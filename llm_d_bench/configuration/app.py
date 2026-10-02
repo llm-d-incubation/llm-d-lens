@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Compatibility import for the shared Prism FastAPI application."""
+"""Compatibility import for the shared Lens FastAPI application."""
 
 from llm_d_bench.api.main import app
 

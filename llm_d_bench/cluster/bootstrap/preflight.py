@@ -20,7 +20,7 @@ from llm_d_bench.utils.ssh import RemoteResult, SshTarget, remote_exec
 #: Linux distributions/versions Kubespray v2.31.0 lists as supported (see
 #: https://github.com/kubernetes-sigs/kubespray/blob/v2.31.0/README.md
 #: "Supported Linux Distributions"). This intentionally mirrors *Kubespray's*
-#: support matrix, not an arbitrary narrower Prism-only whitelist -- a node
+#: support matrix, not an arbitrary narrower Lens-only whitelist -- a node
 #: only needs to run something Kubespray's ``cluster.yml`` playbook actually
 #: knows how to bootstrap. Distros Kubespray marks "experimental" (Flatcar,
 #: Fedora CoreOS, Kylin, UOS, openEuler, Amazon Linux 2) are deliberately

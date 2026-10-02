@@ -11,7 +11,7 @@ else
 fi
 if ! "$PYTHON" -c 'import uvicorn' >/dev/null 2>&1; then
   echo "Backend dependency missing: uvicorn is not available in $PYTHON" >&2
-  echo "Create a virtualenv and install the project requirements before starting Prism." >&2
+  echo "Create a virtualenv and install the project requirements before starting Lens." >&2
   exit 1
 fi
 exec "$PYTHON" -m uvicorn llm_d_bench.api:app \

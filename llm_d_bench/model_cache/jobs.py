@@ -107,7 +107,7 @@ def _proxy_environment(cluster_id: str | None = None) -> list[dict]:
     Prefers the owning cluster's own ``ProxyConfig`` (set via the Create
     Cluster wizard, see docs/design/cluster-creation-wizard-design.md
     section 4.2) when it is in ``mode="custom"``; otherwise falls back to the
-    Prism backend process's own environment, same as before that config
+    Lens backend process's own environment, same as before that config
     existed.
     """
     from llm_d_bench.cluster.service import resolve_proxy_env
@@ -315,7 +315,7 @@ async def _ensure_token_secret(entry: ModelCacheEntry, *, namespace: str) -> Non
 
     - ``HOST``: mirrors ``deploy/runtime/composition.py``'s
       ``create_model_secret()`` -- reads the token from a file on whichever
-      host runs the Prism backend process (``~/.cache/huggingface/token``,
+      host runs the Lens backend process (``~/.cache/huggingface/token``,
       written by ``huggingface-cli login``). No-op (best-effort) if that file
       doesn't exist.
     - ``EXISTING_SECRET``: mirrors ``copy_model_secret()`` -- reads the

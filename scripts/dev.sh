@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Development service manager for llm-d-prism.
+# Development service manager for llm-d-lens.
 #
 # Checks the environment and starts/stops the three local services:
 #   - Vite frontend       (FRONTEND_PORT,   default 5173)
@@ -444,6 +444,10 @@ ensure_venv() {
     # built-in PostgreSQL fallback below.
     log "installing Python dependencies (pip install -e .[embedded-db])..."
     .venv/bin/python -m pip install --upgrade pip >/dev/null 2>&1 || true
+    .venv/bin/python "$ROOT_DIR/scripts/prepare_python_project_upgrade.py" || {
+        fail "Python package rename preparation failed"
+        return 1
+    }
     run_with_tail 5 .venv/bin/python -m pip install -e ".[embedded-db]" || {
         fail "pip install -e .[embedded-db] failed — see output above"
         return 1

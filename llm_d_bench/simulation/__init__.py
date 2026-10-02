@@ -1,4 +1,4 @@
-"""Trace simulation backend for Prism."""
+"""Trace simulation backend for Lens."""
 
 from .backends import SCENARIOS, get_backend, list_backends, list_scenarios
 from .endpoints import discover_models

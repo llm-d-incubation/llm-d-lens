@@ -45,7 +45,7 @@ def _build_external_database_url(
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Configure Prism's own database (install-time Step 0).")
+    parser = argparse.ArgumentParser(description="Configure Lens's own database (install-time Step 0).")
     parser.add_argument("--mode", choices=["embedded", "external"], default="embedded")
     parser.add_argument("--engine", default="postgresql", choices=["postgresql", "mysql", "oracle", "mssql"])
     parser.add_argument("--host", default="")

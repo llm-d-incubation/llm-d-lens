@@ -14,7 +14,7 @@
 
 // "Chat with Lens" (docs/design/mcp-playground-design.zh-CN.md, section 6): the
 // user first picks a Cluster, then a Deployment on that cluster as the
-// conversation's model service, then chats with it. The model calls Prism
+// conversation's model service, then chats with it. The model calls Lens
 // MCP tools (server/mcp); every tool call is shown in a timeline for
 // transparency, and any tool the server did not execute (write/approve-tier,
 // Phase 2/3) renders as "blocked". Cluster + Deployment selection lives in
@@ -34,12 +34,12 @@ import { getMicUnavailableReason, isSpeechToTextSupported, SPEECH_TO_TEXT_LANGUA
 
 // A playful variant of lucide's Bot icon: the eyes (the two short vertical
 // bars) occasionally blink, and the whole icon occasionally hops in place.
-// Pure CSS animation (see .prism-bot-icon / .prism-bot-eyes in index.css) so
+// Pure CSS animation (see .lens-bot-icon / .lens-bot-eyes in index.css) so
 // it costs nothing beyond the header render.
 function AnimatedBotIcon({ className }) {
     return (
         <svg
-            className={`prism-bot-icon ${className || ''}`}
+            className={`lens-bot-icon ${className || ''}`}
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
             fill="none"
@@ -53,7 +53,7 @@ function AnimatedBotIcon({ className }) {
             <rect width="16" height="12" x="4" y="8" rx="2" />
             <path d="M2 14h2" />
             <path d="M20 14h2" />
-            <g className="prism-bot-eyes">
+            <g className="lens-bot-eyes">
                 <path d="M15 13v2" />
                 <path d="M9 13v2" />
             </g>
@@ -75,7 +75,7 @@ const BUBBLE_SUGGESTED_QUESTIONS = [
     'Summarize my recent benchmark results.',
     'Is my last deployment status healthy or failed?',
     'Which deploy validation checks failed, if any?',
-    'What guide combinations can Prism deploy for me?',
+    'What guide combinations can Lens deploy for me?',
     'Show me the agentic plan recommendations.',
     'What does the flow map look like for my traffic?',
     'How many deployments are ready across all clusters?',
@@ -85,7 +85,7 @@ const BUBBLE_SUGGESTED_QUESTIONS = [
 
 // Seconds each suggested-question bubble stays up before the next one takes
 // its turn; keep in sync with the ~6% hold-time window in the
-// .prism-bubble keyframes (index.css) — those percentages are of
+// .lens-bubble keyframes (index.css) — those percentages are of
 // BUBBLE_SUGGESTED_QUESTIONS.length * BUBBLE_INTERVAL_SECONDS.
 const BUBBLE_INTERVAL_SECONDS = 4.5;
 
@@ -890,7 +890,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                                                 translate: '-50% -50%',
                                                 ...bubblePlacements[index],
                                             }}
-                                            className="prism-bubble absolute z-10 w-max max-w-[11rem] whitespace-normal rounded-md bg-[#95ec69] px-3 py-1.5 text-left text-xs font-medium text-slate-900 shadow-lg shadow-black/30 transition-colors hover:bg-[#86e058] disabled:cursor-not-allowed disabled:opacity-50"
+                                            className="lens-bubble absolute z-10 w-max max-w-[11rem] whitespace-normal rounded-md bg-[#95ec69] px-3 py-1.5 text-left text-xs font-medium text-slate-900 shadow-lg shadow-black/30 transition-colors hover:bg-[#86e058] disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             {question}
                                         </button>

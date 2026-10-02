@@ -1,4 +1,4 @@
-"""Resolve and freeze planning evidence owned by existing Prism domains."""
+"""Resolve and freeze planning evidence owned by existing Lens domains."""
 
 from __future__ import annotations
 
@@ -283,7 +283,7 @@ async def _supplementary_evidence(
 
 
 def _aic_predictions(configs: list[dict[str, Any]]) -> list[AICCandidatePrediction]:
-    """Normalize only AIC configurations that can match Prism's bounded topologies."""
+    """Normalize only AIC configurations that can match Lens's bounded topologies."""
     predictions: list[AICCandidatePrediction] = []
     for config in configs:
         try:

@@ -47,7 +47,7 @@ test('administrator-managed Hugging Face environment variables are rejected', ()
 
 test('server parameter errors map to active fields; network errors stay global', async () => {
     const { configurationServerErrors } = await import('./configurationValidation.js');
-    const mapped = configurationServerErrors(['Precise token-load routing currently requires one EPP replica.', 'Requested topology needs 32 accelerators, but only 8 are available to Prism.', 'Connection refused'], { sweepEnabled: true, pdTopologyVariants: '1:2' });
+    const mapped = configurationServerErrors(['Precise token-load routing currently requires one EPP replica.', 'Requested topology needs 32 accelerators, but only 8 are available to Lens.', 'Connection refused'], { sweepEnabled: true, pdTopologyVariants: '1:2' });
     assert.deepEqual(mapped.map(error => error.field), ['routerValues', 'pdTopologyVariants']);
 });
 

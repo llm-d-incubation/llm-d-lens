@@ -13,14 +13,14 @@
 // limitations under the License.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { prismTools } from './tools.ts';
+import { lensTools } from './tools.ts';
 
 // Builds a fresh MCP server instance with the Phase 1 read-only tool catalog
 // registered. Called once per request in stateless mode (see router.ts) so
-// Prism's MCP endpoint stays horizontally scalable and holds no session state
-// of its own — every tool re-reads live data from Prism's REST API.
-export function createPrismMcpServer(): McpServer {
-    const server = new McpServer({ name: 'prism-mcp', version: '0.1.0' });
+// Lens's MCP endpoint stays horizontally scalable and holds no session state
+// of its own — every tool re-reads live data from Lens's REST API.
+export function createLensMcpServer(): McpServer {
+    const server = new McpServer({ name: 'lens-mcp', version: '0.1.0' });
 
     // Guard against duplicate tool names (e.g. a stale/hand-edited tools.ts,
     // or a generated tool colliding with a hand-written special tool). A raw
@@ -31,9 +31,9 @@ export function createPrismMcpServer(): McpServer {
     // Skipping the duplicate and logging instead keeps the endpoint usable.
     const seenNames = new Set<string>();
 
-    for (const tool of prismTools) {
+    for (const tool of lensTools) {
         if (seenNames.has(tool.name)) {
-            console.error(`[Prism MCP] Skipping duplicate tool registration: ${tool.name} (check server/mcp/tools.ts for a name collision)`);
+            console.error(`[Lens MCP] Skipping duplicate tool registration: ${tool.name} (check server/mcp/tools.ts for a name collision)`);
             continue;
         }
         seenNames.add(tool.name);
@@ -58,3 +58,6 @@ export function createPrismMcpServer(): McpServer {
 
     return server;
 }
+
+/** @deprecated Use createLensMcpServer; retained for existing integrations. */
+export const createPrismMcpServer = createLensMcpServer;

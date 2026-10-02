@@ -692,6 +692,10 @@ ensure_venv() {
     fi
     info "installing Python dependencies (pip install -e .${extra})..."
     .venv/bin/python -m pip install --upgrade pip >/dev/null 2>&1 || true
+    .venv/bin/python "$INSTALL_DIR/scripts/prepare_python_project_upgrade.py" || {
+        fail "Python package rename preparation failed"
+        exit 1
+    }
     run_with_tail 5 .venv/bin/python -m pip install -e ".${extra}" || { fail "pip install -e .${extra} failed"; exit 1; }
     echo "$current_hash" > "$stamp"
     ok "Python dependencies installed"

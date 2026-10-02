@@ -100,4 +100,4 @@ if command -v docker >/dev/null 2>&1; then
   echo "  docker: $(systemctl is-active docker 2>/dev/null || echo 'not running as a service')"
 fi
 
-log "Kubernetes has been removed from this node. It should now pass Prism's 'no existing Kubernetes install' preflight check."
+log "Kubernetes has been removed from this node. It should now pass Lens's 'no existing Kubernetes install' preflight check."

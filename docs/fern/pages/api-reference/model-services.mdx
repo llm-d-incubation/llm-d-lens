@@ -15,7 +15,7 @@ List the caller's active model access tokens. The response never includes plaint
   <Tab title="REST API">
     **`GET /api/v1/model-service/tokens`**
 
-    Request: no request body. The caller must be authenticated with a Prism user session.
+    Request: no request body. The caller must be authenticated with a Lens user session.
 
     Response: returns an `items` array of `ModelAccessToken` records projected through `ModelAccessToken.api_payload()`, so `tokenHash` is omitted.
 
@@ -168,7 +168,7 @@ List the model groups that the caller is currently allowed to use through the mo
   <Tab title="REST API">
     **`GET /api/v1/model-service/models`**
 
-    Request: no request body. The caller must be authenticated with a Prism user session.
+    Request: no request body. The caller must be authenticated with a Lens user session.
 
     Response: returns an `items` array of `ModelServiceGroup` payloads.
 

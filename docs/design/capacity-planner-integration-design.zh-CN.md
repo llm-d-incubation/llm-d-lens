@@ -4,13 +4,13 @@
 
 Before running an LLM serving system such as vLLM, accurately estimating model memory, context length, tensor parallelism (TP), and available KV cache is essential to avoiding GPU out-of-memory failures and maintaining concurrent throughput.
 
-`llm-d-benchmark` provides this capability by using the `planner.capacity_planner` module from the external `llm-d-planner` repository. Bringing `llm-d-planner` into `sandbox-llm-d-prism` as an external Git or pip dependency would introduce several problems:
+`llm-d-benchmark` provides this capability by using the `planner.capacity_planner` module from the external `llm-d-planner` repository. Bringing `llm-d-planner` into `llm-d-lens` as an external Git or pip dependency would introduce several problems:
 1. **Network and environment dependencies**: fetching a Git dependency can fail in private or restricted environments, such as offline clusters or environments requiring a specific proxy.
 2. **Fragmented package management**: an unnecessary external dependency increases deployment complexity and version-locking risks.
 3. **Poor architectural cohesion**: the capacity planner core in `llm-d-planner` is fundamentally a self-contained mathematical model and rules engine implemented in pure Python.
 
 **Core goal**:
-Integrate `llm-d-planner`'s algorithms for parsing model parameters, estimating memory usage and KV cache, and validating TP configurations directly into `sandbox-llm-d-prism` as in-tree code (with no required external planner dependency). Use them in the existing **Agentic Deploy** candidate planner, the pre-deployment guardrail, and the MCP decision tools.
+Integrate `llm-d-planner`'s algorithms for parsing model parameters, estimating memory usage and KV cache, and validating TP configurations directly into `llm-d-lens` as in-tree code (with no required external planner dependency). Use them in the existing **Agentic Deploy** candidate planner, the pre-deployment guardrail, and the MCP decision tools.
 
 ---
 
@@ -18,7 +18,7 @@ Integrate `llm-d-planner`'s algorithms for parsing model parameters, estimating 
 
 ```mermaid
 flowchart TD
-    subgraph PrismCore [sandbox-llm-d-prism core]
+    subgraph LensCore [llm-d-lens core]
         subgraph CapacityModule [In-tree llm_d_bench.capacity]
             CP[capacity_planner.py<br/>Capacity and memory estimation engine]
             CONST[vllm_constants.py<br/>Architecture-calibrated constants]
@@ -50,7 +50,7 @@ flowchart TD
 
 ## 3. Capabilities and benefits
 
-| Planning dimension | Previous sandbox-llm-d-prism approach | With the in-tree Capacity Planner |
+| Planning dimension | Previous llm-d-lens approach | With the in-tree Capacity Planner |
 | :--- | :--- | :--- |
 | **Model memory** | Coarse heuristic: `weight * 1.2 + max(1.0, ctx / 4096)` | Breakdown of **model weights, architecture-specific activation memory, CUDA graphs, and non-Torch communication overhead** |
 | **TP validity** | Enumerate powers of two without considering model head counts | Validate against attention and KV heads, excluding TP values that do not divide the relevant head counts |
@@ -62,10 +62,10 @@ flowchart TD
 
 ## 4. Module structure
 
-Add a separate `capacity` module under `sandbox-llm-d-prism/llm_d_bench`:
+Add a separate `capacity` module under `llm-d-lens/llm_d_bench`:
 
 ```text
-sandbox-llm-d-prism/
+llm-d-lens/
 └── llm_d_bench/
     └── capacity/
         ├── __init__.py               # Public API
@@ -93,7 +93,7 @@ Provide the following functions:
 - `max_concurrent_requests(...)` -> estimate maximum concurrency
 
 ### 4.3 Validator and diagnostics (`validator.py`)
-Port `validate_vllm_params` and `run_capacity_planner` from `llm-d-benchmark`. For Prism's deployment modes (`baseline-vllm`, `optimized-baseline`, `pd-disaggregation`, `tiered-prefix-cache`, `precise-prefix-cache-routing`), validate the `prefill` and `decode` roles independently.
+Port `validate_vllm_params` and `run_capacity_planner` from `llm-d-benchmark`. For Lens's deployment modes (`baseline-vllm`, `optimized-baseline`, `pd-disaggregation`, `tiered-prefix-cache`, `precise-prefix-cache-routing`), validate the `prefill` and `decode` roles independently.
 
 ---
 

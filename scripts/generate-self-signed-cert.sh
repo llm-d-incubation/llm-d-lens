@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Ensures a self-signed TLS certificate exists for running Prism over HTTPS on
+# Ensures a self-signed TLS certificate exists for running Lens over HTTPS on
 # a bare-metal box that only has an internal IP (no public DNS name, so a real
 # Let's Encrypt certificate isn't an option). Browsers still treat HTTPS with
 # a self-signed cert as a "secure context" (once the one-time warning is
@@ -29,12 +29,12 @@
 #
 # Examples:
 #   ./scripts/generate-self-signed-cert.sh 10.0.5.23
-#   ./scripts/generate-self-signed-cert.sh prism.internal.example.com ./certs
+#   ./scripts/generate-self-signed-cert.sh lens.internal.example.com ./certs
 #
 # On success, prints two lines to stdout (and nothing else) so callers can
 # eval them directly:
-#   TLS_CERT_FILE=/abs/path/prism.crt
-#   TLS_KEY_FILE=/abs/path/prism.key
+#   TLS_CERT_FILE=/abs/path/lens.crt
+#   TLS_KEY_FILE=/abs/path/lens.key
 set -euo pipefail
 
 FORCE=0
@@ -57,16 +57,24 @@ if [[ -z "$HOST" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
-KEY_FILE="$OUT_DIR/prism.key"
-CERT_FILE="$OUT_DIR/prism.crt"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+KEY_FILE="$OUT_DIR/lens.key"
+CERT_FILE="$OUT_DIR/lens.crt"
+
+# Reuse the filenames and trust of a certificate from an existing installation.
+if [[ ! -e "$CERT_FILE" && ! -e "$KEY_FILE" \
+    && -s "$OUT_DIR/prism.crt" && -s "$OUT_DIR/prism.key" ]]; then
+    KEY_FILE="$OUT_DIR/prism.key"
+    CERT_FILE="$OUT_DIR/prism.crt"
+fi
 
 # Reuse an existing cert if it's already valid for this host and not expired,
 # unless the caller explicitly asked to regenerate.
 if [[ "$FORCE" != "1" && -s "$CERT_FILE" && -s "$KEY_FILE" ]] \
     && openssl x509 -in "$CERT_FILE" -noout -checkend 86400 >/dev/null 2>&1 \
     && openssl x509 -in "$CERT_FILE" -noout -text 2>/dev/null | grep -qF "$HOST"; then
-    echo "TLS_CERT_FILE=$(cd "$OUT_DIR" && pwd)/prism.crt"
-    echo "TLS_KEY_FILE=$(cd "$OUT_DIR" && pwd)/prism.key"
+    echo "TLS_CERT_FILE=$CERT_FILE"
+    echo "TLS_KEY_FILE=$KEY_FILE"
     exit 0
 fi
 
@@ -89,5 +97,5 @@ openssl req -x509 -nodes -newkey rsa:2048 \
 
 chmod 600 "$KEY_FILE"
 
-echo "TLS_CERT_FILE=$(cd "$OUT_DIR" && pwd)/prism.crt"
-echo "TLS_KEY_FILE=$(cd "$OUT_DIR" && pwd)/prism.key"
+echo "TLS_CERT_FILE=$CERT_FILE"
+echo "TLS_KEY_FILE=$KEY_FILE"

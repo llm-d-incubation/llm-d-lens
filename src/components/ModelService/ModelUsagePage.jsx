@@ -37,7 +37,7 @@ import {
 import { CARD, CELL, CELL_MUTED, TABLE_HEAD, TABLE_ROW, maskedKeyHint } from './modelServiceStyles';
 
 const numberFormat = new Intl.NumberFormat();
-// Match the 400-level palette used by the other Prism dashboards (reads well on
+// Match the 400-level palette used by the other Lens dashboards (reads well on
 // the dark surface). Order: emerald, sky, amber, violet, rose.
 const USAGE_COLORS = ['#34d399', '#38bdf8', '#fbbf24', '#a78bfa', '#fb7185'];
 const OTHER_COLOR = '#94a3b8';

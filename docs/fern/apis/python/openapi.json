@@ -17160,7 +17160,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "BootstrapProxyConfig",
-        "description": "Optional per-job network proxy passthrough for the *target* nodes\n(distinct from the cluster-level \"Network Proxy\" step later in the\nwizard, which only affects the Prism backend's own llm-d/benchmark\ndownloads). Kubespray needs ``http_proxy``/``https_proxy``/``no_proxy``\nexported on each node for OS package installs and the\n``container-engine/*`` roles' direct-from-GitHub binary downloads\n(e.g. ``runc``) to succeed when a node has no direct internet route.\n\n* ``mode: \"auto\"`` (default) -- reuse whatever proxy is already\n  configured on each *target* node itself (probed over SSH after\n  preflight, before Kubespray runs) rather than the Prism backend\n  process's own environment, since the backend and the target nodes\n  may sit on entirely different networks.\n* ``mode: \"custom\"`` -- use the explicit values below instead (any left\n  blank are simply omitted from the rendered group_vars)."
+        "description": "Optional per-job network proxy passthrough for the *target* nodes\n(distinct from the cluster-level \"Network Proxy\" step later in the\nwizard, which only affects the Lens backend's own llm-d/benchmark\ndownloads). Kubespray needs ``http_proxy``/``https_proxy``/``no_proxy``\nexported on each node for OS package installs and the\n``container-engine/*`` roles' direct-from-GitHub binary downloads\n(e.g. ``runc``) to succeed when a node has no direct internet route.\n\n* ``mode: \"auto\"`` (default) -- reuse whatever proxy is already\n  configured on each *target* node itself (probed over SSH after\n  preflight, before Kubespray runs) rather than the Lens backend\n  process's own environment, since the backend and the target nodes\n  may sit on entirely different networks.\n* ``mode: \"custom\"`` -- use the explicit values below instead (any left\n  blank are simply omitted from the rendered group_vars)."
       },
       "BootstrapRequest": {
         "properties": {
@@ -22447,7 +22447,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "ProxyConfigDTO",
-        "description": "See docs/design/cluster-creation-wizard-design.md section 4.2.\n\n``mode=\"auto\"`` today falls back to whatever proxy env vars the Prism\nbackend process itself sees (auto-detection of the target cluster's own\nproxy is not implemented yet -- see the design doc's Phase 2). ``custom``\nuses the three values below verbatim for this cluster only."
+        "description": "See docs/design/cluster-creation-wizard-design.md section 4.2.\n\n``mode=\"auto\"`` today falls back to whatever proxy env vars the Lens\nbackend process itself sees (auto-detection of the target cluster's own\nproxy is not implemented yet -- see the design doc's Phase 2). ``custom``\nuses the three values below verbatim for this cluster only."
       },
       "RateStage": {
         "properties": {

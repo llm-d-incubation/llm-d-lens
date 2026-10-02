@@ -452,7 +452,7 @@ class AgenticDeploymentService:
                 planner="openai-compatible",
                 planner_model=planner_model,
                 selection_method=(
-                    f"The configured model selected and scored {candidate_count} Prism-validated candidate(s); "
+                    f"The configured model selected and scored {candidate_count} Lens-validated candidate(s); "
                     "the highest score is selected and deterministic rank breaks ties."
                 ),
                 score_method=(
@@ -463,7 +463,7 @@ class AgenticDeploymentService:
         return AgenticDecisionMetadata(
             planner="deterministic",
             selection_method=(
-                "Prism applies live resource constraints and operator preference first, uses exact AIC predictions "
+                "Lens applies live resource constraints and operator preference first, uses exact AIC predictions "
                 "only within supported aggregated or disaggregated topologies, and treats missing AIC data for other "
                 "guides as neutral."
             ),

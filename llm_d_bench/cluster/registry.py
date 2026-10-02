@@ -41,7 +41,7 @@ class Cluster:
     created_at: str
     # Proxy settings for this cluster. ``mode="auto"`` means "let the system
     # figure it out" -- today (no auto-detection implemented yet) that falls
-    # back to whatever proxy env vars the Prism backend process itself sees,
+    # back to whatever proxy env vars the Lens backend process itself sees,
     # same as pre-wizard behavior; ``mode="custom"`` means the three values
     # below are used verbatim regardless of the backend process environment.
     # See docs/design/cluster-creation-wizard-design.md section 4.2.

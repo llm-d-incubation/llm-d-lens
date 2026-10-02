@@ -103,7 +103,7 @@ class BaseTrace:
     ) -> dict:
         trace_type = trace_registry.get_variant(name)
         if trace_type.externally_managed:
-            raise ValueError("Externally managed datasets cannot be downloaded by Prism")
+            raise ValueError("Externally managed datasets cannot be downloaded by Lens")
         return await trace_type._download(force, max_bytes)
 
     @classmethod
@@ -169,7 +169,7 @@ class BaseTrace:
                         response = await session.get(
                             url,
                             allow_redirects=False,
-                            headers={"User-Agent": "Prism-trace-downloader/1"},
+                            headers={"User-Agent": "Lens-trace-downloader/1"},
                         )
                         if response.status in {301, 302, 303, 307, 308}:
                             location = response.headers.get("Location")

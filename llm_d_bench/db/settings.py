@@ -2,7 +2,7 @@
 
 Per docs/design/sqlalchemy-data-access-layer-design.md section 4 and
 docs/design/cluster-creation-wizard-design.md ("Step 0: database setup"),
-Prism supports two mutually exclusive ways to obtain a database connection:
+Lens supports two mutually exclusive ways to obtain a database connection:
 
 1. External: the user points us at a database instance they already run
    (``LLM_D_BENCH_DATABASE_URL``), managed entirely outside this process.
@@ -146,7 +146,7 @@ def _start_embedded_postgres(data_directory: Path, password: str | None = None) 
     except ImportError as exc:
         raise DatabaseSettingsError(
             "embedded PostgreSQL mode requires the 'pgserver' package; install it with "
-            "`pip install llm-d-prism-backend[embedded-db]`, or set LLM_D_BENCH_DB_MODE=external "
+            "`pip install llm-d-lens-backend[embedded-db]`, or set LLM_D_BENCH_DB_MODE=external "
             "with LLM_D_BENCH_DATABASE_URL pointing at your own PostgreSQL instance."
         ) from exc
     if _embedded_server is None:

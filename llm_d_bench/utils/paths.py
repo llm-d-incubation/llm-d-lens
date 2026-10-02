@@ -39,8 +39,8 @@ def storage_path(area: str, *parts: str) -> Path:
     return target
 
 
-def prism_temp_root(*parts: str) -> Path:
-    """Compatibility entry point for provider scratch directories."""
+def lens_temp_root(*parts: str) -> Path:
+    """Resolve a Lens provider scratch directory without creating it."""
     root = storage_path("scratch")
     for part in parts:
         if Path(part).is_absolute() or ".." in Path(part).parts:
@@ -49,3 +49,8 @@ def prism_temp_root(*parts: str) -> Path:
     if not target.is_relative_to(root):
         raise ValueError("Scratch path escapes its root")
     return target
+
+
+def prism_temp_root(*parts: str) -> Path:
+    """Compatibility alias for integrations using the previous import name."""
+    return lens_temp_root(*parts)

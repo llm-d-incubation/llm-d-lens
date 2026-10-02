@@ -13,7 +13,7 @@ import { requestJson } from '../../api/httpClient';
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Shared state for the Deploy Workflow. Each pipeline stage is its own Prism
+// Shared state for the Deploy Workflow. Each pipeline stage is its own Lens
 // page/tab, so the workflow state (workload, run status, mocked results) lives
 // here in a provider mounted above the view switch and is persisted to
 // localStorage — that way navigating between stage tabs keeps context.
@@ -672,7 +672,7 @@ export function WorkflowProvider({ children }) {
             const resolved = [];
             for (const [source, configurations] of Object.entries(groups)) {
                 const response = await resolveConfigurations({
-                    candidate_source: { name: SOURCE_API_NAMES[source], run_id: `prism-${Date.now()}` },
+                    candidate_source: { name: SOURCE_API_NAMES[source], run_id: `lens-${Date.now()}` },
                     configurations: configurations.map((item) => ({
                         configuration_id: item.id,
                         result_id: item.id,

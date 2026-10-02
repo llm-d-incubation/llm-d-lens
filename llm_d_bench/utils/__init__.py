@@ -1,1 +1,1 @@
-"""Shared utility modules for Prism backend workflows."""
+"""Shared utility modules for Lens backend workflows."""

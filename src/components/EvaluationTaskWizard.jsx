@@ -690,7 +690,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     shared_prefix: test.benchmark?.shared_prefix || effectiveBenchmark?.shared_prefix || undefined,
                     workload_yaml: test.benchmark?.workload_yaml || effectiveBenchmark?.workload_yaml || null,
                 })));
-                window.dispatchEvent(new CustomEvent("prism:evaluation-created", { detail: { benchmarkRuns: createdRuns } }));
+                window.dispatchEvent(new CustomEvent("lens:evaluation-created", { detail: { benchmarkRuns: createdRuns } }));
                 onNavigate("optimization-evaluate");
                 return;
             }
@@ -728,7 +728,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     scenarios: tests,
                 })),
             });
-            window.dispatchEvent(new CustomEvent("prism:evaluation-created", { detail: { workflow: createdWorkflow } }));
+            window.dispatchEvent(new CustomEvent("lens:evaluation-created", { detail: { workflow: createdWorkflow } }));
             onNavigate("optimization-evaluate");
         } catch (nextError) {
             setError(nextError.message || "Evaluation could not be created");

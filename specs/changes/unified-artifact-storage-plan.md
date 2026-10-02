@@ -4,7 +4,7 @@
 **Architecture:** Shared path selection and artifact manifests; domain adapters retain lifecycle; explicit non-destructive migration. Existing filesystem stores remain compatible.
 **Spec:** unified-artifact-storage.md
 
-- [x] Root: test then implement llm_d_bench/utils/paths.py storage_path(area, *parts), preserving prism_temp_root; only XDG/LENS roots determine storage. Legacy directory variables are ignored per the user’s 2026-09-18 request.
+- [x] Root: test then implement llm_d_bench/utils/paths.py storage_path(area, *parts), preserving lens_temp_root; only XDG/LENS roots determine storage. Legacy directory variables are ignored per the user’s 2026-09-18 request.
 - [x] Root: test then implement llm_d_bench/utils/artifact_store.py register_artifacts(root, *, owner_type, owner_id, source_version=None, configuration_ids=(), retention_class='evidence', truncated=False, files=None, status='complete'). Return and atomically persist manifest.json. files optionally maps relative file paths to per-file metadata (truncated/kind); otherwise inventory regular files recursively excluding own manifest and temporary files. Explicit unknown provenance is honest.
 - [x] Evaluation integration: unify records/results roots, register saved evidence on terminal execution, preserve failure/cancellation, meaningful provenance/truncation, tests.
 - [x] Simulation integration: unify task/dataset/backend/tokenizer paths, register completed/failed task artifacts and downloaded datasets, provenance/truncation, tests.

@@ -14,7 +14,7 @@ import { confirmDelete } from "../ui/confirmDelete";
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Deploy Workflow — each pipeline stage is its own Prism page/tab. The left app
+// Deploy Workflow — each pipeline stage is its own Lens page/tab. The left app
 // navigation IS the pipeline; walking the deploy flow means navigating between
 // these stage tabs, each guiding to the next. Shared state lives in
 // WorkflowContext; missing backends are mocked (see mockBackend.js).
@@ -526,7 +526,7 @@ function OfficialGuidePlanning({ ctx }) {
             <div className="my-3 flex justify-center"><ChevronDown className="h-4 w-4 text-slate-600" /></div>
             <ProfileCard title="Step 2 — Deployment Environment" badge={kubernetesMode === 'required' ? 'Kubernetes required' : kubernetesMode === 'disabled' ? 'Planning only' : 'Auto-detect Kubernetes'}>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <button type="button" onClick={() => setMachineMode('current')} className={cn('rounded-lg border p-3 text-left', machineMode === 'current' ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-slate-800')}><div className="mb-1 flex items-center gap-2 text-xs font-semibold text-slate-300"><Cpu className="h-4 w-4 text-cyan-400" />Current machine</div><p className="text-[10px] text-slate-500">Inspect this Prism host. Its active Kubernetes context is discovered automatically when available.</p></button>
+                    <button type="button" onClick={() => setMachineMode('current')} className={cn('rounded-lg border p-3 text-left', machineMode === 'current' ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-slate-800')}><div className="mb-1 flex items-center gap-2 text-xs font-semibold text-slate-300"><Cpu className="h-4 w-4 text-cyan-400" />Current machine</div><p className="text-[10px] text-slate-500">Inspect this Lens host. Its active Kubernetes context is discovered automatically when available.</p></button>
                     <button type="button" onClick={() => setMachineMode('remote')} className={cn('rounded-lg border p-3 text-left', machineMode === 'remote' ? 'border-violet-500/40 bg-violet-500/5' : 'border-slate-800')}><div className="mb-1 flex items-center gap-2 text-xs font-semibold text-slate-300"><Network className="h-4 w-4 text-violet-400" />Another machine</div><p className="text-[10px] text-slate-500">Connect over SSH and inspect CPU, RAM, accelerators, and any Kubernetes cluster configured on that machine.</p></button>
                 </div>
                 <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/30 p-3">
@@ -536,7 +536,7 @@ function OfficialGuidePlanning({ ctx }) {
                         <option value="required">Require Kubernetes — stop if cluster preflight cannot pass</option>
                         <option value="disabled">Planning only — inspect machine resources without Kubernetes</option>
                     </Select>
-                    <p className="mt-1 text-[10px] text-slate-500">For a remote machine, Prism uses the current kubectl context of the SSH user. No kubeconfig upload is needed.</p>
+                    <p className="mt-1 text-[10px] text-slate-500">For a remote machine, Lens uses the current kubectl context of the SSH user. No kubeconfig upload is needed.</p>
                 </div>
                 {machineMode === 'remote' && <div className="mt-4 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
@@ -545,7 +545,7 @@ function OfficialGuidePlanning({ ctx }) {
                         <div><Label>Username</Label><Input autoComplete="username" value={remoteTarget.username} onChange={(event) => updateRemoteTarget('username', event.target.value)} /></div>
                     </div>
                     <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <div><Label>Authentication</Label><Select value={remoteTarget.authMethod} onChange={(event) => updateRemoteTarget('authMethod', event.target.value)}><option value="agent">SSH Agent on Prism server</option><option value="key">Private key on Prism server</option><option value="password">One-time password</option></Select></div>
+                        <div><Label>Authentication</Label><Select value={remoteTarget.authMethod} onChange={(event) => updateRemoteTarget('authMethod', event.target.value)}><option value="agent">SSH Agent on Lens server</option><option value="key">Private key on Lens server</option><option value="password">One-time password</option></Select></div>
                         {remoteTarget.authMethod === 'key' && <div><Label>Server-side private key path</Label><Input value={remoteTarget.keyPath} placeholder="~/.ssh/id_ed25519" onChange={(event) => updateRemoteTarget('keyPath', event.target.value)} /></div>}
                         {remoteTarget.authMethod === 'password' && <div><Label>SSH password (never saved)</Label><Input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></div>}
                     </div>

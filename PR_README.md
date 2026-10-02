@@ -94,7 +94,7 @@ shared components required by these pages also remain.
 
 The four Python failures were reproduced on the Git baseline before cleanup. They
 involve deployment smoke-test commands, cluster capacity validation, and two legacy
-shared-prefix cases. See the [cleanup record](docs/archive/prism-cleanup.md) for names
+shared-prefix cases. See the [cleanup record](docs/archive/lens-cleanup.md) for names
 and reproduction details.
 
 Real cluster deployment, external model calls, browser interaction end-to-end tests,

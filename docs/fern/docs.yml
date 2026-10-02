@@ -41,7 +41,7 @@ favicon: ../../public/favicon.png
 
 navbar-links:
   - type: github
-    value: https://github.com/intel-sandbox/llm-d-prism
+    value: https://github.com/llm-d-incubation/llm-d-lens
 
 colors:
   # Palette and surfaces.

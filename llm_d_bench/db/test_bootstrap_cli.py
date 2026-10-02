@@ -76,7 +76,7 @@ def test_external_mode_reports_connection_failure_without_persisting():
             "--port",
             "1",  # nothing listens here -- connection must fail fast
             "--dbname",
-            "prism",
+            "lens",
         ]
     )
 
@@ -104,7 +104,7 @@ def test_test_connection_success_does_not_persist_anything(monkeypatch, capsys):
             "--host",
             "db.example.com",
             "--dbname",
-            "prism",
+            "lens",
         ]
     )
 
@@ -129,7 +129,7 @@ def test_test_connection_failure_does_not_persist_anything():
             "--port",
             "1",  # nothing listens here -- connection must fail fast
             "--dbname",
-            "prism",
+            "lens",
         ]
     )
 

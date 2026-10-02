@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "llm-d-prism-backend"
+name = "llm-d-lens-backend"
 version = "0.1.0"
-description = "Simulation backend for llm-d-prism"
+description = "Backend for llm-d-lens"
 requires-python = ">=3.11"
 dependencies = [
     "aiconfigurator==0.11.0.dev20260728",
@@ -47,9 +47,9 @@ mysql = ["pymysql>=1.1"]
 oracle = ["oracledb>=2.0"]
 mssql = ["pyodbc>=5.1"]
 external-db = [
-    "llm-d-prism-backend[mysql]",
-    "llm-d-prism-backend[oracle]",
-    "llm-d-prism-backend[mssql]",
+    "llm-d-lens-backend[mysql]",
+    "llm-d-lens-backend[oracle]",
+    "llm-d-lens-backend[mssql]",
 ]
 dev = [
     "pytest>=8",

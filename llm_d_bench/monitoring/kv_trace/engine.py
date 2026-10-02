@@ -1,4 +1,4 @@
-"""Standalone stdlib-only vLLM probe, mounted into model containers by Prism.
+"""Standalone stdlib-only vLLM probe, mounted into model containers by Lens.
 
 Run as a script for begin/end commands. No prompts or token IDs leave the engine.
 The hook observes full prompt blocks held at successful request completion, not

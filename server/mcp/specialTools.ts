@@ -23,7 +23,7 @@
 // route to regenerate them from. The other half of the catalog
 // (`generatedTools`, mechanically derived from the llm_d_bench FastAPI app's
 // OpenAPI schema) lives in the fully generated server/mcp/tools.ts, which
-// imports shared helpers (PrismTool, toPlainResult, jsonRequest,
+// imports shared helpers (LensTool, toPlainResult, jsonRequest,
 // specialTools) from this file. Never hand-edit tools.ts; if a generated
 // tool needs to change, edit the route's FastAPI decorator
 // (summary/description/operation_id) instead and re-run
@@ -35,7 +35,7 @@ import { buildQuery, internalRequest } from './internal.ts';
 
 export type ToolRiskTier = 'read' | 'write' | 'approve';
 
-export interface PrismTool {
+export interface LensTool {
     name: string;
     description: string;
     riskTier: ToolRiskTier;
@@ -43,6 +43,9 @@ export interface PrismTool {
     // eslint-disable-next-line no-unused-vars -- TypeScript function parameter names.
     handler: (args: Record<string, unknown>) => Promise<unknown>;
 }
+
+/** @deprecated Use LensTool; retained for existing integrations. */
+export type PrismTool = LensTool;
 
 async function validateDeployment(namespace: string) {
     const result = await internalRequest(`/api/deploy-poc/validate${buildQuery({ namespace })}`);
@@ -402,7 +405,7 @@ const estimateCapacityShape: z.ZodRawShape = {
 // wraps custom composite logic (e.g. wait_for_status polls another tool, others
 // reshape/aggregate a response) that a generic REST-wrapper generator cannot
 // produce. Maintained by hand; NOT touched by scripts/generate-mcp-tools.mjs.
-export const specialTools: PrismTool[] = [
+export const specialTools: LensTool[] = [
     // hand-written: backed by a Node/Express route, not FastAPI
     {
         name: 'list_deploy_poc_configs',
@@ -805,8 +808,11 @@ export const specialTools: PrismTool[] = [
 // hand-written) can call findTool without a circular import between the two
 // files. Safe because handlers only ever call findTool() at request time,
 // long after both modules have finished loading.
-export const prismTools: PrismTool[] = [...specialTools];
+export const lensTools: LensTool[] = [...specialTools];
 
-export function findTool(name: string): PrismTool | undefined {
-    return prismTools.find((tool) => tool.name === name);
+/** @deprecated Use lensTools; both names refer to the same catalog. */
+export const prismTools = lensTools;
+
+export function findTool(name: string): LensTool | undefined {
+    return lensTools.find((tool) => tool.name === name);
 }

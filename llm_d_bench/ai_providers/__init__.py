@@ -1,6 +1,6 @@
 """External AI providers: user-managed OpenAI/Anthropic-compatible LLM connections.
 
-Prism features that need an external LLM (today: Agentic Deploy's optional
+Lens features that need an external LLM (today: Agentic Deploy's optional
 candidate selector, see ``llm_d_bench/agentic/planner.py``) resolve one of
 these saved connections by id instead of relying solely on process-wide
 ``AGENTIC_OPENAI_*`` environment variables. Environment variables remain a

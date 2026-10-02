@@ -16,13 +16,13 @@
 // backend changes. Runs a small (~39M param) Whisper model entirely in the
 // browser via transformers.js (WebAssembly + CPU, no GPU/server round trip),
 // mirroring what a "small STT model that runs on CPU" means, just moved to
-// the browser's CPU instead of Prism's backend. The model is fetched lazily
+// the browser's CPU instead of Lens's backend. The model is fetched lazily
 // (once, on first use) straight from the Hugging Face Hub CDN and cached by
 // the browser, so it costs nothing on every other page load.
 //
 // "onnx-community/whisper-tiny" (not the .en variant, and not the older
 // "Xenova/whisper-tiny") is used deliberately:
-//  - multilingual, since Prism's own operators have been chatting with Lens
+//  - multilingual, since Lens's own operators have been chatting with Lens
 //    in both English and Chinese in this session ("*.en" would only
 //    understand English).
 //  - the "onnx-community" org re-exports models specifically for this v3+
@@ -112,7 +112,7 @@ export async function transcribeAudioBlob(blob, { onModelProgress, language } = 
 
 // Languages offered in the UI's voice-input language picker. Kept as a small
 // fixed list (rather than Whisper's full ~100-language set) since these are
-// the languages Prism operators have actually used with Chat with Lens.
+// the languages Lens operators have actually used with Chat with Lens.
 export const SPEECH_TO_TEXT_LANGUAGES = [
     { value: 'english', label: 'English' },
     { value: 'chinese', label: 'Chinese' },
@@ -123,7 +123,7 @@ export function isSpeechToTextSupported() {
 }
 
 // Browsers only expose navigator.mediaDevices.getUserMedia in a "secure
-// context" (HTTPS, or http://localhost). When Prism is reached over plain
+// context" (HTTPS, or http://localhost). When Lens is reached over plain
 // HTTP on a non-localhost host/IP, mediaDevices is undefined and
 // isSpeechToTextSupported() above returns false -- not because the browser
 // lacks the feature, but because the page itself can't use it. Surfacing
@@ -136,7 +136,7 @@ export function getMicUnavailableReason() {
     }
     if (!navigator.mediaDevices?.getUserMedia) {
         if (window.isSecureContext === false) {
-            return 'Voice input requires HTTPS (or accessing Prism via http://localhost). Ask your admin to serve Prism over HTTPS, or use an SSH port-forward to localhost.';
+            return 'Voice input requires HTTPS (or accessing Lens via http://localhost). Ask your admin to serve Lens over HTTPS, or use an SSH port-forward to localhost.';
         }
         return 'This browser does not support microphone access.';
     }

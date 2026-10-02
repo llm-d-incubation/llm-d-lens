@@ -180,7 +180,7 @@ function describeOf(schema, components) {
     return resolved?.description || undefined;
 }
 
-// Builds one PrismTool entry's source text for a single OpenAPI operation
+// Builds one LensTool entry's source text for a single OpenAPI operation
 // that has already passed the summary/description/operationId checks.
 function buildToolSource(apiPath, method, operation, components) {
     const riskTier = RISK_TIER_OVERRIDES[operation.operationId] || METHOD_TO_RISK_TIER[method];
@@ -367,18 +367,18 @@ function main() {
         '',
         "import { z } from 'zod';",
         "import { buildQuery, internalRequest } from './internal.ts';",
-        "import { jsonRequest, toPlainResult, prismTools, findTool, type PrismTool } from './specialTools.ts';",
+        "import { jsonRequest, toPlainResult, lensTools, findTool, type LensTool } from './specialTools.ts';",
         '',
-        'const generatedTools: PrismTool[] = [',
+        'const generatedTools: LensTool[] = [',
         toolSources.join('\n'),
         '];',
         '',
         '// Both halves of the catalog live in the SAME array (declared in',
         '// specialTools.ts) so hand-written tools like wait_for_status can look up any',
         '// tool, generated or hand-written, by name without a circular import.',
-        'prismTools.push(...generatedTools);',
+        'lensTools.push(...generatedTools);',
         '',
-        'export { prismTools, findTool };',
+        'export { lensTools, lensTools as prismTools, findTool };',
         '',
     ].join('\n');
 

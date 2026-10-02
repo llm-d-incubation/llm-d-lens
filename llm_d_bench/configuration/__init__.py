@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Configuration processing backend for Prism."""
+"""Configuration processing backend for Lens."""
 
 from .router import router
 from .service import render_configuration, resolve_configurations, save_configuration

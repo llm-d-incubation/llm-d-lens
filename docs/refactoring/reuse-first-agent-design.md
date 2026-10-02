@@ -163,7 +163,7 @@ Rules are maintained centrally under `.agents/skills/`; another parallel set of 
 The following shows the Agent-related directories and major files; business source code and unrelated configuration are omitted. `.cache/reuse/` is a local artifact generated on demand and is not version-controlled.
 
 ```text
-llm-d-prism/
+llm-d-lens/
 ├── AGENTS.md                          # Project rules: skill routing, reuse, registration, and pause requirements
 │
 ├── .agents/skills/                    # Agent execution conventions

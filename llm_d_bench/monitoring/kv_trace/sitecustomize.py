@@ -1,4 +1,4 @@
-"""Install the Prism probe only after vLLM imports its KV manager normally."""
+"""Install the Lens probe only after vLLM imports its KV manager normally."""
 
 import importlib.abc
 import importlib.machinery

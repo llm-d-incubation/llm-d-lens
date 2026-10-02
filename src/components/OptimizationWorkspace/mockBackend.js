@@ -16,7 +16,7 @@
 // MOCK BACKEND for the Deploy Workflow (Optimization Workspace)
 // -----------------------------------------------------------------------------
 // This module fakes the OptimalBench (llm-d-bench) Python/FastAPI control plane
-// so the end-to-end deploy flow can be demonstrated inside Prism BEFORE the real
+// so the end-to-end deploy flow can be demonstrated inside Lens BEFORE the real
 // React -> Express BFF -> FastAPI wiring exists.
 //
 // EVERY function here is a stand-in. The `MOCK_REGISTRY` at the bottom lists what
@@ -296,7 +296,7 @@ export const MOCK_REGISTRY = {
   'search-candidates': {
     level: 'hybrid',
     note: 'Official llm-d guide YAML and machine/Kubernetes discovery are real. Model memory feasibility is an estimate when authoritative model metadata is unavailable.',
-    realBackend: 'llm-d official guide manifests + Prism machine discovery + kubectl preflight + planning resolver',
+    realBackend: 'llm-d official guide manifests + Lens machine discovery + kubectl preflight + planning resolver',
   },
   deployment: {
     level: 'real',

@@ -31,7 +31,7 @@ test('immutable sources survive process-cache recreation and corrupt disk entrie
     const { mkdtemp, rm, readdir, writeFile } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
-    const directory = await mkdtemp(join(tmpdir(), 'prism-manifest-cache-test-'));
+    const directory = await mkdtemp(join(tmpdir(), 'lens-manifest-cache-test-'));
     const options = { directory, validate: (value: unknown): value is string => typeof value === 'string' };
     try {
         const original = createGuideManifestCache<string>(2, options);

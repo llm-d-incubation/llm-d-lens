@@ -17,7 +17,7 @@ from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDep
 from llm_d_bench.deploy.providers.hardware_profile import claim_request_name, device_class
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_bench.deploy.providers.storage_mount import resolve_mount
-from llm_d_bench.utils.paths import prism_temp_root
+from llm_d_bench.utils.paths import lens_temp_root
 
 
 class BaselineVllmAdapter:
@@ -28,7 +28,7 @@ class BaselineVllmAdapter:
         self._namespace_prefix = namespace_prefix
         self._timeout = readiness_timeout_seconds
         self._docker_path = docker_path
-        self._root = prism_temp_root("prism-baseline-vllm")
+        self._root = lens_temp_root("lens-baseline-vllm")
         self._definition = GuideDefinition(
             guide_id="baseline-vllm",
             source_ref="generated-kubernetes-baseline",

@@ -414,10 +414,10 @@ class DeploymentRunWorker:
         """Optionally clean one deployment's cluster resources, then drop its records.
 
         When ``delete_namespace`` is true, cluster cleanup happens first: a
-        persisted record is the only handle Prism keeps on a live namespace,
+        persisted record is the only handle Lens keeps on a live namespace,
         so it is removed after the resources it points at are gone, never
         before. When false, the namespace and its workloads are left running
-        and only Prism's own records are dropped.
+        and only Lens's own records are dropped.
 
         A deployment that's still being created (or already being cancelled)
         is cancelled first rather than rejected, so the user isn't forced to

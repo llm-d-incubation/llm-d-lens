@@ -4,5 +4,5 @@
 accelerator observability, and candidate search. Current API contracts and
 operating guides are in [docs](../docs/evaluation/README.md).
 
-Specifications for the removed upstream Prism dashboards, Results Store,
+Specifications for the removed upstream Lens dashboards, Results Store,
 benchmark ingestion, and schema/workload browsers have been removed.

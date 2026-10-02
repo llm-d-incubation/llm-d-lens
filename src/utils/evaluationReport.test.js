@@ -21,7 +21,7 @@ const details = {
     },
 };
 
-const markdown = buildEvaluationMarkdown(details, "https://prism.example/report?evaluationId=run-1");
+const markdown = buildEvaluationMarkdown(details, "https://lens.example/report?evaluationId=run-1");
 assert.match(markdown, /^# Qwen \/ Routing/m);
 assert.match(markdown, /## Comparison summary/);
 assert.match(markdown, /14,892 vs 6,986 \(\+113\.2%\)/);
@@ -29,7 +29,7 @@ assert.match(markdown, /## Shared-prefix rate ladder/);
 assert.match(markdown, /VRAM \+ CPU RAM · Qwen3-32B.*VRAM-only · Qwen3-32B/);
 assert.match(markdown, /190 \(-99\.7%\)/);
 assert.match(markdown, /300 \(-99\.5%\)/);
-assert.match(markdown, /Interactive report.*https:\/\/prism\.example/);
+assert.match(markdown, /Interactive report.*https:\/\/lens\.example/);
 assert.match(markdown, /## Precise Prefix Cache routing evidence/);
 assert.match(markdown, /KV events.*precise per-pod block index/);
 assert.match(markdown, /Precise versus approximate routing/);

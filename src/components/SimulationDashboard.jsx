@@ -1875,7 +1875,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                             )) : (
                                                 <>
                                                     <div>
-                                                        <Label htmlFor="simulation-timeout">Prism execution timeout (seconds)</Label>
+                                                        <Label htmlFor="simulation-timeout">Lens execution timeout (seconds)</Label>
                                                         <Input id="simulation-timeout" type="number" min="1" value={form.traceTimeoutSeconds} onChange={(event) => update('traceTimeoutSeconds', event.target.value)} />
                                                     </div>
                                                     {aiperfAdvancedOptions.map((option) => {

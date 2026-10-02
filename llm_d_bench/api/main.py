@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Minimal API application for Prism backend workflows."""
+"""Minimal API application for Lens backend workflows."""
 
 import asyncio
 import contextlib

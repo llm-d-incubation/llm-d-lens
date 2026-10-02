@@ -63,13 +63,13 @@ class ConfigurationManifestAdapter:
             if not accelerator_supported(source.get("accelerator")):
                 raise ValueError(
                     f"{definition.guide_id} does not support accelerator "
-                    f"{source.get('accelerator')!r} in this Prism release"
+                    f"{source.get('accelerator')!r} in this Lens release"
                 )
             allowed_servers = {"vllm", "vllm-rdma"} if definition.guide_id == "pd-disaggregation" else {"vllm"}
             if source.get("modelServer") not in allowed_servers:
                 raise ValueError(
                     f"{definition.guide_id} does not support model server {source.get('modelServer')} "
-                    "in this Prism release"
+                    "in this Lens release"
                 )
         except ValueError as error:
             return ValidationResult(False, [str(error)])

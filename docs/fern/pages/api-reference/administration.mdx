@@ -666,7 +666,7 @@ System-setting routes live under the `/api/v1/system` prefix from `llm_d_bench/d
 
 ### Read database setup status
 
-Read whether Prism's own database has already been configured.
+Read whether Lens's own database has already been configured.
 
 <Tabs>
   <Tab title="REST API">
@@ -686,7 +686,7 @@ Returns a `DatabaseStatus` object. `displayTarget` is masked host/port/database 
   "configured": true,
   "mode": "external",
   "engine": "postgresql",
-  "displayTarget": "db.example.com:5432/prism"
+  "displayTarget": "db.example.com:5432/lens"
 }
 ```
 
@@ -705,7 +705,7 @@ print(status.configured, status.mode, status.display_target)
 
 ### Configure the backend database
 
-Configure Prism's own database connection (external or embedded) and create the initial tables.
+Configure Lens's own database connection (external or embedded) and create the initial tables.
 
 <Tabs>
   <Tab title="REST API">
@@ -726,7 +726,7 @@ External-database example:
 {
   "mode": "external",
   "engine": "mysql",
-  "databaseUrl": "mysql://prism:secret@db.example.com:3306/prism"
+  "databaseUrl": "mysql://lens:secret@db.example.com:3306/lens"
 }
 ```
 
@@ -739,7 +739,7 @@ Returns the resulting `DatabaseStatus` after connection probing, engine configur
   "configured": true,
   "mode": "external",
   "engine": "mysql",
-  "displayTarget": "db.example.com:3306/prism"
+  "displayTarget": "db.example.com:3306/lens"
 }
 ```
 
@@ -753,7 +753,7 @@ status = apply_database_setup(
     DatabaseSetupRequest(
         mode="external",
         engine="mysql",
-        databaseUrl="mysql://prism:secret@db.example.com:3306/prism",
+        databaseUrl="mysql://lens:secret@db.example.com:3306/lens",
     )
 )
 print(status.configured, status.mode, status.engine)

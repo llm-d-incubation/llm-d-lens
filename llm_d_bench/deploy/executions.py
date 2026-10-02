@@ -528,12 +528,12 @@ async def update_execution_metadata(
 
 
 async def delete_execution(execution_id: str, *, delete_namespace: bool = True) -> None:
-    """Remove a deployment's Prism records, optionally cleaning its cluster resources first.
+    """Remove a deployment's Lens records, optionally cleaning its cluster resources first.
 
     A deployment still used by another module is never destroyed, and cleanup
     failures keep the records so the delete can be retried. When
     ``delete_namespace`` is false, the Kubernetes namespace and its workloads
-    are left running and only Prism's own records are dropped.
+    are left running and only Lens's own records are dropped.
     """
     async with _execution_lock(execution_id):
         context = get_execution_context(execution_id)

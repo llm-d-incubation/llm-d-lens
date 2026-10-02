@@ -42,7 +42,7 @@ alembic -c alembic.ini revision --autogenerate -m "add foo to bar"
 Review the generated script under `llm_d_bench/db/migrations/versions/`
 before committing — autogenerate does not always get defaults, data
 backfills or renames right. See the full
-[migrations README](https://github.com/intel-sandbox/llm-d-prism/blob/main/llm_d_bench/db/migrations/README.md)
+[migrations README](https://github.com/llm-d-incubation/llm-d-lens/blob/main/llm_d_bench/db/migrations/README.md)
 for the baseline-migration history and edge cases (for example why
 `Base.metadata.create_all()` isn't a substitute for real migrations on an
 already-populated database).

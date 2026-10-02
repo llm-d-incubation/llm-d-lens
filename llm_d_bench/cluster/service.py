@@ -813,7 +813,7 @@ def resolve_proxy_env(cluster_id: str | None) -> dict[str, str]:
 
     ``mode="custom"`` returns exactly the cluster's own three values (may be
     partially empty). ``mode="auto"`` (or no cluster/unknown cluster) falls
-    back to the Prism backend process's own environment, preserving
+    back to the Lens backend process's own environment, preserving
     pre-wizard behavior until real auto-detection (Phase 2 of the design
     doc) is implemented.
     """

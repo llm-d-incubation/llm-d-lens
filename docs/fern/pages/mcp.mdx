@@ -1,6 +1,6 @@
 ---
 title: MCP integration
-description: Connect an MCP client (MCP Inspector, an IDE agent, or your own tool) to Lens' Prism MCP server.
+description: Connect an MCP client (MCP Inspector, an IDE agent, or your own tool) to Lens' Lens MCP server.
 ---
 
 Lens exposes its platform capabilities as a **Model Context Protocol (MCP)** server,
@@ -13,7 +13,7 @@ re-implemented in the MCP server.
 
 | Property | Value |
 | --- | --- |
-| Method / path | `POST /api/mcp` (on the Prism BFF/Node server) |
+| Method / path | `POST /api/mcp` (on the Lens BFF/Node server) |
 | Default port | `SERVER_PORT` / `PORT` (3000; the dev stack uses 3003) |
 | Transport | MCP **Streamable HTTP**, JSON-RPC 2.0 |
 | Session | **Stateless** — one ephemeral MCP server per request, no `Mcp-Session-Id` |

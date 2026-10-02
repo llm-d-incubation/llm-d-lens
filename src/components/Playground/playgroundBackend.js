@@ -64,9 +64,9 @@ export async function streamPlaygroundChat({ deployment, messages, pendingResume
     }
 }
 
-// Clusters and cluster sessions are Prism-wide concepts (see
+// Clusters and cluster sessions are Lens-wide concepts (see
 // llm_d_bench/cluster/router.py); reused as-is here so "pick a cluster, then
-// pick a deployment on it" matches every other Prism workflow (e.g. Model
+// pick a deployment on it" matches every other Lens workflow (e.g. Model
 // Market) instead of inventing a parallel concept just for the Playground.
 export async function listClusters() {
     const payload = await loadClusters();

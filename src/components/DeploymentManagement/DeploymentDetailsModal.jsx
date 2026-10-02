@@ -230,7 +230,7 @@ export function DeploymentDetailsModal({ deployment, clusterNameById = {}, onClo
 
                 <p className="rounded-lg border border-slate-800/60 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-500">
                     {deployment.pending
-                        ? 'Prism is rendering the deployment and creating its execution record. This row refreshes automatically once the Kubernetes execution is available.'
+                        ? 'Lens is rendering the deployment and creating its execution record. This row refreshes automatically once the Kubernetes execution is available.'
                         : 'Runtime configuration is immutable. Model, namespace, image, topology, endpoint, and cluster cannot be edited here.'}
                 </p>
             </div>

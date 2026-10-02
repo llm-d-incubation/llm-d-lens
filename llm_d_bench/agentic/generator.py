@@ -137,7 +137,7 @@ class PlanningToolClient(Protocol):
 
 
 class AgenticMcpClient:
-    """Read bounded cluster and AIC context from Prism's existing MCP endpoint."""
+    """Read bounded cluster and AIC context from Lens's existing MCP endpoint."""
 
     def __init__(self, url: str | None = None, *, principal_id: str | None = None) -> None:
         self.url = url or os.getenv("PRISM_MCP_URL", "http://127.0.0.1:3000/api/mcp")
@@ -877,7 +877,7 @@ class AICandidateGenerator:
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "You are Prism's candidate generator. Use the provided tools to gather evidence, then submit candidates.\n"
+            "You are Lens's candidate generator. Use the provided tools to gather evidence, then submit candidates.\n"
             "Generate 1 to 10 materially useful deployment candidates using only these provider_ref values: "
             "baseline-vllm, optimized-baseline, pd-disaggregation, tiered-prefix-cache, "
             "precise-prefix-cache-routing.\n"

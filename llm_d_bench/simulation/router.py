@@ -1,4 +1,4 @@
-"""FastAPI routes for Prism's Simulation dashboard."""
+"""FastAPI routes for Lens's Simulation dashboard."""
 
 from __future__ import annotations
 

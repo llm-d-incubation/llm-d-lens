@@ -1,9 +1,9 @@
-# Prism MCP Tools and Playground Design
+# Lens MCP Tools and Playground Design
 
-> Draft. Wrap existing Prism cluster, model market, Agentic Deployment, and Simulation
+> Draft. Wrap existing Lens cluster, model market, Agentic Deployment, and Simulation
 > capabilities as MCP (Model Context Protocol) tools. Add a **Playground** page for
-> "Talk with your Prism": natural-language conversation in which a model service uses
-> tool calling to query Prism and perform controlled management operations.
+> "Talk with your Lens": natural-language conversation in which a model service uses
+> tool calling to query Lens and perform controlled management operations.
 
 ## 1. Goals and non-goals
 
@@ -13,7 +13,7 @@
    benchmark/candidate retrieval, Agentic deployment plans, and Simulation. Support both
    the built-in Playground and future external MCP clients such as Claude Desktop,
    Copilot, and other agent platforms.
-2. Add "Talk with your Prism" to Playground. **The user selects an existing Prism Deployment
+2. Add "Talk with your Lens" to Playground. **The user selects an existing Lens Deployment
    as the conversation model service**, using their own deployed model instead of configuring
    another external LLM key. The model can query cluster/benchmark data and generate Agentic
    recommendations, but approval/deployment requires **explicit user confirmation**.
@@ -29,7 +29,7 @@
 
 ## 2. Existing reusable capabilities
 
-Prism already separates service logic from REST routes. MCP tools can wrap these capabilities
+Lens already separates service logic from REST routes. MCP tools can wrap these capabilities
 without reimplementing business logic.
 
 | Domain | Existing implementation | Key paths |
@@ -52,20 +52,20 @@ security model for MCP tools rather than inventing a separate permission system.
 
 ```mermaid
 flowchart TD
-    subgraph Browser["Prism frontend"]
+    subgraph Browser["Lens frontend"]
         PG["Playground page\nsrc/components/PlaygroundPage.jsx"]
         ADW["Existing Agentic Deployment Workspace\n(reuse approval UI)"]
     end
-    subgraph Node["Prism Node backend (server/)"]
+    subgraph Node["Lens Node backend (server/)"]
         CHAT["Chat orchestration\nserver/playground/chat.ts\n(SSE, tool-calling loop)"]
-        MCP["Prism MCP Server\nserver/mcp/*\n(@modelcontextprotocol/sdk)"]
+        MCP["Lens MCP Server\nserver/mcp/*\n(@modelcontextprotocol/sdk)"]
         REST["Existing REST routes\ndeploy.ts / remoteDeploy.ts /\ncandidateSearch.ts / guidePlanning.ts"]
     end
     subgraph Py["Python services (llm_d_bench)"]
         AGENTIC["agentic/router.py + service.py\n(Deterministic + OpenAI-compatible Planner)"]
         SIM["simulation service"]
     end
-    LLM["Model service\nOpenAI-compatible gateway_endpoint\nof the user's selected Prism Deployment"]
+    LLM["Model service\nOpenAI-compatible gateway_endpoint\nof the user's selected Lens Deployment"]
     PG -->|"User message"| CHAT
     CHAT -->|"Tool-calling request/response"| LLM
     CHAT -->|"Tool invocation"| MCP
@@ -79,7 +79,7 @@ flowchart TD
 
 - **MCP Server adds no business logic.** It is a thin wrapper over existing REST/service
   functions: schema validation, invocation, and result shaping.
-- **Chat orchestration** owns Prism's tool-calling loop; the browser does not connect directly
+- **Chat orchestration** owns Lens's tool-calling loop; the browser does not connect directly
   to MCP. It sends user messages, system prompts, and tool schemas to the model, executes tool
   requests, and feeds results into subsequent rounds until a final answer. Server-side audit,
   permission filtering, and approval blocking do not depend on the frontend or model behaving well.
@@ -87,12 +87,12 @@ flowchart TD
   returns a pending invocation. The actual `approve` REST call is triggered by the existing
   `AgenticDeploymentWorkspace` button, preserving mandatory human confirmation.
 
-### 3.1 Connecting Playground, Deployment, and Prism MCP tools
+### 3.1 Connecting Playground, Deployment, and Lens MCP tools
 
 - **Deployment (the selected model)** interprets the message, chooses tools, and explains results.
-  It does not connect directly to Prism data/clusters or speak MCP. It exposes an ordinary
+  It does not connect directly to Lens data/clusters or speak MCP. It exposes an ordinary
   OpenAI-compatible chat-completions endpoint accepting `tools=[...]`.
-- **Prism MCP Server** queries capacity/Prometheus, creates plans, and invokes approval. It speaks
+- **Lens MCP Server** queries capacity/Prometheus, creates plans, and invokes approval. It speaks
   MCP (`list_tools`/`call_tool`) independently of the client: Playground or a future IDE agent.
 - **Chat orchestration** translates protocols and enforces access. It speaks OpenAI
   `tools`/`tool_calls` to Deployment and MCP to the server; those endpoints never communicate
@@ -106,8 +106,8 @@ sequenceDiagram
     participant U as User (Playground UI)
     participant CHAT as Chat orchestration\n(server/playground/chat.ts)
     participant DEP as Selected Deployment\n(OpenAI-compatible gateway_endpoint)
-    participant MCP as Prism MCP Server\n(server/mcp/*)
-    participant BE as Existing Prism REST / Python services
+    participant MCP as Lens MCP Server\n(server/mcp/*)
+    participant BE as Existing Lens REST / Python services
     Note over U,CHAT: Conversation starts after the user selects a Deployment
     CHAT->>MCP: list_tools() (once, cached for this conversation)
     MCP-->>CHAT: Tool names and JSON schemas
@@ -207,18 +207,18 @@ Guardrails:
   as `mcpRouter` at `/api/mcp` in `server/server.js`, sharing existing `oauthRouter`/`limiter`
   authentication and rate limits.
 - **Authentication:** reuse session/cluster context (`clusterSession.ts`). Each call carries
-  current Prism session credentials; MCP does not own a separate permission model.
+  current Lens session credentials; MCP does not own a separate permission model.
 - **Schema:** reuse/export existing REST zod/Pydantic validation rather than rewriting it.
 
 ## 6. Playground frontend
 
-- Add top-level Playground navigation with multiple use cases; "Talk with your Prism" comes first.
+- Add top-level Playground navigation with multiple use cases; "Talk with your Lens" comes first.
 - **Select a Deployment before conversation.** Populate a dropdown/card selector through
   `list_ready_deployments`, showing current-session ready deployments with `gateway_endpoint`
   from PoC known-good/smoke, Remote Deploy, or deployed Agentic runs. Show namespace, model,
   accelerator, and source (PoC/Remote/Agentic).
 - After selection, Chat resolves endpoint/model through `get_deployment_endpoint`. The user's
-  own Prism-deployed model drives the conversation; no separate external LLM is configured.
+  own Lens-deployed model drives the conversation; no separate external LLM is configured.
 - If no ready Deployment exists, direct the user to Model Market/Deploy. There is no hidden
   fallback to an external LLM. Warn about or filter models without tool support (§8).
 - Layout: chat/Markdown on the left, a **tool timeline** on the right. Reuse existing components
@@ -253,7 +253,7 @@ Guardrails:
 The following was implemented and locally verified: MCP handshake/list_tools/call_tool,
 end-to-end Playground SSE, `npm run build`, and existing `server/*.test.ts` tests passed.
 
-- `server/mcp/internal.ts`: internal fetch wrapper for tools calling Prism's REST APIs.
+- `server/mcp/internal.ts`: internal fetch wrapper for tools calling Lens's REST APIs.
 - `server/mcp/tools.ts`: read-only catalog containing `get_deploy_status`, `get_deploy_validation`,
   `list_ready_deployments`, `list_agentic_plans`, `get_agentic_plan`, `get_guide_catalog`,
   `get_cluster_stack_status`, and `get_flow_map_metrics`.

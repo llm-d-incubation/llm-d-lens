@@ -63,7 +63,7 @@ class BootstrapHostKeyResponse(StrictModel):
 class BootstrapProxyConfig(StrictModel):
     """Optional per-job network proxy passthrough for the *target* nodes
     (distinct from the cluster-level "Network Proxy" step later in the
-    wizard, which only affects the Prism backend's own llm-d/benchmark
+    wizard, which only affects the Lens backend's own llm-d/benchmark
     downloads). Kubespray needs ``http_proxy``/``https_proxy``/``no_proxy``
     exported on each node for OS package installs and the
     ``container-engine/*`` roles' direct-from-GitHub binary downloads
@@ -71,7 +71,7 @@ class BootstrapProxyConfig(StrictModel):
 
     * ``mode: "auto"`` (default) -- reuse whatever proxy is already
       configured on each *target* node itself (probed over SSH after
-      preflight, before Kubespray runs) rather than the Prism backend
+      preflight, before Kubespray runs) rather than the Lens backend
       process's own environment, since the backend and the target nodes
       may sit on entirely different networks.
     * ``mode: "custom"`` -- use the explicit values below instead (any left

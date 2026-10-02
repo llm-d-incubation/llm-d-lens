@@ -18,7 +18,7 @@ import { PageHeader, ShareLinkButton } from './PageHeader';
 import { Badge } from './Badge';
 
 // The canonical header for well-lit path dashboards (see .agents/skills/ui/SKILL.md):
-// fixed at the top, llm-d logo + Prism wordmark, page title, "Guided path"
+// fixed at the top, llm-d logo + Lens wordmark, page title, "Guided path"
 // badge, Contact us link, Share link. Pair with pt-16 on the page root so
 // content clears the fixed bar. Do not hand-roll this per dashboard.
 export function WellLitHeader({
@@ -45,7 +45,7 @@ export function WellLitHeader({
                             className="h-6 object-contain"
                         />
                         <span className="text-lg font-bold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 select-none hidden sm:inline">
-                            Prism
+                            Lens
                         </span>
                         <span className="text-lg font-bold tracking-wide text-purple-400 select-none hidden sm:inline">
                             Lens

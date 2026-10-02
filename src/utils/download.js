@@ -27,7 +27,7 @@ function filenameFromContentDisposition(disposition) {
 }
 
 /**
- * Fetch a file from the Prism backend and trigger a browser download.
+ * Fetch a file from the Lens backend and trigger a browser download.
  *
  * Adds the GitHub access token header when one is present so downloads work
  * behind the same auth gate as the rest of the API. The saved filename is
