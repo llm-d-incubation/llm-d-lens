@@ -204,7 +204,7 @@ _PROVIDER_CAPABILITIES = {
                 {
                     "id": "lmcache-connector/fs/base",
                     "label": "LMCache CPU + filesystem",
-                    "reason": "Requires RWX PVC provisioning and validation, which Prism does not orchestrate yet.",
+                    "reason": "Requires RWX PVC provisioning and validation, which Lens does not orchestrate yet.",
                 },
             ],
         },

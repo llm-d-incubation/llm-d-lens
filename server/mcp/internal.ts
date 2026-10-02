@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // -----------------------------------------------------------------------------
-// Prism MCP tools are THIN wrappers: every tool handler calls Prism's own
+// Lens MCP tools are THIN wrappers: every tool handler calls Lens's own
 // existing REST API over loopback HTTP instead of re-implementing cluster,
 // session, or auth logic. This keeps the MCP layer a pure adapter, matching
 // the "no new business logic" principle in docs/design/mcp-playground-design.zh-CN.md.
@@ -69,7 +69,7 @@ export async function internalRequest(path: string, init?: RequestInit): Promise
     const url = `${internalBaseUrl()}${path}`;
     try {
         const method = (init?.method || 'GET').toUpperCase();
-        // The MCP loopback re-enters Prism as the caller already authenticated
+        // The MCP loopback re-enters Lens as the caller already authenticated
         // at POST /api/mcp, so it carries that caller's signed identity instead
         // of a browser cookie (design sections 8.3/9.2).
         const headers: Record<string, string> = {

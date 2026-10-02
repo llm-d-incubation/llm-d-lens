@@ -42,7 +42,7 @@ export async function requestJson(url, options = {}, { fallback = {}, errorFacto
     const payload = strictJson && response.ok ? await response.json() : await readJson(response, fallback);
     if (!response.ok || (expectedStatus !== undefined && response.status !== expectedStatus)) {
         if (response.status === 401 && typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('prism:auth-expired'));
+            window.dispatchEvent(new CustomEvent('lens:auth-expired'));
         }
         throw errorFactory(payload, response);
     }

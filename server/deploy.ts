@@ -15,8 +15,8 @@
 // -----------------------------------------------------------------------------
 // Deploy PoC adapter (Phase 1 vertical slice).
 //
-// A THIN adapter that lets Prism trigger a REAL llm-d deployment of a single
-// known-good config, read its status, and tear it down — without Prism itself
+// A THIN adapter that lets Lens trigger a REAL llm-d deployment of a single
+// known-good config, read its status, and tear it down — without Lens itself
 // knowing about Helm/kubectl. It reuses the EXISTING OptimalBench capability:
 //   - deploy / teardown  -> the `llm-d-bench` CLI (DeploymentManager)
 //   - status             -> the OptimalBench REST service (/api/deployments/..)
@@ -177,7 +177,7 @@ export function buildCliDeployCommand(kubectl: string, namespace: string, optima
         + `-n ${shellQuote(namespace)} --llm-d-root ${shellQuote(llmDRoot)} --no-wait`;
 }
 
-// GET the known-good config descriptors for the Prism deploy dropdown.
+// GET the known-good config descriptors for the Lens deploy dropdown.
 deployRouter.get('/api/deploy-poc/config', (_req, res) => {
     res.json({ configs: [SMOKE, KNOWN_GOOD] });
 });
@@ -209,7 +209,7 @@ deployRouter.post('/api/deploy-poc/start', (req, res) => {
     }
     // Pre-create the namespace so the CLI's HF-secret step doesn't warn about a
     // missing namespace (the guide would create it later anyway). Qwen3-0.6B is
-    // public, so the HF token is optional. --no-wait: return fast; Prism polls.
+    // public, so the HF token is optional. --no-wait: return fast; Lens polls.
     const cliCmd = buildCliDeployCommand(KUBECTL, namespace, OB_BIN, LLM_D_ROOT);
     runShellCommand(namespace, 'deploy', cliCmd, sessionId);
     res.json({ namespace, config: KNOWN_GOOD.id, phase: 'deploying' });

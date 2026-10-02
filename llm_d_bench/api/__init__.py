@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Public FastAPI application for the Prism Python backend."""
+"""Public FastAPI application for the Lens Python backend."""
 
 from .main import app
 

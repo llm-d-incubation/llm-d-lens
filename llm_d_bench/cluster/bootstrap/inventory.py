@@ -115,7 +115,7 @@ def render_group_vars(proxy: dict[str, str] | None = None) -> dict:
 
     ``kubeconfig_localhost``/``kubectl_localhost`` make Kubespray write
     ``admin.conf`` under the inventory's own ``artifacts/`` directory on the
-    machine running ``ansible-playbook`` (the Prism backend host itself),
+    machine running ``ansible-playbook`` (the Lens backend host itself),
     so no extra SSH round-trip back to a control-plane node is needed to
     fetch the kubeconfig.
 

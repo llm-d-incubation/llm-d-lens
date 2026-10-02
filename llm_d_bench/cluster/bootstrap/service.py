@@ -241,7 +241,7 @@ def _probe_node_proxy(node: BootstrapNode) -> dict[str, str]:
 
 async def _resolve_auto_proxy_from_nodes(nodes: list[BootstrapNode]) -> dict[str, str] | None:
     """ "Auto" mode (design §3.1): reuse whatever proxy is *already
-    configured on the target nodes being deployed* -- not the Prism
+    configured on the target nodes being deployed* -- not the Lens
     backend host's own environment, since the backend and the target
     nodes may sit on entirely different networks. Probes each node over
     SSH (off the event loop), taking the first non-empty
@@ -317,7 +317,7 @@ async def run_bootstrap_job(job_id: str) -> None:
             job.phase = "failed"
             job.error = (
                 "one or more nodes use password authentication, but 'sshpass' is not installed on "
-                "the Prism backend host (required by Ansible's ssh connection plugin to supply "
+                "the Lens backend host (required by Ansible's ssh connection plugin to supply "
                 "ansible_ssh_pass) -- install it (e.g. `apt-get install sshpass`) or use an SSH "
                 "private key for those nodes instead"
             )

@@ -38,7 +38,7 @@ Filtering cancels superseded list requests. Creation and deletion prevent duplic
 1. In the volume list, click the delete control titled **Delete storage volume**.
 2. In **Delete storage volume**, review the warning about the Kubernetes PVC and PV objects.
 3. If the volume has model-cache entries, click **Continue**.
-4. On the follow-up **Delete storage volume** step, choose **Keep model files** if you want to keep files on NFS or hostPath, or choose **Delete model files** if you want Prism to remove those files first.
+4. On the follow-up **Delete storage volume** step, choose **Keep model files** if you want to keep files on NFS or hostPath, or choose **Delete model files** if you want Lens to remove those files first.
 5. If the volume has no model-cache entries, click **Delete storage volume** directly.
 
 ## Model cache
@@ -47,4 +47,4 @@ Use [Model cache](/user-guide/model-cache) when you need to manage downloaded mo
 
 ## Permissions
 
-Storage actions are cluster-scoped like the rest of Prism: maintainers can manage volumes only on clusters they are bound to, while admins can manage volumes on every cluster.
+Storage actions are cluster-scoped like the rest of Lens: maintainers can manage volumes only on clusters they are bound to, while admins can manage volumes on every cluster.

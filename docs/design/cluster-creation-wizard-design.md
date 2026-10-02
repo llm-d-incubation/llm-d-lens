@@ -556,7 +556,7 @@ expands only after selection:
   `alembic upgrade head`; if the probe fails (network unreachable / authentication
   failure / invalid DSN / missing driver package for the engine), return 422/409 +
   the specific reason (when the driver is missing, include a hint such as
-  `pip install llm-d-prism-backend[mysql|oracle|mssql]`). Step 0 remains visible
+  `pip install llm-d-lens-backend[mysql|oracle|mssql]`). Step 0 remains visible
   and does not allow proceeding; the user can correct the connection string and
   retry, or switch to embedded mode.
 - Embedded mode: call `pgserver.get_server(data_dir)` (initializing with `initdb`

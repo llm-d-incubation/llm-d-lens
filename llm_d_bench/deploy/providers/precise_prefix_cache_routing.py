@@ -1,7 +1,7 @@
 """Precise prefix-cache routing (KV-event driven, EPP-scored) deployment adapter.
 
 Deploys the upstream Kustomize modelserver overlay together with the upstream
-render (tokenizer) Service and a Prism-authored baseline round-robin Service,
+render (tokenizer) Service and a Lens-authored baseline round-robin Service,
 then Helm-installs the llm-d router with the Guide's KV-cache-aware EPP plugin
 chain patched to match the requested model. On readiness this exposes two
 endpoints: the EPP-routed `endpoint_url` and a `baseline_endpoint_url` (a plain
@@ -89,7 +89,7 @@ class PrecisePrefixCacheRoutingAdapter:
             guide_root / "guides/precise-prefix-cache-routing/router/precise-prefix-cache-routing.values.yaml"
         )
         self._calibration_script = guide_root / "guides/recipes/router/calibration/calibrate.sh"
-        self._root = Path(tempfile.gettempdir()) / "prism-precise-prefix-cache-routing"
+        self._root = Path(tempfile.gettempdir()) / "lens-precise-prefix-cache-routing"
         self._namespace_prefix = namespace_prefix
         self._timeout = timeout
         self._helm_path = helm_path

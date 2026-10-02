@@ -70,7 +70,7 @@ user explicitly asks). Adapt the task id, `--unit` list and test paths to the
 active task; the block below is the current llm-d Gateway Mode task.
 
 ```bash
-cd /home/yi/coding/prism/new_cluster_creation/llm-d-prism
+cd /path/to/llm-d-lens
 for u in unit-10 unit-11 unit-13; do npm run reuse -- cover --task llmd-gateway-mode-migration --unit "$u" --outcome modified --summary "Model-cache downloads use the cluster's saved HF token (no token picker); topology column widths." >/dev/null 2>&1 && echo "cover $u"; done
 K='not (test_aliases_and_concurrent_downloads_share_commit or test_moving_branch_publishes_new_checkout_preserving_old or test_distinct_urls_are_isolated or test_ref_names_that_previously_collided_and_cached_commit_offline or test_published_deployment_names_scope_commands_and_smoke_test)'
 V(){ npm run reuse -- verify --task llmd-gateway-mode-migration "$@" >/dev/null 2>&1; }

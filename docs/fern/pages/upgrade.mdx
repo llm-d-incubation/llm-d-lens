@@ -10,7 +10,7 @@ installer against an existing `--install-dir` picks up the new code, rebuilds
 the app, and reuses the existing configuration and database:
 
 ```bash
-git -C /path/to/llm-d-prism pull
+git -C /path/to/llm-d-lens pull
 ./scripts/LensInstaller-Ubuntu-x86_64.sh --install-dir "$HOME/llm-d-lens" --silent
 ```
 
@@ -26,7 +26,8 @@ traffic again — see [Migration](/migration).
 ```bash
 git pull
 npm install
-python3 -m pip install -e '.[dev]'
+.venv/bin/python scripts/prepare_python_project_upgrade.py
+.venv/bin/python -m pip install -e '.[dev]'
 node scripts/generate-mcp-tools.mjs
 scripts/dev.sh restart
 ```
@@ -41,3 +42,31 @@ to the previous tag/commit and re-running the installer/`scripts/dev.sh
 restart` the same way. If a database migration ran as part of the upgrade,
 roll it back first with `alembic downgrade -1` (see [Migration](/migration))
 before switching the code back.
+
+## Repository naming compatibility
+
+The current repository is
+[llm-d-incubation/llm-d-lens](https://github.com/llm-d-incubation/llm-d-lens).
+New Node and Python package metadata use `llm-d-lens` and
+`llm-d-lens-backend`. Python imports still use `llm_d_bench`.
+
+The installer and development service manager remove the old backend package
+metadata before installing the new distribution. This prevents duplicate
+hardware-provider entry points. The preparation command removes only the
+old distribution from the target virtualenv and its generated source
+metadata; it preserves application data and other installed packages.
+
+Existing `PRISM_*` configuration settings, `prism_session` / `prism_csrf`
+cookies, `x-prism-*` headers, saved browser keys, and Kubernetes resource names
+and label keys remain stable. Keep the existing secret values, bootstrap
+configuration, database, and storage paths when upgrading. The repository
+rename does not migrate data or create replacement cluster resources.
+
+New self-signed certificates use `lens.crt` and `lens.key`. The certificate
+generator reuses an existing `prism.crt` / `prism.key` pair, so an upgrade does
+not require trusting a new certificate.
+
+Internal integrations can use `lens_temp_root`, `LensTool`, `lensTools`, and
+`createLensMcpServer`. Their previous names remain compatibility aliases.
+References to the original upstream Prism project in historical reports and
+proposal documents describe that project rather than the current repository.

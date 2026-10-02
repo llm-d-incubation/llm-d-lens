@@ -13,17 +13,17 @@
 // limitations under the License.
 
 // -----------------------------------------------------------------------------
-// Mounts the Prism MCP tool catalog as a stateless Streamable HTTP MCP server
+// Mounts the Lens MCP tool catalog as a stateless Streamable HTTP MCP server
 // at POST /api/mcp, per the SDK's stateless pattern: one ephemeral McpServer +
 // transport per request, no session id required. This is intentional for
-// Phase 1 (read-only tools only) and lets both Prism's own Playground chat
+// Phase 1 (read-only tools only) and lets both Lens's own Playground chat
 // orchestrator (server/playground/chat.ts) AND any external MCP client
 // (MCP Inspector, an IDE agent, etc.) connect the same way.
 // -----------------------------------------------------------------------------
 
 import { Router } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createPrismMcpServer } from './server.ts';
+import { createLensMcpServer } from './server.ts';
 
 export const mcpRouter = Router();
 
@@ -31,7 +31,7 @@ export const mcpRouter = Router();
 // applied in server/server.js before this router is mounted.
 mcpRouter.post('/api/mcp', async (req, res) => {
     try {
-        const server = createPrismMcpServer();
+        const server = createLensMcpServer();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         res.on('close', () => {
             transport.close();
@@ -40,7 +40,7 @@ mcpRouter.post('/api/mcp', async (req, res) => {
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
     } catch (error) {
-        console.error('[Prism MCP]', error);
+        console.error('[Lens MCP]', error);
         if (!res.headersSent) {
             res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
         }

@@ -6,4 +6,4 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Python services used by Prism's llm-d benchmark workflows."""
+"""Python services used by Lens's llm-d benchmark workflows."""

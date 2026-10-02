@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""FastAPI routes for Prism configuration processing."""
+"""FastAPI routes for Lens configuration processing."""
 
 import io
 import json
@@ -275,7 +275,7 @@ async def download_artifact_bundle(artifact_id: str, request: Request = None) ->
                 "router-effective.yaml contains the merged Helm values. deployment-bundle.json records the chart "
                 "version, source commit and content checksums. Auxiliary YAML and the calibration recipe are "
                 "included when needed. Namespace, storage provisioning and post-deployment calibration are "
-                "performed by Prism; effective calibration values are recorded in deployment diagnostics.\n"
+                "performed by Lens; effective calibration values are recorded in deployment diagnostics.\n"
             ),
         )
     return Response(

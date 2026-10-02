@@ -19,7 +19,7 @@
 import { createContext, useContext } from 'react';
 
 // Workflow tabs. Benchmark is an unnumbered independent tool that becomes
-// available after deployment; `view` is the Prism navigation id.
+// available after deployment; `view` is the Lens navigation id.
 export const STAGES = [
     { id: 'define-workload', view: 'opt-define', label: 'Define Workload', step: '1', group: 'Plan', agent: false },
     { id: 'search-candidates', view: 'opt-search', label: 'Plan Deployment', step: '2', group: 'Configure', agent: true },

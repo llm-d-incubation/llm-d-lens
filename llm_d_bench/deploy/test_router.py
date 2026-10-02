@@ -228,7 +228,7 @@ def test_standard_kubernetes_service_run_rejects_dynamic_pvc_model_cache_storage
 def test_get_execution_pods_returns_pods(monkeypatch):
     mock_context = SimpleNamespace(
         execution_id="exec-123",
-        namespace="prism-exec-123",
+        namespace="lens-exec-123",
         cluster_id="cluster-1",
         cluster_session_id=None,
     )
@@ -240,7 +240,7 @@ def test_get_execution_pods_returns_pods(monkeypatch):
                 {
                     "metadata": {
                         "name": "pod-1",
-                        "namespace": "prism-exec-123",
+                        "namespace": "lens-exec-123",
                         "creationTimestamp": "2026-09-06T00:00:00Z",
                     },
                     "status": {
@@ -272,7 +272,7 @@ def test_get_execution_pods_returns_pods(monkeypatch):
 
     res = asyncio.run(router.get_execution_pods("exec-123"))
     assert res["execution_id"] == "exec-123"
-    assert res["namespace"] == "prism-exec-123"
+    assert res["namespace"] == "lens-exec-123"
     assert len(res["pods"]) == 1
     assert res["pods"][0]["name"] == "pod-1"
     assert res["pods"][0]["phase"] == "Running"
@@ -283,7 +283,7 @@ def test_get_execution_pods_returns_pods(monkeypatch):
 def test_get_execution_pod_logs_returns_logs(monkeypatch):
     mock_context = SimpleNamespace(
         execution_id="exec-123",
-        namespace="prism-exec-123",
+        namespace="lens-exec-123",
         cluster_id="cluster-1",
         cluster_session_id=None,
     )

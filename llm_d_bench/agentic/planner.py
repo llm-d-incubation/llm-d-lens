@@ -982,7 +982,7 @@ def _topology_key(candidate: PlannedCandidate) -> tuple[object, ...]:
 
 
 class OpenAICompatiblePlanner:
-    """Preferred configured planner that can select only candidates validated by Prism."""
+    """Preferred configured planner that can select only candidates validated by Lens."""
 
     def __init__(
         self,
@@ -1082,7 +1082,7 @@ class OpenAICompatiblePlanner:
         user_content += "\n\nDeployment use case (important scenario-specific planning input):\n" + facts.use_case
         expected_candidate_count = min(3, len(valid_candidates))
         system_prompt = (
-            "You are Prism's configuration selector. Follow this priority order:\n"
+            "You are Lens's configuration selector. Follow this priority order:\n"
             "Provider semantics:\n"
             f"{provider_guidance()}\n"
             "1. Choose only among valid_candidates. Never invent IDs, configurations, providers, or facts.\n"
@@ -1320,7 +1320,7 @@ class OpenAICompatiblePlanner:
 
     @staticmethod
     def _recommendation_schema(valid_ids: set[str]) -> dict[str, Any]:
-        """Constrain provider output to exactly the candidate IDs Prism supplied."""
+        """Constrain provider output to exactly the candidate IDs Lens supplied."""
         schema = OpenAIPlannerRecommendation.model_json_schema()
         ordered_ids = sorted(valid_ids)
         schema["properties"]["candidate_id"] = {"type": "string", "enum": ordered_ids}

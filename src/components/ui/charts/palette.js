@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The single categorical palette for every chart in Prism.
+// The single categorical palette for every chart in Lens.
 //
 // Validated (OKLCH lightness band, chroma floor, CVD adjacent-pair separation,
 // normal-vision floor, WCAG contrast) against both the light (#ffffff) and dark

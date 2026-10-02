@@ -18,7 +18,7 @@ class StrictModel(BaseModel):
 class ProxyConfigDTO(StrictModel):
     """See docs/design/cluster-creation-wizard-design.md section 4.2.
 
-    ``mode="auto"`` today falls back to whatever proxy env vars the Prism
+    ``mode="auto"`` today falls back to whatever proxy env vars the Lens
     backend process itself sees (auto-detection of the target cluster's own
     proxy is not implemented yet -- see the design doc's Phase 2). ``custom``
     uses the three values below verbatim for this cluster only.

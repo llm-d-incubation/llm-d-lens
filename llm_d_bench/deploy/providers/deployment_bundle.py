@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from llm_d_bench.utils.paths import prism_temp_root
+from llm_d_bench.utils.paths import lens_temp_root
 from llm_d_bench.utils.shell import spawn
 
 CommandRunner = Callable[[list[str]], Awaitable[tuple[int, str, str]]]
@@ -120,7 +120,7 @@ def materialize_deployment_bundle(
     validate_deployment_bundle(bundle, guide, source_commit)
     serialized = json.dumps(bundle, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-    root = (output_root or prism_temp_root("guide-deployment-bundles")).resolve()
+    root = (output_root or lens_temp_root("guide-deployment-bundles")).resolve()
     directory = (root / digest).resolve()
     if not directory.is_relative_to(root):
         raise ValueError("Guide deployment bundle path is outside the controlled output directory")

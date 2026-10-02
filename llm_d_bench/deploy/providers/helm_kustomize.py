@@ -21,7 +21,7 @@ from llm_d_bench.deploy.providers.deployment_bundle import (
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_bench.deploy.providers.hardware_profile import requires_dra_claim, set_accelerator_request
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
-from llm_d_bench.utils.paths import prism_temp_root
+from llm_d_bench.utils.paths import lens_temp_root
 from llm_d_bench.utils.shell import spawn
 
 
@@ -65,7 +65,7 @@ class HelmKustomizeGuideAdapter:
         self._timeout = timeout_seconds
         self._environment = {**os.environ, "KUBECONFIG": kubeconfig} if kubeconfig else None
         self._bundle_command_runner = subprocess_bundle_runner(helm_path, kubectl_path, self._environment)
-        self._render_root = prism_temp_root("prism-helm-kustomize", descriptor.guide_id)
+        self._render_root = lens_temp_root("lens-helm-kustomize", descriptor.guide_id)
         self._definition = GuideDefinition(
             guide_id=descriptor.guide_id,
             source_ref=f"local-{descriptor.guide_id}",

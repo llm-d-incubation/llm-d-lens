@@ -1,4 +1,4 @@
-# Lens
+# llm-d-lens
 
 Lens manages models, inference deployments, evaluation, simulation, and cluster
 resources.
@@ -17,7 +17,7 @@ resources.
 - External providers (`ai-providers`)
 - Observability (`cluster-monitoring-stack`)
 
-The original Prism benchmark browser, Results Store, workload catalog, schema
+The original upstream Prism benchmark browser, Results Store, workload catalog, schema
 explorer, regression dashboards, and well-lit-path demonstration pages have been
 removed. Their GCS/GIQ/Drive data ingestion and GitHub submission authentication
 are no longer required. Shared UI and infrastructure used by Lens remain.
@@ -25,6 +25,8 @@ are no longer required. Shared UI and infrastructure used by Lens remain.
 ## Local development
 
 ```bash
+git clone https://github.com/llm-d-incubation/llm-d-lens.git
+cd llm-d-lens
 npm install
 python3 -m venv .venv
 source .venv/bin/activate
@@ -54,7 +56,7 @@ make test-python
 The generated MCP catalog is required for the assistant and Node server. Regenerate
 it when backend routes change. Docker builds generate it automatically.
 
-The original Prism Cloud Run publishing workflow has been removed. Use the Lens
+The original upstream Prism Cloud Run publishing workflow has been removed. Use the Lens
 Dockerfiles, Compose configuration, or `scripts/dev.sh` for this application.
 
 ## Documentation

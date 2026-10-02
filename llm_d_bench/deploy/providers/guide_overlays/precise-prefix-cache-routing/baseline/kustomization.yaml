@@ -1,7 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Prism-authored comparison baseline for the precise-prefix-cache-routing Guide.
+# Lens-authored comparison baseline for the precise-prefix-cache-routing Guide.
 #
 # Upstream ships no such Service -- this exists purely so Evaluate can compare
 # precise, event-driven prefix-cache routing against "a stock Kubernetes Service

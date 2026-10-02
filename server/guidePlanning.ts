@@ -52,7 +52,7 @@ const loadCachedManifest = createGuideManifestCache<ManifestSet>(24, {
     },
 });
 function githubHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'llm-d-prism' };
+    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'llm-d-lens' };
     if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     return headers;
 }
@@ -243,7 +243,7 @@ async function discoverLocalCluster(kubeconfig: string | null = null): Promise<J
 
 function inspectionSections(output: string): Record<string, string> {
     const sections: Record<string, string> = {};
-    const marker = /^__PRISM_([A-Z_]+)__$/gm;
+    const marker = /^__LENS_([A-Z_]+)__$/gm;
     const matches = [...output.matchAll(marker)];
     matches.forEach((match, index) => {
         const start = (match.index || 0) + match[0].length;
@@ -272,18 +272,18 @@ function remoteAccelerators(sections: Record<string, string>): JsonRecord {
 
 async function discoverRemoteEnvironment(target: unknown, requestCredentials: unknown): Promise<{ machine: JsonRecord; cluster: JsonRecord | null }> {
     const command = [
-        'printf "__PRISM_HOST__\\n"; hostname',
-        'printf "__PRISM_PLATFORM__\\n"; uname -srm',
-        'printf "__PRISM_CPU__\\n"; (lscpu -J 2>/dev/null || true)',
-        'printf "__PRISM_CORES__\\n"; (getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0)',
-        'printf "__PRISM_MEMORY__\\n"; awk \'/MemTotal/ {print $2}\' /proc/meminfo 2>/dev/null',
-        'printf "__PRISM_NVIDIA__\\n"; (nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)',
-        'printf "__PRISM_ROCM__\\n"; (rocm-smi --showproductname --showmeminfo vram --csv 2>/dev/null || true)',
-        'printf "__PRISM_XPU__\\n"; (xpu-smi discovery -d 2>/dev/null || true)',
-        'printf "__PRISM_K8S_VERSION__\\n"; (kubectl version -o json 2>/dev/null || true)',
-        'printf "__PRISM_K8S_NODES__\\n"; (kubectl get nodes -o json 2>/dev/null || true)',
-        'printf "__PRISM_DEVICE_CLASSES__\\n"; (kubectl get deviceclasses.resource.k8s.io -o json 2>/dev/null || true)',
-        'printf "__PRISM_RESOURCE_SLICES__\\n"; (kubectl get resourceslices.resource.k8s.io -o json 2>/dev/null || true)',
+        'printf "__LENS_HOST__\\n"; hostname',
+        'printf "__LENS_PLATFORM__\\n"; uname -srm',
+        'printf "__LENS_CPU__\\n"; (lscpu -J 2>/dev/null || true)',
+        'printf "__LENS_CORES__\\n"; (getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0)',
+        'printf "__LENS_MEMORY__\\n"; awk \'/MemTotal/ {print $2}\' /proc/meminfo 2>/dev/null',
+        'printf "__LENS_NVIDIA__\\n"; (nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)',
+        'printf "__LENS_ROCM__\\n"; (rocm-smi --showproductname --showmeminfo vram --csv 2>/dev/null || true)',
+        'printf "__LENS_XPU__\\n"; (xpu-smi discovery -d 2>/dev/null || true)',
+        'printf "__LENS_K8S_VERSION__\\n"; (kubectl version -o json 2>/dev/null || true)',
+        'printf "__LENS_K8S_NODES__\\n"; (kubectl get nodes -o json 2>/dev/null || true)',
+        'printf "__LENS_DEVICE_CLASSES__\\n"; (kubectl get deviceclasses.resource.k8s.io -o json 2>/dev/null || true)',
+        'printf "__LENS_RESOURCE_SLICES__\\n"; (kubectl get resourceslices.resource.k8s.io -o json 2>/dev/null || true)',
     ].join('; ');
     const result = await executeRemoteInspection(target, requestCredentials, command);
     const sections = inspectionSections(result.stdout);

@@ -2,7 +2,7 @@
 
 import pytest
 
-from llm_d_bench.utils.paths import prism_temp_root, storage_path
+from llm_d_bench.utils.paths import lens_temp_root, storage_path
 
 
 def test_lens_roots_ignore_legacy_environment(monkeypatch, tmp_path):
@@ -18,14 +18,21 @@ def test_lens_roots_ignore_legacy_environment(monkeypatch, tmp_path):
 def test_scratch_ignores_legacy_override(monkeypatch, tmp_path):
     monkeypatch.setenv("PRISM_SCRATCH_DIR", str(tmp_path / "scratch"))
     monkeypatch.setenv("LENS_SCRATCH_DIR", str(tmp_path / "new"))
-    assert prism_temp_root("provider") == tmp_path / "new/provider"
+    assert lens_temp_root("provider") == tmp_path / "new/provider"
 
 
 def test_scratch_new_default(monkeypatch, tmp_path):
     monkeypatch.delenv("PRISM_SCRATCH_DIR", raising=False)
     monkeypatch.delenv("LENS_SCRATCH_DIR", raising=False)
     monkeypatch.setenv("LENS_CACHE_DIR", str(tmp_path))
-    assert prism_temp_root("provider") == tmp_path / "tmp/provider"
+    assert lens_temp_root("provider") == tmp_path / "tmp/provider"
+
+
+def test_legacy_scratch_import_preserves_lens_layout(monkeypatch, tmp_path):
+    from llm_d_bench.utils.paths import prism_temp_root
+
+    monkeypatch.setenv("LENS_SCRATCH_DIR", str(tmp_path))
+    assert prism_temp_root("provider") == lens_temp_root("provider")
 
 
 @pytest.mark.parametrize("part", ["../escape", "/escape"])
@@ -68,7 +75,7 @@ def test_domains_ignore_all_old_storage_variables(tmp_path):
             sys.executable,
             "-c",
             """
-from llm_d_bench.utils.paths import storage_path, prism_temp_root
+from llm_d_bench.utils.paths import storage_path, lens_temp_root
 from llm_d_bench.configuration.service import CONFIGURATION_OUTPUT_DIR, CONFIGURATION_ARTIFACT_DIR
 from llm_d_bench.utils.artifacts import DEPLOYMENT_MANIFEST_DIR
 from llm_d_bench.evaluate.router import _results_root, _runs_directory
@@ -89,7 +96,7 @@ assert ClusterSettings.from_environment().session_directory == storage_path(
 )
 assert repo_root() == storage_path("cache", "repos")
 assert kubespray_root() == storage_path("cache", "kubespray")
-assert prism_temp_root("test") == storage_path("scratch", "test")
+assert lens_temp_root("test") == storage_path("scratch", "test")
 """,
         ],
         env=environment,

@@ -38,13 +38,13 @@ def test_status_reports_unconfigured_by_default():
 
 
 def test_status_reports_configured_via_env_var(monkeypatch):
-    monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", "postgresql://user:secret@db.example.com:5432/prism")
+    monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", "postgresql://user:secret@db.example.com:5432/lens")
     monkeypatch.setenv("LLM_D_BENCH_DB_MODE", "external")
     response = client.get("/api/v1/system/database")
     body = response.json()
     assert body["configured"] is True
     assert body["mode"] == "external"
-    assert body["displayTarget"] == "db.example.com:5432/prism"
+    assert body["displayTarget"] == "db.example.com:5432/lens"
     assert "secret" not in body["displayTarget"]
     assert "user" not in body["displayTarget"]
 

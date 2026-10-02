@@ -30,9 +30,9 @@ export const TERMINAL_EVALUATION_STATUSES = new Set([
 ]);
 
 const BASELINE_LABELS = Object.freeze({
-    "direct-vllm": "Prism plain vLLM reference",
-    "router-neutral": "Prism neutral-router reference",
-    "router-round-robin": "Prism neutral-router reference",
+    "direct-vllm": "Lens plain vLLM reference",
+    "router-neutral": "Lens neutral-router reference",
+    "router-round-robin": "Lens neutral-router reference",
     "load-only": "Load-only routing",
     "affinity-only": "Affinity Policy Only",
     "optimized-baseline": "llm-d optimized-baseline Guide",

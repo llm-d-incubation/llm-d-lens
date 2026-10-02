@@ -272,7 +272,7 @@ def test_evaluation_capacity_rejects_more_cards_than_allowlisted(monkeypatch):
         checksum=configuration_checksum(content),
     )
 
-    with pytest.raises(ValueError, match="configuration requires 8 XPU cards, but only 4 are available to Prism"):
+    with pytest.raises(ValueError, match="configuration requires 8 XPU cards, but only 4 are available to Lens"):
         router._validate_evaluation_capacity(configuration)
 
 

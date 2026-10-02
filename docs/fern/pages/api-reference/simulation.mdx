@@ -188,7 +188,7 @@ List registered trace datasets and the backends that can replay each one.
 
     ```json
     {
-      "data_dir": "/home/prism/.local/share/prism/data/datasets",
+      "data_dir": "/home/lens/.local/share/lens/data/datasets",
       "datasets": [
         {
           "name": "mooncake-arxiv",
@@ -197,7 +197,7 @@ List registered trace datasets and the backends that can replay each one.
           "trace_format": "mooncake_trace",
           "description": "Mooncake chat trace derived from Arxiv summarization prompts.",
           "downloaded": false,
-          "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+          "path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
           "artifact_uri": "artifact://dataset/mooncake-arxiv/mooncake_trace.jsonl",
           "size_bytes": null,
           "license": "Apache-2.0",
@@ -252,10 +252,10 @@ Download a registered trace dataset into Lens's local trace store.
     ```json
     {
       "artifact_uri": "artifact://dataset/mooncake-arxiv/mooncake_trace.jsonl",
-      "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+      "path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
       "trace_format": "mooncake_trace",
       "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
-      "metadata_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl.metadata.json",
+      "metadata_path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl.metadata.json",
       "size_bytes": 1048576
     }
     ```
@@ -348,7 +348,7 @@ List Simulation tasks with optional filters for status, scenario, backend, model
           "scenario": "chat",
           "status": "running",
           "endpoint_mode": "deployment",
-          "endpoint_namespace": "prism-sim",
+          "endpoint_namespace": "lens-sim",
           "endpoint_service": "qwen-router",
           "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
           "endpoint_deployment_run_id": null,
@@ -371,7 +371,7 @@ List Simulation tasks with optional filters for status, scenario, backend, model
             "type": "trace",
             "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
             "trace": {
-              "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+              "path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
               "format": "mooncake_trace",
               "fixed_schedule": true,
               "timeout_seconds": 3600.0,
@@ -380,7 +380,7 @@ List Simulation tasks with optional filters for status, scenario, backend, model
               "end_seconds": null
             }
           },
-          "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
+          "task_dir": "/home/lens/.local/share/lens/data/artifacts/simulations/1a2b3c4d",
           "artifact_uri": null,
           "artifact_error": null,
           "logs_truncated": false,
@@ -465,7 +465,7 @@ Create a Simulation task that replays a trace dataset against a target model end
       "backend": "trace-replayer",
       "endpoint_mode": "deployment",
       "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "endpoint_namespace": "prism-sim",
+      "endpoint_namespace": "lens-sim",
       "endpoint_service": "qwen-router",
       "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
       "endpoint_cluster_id": "cluster-1",
@@ -474,7 +474,7 @@ Create a Simulation task that replays a trace dataset against a target model end
       "endpoint_url": "http://127.0.0.1:38000/v1",
       "model_name": "Qwen/Qwen3-8B",
       "trace_dataset": "mooncake-arxiv",
-      "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+      "trace_path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
       "duration_seconds": 60,
       "scale_factor": 1,
       "trace_start_seconds": 0,
@@ -499,7 +499,7 @@ Create a Simulation task that replays a trace dataset against a target model end
         "scenario": "chat",
         "status": "queued",
         "endpoint_mode": "deployment",
-        "endpoint_namespace": "prism-sim",
+        "endpoint_namespace": "lens-sim",
         "endpoint_service": "qwen-router",
         "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
         "endpoint_deployment_run_id": null,
@@ -522,7 +522,7 @@ Create a Simulation task that replays a trace dataset against a target model end
           "type": "trace",
           "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
           "trace": {
-            "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+            "path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
             "format": "mooncake_trace",
             "fixed_schedule": true,
             "timeout_seconds": 3600.0,
@@ -531,7 +531,7 @@ Create a Simulation task that replays a trace dataset against a target model end
             "end_seconds": null
           }
         },
-        "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
+        "task_dir": "/home/lens/.local/share/lens/data/artifacts/simulations/1a2b3c4d",
         "artifact_uri": null,
         "artifact_error": null,
         "logs_truncated": false,
@@ -573,7 +573,7 @@ async def main() -> None:
             endpoint_url="http://127.0.0.1:38000/v1",
             model_name="Qwen/Qwen3-8B",
             trace_dataset="mooncake-arxiv",
-            trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+            trace_path="/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
         )
     )
     print(task.id, task.status)
@@ -605,7 +605,7 @@ Get one Simulation task by id, including progress, logs, and result artifacts wh
       "scenario": "chat",
       "status": "completed",
       "endpoint_mode": "deployment",
-      "endpoint_namespace": "prism-sim",
+      "endpoint_namespace": "lens-sim",
       "endpoint_service": "qwen-router",
       "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
       "endpoint_deployment_run_id": null,
@@ -628,7 +628,7 @@ Get one Simulation task by id, including progress, logs, and result artifacts wh
         "type": "trace",
         "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
         "trace": {
-          "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+          "path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
           "format": "mooncake_trace",
           "fixed_schedule": true,
           "timeout_seconds": 3600.0,
@@ -637,7 +637,7 @@ Get one Simulation task by id, including progress, logs, and result artifacts wh
           "end_seconds": null
         }
       },
-      "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
+      "task_dir": "/home/lens/.local/share/lens/data/artifacts/simulations/1a2b3c4d",
       "artifact_uri": "artifact://simulation/1a2b3c4d",
       "artifact_error": null,
       "logs_truncated": false,
@@ -661,7 +661,7 @@ Get one Simulation task by id, including progress, logs, and result artifacts wh
           {
             "uri": "artifact://simulation/1a2b3c4d/summary.json",
             "kind": "summary-json",
-            "path": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d/summary.json",
+            "path": "/home/lens/.local/share/lens/data/artifacts/simulations/1a2b3c4d/summary.json",
             "media_type": "application/json"
           }
         ],
@@ -870,7 +870,7 @@ Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh 
         "scenario": "chat",
         "status": "queued",
         "endpoint_mode": "deployment",
-        "endpoint_namespace": "prism-sim",
+        "endpoint_namespace": "lens-sim",
         "endpoint_service": "qwen-router",
         "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000002",
         "endpoint_deployment_run_id": null,
@@ -893,7 +893,7 @@ Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh 
           "type": "trace",
           "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
           "trace": {
-            "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+            "path": "/home/lens/.local/share/lens/data/datasets/mooncake_trace.jsonl",
             "format": "mooncake_trace",
             "fixed_schedule": true,
             "timeout_seconds": 3600.0,
@@ -902,7 +902,7 @@ Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh 
             "end_seconds": null
           }
         },
-        "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/5e6f7a8b",
+        "task_dir": "/home/lens/.local/share/lens/data/artifacts/simulations/5e6f7a8b",
         "artifact_uri": null,
         "artifact_error": null,
         "logs_truncated": false,

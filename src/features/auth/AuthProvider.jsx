@@ -31,8 +31,8 @@ export function AuthProvider({ children }) {
             setPrincipal(null);
             setStatus('anonymous');
         };
-        window.addEventListener('prism:auth-expired', onExpired);
-        return () => window.removeEventListener('prism:auth-expired', onExpired);
+        window.addEventListener('lens:auth-expired', onExpired);
+        return () => window.removeEventListener('lens:auth-expired', onExpired);
     }, [refresh]);
 
     const login = useCallback(async (username, password, remember = false) => {

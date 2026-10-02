@@ -179,8 +179,8 @@ Shared domain error classification and foundations for HTTP status mapping.
 Unified Lens persistent data, logs, cache, scratch and runtime path selection; only LENS roots and XDG defaults are supported.
 
 - Entry point: [llm_d_bench/utils/paths.py](../llm_d_bench/utils/paths.py)
-- Symbols: `storage_path`, `prism_temp_root`
-- Boundaries: Path selection only; LENS_* overrides XDG defaults, legacy domain directory variables are ignored. No implicit migration, creation or cleanup. Reject traversal; domains own lifecycle. prism_temp_root uses LENS_SCRATCH_DIR.
+- Symbols: `storage_path`, `lens_temp_root`, `prism_temp_root`
+- Boundaries: Path selection only; LENS_* overrides XDG defaults, legacy domain directory variables are ignored. No implicit migration, creation or cleanup. Reject traversal; domains own lifecycle. lens_temp_root uses LENS_SCRATCH_DIR; prism_temp_root remains a compatibility alias with the same path/error contract.
 - Examples: [llm_d_bench/cluster/settings.py](../llm_d_bench/cluster/settings.py), [llm_d_bench/configuration/service.py](../llm_d_bench/configuration/service.py), [llm_d_bench/simulation/service.py](../llm_d_bench/simulation/service.py)
 - Tests: [llm_d_bench/utils/test_paths.py](../llm_d_bench/utils/test_paths.py)
 
@@ -890,7 +890,7 @@ React context maintaining the current principal and permission checks.
 
 - Entry point: [src/features/auth/AuthProvider.jsx](../src/features/auth/AuthProvider.jsx)
 - Symbols: `AuthProvider`
-- Boundaries: Session is a revocable httpOnly cookie; this provider only mirrors /api/v1/auth/session. 401 from httpClient dispatches prism:auth-expired to reset state. Use useAuth() inside the provider.
+- Boundaries: Session is a revocable httpOnly cookie; this provider only mirrors /api/v1/auth/session. 401 from httpClient dispatches lens:auth-expired to reset state. Use useAuth() inside the provider.
 - Examples: [src/App.jsx](../src/App.jsx), [src/features/auth/LoginPage.jsx](../src/features/auth/LoginPage.jsx)
 - Tests: [src/features/auth/permissions.test.js](../src/features/auth/permissions.test.js)
 
@@ -1516,3 +1516,33 @@ Browser and Node copy of the administrator-managed Hugging Face environment poli
 - Boundaries: Mirrors llm_d_bench/configuration/managed_environment.py: matches HF_, HUGGING and TRANSFORMERS_ prefixes case-insensitively. Presentation-safe and React-free so both the browser validator and server/configurationOverrides.ts can import it.
 - Examples: [src/features/evaluation/configurationValidation.js](../src/features/evaluation/configurationValidation.js), [server/configurationOverrides.ts](../server/configurationOverrides.ts)
 - Tests: [src/features/evaluation/configurationValidation.test.js](../src/features/evaluation/configurationValidation.test.js), [server/configurationOverrides.test.ts](../server/configurationOverrides.test.ts)
+
+## mcp-tool-catalog
+
+Existing MCP tool descriptor contract and shared mutable Lens catalog used by generated adapters, the MCP server, and the assistant.
+
+- Entry point: [server/mcp/specialTools.ts](../server/mcp/specialTools.ts)
+- Symbols: `LensTool`, `lensTools`, `findTool`
+- Boundaries: The generator appends API-derived tools to the same array. Tool names, handlers, risk tiers, input schemas, and target-route authorization remain owned by the existing adapters. PrismTool and prismTools are compatibility aliases, not additional catalogs.
+- Examples: [scripts/generate-mcp-tools.mjs](../scripts/generate-mcp-tools.mjs), [server/mcp/server.ts](../server/mcp/server.ts), [server/playground/chat.ts](../server/playground/chat.ts)
+- Tests: [server/mcp/specialTools.test.ts](../server/mcp/specialTools.test.ts), [server/http.test.ts](../server/http.test.ts)
+
+## mcp-stateless-server
+
+Construct a fresh Lens MCP SDK server from the existing tool catalog for each stateless HTTP request.
+
+- Entry point: [server/mcp/server.ts](../server/mcp/server.ts)
+- Symbols: `createLensMcpServer`
+- Boundaries: The server identifies itself as lens-mcp. Duplicate tool names keep the existing skip-and-log behavior; tool result/error handling and gateway/target-route authorization are unchanged. createPrismMcpServer remains an alias of the same factory.
+- Examples: [server/mcp/router.ts](../server/mcp/router.ts), [server/playground/chat.ts](../server/playground/chat.ts)
+- Tests: [server/mcp/specialTools.test.ts](../server/mcp/specialTools.test.ts), [server/auth.test.ts](../server/auth.test.ts)
+
+## python-project-name-upgrade
+
+Prepare an installer/development virtualenv for the backend distribution rename without retaining duplicate hardware-provider entry points.
+
+- Entry point: [scripts/prepare_python_project_upgrade.py](../scripts/prepare_python_project_upgrade.py)
+- Symbols: `prepare_python_project_upgrade`
+- Boundaries: Only runs for a project named llm-d-lens-backend and requires a virtualenv. Removes the exact old llm-d-prism-backend generated source metadata after checking its package name, then uses existing pip to uninstall that distribution only when its installed metadata belongs to the current virtualenv. Other environments, packages, application data, and provider registry semantics remain unchanged.
+- Examples: [scripts/dev.sh](../scripts/dev.sh), [scripts/LensInstaller-Ubuntu-x86_64.sh](../scripts/LensInstaller-Ubuntu-x86_64.sh), [docs/fern/pages/upgrade.mdx](../docs/fern/pages/upgrade.mdx)
+- Tests: [tests/python/test_python_project_upgrade.py](../tests/python/test_python_project_upgrade.py)

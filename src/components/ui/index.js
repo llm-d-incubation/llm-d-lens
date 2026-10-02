@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Prism UI primitives. The contract for using (and extending) these lives in
+// Lens UI primitives. The contract for using (and extending) these lives in
 // .agents/skills/ui/SKILL.md — read it before adding UI.
 
 export { Button } from './Button';

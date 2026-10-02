@@ -95,7 +95,7 @@ The human-facing reference is the
 ## File storage
 
 Use the [storage scheme](../../../docs/design/storage-layout.md) for exact domain paths.
-Reuse `storage_path` / `prism_temp_root` in `llm_d_bench/utils/paths.py` and
+Reuse `storage_path` / `lens_temp_root` in `llm_d_bench/utils/paths.py` and
 `storagePath` in `server/storagePaths.ts`; do not introduce another storage root
 variable or restore legacy directory overrides. `LENS_*` roots take precedence
 over XDG defaults. Explicit source checkout inputs such as `LLM_D_ROOT` retain

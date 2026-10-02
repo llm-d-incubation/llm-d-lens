@@ -21,7 +21,7 @@ from llm_d_bench.deploy.providers.gpu_selection import gpu_device_selectors
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_bench.deploy.providers.hardware_profile import device_class
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
-from llm_d_bench.utils.paths import prism_temp_root
+from llm_d_bench.utils.paths import lens_temp_root
 
 
 class PdDisaggregationAdapter:
@@ -41,7 +41,7 @@ class PdDisaggregationAdapter:
             "vllm": guide_root / "guides/pd-disaggregation/modelserver/xpu/vllm",
             "vllm-rdma": guide_root / "guides/pd-disaggregation/modelserver/xpu/vllm-rdma",
         }
-        self._root = prism_temp_root("prism-pd-overlays")
+        self._root = lens_temp_root("lens-pd-overlays")
         self._namespace_prefix = namespace_prefix
         self._timeout = timeout
         self._helm_path = helm_path

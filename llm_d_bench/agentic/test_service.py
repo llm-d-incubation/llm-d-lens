@@ -1,4 +1,4 @@
-"""Tests for Agentic Deploy's delegation to existing Prism services."""
+"""Tests for Agentic Deploy's delegation to existing Lens services."""
 
 import asyncio
 from dataclasses import replace

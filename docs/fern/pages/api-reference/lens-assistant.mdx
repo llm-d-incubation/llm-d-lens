@@ -11,6 +11,12 @@ Lens Assistant is backed by the Node MCP server under `server/mcp/`, not by a de
 
 Handle one stateless Streamable HTTP MCP request by creating a fresh `McpServer`, connecting it, and serving the request body.
 
+The `initialize` response sets `result.serverInfo.name` to `lens-mcp`.
+The Node factory is `createLensMcpServer` in `server/mcp/server.ts`; the
+catalog uses `LensTool` and `lensTools`. The previous `createPrismMcpServer`,
+`PrismTool`, and `prismTools` exports remain compatibility aliases for existing
+integrations. Tool names, permissions, and request fields remain unchanged.
+
 <Tabs>
   <Tab title="REST API">
 
@@ -19,7 +25,7 @@ Handle one stateless Streamable HTTP MCP request by creating a fresh `McpServer`
 Request:
 
 - Content type: `application/json`
-- Body: one MCP JSON-RPC request object. In stateless mode, Prism creates a fresh server per request, so no session id is required.
+- Body: one MCP JSON-RPC request object. In stateless mode, Lens creates a fresh server per request, so no session id is required.
 - Common request shapes include `initialize`, `tools/list`, and `tools/call`.
 
 Example `tools/call` request:
@@ -38,7 +44,7 @@ Example `tools/call` request:
 
 Response:
 
-Successful responses use MCP JSON-RPC result envelopes. For tool calls, Prism's MCP server returns `content` blocks whose `text` contains the JSON-stringified Prism REST result.
+Successful responses use MCP JSON-RPC result envelopes. For tool calls, Lens's MCP server returns `content` blocks whose `text` contains the JSON-stringified Lens REST result.
 
 ```json
 {
@@ -55,7 +61,7 @@ Successful responses use MCP JSON-RPC result envelopes. For tool calls, Prism's 
 }
 ```
 
-If an unhandled server error occurs before the SDK sends a response, Prism returns:
+If an unhandled server error occurs before the SDK sends a response, Lens returns:
 
 ```json
 {
@@ -104,7 +110,7 @@ Return `405 Method not allowed.` because stateless mode does not support the Str
 
 Request:
 
-This endpoint has no request body. In Prism's stateless MCP mode, the Streamable HTTP GET stream is intentionally disabled.
+This endpoint has no request body. In Lens's stateless MCP mode, the Streamable HTTP GET stream is intentionally disabled.
 
 Response:
 
@@ -140,7 +146,7 @@ Return `405 Method not allowed.` because stateless mode does not support session
 
 Request:
 
-This endpoint has no request body. Prism does not keep MCP sessions between requests, so there is no server-side session to terminate.
+This endpoint has no request body. Lens does not keep MCP sessions between requests, so there is no server-side session to terminate.
 
 Response:
 
@@ -160,12 +166,12 @@ Returns a JSON-RPC error payload with HTTP status `405`.
   </Tab>
   <Tab title="Python API">
 
-This endpoint is a Node.js MCP transport guard, not a Python function — there is no direct Python call. For Python automation, skip MCP and call the underlying Prism domain module directly.
+This endpoint is a Node.js MCP transport guard, not a Python function — there is no direct Python call. For Python automation, skip MCP and call the underlying Lens domain module directly.
 
   </Tab>
 </Tabs>
 
-The tool catalog is assembled in two parts: `server/mcp/tools.ts` contains 126 generated tools, and `server/mcp/specialTools.ts` contains 23 hand-written tools. The generated half is produced by `node scripts/generate-mcp-tools.mjs` from the `llm_d_bench` FastAPI OpenAPI schema, while the hand-written half covers composite or Node-backed routes. The handlers are thin wrappers over Prism's own REST API: `server/mcp/internal.ts` forwards requests to loopback `/api/...` paths through `internalRequest(...)`.
+The tool catalog is assembled in two parts: `server/mcp/tools.ts` contains generated REST adapters, and `server/mcp/specialTools.ts` contains hand-written tools for composite or Node-backed routes. The generated half is produced by `node scripts/generate-mcp-tools.mjs` from the `llm_d_bench` FastAPI OpenAPI schema. The handlers are thin wrappers over Lens's own REST API: `server/mcp/internal.ts` forwards requests to loopback `/api/...` paths through `internalRequest(...)`.
 
 ## What the MCP tools call
 

@@ -840,7 +840,7 @@ async def patch_execution(execution_id: str, request: DeploymentMetadataUpdateRe
     operation_id="delete_deployment_execution",
 )
 async def delete_execution(execution_id: str, delete_namespace: bool = True, request: Request = None):
-    """Remove a deployment's Prism records, optionally cleaning its cluster resources."""
+    """Remove a deployment's Lens records, optionally cleaning its cluster resources."""
     existing = find_execution_context(execution_id)
     if existing is not None:
         _require_execution_permission(current_principal(request), existing, "deployment:execution:delete")

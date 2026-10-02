@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the local Prism stack with every rendered Kubernetes workload pinned to
+# Start the local Lens stack with every rendered Kubernetes workload pinned to
 # one node. Change TARGET_NODE in the config file, or pass another config path.
 set -euo pipefail
 
@@ -85,7 +85,7 @@ if [[ -z "${LLM_D_BENCH_DOCKER_PATH:-}" ]]; then
     [[ -n "$docker_path" ]] && export LLM_D_BENCH_DOCKER_PATH="$(readlink -f "$docker_path")"
 fi
 
-echo "Starting Prism for Kubernetes node: $TARGET_NODE"
+echo "Starting Lens for Kubernetes node: $TARGET_NODE"
 echo "GPU PCI allowlist: $PRISM_GPU_PCI_ALLOWLIST"
 echo "Kubernetes context: $($KUBECTL config current-context)"
 cd "$ROOT_DIR"

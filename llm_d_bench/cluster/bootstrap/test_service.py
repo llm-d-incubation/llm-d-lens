@@ -221,7 +221,7 @@ async def test_run_bootstrap_job_auto_mode_reuses_the_target_nodes_own_proxy(mon
 
     def _fake_remote_exec(target, command, timeout=None):
         # Simulate a node that already has a proxy configured for itself
-        # (e.g. via /etc/environment), distinct from anything the Prism
+        # (e.g. via /etc/environment), distinct from anything the Lens
         # backend host's own env might have.
         return RemoteResult(
             stdout='http_proxy=http://node-proxy:3128\nno_proxy="localhost,127.0.0.1"\n', stderr="", returncode=0

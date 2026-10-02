@@ -608,7 +608,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
             <Modal isOpen onClose={onClose} title="Add a Kubernetes cluster" size="lg">
                 <div role="alert" className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    Prism's database is not configured yet. Re-run the installer
+                    Lens's database is not configured yet. Re-run the installer
                     (<code>LensInstaller-Ubuntu-x86_64.sh</code>) to set it up, then reopen this wizard.
                 </div>
             </Modal>
@@ -731,7 +731,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
                                 <span className="block text-sm font-medium text-theme-text">Auto-detect this cluster's proxy (recommended)</span>
                                 <span className="block text-xs text-theme-muted mt-0.5">
                                     Automatic detection from the target cluster is not implemented yet; until then this
-                                    falls back to the Prism backend's own proxy environment variables (pre-wizard
+                                    falls back to the Lens backend's own proxy environment variables (pre-wizard
                                     behavior). Use "Custom" below if this cluster needs a different proxy.
                                 </span>
                             </span>

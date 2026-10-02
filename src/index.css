@@ -265,7 +265,7 @@ main span:has(> :only-child) + p.text-slate-600 {
   scrollbar-width: none;  /* Firefox */
 }
 
-/* Prism Custom Scrollbars */
+/* Lens Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -428,12 +428,12 @@ main span:has(> :only-child) + p.text-slate-600 {
 
 
 /* Chat with Lens: playful bot icon that blinks and hops. */
-@keyframes prism-bot-blink {
+@keyframes lens-bot-blink {
   0%, 92%, 100% { transform: scaleY(1); }
   95% { transform: scaleY(0.1); }
 }
 
-@keyframes prism-bot-hop {
+@keyframes lens-bot-hop {
   0%, 80%, 100% { transform: translateY(0); }
   85% { transform: translateY(-8px); }
   90% { transform: translateY(0); }
@@ -441,18 +441,18 @@ main span:has(> :only-child) + p.text-slate-600 {
   96% { transform: translateY(0); }
 }
 
-.prism-bot-icon {
-  animation: prism-bot-hop 6s ease-in-out infinite;
+.lens-bot-icon {
+  animation: lens-bot-hop 6s ease-in-out infinite;
 }
 
-.prism-bot-icon .prism-bot-eyes {
+.lens-bot-icon .lens-bot-eyes {
   transform-origin: center;
-  animation: prism-bot-blink 4.5s ease-in-out infinite;
+  animation: lens-bot-blink 4.5s ease-in-out infinite;
 }
 
 /* Chat with Lens: suggested-question speech bubbles that float near
    the empty-state bot icon, one at a time, staying up long enough to click. */
-@keyframes prism-bubble-float {
+@keyframes lens-bubble-float {
   0% { opacity: 0; visibility: hidden; transform: translateY(6px) scale(0.92); }
   1% { visibility: visible; }
   2% { opacity: 1; transform: translateY(0) scale(1); }
@@ -462,8 +462,8 @@ main span:has(> :only-child) + p.text-slate-600 {
   100% { opacity: 0; visibility: hidden; }
 }
 
-.prism-bubble {
-  animation-name: prism-bubble-float;
+.lens-bubble {
+  animation-name: lens-bubble-float;
   animation-timing-function: ease-in-out;
   animation-iteration-count: infinite;
   opacity: 0;

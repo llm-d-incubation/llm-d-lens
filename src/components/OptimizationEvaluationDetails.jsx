@@ -18,8 +18,8 @@ import { guideResultProfile } from "./benchmark-results/guideProfiles";
 
 function comparisonName(type) {
     return {
-        'direct-vllm': 'Prism plain vLLM reference',
-        'router-neutral': 'Prism neutral-router reference',
+        'direct-vllm': 'Lens plain vLLM reference',
+        'router-neutral': 'Lens neutral-router reference',
         'load-only': 'Load-only',
         'affinity-only': 'Affinity Policy Only',
         'optimized-baseline': 'llm-d optimized-baseline Guide',

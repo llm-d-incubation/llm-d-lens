@@ -185,7 +185,7 @@ export function CreateStorageVolumeModal({ clusters = [], defaultClusterId = '',
                             <Input id="storage-host-path" value={hostPath} placeholder="/data/models" onChange={(event) => setHostPath(event.target.value.trim())} disabled={creating} />
                             <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
                                 This directory must exist with the same content on <strong>every node</strong> in the
-                                cluster (e.g. a pre-populated or synced model cache). Prism does not pin the volume to
+                                cluster (e.g. a pre-populated or synced model cache). Lens does not pin the volume to
                                 a single node — Deployments using it may be scheduled onto any node below.
                             </p>
                         </div>

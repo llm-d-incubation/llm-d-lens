@@ -3,7 +3,7 @@
 See docs/design/cluster-creation-wizard-design.md section 4.0 and
 docs/design/sqlalchemy-data-access-layer-design.md section 4 for the full
 design. This module intentionally has nothing to do with any particular
-cluster -- it configures how the *Prism backend process itself* connects to
+cluster -- it configures how the *Lens backend process itself* connects to
 its own database, a one-time, global (not per-cluster) step that gates the
 rest of the wizard only the first time the backend is ever run without a
 database already configured (via env vars or a previous Step 0 submission).
@@ -161,7 +161,7 @@ def _with_driver_hint(database_url: str, error: Exception) -> str:
     extra = _DRIVER_EXTRA_HINT.get(dialect)
     if extra is None:
         return str(error)
-    return f"{error} (if this is a missing driver, install it with `pip install llm-d-prism-backend[{extra}]`)"
+    return f"{error} (if this is a missing driver, install it with `pip install llm-d-lens-backend[{extra}]`)"
 
 
 def _create_tables() -> None:

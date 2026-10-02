@@ -1,7 +1,7 @@
 """Application-level database configuration ("Step 0" of the cluster creation
 wizard -- see docs/design/cluster-creation-wizard-design.md section 4.0).
 
-This describes *how the Prism backend process itself connects to its own
+This describes *how the Lens backend process itself connects to its own
 database*, so it cannot be stored in that database (chicken and egg). It is
 persisted in a small standalone file, using the same atomic
 temp-file-plus-``os.replace`` write pattern as every other file-backed Store

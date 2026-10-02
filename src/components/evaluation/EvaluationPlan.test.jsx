@@ -23,7 +23,7 @@ test('execution plan separates tasks from measurements and shows selected target
     assert.match(html, /12 measured combinations/);
     assert.match(html, /300 measured requests/);
     assert.ok(html.indexOf('Baseline') < html.indexOf('P/D'));
-    assert.ok(html.indexOf('P/D') < html.indexOf('Prism plain vLLM reference'));
+    assert.ok(html.indexOf('P/D') < html.indexOf('Lens plain vLLM reference'));
     assert.match(html, /450 ms/);
     assert.match(html, /Measure only/);
     assert.match(html, /8 concurrent/);
@@ -44,7 +44,7 @@ test('same-pod reference runs immediately after its owning configuration and bef
     assert.match(html, /16 measured combinations/);
     assert.ok(html.indexOf('Configuration A') < html.indexOf('Kubernetes Service round-robin'));
     assert.ok(html.indexOf('Kubernetes Service round-robin') < html.indexOf('Configuration B'));
-    assert.ok(html.indexOf('Configuration B') < html.indexOf('Prism plain vLLM reference'));
+    assert.ok(html.indexOf('Configuration B') < html.indexOf('Lens plain vLLM reference'));
     assert.match(html, /Reuse Configuration A pods through Kubernetes Service/);
 });
 
@@ -54,7 +54,7 @@ test('existing endpoint ignores leftover configuration and reference selections'
     assert.match(html, /4 measured combinations/);
     assert.match(html, /https:\/\/model.example\/v1/);
     assert.match(html, /No deployment is created or cleaned up/);
-    assert.doesNotMatch(html, /Prism plain vLLM reference|Edit configurations|TP2/);
+    assert.doesNotMatch(html, /Lens plain vLLM reference|Edit configurations|TP2/);
 });
 
 test('rate stages show configured load duration without claiming total wall time', () => {

@@ -171,7 +171,7 @@ def _validate_evaluation_capacity(configuration: DeployableConfiguration) -> Non
         )
         if required > len(allowed_devices):
             raise ValueError(
-                f"configuration requires {required} XPU cards, but only {len(allowed_devices)} are available to Prism"
+                f"configuration requires {required} XPU cards, but only {len(allowed_devices)} are available to Lens"
             )
 
 
@@ -2921,7 +2921,7 @@ async def _prepare_benchmark_storage(
         "claimRef": {"namespace": namespace, "name": "workload-pvc"},
         "hostPath": {
             # Per-run node-local storage for the benchmark PV, not a host temp-file write.
-            "path": f"/var/tmp/llm-d-prism/benchmarks/{run_id}",  # noqa: S108
+            "path": f"/var/tmp/llm-d-lens/benchmarks/{run_id}",  # noqa: S108
             "type": "DirectoryOrCreate",
         },
     }

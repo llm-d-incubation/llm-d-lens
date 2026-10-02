@@ -1,4 +1,4 @@
-# Prism Configuration API
+# Lens Configuration API
 
 FastAPI implementation of the configuration contract in [specs/changes/aiconfiguration.md](../../specs/changes/aiconfiguration.md).
 
@@ -10,7 +10,7 @@ From the repository root, in an environment containing the packages in `requirem
 python -m uvicorn llm_d_bench.api.main:app --host 127.0.0.1 --port 8090
 ```
 
-The backend follows the same module boundary as Prism's Simulation workflow:
+The backend follows the same module boundary as Lens's Simulation workflow:
 
 - `llm_d_bench.api.main` owns the minimal FastAPI application and health endpoint.
 - `configuration.router` owns HTTP request handling and error translation.
@@ -20,7 +20,7 @@ The backend follows the same module boundary as Prism's Simulation workflow:
 
 `llm_d_bench.configuration.app:app` remains available as a compatibility import.
 
-Prism's Express server proxies `/api/configurations/{resolve,render,save}` to this service. Override the upstream with `CONFIGURATION_API_URL`; set the data root with `LENS_DATA_DIR` (configurations use its `artifacts/configurations` subdirectory) (the default is `~/.local/share/lens/artifacts/configurations`). The logical file path returned to Deploy is `/configs/<artifact-id>/<file>`.
+Lens's Express server proxies `/api/configurations/{resolve,render,save}` to this service. Override the upstream with `CONFIGURATION_API_URL`; set the data root with `LENS_DATA_DIR` (configurations use its `artifacts/configurations` subdirectory) (the default is `~/.local/share/lens/artifacts/configurations`). The logical file path returned to Deploy is `/configs/<artifact-id>/<file>`.
 
 The resolve operation calls the in-process AIConfigurator adapter in `llm_d_bench.aic` before normalization and validation. The adapter uses the pinned `aiconfigurator` nightly wheel and does not require a separate prediction service.
 

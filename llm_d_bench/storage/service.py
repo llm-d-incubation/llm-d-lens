@@ -60,7 +60,7 @@ def _pv_manifest(volume: StorageVolume) -> dict | None:
     """Build the static PersistentVolume manifest for local-disk/nfs volumes.
 
     ``dynamic-pvc`` volumes are provisioned by a CSI driver and never get a
-    Prism-managed PV, so this returns ``None`` for that kind.
+    Lens-managed PV, so this returns ``None`` for that kind.
     """
     pv_name = _pv_name(volume)
     namespace = _pvc_namespace(volume)

@@ -58,8 +58,8 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
     // *target* nodes themselves (OS package installs + the
     // container-engine/runc role's direct-from-GitHub download) -- distinct
     // from this wizard's later "Network Proxy" step, which only covers the
-    // Prism backend's own llm-d/benchmark downloads. "auto" reuses the
-    // Prism backend's own proxy env vars (resolved server-side); "custom"
+    // Lens backend's own llm-d/benchmark downloads. "auto" reuses the
+    // Lens backend's own proxy env vars (resolved server-side); "custom"
     // lets the operator override that for these target nodes specifically.
     const [proxyMode, setProxyMode] = useState('auto');
     const [httpProxy, setHttpProxy] = useState('');
@@ -251,7 +251,7 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
     return (
         <div className="space-y-3 rounded-lg border border-slate-700/70 bg-slate-800/40 p-3">
             <p className="text-xs text-theme-muted">
-                Prism will run Kubespray's <code>cluster.yml</code> playbook over SSH to install a production-ready
+                Lens will run Kubespray's <code>cluster.yml</code> playbook over SSH to install a production-ready
                 Kubernetes cluster on the nodes below, then use the resulting kubeconfig for this cluster. Credentials
                 are only kept in memory for the duration of the bootstrap job.
             </p>

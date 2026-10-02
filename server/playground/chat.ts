@@ -13,11 +13,11 @@
 // limitations under the License.
 
 // -----------------------------------------------------------------------------
-// "Talk with your Prism" chat orchestrator (docs/design/mcp-playground-design.zh-CN.md
+// "Talk with your Lens" chat orchestrator (docs/design/mcp-playground-design.zh-CN.md
 // section 3.1). This is the ONLY component that speaks both protocols:
 //   - OpenAI-compatible chat/completions + tools/tool_calls, to the
 //     Deployment the user picked in the Playground as the model service.
-//   - MCP (list_tools / call_tool), to Prism's own MCP server (server/mcp).
+//   - MCP (list_tools / call_tool), to Lens's own MCP server (server/mcp).
 // approve-tier tools are never auto-executed: the model's request to
 // call one pauses the turn (a `confirm_required` SSE event, no tool run yet)
 // until the user explicitly approves or rejects it from the UI, at which
@@ -33,7 +33,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { ProxyAgent } from 'undici';
 import { internalBaseUrl, internalFetch, internalRequest } from '../mcp/internal.ts';
 import { internalHeadersFor } from '../internalAuth.ts';
-import { findTool, prismTools } from '../mcp/tools.ts';
+import { findTool, lensTools } from '../mcp/tools.ts';
 import { findModelByRepository } from '../../src/data/modelCatalog.js';
 
 export const playgroundRouter = Router();
@@ -158,7 +158,7 @@ const TOOL_RESULT_TRUNCATE_CHARS = 1500;
 
 // Rough, tokenizer-free token estimate: good enough for a soft context
 // budget check, not an exact count. Plain ASCII/English text averages ~4
-// characters per token, but Prism operators here also chat in Chinese,
+// characters per token, but Lens operators here also chat in Chinese,
 // where each character is usually close to its own token -- so CJK
 // characters are counted individually and everything else at chars/4.
 function estimateTokens(text: string | null | undefined): number {
@@ -647,7 +647,7 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
     }
 
     // The endpoint returned by list_ready_deployments is a Kubernetes-internal
-    // ClusterIP address (`*.svc:port`) that the Prism backend process cannot
+    // ClusterIP address (`*.svc:port`) that the Lens backend process cannot
     // reach directly. Resolve it to a live kubectl port-forward on 127.0.0.1
     // first (same mechanism Model Market uses via connectDeploymentExecution).
     // Not needed for External AI providers: those are called by their real,
@@ -689,7 +689,7 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
 
     let client: Client | undefined;
     try {
-        client = new Client({ name: 'prism-playground', version: '0.1.0' });
+        client = new Client({ name: 'lens-playground', version: '0.1.0' });
         // The MCP server sits behind the same gateway, so this loopback call must
         // carry the current user's identity instead of an anonymous request.
         const mcpFetch: typeof fetch = (input, init) => {
@@ -958,4 +958,4 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
 });
 
 // Exposed for tests / diagnostics: the tool names currently registered.
-export const registeredToolNames = prismTools.map((tool) => tool.name);
+export const registeredToolNames = lensTools.map((tool) => tool.name);

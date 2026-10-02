@@ -1,4 +1,4 @@
-"""Uniform Problem Details responses for Prism API modules."""
+"""Uniform Problem Details responses for Lens API modules."""
 
 from __future__ import annotations
 
