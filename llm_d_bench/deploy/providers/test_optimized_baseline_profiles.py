@@ -407,3 +407,13 @@ def test_input_validation_allows_waiting_for_accelerators(tmp_path):
         },
     )
     assert result.accepted, result.reasons
+
+
+def test_gateway_mode_values_skipped_for_evaluation_owned_deployments(tmp_path):
+    adapter, _ = _adapter(tmp_path)
+    gateway_path = str(adapter._policy.gateway_mode_values_path)
+
+    assert adapter._gateway_mode_args({}) == ["--values", gateway_path]
+    assert adapter._gateway_mode_args({"provenance": {"evaluate_workflow": True}}) == []
+    assert adapter._gateway_mode_args({"provenance": {"evaluation_id": "eval-1"}}) == []
+    assert adapter._gateway_mode_args({"provenance": {"evaluation_case_id": "case-1"}}) == []

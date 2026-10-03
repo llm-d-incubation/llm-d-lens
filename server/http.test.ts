@@ -64,11 +64,11 @@ test('configuration and candidate routes retain distinct error bodies and status
 });
 
 test('candidate support forwards the authenticated caller to AIC', async (t) => {
-    const previousSecret = process.env.PRISM_INTERNAL_AUTH_SECRET;
-    process.env.PRISM_INTERNAL_AUTH_SECRET = 'candidate-search-test-secret';
+    const previousSecret = process.env.LENS_INTERNAL_AUTH_SECRET;
+    process.env.LENS_INTERNAL_AUTH_SECRET = 'candidate-search-test-secret';
     t.after(() => {
-        if (previousSecret === undefined) delete process.env.PRISM_INTERNAL_AUTH_SECRET;
-        else process.env.PRISM_INTERNAL_AUTH_SECRET = previousSecret;
+        if (previousSecret === undefined) delete process.env.LENS_INTERNAL_AUTH_SECRET;
+        else process.env.LENS_INTERNAL_AUTH_SECRET = previousSecret;
     });
 
     const {default: express} = await import('express');

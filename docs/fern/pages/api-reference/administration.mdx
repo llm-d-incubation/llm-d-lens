@@ -762,6 +762,132 @@ print(status.configured, status.mode, status.engine)
   </Tab>
 </Tabs>
 
+### Read the stored-secret master key status
+
+Read the effective master key (`LENS_SECRET_KEY`) source, a non-reversible fingerprint, and how many provider secrets and old fallback keys exist. The key value itself is never returned.
+
+<Tabs>
+  <Tab title="REST API">
+
+**`GET /api/v1/system/secret-key`**
+
+Request:
+
+This endpoint has no request body.
+
+Response:
+
+```json
+{
+  "source": "file",
+  "envLocked": false,
+  "configured": true,
+  "fingerprint": "3f9a1c7b52e0d4a6",
+  "keyLength": 64,
+  "oldKeyCount": 1,
+  "path": "/home/user/.local/share/lens/credentials/master_key.json",
+  "providerSecretCount": 2
+}
+```
+
+`source` is `environment`, `file`, or `unconfigured`; `envLocked` is `true` when `LENS_SECRET_KEY` is supplied through the environment (the stored key is then ignored and rotation through the API is rejected).
+
+  </Tab>
+  <Tab title="Python API">
+
+```python
+from llm_d_bench.auth.master_key import status
+from llm_d_bench.auth.settings import get_settings
+
+print(status(get_settings())["source"], status(get_settings())["fingerprint"])
+```
+
+  </Tab>
+</Tabs>
+
+### Rotate the stored-secret master key
+
+Generate a new master key (or use a supplied one), re-encrypt every stored provider secret with it, and retain the previous key(s) as decryption fallback. Rejected when `LENS_SECRET_KEY` is environment-locked.
+
+<Tabs>
+  <Tab title="REST API">
+
+**`POST /api/v1/system/secret-key/rotate`**
+
+Request:
+
+- JSON body fields:
+  - `newKey` (`string`, optional; leave empty to auto-generate a strong key)
+
+```json
+{
+  "newKey": "a-manually-chosen-strong-key"
+}
+```
+
+Response:
+
+Returns the new status plus `rotatedSecrets`, the number of provider secrets re-encrypted.
+
+```json
+{
+  "source": "file",
+  "envLocked": false,
+  "configured": true,
+  "fingerprint": "b71e0c9d3a4f8215",
+  "keyLength": 28,
+  "oldKeyCount": 1,
+  "path": "/home/user/.local/share/lens/credentials/master_key.json",
+  "providerSecretCount": 2,
+  "rotatedSecrets": 2
+}
+```
+
+  </Tab>
+  <Tab title="Python API">
+
+```python
+from llm_d_bench.auth.master_key import rotate_master_key
+from llm_d_bench.auth.settings import get_settings
+from llm_d_bench.db.dao.identity_provider import IdentityProviderDao
+
+result = rotate_master_key(get_settings(), None, provider_dao=IdentityProviderDao())
+print(result["fingerprint"], result["rotatedSecrets"])
+```
+
+  </Tab>
+</Tabs>
+
+### Clear previous master keys
+
+Drop the retained fallback keys once every provider secret has been re-encrypted. Secrets still encrypted with an old key become unreadable, so re-save those providers first.
+
+<Tabs>
+  <Tab title="REST API">
+
+**`DELETE /api/v1/system/secret-key/old`**
+
+Request:
+
+This endpoint has no request body.
+
+Response:
+
+Returns the status with `oldKeyCount` set to `0`.
+
+  </Tab>
+  <Tab title="Python API">
+
+```python
+from llm_d_bench.auth.master_key import clear_old_keys
+from llm_d_bench.auth.settings import get_settings
+
+print(clear_old_keys(get_settings())["oldKeyCount"])
+```
+
+  </Tab>
+</Tabs>
+
 Additional auth endpoints also exist for login/session state, groups, identity providers, audit logs, password changes, and bootstrap; see the OpenAPI reference.
 
 See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).

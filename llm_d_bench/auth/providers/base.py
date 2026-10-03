@@ -61,5 +61,13 @@ class IdentityProvider(ABC):
     async def search_users(self, query: str) -> list[ExternalIdentity]:
         return []
 
+    async def list_groups(self) -> list[dict[str, str]]:
+        """Enumerate directory groups as ``{"external_id", "name"}`` records.
+
+        ``external_id`` is the stable directory identifier (LDAP DN); ``name`` is
+        the human label. Providers without a group concept return an empty list.
+        """
+        return []
+
     async def test_connection(self) -> ConnectionResult:
         return ConnectionResult(ok=False, detail="not implemented")

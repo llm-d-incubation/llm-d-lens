@@ -6,24 +6,19 @@ import { ModulePage } from '../ui/ModulePage';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FormError } from '../ui/FormError';
-import { Checkbox, Input, Label, Select } from '../ui/FormControls';
+import { Checkbox, Input, Label } from '../ui/FormControls';
 import { Badge } from '../ui/Badge';
 import { AsyncState } from '../shared/AsyncState';
 import { EmptyState } from '../ui/EmptyState';
-import { Spinner } from '../ui/Spinner';
 import { useNotice } from '../../hooks/useNotice';
 import { useSubmission } from '../../hooks/useSubmission';
 import { errorMessage } from '../../utils/errorMessage';
 import { PermissionGate } from '../../features/auth/PermissionGate';
 import {
     createIdentityProvider,
-    createMapping,
     deleteIdentityProvider,
-    deleteMapping,
-    listGroups,
     listIdentityProviders,
-    listMappings,
-    listRoles,
+    syncIdentityProvider,
     testIdentityProvider,
     updateIdentityProvider,
 } from '../../features/auth/adminClient';
@@ -36,6 +31,7 @@ const EMPTY = {
     name: '',
     server_url: '',
     user_base_dn: '',
+    group_base_dn: '',
     user_filter: '(uid={username})',
     username_attribute: 'uid',
     display_name_attribute: 'cn',
@@ -54,8 +50,8 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
     const [notice, setNotice] = useNotice();
     const [dialog, setDialog] = useState(null);
     const [pendingDelete, setPendingDelete] = useState(null);
-    const [pendingMappings, setPendingMappings] = useState(null);
     const [testingId, setTestingId] = useState(null);
+    const [syncingId, setSyncingId] = useState(null);
     const [testResults, setTestResults] = useState({});
     const loadedOnce = useRef(false);
 
@@ -88,6 +84,19 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
             setTestResults((prev) => ({ ...prev, [provider.id]: { ok: false, detail: errorMessage(failure, 'Test failed') } }));
         } finally {
             setTestingId(null);
+        }
+    };
+
+    const runSync = async (provider) => {
+        setSyncingId(provider.id);
+        try {
+            const result = await syncIdentityProvider(provider.id);
+            setNotice(`Synced ${result.groups} group(s), ${result.members} member(s) from ${provider.name}`);
+            await load({ quiet: true });
+        } catch (failure) {
+            setError(errorMessage(failure, 'Sync failed'));
+        } finally {
+            setSyncingId(null);
         }
     };
 
@@ -173,8 +182,10 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                                                 </td>
                                                 <td className="px-4 py-3">
                                                     <div className="flex items-center justify-end gap-1">
-                                                        <PermissionGate permission="idp:mapping:manage">
-                                                            <Button variant="secondary" size="xs" onClick={() => setPendingMappings(provider)}>Mappings</Button>
+                                                        <PermissionGate permission="idp:sync:execute">
+                                                            <Button variant="secondary" size="xs" onClick={() => runSync(provider)} isLoading={syncingId === provider.id}>
+                                                                Sync
+                                                            </Button>
                                                         </PermissionGate>
                                                         <PermissionGate permission="idp:provider:configure">
                                                             <Button variant="ghost" size="icon" onClick={() => setDialog({ mode: 'edit', provider })} aria-label={`Edit ${provider.name}`}>
@@ -200,10 +211,18 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                 <ProviderFormModal
                     provider={dialog.mode === 'edit' ? dialog.provider : null}
                     onCancel={() => setDialog(null)}
-                    onSaved={() => { setDialog(null); load(); setNotice(dialog.mode === 'edit' ? 'Provider updated' : 'Provider created'); }}
+                    onSaved={(saved) => {
+                        setDialog(null);
+                        load();
+                        setNotice(dialog.mode === 'edit' ? 'Provider updated' : 'Provider created');
+                        // Import the directory immediately when it is ready, so
+                        // configured users/groups show up without a manual step.
+                        if (saved?.enabled && saved?.config?.group_base_dn) {
+                            syncIdentityProvider(saved.id).then(() => load({ quiet: true })).catch(() => {});
+                        }
+                    }}
                 />
             )}
-            {pendingMappings && <MappingsModal provider={pendingMappings} onCancel={() => setPendingMappings(null)} />}
             {pendingDelete && (
                 <ConfirmDeleteModal
                     title="Delete identity provider"
@@ -226,6 +245,7 @@ function ProviderFormModal({ provider, onCancel, onSaved }) {
             name: provider.name || '',
             server_url: provider.config?.server_url || '',
             user_base_dn: provider.config?.user_base_dn || '',
+            group_base_dn: provider.config?.group_base_dn || '',
             user_filter: provider.config?.user_filter || '(uid={username})',
             username_attribute: provider.config?.username_attribute || 'uid',
             display_name_attribute: provider.config?.display_name_attribute || 'cn',
@@ -253,6 +273,7 @@ function ProviderFormModal({ provider, onCancel, onSaved }) {
                 config: {
                     server_url: form.server_url.trim(),
                     user_base_dn: form.user_base_dn.trim(),
+                    group_base_dn: form.group_base_dn.trim(),
                     user_filter: form.user_filter.trim(),
                     username_attribute: form.username_attribute.trim(),
                     display_name_attribute: form.display_name_attribute.trim(),
@@ -262,9 +283,8 @@ function ProviderFormModal({ provider, onCancel, onSaved }) {
                 syncMode: 'login',
             };
             if (form.bind_password) payload.secret = form.bind_password;
-            if (isEdit) await updateIdentityProvider(provider.id, payload);
-            else await createIdentityProvider(payload);
-            onSaved();
+            const saved = isEdit ? await updateIdentityProvider(provider.id, payload) : await createIdentityProvider(payload);
+            onSaved(saved);
         });
     };
 
@@ -314,6 +334,13 @@ function ProviderFormModal({ provider, onCancel, onSaved }) {
                     <Label htmlFor="admin-idp-email-attr">Email attribute</Label>
                     <Input id="admin-idp-email-attr" value={form.email_attribute} onChange={setField('email_attribute')} />
                 </div>
+                <div className="sm:col-span-2">
+                    <Label htmlFor="admin-idp-group-base">Group base DN</Label>
+                    <Input id="admin-idp-group-base" value={form.group_base_dn} onChange={setField('group_base_dn')} placeholder="ou=groups,dc=example,dc=com" />
+                    <p className="mt-1.5 text-[11px] text-slate-500">
+                        Optional. Groups under this base are imported on Sync and on sign-in so they can be granted roles and shared to.
+                    </p>
+                </div>
                 <div>
                     <Label htmlFor="admin-idp-bind-dn">Bind DN</Label>
                     <Input id="admin-idp-bind-dn" value={form.bind_dn} onChange={setField('bind_dn')} placeholder="cn=svc,dc=example,dc=com" />
@@ -328,123 +355,6 @@ function ProviderFormModal({ provider, onCancel, onSaved }) {
                 </div>
                 <div className="sm:col-span-2"><FormError message={error} /></div>
             </form>
-        </Modal>
-    );
-}
-
-function MappingsModal({ provider, onCancel }) {
-    const [mappings, setMappings] = useState([]);
-    const [groups, setGroups] = useState([]);
-    const [roles, setRoles] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [externalGroup, setExternalGroup] = useState('');
-    const [groupId, setGroupId] = useState('');
-    const [roleId, setRoleId] = useState('');
-    const { pending, error: saveError, run } = useSubmission('Failed to update mappings');
-
-    const load = useCallback(async () => {
-        setLoading(true);
-        try {
-            const [mappingList, groupList, roleList] = await Promise.all([listMappings(provider.id), listGroups(), listRoles()]);
-            setMappings(mappingList);
-            setGroups(groupList);
-            setRoles(roleList);
-            setError('');
-        } catch (failure) {
-            setError(errorMessage(failure, 'Failed to load mappings'));
-        } finally {
-            setLoading(false);
-        }
-    }, [provider.id]);
-
-    useEffect(() => { load(); }, [load]);
-
-    const add = async (event) => {
-        event.preventDefault();
-        if (pending || !externalGroup.trim()) return;
-        if (!groupId && !roleId) return;
-        await run(async () => {
-            await createMapping(provider.id, {
-                externalGroup: externalGroup.trim(),
-                groupId: groupId || null,
-                roleId: roleId || null,
-            });
-            setExternalGroup('');
-            setGroupId('');
-            setRoleId('');
-            await load();
-        });
-    };
-
-    const remove = async (mapping) => {
-        await run(async () => {
-            await deleteMapping(provider.id, mapping.id);
-            await load();
-        });
-    };
-
-    return (
-        <Modal
-            isOpen
-            onClose={pending ? undefined : onCancel}
-            title="Group mappings"
-            subtitle={provider.name}
-            size="lg"
-            closeOnBackdrop={!pending}
-            closeOnEscape={!pending}
-            footer={<Button variant="secondary" onClick={onCancel} disabled={pending}>Close</Button>}
-        >
-            <div className="flex flex-col gap-4">
-                <form onSubmit={add} className="flex flex-col gap-3 rounded-xl border border-theme-border p-3">
-                    <div>
-                        <Label htmlFor="admin-mapping-external">External group</Label>
-                        <Input id="admin-mapping-external" value={externalGroup} onChange={(e) => setExternalGroup(e.target.value)} placeholder="cn=platform-team,ou=groups,dc=example,dc=com" />
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div>
-                            <Label htmlFor="admin-mapping-group">Lens group</Label>
-                            <Select id="admin-mapping-group" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-                                <option value="">—</option>
-                                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                            </Select>
-                        </div>
-                        <div>
-                            <Label htmlFor="admin-mapping-role">Or role</Label>
-                            <Select id="admin-mapping-role" value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-                                <option value="">—</option>
-                                {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-                            </Select>
-                        </div>
-                    </div>
-                    <div><Button type="submit" variant="primary" size="sm" isLoading={pending}>Add mapping</Button></div>
-                </form>
-
-                <FormError message={saveError} />
-                {error && <AdminAlert>{error}</AdminAlert>}
-
-                {loading ? (
-                    <div className="flex justify-center p-4"><Spinner /></div>
-                ) : mappings.length === 0 ? (
-                    <EmptyState title="No mappings" message="Map an external directory group to a Lens group or role." />
-                ) : (
-                    <ul className="flex flex-col gap-2">
-                        {mappings.map((mapping) => (
-                            <li key={mapping.id} className="flex items-center justify-between gap-3 rounded-lg border border-theme-border px-3 py-2 text-sm">
-                                <span className="min-w-0 truncate font-mono text-xs text-theme-text" title={mapping.external_group}>{mapping.external_group}</span>
-                                <span className="flex items-center gap-2">
-                                    <Badge tone={mapping.group_id ? 'brand' : 'violet'}>
-                                        {mapping.group_id ? `group: ${groups.find((g) => g.id === mapping.group_id)?.name || mapping.group_id}` : `role: ${roles.find((r) => r.id === mapping.role_id)?.name || mapping.role_id}`}
-                                    </Badge>
-                                    <Button variant="ghost" size="icon" onClick={() => remove(mapping)} aria-label="Remove mapping" disabled={pending}>
-                                        <Trash2 size={14} className="text-rose-400" />
-                                    </Button>
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </div>
         </Modal>
     );
 }

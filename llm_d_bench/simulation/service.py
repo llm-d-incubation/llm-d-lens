@@ -556,6 +556,25 @@ def _task_execution_id(task: SimulationTask) -> str | None:
     return resolve_legacy_execution_id(task.endpoint_deployment_run_id, task.endpoint_deployment_case_id)
 
 
+async def _cluster_gateway_endpoint(cluster_id: str | None) -> str | None:
+    """The cluster's shared-Gateway base URL (no ``/v1``) for benchmark traffic.
+
+    Gateway Mode deployments disable their own proxy, so an in-cluster harness
+    reaches a deployment's EPP through the shared Gateway. Returns ``None`` when
+    the cluster has no ready Gateway, so callers fall back to the deployment's
+    stored endpoint.
+    """
+    if not cluster_id:
+        return None
+    try:
+        from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+        base = await GatewayOpsService().cluster_gateway_base_url(cluster_id)
+    except Exception:  # noqa: BLE001 - simulation must not fail on a gateway lookup
+        return None
+    return base.removesuffix("/v1") if base else None
+
+
 async def _resolve_task_endpoint_url(
     *,
     endpoint_mode: str,
@@ -609,8 +628,14 @@ async def _resolve_task_endpoint_url(
         except Exception:
             cluster = None
         cluster_name = cluster.name if cluster else None
+    # Only deployments whose provider declared the shared Gateway as their data
+    # plane (and that are not evaluation-owned) are reached through it; all other
+    # deployments keep their own callable endpoint.
+    endpoint_url = context.endpoint
+    if getattr(context, "uses_shared_gateway", False):
+        endpoint_url = await _cluster_gateway_endpoint(context.cluster_id) or context.endpoint
     return ResolvedTaskEndpoint(
-        url=context.endpoint,
+        url=endpoint_url,
         cluster_id=context.cluster_id,
         cluster_name=cluster_name,
         deployment_name=context.display_name,
@@ -721,6 +746,7 @@ async def create_task(request: SimulationTaskCreateRequest) -> SimulationTask:
             endpoint_deployment_name=request.endpoint_deployment_name or resolved_endpoint.deployment_name,
             endpoint_url=endpoint_url,
             model_name=request.model_name,
+            api_key=request.api_key,
             simulation=SimulationConfig(
                 backend=request.backend,
                 backend_options=request.backend_options,
@@ -825,6 +851,7 @@ async def rerun_task(
             update={
                 "id": rerun_id,
                 "endpoint_url": endpoint_url,
+                "api_key": override.api_key,
                 "endpoint_namespace": namespace,
                 "endpoint_deployment_execution_id": execution_id,
                 "endpoint_deployment_run_id": None,

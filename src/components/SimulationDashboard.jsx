@@ -164,6 +164,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         endpointClusterId: '',
         endpointDeployment: '',
         endpointUrl: '',
+        apiKey: '',
         modelName: '',
         runName: '',
         description: '',
@@ -949,6 +950,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
             endpoint_cluster_name: form.endpointMode === 'deployment' ? (endpointCluster?.name || null) : null,
             endpoint_deployment_name: form.endpointMode === 'deployment' ? (endpointDeployment?.name || null) : null,
             endpoint_url: form.endpointUrl.trim(),
+            api_key: form.apiKey.trim() || null,
             model_name: form.modelName.trim(),
             trace_dataset: form.dataset,
             trace_path: form.tracePath,
@@ -2021,6 +2023,21 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                         <Input id="simulation-endpoint" type="url" placeholder="http://inference.example:8000" value={form.endpointUrl} onChange={(event) => updateExternalEndpoint(event.target.value)} />
                                     </div>
                                 )}
+
+                                <div className="mb-4">
+                                    <Label htmlFor="simulation-api-key">Model access token (optional)</Label>
+                                    <Input
+                                        id="simulation-api-key"
+                                        type="password"
+                                        autoComplete="off"
+                                        placeholder="lens-mk-…"
+                                        value={form.apiKey}
+                                        onChange={(event) => update('apiKey', event.target.value)}
+                                    />
+                                    <p className="mt-1 text-[10px] text-slate-500">
+                                        Needed when the harness calls a deployment through the cluster&apos;s shared Gateway. Used for this run only; never stored.
+                                    </p>
+                                </div>
 
                                 <div>
                                         <Label htmlFor="simulation-model">Model</Label>

@@ -94,6 +94,10 @@ class DeploymentExecutionContext:
     custom_parameters: list[dict[str, Any]] | None = None
     baseline_endpoint: str | None = None
     service_ref: str | None = None
+    #: True when an evaluation created this ephemeral deployment for benchmarking.
+    evaluate_owned: bool = False
+    #: True when a benchmark must reach this deployment through the shared Gateway.
+    uses_shared_gateway: bool = False
     configuration_artifact_ids: tuple[str, ...] = ()
 
     def api_payload(self) -> dict[str, Any]:
@@ -292,7 +296,42 @@ def _context(run, case, execution) -> DeploymentExecutionContext:
         custom_parameters=serving["custom_parameters"],
         baseline_endpoint=baseline_endpoint,
         service_ref=service_ref,
+        evaluate_owned=bool(
+            exec_prov.get("evaluate_workflow")
+            or exec_prov.get("evaluation_id")
+            or exec_prov.get("evaluation_case_id")
+            or run_prov.get("evaluate_workflow")
+            or run_prov.get("evaluation_id")
+        ),
+        uses_shared_gateway=deployment_uses_shared_gateway(execution),
     )
+
+
+def deployment_uses_shared_gateway(execution: object) -> bool:
+    """True when a benchmark must reach this deployment through the shared Gateway.
+
+    A provider whose data plane is the cluster's shared Gateway disables the
+    deployment's own router proxy and records ``shares_gateway`` in the
+    persisted deployment contract; only those deployments need the Gateway (and
+    the model token it enforces). Evaluation-owned deployments keep their own
+    proxy even then, so they are always reached directly.
+    """
+    provenance = getattr(execution, "provenance", {}) or {}
+    if (
+        provenance.get("evaluate_workflow")
+        or provenance.get("evaluation_id")
+        or provenance.get("evaluation_case_id")
+    ):
+        return False
+    artifact = getattr(execution, "artifact", None)
+    payload = getattr(artifact, "rendered_payload", None)
+    value = getattr(payload, "value", None) or {}
+    contract = value.get("deployment_contract") or {}
+    if "shares_gateway" in contract:
+        return bool(contract["shares_gateway"])
+    # Executions rendered before the contract carried the flag: optimized-baseline
+    # is the only Guide that ever disabled the per-deployment proxy.
+    return value.get("provider_ref") == "optimized-baseline"
 
 
 def _optional_str(value: object | None) -> str | None:

@@ -59,6 +59,9 @@ SCENARIOS = [
 def command_for_log(executable: str, args: Sequence[str]) -> str:
     sanitized = list(args)
     for index, value in enumerate(sanitized[:-1]):
+        if value == "--api-key":
+            sanitized[index + 1] = "<redacted>"
+            continue
         if value not in {"--endpoint", "--url"}:
             continue
         parsed = urlparse(sanitized[index + 1])
@@ -521,6 +524,7 @@ class CommandBackend(Backend):
                 artifact_dir=artifact_dir,
                 timeout_seconds=command.timeout_seconds,
                 context=context,
+                env=dict(command.env) or None,
                 progress_request_counts=lambda: (self.completed_request_count(task), expected_requests),
                 tolerate_timeout=self.tolerate_timeout,
             )
@@ -533,6 +537,7 @@ class CommandBackend(Backend):
                 context,
                 progress_request_counts=lambda: (self.completed_request_count(task), expected_requests),
                 tolerate_timeout=self.tolerate_timeout,
+                env=dict(command.env) or None,
             )
         context.progress(99, "Processing simulation results")
         parsed = await self.parse(task, result, self.backend_version(detected_version))

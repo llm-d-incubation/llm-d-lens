@@ -38,11 +38,21 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_key_list(name: str) -> tuple[str, ...]:
+    """Parse a comma-separated key list, trimming blanks and de-duplicating."""
+    raw = os.environ.get(name, "")
+    keys = [item.strip() for item in raw.split(",") if item.strip()]
+    return tuple(dict.fromkeys(keys))
+
+
 @dataclass(frozen=True)
 class AuthSettings:
     auth_mode: str = "local"
     allow_unauthenticated: bool = False
     secret_key: str = ""
+    #: Old master keys (comma-separated in LENS_SECRET_KEYS_OLD), tried after
+    #: ``secret_key`` when decrypting stored provider secrets (design §12).
+    old_secret_keys: tuple[str, ...] = ()
     internal_auth_secret: str = ""
     # Absolute cap on a session's lifetime, independent of activity (prevents
     # infinite sliding renewal). Deliberately much larger than the idle
@@ -82,8 +92,9 @@ class AuthSettings:
         return cls(
             auth_mode=mode,
             allow_unauthenticated=allow_unauthenticated,
-            secret_key=os.environ.get("PRISM_SECRET_KEY", ""),
-            internal_auth_secret=os.environ.get("PRISM_INTERNAL_AUTH_SECRET", ""),
+            secret_key=os.environ.get("LENS_SECRET_KEY", ""),
+            old_secret_keys=_env_key_list("LENS_SECRET_KEYS_OLD"),
+            internal_auth_secret=os.environ.get("LENS_INTERNAL_AUTH_SECRET", ""),
             session_ttl_seconds=_env_int("PRISM_SESSION_TTL_SECONDS", 43200),
             session_idle_seconds=_env_int("PRISM_SESSION_IDLE_SECONDS", 1800),
             remember_session_ttl_seconds=_env_int("PRISM_REMEMBER_SESSION_TTL_SECONDS", 2592000),
@@ -109,7 +120,7 @@ class AuthSettings:
 
     def as_public_dict(self) -> dict[str, Any]:
         """Non-sensitive subset safe to log or return."""
-        hidden = {"secret_key", "internal_auth_secret"}
+        hidden = {"secret_key", "old_secret_keys", "internal_auth_secret"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in hidden}
 
 

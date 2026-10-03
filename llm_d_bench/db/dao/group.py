@@ -79,6 +79,23 @@ class GroupDao(BaseDao):
             stmt = select(GroupRow).order_by(func.lower(GroupRow.name), GroupRow.id)
             return [_group_to_record(row) for row in session.scalars(stmt)]
 
+    def get_by_external(self, provider_id: str, external_id: str) -> GroupRecord | None:
+        with self._read_only() as session:
+            stmt = select(GroupRow).where(
+                GroupRow.provider_id == provider_id, GroupRow.external_id == external_id
+            )
+            row = session.scalars(stmt).first()
+            return _group_to_record(row) if row else None
+
+    def list_for_provider(self, provider_id: str) -> list[GroupRecord]:
+        with self._read_only() as session:
+            stmt = (
+                select(GroupRow)
+                .where(GroupRow.provider_id == provider_id)
+                .order_by(func.lower(GroupRow.name), GroupRow.id)
+            )
+            return [_group_to_record(row) for row in session.scalars(stmt)]
+
     def save(self, record: GroupRecord) -> GroupRecord:
         with self._transaction() as session:
             row = session.get(GroupRow, record.id)

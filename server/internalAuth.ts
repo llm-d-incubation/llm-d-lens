@@ -36,7 +36,7 @@ export type InternalAuthContext = { principalId: string };
 const storage = new AsyncLocalStorage<InternalAuthContext>();
 
 export function internalAuthSecret(): string {
-    return process.env.PRISM_INTERNAL_AUTH_SECRET || '';
+    return process.env.LENS_INTERNAL_AUTH_SECRET || '';
 }
 
 export function internalAuthEnabled(): boolean {

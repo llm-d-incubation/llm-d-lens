@@ -181,7 +181,7 @@ All `utils/` entry points in Python are under `llm_d_bench/`.
 | Startup environment | [scripts/storage-env.sh](../../scripts/storage-env.sh) | Root-directory configuration for development and installation startup scripts |
 | File manifests and identifiers | [llm_d_bench/utils/artifact_store.py](../../llm_d_bench/utils/artifact_store.py) | Configuration, deployment, evaluation, simulation, dataset, and monitoring results |
 | Migration and retention checks | [llm_d_bench/utils/storage_admin.py](../../llm_d_bench/utils/storage_admin.py) | Offline copying, manifest reconstruction, cleanup-candidate statistics |
-| Container storage | [docker-compose.yml](../../docker-compose.yml) | Service root directories and volume configuration |
+| Container storage | [Dockerfile](../../Dockerfile) | Service root directories and volume configuration |
 
 ### Content Kept Under Separate Management
 

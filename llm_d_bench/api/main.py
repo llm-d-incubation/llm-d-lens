@@ -24,6 +24,7 @@ from llm_d_bench.api.problems import install_problem_handlers
 from llm_d_bench.auth.bootstrap import ensure_initial_admin, format_initial_admin_banner
 from llm_d_bench.auth.context import AuthContextMiddleware, require_route_permission
 from llm_d_bench.auth.maintenance import run_maintenance
+from llm_d_bench.auth.master_key import ensure_master_key
 from llm_d_bench.auth.router import router as auth_router
 from llm_d_bench.auth.routes import validate_route_registry
 from llm_d_bench.auth.service import default_service as default_auth_service
@@ -191,6 +192,7 @@ async def _auth_startup() -> None:
     service = default_auth_service()
     service.ensure_builtin_roles()
     current_settings = get_auth_settings()
+    ensure_master_key(current_settings)
     initial = ensure_initial_admin(service, current_settings)
     if initial is not None:
         banner = format_initial_admin_banner(initial)

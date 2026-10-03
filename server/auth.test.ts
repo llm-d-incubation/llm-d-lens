@@ -35,7 +35,7 @@ function listen(server: http.Server): Promise<number> {
 }
 
 before(async () => {
-    process.env.PRISM_INTERNAL_AUTH_SECRET = INTERNAL_SECRET;
+    process.env.LENS_INTERNAL_AUTH_SECRET = INTERNAL_SECRET;
     upstream = http.createServer((req, res) => {
         upstreamRequests.push({
             url: req.url || '',

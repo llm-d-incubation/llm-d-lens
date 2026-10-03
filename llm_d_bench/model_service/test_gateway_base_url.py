@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from llm_d_bench.model_service.router import _gateway_base_url
+from llm_d_bench.model_service.gateway_ops import gateway_base_url as _gateway_base_url
 
 
 def _cluster(**kwargs):

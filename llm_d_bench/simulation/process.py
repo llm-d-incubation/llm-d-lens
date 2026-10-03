@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -91,6 +92,7 @@ async def execute_command(
     context: RunContext,
     progress_request_counts: Callable[[], tuple[int, int | None] | None] | None = None,
     tolerate_timeout: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> CommandResult:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = artifact_dir / "stdout.log"
@@ -100,6 +102,7 @@ async def execute_command(
         try:
             process = await spawn(
                 [executable, *args],
+                env={**os.environ, **env} if env else None,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

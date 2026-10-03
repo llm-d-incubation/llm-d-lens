@@ -15,8 +15,9 @@ to set the auth and gateway groups explicitly.
 | `PRISM_AUTH_MODE` | Auth mode (`local` by default). | `local` |
 | `PRISM_ADMIN_USERNAME` / `PRISM_ADMIN_PASSWORD` | Seed the initial admin account on first boot. | `PRISM_ADMIN_USERNAME`: `admin`<br />`PRISM_ADMIN_PASSWORD`: `""` |
 | `PRISM_ADMIN_AUTOSEED` | Whether to auto-create the initial admin account (default on). | `True` |
-| `PRISM_SECRET_KEY` | Required to encrypt/decrypt stored external-provider secrets. | `""` |
-| `PRISM_INTERNAL_AUTH_SECRET` | Shared secret for internal service-to-service calls (for example agentic planning callbacks). | `""` |
+| `LENS_SECRET_KEY` | Master key that encrypts stored external-provider secrets. When unset, Lens generates one on first start under `<LENS_DATA_DIR>/credentials/master_key.json` (mode 600); set it to pin the key or make the **Master key** page read-only. | generated and stored on first start |
+| `LENS_SECRET_KEYS_OLD` | Comma-separated previous master keys used as decryption fallback after a rotation. | `""` |
+| `LENS_INTERNAL_AUTH_SECRET` | Shared secret for internal service-to-service calls (for example agentic planning callbacks). | `""` |
 | `PRISM_EXPOSE_API_DOCS` | Whether to expose the FastAPI `/docs` page. | `True` |
 
 ## Database

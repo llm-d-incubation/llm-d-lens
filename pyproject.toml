@@ -54,6 +54,14 @@ external-db = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "llm-d-prism-backend[ldap]",
+]
+# LDAP directory identity provider client (design section 20.5.1, decision
+# D19). Kept as an extra so slim/custom builds can omit it, but the default
+# development and installer install paths include it so the Administration
+# directory "Test" action works out of the box.
+ldap = [
+    "ldap3>=2.9",
 ]
 
 # Hardware plugin discovery (see docs/design/hardware-plugin-architecture.md).

@@ -54,21 +54,34 @@ The Administration area contains separate pages for user access, directory integ
 
 1. Open the **Identity providers** page.
 2. Click **Add provider**.
-3. In **Add identity provider**, fill in **Name**, **Server URL**, **User base DN**, **User filter**, **Username attribute**, **Display name attribute**, **Email attribute**, **Bind DN**, and **Bind password** as needed.
+3. In **Add identity provider**, fill in **Name**, **Server URL**, **User base DN**, **Group base DN** (optional), **User filter**, **Username attribute**, **Display name attribute**, **Email attribute**, **Bind DN**, and **Bind password** as needed.
 4. Turn **Enabled** on or off.
 5. Optional: select **Default provider**.
 6. Click **Add provider**.
 7. To verify connectivity later, click **Test** in the provider's row.
 8. To modify an existing entry, click the action labeled **Edit** followed by the provider's name, update the fields, then click **Save changes**.
 
-## Map an external directory group to Lens access
+## Import directory users and groups
 
-1. Open the **Identity providers** page.
-2. In the provider row, click **Mappings**.
-3. In **Group mappings**, enter the directory group's name in **External group**.
-4. Choose a target in **Lens group** or **Or role**.
-5. Click **Add mapping**.
-6. To remove a mapping, click **Remove mapping**.
+Directory users and groups become ordinary Lens accounts and groups tagged with their source (`ldap`), so they can be granted roles and shared to exactly like local ones.
+
+1. Set **Group base DN** on the provider (for example `ou=groups,dc=example,dc=org`).
+2. On the **Identity providers** page, click **Sync** in the provider row to import every group under that base and its members.
+3. Sign-in also imports the user and their groups, so a directory user appears in **Users** after their first login.
+4. Open **Users** or **Groups** to grant roles to an imported account or group. Directory group membership is **read-only** in Lens (it is owned by the directory and reconciled on the next sign-in or Sync); only roles and shares are editable here.
+5. Open a deployment's **Share** drawer and choose the imported user or group to grant access to it.
+6. Deleting the provider removes every account and group it imported, together with their role bindings and shares.
+
+## Manage the master key
+
+The master key (`LENS_SECRET_KEY`) encrypts stored external-provider secrets such as LDAP bind passwords. When the environment variable is not set, Lens generates one on first start and stores it under `credentials/` with mode 600.
+
+1. Open the **Master key** page.
+2. Review **Source**, **Key fingerprint**, **Key length**, **Provider secrets encrypted**, and **Previous keys retained**.
+3. To rotate it, click **Rotate key**, optionally enter a new key of at least 16 characters (leave the field blank to generate one), then confirm with **Rotate key**. Stored provider secrets are re-encrypted with the new key and the previous key is retained for fallback.
+4. Once you have confirmed nothing still needs the previous key, click **Clear previous keys** and confirm.
+
+When `LENS_SECRET_KEY` is provided through the environment the page is read-only: update the variable and restart Lens to rotate it.
 
 ## Revoke an active session
 

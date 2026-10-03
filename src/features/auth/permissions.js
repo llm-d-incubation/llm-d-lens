@@ -51,6 +51,7 @@ export const VIEW_PERMISSIONS = {
     'admin/groups': ['group:group:read'],
     'admin/roles': ['role:role:read'],
     'admin/identity-providers': ['idp:provider:read'],
+    'admin/master-key': ['system:secret:read'],
     'admin/sessions': ['session:session:read'],
     'admin/audit': ['audit:log:read'],
     'admin/model-service': ['model-service:group:manage', 'model-service:group:read', 'model-service:gateway:read'],

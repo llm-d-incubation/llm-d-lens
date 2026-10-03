@@ -312,6 +312,15 @@ class EvaluateRunRequest(BenchmarkSpec):
             "endpoint; fails clearly otherwise."
         ),
     )
+    api_key: str | None = Field(
+        default=None,
+        exclude=True,
+        max_length=4096,
+        description=(
+            "Model access token (lens-mk-...) the harness sends as OPENAI_API_KEY when the "
+            "deployment is reached through the cluster's shared Gateway. Run-only; never persisted."
+        ),
+    )
 
 
 class EvaluateWorkflowRequest(BaseModel):

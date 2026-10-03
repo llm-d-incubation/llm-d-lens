@@ -12,7 +12,7 @@
 # followed by supplementary contributor/design-reference sections that have
 # no GPUStack equivalent.
 instances:
-  - url: lens.docs.buildwithfern.com
+  - url: llm-d-lens.docs.buildwithfern.com
 
 title: Lens Documentation
 

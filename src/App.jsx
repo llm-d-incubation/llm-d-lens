@@ -46,6 +46,7 @@ import UsersPage from './components/Administration/UsersPage';
 import GroupsPage from './components/Administration/GroupsPage';
 import RolesPage from './components/Administration/RolesPage';
 import IdentityProvidersPage from './components/Administration/IdentityProvidersPage';
+import SecretKeyPage from './components/Administration/SecretKeyPage';
 import SessionsPage from './components/Administration/SessionsPage';
 import AuditLogsPage from './components/Administration/AuditLogsPage';
 
@@ -56,7 +57,7 @@ const VIEW_ALIASES = {
   'optimization-cluster': 'clusters',
 };
 
-const SUPPORTED_VIEWS = new Set(['cluster-monitoring-stack', 'clusters', 'storage-management', 'model-cache', 'ai-providers', 'model-service', 'api-keys', 'usage', 'playground', 'optimization-deployments', 'model-market', 'optimization-evaluate', 'optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-explore', 'optimization-deploy', 'optimization-workspace', 'optimization-simulate', 'optimization-simulate-details', 'opt-define', 'opt-search', 'opt-deploy', 'opt-benchmark', 'opt-performance', 'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/sessions', 'admin/audit', 'admin/model-service', 'admin/usage']);
+const SUPPORTED_VIEWS = new Set(['cluster-monitoring-stack', 'clusters', 'storage-management', 'model-cache', 'ai-providers', 'model-service', 'api-keys', 'usage', 'playground', 'optimization-deployments', 'model-market', 'optimization-evaluate', 'optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-explore', 'optimization-deploy', 'optimization-workspace', 'optimization-simulate', 'optimization-simulate-details', 'opt-define', 'opt-search', 'opt-deploy', 'opt-benchmark', 'opt-performance', 'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/master-key', 'admin/sessions', 'admin/audit', 'admin/model-service', 'admin/usage']);
 
 function resolveView(view) {
   const resolved = VIEW_ALIASES[view] || view;
@@ -232,6 +233,7 @@ function AuthenticatedApp() {
             {currentView === 'admin/groups' && <GroupsPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/roles' && <RolesPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/identity-providers' && <IdentityProvidersPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
+            {currentView === 'admin/master-key' && <SecretKeyPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/sessions' && <SessionsPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/audit' && <AuditLogsPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/model-service' && <ModelServiceAdminPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}

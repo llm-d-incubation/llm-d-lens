@@ -478,6 +478,10 @@ class AIPerfBackend(CommandBackend):
                     str(options["profile_run_cooldown_seconds"]),
                 ]
             )
+        if task.api_key:
+            # Shared-Gateway deployments require a model access token; AIPerf
+            # sends it as ``Authorization: Bearer <api-key>``.
+            args.extend(["--api-key", task.api_key])
         return BackendCommand(
             args=tuple(args),
             timeout_seconds=math.ceil(trace.timeout_seconds + task.simulation.grace_period_seconds + 180),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +32,21 @@ from llm_d_bench.deploy.providers.storage_mount import resolve_mount
 from llm_d_bench.deploy.providers.target_node import configured_target_node
 
 CommandRunner = Callable[[list[str]], Awaitable[tuple[int, str, str]]]
+
+
+def _evaluation_owned(provenance: Mapping[str, Any] | None) -> bool:
+    """True for ephemeral deployments an evaluation created for benchmarking.
+
+    Those keep the chart's own router proxy (no shared Gateway) so several
+    same-model deployments can be benchmarked without colliding on the Gateway's
+    single base-model route key.
+    """
+    provenance = provenance or {}
+    return bool(
+        provenance.get("evaluate_workflow")
+        or provenance.get("evaluation_id")
+        or provenance.get("evaluation_case_id")
+    )
 
 
 @dataclass(frozen=True)
@@ -85,6 +100,16 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
 
     def discover(self) -> GuideDefinition:
         return self._definition
+
+    def _gateway_mode_args(self, execution_context: Mapping[str, Any] | None) -> list[str]:
+        """Extra Helm args that switch the chart to the shared Gateway.
+
+        Evaluation-owned deployments keep their own proxy instead (see
+        :func:`_evaluation_owned`), so this returns nothing for them.
+        """
+        if _evaluation_owned((execution_context or {}).get("provenance")):
+            return []
+        return ["--values", str(self._policy.gateway_mode_values_path)]
 
     def register_restored_namespace(self, namespace: str) -> None:
         register = getattr(self._command_runner, "register_restored_namespace", None)
@@ -155,7 +180,14 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             source_ref=definition.source_ref,
             guide_content_hash=definition.content_hash,
             manifest_checksum=manifest_checksum,
-            deployment_contract={"routerProfile": overrides.get("routerProfile", "optimized-baseline")},
+            deployment_contract={
+                "routerProfile": overrides.get("routerProfile", "optimized-baseline"),
+                # This Guide's data plane is the cluster's shared Gateway: a
+                # non-evaluation deployment disables its own router proxy, so a
+                # benchmark must be routed through that Gateway. Evaluation-owned
+                # deployments keep their proxy instead (see deploy()).
+                "shares_gateway": True,
+            },
         )
 
     async def install_published_router(
@@ -202,8 +234,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             str(self._policy.router_base_values_path),
             "--values",
             str(values),
-            "--values",
-            str(self._policy.gateway_mode_values_path),
+            *self._gateway_mode_args(execution_context),
         ]
         status, stdout, stderr = await self._command_runner(command)
         if status != 0:
@@ -262,8 +293,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                         rendered_overlay,
                     )
                 ),
-                "--values",
-                str(self._policy.gateway_mode_values_path),
+                *self._gateway_mode_args(execution_context),
             ],
             ["kubectl", "apply", "--namespace", namespace, "--kustomize", str(rendered_overlay)],
         ]

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from llm_d_bench.auth.contracts import Principal
+from llm_d_bench.auth.master_key import resolve_master_key
 from llm_d_bench.auth.permissions import (
     ALL_PERMISSIONS,
     BUILTIN_ROLE_ADMIN,
@@ -68,6 +69,12 @@ class LoginResult:
     user: UserRecord
     token: str
     principal: Principal
+
+
+def _group_name_from_dn(dn: str) -> str:
+    """Best-effort display name (first RDN value) for an LDAP group DN."""
+    first = dn.split(",", 1)[0].strip()
+    return first.split("=", 1)[1].strip() if "=" in first else dn
 
 
 def validate_password_strength(password: str, *, username: str = "") -> None:
@@ -129,9 +136,10 @@ class AuthService:
 
     # --- external providers (LDAP, future OIDC) ------------------------------
     def secret_cipher(self) -> SecretCipher:
-        if not self.settings.secret_key:
-            raise DomainValidationError("PRISM_SECRET_KEY is required to read provider secrets")
-        return SecretCipher(self.settings.secret_key)
+        resolved = resolve_master_key(self.settings)
+        if not resolved.primary:
+            raise DomainValidationError("LENS_SECRET_KEY is required to read provider secrets")
+        return SecretCipher(resolved.primary, old=resolved.old)
 
     def decrypt_provider_secret(self, secret_encrypted: str | None) -> str | None:
         if not secret_encrypted:
@@ -204,40 +212,44 @@ class AuthService:
         user.principal_version = (user.principal_version or 1) + 1
         return self.user_dao.save(user)
 
-    def _sync_external_groups(self, provider, user: UserRecord, identity: ExternalIdentity) -> None:
-        mappings = self.identity_mapping_dao.list_for_provider(provider.id)
-        external = set(identity.groups)
-        all_mapped_groups = {mapping.group_id for mapping in mappings if mapping.group_id}
-        mapped_groups: set[str] = set()
-        for mapping in mappings:
-            if mapping.external_group not in external:
-                continue
-            if mapping.group_id:
-                mapped_groups.add(mapping.group_id)
-                current = {m.group_id for m in self.user_group_dao.list_for_user(user.id)}
-                if mapping.group_id not in current:
-                    self.user_group_dao.add(
-                        UserGroupRecord(user_id=user.id, group_id=mapping.group_id, source="external")
-                    )
-                    self.group_dao.bump_authz_version(mapping.group_id)
-            if mapping.role_id:
-                existing = {
-                    (b.role_id, b.scope_type, b.scope_cluster_id) for b in self.user_binding_dao.list_for_user(user.id)
-                }
-                if (mapping.role_id, "global", None) not in existing:
-                    self.user_binding_dao.create(
-                        UserRoleBindingRecord(user_id=user.id, role_id=mapping.role_id, scope_type="global")
-                    )
-                    self.user_dao.bump_principal_version(user.id)
-        # Remove previously synced memberships that are no longer present
-        # (only for groups this provider maps; manual memberships are kept).
-        for membership in self.user_group_dao.list_for_user(user.id):
-            stale = (
-                membership.source == "external"
-                and membership.group_id in all_mapped_groups
-                and membership.group_id not in mapped_groups
+    def _upsert_external_group(self, provider, external_id: str, name: str) -> GroupRecord:
+        """Create or refresh the Lens group mirroring a directory group."""
+        existing = self.group_dao.get_by_external(provider.id, external_id)
+        if existing is not None:
+            if name and existing.name != name:
+                existing.name = name
+                return self.group_dao.save(existing)
+            return existing
+        return self.group_dao.create(
+            GroupRecord(
+                name=name or external_id,
+                source=provider.type,
+                provider_id=provider.id,
+                external_id=external_id,
             )
-            if stale:
+        )
+
+    def _sync_external_groups(self, provider, user: UserRecord, identity: ExternalIdentity) -> None:
+        """Reflect the user's directory groups as Lens group memberships on login.
+
+        Directory groups are materialized as ordinary ``groups`` rows with
+        ``source=ldap`` so they can be granted roles and shared to like any other
+        group. Memberships synced here use ``source=external`` and are removed
+        again when the directory no longer reports them (manual ones are kept).
+        """
+        synced: set[str] = set()
+        for external_id in identity.groups:
+            group = self._upsert_external_group(provider, external_id, _group_name_from_dn(external_id))
+            synced.add(group.id)
+            current = {membership.group_id for membership in self.user_group_dao.list_for_user(user.id)}
+            if group.id not in current:
+                self.user_group_dao.add(UserGroupRecord(user_id=user.id, group_id=group.id, source="external"))
+                self.group_dao.bump_authz_version(group.id)
+        for membership in self.user_group_dao.list_for_user(user.id):
+            if membership.source != "external":
+                continue
+            group = self.group_dao.get(membership.group_id)
+            if group is not None and group.provider_id == provider.id and membership.group_id not in synced:
                 self.user_group_dao.remove(user.id, membership.group_id)
                 self.group_dao.bump_authz_version(membership.group_id)
 
@@ -618,58 +630,92 @@ class AuthService:
             raise ConflictError("cannot remove the last global admin")
 
     async def sync_directory(self, provider_id: str) -> dict[str, object]:
-        """Reconcile mapped groups' members from an external directory."""
+        """Materialize the directory's groups and members into Lens.
+
+        Every group under the provider's ``group_base_dn`` becomes a Lens group
+        (``source=ldap``) and its members become Lens users plus memberships
+        (``source=external``). Memberships no longer reported by the directory
+        are removed; manually added memberships are kept.
+        """
         record = self.identity_provider_dao.get(provider_id)
         if record is None:
             raise NotFoundError("identity provider not found")
         provider = get_provider(record, secret=self.decrypt_provider_secret(record.secret_encrypted))
-        mappings = self.identity_mapping_dao.list_for_provider(provider_id)
-        synced = 0
+        descriptors = await provider.list_groups()
+        group_count = 0
+        member_count = 0
         failed: list[str] = []
-        for mapping in mappings:
-            if not mapping.group_id and not mapping.role_id:
+        for descriptor in descriptors:
+            external_id = str(descriptor.get("external_id") or "")
+            if not external_id:
                 continue
             try:
-                members = await provider.list_group_members(mapping.external_group)
+                group = self._upsert_external_group(
+                    record, external_id, str(descriptor.get("name") or external_id)
+                )
+                members = await provider.list_group_members(external_id)
             except IdentityProviderError as error:
-                failed.append(mapping.external_group)
+                failed.append(external_id)
                 self.audit(
                     "directory_sync_failed",
                     result="failure",
                     target_type="identity_provider",
                     target_id=provider_id,
-                    detail={"group": mapping.external_group, "error": str(error)},
+                    detail={"group": external_id, "error": str(error)},
                 )
                 continue
+            group_count += 1
+            member_ids: set[str] = set()
             for identity in members:
                 user = self._upsert_external_user(record, identity)
-                if mapping.group_id:
-                    current = {membership.group_id for membership in self.user_group_dao.list_for_user(user.id)}
-                    if mapping.group_id not in current:
-                        self.user_group_dao.add(
-                            UserGroupRecord(user_id=user.id, group_id=mapping.group_id, source="external")
-                        )
-                        self.group_dao.bump_authz_version(mapping.group_id)
-                if mapping.role_id:
-                    existing = {
-                        (binding.role_id, binding.scope_type, binding.scope_cluster_id)
-                        for binding in self.user_binding_dao.list_for_user(user.id)
-                    }
-                    if (mapping.role_id, "global", None) not in existing:
-                        self.user_binding_dao.create(
-                            UserRoleBindingRecord(user_id=user.id, role_id=mapping.role_id, scope_type="global")
-                        )
-                        self.user_dao.bump_principal_version(user.id)
-                synced += 1
+                member_ids.add(user.id)
+                current = {membership.group_id for membership in self.user_group_dao.list_for_user(user.id)}
+                if group.id not in current:
+                    self.user_group_dao.add(UserGroupRecord(user_id=user.id, group_id=group.id, source="external"))
+                    self.group_dao.bump_authz_version(group.id)
+                member_count += 1
+            for membership in self.user_group_dao.list_for_group(group.id):
+                if membership.source == "external" and membership.user_id not in member_ids:
+                    self.user_group_dao.remove(membership.user_id, group.id)
+                    self.group_dao.bump_authz_version(group.id)
         record.last_sync_at = utcnow()
         self.identity_provider_dao.save(record)
         self.audit(
             "directory_synced",
             target_type="identity_provider",
             target_id=provider_id,
-            detail={"members": synced, "failed": failed},
+            detail={"groups": group_count, "members": member_count, "failed": failed},
         )
-        return {"ok": not failed, "members": synced, "failed": failed}
+        return {"ok": not failed, "groups": group_count, "members": member_count, "failed": failed}
+
+    def delete_identity_provider(self, provider_id: str) -> None:
+        """Delete a provider and every external user/group (and authorization) it produced.
+
+        Deleting the users/groups cascades their role bindings, cluster access,
+        group memberships and resource (deployment) shares. Refuses when it would
+        remove the last global admin.
+        """
+        record = self.identity_provider_dao.get(provider_id)
+        if record is None:
+            raise NotFoundError("identity provider not found")
+        external_users = [
+            user for user in self.user_dao.list() if user.provider_id == provider_id and user.auth_source != "local"
+        ]
+        for user in external_users:
+            self._guard_last_admin(user.id)
+        for user in external_users:
+            self.session_dao.revoke_user_sessions(user.id)
+            self.user_dao.delete(user.id)
+        external_groups = self.group_dao.list_for_provider(provider_id)
+        for group in external_groups:
+            self.group_dao.delete(group.id)
+        self.identity_provider_dao.delete(provider_id)
+        self.audit(
+            "identity_provider_deleted",
+            target_type="identity_provider",
+            target_id=provider_id,
+            detail={"users": len(external_users), "groups": len(external_groups)},
+        )
 
     # --- groups --------------------------------------------------------------
     def create_group(
@@ -695,15 +741,23 @@ class AuthService:
             raise NotFoundError("group not found")
         self.group_dao.delete(group_id)
 
-    def add_group_member(self, group_id: str, user_id: str, *, source: str = "manual") -> None:
-        if self.group_dao.get(group_id) is None:
+    def _require_local_group(self, group_id: str) -> GroupRecord:
+        group = self.group_dao.get(group_id)
+        if group is None:
             raise NotFoundError("group not found")
+        if group.source != "local":
+            raise DomainValidationError("membership of directory groups is managed by the identity provider")
+        return group
+
+    def add_group_member(self, group_id: str, user_id: str, *, source: str = "manual") -> None:
+        self._require_local_group(group_id)
         if self.user_dao.get(user_id) is None:
             raise NotFoundError("user not found")
         self.user_group_dao.add(UserGroupRecord(user_id=user_id, group_id=group_id, source=source))
         self.group_dao.bump_authz_version(group_id)
 
     def remove_group_member(self, group_id: str, user_id: str) -> None:
+        self._require_local_group(group_id)
         self.user_group_dao.remove(user_id, group_id)
         self.group_dao.bump_authz_version(group_id)
 

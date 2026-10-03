@@ -42,6 +42,7 @@ from llm_d_bench.deploy.contracts import (
     DeploymentStatus,
     RuntimeBinding,
 )
+from llm_d_bench.deploy.executions import deployment_uses_shared_gateway
 from llm_d_bench.deploy.usage import register_usage_probe
 from llm_d_bench.evaluate.api_models import (
     BenchmarkDefaultsResponse,
@@ -99,6 +100,8 @@ _workflow_records = EvaluateWorkflowDao()
 _tasks: dict[str, asyncio.Task[None]] = {}
 _workflow_tasks: dict[str, asyncio.Task[None]] = {}
 _active_workflows: dict[str, dict] = {}
+#: Run-only model access tokens (never persisted) keyed by benchmark run id.
+_run_api_keys: dict[str, str] = {}
 _benchmark_install_lock = asyncio.Lock()
 _MONITORING_PREPARE_TIMEOUT = 30.0
 _OBSERVABILITY_COLLECT_TIMEOUT = 120.0
@@ -2283,12 +2286,21 @@ def _stage_metric_summary(result_root: Path, stage_index: int) -> dict:
     return _metric_summary(result_root, pattern=f"stage_{stage_index}_lifecycle_metrics.json")
 
 
+def _inference_server_config(model: str, endpoint_url: str, api_key: str | None) -> dict:
+    """inference-perf ``server`` block; carries ``api_key`` when routed by a Gateway."""
+    server = {"type": "vllm", "model_name": model, "base_url": endpoint_url, "ignore_eos": True}
+    if api_key:
+        server["api_key"] = api_key
+    return server
+
+
 def _matrix_workload_yaml(
     point: WorkloadMatrixPoint,
     stages: list[ConcurrencyStage],
     model: str,
     endpoint_url: str,
     targets: dict | None = None,
+    api_key: str | None = None,
 ) -> str:
     """Build an exact-length, closed-loop inference-perf workload for one ISL/OSL matrix point.
 
@@ -2305,7 +2317,7 @@ def _matrix_workload_yaml(
             ],
         },
         "api": {"type": "completion", "streaming": True},
-        "server": {"type": "vllm", "model_name": model, "base_url": endpoint_url, "ignore_eos": True},
+        "server": _inference_server_config(model, endpoint_url, api_key),
         "tokenizer": {"pretrained_model_name_or_path": model},
         "data": {
             "type": "random",
@@ -2320,7 +2332,11 @@ def _matrix_workload_yaml(
 
 
 def _shared_prefix_workload_yaml(
-    spec: SharedPrefixWorkloadSpec, model: str, endpoint_url: str, targets: dict | None = None
+    spec: SharedPrefixWorkloadSpec,
+    model: str,
+    endpoint_url: str,
+    targets: dict | None = None,
+    api_key: str | None = None,
 ) -> str:
     """Build an open-loop, shared-system-prompt inference-perf workload.
 
@@ -2344,7 +2360,7 @@ def _shared_prefix_workload_yaml(
             "request_timeout": 120,
         },
         "api": {"type": "completion", "streaming": True},
-        "server": {"type": "vllm", "model_name": model, "base_url": endpoint_url, "ignore_eos": True},
+        "server": _inference_server_config(model, endpoint_url, api_key),
         "tokenizer": {"pretrained_model_name_or_path": model},
         "data": {
             "type": "shared_prefix",
@@ -2364,15 +2380,12 @@ def _shared_prefix_workload_yaml(
     return yaml.safe_dump(enable_request_reports(workload, targets or {}), sort_keys=False)
 
 
-def _inline_workload_yaml(content: str, model: str, endpoint_url: str, targets: dict | None = None) -> str:
+def _inline_workload_yaml(
+    content: str, model: str, endpoint_url: str, targets: dict | None = None, api_key: str | None = None
+) -> str:
     """Bind a user-authored inference-perf workload to the selected deployment."""
     workload = validate_inline_workload(content)
-    workload["server"] = {
-        "type": "vllm",
-        "model_name": model,
-        "base_url": endpoint_url,
-        "ignore_eos": True,
-    }
+    workload["server"] = _inference_server_config(model, endpoint_url, api_key)
     return yaml.safe_dump(enable_request_reports(workload, targets or {}), sort_keys=False)
 
 
@@ -2783,7 +2796,7 @@ def _harness_proxy_override(proxy_environment: dict[str, str]) -> str | None:
     """Build the legacy-compatible proxy override for benchmark harnesses."""
     items = [
         {"name": name, "value": proxy_environment[name]}
-        for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "OPENAI_API_KEY")
         if name in proxy_environment
     ]
     return f"harness.extraEnvVars={json.dumps(items, separators=(',', ':'))}" if items else None
@@ -3055,6 +3068,24 @@ async def _stream_benchmark_process(
     return tails["stdout"], tails["stderr"]
 
 
+async def _cluster_gateway_endpoint(cluster_id: str | None) -> str | None:
+    """The cluster's shared-Gateway base URL (no ``/v1``) for benchmark traffic.
+
+    Gateway Mode deployments disable their own proxy, so the in-cluster harness
+    reaches a deployment's EPP through the shared Gateway. Returns ``None`` when
+    the cluster has no ready Gateway, so callers fall back to the stored endpoint.
+    """
+    if not cluster_id:
+        return None
+    try:
+        from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+        base = await GatewayOpsService().cluster_gateway_base_url(cluster_id)
+    except Exception:  # noqa: BLE001 - evaluation must not fail on a gateway lookup
+        return None
+    return base.removesuffix("/v1") if base else None
+
+
 async def _execute(run_id: str) -> None:
     run = _get("benchmark", run_id)
     if run is None:
@@ -3091,10 +3122,22 @@ async def _execute(run_id: str) -> None:
                     "this Guide deployment does not expose a kubernetes-service baseline endpoint for comparison"
                 )
             endpoint_url = execution.endpoint.baseline_url
+        elif deployment_uses_shared_gateway(execution):
+            # Provider declared the shared Gateway as this deployment's data
+            # plane: route through it so EPP stays in the path. Standalone
+            # providers and evaluation-owned deployments are reached directly.
+            gateway_endpoint = await _cluster_gateway_endpoint(execution.provenance.get("cluster_server_id"))
+            if gateway_endpoint:
+                endpoint_url = gateway_endpoint
         run.update(endpoint_used=endpoint_url, namespace=execution.namespace, model=_execution_model(execution))
         session_id = execution.provenance.get("cluster_session_id")
         environment = {**os.environ, **deployment_runtime_overrides(session_id)} if session_id else dict(os.environ)
         harness_environment = _harness_proxy_environment(run, kubeconfig_path=environment.get("KUBECONFIG"))
+        api_key = _run_api_keys.pop(run_id, None)
+        if api_key:
+            # Shared-Gateway deployments need the user's model access token in
+            # the harness Pod; it is injected via harness.extraEnvVars below.
+            harness_environment["OPENAI_API_KEY"] = api_key
         # The CLI's independent Kubernetes SDK must not inherit external-network
         # proxies. Pass Pod settings as values instead of --envvarspod, which
         # couples Pod downloads to the control-plane client's environment.
@@ -3246,6 +3289,7 @@ async def _execute(run_id: str) -> None:
                         [ConcurrencyStage(concurrency=1, num_requests=warmup_requests)],
                         model_name,
                         endpoint_url,
+                        api_key=api_key,
                     ),
                     encoding="utf-8",
                 )
@@ -3273,7 +3317,9 @@ async def _execute(run_id: str) -> None:
                 point_workspace.mkdir(parents=True, exist_ok=True)
                 workload_path = point_workspace / "workload.yaml"
                 workload_path.write_text(
-                    _matrix_workload_yaml(point, stages, model_name, endpoint_url, run.get("sla_targets")),
+                    _matrix_workload_yaml(
+                        point, stages, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key
+                    ),
                     encoding="utf-8",
                 )
                 point_returncode, point_stdout, point_stderr = await _run_workload(point_workspace, workload_path)
@@ -3334,7 +3380,9 @@ async def _execute(run_id: str) -> None:
             model_name = _execution_model(execution)
             workload_path = output / "workload.yaml"
             workload_path.write_text(
-                _shared_prefix_workload_yaml(spec, model_name, endpoint_url, run.get("sla_targets")),
+                _shared_prefix_workload_yaml(
+                    spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key
+                ),
                 encoding="utf-8",
             )
             command = _base_command(output) + ["--workload-file-path", str(workload_path)]
@@ -3387,7 +3435,11 @@ async def _execute(run_id: str) -> None:
             workload_path = output / "workload.yaml"
             workload_path.write_text(
                 _inline_workload_yaml(
-                    run["workload_yaml"], _execution_model(execution), endpoint_url, run.get("sla_targets")
+                    run["workload_yaml"],
+                    _execution_model(execution),
+                    endpoint_url,
+                    run.get("sla_targets"),
+                    api_key=api_key,
                 ),
                 encoding="utf-8",
             )
@@ -3843,6 +3895,9 @@ async def create_run(request: EvaluateRunRequest, http_request: Request = None) 
         "benchmark_runtime": benchmark_runtime,
     }
     run["benchmark"] = request.model_dump(include=set(BenchmarkSpec.model_fields))
+    if request.api_key:
+        # Run-only, in-memory: never part of the persisted run dict.
+        _run_api_keys[run["id"]] = request.api_key
     _hydrate_benchmark_context(run)
     if "specification_file" not in request.model_fields_set:
         guide = run.get("guide")

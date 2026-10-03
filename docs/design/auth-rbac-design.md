@@ -219,7 +219,7 @@ Browser ──HTTPS──▶ Node/Express (primary PEP, browser's only entry poi
   `llm_d_bench/auth/` domain and are persisted with the existing SQLAlchemy + DAO stack.
 - **Node is the primary policy enforcement point** (the browser's only entry point, and it also has native write routes).
 - **Python is the secondary policy enforcement point**: even if someone connects directly to loopback, they must still carry
-  the internal identity headers injected by Node and signed/encrypted with `PRISM_INTERNAL_AUTH_SECRET`;
+  the internal identity headers injected by Node and signed/encrypted with `LENS_INTERNAL_AUTH_SECRET`;
   client-supplied `X-Prism-Principal-*` headers are stripped at the Node entry point without exception.
 
 ### 3.2 Login (local / LDAP) sequence
@@ -445,7 +445,7 @@ Indexes: `uq_sessions_token_hash` (unique), `ix_sessions_sweep(expires_at, idle_
 | `enabled` | `Boolean` | No | Whether it appears in login options |
 | `is_default` | `Boolean` | No | Selected by default on the login page; at most one globally |
 | `config` | `JSONVariant` | No | Non-sensitive config (LDAP: `server_url` / `start_tls` / `verify_tls` / `user_base_dn` / `user_filter` / attribute mappings / group config; OIDC: `issuer` / `client_id` / `scopes` …) |
-| `secret_encrypted` | `Text` | Yes | Sensitive items (LDAP bind password / OIDC client_secret), encrypted with `PRISM_SECRET_KEY`, never returned in API output |
+| `secret_encrypted` | `Text` | Yes | Sensitive items (LDAP bind password / OIDC client_secret), encrypted with `LENS_SECRET_KEY`, never returned in API output |
 | `sync_mode` | `String(16)` | No | `login` (sync at login) \| `manual` |
 | `last_sync_at` | `UTCDateTime` | Yes | |
 | `created_at` / `updated_at` | `UTCDateTime` | No | |
@@ -460,12 +460,21 @@ Constraint: at most one row where `type='local'`; uniqueness of `is_default` is 
 | `id` | `String(36)` | No | PK |
 | `provider_id` | `String(36)` | No | FK `identity_providers.id` CASCADE |
 | `external_group` | `String(512)` | No | IdP group identifier (LDAP group DN / name, OIDC group claim value) |
-| `group_id` | `String(36)` | Yes | FK `groups.id` SET NULL (map to a Lens group, preferred) |
-| `role_id` | `String(36)` | Yes | FK `roles.id` SET NULL (direct role mapping, secondary choice) |
+| `group_id` | `String(36)` | Yes | FK `groups.id` SET NULL (map to a Lens group) |
+| `role_id` | `String(36)` | Yes | FK `roles.id` SET NULL (direct role mapping) |
+| `scope_type` | `String(16)` | No | `global` (default) or `cluster`; role mapping only |
+| `scope_cluster_id` | `String(36)` | Yes | FK `clusters.id` SET NULL; required when `scope_type = cluster` |
 | `created_at` | `UTCDateTime` | No | |
 
-Unique constraint `(provider_id, external_group)`; at least one of `group_id` and `role_id` must be non-null
-(validated at the application layer).
+Unique constraint `(provider_id, external_group)`.
+
+**Deprecated / unused.** Directory groups are no longer mapped indirectly: on sign-in and on
+`POST /api/v1/identity-providers/{id}/sync`, every group under the provider's `group_base_dn` is
+materialized directly as a `groups` row with `source=ldap`, `provider_id` and `external_id` (the DN), and
+its members become users plus `user_groups` rows with `source=external`. Those groups and users are then
+granted roles and shared to like local ones. The table is retained for compatibility but no longer applied,
+and its UI/API were removed. Deleting a provider cascades: its external users and groups are deleted, which
+in turn cascades their role bindings, memberships and resource shares (§4.2.1/§4.2.2).
 
 #### 4.2.11 `audit_logs`
 
@@ -1273,7 +1282,7 @@ Public allowlist (explicit, unauthenticated):
   - `X-Prism-Principal-Id`, `X-Prism-Principal-Name`
   - `X-Prism-Principal-Permissions` (comma-separated, or pass only roles and let Python recompute permissions)
   - `X-Prism-Internal-Ts`, `X-Prism-Internal-Sig`
-    = `HMAC-SHA256(PRISM_INTERNAL_AUTH_SECRET, ts + method + path + principal_id)`
+    = `HMAC-SHA256(LENS_INTERNAL_AUTH_SECRET, ts + method + path + principal_id)`
 - Python rejects requests when:
   - the signature is missing or does not match;
   - `ts` is outside the ±60s window (replay protection);
@@ -1499,7 +1508,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 
 | Risk | Countermeasure |
 | --- | --- |
-| Credential leakage | Passwords use Argon2id; session tokens store hash only; LDAP bind passwords are encrypted with `PRISM_SECRET_KEY`; API outputs never return hashes/ciphertext/tokens |
+| Credential leakage | Passwords use Argon2id; session tokens store hash only; LDAP bind passwords are encrypted with `LENS_SECRET_KEY`; API outputs never return hashes/ciphertext/tokens |
 | Session fixation | Regenerate token after login; revoke other sessions after password change / privilege elevation |
 | CSRF | `SameSite=Lax` + modifying requests require custom header `X-Prism-CSRF`, and `Origin` / `Referer` must validate as same-origin. **Mechanism detail**: on login, also issue a **non-httpOnly** `prism_csrf` Cookie (`SameSite=Lax`) and a response-body token; the frontend reads the Cookie and puts it into the `X-Prism-CSRF` header; the server compares “header value == Cookie value == value stored in session” (double-submit). Only GET/HEAD/OPTIONS are exempt; missing/mismatched values return `403 csrf_failed`. This avoids extra frontend token storage |
 | XSS stealing tokens | httpOnly Cookie; frontend does not store tokens; `prism_csrf` is readable but still requires XSS to exploit, so CSP is still necessary |
@@ -1511,7 +1520,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | Audit tampering | `audit_logs` is append-only; no delete API is provided; **retention** is controlled by `PRISM_AUDIT_RETENTION_DAYS` (default 180), with batch deletes by `created_at` in a background task, and **no manual delete** |
 | Privilege escalation | Built-in roles cannot be changed; only `admin` may change roles/members; users may not change their own roles; see §7.13 for anti-lockout |
 | Default-open behavior | Unregistered routes denied by default + startup self-check |
-| Key rotation | `PRISM_SECRET_KEY` uses multiple keys: `PRISM_SECRET_KEY` (current) + `PRISM_SECRET_KEYS_OLD` (comma-separated old keys) for fallback decryption; after rotation, re-encrypt LDAP/OIDC secrets; rotating `PRISM_INTERNAL_AUTH_SECRET` requires Node and Python to restart together (otherwise signatures mismatch) |
+| Key rotation | `LENS_SECRET_KEY` uses multiple keys: `LENS_SECRET_KEY` (current) + `LENS_SECRET_KEYS_OLD` (comma-separated old keys) for fallback decryption; after rotation, re-encrypt LDAP/OIDC secrets; rotating `LENS_INTERNAL_AUTH_SECRET` requires Node and Python to restart together (otherwise signatures mismatch) |
 | Documentation exposure | `/api/simulation/docs`, `/redoc`, `/openapi.json` are disabled by default in production (`PRISM_EXPOSE_API_DOCS=false`), or placed behind authentication, to avoid exposing the full route and permission registry |
 | Sensitive logging | Audit/access logs must not record passwords/tokens/keys/Secret contents (aligned with `cluster-monitoring-service-design.md:417-419`) |
 | Rate limiting | login/logout/password-change/bootstrap endpoints get independent limits (stricter than global `/api`), keyed by both `IP` and `username`; the existing global limiter is effectively disabled (`server/server.js:47-54`) and cannot serve as authentication protection |
@@ -1526,8 +1535,8 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | --- | --- | --- |
 | `PRISM_AUTH_MODE` | `local` | `local` (self-managed only) \| `external` (external only) \| `hybrid` \| `disabled` |
 | `PRISM_ALLOW_UNAUTHENTICATED` | `false` | Development only; prerequisite for `disabled` |
-| `PRISM_SECRET_KEY` | — | Encrypts LDAP secrets and signatures |
-| `PRISM_INTERNAL_AUTH_SECRET` | — | Internal signature between Node↔Python |
+| `LENS_SECRET_KEY` | — | Encrypts LDAP secrets and signatures |
+| `LENS_INTERNAL_AUTH_SECRET` | — | Internal signature between Node↔Python |
 | `PRISM_SESSION_TTL_SECONDS` | `43200` | Absolute session lifetime (not sliding, default 12 hours; hard upper bound only; everyday “logout after 30 minutes” is determined by the idle threshold) |
 | `PRISM_SESSION_IDLE_SECONDS` | `1800` | Idle lifetime (default 30 minutes; activity renews it, logout happens only after 30 consecutive minutes without requests) |
 | `PRISM_REMEMBER_SESSION_TTL_SECONDS` | `2592000` | “Keep me logged in” absolute lifetime (30 days) |
@@ -1542,16 +1551,16 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | `PRISM_ADMIN_USERNAME` / `PRISM_ADMIN_PASSWORD` | `admin` / `admin` | Initial admin account; if password is empty, use fixed `admin` and write a credential file, then force password change on first login |
 | `PRISM_AUDIT_RETENTION_DAYS` | `180` | Audit log retention (§12) |
 | `PRISM_EXPOSE_API_DOCS` | `true` | Set to `false` in production to disable docs (§12) |
-| `PRISM_SECRET_KEYS_OLD` | — | Old keys (comma-separated), decryption fallback for rotation (§12) |
+| `LENS_SECRET_KEYS_OLD` | — | Old keys (comma-separated), decryption fallback for rotation (§12) |
 | `PRISM_AUTH_INTROSPECT_TTL_MS` | `0` | Introspection cache TTL; 0 = no cache (most correct, §9.5) |
 
 ### 13.2 Node
 
-- `authMiddleware` reads `PRISM_INTERNAL_AUTH_SECRET`, `PRISM_AUTH_MODE`,
+- `authMiddleware` reads `LENS_INTERNAL_AUTH_SECRET`, `PRISM_AUTH_MODE`,
   `PRISM_AUTH_INTROSPECT_TTL_MS`.
 - See §9.2 for the adjusted mount order in `server.js`.
-- `Dockerfile` / `docker-compose.yml`: inject `PRISM_SECRET_KEY`,
-  `PRISM_INTERNAL_AUTH_SECRET` through secrets; in production set `PRISM_COOKIE_SECURE=true`.
+- `.deploy_config.example` and the installer-written environment: inject `LENS_SECRET_KEY`,
+  `LENS_INTERNAL_AUTH_SECRET` through secrets; in production set `PRISM_COOKIE_SECURE=true`.
 - `scripts/dev.sh`: for development paths other than the default `PRISM_AUTH_MODE=disabled`,
   provide a bootstrap admin; keep `SIMULATION_ALLOW_UNAUTHENTICATED` compatibility.
 - In production, `NODE_ENV=production` must be set and both keys must be non-empty; otherwise startup fails fast.
@@ -1566,7 +1575,9 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
   - `ldap3` (**optional extra `[ldap]`**, decision D19, needed only by the `ldap` provider).
 - Node: **no additions required** (use built-in `crypto` and `fetch`; introspection uses existing fetch;
   Node does not embed Casbin and instead matches introspection results, decisions D8/D11).
-- New dependencies must be explained in the PR; `ldap3` is made an extra to avoid making the default image heavier.
+- New dependencies must be explained in the PR; `ldap3` stays an extra so slim or custom builds can omit it, while the default
+  development and installer install paths include `[ldap]` so the Administration directory provider "Test" action works out of
+  the box.
 
 ---
 
@@ -1979,8 +1990,8 @@ Connected through `llm_d_bench/auth/access.py` (`current_principal` / `visible_c
 - **Manual full LDAP sync**: `LdapProvider.list_group_members` +
   `AuthService.sync_directory`; `POST /identity-providers/{id}/sync` now reconciles
   group members by mapping (JIT-create users, write external members/roles).
-- **Deployment configuration**: `docker-compose.yml` and `.deploy_config.example` add examples for
-  `PRISM_AUTH_MODE` / `PRISM_SECRET_KEY` / `PRISM_INTERNAL_AUTH_SECRET` /
+- **Deployment configuration**: `.deploy_config.example` adds examples for
+  `PRISM_AUTH_MODE` / `LENS_SECRET_KEY` / `LENS_INTERNAL_AUTH_SECRET` /
   `PRISM_EXPOSE_API_DOCS` (local default is disabled).
 - **Frontend account UI**: show the current user and “Sign out” at the bottom of the sidebar.
 - **First-login prompt**: on empty-DB startup, automatically seed an admin, generate/read credentials and print a banner, and write to

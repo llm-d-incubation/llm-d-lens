@@ -924,6 +924,25 @@ async def test_baseten_dataset_uses_native_range_with_replay_speedup(simulation_
 
 
 @pytest.mark.asyncio
+async def test_aiperf_command_passes_api_key_and_redacts_it_in_logs(simulation_root):
+    trace = simulation_root / "datasets" / "mooncake_trace.jsonl"
+    trace.write_text(
+        json.dumps({"timestamp": 0, "input_length": 2, "output_length": 3, "hash_ids": []}) + "\n",
+        encoding="utf-8",
+    )
+    task = task_record(simulation_root, "1234abcd")
+    update_trace(task, path=trace.name)
+    task.api_key = "lens-mk-super-secret"
+    # The run-only token must never be serialized (persisted or returned by the API).
+    assert "api_key" not in task.model_dump()
+    args = (await AIPerfBackend().command(task)).args
+    assert args[args.index("--api-key") + 1] == "lens-mk-super-secret"
+    logged = _command_for_log("aiperf", args)
+    assert "lens-mk-super-secret" not in logged
+    assert "<redacted>" in logged
+
+
+@pytest.mark.asyncio
 async def test_aiperf_weka_public_dataset_command(simulation_root):
     task = task_record(simulation_root, "1234abcd")
     task.scenario = "coding"
@@ -1120,6 +1139,28 @@ async def test_trace_replayer_command_uses_producer_defaults(simulation_root, mo
     assert args[args.index("--num-producer") + 1] == "16"
     assert args[args.index("--channel-capacity") + 1] == "32"
     assert args[args.index("--threads") + 1] == "32"
+
+
+@pytest.mark.asyncio
+async def test_trace_replayer_passes_api_key_as_environment(simulation_root, monkeypatch):
+    task = task_record(simulation_root, "1234abcd")
+    update_simulation(task, backend="trace-replayer")
+    task.api_key = "lens-mk-super-secret"
+    backend = TraceReplayerBackend()
+
+    async def tokenizer_paths(_task):
+        return Path("/tokenizer.json"), Path("/tokenizer_config.json")
+
+    async def trace_path(_task):
+        return Path("/trace.jsonl")
+
+    monkeypatch.setattr(backend, "_tokenizer_paths", tokenizer_paths)
+    monkeypatch.setattr(backend, "_trace_path", trace_path)
+
+    command = await backend.command(task)
+    assert command.env == (("OPENAI_API_KEY", "lens-mk-super-secret"),)
+    # The token is never an argv entry, so it cannot leak into the logged command.
+    assert "lens-mk-super-secret" not in _command_for_log("trace-replayer", command.args)
 
 
 @pytest.mark.asyncio
@@ -1712,6 +1753,44 @@ def test_resolve_task_endpoint_url_uses_incluster_endpoint_for_deployment_mode(m
     assert resolved.namespace == "my-namespace"
     assert resolved.cluster_id == "cluster-123"
     assert resolved.deployment_name == "qwen3-0.6b"
+
+
+def test_resolve_task_endpoint_url_prefers_cluster_gateway(monkeypatch):
+    import types
+
+    context = types.SimpleNamespace(
+        endpoint="http://optimized-baseline-epp.my-namespace.svc:80",
+        namespace="my-namespace",
+        cluster_id="cluster-123",
+        display_name="qwen3-0.6b",
+        uses_shared_gateway=True,
+    )
+    monkeypatch.setattr("llm_d_bench.deploy.executions.get_execution_context", lambda execution_id: context)
+
+    async def gateway(_cluster_id):
+        return "http://10.0.0.5:30012"
+
+    monkeypatch.setattr(simulation_service, "_cluster_gateway_endpoint", gateway)
+
+    resolved = asyncio.run(
+        simulation_service._resolve_task_endpoint_url(
+            endpoint_mode="deployment",
+            endpoint_url="http://127.0.0.1:18042",
+            endpoint_deployment_execution_id="exec-1",
+        )
+    )
+
+    assert resolved.url == "http://10.0.0.5:30012"
+
+    context.uses_shared_gateway = False
+    direct = asyncio.run(
+        simulation_service._resolve_task_endpoint_url(
+            endpoint_mode="deployment",
+            endpoint_url="http://127.0.0.1:18042",
+            endpoint_deployment_execution_id="exec-1",
+        )
+    )
+    assert direct.url == "http://optimized-baseline-epp.my-namespace.svc:80"
 
 
 def test_resolve_task_endpoint_url_rejects_deployment_without_endpoint(monkeypatch):

@@ -69,6 +69,8 @@ _PERMISSIONS: tuple[Permission, ...] = (
     _permission("audit:log:read", "View the audit log", READ),
     _permission("system:database:read", "View database configuration", READ),
     _permission("system:database:configure", "Configure the database"),
+    _permission("system:secret:read", "View the stored-secret master key status", READ),
+    _permission("system:secret:manage", "Rotate or clear the stored-secret master key"),
     # cluster
     _permission("cluster:cluster:read", "View clusters", READ),
     _permission("cluster:cluster:create", "Register clusters"),
@@ -242,6 +244,8 @@ _MAINTAINER_DENIED = _permissions_named(
     "audit:log:read",
     "system:database:read",
     "system:database:configure",
+    "system:secret:read",
+    "system:secret:manage",
     "model-service:group:manage",
     "model-service:gateway:manage",
 )

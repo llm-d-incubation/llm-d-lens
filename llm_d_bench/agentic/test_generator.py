@@ -51,7 +51,7 @@ def test_validator_keeps_valid_ai_candidates_when_other_proposals_are_invalid():
 
 
 def test_mcp_client_signs_authenticated_principal(monkeypatch):
-    monkeypatch.setenv("PRISM_INTERNAL_AUTH_SECRET", "test-secret")
+    monkeypatch.setenv("LENS_INTERNAL_AUTH_SECRET", "test-secret")
     monkeypatch.setattr("llm_d_bench.agentic.generator.time.time", lambda: 1000)
 
     headers = AgenticMcpClient("https://127.0.0.1:3005/api/mcp", principal_id="user-1")._headers()

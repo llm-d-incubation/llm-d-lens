@@ -70,6 +70,10 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
     endpoint_deployment_name: str | None = None
     endpoint_url: str
     model_name: str = Field(min_length=1)
+    #: User-supplied model access token (``lens-mk-...``) used when the harness
+    #: must call a deployment through the cluster's shared Gateway. Never
+    #: persisted on the task and never returned by the API (``exclude=True``).
+    api_key: str | None = Field(default=None, exclude=True, max_length=4096)
     trace_dataset: str = Field(min_length=1)
     trace_path: str = Field(min_length=1)
     duration_seconds: int = Field(default=60, ge=1)
@@ -110,6 +114,8 @@ class SimulationTaskRerunRequest(FrozenDomainModel):
     endpoint_cluster_id: str | None = None
     endpoint_cluster_name: str | None = None
     endpoint_deployment_name: str | None = None
+    #: Re-supply the model access token for a rerun; it is never persisted.
+    api_key: str | None = Field(default=None, exclude=True, max_length=4096)
 
 
 class TraceDatasetDownloadRequest(FrozenDomainModel):
@@ -221,6 +227,9 @@ class SimulationTask(BaseModel):
     endpoint_deployment_name: str | None = None
     endpoint_url: str
     model_name: str
+    #: In-memory model access token for this run only: excluded from persistence
+    #: and API responses so the plaintext never lands at rest.
+    api_key: str | None = Field(default=None, exclude=True)
     simulation: SimulationConfig
     prompt: SimulationPrompt
     task_dir: str
@@ -351,6 +360,9 @@ class SimulationGoodputTimelinePoint(FrozenDomainModel):
 class BackendCommand:
     args: tuple[str, ...]
     timeout_seconds: int
+    #: Extra environment for the backend process (e.g. ``OPENAI_API_KEY`` for a
+    #: model access token). Never logged; the command line is not env-aware.
+    env: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:

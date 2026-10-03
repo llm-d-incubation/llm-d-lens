@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import re
-import socket
 from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Annotated
@@ -48,7 +47,11 @@ from llm_d_bench.model_service.gateway_contracts import (
     GatewayStreamRequest,
     IppConfigRequest,
 )
-from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+from llm_d_bench.model_service.gateway_ops import (
+    GatewayOpsService,
+    gateway_base_url,
+    local_public_ip,
+)
 from llm_d_bench.model_service.service import (
     ModelServiceConflictError,
     ModelServiceNotFoundError,
@@ -98,55 +101,6 @@ def _stream_gateway_operation(run) -> StreamingResponse:
                     await task
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=_SSE_HEADERS)
-
-
-def _local_public_ip() -> str:
-    """The host's outbound IP (used as the public host for exposed Gateways)."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("8.8.8.8", 80))
-        return sock.getsockname()[0]
-    except OSError:
-        return ""
-    finally:
-        sock.close()
-
-
-def _is_container_network(host: str) -> bool:
-    """True for docker/kind bridge addresses (``172.16.0.0/12``).
-
-    Such a node IP is only reachable inside the host running the containers, so
-    the Gateway must be published through the Lens host's managed tunnel instead.
-    """
-    parts = host.split(".")
-    return len(parts) == 4 and parts[0] == "172" and parts[1].isdigit() and 16 <= int(parts[1]) <= 31
-
-
-def _gateway_base_url(cluster: object, public_host: str, global_url: str | None) -> str:
-    """Resolve the externally reachable OpenAI base URL for a cluster's Gateway.
-
-    Layered so no single network layout is assumed:
-      1. an explicit global/per-cluster public URL always wins;
-      2. a LoadBalancer/Gateway address (the provider's own external address);
-      3. a NodePort: the node address, unless it is a container-only (docker/kind)
-         address, in which case only the Lens host's managed tunnel is reachable;
-      4. empty when nothing else is available.
-    """
-    if global_url:
-        return global_url
-    # The user-supplied value is only a host/IP; the port comes from gateway_port.
-    cluster_host = (getattr(cluster, "gateway_public_url", None) or "").strip()
-    port = getattr(cluster, "gateway_port", None)
-    if cluster_host:
-        return f"http://{cluster_host}:{port}/v1" if port else f"http://{cluster_host}/v1"
-    if port:
-        node_host = getattr(cluster, "gateway_node_address", None)
-        if node_host and _is_container_network(node_host):
-            node_host = None
-        host = node_host or public_host
-        return f"http://{host}:{port}/v1" if host else ""
-    address = getattr(cluster, "gateway_address", None)
-    return f"http://{address}/v1" if address else ""
 
 
 router = APIRouter(prefix="/api/v1/model-service", tags=["model-service"])
@@ -238,7 +192,7 @@ async def model_service_connection(request: Request) -> dict:
     host_header = (request.headers.get("host") or "").split(":")[0]
     public_host = (
         os.environ.get("LENS_PUBLIC_HOST", "").strip()
-        or _local_public_ip()
+        or local_public_ip()
         or host_header
         or (request.url.hostname or "")
     )
@@ -247,7 +201,7 @@ async def model_service_connection(request: Request) -> dict:
     for cluster in status.clusters:
         if allowed is not None and cluster.cluster_id not in allowed:
             continue
-        base_url = _gateway_base_url(cluster, public_host, global_url)
+        base_url = gateway_base_url(cluster, public_host, global_url)
         clusters.append(
             {
                 "clusterId": cluster.cluster_id,

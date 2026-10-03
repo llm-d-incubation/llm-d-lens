@@ -913,7 +913,7 @@ principal_id), with AsyncLocalStorage propagating authenticated callers to deepe
 
 - Entry point: [server/internalAuth.ts](../server/internalAuth.ts)
 - Symbols: `signInternalHeaders`, `verifyInternalHeaders`, `internalHeadersFor`, `runWithInternalAuth`, `currentInternalPrincipalId`, `internalAuthEnabled`
-- Boundaries: Only the principal id is claimed; Python recomputes permissions/scope from the DB. Requires a shared PRISM_INTERNAL_AUTH_SECRET on both sides; empty secret disables signing (cookie fallback). Signatures bind method+path and expire after 60s, so they cannot be replayed or used for a rewritten path.
+- Boundaries: Only the principal id is claimed; Python recomputes permissions/scope from the DB. Requires a shared LENS_INTERNAL_AUTH_SECRET on both sides; empty secret disables signing (cookie fallback). Signatures bind method+path and expire after 60s, so they cannot be replayed or used for a rewritten path.
 - Examples: [server/auth.ts](../server/auth.ts), [server/backend-api-proxy.ts](../server/backend-api-proxy.ts), [server/clusterSources.ts](../server/clusterSources.ts), [server/planningDiscovery.ts](../server/planningDiscovery.ts), [server/mcp/internal.ts](../server/mcp/internal.ts)
 - Tests: [server/auth.test.ts](../server/auth.test.ts)
 
@@ -1486,6 +1486,26 @@ Deliver Agentic planning/refinement progress and terminal SSE events.
 - Boundaries: Routes retain their own expected exceptions, generic messages, logging and principal resolution. Closing the stream cancels and awaits unfinished planning. Gateway log streams keep their distinct domain contract.
 - Examples: [llm_d_bench/agentic/router.py](../llm_d_bench/agentic/router.py)
 - Tests: [llm_d_bench/agentic/test_streaming.py](../llm_d_bench/agentic/test_streaming.py)
+
+## auth-master-key
+
+Own the LENS_SECRET_KEY lifecycle for stored provider secrets: resolve the effective key from the environment or the mode-600 credentials file, auto-generate one at startup, and rotate it by re-encrypting stored provider secrets while keeping previous keys as decryption fallback.
+
+- Entry point: [llm_d_bench/auth/master_key.py](../llm_d_bench/auth/master_key.py)
+- Symbols: `ensure_master_key`, `resolve_master_key`, `rotate_master_key`, `clear_old_keys`, `status`, `generate_key`, `master_key_path`, `fingerprint`, `MasterKey`
+- Boundaries: Auth domain only. Encrypts external-provider secrets through SecretCipher; it does not encrypt session tokens or sign Node->Python assertions (those use LENS_INTERNAL_AUTH_SECRET). The environment key always overrides the stored key, which makes rotation through the API read-only. Rotation re-encrypts each provider secret before the operator clears the retained fallback keys.
+- Examples: [llm_d_bench/auth/router.py](../llm_d_bench/auth/router.py), [llm_d_bench/auth/service.py](../llm_d_bench/auth/service.py), [llm_d_bench/api/main.py](../llm_d_bench/api/main.py)
+- Tests: [llm_d_bench/auth/test_master_key.py](../llm_d_bench/auth/test_master_key.py), [llm_d_bench/auth/test_api.py](../llm_d_bench/auth/test_api.py)
+
+## admin-master-key-page
+
+Administration page to view stored-secret master key status and rotate the key or clear previous keys, honouring the environment-locked read-only state.
+
+- Entry point: [src/components/Administration/SecretKeyPage.jsx](../src/components/Administration/SecretKeyPage.jsx)
+- Symbols: `SecretKeyPage`
+- Boundaries: Administration UI only; it calls the /api/v1/system/secret-key endpoints through the shared admin client and never receives the key value. The view is gated by system:secret:read and mutations by system:secret:manage.
+- Examples: [src/App.jsx](../src/App.jsx), [src/components/LeftNavigation.jsx](../src/components/LeftNavigation.jsx), [src/features/auth/adminClient.js](../src/features/auth/adminClient.js)
+- Tests: Presentation-only; covered by npm run build, eslint and the backend master-key API tests.
 
 ## model-cache-offline-serving-environment
 

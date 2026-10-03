@@ -190,7 +190,16 @@ export default function GroupsPage({ onToggleMobileNav }) {
                                                             </Button>
                                                         </PermissionGate>
                                                         <PermissionGate permission="group:group:manage-members">
-                                                            <Button variant="secondary" size="xs" onClick={() => setPendingMembers(group)}>Members</Button>
+                                                            <span title={group.source !== 'local' ? 'Managed by IdP' : undefined}>
+                                                                <Button
+                                                                    variant="secondary"
+                                                                    size="xs"
+                                                                    onClick={() => setPendingMembers(group)}
+                                                                    disabled={group.source !== 'local'}
+                                                                >
+                                                                    Members
+                                                                </Button>
+                                                            </span>
                                                         </PermissionGate>
                                                         <PermissionGate permission="group:group:delete">
                                                             <Button variant="ghost" size="icon" onClick={() => setPendingDelete(group)} aria-label={`Delete ${group.name}`}>

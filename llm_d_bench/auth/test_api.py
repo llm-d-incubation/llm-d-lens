@@ -13,8 +13,16 @@ NEW_STRONG = "Another-Strong-7!"  # nosemgrep - test fixture
 
 
 @pytest.fixture(autouse=True)
-def _enable_local_auth():
-    """These tests exercise enforcement, so enable local auth for the module."""
+def _enable_local_auth(tmp_path_factory, monkeypatch):
+    """These tests exercise enforcement, so enable local auth for the module.
+
+    The master-key store is redirected to a temporary file so startup never
+    writes to the operator's real ``credentials/`` directory.
+    """
+    from llm_d_bench.auth import master_key
+
+    key_dir = tmp_path_factory.mktemp("master-key")
+    monkeypatch.setattr(master_key, "master_key_path", lambda: key_dir / "master_key.json")
     set_settings_for_testing(
         AuthSettings(
             auth_mode="local",
@@ -468,3 +476,28 @@ def test_configuration_artifacts_list_returns_200():
         _bootstrap_and_login(client)
         response = client.get("/api/v1/configurations/artifacts")
         assert response.status_code == 200, response.text
+
+
+def test_master_key_status_rotate_and_clear():
+    with _client() as client:
+        _bootstrap_and_login(client)
+
+        status = client.get("/api/v1/system/secret-key")
+        assert status.status_code == 200, status.text
+        body = status.json()
+        assert body["configured"] is True
+        assert body["fingerprint"]
+        assert body["envLocked"] is False
+
+        rotated = client.post(
+            "/api/v1/system/secret-key/rotate",
+            json={"newKey": "api-rotated-master-key"},
+            headers=_csrf_headers(client),
+        )
+        assert rotated.status_code == 200, rotated.text
+        assert rotated.json()["oldKeyCount"] == 1
+        assert rotated.json()["fingerprint"] != body["fingerprint"]
+
+        cleared = client.delete("/api/v1/system/secret-key/old", headers=_csrf_headers(client))
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["oldKeyCount"] == 0

@@ -26,7 +26,7 @@ import json
 import os
 import shlex
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from llm_d_bench.utils.kubernetes import kubeconfig_environment, scoped_runner
@@ -177,7 +177,14 @@ def _cluster_proxy_env(cluster_id: str | None = None) -> list[dict[str, str]]:
     return env_vars
 
 
-def _pod_manifest(name: str, namespace: str, image: str, timeout_seconds: int, cluster_id: str | None = None) -> dict:
+def _pod_manifest(
+    name: str,
+    namespace: str,
+    image: str,
+    timeout_seconds: int,
+    cluster_id: str | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> dict:
     container: dict = {
         "name": "runner",
         "image": image,
@@ -202,7 +209,7 @@ def _pod_manifest(name: str, namespace: str, image: str, timeout_seconds: int, c
             "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN", "optional": True}},
         }
         for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
-    ] + _cluster_proxy_env(cluster_id)
+    ] + _cluster_proxy_env(cluster_id) + [{"name": key, "value": value} for key, value in (extra_env or {}).items()]
     return {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -233,9 +240,15 @@ class _PodHandle:
         return f"{self.namespace}/{self.name}"
 
 
-async def _create_pod(namespace: str, cluster_id: str | None, image: str, timeout_seconds: int) -> _PodHandle:
+async def _create_pod(
+    namespace: str,
+    cluster_id: str | None,
+    image: str,
+    timeout_seconds: int,
+    extra_env: Mapping[str, str] | None = None,
+) -> _PodHandle:
     name = _pod_name(uuid.uuid4().hex[:8])
-    manifest = _pod_manifest(name, namespace, image, timeout_seconds, cluster_id=cluster_id)
+    manifest = _pod_manifest(name, namespace, image, timeout_seconds, cluster_id=cluster_id, extra_env=extra_env)
     runner = scoped_runner(cluster_id)
     result = await runner.run(["kubectl", "apply", "-f", "-"], input=json.dumps(manifest), timeout=30)
     if result.returncode != 0:
@@ -367,6 +380,7 @@ async def execute_command_in_pod(
     context: RunContext,
     progress_request_counts: Callable[[], tuple[int, int | None] | None] | None = None,
     tolerate_timeout: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> CommandResult:
     """Run a backend command inside a Pod in ``namespace``, mirroring :func:`execute_command`.
 
@@ -385,7 +399,7 @@ async def execute_command_in_pod(
     started_at = utc_now()
 
     context.log(f"Launching in-cluster simulation pod in namespace {namespace}")
-    pod = await _create_pod(namespace, cluster_id, image, timeout_seconds)
+    pod = await _create_pod(namespace, cluster_id, image, timeout_seconds, extra_env=env)
     try:
         await _wait_pod_running(pod, context)
         context.log(f"In-cluster simulation pod {pod.ref} is running; staging task data")

@@ -203,38 +203,147 @@ def test_custom_role_permissions_and_builtin_protection():
 
 
 @pytest.mark.asyncio
-async def test_manual_directory_sync_reconciles_mapped_group(monkeypatch):
+async def test_directory_sync_imports_groups_and_reconciles_members(monkeypatch):
     from llm_d_bench.auth.providers.base import ExternalIdentity
-    from llm_d_bench.auth.records import IdentityGroupMappingRecord, IdentityProviderRecord
+    from llm_d_bench.auth.records import IdentityProviderRecord
 
     service = _service()
     provider = service.identity_provider_dao.create(
         IdentityProviderRecord(type="ldap", name="corp", enabled=True, config={"group_base_dn": "dc=x"})
     )
-    group = service.create_group(name="ldap-team")
-    service.identity_mapping_dao.create(
-        IdentityGroupMappingRecord(provider_id=provider.id, external_group="cn=team", group_id=group.id)
-    )
+
+    members_by_group = {
+        "cn=team,dc=x": [
+            ExternalIdentity(external_id="uid=a,dc=x", username="ldap-a"),
+            ExternalIdentity(external_id="uid=b,dc=x", username="ldap-b"),
+        ]
+    }
 
     class _FakeProvider:
+        async def list_groups(self):
+            return [{"external_id": "cn=team,dc=x", "name": "team"}]
+
         async def list_group_members(self, external_group):
-            assert external_group == "cn=team"
-            return [
-                ExternalIdentity(external_id="uid=a,dc=x", username="ldap-a"),
-                ExternalIdentity(external_id="uid=b,dc=x", username="ldap-b"),
-            ]
+            return list(members_by_group.get(external_group, []))
 
     monkeypatch.setattr("llm_d_bench.auth.service.get_provider", lambda *args, **kwargs: _FakeProvider())
     result = await service.sync_directory(provider.id)
 
-    assert result == {"ok": True, "members": 2, "failed": []}
-    members = service.user_group_dao.list_for_group(group.id)
-    assert {member.user_id for member in members} == {
+    assert result == {"ok": True, "groups": 1, "members": 2, "failed": []}
+    group = service.group_dao.get_by_external(provider.id, "cn=team,dc=x")
+    assert group is not None
+    assert (group.source, group.name) == ("ldap", "team")
+    memberships = service.user_group_dao.list_for_group(group.id)
+    assert {membership.user_id for membership in memberships} == {
         service.user_dao.get_by_username("ldap-a").id,
         service.user_dao.get_by_username("ldap-b").id,
     }
-    assert all(member.source == "external" for member in members)
+    assert all(membership.source == "external" for membership in memberships)
+
+    # A later sync that drops a member reconciles the membership away.
+    members_by_group["cn=team,dc=x"] = [ExternalIdentity(external_id="uid=a,dc=x", username="ldap-a")]
+    await service.sync_directory(provider.id)
+    assert {membership.user_id for membership in service.user_group_dao.list_for_group(group.id)} == {
+        service.user_dao.get_by_username("ldap-a").id
+    }
     assert service.identity_provider_dao.get(provider.id).last_sync_at is not None
+
+
+def test_login_sync_materializes_directory_groups():
+    from llm_d_bench.auth.providers.base import ExternalIdentity
+    from llm_d_bench.auth.records import IdentityProviderRecord, UserRecord
+
+    service = _service()
+    provider = service.identity_provider_dao.create(
+        IdentityProviderRecord(type="ldap", name="login-corp", enabled=True)
+    )
+    user = service.user_dao.create(
+        UserRecord(username="ldap-login", auth_source="ldap", provider_id=provider.id, external_id="uid=l,dc=x")
+    )
+
+    identity = ExternalIdentity(external_id="uid=l,dc=x", username="ldap-login", groups=("cn=team,dc=x",))
+    service._sync_external_groups(provider, user, identity)
+
+    group = service.group_dao.get_by_external(provider.id, "cn=team,dc=x")
+    assert group is not None
+    assert (group.source, group.name) == ("ldap", "team")
+    assert [membership.group_id for membership in service.user_group_dao.list_for_user(user.id)] == [group.id]
+
+    # The directory no longer reports the group: the external membership is removed.
+    service._sync_external_groups(
+        provider, user, ExternalIdentity(external_id="uid=l,dc=x", username="ldap-login", groups=())
+    )
+    assert service.user_group_dao.list_for_user(user.id) == []
+
+
+def test_directory_group_membership_is_read_only_in_lens():
+    from llm_d_bench.auth.records import GroupRecord, IdentityProviderRecord
+
+    service = _service()
+    provider = service.identity_provider_dao.create(IdentityProviderRecord(type="ldap", name="corp-mem", enabled=True))
+    group = service.group_dao.create(
+        GroupRecord(name="dir-group", source="ldap", provider_id=provider.id, external_id="cn=g,dc=x")
+    )
+
+    with pytest.raises(DomainValidationError):
+        service.add_group_member(group.id, "someone")
+    with pytest.raises(DomainValidationError):
+        service.remove_group_member(group.id, "someone")
+
+
+def test_delete_identity_provider_removes_external_identities_and_authorizations():
+    from llm_d_bench.auth.records import (
+        GroupRecord,
+        GroupRoleBindingRecord,
+        IdentityProviderRecord,
+        UserGroupRecord,
+        UserRecord,
+        UserRoleBindingRecord,
+    )
+
+    service = _service()
+    service.ensure_builtin_roles()
+    provider = service.identity_provider_dao.create(IdentityProviderRecord(type="ldap", name="corp-del", enabled=True))
+    user = service.user_dao.create(
+        UserRecord(username="ldap-del", auth_source="ldap", provider_id=provider.id, external_id="uid=del,dc=x")
+    )
+    group = service.group_dao.create(
+        GroupRecord(name="ldap-del-group", source="ldap", provider_id=provider.id, external_id="cn=del,dc=x")
+    )
+    maintainer = service.require_role("maintainer")
+    service.user_binding_dao.create(
+        UserRoleBindingRecord(user_id=user.id, role_id=maintainer.id, scope_type="global")
+    )
+    service.group_binding_dao.create(
+        GroupRoleBindingRecord(group_id=group.id, role_id=maintainer.id, scope_type="global")
+    )
+    service.user_group_dao.add(UserGroupRecord(user_id=user.id, group_id=group.id, source="external"))
+
+    service.delete_identity_provider(provider.id)
+
+    assert service.identity_provider_dao.get(provider.id) is None
+    assert service.user_dao.get(user.id) is None
+    assert service.group_dao.get(group.id) is None
+    assert service.user_binding_dao.list_for_user(user.id) == []
+    assert service.group_binding_dao.list_for_group(group.id) == []
+
+
+def test_delete_identity_provider_refuses_to_remove_the_last_admin():
+    from llm_d_bench.auth.records import IdentityProviderRecord, UserRecord, UserRoleBindingRecord
+
+    service = _service()
+    service.ensure_builtin_roles()
+    provider = service.identity_provider_dao.create(
+        IdentityProviderRecord(type="ldap", name="corp-admin", enabled=True)
+    )
+    user = service.user_dao.create(
+        UserRecord(username="ldap-admin", auth_source="ldap", provider_id=provider.id, external_id="uid=admin,dc=x")
+    )
+    admin_role = service.require_role("admin")
+    service.user_binding_dao.create(UserRoleBindingRecord(user_id=user.id, role_id=admin_role.id, scope_type="global"))
+
+    with pytest.raises(ConflictError):
+        service.delete_identity_provider(provider.id)
 
 
 def test_protected_admin_cannot_be_deleted_or_reroled():

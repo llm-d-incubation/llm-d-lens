@@ -1644,7 +1644,7 @@
         "internalAuthEnabled"
       ],
       "purpose": "Signed Node-to-Python/loopback internal identity (\u00a78.3): HMAC(ts\nMETHOD\npath\nprincipal_id), with AsyncLocalStorage propagating authenticated callers to deeper internal reads.",
-      "boundaries": "Only the principal id is claimed; Python recomputes permissions/scope from the DB. Requires a shared PRISM_INTERNAL_AUTH_SECRET on both sides; empty secret disables signing (cookie fallback). Signatures bind method+path and expire after 60s, so they cannot be replayed or used for a rewritten path.",
+      "boundaries": "Only the principal id is claimed; Python recomputes permissions/scope from the DB. Requires a shared LENS_INTERNAL_AUTH_SECRET on both sides; empty secret disables signing (cookie fallback). Signatures bind method+path and expire after 60s, so they cannot be replayed or used for a rewritten path.",
       "examples": [
         "server/auth.ts",
         "server/backend-api-proxy.ts",
@@ -2656,6 +2656,48 @@
       "tests": [
         "llm_d_bench/agentic/test_streaming.py"
       ]
+    },
+    {
+      "id": "auth-master-key",
+      "path": "llm_d_bench/auth/master_key.py",
+      "symbols": [
+        "ensure_master_key",
+        "resolve_master_key",
+        "rotate_master_key",
+        "clear_old_keys",
+        "status",
+        "generate_key",
+        "master_key_path",
+        "fingerprint",
+        "MasterKey"
+      ],
+      "purpose": "Own the LENS_SECRET_KEY lifecycle for stored provider secrets: resolve the effective key from the environment or the mode-600 credentials file, auto-generate one at startup, and rotate it by re-encrypting stored provider secrets while keeping previous keys as decryption fallback.",
+      "boundaries": "Auth domain only. Encrypts external-provider secrets through SecretCipher; it does not encrypt session tokens or sign Node->Python assertions (those use LENS_INTERNAL_AUTH_SECRET). The environment key always overrides the stored key, which makes rotation through the API read-only. Rotation re-encrypts each provider secret before the operator clears the retained fallback keys.",
+      "examples": [
+        "llm_d_bench/auth/router.py",
+        "llm_d_bench/auth/service.py",
+        "llm_d_bench/api/main.py"
+      ],
+      "tests": [
+        "llm_d_bench/auth/test_master_key.py",
+        "llm_d_bench/auth/test_api.py"
+      ]
+    },
+    {
+      "id": "admin-master-key-page",
+      "path": "src/components/Administration/SecretKeyPage.jsx",
+      "symbols": [
+        "SecretKeyPage"
+      ],
+      "purpose": "Administration page to view stored-secret master key status and rotate the key or clear previous keys, honouring the environment-locked read-only state.",
+      "boundaries": "Administration UI only; it calls the /api/v1/system/secret-key endpoints through the shared admin client and never receives the key value. The view is gated by system:secret:read and mutations by system:secret:manage.",
+      "examples": [
+        "src/App.jsx",
+        "src/components/LeftNavigation.jsx",
+        "src/features/auth/adminClient.js"
+      ],
+      "tests": [],
+      "testNote": "Presentation-only; covered by npm run build, eslint and the backend master-key API tests."
     },
     {
       "id": "model-cache-offline-serving-environment",

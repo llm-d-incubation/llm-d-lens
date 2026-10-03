@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from llm_d_bench.auth import master_key
 from llm_d_bench.auth.bootstrap import clear_initial_admin_credentials
 from llm_d_bench.auth.context import CSRF_COOKIE, SESSION_COOKIE
 from llm_d_bench.auth.contracts import Principal
@@ -22,7 +23,6 @@ from llm_d_bench.auth.permissions import ALL_PERMISSIONS
 from llm_d_bench.auth.policy import accessible_cluster_ids, authorize, principal_permissions
 from llm_d_bench.auth.providers.registry import get_provider
 from llm_d_bench.auth.records import (
-    IdentityGroupMappingRecord,
     IdentityProviderRecord,
     RoleRecord,
     UserRecord,
@@ -223,10 +223,8 @@ class ProviderRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class MappingRequest(BaseModel):
-    external_group: str = Field(alias="externalGroup")
-    group_id: str | None = Field(default=None, alias="groupId")
-    role_id: str | None = Field(default=None, alias="roleId")
+class RotateSecretKeyRequest(BaseModel):
+    new_key: str | None = Field(default=None, alias="newKey")
 
     model_config = {"populate_by_name": True}
 
@@ -662,7 +660,7 @@ async def update_identity_provider(provider_id: str, body: ProviderRequest) -> d
 
 @router.delete("/identity-providers/{provider_id}", status_code=204)
 async def delete_identity_provider(provider_id: str) -> None:
-    default_service().identity_provider_dao.delete(provider_id)
+    default_service().delete_identity_provider(provider_id)
 
 
 @router.post("/identity-providers/{provider_id}/test")
@@ -683,31 +681,6 @@ async def sync_identity_provider(provider_id: str) -> dict[str, Any]:
     if record is None:
         raise NotFoundError("identity provider not found")
     return await service.sync_directory(provider_id)
-
-
-@router.get("/identity-providers/{provider_id}/mappings")
-async def list_mappings(provider_id: str) -> list[dict[str, Any]]:
-    return _jsonify(default_service().identity_mapping_dao.list_for_provider(provider_id))
-
-
-@router.post("/identity-providers/{provider_id}/mappings", status_code=201)
-async def create_mapping(provider_id: str, body: MappingRequest) -> dict[str, Any]:
-    if not body.group_id and not body.role_id:
-        raise DomainValidationError("a mapping needs a group_id or a role_id")
-    record = default_service().identity_mapping_dao.create(
-        IdentityGroupMappingRecord(
-            provider_id=provider_id,
-            external_group=body.external_group,
-            group_id=body.group_id,
-            role_id=body.role_id,
-        )
-    )
-    return _jsonify(record)
-
-
-@router.delete("/identity-providers/{provider_id}/mappings/{mapping_id}", status_code=204)
-async def delete_mapping(provider_id: str, mapping_id: str) -> None:
-    default_service().identity_mapping_dao.delete(mapping_id)
 
 
 # --- audit ------------------------------------------------------------------
@@ -735,6 +708,47 @@ async def list_audit_logs(
         "limit": limit,
         "offset": offset,
     }
+
+
+# --- system: stored-secret master key ---------------------------------------
+def _provider_secret_count(service: Any) -> int:
+    return sum(1 for record in service.identity_provider_dao.list() if record.secret_encrypted)
+
+
+@router.get("/system/secret-key")
+async def get_secret_key_status() -> dict[str, Any]:
+    service = default_service()
+    data = master_key.status(get_settings())
+    data["providerSecretCount"] = _provider_secret_count(service)
+    return data
+
+
+@router.post("/system/secret-key/rotate")
+async def rotate_secret_key(body: RotateSecretKeyRequest, request: Request) -> dict[str, Any]:
+    service = default_service()
+    actor = _principal(request)
+    result = master_key.rotate_master_key(
+        get_settings(), body.new_key, provider_dao=service.identity_provider_dao
+    )
+    service.audit(
+        "secret_key_rotated",
+        actor=actor,
+        target_type="system",
+        target_id="secret-key",
+        detail={"rotatedSecrets": result.get("rotatedSecrets", 0), "fingerprint": result["fingerprint"]},
+    )
+    result["providerSecretCount"] = _provider_secret_count(service)
+    return result
+
+
+@router.delete("/system/secret-key/old")
+async def clear_old_secret_keys(request: Request) -> dict[str, Any]:
+    service = default_service()
+    actor = _principal(request)
+    result = master_key.clear_old_keys(get_settings())
+    service.audit("secret_key_old_cleared", actor=actor, target_type="system", target_id="secret-key")
+    result["providerSecretCount"] = _provider_secret_count(service)
+    return result
 
 
 # --- access management ------------------------------------------------------

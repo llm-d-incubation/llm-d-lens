@@ -106,14 +106,19 @@ export function deleteIdentityProvider(providerId) {
 export function testIdentityProvider(providerId) {
     return postJson(`/api/v1/identity-providers/${providerId}/test`, {});
 }
-export function listMappings(providerId) {
-    return requestJson(`/api/v1/identity-providers/${providerId}/mappings`);
+export function syncIdentityProvider(providerId) {
+    return postJson(`/api/v1/identity-providers/${providerId}/sync`, {});
 }
-export function createMapping(providerId, payload) {
-    return postJson(`/api/v1/identity-providers/${providerId}/mappings`, payload);
+
+// stored-secret master key
+export function getSecretKeyStatus() {
+    return requestJson('/api/v1/system/secret-key');
 }
-export function deleteMapping(providerId, mappingId) {
-    return del(`/api/v1/identity-providers/${providerId}/mappings/${mappingId}`);
+export function rotateSecretKey(newKey) {
+    return postJson('/api/v1/system/secret-key/rotate', newKey ? { newKey } : {});
+}
+export function clearOldSecretKeys() {
+    return del('/api/v1/system/secret-key/old');
 }
 
 // sessions & audit

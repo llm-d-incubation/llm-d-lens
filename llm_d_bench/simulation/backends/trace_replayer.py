@@ -542,11 +542,13 @@ class TraceReplayerBackend(CommandBackend):
             args.extend(["--early-stop-error-threshold", str(options["early_stop_error_threshold"])])
         if isinstance(options.get("metric_percentiles"), (list, tuple)):
             args.extend(["--metric-percentile", ",".join(map(str, options["metric_percentiles"]))])
+        env = (("OPENAI_API_KEY", task.api_key),) if task.api_key else ()
         return BackendCommand(
             args=tuple(args),
             timeout_seconds=math.ceil(
                 task.simulation.duration_seconds + task.simulation.grace_period_seconds + self.TIMEOUT_OVERHEAD_SECONDS
             ),
+            env=env,
         )
 
     def artifact_records(

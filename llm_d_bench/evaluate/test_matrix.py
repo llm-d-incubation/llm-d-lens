@@ -67,6 +67,21 @@ server: {type: vllm, model_name: stale, base_url: 'http://stale.invalid'}
     }
 
 
+def test_workload_yaml_binds_gateway_api_key_when_routed():
+    content = (
+        "load: {type: constant, stages: [{rate: 1, duration: 30}]}\n"
+        "api: {type: completion, streaming: true}\n"
+        "data: {type: random}\n"
+    )
+    parsed = yaml.safe_load(
+        router._inline_workload_yaml(
+            content, "Qwen/Qwen3-0.6B", "http://gateway:30012", api_key="lens-mk-abc"
+        )
+    )
+    assert parsed["server"]["api_key"] == "lens-mk-abc"
+    assert parsed["server"]["base_url"] == "http://gateway:30012"
+
+
 @pytest.mark.parametrize("request_type", [BenchmarkSpec, router.EvaluateRunRequest])
 @pytest.mark.parametrize("load_type", ["constant", "poisson", "concurrent"])
 @pytest.mark.parametrize("schedule", [{}, {"stages": []}, {"stages": [], "sweep": {}}])
@@ -558,3 +573,23 @@ async def test_execute_isolates_cluster_process_from_harness_proxies(monkeypatch
     assert pod_env["HTTPS_PROXY"] == "http://harness-proxy.invalid:911"
     assert ".svc" in pod_env["NO_PROXY"].split(",")
     assert os.environ["HTTPS_PROXY"] == "http://ambient-proxy.invalid:911"
+
+
+def test_deployment_uses_shared_gateway_from_contract_and_ownership():
+    from llm_d_bench.deploy.executions import deployment_uses_shared_gateway
+
+    def execution(provenance, shares_gateway):
+        return SimpleNamespace(
+            provenance=provenance,
+            artifact=SimpleNamespace(
+                rendered_payload=SimpleNamespace(value={"deployment_contract": {"shares_gateway": shares_gateway}})
+            ),
+        )
+
+    # A provider that declares the shared Gateway routes through it...
+    assert deployment_uses_shared_gateway(execution({}, True)) is True
+    # ...unless the deployment is evaluation-owned (keeps its own proxy).
+    assert deployment_uses_shared_gateway(execution({"evaluate_workflow": True}, True)) is False
+    # Providers with their own proxy never use the Gateway.
+    assert deployment_uses_shared_gateway(execution({}, False)) is False
+    assert deployment_uses_shared_gateway(SimpleNamespace(provenance={}, artifact=None)) is False

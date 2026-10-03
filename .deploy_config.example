@@ -5,11 +5,15 @@ LLM_D_DEPLOY_API_URL="http://127.0.0.1:8081"
 # local = Lens-managed accounts only; hybrid = local + external IdP;
 # external = external IdP only; disabled = no authentication (dev only).
 PRISM_AUTH_MODE="hybrid"
-# Required to encrypt stored IdP secrets and sign internal assertions. Replace
-# with strong, unique values in production; rotating PRISM_SECRET_KEY requires
-# re-encrypting stored secrets (PRISM_SECRET_KEYS_OLD lists decryption fallbacks).
-PRISM_SECRET_KEY=""
-PRISM_INTERNAL_AUTH_SECRET=""
+# Master key that encrypts stored IdP secrets. When unset, Lens generates one on
+# first start under <LENS_DATA_DIR>/credentials/master_key.json (mode 600) and it
+# can be rotated from Administration > Master key. Set it here (or in the
+# environment) to pin the key instead; LENS_SECRET_KEYS_OLD lists comma-separated
+# previous keys kept as decryption fallbacks after a rotation.
+LENS_SECRET_KEY=""
+LENS_SECRET_KEYS_OLD=""
+# Shared secret for internal Node<->Python assertions.
+LENS_INTERNAL_AUTH_SECRET=""
 # Disable public API documentation in production.
 PRISM_EXPOSE_API_DOCS="false"
 # First-run administrator. With no users yet, the backend creates one admin and

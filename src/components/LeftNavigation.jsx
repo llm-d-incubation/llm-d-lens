@@ -49,6 +49,7 @@ const MENU_GROUPS = [
             { id: 'admin-groups', label: 'Groups', icon: UserCog, view: 'admin/groups', iconColor: 'text-white' },
             { id: 'admin-roles', label: 'Roles', icon: ShieldCheck, view: 'admin/roles', iconColor: 'text-white' },
             { id: 'admin-identity-providers', label: 'Identity providers', icon: KeyRound, view: 'admin/identity-providers', iconColor: 'text-white', badge: 'Exp' },
+            { id: 'admin-master-key', label: 'Master key', icon: KeyRound, view: 'admin/master-key', iconColor: 'text-white' },
             { id: 'admin-audit', label: 'Audit log', icon: ScrollText, view: 'admin/audit', iconColor: 'text-white' },
             { id: 'admin-sessions', label: 'Sessions', icon: Monitor, view: 'admin/sessions', iconColor: 'text-white' }
         ]

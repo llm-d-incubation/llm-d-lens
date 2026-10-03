@@ -144,7 +144,7 @@ class AgenticMcpClient:
         self.principal_id = principal_id
 
     def _headers(self) -> dict[str, str]:
-        secret = os.getenv("PRISM_INTERNAL_AUTH_SECRET", "")
+        secret = os.getenv("LENS_INTERNAL_AUTH_SECRET", "")
         if not secret or not self.principal_id:
             return {}
         timestamp = int(time.time())

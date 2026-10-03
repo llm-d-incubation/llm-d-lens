@@ -20,6 +20,13 @@ from llm_d_bench.auth.providers.base import (
 #: RFC 4515 filter escaping for the ``{username}`` placeholder.
 _FILTER_ESCAPES = {"\\": "\\5c", "*": "\\2a", "(": "\\28", ")": "\\29", "\x00": "\\00"}
 
+#: Default filter selecting group entries; overridable via ``group_filter``.
+#: Excludes containers such as ``organizationalUnit`` that a ``(objectClass=*)``
+#: search under ``group_base_dn`` would otherwise import as empty groups.
+_DEFAULT_GROUP_FILTER = (
+    "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))"
+)
+
 
 def escape_filter_value(value: str) -> str:
     return "".join(_FILTER_ESCAPES.get(char, char) for char in value)
@@ -73,25 +80,26 @@ class LdapProvider(IdentityProvider):
         if not password:
             return None
         user_base = str(self.config.get("user_base_dn") or "")
-        connection = self._connect(self.config.get("bind_dn"), self.secret)
+        # Resolve the user entry and their groups with the service bind: ordinary
+        # users are usually not allowed to read group entries (osixia's default
+        # ACL restricts reads to self), so the bind connection is used for both.
+        admin = self._connect(self.config.get("bind_dn"), self.secret)
         try:
-            connection.search(user_base, self._user_filter(username), attributes=["*"])
-            entries = list(connection.entries)
+            admin.search(user_base, self._user_filter(username), attributes=["*"])
+            entries = list(admin.entries)
             if not entries:
                 return None
             entry = entries[0]
             user_dn = entry.entry_dn
+            groups = self._groups_for(admin, user_dn)
         finally:
-            connection.unbind()
+            admin.unbind()
         # Verify the user's own password with a second bind.
         try:
             user_connection = self._connect(user_dn, password)
         except Exception:  # noqa: BLE001 - any bind failure means invalid credentials
             return None
-        try:
-            groups = self._groups_for(user_connection, user_dn)
-        finally:
-            user_connection.unbind()
+        user_connection.unbind()
         return ExternalIdentity(
             external_id=user_dn,
             username=username,
@@ -101,19 +109,40 @@ class LdapProvider(IdentityProvider):
         )
 
     def _groups_for(self, connection: Any, user_dn: str) -> list[str]:
+        """Return the DNs of the groups the user belongs to (design section 20.5.1)."""
         group_base = str(self.config.get("group_base_dn") or "")
         if not group_base:
             return []
         member_attribute = str(self.config.get("group_member_attribute", "member"))
         name_attribute = str(self.config.get("group_name_attribute", "cn"))
-        group_filter = str(self.config.get("group_filter") or "(objectClass=*)")
+        group_filter = str(self.config.get("group_filter") or _DEFAULT_GROUP_FILTER)
         connection.search(group_base, group_filter, attributes=[member_attribute, name_attribute])
         groups: list[str] = []
         for entry in connection.entries:
             members = entry[member_attribute].values if member_attribute in entry else []
             if user_dn in members:
-                groups.append(str(entry[name_attribute].value))
+                groups.append(str(entry.entry_dn))
         return groups
+
+    async def list_groups(self) -> list[dict[str, str]]:
+        """Enumerate every group under ``group_base_dn`` (design section 20.5.1)."""
+        group_base = str(self.config.get("group_base_dn") or "")
+        if not group_base:
+            return []
+        name_attribute = str(self.config.get("group_name_attribute", "cn"))
+        group_filter = str(self.config.get("group_filter") or _DEFAULT_GROUP_FILTER)
+        connection = self._connect(self.config.get("bind_dn"), self.secret)
+        try:
+            connection.search(group_base, group_filter, attributes=[name_attribute])
+            return [
+                {
+                    "external_id": str(entry.entry_dn),
+                    "name": str(self._attribute(entry, name_attribute) or entry.entry_dn),
+                }
+                for entry in connection.entries
+            ]
+        finally:
+            connection.unbind()
 
     @staticmethod
     def _attribute(entry: Any, name: str) -> Any:

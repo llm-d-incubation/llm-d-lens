@@ -99,9 +99,6 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("DELETE", "/api/v1/identity-providers/{provider_id}", "idp:provider:configure"),
     RoutePermission("POST", "/api/v1/identity-providers/{provider_id}/test", "idp:provider:configure"),
     RoutePermission("POST", "/api/v1/identity-providers/{provider_id}/sync", "idp:sync:execute"),
-    RoutePermission("GET", "/api/v1/identity-providers/{provider_id}/mappings", "idp:provider:read"),
-    RoutePermission("POST", "/api/v1/identity-providers/{provider_id}/mappings", "idp:mapping:manage"),
-    RoutePermission("DELETE", "/api/v1/identity-providers/{provider_id}/mappings/{mapping_id}", "idp:mapping:manage"),
     # --- audit ---
     RoutePermission("GET", "/api/v1/audit-logs", "audit:log:read"),
     # --- access management ---
@@ -299,6 +296,9 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     # --- system ---
     RoutePermission("GET", "/api/v1/system/database", "system:database:read"),
     RoutePermission("POST", "/api/v1/system/database", "system:database:configure"),
+    RoutePermission("GET", "/api/v1/system/secret-key", "system:secret:read"),
+    RoutePermission("POST", "/api/v1/system/secret-key/rotate", "system:secret:manage"),
+    RoutePermission("DELETE", "/api/v1/system/secret-key/old", "system:secret:manage"),
     # --- model service: user ---
     RoutePermission("GET", "/api/v1/model-service/tokens", "model-service:token:manage"),
     RoutePermission("POST", "/api/v1/model-service/tokens", "model-service:token:manage"),

@@ -13,7 +13,7 @@ registration and unresolved decisions. Paths below are repo-relative.
 | Scope | Inspect before changing |
 | --- | --- |
 | Local service start/restart | `scripts/dev.sh`, `scripts/run-backend.sh`, `package.json` |
-| Containers | The relevant Dockerfile under the root or `docker/`, `docker-compose.yml` |
+| Containers | The relevant Dockerfile under the root or `docker/` |
 | Cluster provisioning/deployment | `llm_d_bench/cluster/`, `llm_d_bench/deploy/`, the manifest/template used by the caller |
 | CI | The relevant workflow under `.github/workflows/` |
 
@@ -84,8 +84,8 @@ report those operations separately when they are part of the task.
 
 ## Validate proportionately
 
-Use `bash -n` for changed shell scripts and `docker compose config` for changed
-Compose configuration, then relevant tests or image builds for the actual change.
+Use `bash -n` for changed shell scripts and build changed Dockerfiles
+(`docker buildx build`), then relevant tests or image builds for the actual change.
 Inspect persisted volumes, secrets, environment variables and rollback impact
 before changing lifecycle behavior. A syntax check or image build does not prove
 successful cluster deployment. State explicitly whether services were restarted

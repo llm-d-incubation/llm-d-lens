@@ -661,10 +661,13 @@ ensure_venv() {
     step "Python virtual environment"
     cd "$INSTALL_DIR"
 
-    # The embedded PostgreSQL mode needs the optional 'pgserver' extra; a
-    # plain "pip install -e ." skips it.
-    local extra=""
-    [[ "$DB_MODE" == "embedded" ]] && extra="[embedded-db]"
+    # The embedded PostgreSQL mode needs the optional 'pgserver' extra and the
+    # LDAP identity provider needs the optional 'ldap' extra; a plain
+    # "pip install -e ." skips both. Install them so those features work.
+    local extras=()
+    [[ "$DB_MODE" == "embedded" ]] && extras+=("embedded-db")
+    extras+=("ldap")
+    local extra="[$(IFS=,; printf '%s' "${extras[*]}")]"
 
     # A stamp of pyproject.toml (plus the selected extra) forces a reinstall
     # when a dependency is added/bumped by a source update, e.g. casbin. Without

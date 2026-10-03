@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import re
+import socket
 import tempfile
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -109,6 +110,55 @@ def member_pool_name(member) -> str | None:
     if name:
         return name
     return default_pool_name(member.epp_ref or member.target_service)
+
+
+def local_public_ip() -> str:
+    """The host's outbound IP (used as the public host for exposed Gateways)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        sock.close()
+
+
+def _is_container_network(host: str) -> bool:
+    """True for docker/kind bridge addresses (``172.16.0.0/12``).
+
+    Such a node IP is only reachable inside the host running the containers, so
+    the Gateway must be published through the Lens host's managed tunnel instead.
+    """
+    parts = host.split(".")
+    return len(parts) == 4 and parts[0] == "172" and parts[1].isdigit() and 16 <= int(parts[1]) <= 31
+
+
+def gateway_base_url(cluster: object, public_host: str, global_url: str | None) -> str:
+    """Resolve the externally reachable OpenAI base URL for a cluster's Gateway.
+
+    Layered so no single network layout is assumed:
+      1. an explicit global/per-cluster public URL always wins;
+      2. a LoadBalancer/Gateway address (the provider's own external address);
+      3. a NodePort: the node address, unless it is a container-only (docker/kind)
+         address, in which case only the Lens host's managed tunnel is reachable;
+      4. empty when nothing else is available.
+    """
+    if global_url:
+        return global_url
+    # The user-supplied value is only a host/IP; the port comes from gateway_port.
+    cluster_host = (getattr(cluster, "gateway_public_url", None) or "").strip()
+    port = getattr(cluster, "gateway_port", None)
+    if cluster_host:
+        return f"http://{cluster_host}:{port}/v1" if port else f"http://{cluster_host}/v1"
+    if port:
+        node_host = getattr(cluster, "gateway_node_address", None)
+        if node_host and _is_container_network(node_host):
+            node_host = None
+        host = node_host or public_host
+        return f"http://{host}:{port}/v1" if host else ""
+    address = getattr(cluster, "gateway_address", None)
+    return f"http://{address}/v1" if address else ""
 
 
 class GatewayOpsService:
@@ -1589,3 +1639,23 @@ class GatewayOpsService:
                 )
             )
         return GatewayStatus(clusters=clusters)
+
+    async def cluster_gateway_base_url(self, cluster_id: str | None) -> str | None:
+        """One cluster's shared-Gateway base URL (``.../v1``), or ``None``.
+
+        In-cluster consumers (Simulation/Evaluate) resolve a deployment's
+        benchmark endpoint through this URL so traffic keeps flowing through the
+        shared Gateway and the deployment's EPP instead of the disabled
+        per-deployment proxy.
+        """
+        if not cluster_id:
+            return None
+        global_url = os.environ.get("LENS_MODEL_GATEWAY_PUBLIC_URL", "").strip()
+        status = await self.status()
+        for cluster in status.clusters:
+            if cluster.cluster_id != cluster_id:
+                continue
+            if not cluster.gateway_ready:
+                return None
+            return gateway_base_url(cluster, local_public_ip(), global_url) or None
+        return None
