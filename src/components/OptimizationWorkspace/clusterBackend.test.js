@@ -36,12 +36,13 @@ test('software workflow starts once, reports progress and preserves unreturned p
         return Response.json(options.method === 'POST' ? {} : { llmD: { state: 'ready', path: 'new-d' }, llmDBenchmark: { state: 'idle' } });
     });
     const updates = [];
-    const result = await downloadClusterSoftware(cluster, { llmDRef: 'main', llmDBenchmarkRef: null }, { onUpdate: s => updates.push(s) });
+    const result = await downloadClusterSoftware(cluster, { onUpdate: s => updates.push(s) });
     assert.deepEqual(result, { ...cluster, llmDRepoPath: 'new-d' });
     assert.equal(cluster.llmDRepoPath, 'old-d');
     assert.equal(calls.length, 2);
     assert.match(calls[0].url, /a%2Fb/);
-    assert.deepEqual(JSON.parse(calls[0].options.body), { llmDRef: 'main', llmDBenchmarkRef: null });
+    // The backend downloads the profile-pinned revisions; the body is empty.
+    assert.deepEqual(JSON.parse(calls[0].options.body), {});
     assert.equal(updates.length, 1);
 });
 

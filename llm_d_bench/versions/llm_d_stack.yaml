@@ -1,0 +1,32 @@
+# Lens-supported llm-d stack: the single source of truth for the versions of
+# every third-party llm-d component Lens deploys or benchmarks.
+#
+# The file is frozen with the Lens codebase and replaced wholesale on an upgrade
+# (there is no per-Lens-release history). All consumers — Deploy providers, the
+# Node Guide planner, Model service, Evaluate, hardware profiles and the cluster
+# wizard — read these values; nothing may hardcode a component version.
+#
+# `llm_d` is the llm-d release tag; it pins the Gateway API / Gateway API
+# Inference Extension versions the release lists in its `guides/env.sh`. The
+# model-server image (repository and version) is owned by each hardware profile
+# (`llm_d_bench/hardware/profiles/*.json`), resolved dynamically, not by this file.
+#
+# `llm_d_router` is one release of llm-d-router that provides all three router
+# artifacts: the standalone chart, the EPP image and the P/D disaggregation
+# sidecar image.
+llm_d: v0.9.0
+#: Minimum Kubernetes version this stack runs on. llm-d's gateway prerequisites
+#: require one of the three most recent Kubernetes releases (Envoy AI Gateway
+#: names 1.32 explicitly); the pinned Gateway API v1.5.x CRDs need >= 1.31.
+min_k8s_version: v1.32.0
+llm_d_router: v0.10.0
+llm_d_benchmark: v0.8.0
+llm_d_inference_payload_processor: v0.1.0
+k8s_gateway_api: v1.5.1
+k8s_gateway_api_inference_extension: v1.5.0
+gateway_providers:
+  # Istio versions/tags carry no leading "v" (chart and image tags are "1.29.2").
+  istio: 1.29.2
+  envoy_gateway: v1.8.1
+  envoy_ai_gateway: v1.1.0
+  agentgateway: v1.1.0

@@ -210,11 +210,13 @@ export default function UsersPage({ onToggleMobileNav }) {
                                                                 </Button>
                                                             </PermissionGate>
                                                         )}
-                                                        <PermissionGate permission="user:user:reset-password">
-                                                            <Button variant="ghost" size="icon" onClick={() => setPendingReset(user)} aria-label={`Reset password for ${user.username}`} title="Reset password">
-                                                                <KeyRound size={14} />
-                                                            </Button>
-                                                        </PermissionGate>
+                                                        {user.auth_source === 'local' && (
+                                                            <PermissionGate permission="user:user:reset-password">
+                                                                <Button variant="ghost" size="icon" onClick={() => setPendingReset(user)} aria-label={`Reset password for ${user.username}`} title="Reset password">
+                                                                    <KeyRound size={14} />
+                                                                </Button>
+                                                            </PermissionGate>
+                                                        )}
                                                         {!user.protected && user.id !== principal?.userId && (
                                                             <PermissionGate permission="user:user:delete">
                                                                 <Button variant="ghost" size="icon" onClick={() => setPendingDelete(user)} aria-label={`Delete ${user.username}`} title="Delete">

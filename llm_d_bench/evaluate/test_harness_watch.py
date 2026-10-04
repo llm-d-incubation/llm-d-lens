@@ -22,6 +22,73 @@ class HarnessWatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("huggingface.co", run["harness_logs"])
         self.assertEqual(run["harness_checked_at"], "now")
 
+    async def test_post_loadgen_analysis_failure_is_only_a_warning(self):
+        warned = asyncio.Event()
+
+        async def read(env, *args):
+            if "get" in args:
+                return json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "harness"},
+                                "status": {
+                                    "phase": "Failed",
+                                    "containerStatuses": [
+                                        {"name": "harness", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                )
+            return "Harness completed successfully.\nRunning analysis: inference-perf-analyze_results.sh\n"
+
+        run = {}
+
+        def save(value):
+            if value.get("harness_warning"):
+                warned.set()
+
+        with patch.object(watch, "_read", read), patch.object(watch, "_POLL_SECONDS", 0.02):
+            task = asyncio.create_task(watch._poll_harness(run, "ns", {}, save, lambda: "now"))
+            try:
+                await asyncio.wait_for(warned.wait(), 1)
+            finally:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+        self.assertIn("already completed", run["harness_warning"])
+
+    async def test_loadgen_failure_without_the_completion_marker_still_raises(self):
+        async def read(env, *args):
+            if "get" in args:
+                return json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "harness"},
+                                "status": {
+                                    "phase": "Failed",
+                                    "containerStatuses": [
+                                        {"name": "harness", "state": {"terminated": {"exitCode": 1, "reason": "Error"}}}
+                                    ],
+                                },
+                            }
+                        ]
+                    }
+                )
+            return "connection refused before any load was generated"
+
+        with (
+            patch.object(watch, "_read", read),
+            patch.object(watch, "_POLL_SECONDS", 0.02),
+            self.assertRaisesRegex(RuntimeError, r"harness: Error \(exit 1\)"),
+        ):
+            await asyncio.wait_for(
+                watch._poll_harness({}, "ns", {}, lambda _: None, lambda: "now"), 1
+            )
+
     def test_container_failure_detected_even_with_running_pod(self):
         self.assertIn(
             "OOMKilled",
@@ -99,7 +166,9 @@ class HarnessSDKWatchTests(unittest.IsolatedAsyncioTestCase):
         ):
             await asyncio.wait_for(watch.watch_harness({}, "ns", {}, lambda _: None, lambda: "now"), 1)
         self.assertTrue(closed.is_set())
-        self.assertEqual(len(reads), 1)
+        # One poll to list pods, plus one immediate log fetch to check whether the
+        # load generator had already completed before failing.
+        self.assertGreaterEqual(len(reads), 1)
 
     async def test_snapshot_reset_delete_and_cancellation(self):
         from llm_d_bench.utils import kubernetes_watch

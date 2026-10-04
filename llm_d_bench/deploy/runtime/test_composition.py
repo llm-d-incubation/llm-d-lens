@@ -113,6 +113,49 @@ def test_precise_prefix_cache_routing_provider_registers_modelserver_render_and_
     assert configured.source_namespace == "model-secrets"
 
 
+def test_tiered_prefix_cache_provider_renders_gpu_when_the_run_recorded_an_nvidia_accelerator(tmp_path: Path):
+    environment, _ = _environment(tmp_path)
+    runtime = RuntimeEnvironment.from_environment({**environment, "PRISM_DEPLOY_ACCELERATOR": "gpu"})
+
+    adapter = _build_tiered_prefix_cache_provider(runtime)
+
+    assert all(str(path).count("/gpu/") == 1 for path in adapter._descriptor.variants.values())
+
+
+def test_precise_prefix_cache_routing_provider_renders_gpu_when_the_run_recorded_an_nvidia_accelerator(
+    tmp_path: Path,
+):
+    environment, _ = _environment(tmp_path)
+    runtime = RuntimeEnvironment.from_environment({**environment, "PRISM_DEPLOY_ACCELERATOR": "gpu"})
+
+    adapter = _build_precise_prefix_cache_routing_provider(runtime)
+
+    guide_root = runtime.manifest_root
+    assert adapter._modelserver_source == guide_root / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
+
+
+def test_concurrent_runs_with_different_accelerators_do_not_share_overlay_state(tmp_path: Path):
+    """Two runs for different clusters must each render their own vendor's overlay.
+
+    Nothing here is process-global (no shared env var is mutated), so building
+    an XPU-run provider after a GPU-run provider must not leak the GPU choice,
+    and vice versa -- this is the regression the per-run ``accelerator`` field
+    protects against.
+    """
+    environment, _ = _environment(tmp_path)
+    gpu_runtime = RuntimeEnvironment.from_environment({**environment, "PRISM_DEPLOY_ACCELERATOR": "gpu"})
+    xpu_runtime = RuntimeEnvironment.from_environment({**environment, "PRISM_DEPLOY_ACCELERATOR": "xpu"})
+
+    gpu_adapter = _build_precise_prefix_cache_routing_provider(gpu_runtime)
+    xpu_adapter = _build_precise_prefix_cache_routing_provider(xpu_runtime)
+    gpu_adapter_again = _build_precise_prefix_cache_routing_provider(gpu_runtime)
+
+    guide_root = gpu_runtime.manifest_root
+    assert gpu_adapter._modelserver_source == guide_root / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
+    assert xpu_adapter._modelserver_source == guide_root / "guides/precise-prefix-cache-routing/modelserver/xpu/vllm"
+    assert gpu_adapter_again._modelserver_source == gpu_adapter._modelserver_source
+
+
 def test_registered_guide_allows_idempotent_namespace_cleanup(tmp_path: Path):
     namespace = "llm-d-bench-optimized-baseline-test"
     runner = RegisteredGuideCommandRunner(

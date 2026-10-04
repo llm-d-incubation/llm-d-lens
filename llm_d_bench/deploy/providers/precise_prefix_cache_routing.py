@@ -19,6 +19,7 @@ different container-args shape.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import shutil
@@ -30,14 +31,20 @@ import yaml
 
 from llm_d_bench.common.hashing import stable_hash
 from llm_d_bench.configuration.manifest_facts import _invocation_tokens, _model_argument, _option
+from llm_d_bench.deploy.data_plane import router_data_plane_args, router_data_plane_effective_values
 from llm_d_bench.deploy.providers.deployment_bundle import (
     install_deployment_bundle,
     subprocess_bundle_runner,
     text_checksum,
 )
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
-from llm_d_bench.deploy.providers.hardware_profile import requires_dra_claim, set_accelerator_request
+from llm_d_bench.deploy.providers.hardware_profile import (
+    overlay_variant,
+    requires_dra_claim,
+    set_accelerator_request,
+)
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
+from llm_d_bench.versions import router_chart_version
 
 # Upstream sample calibration is used only during the short bootstrap interval
 # before the model is ready. Readiness always replaces it with a live measurement
@@ -45,9 +52,14 @@ from llm_d_bench.deploy.providers.model_cache_environment import model_cache_env
 UPSTREAM_SAMPLE_PEAK_PREFILL_THROUGHPUT = 15926
 
 _ROUTER_CHART = "oci://ghcr.io/llm-d/charts/llm-d-router-standalone"
-_ROUTER_CHART_VERSION = "v0.9.0"
+_ROUTER_CHART_VERSION = router_chart_version()
 _RELEASE_NAME = "precise-prefix-cache-routing"
-_DECODE_DEPLOYMENT = "precise-prefix-cache-routing-xpu-vllm-decode"
+
+# Grace period for the EPP to finish registering a healthy decode backend
+# after its calibration-triggered restart, before Evaluate's warmup can race
+# it with "503 no healthy upstream". An active probe is not allowlist-safe
+# (see readiness()); this is a time-bounded mitigation instead.
+_EPP_ENDPOINT_SETTLE_SECONDS = 20
 
 
 def _modelserver_invocations(manifest_text: str):
@@ -64,6 +76,23 @@ def _modelserver_invocations(manifest_text: str):
             yield deployment_name, tokens
 
 
+def _parse_peak_prefill_throughput(output: str) -> int | None:
+    """Extract the measured value from the upstream calibration recipe output.
+
+    On success the recipe prints ``Measured peakPrefillThroughput = <n>
+    tokens/sec``; the Job's own ``PEAK_PREFILL_THROUGHPUT=<n>`` line may also be
+    echoed on failure. Return the last positive value, or None.
+    """
+    matches = re.findall(
+        r"(?m)(?:^PEAK_PREFILL_THROUGHPUT=|Measured peakPrefillThroughput\s*=\s*)(\d+)", output
+    )
+    for value in reversed(matches):
+        parsed = int(value)
+        if parsed > 0:
+            return parsed
+    return None
+
+
 class PrecisePrefixCacheRoutingAdapter:
     """Structured XPU precise-prefix-cache-routing deployment adapter."""
 
@@ -77,9 +106,15 @@ class PrecisePrefixCacheRoutingAdapter:
         timeout: int,
         helm_path: Path,
         kubeconfig: str | None,
+        accelerator: str | None = None,
     ) -> None:
         self._runner = command_runner
-        self._modelserver_source = guide_root / "guides/precise-prefix-cache-routing/modelserver/xpu/vllm"
+        # Resolved once per adapter instance (one per deployment run) from the
+        # run's own accelerator, never a shared global: concurrent runs for
+        # different clusters/vendors must not race on a single overlay choice.
+        self._accelerator = accelerator
+        self._overlay_variant_value = overlay_variant(accelerator=accelerator)
+        self._modelserver_source = self._modelserver_overlay(guide_root)
         self._render_source = guide_root / "guides/precise-prefix-cache-routing/render"
         self._baseline_source = (
             Path(__file__).resolve().parent / "guide_overlays" / "precise-prefix-cache-routing" / "baseline"
@@ -114,7 +149,7 @@ class PrecisePrefixCacheRoutingAdapter:
             ),
             "supported-extension",
             {
-                "variant": "xpu-routed-guide",
+                "variant": f"{self._overlay_variant_value}-routed-guide",
                 "structured_custom_parameters": True,
                 "endpoint_service_name": f"{_RELEASE_NAME}-epp",
                 "endpoint_service_port": 80,
@@ -122,6 +157,18 @@ class PrecisePrefixCacheRoutingAdapter:
                 "baseline_endpoint_service_port": 8000,
             },
         )
+
+    def _modelserver_overlay(self, guide_root: Path) -> Path:
+        """Model-server Kustomize overlay for this run's resolved hardware.
+
+        Intel XPU keeps its overlay directly under ``modelserver/xpu/vllm``;
+        every other profile (notably NVIDIA) uses the generic ``gpu/vllm/base``
+        overlay.
+        """
+        modelserver = guide_root / "guides/precise-prefix-cache-routing/modelserver"
+        if self._overlay_variant_value == "xpu":
+            return modelserver / "xpu/vllm"
+        return modelserver / f"{self._overlay_variant_value}/vllm/base"
 
     def discover(self) -> GuideDefinition:
         return self._definition
@@ -175,6 +222,9 @@ class PrecisePrefixCacheRoutingAdapter:
             source_ref=self._definition.source_ref,
             guide_content_hash=self._definition.content_hash,
             manifest_checksum=stable_hash({"parameters": parameters}),
+            # llm-d router data plane: reached through the shared Gateway unless
+            # the deployment is evaluation-owned (then it keeps its own proxy).
+            deployment_contract={"data_plane_kind": "llm-d-router"},
         )
 
     async def deploy(self, artifact: GuideDeploymentArtifact, execution_context: dict[str, Any]) -> dict[str, Any]:
@@ -192,6 +242,10 @@ class PrecisePrefixCacheRoutingAdapter:
                 namespace=namespace,
                 command_runner=self._bundle_command_runner,
                 output_root=Path(artifact.manifest_ref or "").parent / "deployment-bundle",
+                effective_values_content=router_data_plane_effective_values(
+                    bundle["helm"]["values"][-1]["content"], execution_context
+                ),
+                effective_values_name="router-effective-precise-routing.yaml",
             )
             router_values_path = Path(reproducibility["router_values_path"])
             calibration_path = reproducibility.get("calibration_script_path")
@@ -226,6 +280,7 @@ class PrecisePrefixCacheRoutingAdapter:
                 str(self._router_base_values),
                 "--values",
                 str(router_values_path),
+                *router_data_plane_args(execution_context),
                 env=self._environment,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -253,8 +308,36 @@ class PrecisePrefixCacheRoutingAdapter:
             "model": self._extract_model_name(manifest_text),
             "calibration_chunk_size": self._extract_calibration_chunk_size(manifest_text),
             "router_values_path": str(router_values_path),
+            # Carried so the post-calibration router re-render applies the same
+            # data-plane values (plaintext EPP ext_proc, proxy disable).
+            "data_plane": execution_context.get("data_plane"),
+            "provenance": execution_context.get("provenance"),
             **reproducibility,
         }
+
+    def _decode_deployment(self, artifact: object) -> str:
+        """Decode Deployment name as rendered for this run's resolved hardware.
+
+        Names are hardware specific (the NVIDIA overlay renders
+        ``precise-prefix-cache-routing-gpu-vllm-*`` while Intel XPU renders
+        ``precise-prefix-cache-routing-xpu-vllm-*``), so they are read from the
+        deployment contract or the rendered manifest rather than hardcoded.
+        """
+        contract = artifact.deployment_contract if isinstance(artifact, GuideDeploymentArtifact) else {}
+        names = [str(name) for name in contract.get("readinessDeployments") or []]
+        decode = next((name for name in names if name.endswith("decode")), None)
+        if decode:
+            return decode
+        manifest_ref = getattr(artifact, "manifest_ref", None)
+        if manifest_ref and Path(manifest_ref).is_file():
+            for item in yaml.safe_load_all(Path(manifest_ref).read_text(encoding="utf-8")):
+                if (
+                    isinstance(item, dict)
+                    and item.get("kind") == "Deployment"
+                    and str((item.get("metadata") or {}).get("name") or "").endswith("decode")
+                ):
+                    return str(item["metadata"]["name"])
+        return f"precise-prefix-cache-routing-{getattr(self, '_overlay_variant_value', None) or overlay_variant()}-vllm-decode"
 
     async def readiness(self, execution: dict[str, Any]) -> ValidationResult:
         namespace = execution["namespace"]
@@ -266,7 +349,7 @@ class PrecisePrefixCacheRoutingAdapter:
                 "kubectl",
                 "rollout",
                 "status",
-                f"deployment/{_DECODE_DEPLOYMENT}",
+                f"deployment/{self._decode_deployment(execution.get('_artifact'))}",
                 "--namespace",
                 namespace,
                 f"--timeout={self._timeout}s",
@@ -301,6 +384,19 @@ class PrecisePrefixCacheRoutingAdapter:
         execution["calibrated_peak_prefill_throughput"] = measured
         execution["endpoint_url"] = f"http://{_RELEASE_NAME}-epp.{namespace}.svc:80"
         execution["baseline_endpoint_url"] = f"http://{_RELEASE_NAME}-baseline.{namespace}.svc:8000"
+        # `kubectl rollout status` for the EPP Deployment only reflects its own
+        # pod readiness probe; it does not guarantee the EPP has finished
+        # registering a healthy decode endpoint in its routing table. The
+        # calibration step above always re-applies the router Helm values
+        # (even on an unchanged measurement), which restarts the EPP pod, so a
+        # request sent immediately after rollout status succeeds can still
+        # race that registration and get Envoy's "503 no healthy upstream" --
+        # exactly what Evaluate's warmup/first benchmark stage hit. An active
+        # HTTP probe would need `kubectl exec` (or an API-server proxy call),
+        # which `RestrictedKubectlRunner`'s allowlist deliberately excludes, so
+        # this grace period is the allowlist-compliant mitigation; a probe-based
+        # replacement needs an explicit allowlist decision first.
+        await asyncio.sleep(_EPP_ENDPOINT_SETTLE_SECONDS)
         return ValidationResult(True)
 
     async def diagnostics(self, execution: dict[str, Any]) -> dict[str, Any]:
@@ -337,13 +433,33 @@ class PrecisePrefixCacheRoutingAdapter:
             },
         }
 
+    def _ensure_calibration_job_template(self, script_path: Path) -> None:
+        """Ensure the recipe's Job template sits beside the script it reads.
+
+        ``calibrate.sh`` resolves ``calibration-peak-throughput.yaml`` from its
+        own directory. Bundles saved before the template was bundled (and the
+        live Guide tree) provide it next to the source recipe; copy it beside a
+        materialized script when it is missing.
+        """
+        template = script_path.parent / "calibration-peak-throughput.yaml"
+        if template.is_file():
+            return
+        source = self._calibration_script.parent / "calibration-peak-throughput.yaml"
+        if source.is_file():
+            template.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
     async def _calibrate_peak_prefill_throughput(self, namespace: str, model: str, chunk_size: int) -> int:
         if not model:
             raise ValueError("model name could not be derived from the deployed modelserver manifest")
         environment = {
             **os.environ,
             **(self._environment or {}),
-            "GUIDE_NAME": _RELEASE_NAME,
+            # The upstream recipe renders its Job to a fixed
+            # /tmp/<GUIDE_NAME>-calibrate-peak-throughput.yaml; a stale file
+            # owned by another user blocks that write. A per-deployment name
+            # keeps the path unique and writable. VLLM_ENDPOINT is set below, so
+            # the recipe never auto-discovers the <GUIDE_NAME>-epp service.
+            "GUIDE_NAME": f"{_RELEASE_NAME}-{namespace}",
             "NAMESPACE": namespace,
             # Measure the exact same modelserver pods while bypassing EPP. This avoids
             # using the uncalibrated affinity threshold to calibrate itself.
@@ -351,7 +467,10 @@ class PrecisePrefixCacheRoutingAdapter:
             "MODEL_NAME": model,
             "CHUNK_SIZE": str(chunk_size),
         }
-        calibration_script = getattr(self, "_bundle_calibration_scripts", {}).get(namespace, self._calibration_script)
+        calibration_script = Path(
+            getattr(self, "_bundle_calibration_scripts", {}).get(namespace, self._calibration_script)
+        )
+        self._ensure_calibration_job_template(calibration_script)
         process = await asyncio.create_subprocess_exec(
             "bash",
             str(calibration_script),
@@ -368,10 +487,28 @@ class PrecisePrefixCacheRoutingAdapter:
         output = (stdout + b"\n" + stderr).decode(errors="replace")
         if process.returncode:
             raise RuntimeError(output[-4000:].strip() or "upstream calibration recipe failed")
-        matches = re.findall(r"(?m)^PEAK_PREFILL_THROUGHPUT=(\d+)\s*$", output)
-        if not matches or int(matches[-1]) <= 0:
-            raise RuntimeError("upstream calibration recipe emitted no valid PEAK_PREFILL_THROUGHPUT value")
-        return int(matches[-1])
+        measured = _parse_peak_prefill_throughput(output)
+        if measured is None:
+            raise RuntimeError(
+                "upstream calibration recipe emitted no valid PEAK_PREFILL_THROUGHPUT value: "
+                + output[-1500:].strip()
+            )
+        # The recipe leaves its Job behind (it only clears the previous one), and
+        # its Completed pod would otherwise read as "not ready" in the
+        # deployment's pod list. Best-effort cleanup.
+        with contextlib.suppress(Exception):
+            await self._runner(
+                [
+                    "kubectl",
+                    "delete",
+                    "job",
+                    "calibrate-peak-throughput",
+                    "--namespace",
+                    namespace,
+                    "--ignore-not-found=true",
+                ]
+            )
+        return measured
 
     async def _apply_calibrated_router_values(self, execution: dict[str, Any], measured: int) -> None:
         source_path = Path(str(execution.get("router_values_path") or ""))
@@ -397,6 +534,7 @@ class PrecisePrefixCacheRoutingAdapter:
                 str(execution["router_version"]),
                 "--values",
                 str(calibrated_path),
+                *router_data_plane_args(execution),
             ]
             status, stdout, stderr = await self._bundle_command_runner(["helm", "template", *common])
             if status != 0:
@@ -442,6 +580,7 @@ class PrecisePrefixCacheRoutingAdapter:
                 str(self._router_base_values),
                 "--values",
                 str(calibrated_path),
+                *router_data_plane_args(execution),
                 env=self._environment,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -459,7 +598,7 @@ class PrecisePrefixCacheRoutingAdapter:
             [
                 "kubectl",
                 "scale",
-                f"deployment/{_DECODE_DEPLOYMENT}",
+                f"deployment/{self._decode_deployment(artifact)}",
                 "--namespace",
                 execution["namespace"],
                 "--replicas=0",
@@ -627,11 +766,10 @@ class PrecisePrefixCacheRoutingAdapter:
             "router_values_override": router_values_override,
         }
 
-    @staticmethod
-    def _patch_modelserver(documents: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
+    def _patch_modelserver(self, documents: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
         deployment = next((item for item in documents if item.get("kind") == "Deployment"), None)
         claim = next((item for item in documents if item.get("kind") == "ResourceClaimTemplate"), None)
-        if deployment is None or (requires_dra_claim() and claim is None):
+        if deployment is None or (requires_dra_claim(accelerator=self._accelerator) and claim is None):
             raise ValueError(
                 "rendered precise-prefix-cache-routing overlay is missing Deployment or ResourceClaimTemplate"
             )
@@ -683,7 +821,7 @@ class PrecisePrefixCacheRoutingAdapter:
         container["args"] = args
         container["env"] = environment
         container["image"] = parameters["image"]
-        set_accelerator_request(container, claim, parameters["tensor_parallel_size"])
+        set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
         if parameters["mount_path"]:
             pod_spec = deployment["spec"]["template"]["spec"]
             pod_spec.setdefault("volumes", []).append(

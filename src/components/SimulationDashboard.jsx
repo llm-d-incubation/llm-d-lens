@@ -70,7 +70,7 @@ import {
     ToggleGroup,
 } from './ui';
 import { MultiSelectDropdown } from './common';
-import { getDeploymentExecutions } from './OptimizationWorkspace/remoteDeployBackend';
+import { listModelNames } from './ModelService/modelServiceBackend';
 import SimulationIcon from './SimulationIcon';
 
 const EMPTY_ADVANCED_FILTERS = {
@@ -118,12 +118,9 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
     const [timelineLoading, setTimelineLoading] = useState(false);
     const [timelineError, setTimelineError] = useState('');
     const [timelineSelection, setTimelineSelection] = useState({ startIndex: 0, endIndex: 0 });
-    const [endpointClusters, setEndpointClusters] = useState([]);
-    const [endpointClustersLoading, setEndpointClustersLoading] = useState(false);
-    const [endpointDeployments, setEndpointDeployments] = useState([]);
-    const [endpointDeploymentsLoading, setEndpointDeploymentsLoading] = useState(false);
-    const [endpointDeploymentError, setEndpointDeploymentError] = useState('');
-    const [connectingDeployment, setConnectingDeployment] = useState(false);
+    const [modelServices, setModelServices] = useState([]);
+    const [modelServicesLoading, setModelServicesLoading] = useState(false);
+    const [modelServicesError, setModelServicesError] = useState('');
     const [endpointModels, setEndpointModels] = useState([]);
     const [modelsLoading, setModelsLoading] = useState(false);
     const [modelDiscoveryError, setModelDiscoveryError] = useState('');
@@ -161,8 +158,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         tracePath: '',
         traceFormat: '',
         endpointMode: 'deployment',
-        endpointClusterId: '',
-        endpointDeployment: '',
+        endpointModelServiceId: '',
         endpointUrl: '',
         apiKey: '',
         modelName: '',
@@ -198,18 +194,16 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
     }, []);
 
     const chooseEndpointMode = (value) => {
-        setEndpointDeploymentError('');
-        setEndpointDeployments([]);
+        setModelServicesError('');
         resetModelDiscovery();
         setForm((current) => ({
             ...current,
             endpointMode: value,
-            endpointClusterId: '',
-            endpointDeployment: '',
+            endpointModelServiceId: '',
             endpointUrl: '',
             modelName: '',
         }));
-        if (value === 'deployment') void loadEndpointClusters();
+        if (value === 'deployment') void loadModelServices();
     };
 
     const discoverEndpointModels = useCallback(async (endpointUrl) => {
@@ -268,113 +262,46 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         }));
     };
 
-    const loadEndpointClusters = async () => {
-        setEndpointClustersLoading(true);
-        setEndpointDeploymentError('');
+    const loadModelServices = async () => {
+        setModelServicesLoading(true);
+        setModelServicesError('');
         try {
-            const payload = await requestJson('/api/cluster/clusters');
-            const clusters = (payload?.items || []).filter((cluster) => cluster.ready);
-            setEndpointClusters(clusters);
-            if (!clusters.length) {
-                setEndpointDeploymentError('No ready clusters are available.');
+            const items = await listModelNames();
+            setModelServices(items);
+            resetModelDiscovery();
+            if (!items.length) {
+                setForm((current) => ({ ...current, endpointModelServiceId: '', endpointUrl: '', modelName: '' }));
+                setModelServicesError('No model service is published and healthy yet. Publish one from the Model Service page first.');
                 return;
             }
-            const firstCluster = clusters[0];
-            setForm((current) => ({ ...current, endpointClusterId: firstCluster.id }));
-            void loadEndpointDeployments(firstCluster.id);
+            selectModelService(items[0].id, items);
         } catch (error) {
-            setEndpointClusters([]);
-            setEndpointDeploymentError(`Unable to load clusters: ${error.message}`);
+            setModelServices([]);
+            setModelServicesError(`Unable to load model services: ${error.message}`);
         } finally {
-            setEndpointClustersLoading(false);
+            setModelServicesLoading(false);
         }
     };
 
-    const connectDeployment = async (deployment) => {
-        setEndpointDeploymentError('');
-        if (!deployment) {
-            resetModelDiscovery();
-            setForm((current) => ({
-                ...current,
-                endpointDeployment: '',
-                endpointUrl: '',
-                modelName: '',
-            }));
-            return;
-        }
-        const deploymentKey = deployment.execution_id;
+    const selectModelService = (modelServiceId, items = modelServices) => {
+        setModelServicesError('');
         resetModelDiscovery();
-        setConnectingDeployment(true);
-        try {
-            // The deployment's in-cluster Service URL is already known from the
-            // deployment list (see getDeploymentExecutions below) — simulation no
-            // longer opens a host-side kubectl port-forward for this, since a
-            // port-forward to a Service pins its whole tunnel to one backing pod
-            // and defeats load-balanced traffic generation. The backend re-resolves
-            // and pins this to the deployment's namespace when the task runs.
-            if (!deployment.endpoint) {
-                throw new Error('This deployment does not expose an in-cluster endpoint yet.');
-            }
-            const modelName = deployment.model || deployment.model_name || '';
-            setForm((current) => ({
-                ...current,
-                endpointDeployment: deploymentKey,
-                endpointUrl: deployment.endpoint,
-                modelName,
-            }));
-            if (modelName) {
-                setEndpointModels([modelName]);
-            }
-        } catch (error) {
-            resetModelDiscovery();
-            setForm((current) => ({
-                ...current,
-                endpointDeployment: '',
-                endpointUrl: '',
-                modelName: '',
-            }));
-            setEndpointDeploymentError(`Unable to connect to the deployment: ${error.message}`);
-        } finally {
-            setConnectingDeployment(false);
-        }
-    };
-
-    const connectDeploymentEndpoint = (deploymentKey) => {
-        setEndpointDeploymentError('');
-        const deployment = endpointDeployments.find((candidate) => candidate.execution_id === deploymentKey);
-        void connectDeployment(deployment);
-    };
-
-    const loadEndpointDeployments = async (clusterId) => {
-        if (!clusterId) {
-            setEndpointDeployments([]);
+        const entry = items.find((candidate) => candidate.id === modelServiceId);
+        if (!entry) {
+            setForm((current) => ({ ...current, endpointModelServiceId: '', endpointUrl: '', modelName: '' }));
             return;
         }
-        setEndpointDeploymentsLoading(true);
-        setEndpointDeploymentError('');
-        try {
-            const deployments = (await getDeploymentExecutions({ status: 'ready', clusterId })).filter(
-                (deployment) => deployment.execution_id && deployment.endpoint,
-            );
-            setEndpointDeployments(deployments);
-            resetModelDiscovery();
-            if (!deployments.length) {
-                setForm((current) => ({
-                    ...current,
-                    endpointDeployment: '',
-                    endpointUrl: '',
-                    modelName: '',
-                }));
-                setEndpointDeploymentError('No ready deployments were found for this cluster.');
-                return;
-            }
-            void connectDeployment(deployments[0]);
-        } catch (error) {
-            setEndpointDeployments([]);
-            setEndpointDeploymentError(`Unable to load deployments: ${error.message}`);
-        } finally {
-            setEndpointDeploymentsLoading(false);
-        }
+        // The backend resolves the actual in-cluster endpoint from the published
+        // Model Service (always the first healthy member); this placeholder URL
+        // satisfies request validation and is discarded once the server re-resolves it.
+        const modelName = entry.name || entry.baseModel || '';
+        setForm((current) => ({
+            ...current,
+            endpointModelServiceId: modelServiceId,
+            endpointUrl: 'http://model-service.internal',
+            modelName,
+        }));
+        if (modelName) setEndpointModels([modelName]);
     };
 
     const loadTasks = useCallback(async ({ quiet = false } = {}) => {
@@ -472,7 +399,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
     }, [loadCatalogs]);
 
     useEffect(() => {
-        void loadEndpointClusters();
+        void loadModelServices();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -515,16 +442,16 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         () => backends.find((item) => (item.name || item.id || item.value) === form.backend),
         [backends, form.backend]
     );
-    const selectedEndpointDeployment = useMemo(
-        () => endpointDeployments.find((deployment) => deployment.execution_id === form.endpointDeployment),
-        [endpointDeployments, form.endpointDeployment]
+    const selectedModelService = useMemo(
+        () => modelServices.find((item) => item.id === form.endpointModelServiceId),
+        [modelServices, form.endpointModelServiceId]
     );
     const incompatibleDeploymentGuideError = (
         form.endpointMode === 'deployment'
-        && selectedEndpointDeployment?.guide
-        && (selectedBackend?.capabilities?.incompatible_deployment_guides || []).includes(selectedEndpointDeployment.guide)
+        && selectedModelService?.guide
+        && (selectedBackend?.capabilities?.incompatible_deployment_guides || []).includes(selectedModelService.guide)
     )
-        ? `${selectedBackend?.display_name || displayName(form.backend)} does not support the "${selectedEndpointDeployment.guide}" deployment guide. Choose a different backend or target a different deployment.`
+        ? `${selectedBackend?.display_name || displayName(form.backend)} does not support the "${selectedModelService.guide}" deployment guide. Choose a different model service or backend.`
         : '';
     const traceFormatCapabilities = (
         selectedBackend?.capabilities?.trace_format_capabilities?.[form.traceFormat] || {}
@@ -791,7 +718,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
             if (selectedBackend?.available === false) next.push('The selected backend is unavailable.');
             if (!form.endpointUrl.trim()) {
                 next.push(form.endpointMode === 'deployment'
-                    ? 'Select a cluster deployment and establish its endpoint.'
+                    ? 'Select a published Model Service.'
                     : 'Endpoint URL is required.');
             }
             else {
@@ -801,6 +728,9 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                 } catch {
                     next.push('Endpoint URL must be a valid HTTP or HTTPS URL.');
                 }
+            }
+            if (form.endpointMode === 'deployment' && !form.apiKey.trim()) {
+                next.push('A model access token is required to call a Model Service through the cluster\'s shared Gateway.');
             }
             if (!form.modelName.trim()) next.push('Model name is required.');
             if (incompatibleDeploymentGuideError) next.push(incompatibleDeploymentGuideError);
@@ -889,7 +819,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
             description: [
                 `Replay the ${dataset} trace for the ${scenario} scenario against ${model} at ${endpoint}.`,
                 form.endpointMode === 'deployment'
-                    ? `The endpoint is the selected cluster deployment ${form.endpointDeployment}.`
+                    ? `The endpoint is the published Model Service ${selectedModelService?.name || form.endpointModelServiceId}.`
                     : 'The endpoint is external.',
                 supportsTraceRange
                     ? `Replay source seconds ${Math.round(Number(form.traceStartSeconds))}–${Math.round(Number(form.traceEndSeconds))} with ${displayName(form.backend)} for ${form.durationSeconds}s at ${form.scaleFactor}x scale.`
@@ -931,11 +861,6 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         if (form.ttftSlo !== '') backendOptions.ttft_slo = Number(form.ttftSlo) / 1000;
         if (form.tpotSlo !== '') backendOptions.tpot_slo = Number(form.tpotSlo) / 1000;
         if (form.errorRateSlo !== '') backendOptions.error_rate_slo = Number(form.errorRateSlo);
-        const endpointDeploymentExecutionId = form.endpointMode === 'deployment' ? (form.endpointDeployment || '') : '';
-        const endpointCluster = endpointClusters.find((cluster) => cluster.id === form.endpointClusterId);
-        const endpointDeployment = endpointDeployments.find(
-            (deployment) => deployment.execution_id === form.endpointDeployment,
-        );
         const body = {
             name: form.runName.trim() || `${scenarioDisplayName(form.scenario)} simulation`,
             description: form.description.trim()
@@ -945,10 +870,11 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
             endpoint_mode: form.endpointMode,
             endpoint_namespace: null,
             endpoint_service: null,
-            endpoint_deployment_execution_id: endpointDeploymentExecutionId || null,
-            endpoint_cluster_id: form.endpointMode === 'deployment' ? (form.endpointClusterId || null) : null,
-            endpoint_cluster_name: form.endpointMode === 'deployment' ? (endpointCluster?.name || null) : null,
-            endpoint_deployment_name: form.endpointMode === 'deployment' ? (endpointDeployment?.name || null) : null,
+            endpoint_deployment_execution_id: null,
+            endpoint_cluster_id: null,
+            endpoint_cluster_name: null,
+            endpoint_deployment_name: null,
+            model_service_group_id: form.endpointMode === 'deployment' ? (form.endpointModelServiceId || null) : null,
             endpoint_url: form.endpointUrl.trim(),
             api_key: form.apiKey.trim() || null,
             model_name: form.modelName.trim(),
@@ -1047,23 +973,16 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         try {
             // Legacy deployment tasks created before deployment identity was persisted
             // carry no deployment reference, so a rerun would replay their stale endpoint
-            // URL. Fall back to the currently selected ready deployment so the backend can
-            // re-resolve the latest port-forward URL.
+            // URL. Fall back to the currently selected Model Service so the backend can
+            // re-resolve a fresh, health-probed endpoint.
             let rerunBody = null;
             if (String(item?.endpoint_mode || '').toLowerCase() === 'deployment'
                 && !item?.endpoint_deployment_execution_id
                 && !item?.endpoint_deployment_run_id
                 && !item?.endpoint_deployment_case_id
-                && form.endpointDeployment) {
-                const cluster = endpointClusters.find((candidate) => candidate.id === form.endpointClusterId);
-                const deployment = endpointDeployments.find(
-                    (candidate) => candidate.execution_id === form.endpointDeployment,
-                );
+                && form.endpointModelServiceId) {
                 rerunBody = {
-                    endpoint_deployment_execution_id: form.endpointDeployment,
-                    endpoint_cluster_id: form.endpointClusterId || null,
-                    endpoint_cluster_name: cluster?.name || null,
-                    endpoint_deployment_name: deployment?.name || null,
+                    model_service_group_id: form.endpointModelServiceId,
                 };
             }
             const payload = await requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(id)}/rerun`, {
@@ -1922,7 +1841,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                             onChange={(event) => chooseEndpointMode(event.target.value)}
                                             className="accent-emerald-500"
                                         />
-                                        <span>Cluster Deployment</span>
+                                        <span>Model Service</span>
                                     </label>
                                     <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-200">
                                         <input
@@ -1939,81 +1858,44 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
                                 {form.endpointMode === 'deployment' ? (
                                     <div className="mb-4 rounded-lg border border-emerald-500/20 bg-slate-950/35 p-4">
-                                        <div className="grid gap-4 sm:grid-cols-[1fr_1.5fr_auto] sm:items-end">
+                                        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
                                             <div>
-                                                <Label htmlFor="simulation-endpoint-cluster">Cluster</Label>
+                                                <Label htmlFor="simulation-endpoint-model-service">Model service</Label>
                                                 <Select
-                                                    id="simulation-endpoint-cluster"
-                                                    value={form.endpointClusterId}
-                                                    onChange={(event) => {
-                                                        update('endpointClusterId', event.target.value);
-                                                        void loadEndpointDeployments(event.target.value);
-                                                    }}
-                                                    disabled={endpointClustersLoading || connectingDeployment}
+                                                    id="simulation-endpoint-model-service"
+                                                    value={form.endpointModelServiceId}
+                                                    onChange={(event) => selectModelService(event.target.value)}
+                                                    disabled={modelServicesLoading || modelServices.length === 0}
                                                 >
                                                     <option value="">
-                                                        {endpointClustersLoading
-                                                            ? 'Loading clusters…'
-                                                            : endpointClusters.length
-                                                                ? 'Choose a cluster…'
-                                                                : 'No ready clusters'}
+                                                        {modelServicesLoading
+                                                            ? 'Loading model services…'
+                                                            : modelServices.length
+                                                                ? 'Choose a model service…'
+                                                                : 'No published model service'}
                                                     </option>
-                                                    {endpointClusters.map((cluster) => (
-                                                        <option key={cluster.id} value={cluster.id}>
-                                                            {cluster.name || cluster.id}
+                                                    {modelServices.map((item) => (
+                                                        <option key={item.id} value={item.id}>
+                                                            {item.name}{item.baseModel && item.baseModel !== item.name ? ` · ${item.baseModel}` : ''}{item.clusterName ? ` (${item.clusterName})` : ''}
                                                         </option>
                                                     ))}
                                                 </Select>
                                             </div>
-                                            <div>
-                                                <Label htmlFor="simulation-endpoint-deployment">Deployment</Label>
-                                                <Select
-                                                    id="simulation-endpoint-deployment"
-                                                    value={form.endpointDeployment}
-                                                    onChange={(event) => void connectDeploymentEndpoint(event.target.value)}
-                                                    disabled={endpointDeploymentsLoading || connectingDeployment || !form.endpointClusterId || endpointDeployments.length === 0}
-                                                >
-                                                    <option value="">
-                                                        {endpointDeploymentsLoading
-                                                            ? 'Loading deployments…'
-                                                            : endpointDeployments.length
-                                                                ? 'Choose a deployment…'
-                                                                : 'No ready deployments'}
-                                                    </option>
-                                                    {endpointDeployments.map((deployment) => {
-                                                        const key = deployment.execution_id;
-                                                        return (
-                                                            <option key={key} value={key}>
-                                                                {deployment.name || deployment.model_name || key} · {deployment.namespace}
-                                                            </option>
-                                                        );
-                                                    })}
-                                                </Select>
-                                            </div>
                                             <Button
                                                 variant="secondary"
-                                                onClick={() => {
-                                                    void loadEndpointClusters();
-                                                    if (form.endpointClusterId) void loadEndpointDeployments(form.endpointClusterId);
-                                                }}
-                                                isLoading={endpointClustersLoading}
-                                                disabled={connectingDeployment}
+                                                onClick={() => void loadModelServices()}
+                                                isLoading={modelServicesLoading}
                                             >
                                                 <RefreshCw className="h-3.5 w-3.5" /> Refresh
                                             </Button>
                                         </div>
-                                        {connectingDeployment && (
-                                            <p className="mt-3 flex items-center gap-2 text-xs text-amber-300">
-                                                <Spinner /> Resolving deployment endpoint…
-                                            </p>
+                                        {modelServicesError && (
+                                            <p role="alert" className="mt-3 text-xs text-rose-300">{modelServicesError}</p>
                                         )}
-                                        {endpointDeploymentError && (
-                                            <p role="alert" className="mt-3 text-xs text-rose-300">{endpointDeploymentError}</p>
-                                        )}
-                                        {form.endpointUrl && (
+                                        {form.endpointModelServiceId && (
                                             <div className="mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs">
-                                                <div className="font-semibold text-emerald-300">Endpoint ready</div>
-                                                <div className="mt-1 font-mono text-slate-400">{form.endpointUrl}</div>
+                                                <div className="font-semibold text-emerald-300">Model service ready</div>
+                                                <div className="mt-1 font-mono text-slate-400">{selectedModelService?.name || form.endpointModelServiceId}</div>
                                             </div>
                                         )}
                                     </div>
@@ -2025,7 +1907,9 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                 )}
 
                                 <div className="mb-4">
-                                    <Label htmlFor="simulation-api-key">Model access token (optional)</Label>
+                                    <Label htmlFor="simulation-api-key">
+                                        Model access token{form.endpointMode === 'deployment' ? '' : ' (optional)'}
+                                    </Label>
                                     <Input
                                         id="simulation-api-key"
                                         type="password"
@@ -2035,7 +1919,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                         onChange={(event) => update('apiKey', event.target.value)}
                                     />
                                     <p className="mt-1 text-[10px] text-slate-500">
-                                        Needed when the harness calls a deployment through the cluster&apos;s shared Gateway. Used for this run only; never stored.
+                                        Needed when the harness calls a Model Service through the cluster&apos;s shared Gateway. Used for this run only; never stored.
                                     </p>
                                 </div>
 

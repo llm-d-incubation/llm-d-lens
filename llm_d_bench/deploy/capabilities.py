@@ -286,9 +286,59 @@ def _supported_accelerators() -> list[str]:
     return sorted(variants or {"xpu"})
 
 
+#: PD-disaggregation variants per accelerator (the accelerator comes from the
+#: selected cluster's hardware, never the Lens host's own profile). Variant ids
+#: follow the guide tree under ``modelserver/<accelerator>/``:
+#: - NVIDIA GPU: vLLM infra-provider overlays (``gpu/vllm/<INFRA_PROVIDER>``).
+#:   Only the generic ``base`` overlay is supported today.
+#: - Intel XPU: the two model-server overlays ``xpu/vllm`` and ``xpu/vllm-rdma``.
+_PD_VARIANTS_BY_ACCELERATOR = {
+    "xpu": ["vllm", "vllm-rdma"],
+    "gpu": ["base"],
+}
+_PD_UNAVAILABLE_VARIANTS_BY_ACCELERATOR = {
+    "gpu": [
+        {"id": "coreweave", "label": "CoreWeave", "reason": "Cloud-provider overlay is not supported yet."},
+        {"id": "gke/base", "label": "GKE", "reason": "Cloud-provider overlay is not supported yet."},
+        {"id": "gke/a4x", "label": "GKE A4X", "reason": "Cloud-provider overlay is not supported yet."},
+        {"id": "gke/a4xmax", "label": "GKE A4X Max", "reason": "Cloud-provider overlay is not supported yet."},
+        {"id": "aws", "label": "AWS EFA", "reason": "Cloud-provider overlay is not supported yet."},
+        {
+            "id": "cks-mooncake",
+            "label": "CKS / Mooncake",
+            "reason": "Requires an InfiniBand/RDMA cluster that Prism does not orchestrate yet.",
+        },
+    ],
+}
+
+
+def _hardware_variants(provider: str, metadata: dict) -> dict:
+    """Expose a provider's per-accelerator variants to the UI.
+
+    The PD disaggregation variant set depends on the **selected cluster's**
+    accelerator (``gpu`` for NVIDIA, ``xpu`` for Intel), not on the Lens host, so
+    the capabilities carry a per-accelerator map and the UI picks by the cluster
+    hardware. Variants declared unavailable are surfaced but not selectable.
+    """
+    if provider != "pd-disaggregation":
+        return metadata
+    variants = sorted({variant for items in _PD_VARIANTS_BY_ACCELERATOR.values() for variant in items})
+    return {
+        **metadata,
+        "variants": variants,
+        "variants_by_accelerator": _PD_VARIANTS_BY_ACCELERATOR,
+        "unavailable_variants_by_accelerator": _PD_UNAVAILABLE_VARIANTS_BY_ACCELERATOR,
+    }
+
+
 def deployment_capabilities() -> list[dict]:
     return [
-        {"id": provider, "supported": True, "accelerators": _supported_accelerators(), **metadata}
+        {
+            "id": provider,
+            "supported": True,
+            "accelerators": _supported_accelerators(),
+            **_hardware_variants(provider, metadata),
+        }
         for provider, metadata in _PROVIDER_CAPABILITIES.items()
     ]
 
@@ -298,7 +348,12 @@ def provider_capability(provider: str) -> dict | None:
     return (
         None
         if capability is None
-        else {"id": provider, "supported": True, "accelerators": _supported_accelerators(), **capability}
+        else {
+            "id": provider,
+            "supported": True,
+            "accelerators": _supported_accelerators(),
+            **_hardware_variants(provider, capability),
+        }
     )
 
 

@@ -15,6 +15,7 @@ import yaml
 
 from llm_d_bench.common.hashing import stable_hash
 from llm_d_bench.configuration.service import CONFIGURATION_OUTPUT_DIR
+from llm_d_bench.deploy.data_plane import router_data_plane_args, router_data_plane_effective_values
 from llm_d_bench.deploy.providers.deployment_bundle import (
     install_deployment_bundle,
     subprocess_bundle_runner,
@@ -32,21 +33,6 @@ from llm_d_bench.deploy.providers.storage_mount import resolve_mount
 from llm_d_bench.deploy.providers.target_node import configured_target_node
 
 CommandRunner = Callable[[list[str]], Awaitable[tuple[int, str, str]]]
-
-
-def _evaluation_owned(provenance: Mapping[str, Any] | None) -> bool:
-    """True for ephemeral deployments an evaluation created for benchmarking.
-
-    Those keep the chart's own router proxy (no shared Gateway) so several
-    same-model deployments can be benchmarked without colliding on the Gateway's
-    single base-model route key.
-    """
-    provenance = provenance or {}
-    return bool(
-        provenance.get("evaluate_workflow")
-        or provenance.get("evaluation_id")
-        or provenance.get("evaluation_case_id")
-    )
 
 
 @dataclass(frozen=True)
@@ -104,12 +90,10 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
     def _gateway_mode_args(self, execution_context: Mapping[str, Any] | None) -> list[str]:
         """Extra Helm args that switch the chart to the shared Gateway.
 
-        Evaluation-owned deployments keep their own proxy instead (see
-        :func:`_evaluation_owned`), so this returns nothing for them.
+        Delegates to the shared data-plane helper; evaluation-owned deployments
+        keep their own proxy and get nothing here.
         """
-        if _evaluation_owned((execution_context or {}).get("provenance")):
-            return []
-        return ["--values", str(self._policy.gateway_mode_values_path)]
+        return router_data_plane_args(execution_context)
 
     def register_restored_namespace(self, namespace: str) -> None:
         register = getattr(self._command_runner, "register_restored_namespace", None)
@@ -182,11 +166,10 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             manifest_checksum=manifest_checksum,
             deployment_contract={
                 "routerProfile": overrides.get("routerProfile", "optimized-baseline"),
-                # This Guide's data plane is the cluster's shared Gateway: a
-                # non-evaluation deployment disables its own router proxy, so a
-                # benchmark must be routed through that Gateway. Evaluation-owned
-                # deployments keep their proxy instead (see deploy()).
-                "shares_gateway": True,
+                # llm-d router data plane: non-evaluation deployments run no proxy
+                # and are reached through the cluster's shared Gateway;
+                # evaluation-owned deployments keep their own proxy (see deploy()).
+                "data_plane_kind": "llm-d-router",
             },
         )
 
@@ -202,11 +185,12 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             manifest_ref = Path(artifact.manifest_ref or "").resolve()
             output_root = (manifest_ref if manifest_ref.is_dir() else manifest_ref.parent) / "deployment-bundle"
             saved_effective = bundle["helm"]["values"][-1]["content"]
-            profiled_values = (
-                None
+            base_values = (
+                saved_effective
                 if profile == "optimized-baseline"
                 else self._profiled_router_values_content(saved_effective, profile)
             )
+            effective_values = router_data_plane_effective_values(base_values, execution_context)
             result = await install_deployment_bundle(
                 bundle,
                 guide=artifact.guide_id,
@@ -214,7 +198,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 namespace=namespace,
                 command_runner=self._bundle_command_runner,
                 output_root=output_root,
-                effective_values_content=profiled_values,
+                effective_values_content=effective_values,
                 effective_values_name=f"router-effective-{profile}.yaml",
             )
             execution_context.update(result)

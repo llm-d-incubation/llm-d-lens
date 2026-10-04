@@ -280,8 +280,30 @@ class EvaluateRunRequest(BenchmarkSpec):
     """Target binding around the same workload contract used by workflow plans."""
 
     sla_targets: BenchmarkSlaTargets = Field(default_factory=BenchmarkSlaTargets)
-    deployment_execution_id: str = Field(min_length=1)
+    deployment_execution_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="A specific deployment execution to benchmark directly. Mutually exclusive with model_service_group_id.",
+    )
+    model_service_group_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "A published Model Service to benchmark instead of a raw deployment: the run resolves "
+            "to one of the group's currently healthy, authorized members and calls it by its "
+            "published name through the cluster's shared Gateway, the same path real clients use. "
+            "Requires api_key. Mutually exclusive with deployment_execution_id."
+        ),
+    )
     cluster_session_id: str | None = Field(default=None, min_length=36, max_length=36)
+
+    @model_validator(mode="after")
+    def exactly_one_target(self) -> EvaluateRunRequest:
+        if bool(self.deployment_execution_id) == bool(self.model_service_group_id):
+            raise ValueError("set exactly one of deployment_execution_id or model_service_group_id")
+        if self.model_service_group_id and not self.api_key:
+            raise ValueError("model_service_group_id requires api_key (a model access token)")
+        return self
     specification_file: str = Field(
         default="guides/optimized-baseline",
         min_length=1,

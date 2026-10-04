@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from llm_d_bench.deploy.providers.guide_adapter import GuideDeploymentArtifact
 from llm_d_bench.deploy.providers.pd_disaggregation import PdDisaggregationAdapter
@@ -33,6 +34,20 @@ class _ReadinessRunner:
                                 },
                             }
                         ],
+                    }
+                ),
+                "",
+            )
+        if command[1:3] == ["get", "deployments"]:
+            return (
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "pd-disaggregation-nvidia-gpu-vllm-prefill"}},
+                            {"metadata": {"name": "pd-disaggregation-nvidia-gpu-vllm-decode"}},
+                            {"metadata": {"name": "pd-disaggregation-epp"}},
+                        ]
                     }
                 ),
                 "",
@@ -90,7 +105,12 @@ async def test_deploy_uses_saved_bundle_when_original_guide_tree_is_missing(tmp_
 
     assert any(command[:2] == ["kubectl", "apply"] for command in bundle_commands)
     assert not any("removed-guide" in " ".join(command) for command in bundle_commands + runner.commands)
-    assert execution["router_effective_values"] == "router:\n  saved: true\n"
+    # Gateway Mode: the saved effective values are merged with the shared-Gateway
+    # values so the deployment's own proxy is disabled.
+    effective = yaml.safe_load(execution["router_effective_values"])
+    assert effective["router"]["saved"] is True
+    assert effective["router"]["proxy"]["enabled"] is False
+    assert effective["router"]["epp"]["flags"]["secure-serving"] is False
     assert execution["router_rendered_manifest"].endswith("name: saved-router\n")
 
 
@@ -115,3 +135,45 @@ async def test_readiness_discovers_epp_router_service():
         "--output",
         "json",
     ]
+
+
+@pytest.mark.asyncio
+async def test_readiness_uses_contract_deployment_names():
+    runner = _ReadinessRunner()
+    adapter = PdDisaggregationAdapter.__new__(PdDisaggregationAdapter)
+    adapter._runner = runner
+    adapter._timeout = 30
+    artifact = GuideDeploymentArtifact(
+        "pd-disaggregation",
+        "hash",
+        deployment_contract={
+            "data_plane_kind": "llm-d-router",
+            "readinessDeployments": [
+                "pd-disaggregation-nvidia-gpu-vllm-prefill",
+                "pd-disaggregation-nvidia-gpu-vllm-decode",
+            ],
+        },
+    )
+    execution = {"namespace": "llm-d-bench-run", "_artifact": artifact}
+
+    result = await adapter.readiness(execution)
+
+    assert result.accepted
+    rolled = [command[3] for command in runner.commands if command[1:3] == ["rollout", "status"]]
+    assert rolled == [
+        "deployment/pd-disaggregation-nvidia-gpu-vllm-prefill",
+        "deployment/pd-disaggregation-nvidia-gpu-vllm-decode",
+    ]
+    assert not any(command[1:3] == ["get", "deployments"] for command in runner.commands)
+
+
+def test_guide_sources_follow_the_active_accelerator(monkeypatch, tmp_path):
+    import llm_d_bench.deploy.providers.pd_disaggregation as pd
+
+    monkeypatch.setattr(pd, "overlay_variant", lambda: "gpu")
+    assert PdDisaggregationAdapter._guide_sources(tmp_path) == {
+        "base": tmp_path / "guides/pd-disaggregation/modelserver/gpu/vllm/base"
+    }
+
+    monkeypatch.setattr(pd, "overlay_variant", lambda: "xpu")
+    assert set(PdDisaggregationAdapter._guide_sources(tmp_path)) == {"vllm", "vllm-rdma"}

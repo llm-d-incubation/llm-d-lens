@@ -12,6 +12,7 @@ sections 5, 10.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+
+from llm_d_bench.versions import gateway_provider_version
 
 GATEWAY_API = "gateway.networking.k8s.io/v1"
 #: Bare API group: ``targetRefs[].group`` / ``parentRefs[].group`` must be the
@@ -93,7 +96,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
                 "eg",
                 "oci://docker.io/envoyproxy/gateway-helm",
                 "--version",
-                "v1.8.1",
+                gateway_provider_version("envoy-gateway") or "",
                 "-n",
                 "envoy-gateway-system",
                 "--create-namespace",
@@ -107,7 +110,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
                 "aieg-crd",
                 "oci://docker.io/envoyproxy/ai-gateway-crds-helm",
                 "--version",
-                "v1.1.0",
+                gateway_provider_version("envoy-ai-gateway") or "",
                 "-n",
                 "envoy-ai-gateway-system",
                 "--create-namespace",
@@ -119,7 +122,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
                 "aieg",
                 "oci://docker.io/envoyproxy/ai-gateway-helm",
                 "--version",
-                "v1.1.0",
+                gateway_provider_version("envoy-ai-gateway") or "",
                 "-n",
                 "envoy-ai-gateway-system",
                 "--create-namespace",
@@ -152,7 +155,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
                 "agentgateway-system",
                 "--create-namespace",
                 "--version",
-                "v1.1.0",
+                gateway_provider_version("agentgateway") or "",
             ),
             (
                 "helm",
@@ -164,7 +167,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
                 "agentgateway-system",
                 "--create-namespace",
                 "--version",
-                "v1.1.0",
+                gateway_provider_version("agentgateway") or "",
                 "--set",
                 "inferenceExtension.enabled=true",
             ),
@@ -644,3 +647,39 @@ def render_node_inotify_daemonset(limit: int, namespace: str, image: str | None 
         },
     }
     return yaml.safe_dump(manifest, sort_keys=False)
+
+
+def ensure_istioctl(version: str) -> Path:
+    """Return a local ``istioctl`` for ``version``, downloading it once.
+
+    ``istioctl install`` uses the binary's own version, so honoring the pinned
+    stack version means running a matching binary. Istio release versions carry
+    no leading ``v`` (e.g. ``1.29.2``); the download is cached under the Lens
+    cache and reused.
+    """
+    import platform  # noqa: PLC0415
+    import tarfile  # noqa: PLC0415
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
+
+    from llm_d_bench.utils.paths import storage_path  # noqa: PLC0415
+
+    machine = platform.machine().lower()
+    arch = "arm64" if machine in {"aarch64", "arm64"} else "amd64"
+    root = _Path(storage_path("cache", "tools", "istioctl", version))
+    binary = root / "istioctl"
+    if binary.is_file() and os.access(binary, os.X_OK):
+        return binary
+    root.mkdir(parents=True, exist_ok=True)
+    url = f"https://github.com/istio/istio/releases/download/{version}/istioctl-{version}-linux-{arch}.tar.gz"
+    archive = root / "istioctl.tar.gz"
+    with httpx.Client(follow_redirects=True, timeout=180) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        archive.write_bytes(response.content)
+    with tarfile.open(archive) as tar:
+        tar.extractall(root)  # noqa: S202 - trusted Istio release archive
+    binary.chmod(0o755)
+    archive.unlink(missing_ok=True)
+    return binary

@@ -30,6 +30,7 @@ from llm_d_bench.deploy.providers.precise_prefix_cache_routing import PrecisePre
 from llm_d_bench.deploy.service import GuideAdapterDeploymentService
 from llm_d_bench.utils.paths import storage_path
 from llm_d_bench.utils.shell import run_sync, spawn
+from llm_d_bench.versions import router_chart_version
 
 
 class RuntimeConfigurationError(ValueError):
@@ -141,6 +142,11 @@ class RuntimeEnvironment:
     command_timeout_seconds: int
     model_environment: dict[str, str]
     kubeconfig: str | None
+    #: This run's resolved accelerator (the UI/provenance selection), used to
+    #: pick the right vendor overlay. ``None`` keeps the historical Intel
+    #: default; never read from the real process environment at render time,
+    #: so concurrent runs for different clusters/vendors cannot race.
+    accelerator: str | None = None
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> RuntimeEnvironment | None:
@@ -175,6 +181,7 @@ class RuntimeEnvironment:
             command_timeout_seconds=_positive_integer(values, "LLM_D_BENCH_KUBECTL_TIMEOUT_SECONDS", 120),
             model_environment=_model_environment(values),
             kubeconfig=values.get("KUBECONFIG") or None,
+            accelerator=(values.get("PRISM_DEPLOY_ACCELERATOR") or "").strip() or None,
         )
 
 
@@ -859,7 +866,7 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
     guide_root = settings.manifest_root / "llm-d"
     if not guide_root.is_dir():
         guide_root = settings.manifest_root
-    overlay_path = guide_root / "guides" / "optimized-baseline" / "modelserver" / overlay_variant() / "vllm"
+    overlay_path = guide_root / "guides" / "optimized-baseline" / "modelserver" / overlay_variant(accelerator=settings.accelerator) / "vllm"
     router_base_values_path = guide_root / "guides" / "recipes" / "router" / "base.values.yaml"
     router_values_path = guide_root / "guides" / "optimized-baseline" / "router" / "optimized-baseline.values.yaml"
     neutral_router_values_path = (
@@ -886,7 +893,7 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
         content_hash=stable_hash(_tree_checksum(overlay_path)),
         maturity="supported-core",
         capabilities={
-        "variant": f"{overlay_variant()}-routed-guide",
+        "variant": f"{overlay_variant(accelerator=settings.accelerator)}-routed-guide",
             "endpoint_service_name": "optimized-baseline-epp",
             "endpoint_service_port": 80,
         },
@@ -904,15 +911,15 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
         content_hash=definition.content_hash,
         maturity=definition.maturity,
         manifest_path=overlay_path,
-        adapter_type=f"optimized-baseline-{overlay_variant()}",
+        adapter_type=f"optimized-baseline-{overlay_variant(accelerator=settings.accelerator)}",
         guide_root=guide_root,
         router_base_values_path=router_base_values_path,
         router_values_path=router_values_path,
         neutral_router_values_path=neutral_router_values_path,
         router_chart="oci://ghcr.io/llm-d/charts/llm-d-router-standalone",
-        router_chart_version="v0.9.0",
+        router_chart_version=router_chart_version(),
         router_release_name="optimized-baseline",
-        readiness_deployment_name=f"optimized-baseline-{overlay_variant()}-vllm-decode",
+        readiness_deployment_name=f"optimized-baseline-{overlay_variant(accelerator=settings.accelerator)}-vllm-decode",
         endpoint_service_name="optimized-baseline-epp",
         endpoint_service_port=80,
         baseline_service_name="optimized-baseline-modelserver",
@@ -1001,22 +1008,23 @@ def _build_tiered_prefix_cache_provider(settings: RuntimeEnvironment) -> HelmKus
         guide_id="tiered-prefix-cache",
         guide_root=guide_root,
         variants={
-            "base": guide_root / f"guides/tiered-prefix-cache/modelserver/{overlay_variant()}/vllm/base",
-            "native/cpu/base": guide_root / f"guides/tiered-prefix-cache/modelserver/{overlay_variant()}/vllm/native/cpu/base",
+            "base": guide_root / f"guides/tiered-prefix-cache/modelserver/{overlay_variant(accelerator=settings.accelerator)}/vllm/base",
+            "native/cpu/base": guide_root / f"guides/tiered-prefix-cache/modelserver/{overlay_variant(accelerator=settings.accelerator)}/vllm/native/cpu/base",
             "lmcache-connector/cpu/base": guide_root
-            / f"guides/tiered-prefix-cache/modelserver/{overlay_variant()}/vllm/lmcache-connector/cpu/base",
+            / f"guides/tiered-prefix-cache/modelserver/{overlay_variant(accelerator=settings.accelerator)}/vllm/lmcache-connector/cpu/base",
         },
         default_variant="native/cpu/base",
         router_chart="oci://ghcr.io/llm-d/charts/llm-d-router-standalone",
-        router_version="v0.9.0",
+        router_version=router_chart_version(),
         router_values=(
             guide_root / "guides/recipes/router/base.values.yaml",
             guide_root / "guides/tiered-prefix-cache/router/tiered-prefix-cache-cpu.values.yaml",
         ),
         release_name="tiered-prefix-cache",
-        readiness_deployments=(f"{overlay_variant()}-vllm-decode",),
+        readiness_deployments=(f"{overlay_variant(accelerator=settings.accelerator)}-vllm-decode",),
         endpoint_service="tiered-prefix-cache-epp",
         endpoint_port=80,
+        data_plane_kind="llm-d-router",
     )
     runner = RestrictedKubectlRunner(
         settings.kubectl_path,
@@ -1032,6 +1040,7 @@ def _build_tiered_prefix_cache_provider(settings: RuntimeEnvironment) -> HelmKus
         settings.namespace_prefix,
         settings.readiness_timeout_seconds,
         settings.kubeconfig,
+        accelerator=settings.accelerator,
     )
 
 
@@ -1054,6 +1063,7 @@ def _build_precise_prefix_cache_routing_provider(settings: RuntimeEnvironment) -
         settings.readiness_timeout_seconds,
         settings.helm_path,
         settings.kubeconfig,
+        accelerator=settings.accelerator,
     )
 
 

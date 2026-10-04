@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import threading
 from collections.abc import Callable
@@ -28,10 +29,14 @@ from llm_d_bench.deploy.contracts import (
     DeploymentStatus,
     VersionedPayload,
 )
+from llm_d_bench.deploy.data_plane import resolve_data_plane
 from llm_d_bench.deploy.providers.guide_adapter import GuideAdapter, GuideDeploymentArtifact
 from llm_d_bench.deploy.providers.guide_catalog import GuideCatalog
+from llm_d_bench.deploy.providers.hardware_profile import pin_runtime_image
 from llm_d_bench.utils.artifact_store import register_artifacts
 from llm_d_bench.utils.paths import storage_path
+
+logger = logging.getLogger(__name__)
 
 NamespaceFactory = Callable[[DeploymentCreateRequest], str]
 
@@ -346,6 +351,11 @@ class GuideAdapterDeploymentService:
 
         definition = adapter.discover()
         overrides = self._compatibility_overrides(artifact_input)
+        # The llm-d model-server image always follows the pinned stack version,
+        # whatever tag a stored configuration carries (custom images are left as-is).
+        runtime_overrides = overrides.get("runtime")
+        if isinstance(runtime_overrides, dict) and isinstance(runtime_overrides.get("image"), str):
+            runtime_overrides["image"] = pin_runtime_image(runtime_overrides["image"])
         cluster_snapshot = request.cluster_snapshot.value if request.cluster_snapshot else {}
         validation = adapter.validate_inputs(definition, cluster_snapshot, overrides)
         if not validation.accepted:
@@ -372,6 +382,15 @@ class GuideAdapterDeploymentService:
             overrides["_deployment_namespace"] = namespace
             overrides["_cluster_id"] = request.provenance.get("cluster_server_id")
             provider_artifact = await adapter.render(definition, overrides)
+            # The framework resolves the data plane (shared Gateway vs the
+            # deployment's own proxy) so providers do not inspect cluster state.
+            data_plane, data_plane_warning = await resolve_data_plane(
+                provider_artifact.deployment_contract.get("data_plane_kind") or "external",
+                provenance=request.provenance,
+                cluster_id=request.provenance.get("cluster_server_id"),
+            )
+            if data_plane_warning:
+                logger.warning("Deployment %s: %s", execution_id, data_plane_warning)
             artifact = self._deployment_artifact(request, artifact_input, provider_artifact)
             initial_execution = DeploymentExecution(
                 execution_id=execution_id,
@@ -398,6 +417,8 @@ class GuideAdapterDeploymentService:
                     "model_token": model_token,
                     "provenance": request.provenance,
                     "runtime": overrides.get("runtime") or {},
+                    "data_plane": data_plane,
+                    "data_plane_warning": data_plane_warning,
                 },
             )
             provider_execution["_artifact"] = provider_artifact
@@ -417,6 +438,7 @@ class GuideAdapterDeploymentService:
                     namespace=namespace,
                     configuration_artifacts=request.configuration_artifacts,
                     provenance=request.provenance,
+                    data_plane=data_plane,
                     metadata=metadata,
                     evidence_refs=list(provider_execution.get("evidence_refs") or []),
                     diagnostics=VersionedPayload(
@@ -444,11 +466,16 @@ class GuideAdapterDeploymentService:
                     namespace=namespace,
                     configuration_artifacts=request.configuration_artifacts,
                     provenance=request.provenance,
+                    data_plane=data_plane,
                     metadata=metadata,
                     evidence_refs=list(provider_execution.get("evidence_refs") or []),
                     diagnostics=VersionedPayload(
                         schema_version="deploy-diagnostics.v1",
-                        value={"snapshot": diagnostics},
+                        value={
+                            "snapshot": diagnostics,
+                            "data_plane": data_plane,
+                            **({"data_plane_warning": data_plane_warning} if data_plane_warning else {}),
+                        },
                     ),
                 )
             execution = self._store(execution)
@@ -535,8 +562,27 @@ class GuideAdapterDeploymentService:
         self._provider_executions.pop(execution.execution_id, None)
         return self._store(updated)
 
+    @staticmethod
+    def _has_provider_context(execution: DeploymentExecution) -> bool:
+        """True when the execution has the state needed to reach cluster resources."""
+        return execution.namespace is not None and bool(execution.configuration_artifacts)
+
     async def stop(self, execution: DeploymentExecution) -> DeploymentExecution:
         provider_state = self._provider_executions.get(execution.execution_id)
+        if provider_state is None and not self._has_provider_context(execution):
+            # The execution failed before any cluster resource was created.
+            return self._store(
+                execution.model_copy(
+                    update={
+                        "status": DeploymentStatus.ROLLED_BACK,
+                        "diagnostics": VersionedPayload(
+                            schema_version="deploy-diagnostics.v1",
+                            value={"stop": {"stopped": True, "reason": "no_provider_context"}},
+                        ),
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+            )
         if provider_state is None:
             adapter, artifact, provider_execution = self._restored_provider_state(execution)
         else:
@@ -561,6 +607,22 @@ class GuideAdapterDeploymentService:
         self, execution: DeploymentExecution, *, preserve_rendered_overlay: bool = False
     ) -> DeploymentExecution:
         provider_state = self._provider_executions.get(execution.execution_id)
+        if provider_state is None and not self._has_provider_context(execution):
+            # The execution failed before any cluster resource was created, so
+            # there is nothing to clean; just drop the record.
+            self._provider_executions.pop(execution.execution_id, None)
+            return self._store(
+                execution.model_copy(
+                    update={
+                        "status": DeploymentStatus.CLEANED,
+                        "diagnostics": VersionedPayload(
+                            schema_version="deploy-diagnostics.v1",
+                            value={"cleanup": {"cleaned_up": True, "reason": "no_provider_context"}},
+                        ),
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+            )
         if provider_state is None:
             adapter, artifact, provider_execution = self._restored_provider_state(execution)
         else:

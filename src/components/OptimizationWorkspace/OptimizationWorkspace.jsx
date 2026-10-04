@@ -239,6 +239,30 @@ function LocalDeploymentRunStatus({ run }) {
         setActionMessage('');
     }, [run?.id]);
     const runStatus = ['succeeded', 'partially_succeeded'].includes(displayRun?.status) ? 'ready' : displayRun?.status === 'failed' ? 'failed' : displayRun?.status === 'cleaned' ? 'neutral' : 'pending';
+    // The workspace loads a run once; keep the selected case (and its status
+    // chip) fresh while the deployment is still progressing, so a finished
+    // deployment stops showing "in progress".
+    React.useEffect(() => {
+        if (!selectedCase) return undefined;
+        const terminal = new Set(['ready', 'failed', 'stopped', 'cleaned', 'cleaned_up', 'cancelled']);
+        const selectedRun = selectedCase.runId === run.id ? displayRun : selectedRecordRun;
+        const deploymentCase = (Array.isArray(selectedRun?.cases) ? selectedRun.cases : [])
+            .find((item) => item.id === selectedCase.caseId);
+        if (deploymentCase && terminal.has(deploymentCase.status)) return undefined;
+        const timer = window.setInterval(async () => {
+            try {
+                const refreshed = await refreshLocalDeploymentCase(selectedCase.runId, selectedCase.caseId);
+                setDetails(refreshed);
+                const updatedRun = await getLocalDeploymentRun(selectedCase.runId);
+                if (selectedCase.runId === run.id) setDisplayRun(updatedRun);
+                else setSelectedRecordRun(updatedRun);
+            } catch {
+                // Keep the last good state; the next tick retries.
+            }
+        }, 5000);
+        return () => window.clearInterval(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedCase?.runId, selectedCase?.caseId, displayRun?.status, selectedRecordRun?.status, run?.id]);
     const updateSelectedRun = (updatedRun, { asSelectedRecord = false } = {}) => {
         if (!asSelectedRecord && updatedRun.id === run.id) setDisplayRun(updatedRun);
         else setSelectedRecordRun(updatedRun);
@@ -914,7 +938,7 @@ function StageBody({ stageId, ctx }) {
                             <div><Label>NO_PROXY</Label><Input value={deploymentEnvironment.noProxy} onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, noProxy: event.target.value.trim() })} /></div>
                         </div>
                         <div className="mt-3"><Label>Model server image</Label><div className="mt-1 inline-flex rounded-md border border-slate-800 bg-slate-950/60 p-1"><button type="button" onClick={() => setDeploymentEnvironment({ ...deploymentEnvironment, imageMode: 'use-upstream-image' })} className={cn('rounded px-3 py-1.5 text-xs', deploymentEnvironment.imageMode === 'use-upstream-image' ? 'bg-blue-500/20 text-blue-100' : 'text-slate-400 hover:text-slate-200')}>Use upstream image</button><button type="button" onClick={() => setDeploymentEnvironment({ ...deploymentEnvironment, imageMode: 'build-from-source' })} className={cn('rounded px-3 py-1.5 text-xs', deploymentEnvironment.imageMode === 'build-from-source' ? 'bg-blue-500/20 text-blue-100' : 'text-slate-400 hover:text-slate-200')}>Build image from source</button></div></div>
-                        {deploymentEnvironment.imageMode === 'build-from-source' ? <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2"><div><Label>Source URL</Label><Input value={deploymentEnvironment.buildSourceUrl} placeholder="https://github.com/org/project.git" onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, buildSourceUrl: event.target.value.trim() })} /></div><div><Label>Target image name</Label><Input value={deploymentEnvironment.targetImageName} placeholder="registry.example.com/team/vllm:dev" onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, targetImageName: event.target.value.trim() })} /></div></div> : <div className="mt-3"><Label>Upstream image</Label><Input value={deploymentEnvironment.upstreamImage} placeholder="ghcr.io/llm-d/llm-d-xpu:v0.8.0" onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, upstreamImage: event.target.value.trim() })} /></div>}
+                        {deploymentEnvironment.imageMode === 'build-from-source' ? <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2"><div><Label>Source URL</Label><Input value={deploymentEnvironment.buildSourceUrl} placeholder="https://github.com/org/project.git" onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, buildSourceUrl: event.target.value.trim() })} /></div><div><Label>Target image name</Label><Input value={deploymentEnvironment.targetImageName} placeholder="registry.example.com/team/vllm:dev" onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, targetImageName: event.target.value.trim() })} /></div></div> : <div className="mt-3"><Label>Upstream image</Label><Input value={deploymentEnvironment.upstreamImage} placeholder="ghcr.io/llm-d/llm-d-xpu" onChange={(event) => setDeploymentEnvironment({ ...deploymentEnvironment, upstreamImage: event.target.value.trim() })} /></div>}
                     </div>
 
                     <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 mb-4">

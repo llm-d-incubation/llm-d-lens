@@ -63,6 +63,46 @@ List Lens-managed clusters and optionally include draft records that have not be
   </Tab>
 </Tabs>
 
+### Get supported llm-d versions
+
+Return the llm-d component versions this Lens release supports (llm-d, llm-d-router, llm-d-benchmark, Inference Payload Processor, Gateway API / Gateway API Inference Extension CRDs and the gateway providers). Read-only; the cluster wizard and every install path use these values.
+
+<Tabs>
+  <Tab title="REST API">
+    **`GET /api/v1/versions`**
+
+    Response:
+
+    ```json
+    {
+      "llm_d": "v0.9.0",
+      "min_k8s_version": "v1.32.0",
+      "llm_d_router": "v0.10.0",
+      "llm_d_benchmark": "v0.8.0",
+      "llm_d_inference_payload_processor": "v0.1.0",
+      "k8s_gateway_api": "v1.5.1",
+      "k8s_gateway_api_inference_extension": "v1.5.0",
+      "gateway_providers": {
+        "istio": "1.29.2",
+        "envoy_gateway": "v1.8.1",
+        "envoy_ai_gateway": "v1.1.0",
+        "agentgateway": "v1.1.0"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Python API">
+    ```python
+    from llm_d_bench import versions
+
+    stack = versions.describe()
+
+    print(stack["llm_d"], stack["llm_d_router"], stack["llm_d_benchmark"])
+    print(stack["gateway_providers"]["istio"])
+    ```
+  </Tab>
+</Tabs>
+
 ### List Lens host addresses
 
 Return this Lens host's candidate IP addresses/hostnames for the cluster create/edit form's "Lens address" dropdown and auto-fill. The port is Lens' own live serving port, added automatically.
@@ -92,6 +132,8 @@ Return this Lens host's candidate IP addresses/hostnames for the cluster create/
 
 Register a cluster from an uploaded kubeconfig file. The route accepts multipart form data, stores the cluster record, and returns the new cluster plus any created Lens session id.
 
+llm-d component versions are fixed by the Lens stack profile (see [Get supported llm-d versions](#get-supported-llm-d-versions)); `llmDRef`, `llmDBenchmarkRef`, `routerVersion`, `gieVersion` and `ippVersion` are accepted for compatibility but ignored.
+
 <Tabs>
   <Tab title="REST API">
     **`POST /api/cluster/clusters`**
@@ -102,8 +144,8 @@ Register a cluster from an uploaded kubeconfig file. The route accepts multipart
     - `description` (`string`, form, optional): free-form description.
     - `file` (`file`, form): UTF-8 kubeconfig upload.
     - `proxy` (`string`, form, optional): JSON string matching `ProxyConfigDTO`.
-    - `llmDRef` (`string`, form, optional): pinned `llm-d` ref.
-    - `llmDBenchmarkRef` (`string`, form, optional): pinned `llm-d-benchmark` ref.
+    - `llmDRef` (`string`, form, optional): ignored — the `llm-d` version comes from the stack profile.
+    - `llmDBenchmarkRef` (`string`, form, optional): ignored — the `llm-d-benchmark` version comes from the stack profile.
     - `gatewayProvider` (`string`, form, optional): shared Gateway provider (`envoy-ai-gateway` | `istio` | `agentgateway` | `gke`).
     - `gatewayPublicUrl` (`string`, form, optional): externally reachable host/IP clients use for the Gateway — Lens adds `http://` + the exposed port + `/v1`. Empty derives it from the exposed port and the cluster node.
     - `gatewayPort` (`integer`, form, optional): NodePort the shared Gateway is exposed on (30000–32767).
@@ -182,7 +224,7 @@ Register a cluster from an uploaded kubeconfig file. The route accepts multipart
 
 ### Update a cluster
 
-Patch a cluster's editable settings, including name, description, proxy settings, version pins, and draft status. The kubeconfig itself is not part of this patch contract.
+Patch a cluster's editable settings, including name, description, proxy settings, and draft status. The kubeconfig itself is not part of this patch contract. Version fields (`llmDRef`, `llmDBenchmarkRef`, `routerVersion`, `gieVersion`, `ippVersion`) are server-managed from the stack profile and ignored on input.
 
 <Tabs>
   <Tab title="REST API">
@@ -266,22 +308,16 @@ Patch a cluster's editable settings, including name, description, proxy settings
 
 ### Start cluster software downloads
 
-Start downloading the pinned `llm-d` and `llm-d-benchmark` refs for a cluster. The handler schedules background downloads and immediately returns the current status snapshot.
+Start downloading the `llm-d` and `llm-d-benchmark` revisions pinned by the Lens stack profile for a cluster. The handler schedules background downloads and immediately returns the current status snapshot; the request body is ignored.
 
 <Tabs>
   <Tab title="REST API">
     **`POST /api/cluster/clusters/{cluster_id}/software-downloads`**
 
-    Request body (`SoftwareDownloadRequest`):
-
-    - `llmDRef` (`string`, optional): `llm-d` ref to download.
-    - `llmDBenchmarkRef` (`string`, optional): `llm-d-benchmark` ref to download.
+    Request body (`SoftwareDownloadRequest`): optional and ignored — the profile-pinned revisions are downloaded.
 
     ```json
-    {
-      "llmDRef": "v0.2.0",
-      "llmDBenchmarkRef": "main"
-    }
+    {}
     ```
 
     Response: `SoftwareDownloadStatusResponse`.
@@ -360,6 +396,168 @@ Return the current in-memory download status for the cluster's pinned `llm-d` an
     llm_d_benchmark = repo_downloads.get_status("cluster-a", "llm-d-benchmark")
     print(llm_d)
     print(llm_d_benchmark)
+    ```
+  </Tab>
+</Tabs>
+
+### Start cluster image pre-pull
+
+Pre-pull the pinned llm-d images for the selected accelerators onto every cluster node. The images are the llm-d-router EPP and P/D sidecar plus the model-server image(s) for the accelerators; versions come from the Lens stack profile, not the request. A privileged DaemonSet runs the host's `crictl` per node; poll the GET below for per-node readiness.
+
+<Tabs>
+  <Tab title="REST API">
+    **`POST /api/cluster/clusters/{cluster_id}/images/prepull`**
+
+    Request body:
+
+    - `accelerators` (`string[]`): accelerator ids whose model-server image should be pulled (e.g. `["nvidia","intel"]`).
+
+    ```json
+    {
+      "accelerators": ["nvidia", "intel"]
+    }
+    ```
+
+    Response: overall state, `ready`/`desired` node counts, the image list and per-node readiness.
+
+    ```json
+    {
+      "state": "pulling",
+      "desired": 2,
+      "ready": 1,
+      "images": [
+        { "name": "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.10.0", "ready": 2, "desired": 2, "state": "ready" },
+        { "name": "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.10.0", "ready": 2, "desired": 2, "state": "ready" },
+        { "name": "ghcr.io/llm-d/llm-d-cuda:v0.9.0", "ready": 1, "desired": 2, "state": "pulling" }
+      ],
+      "nodes": [{ "node": "worker-1", "phase": "Running", "ready": true, "restarts": 0 }]
+    }
+    ```
+
+    `images[].state` is `ready` when every node pulled that image, `pulling` while in progress and `failed` if a node's pull crash-loops.
+  </Tab>
+  <Tab title="Python API">
+    ```python
+    from llm_d_bench.cluster import images
+
+    status = await images.start_image_prepull("cluster-a", ["nvidia", "intel"])
+    print(status["state"], status["ready"], status["desired"])
+    ```
+  </Tab>
+</Tabs>
+
+### Get cluster image pre-pull status
+
+Get the current image pre-pull status for a cluster: overall state, ready/desired node count and each puller pod's node readiness.
+
+<Tabs>
+  <Tab title="REST API">
+    **`GET /api/cluster/clusters/{cluster_id}/images/prepull`**
+
+    Response: the same shape as the start response.
+
+    ```json
+    {
+      "state": "ready",
+      "desired": 2,
+      "ready": 2,
+      "images": [
+        { "name": "ghcr.io/llm-d/llm-d-cuda:v0.9.0", "ready": 2, "desired": 2, "state": "ready" }
+      ],
+      "nodes": [
+        { "node": "worker-1", "phase": "Running", "ready": true, "restarts": 0 },
+        { "node": "worker-2", "phase": "Running", "ready": true, "restarts": 0 }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab title="Python API">
+    ```python
+    from llm_d_bench.cluster import images
+
+    status = await images.image_prepull_status("cluster-a")
+    print(status["state"])
+    ```
+  </Tab>
+</Tabs>
+
+### Apply pinned Gateway API / Gateway API Inference Extension CRDs
+
+Apply the Gateway API (`gateway.networking.k8s.io`) and Gateway API Inference Extension (`inference.networking.k8s.io`) CRD bundles pinned by the Lens stack profile. Idempotent; also applied during cluster creation.
+
+<Tabs>
+  <Tab title="REST API">
+    **`POST /api/cluster/clusters/{cluster_id}/crds`**
+
+    Response: a per-bundle result.
+
+    ```json
+    {
+      "gateway_api": { "ok": true, "message": "" },
+      "gateway_api_inference_extension": { "ok": true, "message": "" }
+    }
+    ```
+  </Tab>
+  <Tab title="Python API">
+    ```python
+    from llm_d_bench.cluster import gateway_crds
+
+    result = await gateway_crds.apply_gateway_crds("cluster-a")
+    print(result["gateway_api"]["ok"])
+    ```
+  </Tab>
+</Tabs>
+
+### Get Gateway API / GIE CRD status
+
+Report whether the pinned Gateway API and Gateway API Inference Extension CRDs are present on the cluster (`ready`/`missing` per bundle).
+
+<Tabs>
+  <Tab title="REST API">
+    **`GET /api/cluster/clusters/{cluster_id}/crds`**
+
+    ```json
+    {
+      "gateway_api": "ready",
+      "gateway_api_inference_extension": "ready"
+    }
+    ```
+  </Tab>
+  <Tab title="Python API">
+    ```python
+    from llm_d_bench.cluster import gateway_crds
+
+    status = await gateway_crds.gateway_crds_status("cluster-a")
+    print(status["gateway_api"])
+    ```
+  </Tab>
+</Tabs>
+
+### Check cluster Kubernetes version
+
+Probe the cluster's Kubernetes API for reachability and its server version, and compare it with the minimum Kubernetes version pinned by the Lens stack profile (`min_k8s_version`). The create wizard calls this after the kubeconfig upload and blocks progress when the cluster is unreachable or too old.
+
+<Tabs>
+  <Tab title="REST API">
+    **`GET /api/cluster/clusters/{cluster_id}/kubernetes-version`**
+
+    ```json
+    {
+      "reachable": true,
+      "version": "1.34",
+      "min_k8s_version": "v1.32.0",
+      "supported": true
+    }
+    ```
+  </Tab>
+  <Tab title="Python API">
+    ```python
+    from llm_d_bench.hardware.version import server_kubernetes_version
+    from llm_d_bench.versions import k8s_version_supports
+
+    parsed = await server_kubernetes_version("cluster-a")
+    version = f"{parsed[0]}.{parsed[1]}" if parsed else None
+    print(version, bool(version) and k8s_version_supports(version))
     ```
   </Tab>
 </Tabs>

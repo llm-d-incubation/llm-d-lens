@@ -26,7 +26,9 @@
     "docs:check": "cd docs/fern && fern check",
     "docs:api": "python scripts/export-openapi.py",
     "check:english": "node tools/check-english.mjs",
-    "test:english": "node --test tools/check-english.test.mjs"
+    "test:english": "node --test tools/check-english.test.mjs",
+    "check:stack": "node tools/check-llm-d-stack.mjs",
+    "test:stack": "node --test tools/check-llm-d-stack.test.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.0",

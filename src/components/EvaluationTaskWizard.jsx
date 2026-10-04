@@ -1,5 +1,4 @@
 import { resolveEvaluationTarget } from '../features/evaluation/client';
-import { requestJson } from '../api/httpClient';
 import { editedEvaluationConfiguration } from '../features/evaluation/configuration';
 import OptimizationSelectionSummary from './evaluation/OptimizationSelectionSummary.jsx';
 import { selectedOptimizationPlan } from '../features/evaluation/experimentDesign.js';
@@ -19,7 +18,8 @@ import { listStorageVolumes } from "./StorageManagement/storageManagementBackend
 import { listModelCacheEntries } from "./ModelCache/modelCacheBackend";
 import { loadCluster, loadClusterOverview, loadClusters, selectCluster } from "./OptimizationWorkspace/clusterBackend";
 import { deleteConfigurationArtifact, loadConfigurationArtifacts, loadConfigurationCapabilities, saveConfiguration } from "./OptimizationWorkspace/configurationBackend";
-import { getDeploymentExecutions, startLocalDeployment } from "./OptimizationWorkspace/remoteDeployBackend";
+import { startLocalDeployment } from "./OptimizationWorkspace/remoteDeployBackend";
+import { listModelNames } from "./ModelService/modelServiceBackend";
 import { loadGuideCatalog } from "./OptimizationWorkspace/guidePlanningBackend";
 import { createBenchmarkRun, createEvaluation } from "../features/evaluation/client";
 import {
@@ -30,7 +30,7 @@ import { matchesEvaluationSetup, retainCompatibleConfigurations } from "../featu
 import { clearEvaluationIntent, readEvaluationIntent, storeEvaluationIntent } from "../features/evaluation/transfer";
 import { useAuth } from "../features/auth/useAuth";
 import { MODELS } from "../data/modelCatalog";
-import { acceleratorVariantForHardware, DEFAULT_RUNTIME_IMAGES } from "./benchmark-results/acceleratorDisplay";
+import { acceleratorVariantForHardware, DEFAULT_RUNTIME_IMAGES, isDefaultRuntimeImage } from "./benchmark-results/acceleratorDisplay";
 
 const STEPS = ["Evaluation Setup", "Configurations", "Benchmark", "Execution plan"];
 const inputClass = "mt-1 h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-xs text-slate-100 outline-none focus:border-cyan-400";
@@ -162,12 +162,9 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const [highlightedArtifactIds, setHighlightedArtifactIds] = useState([]);
     const selectedConfigurationsRef = useRef(null);
     const [targetMode, setTargetMode] = useState(benchmarkOnly ? "existing" : "configurations");
-    const [endpointSource, setEndpointSource] = useState("discovered");
-    const [readyDeployments, setReadyDeployments] = useState([]);
+    const [modelServices, setModelServices] = useState([]);
     const [targetId, setTargetId] = useState("");
-    const [customEndpoint, setCustomEndpoint] = useState("");
     const [apiToken, setApiToken] = useState("");
-    const [endpointProbe, setEndpointProbe] = useState({ loading: false, model: "", models: [], error: "" });
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
@@ -185,33 +182,11 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         const variant = acceleratorVariantForHardware(clusterHardware);
         if (!variant) return;
         setRuntimeImage((current) => (
-            Object.values(DEFAULT_RUNTIME_IMAGES).includes(current) && current !== DEFAULT_RUNTIME_IMAGES[variant]
+            isDefaultRuntimeImage(current) && current !== DEFAULT_RUNTIME_IMAGES[variant]
                 ? DEFAULT_RUNTIME_IMAGES[variant]
                 : current
         ));
     }, [clusterHardware]);
-
-    // Discover the OpenAI-compatible model exposed by an existing service.
-    useEffect(() => {
-        if (targetMode !== "existing") return;
-        // Selecting a discovered deployment uses its execution_id; do not call
-        // the forwarded localhost URL from the browser. URL probing is only
-        // relevant to the explicit Enter URL flow.
-        if (endpointSource !== "url") { setEndpointProbe({ loading: false, model: "", models: [], error: "" }); return; }
-        const endpoint = customEndpoint;
-        if (!endpoint) { setEndpointProbe({ loading: false, model: "", models: [], error: "" }); return; }
-        let cancelled = false;
-        setEndpointProbe({ loading: true, model: "", models: [], error: "" });
-        const base = endpoint.replace(/\/$/, "");
-        requestJson(`${base}/v1/models`, {}, {
-            errorFactory: (payload, response) => new Error(payload?.error?.message || `Model discovery failed (${response.status})`),
-        }).then((payload) => {
-            const models = Array.isArray(payload?.data) ? payload.data.map((item) => item?.id).filter(Boolean) : [];
-            if (!models.length) throw new Error("Endpoint returned no models");
-            if (!cancelled) { setEndpointProbe({ loading: false, model: models[0], models, error: "" }); setSharedModel(models[0]); }
-        }).catch((err) => !cancelled && setEndpointProbe({ loading: false, model: "", models: [], error: err.message || "Unable to discover model" }));
-        return () => { cancelled = true; };
-    }, [targetMode, endpointSource, targetId, customEndpoint, readyDeployments]);
 
     useEffect(() => {
         if (!openMenuId) return undefined;
@@ -237,8 +212,8 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             catalogError = error.message || "Unable to load cluster guides";
             return { guides: [] };
         });
-        Promise.all([catalogRequest, loadConfigurationCapabilities(), loadConfigurationArtifacts(), getDeploymentExecutions({ status: "ready" }).catch(() => [])])
-            .then(([guideCatalog, capabilities, savedArtifacts, deployments]) => {
+        Promise.all([catalogRequest, loadConfigurationCapabilities(), loadConfigurationArtifacts(), listModelNames().catch(() => [])])
+            .then(([guideCatalog, capabilities, savedArtifacts, services]) => {
                 if (!active) return;
                 const nextProviders = new Map((capabilities.providers || []).map((provider) => [provider.id, provider]));
                 const guides = (guideCatalog.guides || []).filter((guide) => nextProviders.has(guide.id));
@@ -246,8 +221,8 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 setProviders(nextProviders);
                 setCatalog(guides);
                 setArtifacts(savedArtifacts || []);
-                setReadyDeployments(deployments || []);
-                setTargetId(deployments?.[0]?.execution_id || "");
+                setModelServices(services || []);
+                setTargetId(services?.[0]?.id || "");
                 setTemplate((current) => guides.some((guide) => guide.id === current) ? current : guides[0]?.id || "");
                 if (deployOnly) {
                     const guideId = returningIntent?.workloads?.[0]?.guide || guides[0]?.id || "";
@@ -433,11 +408,11 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     ].filter(Boolean);
     const canContinue = step === 0
         ? targetMode === "existing"
-            ? Boolean(name.trim() && (endpointSource === "discovered" ? targetId : customEndpoint.trim()))
+            ? Boolean(name.trim() && targetId && apiToken.trim())
             : Boolean(name.trim() && deploymentName.trim() && sharedModel.trim() && cluster.session_id && !clusterLoading && !clusterHardwareLoading && cluster.id === selectedClusterId && !modelCacheMismatch)
         : step === 1
             ? targetMode === "existing"
-                ? Boolean(endpointSource === "discovered" ? targetId : customEndpoint.trim())
+                ? Boolean(targetId && apiToken.trim())
                 : Boolean(!configurationEditor && !editorBusy && selectedArtifacts.length && selectedClusters.size === 1 && selectedArtifacts.every((item) => matchesEvaluationSetup(item, sharedContext)))
             : step === 2 ? tests.length > 0 && !benchmarkErrors.length : true;
 
@@ -674,11 +649,12 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         setError("");
         try {
             if (targetMode === "existing") {
-                const resolvedTargetId = resolveEvaluationTarget({ endpointSource, targetId, customEndpoint, readyDeployments });
+                const resolvedTargetId = resolveEvaluationTarget({ targetId });
                 const createdRuns = await Promise.all(tests.map((test) => createBenchmarkRun({
                     ...effectiveBenchmark,
                     ...test.benchmark,
-                    deployment_execution_id: resolvedTargetId,
+                    deployment_execution_id: null,
+                    model_service_group_id: resolvedTargetId,
                     wait_timeout_seconds: effectiveBenchmark.wait_timeout_seconds,
                     harness_memory_gib: Number(test.benchmark?.harness_memory_gib ?? effectiveBenchmark.harness_memory_gib ?? 32),
                     sla_targets: benchmarkScenario(effectiveBenchmark, slaTargets).sla_targets,
@@ -773,7 +749,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     {benchmarkOnly && <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-200">Your role can only benchmark an existing deployment. Designing and deploying a new one from configurations needs the deployment-create permission.</p>}
                     <div className="grid items-end gap-3 lg:grid-cols-[1fr_320px]"><div><h2 className="text-lg font-bold">Evaluation Setup</h2><p className="mt-1 text-[11px] text-slate-500">Choose a target and provide only the shared context it needs.</p></div><label className="text-[11px] text-slate-400">Task name<input className={`${inputClass} h-9`} value={name} onChange={(event) => setName(event.target.value)} /></label></div>
                     <section className="relative overflow-hidden rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-slate-900/80 via-slate-950/70 to-cyan-950/15 p-4 shadow-lg shadow-black/10"><div aria-hidden="true" className="absolute -right-16 -top-20 h-40 w-40 rounded-full bg-cyan-400/[0.06] blur-3xl" /><div className="relative mb-3 flex items-center justify-between"><div><p className="text-[9px] font-bold uppercase tracking-[0.18em] text-cyan-400">Target</p><h3 className="mt-1 text-sm font-semibold text-slate-100">How should this evaluation run?</h3></div><span className="rounded-full border border-slate-700/80 bg-slate-950/60 px-2.5 py-1 text-[9px] text-slate-500">Step 1</span></div><div className="relative grid gap-3 md:grid-cols-2"><button type="button" onClick={() => setTargetMode("existing")} className={`group rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 ${targetMode === "existing" ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className="text-xs font-semibold">Use existing endpoint</span><span className="mt-0.5 block text-[9px] text-slate-500">Skip deployment design and continue to Benchmark.</span></button>{!benchmarkOnly && <button type="button" onClick={() => setTargetMode("configurations")} className={`group rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40 ${targetMode === "configurations" ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className="text-xs font-semibold">Design configurations</span><span className="mt-0.5 block text-[9px] text-slate-500">Set shared deployment context, then choose configurations.</span></button>}</div></section>
-                    {targetMode === "existing" ? <section className="rounded-xl border border-slate-800 bg-slate-950/35 p-3"><div className="flex gap-1 rounded-lg bg-slate-900/60 p-1"><button onClick={() => setEndpointSource("discovered")} className={`flex-1 rounded-md px-3 py-1.5 text-[10px] ${endpointSource === "discovered" ? "bg-slate-700 text-white" : "text-slate-500"}`}>Deployed services</button><button onClick={() => setEndpointSource("url")} className={`flex-1 rounded-md px-3 py-1.5 text-[10px] ${endpointSource === "url" ? "bg-slate-700 text-white" : "text-slate-500"}`}>Enter URL</button></div>{endpointSource === "discovered" ? <label className="mt-2 block text-[11px] text-slate-400">Ready endpoint<select className={`${inputClass} h-9`} value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Select an existing service</option>{readyDeployments.map((item) => <option key={item.execution_id} value={item.execution_id}>{item.model} · {item.namespace || "default"} · {item.forwarded_endpoint || item.endpoint}</option>)}</select></label> : <label className="mt-2 block text-[11px] text-slate-400">Endpoint URL<input type="url" className={`${inputClass} h-9`} placeholder="http://model-service.example:8000" value={customEndpoint} onChange={(event) => setCustomEndpoint(event.target.value)} /><span className="mt-1 block text-[9px] text-amber-300">Must match a discovered deployment.</span></label>}{endpointProbe.loading && <p className="mt-2 text-[10px] text-cyan-300">Probing /v1/models…</p>}{endpointProbe.model && <p className="mt-2 text-[10px] text-emerald-300">Detected model: {endpointProbe.model}</p>}{endpointProbe.error && <p className="mt-2 text-[10px] text-amber-300">{endpointProbe.error}</p>}<label className="mt-2 block text-[11px] text-slate-400">Model access token (optional)<input type="password" autoComplete="off" className={`${inputClass} h-9`} placeholder="lens-mk-…" value={apiToken} onChange={(event) => setApiToken(event.target.value)} /><span className="mt-1 block text-[9px] text-slate-500">Needed when the harness calls a deployment through the cluster&apos;s shared Gateway. Used for this run only; never stored.</span></label></section> : <>
+                    {targetMode === "existing" ? <section className="rounded-xl border border-slate-800 bg-slate-950/35 p-3"><label className="block text-[11px] text-slate-400">Model service<select className={`${inputClass} h-9`} value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Select a published model service</option>{modelServices.map((item) => <option key={item.id} value={item.id}>{item.name}{item.baseModel && item.baseModel !== item.name ? ` · ${item.baseModel}` : ""}{item.clusterName ? ` (${item.clusterName})` : ""}</option>)}</select>{!modelServices.length && <span className="mt-1 block text-[9px] text-amber-300">No model service is published and healthy yet. Publish one from the Model Service page first.</span>}</label><label className="mt-2 block text-[11px] text-slate-400">Model access token<input type="password" autoComplete="off" className={`${inputClass} h-9`} placeholder="lens-mk-…" value={apiToken} onChange={(event) => setApiToken(event.target.value)} /><span className="mt-1 block text-[9px] text-slate-500">Required: the harness authenticates through the cluster&apos;s shared Gateway. Used for this run only; never stored.</span></label></section> : <>
                     <div className="grid grid-cols-2 gap-3">
                         <section className="rounded-xl border border-slate-800 bg-gradient-to-br from-slate-950/70 to-cyan-950/10 p-3">
                             <div className="flex items-center justify-between"><SectionLabel>Environment</SectionLabel><div className="flex items-center gap-2"><span className={`text-[9px] font-semibold ${cluster.session_id ? "text-emerald-300" : "text-amber-300"}`}>{clusterLoading ? "Checking…" : cluster.session_id ? "Connected ✓" : "Required"}</span><button type="button" onClick={() => leaveSetupFor("clusters")} title="Manage clusters" aria-label="Manage clusters" className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-700 text-slate-400 transition hover:border-cyan-500/50 hover:bg-cyan-500/10 hover:text-cyan-200"><ExternalLink className="h-3.5 w-3.5" /></button></div></div>
@@ -875,7 +851,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     benchmark={effectiveBenchmark}
                     slaTargets={slaTargets}
                     cluster={cluster.name || cluster.id}
-                    existingEndpoint={targetMode === 'existing' ? (endpointSource === 'url' ? customEndpoint : readyDeployments.find(item => item.execution_id === targetId)?.forwarded_endpoint || readyDeployments.find(item => item.execution_id === targetId)?.endpoint || targetId || 'Existing endpoint') : null}
+                    existingEndpoint={targetMode === 'existing' ? (modelServices.find(item => item.id === targetId)?.name || targetId || 'Existing endpoint') : null}
                     preserveDeployment={preserveDeployment}
                     onEditSetup={() => setStep(0)}
                     onEditConfigurations={() => setStep(1)}

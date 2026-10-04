@@ -13,7 +13,12 @@ from typing import Any
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
-VALID_AUTH_MODES = ("local", "external", "hybrid", "disabled")
+#: ``disabled`` fully bypasses authentication/authorization for local dev and
+#: tests (see ``AuthSettings.disabled``). Any other value means "enabled":
+#: ``AuthService.login`` decides local-vs-directory per username by looking at
+#: that account's own ``auth_source`` — there is no local/external/hybrid mode
+#: to configure.
+VALID_AUTH_MODES = ("local", "disabled")
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -47,6 +52,8 @@ def _env_key_list(name: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class AuthSettings:
+    #: ``"disabled"`` bypasses auth entirely (dev/test); any other value is a
+    #: no-op placeholder — see ``VALID_AUTH_MODES`` and ``AuthService.login``.
     auth_mode: str = "local"
     allow_unauthenticated: bool = False
     secret_key: str = ""

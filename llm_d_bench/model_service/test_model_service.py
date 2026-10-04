@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -279,6 +280,25 @@ def test_public_models_endpoint_lists_only_authorized(monkeypatch):
 
     assert client.get("/v1/models").status_code == 401
     assert client.get("/v1/models", headers={"Authorization": "Bearer lens-mk-bogus"}).status_code == 401
+
+
+def test_list_model_entries_for_user_includes_cluster_name(monkeypatch):
+    _patch_target(monkeypatch)
+    monkeypatch.setattr(
+        "llm_d_bench.cluster.registry.list_clusters",
+        lambda: [SimpleNamespace(id="cluster-a", name="Cluster A")],
+    )
+    user = _create_user("entries-owner")
+    service = _service()
+    group = service.create_group(
+        GroupCreateRequest(name="entries-model", model_ref="Entries/Model", clusterId="cluster-a"),
+        created_by=user.id,
+    )
+    service.create_member(MemberCreateRequest(group_id=group.id, execution_id="exec-1"), published_by=user.id)
+
+    entries = service.list_model_entries_for_user(user.id)
+
+    assert [entry["clusterName"] for entry in entries] == ["Cluster A"]
 
 
 def test_ext_authz_accepts_forwarded_methods_and_models_path():

@@ -16,7 +16,9 @@ test('precise bundle pins auxiliary inputs and aligns tokenizer and index with m
     assert.equal(bundle.sourceCommit, 'a'.repeat(40));
     assert.equal(bundle.resources.length, 2);
     assert.equal(yaml.load(bundle.resources[1].content).metadata.name, 'precise-prefix-cache-routing-baseline');
-    assert.equal(bundle.calibration!.content, 'echo calibration');
+    assert.equal(bundle.calibration!.length, 2);
+    assert.equal(bundle.calibration![0].content, 'echo calibration');
+    assert.equal(bundle.calibration![1].name, 'calibration-peak-throughput.yaml');
     const effective = yaml.load(bundle.helm.values.at(-1)!.content);
     const plugins = yaml.load(effective.router.epp.pluginsCustomConfig['plugins.yaml']).plugins;
     assert.equal(plugins[0].parameters.modelName, 'New/Model');

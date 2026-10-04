@@ -301,6 +301,12 @@ class DeploymentExecution(BaseModel):
     configuration_artifacts: list[ConfigurationArtifact] = Field(min_length=1)
     resource_snapshot: VersionedPayload | None = None
     provenance: dict[str, Any] = Field(default_factory=dict)
+    # The concrete data plane the framework resolved at deploy time (see
+    # llm_d_bench/deploy/data_plane.py): "shared_gateway", "standalone_router",
+    # "direct" or "external". A top-level field (not nested in `diagnostics`)
+    # so periodic readiness refreshes, which only overwrite `diagnostics`,
+    # never clobber it.
+    data_plane: str | None = None
     metadata: DeploymentMetadata = Field(default_factory=DeploymentMetadata)
     evidence_refs: list[str] = Field(default_factory=list)
     diagnostics: VersionedPayload | None = None

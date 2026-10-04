@@ -56,6 +56,12 @@ class ClusterRecord(StrictModel):
     draft: bool = False
 
 
+class ImagePrepullRequest(StrictModel):
+    """Accelerators whose llm-d images should be pre-pulled onto every node."""
+
+    accelerators: list[str] = Field(default_factory=list)
+
+
 class ClusterSettingsUpdateRequest(StrictModel):
     """``PATCH /api/cluster/clusters/{id}`` payload; every field is optional,
     only supplied keys are changed. Covers both the wizard's Step 2/3 settings

@@ -265,18 +265,27 @@ class ModelService:
 
         A model service is scoped to a single cluster, and its providers live in
         that cluster, so the caller sees it once with its own cluster's connection.
+        Each entry carries ``clusterName`` (same enrichment as
+        ``list_publishable_deployments``) so callers choosing between several
+        model services -- often sharing the same public name across clusters --
+        can tell them apart without a separate cluster lookup.
         """
+        from llm_d_bench.cluster.registry import list_clusters  # noqa: PLC0415
+
         user = self._auth.user_dao.get(user_id)
         if user is None or user.status != "active":
             return []
         principal = self._auth.principal_for(user)
+        cluster_names = {cluster.id: cluster.name for cluster in list_clusters()}
         entries: list[dict] = []
         for group in self.groups.list():
             if group.status != "active":
                 continue
             if not self.authorized_members(group, principal):
                 continue
-            entries.append(group.api_payload())
+            payload = group.api_payload()
+            payload["clusterName"] = cluster_names.get(group.cluster_id, "")
+            entries.append(payload)
         return entries
 
     def authorize_request(self, request: AuthorizeRequest, *, cluster_id: str | None = None) -> AuthorizeResult:

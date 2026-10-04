@@ -25,6 +25,7 @@ from llm_d_bench.monitoring.cluster_stack.discovery import discover_cluster_stac
 from llm_d_bench.monitoring.cluster_stack.errors import ClusterStackError
 from llm_d_bench.utils.kubernetes import PortForwardError, ensure_port_forward, run_kubectl, scoped_runner
 from llm_d_bench.utils.shell import CommandResult
+from llm_d_bench.versions import stack as stack_profile
 
 logger = logging.getLogger(__name__)
 
@@ -676,6 +677,9 @@ def create_cluster(
             status_code=422,
             code="invalid_proxy_config",
         )
+    # llm-d component versions are fixed by the Lens stack profile; a caller may
+    # not pick them (see docs/design/llm-d-stack-profile-design.md).
+    current = stack_profile()
     cluster = registry.create_cluster(
         clean_name,
         clean_description,
@@ -684,8 +688,8 @@ def create_cluster(
         http_proxy=http_proxy,
         https_proxy=https_proxy,
         no_proxy=no_proxy,
-        llm_d_ref=llm_d_ref,
-        llm_d_benchmark_ref=llm_d_benchmark_ref,
+        llm_d_ref=current.llm_d,
+        llm_d_benchmark_ref=current.llm_d_benchmark,
         gateway_provider=gateway_provider,
         gateway_namespace=gateway_namespace,
         gateway_name=gateway_name,
@@ -693,9 +697,9 @@ def create_cluster(
         gateway_port=gateway_port,
         gateway_authz_host=gateway_authz_host,
         inotify_max_user_instances=inotify_max_user_instances,
-        router_version=router_version,
-        gie_version=gie_version,
-        ipp_version=ipp_version,
+        router_version=current.llm_d_router,
+        gie_version=current.k8s_gateway_api_inference_extension,
+        ipp_version=current.llm_d_inference_payload_processor,
         draft=draft,
     )
     return cluster, _register_cluster_session(cluster)
@@ -750,10 +754,13 @@ def update_cluster_settings(
         updates["http_proxy"] = http_proxy if proxy_mode == "custom" else None
         updates["https_proxy"] = https_proxy if proxy_mode == "custom" else None
         updates["no_proxy"] = no_proxy if proxy_mode == "custom" else None
-    if llm_d_ref is not None:
-        updates["llm_d_ref"] = llm_d_ref or None
-    if llm_d_benchmark_ref is not None:
-        updates["llm_d_benchmark_ref"] = llm_d_benchmark_ref or None
+    # llm-d component versions always follow the Lens stack profile.
+    current = stack_profile()
+    updates["llm_d_ref"] = current.llm_d
+    updates["llm_d_benchmark_ref"] = current.llm_d_benchmark
+    updates["router_version"] = current.llm_d_router
+    updates["gie_version"] = current.k8s_gateway_api_inference_extension
+    updates["ipp_version"] = current.llm_d_inference_payload_processor
     for key, value in (
         ("gateway_provider", gateway_provider),
         ("gateway_namespace", gateway_namespace),
@@ -761,9 +768,6 @@ def update_cluster_settings(
         ("gateway_public_url", gateway_public_url),
         ("gateway_port", gateway_port),
         ("gateway_authz_host", gateway_authz_host),
-        ("router_version", router_version),
-        ("gie_version", gie_version),
-        ("ipp_version", ipp_version),
     ):
         if value is not None:
             updates[key] = value or None

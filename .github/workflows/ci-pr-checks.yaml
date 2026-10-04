@@ -50,6 +50,33 @@ jobs:
               - '!**/*.md'
               - '!LICENSE'
 
+  # Release-time gate: the pinned llm-d stack must be internally consistent and
+  # every referenced version must exist (llm_d_bench/versions/llm_d_stack.yaml).
+  llm-d-stack:
+    runs-on: ubuntu-latest
+    needs: check-code-changes
+    if: needs.check-code-changes.outputs.has_code_changes == 'true'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test the stack checker
+        run: npm run test:stack
+
+      - name: Validate the pinned llm-d stack
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run check:stack
+
   # Validate the actual frontend and Node API instead of the old Go placeholder.
   frontend-and-server:
     runs-on: ubuntu-latest

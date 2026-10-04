@@ -164,7 +164,11 @@ export function DataPlaneTopology({
     }, [clusters, memberGroups]);
 
     const totalRows = layout.reduce((sum, section) => sum + section.rows.length, 0);
-    const height = Math.max(layout.reduce((max, s) => Math.max(max, s.ippY + IPP.h), 0), TOP) + 24;
+    // Keep enough room for the always-rendered control plane/clients row even
+    // before clusters resolve, so the absolutely positioned boxes are not
+    // clipped to a thin strip while the first load is in flight.
+    const emptyHeight = CP.y + CP.h + HEADER_H + GW.h + IPP.h + 12;
+    const height = Math.max(layout.reduce((max, s) => Math.max(max, s.ippY + IPP.h), 0), emptyHeight) + 24;
     const lastGwMid = layout.length ? layout[layout.length - 1].gwY + GW.h / 2 : 0;
 
     const toggleMenu = (key, event) => {
@@ -274,7 +278,7 @@ export function DataPlaneTopology({
                 </span>
             </div>
 
-            <div className="w-full overflow-x-auto">
+            <div className="w-full shrink-0 overflow-x-auto">
                 <div className="relative" style={{ width: WIDTH, height, minWidth: WIDTH }}>
                     <svg className="pointer-events-none absolute inset-0" width={WIDTH} height={height} viewBox={`0 0 ${WIDTH} ${height}`}>
                         {layout.length > 0 && (

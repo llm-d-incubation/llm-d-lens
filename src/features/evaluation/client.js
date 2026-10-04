@@ -74,19 +74,10 @@ export function runDeploymentCaseAction(runId, caseId, action, { modelToken = ""
 }
 
 /** Resolve only discovered deployments; arbitrary URLs do not grant lifecycle ownership. */
-export function resolveEvaluationTarget({ endpointSource, targetId, customEndpoint, readyDeployments = [] }) {
-    if (endpointSource === 'url') {
-        let normalizedUrl;
-        try {
-            normalizedUrl = new URL(customEndpoint).toString().replace(/\/$/, '');
-        } catch {
-            throw new Error('Enter a valid endpoint URL, including http:// or https://.');
-        }
-        const match = readyDeployments.find(item => [item.endpoint, item.forwarded_endpoint]
-            .some(endpoint => String(endpoint || '').replace(/\/$/, '') === normalizedUrl));
-        if (!match) throw new Error('This URL is not linked to a discovered deployment.');
-        targetId = match.execution_id;
-    }
-    if (!targetId) throw new Error('Select an available endpoint or enter its URL.');
+// Existing-endpoint evaluation and simulation runs must target a published,
+// continuously health-probed Model Service (not a raw deployment execution,
+// whose own EPP has no liveness gating) — see docs/design for the rationale.
+export function resolveEvaluationTarget({ targetId }) {
+    if (!targetId) throw new Error('Select an existing model service.');
     return targetId;
 }

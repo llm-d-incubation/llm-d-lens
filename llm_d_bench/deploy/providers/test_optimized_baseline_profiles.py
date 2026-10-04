@@ -163,7 +163,12 @@ async def test_published_default_profile_installs_bundle_after_guide_values_disa
     await adapter.install_published_router(artifact, context)
 
     assert commands[0][1:5] == ["template", "saved-release", "saved-chart", "--namespace"]
-    assert context["router_effective_values"] == "router:\n  saved: true\n"
+    # Gateway Mode: the saved effective values are merged with the shared-Gateway
+    # values so the deployment's own proxy is disabled for the shared Gateway.
+    effective = yaml.safe_load(context["router_effective_values"])
+    assert effective["router"]["saved"] is True
+    assert effective["router"]["proxy"]["enabled"] is False
+    assert effective["router"]["epp"]["flags"]["secure-serving"] is False
 
 
 @pytest.mark.asyncio
@@ -409,11 +414,16 @@ def test_input_validation_allows_waiting_for_accelerators(tmp_path):
     assert result.accepted, result.reasons
 
 
-def test_gateway_mode_values_skipped_for_evaluation_owned_deployments(tmp_path):
-    adapter, _ = _adapter(tmp_path)
-    gateway_path = str(adapter._policy.gateway_mode_values_path)
+def test_gateway_mode_proxy_disable_skipped_for_evaluation_owned_deployments(tmp_path):
+    from llm_d_bench.deploy.data_plane import GATEWAY_MODE_VALUES_PATH, PLAINTEXT_EPP_VALUES_PATH
 
-    assert adapter._gateway_mode_args({}) == ["--values", gateway_path]
-    assert adapter._gateway_mode_args({"provenance": {"evaluate_workflow": True}}) == []
-    assert adapter._gateway_mode_args({"provenance": {"evaluation_id": "eval-1"}}) == []
-    assert adapter._gateway_mode_args({"provenance": {"evaluation_case_id": "case-1"}}) == []
+    adapter, _ = _adapter(tmp_path)
+    plaintext = ["--values", str(PLAINTEXT_EPP_VALUES_PATH)]
+    shared = [*plaintext, "--values", str(GATEWAY_MODE_VALUES_PATH)]
+
+    assert adapter._gateway_mode_args({}) == shared
+    # Evaluation-owned deployments keep their own proxy, but the EPP is still
+    # forced plaintext so the proxy's ext_proc stays consistent.
+    assert adapter._gateway_mode_args({"provenance": {"evaluate_workflow": True}}) == plaintext
+    assert adapter._gateway_mode_args({"provenance": {"evaluation_id": "eval-1"}}) == plaintext
+    assert adapter._gateway_mode_args({"provenance": {"evaluation_case_id": "case-1"}}) == plaintext

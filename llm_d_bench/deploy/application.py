@@ -62,7 +62,7 @@ def _deploy_accelerator(run) -> str | None:
         if recorded:
             return recorded
         guide = content.get("officialGuide") if isinstance(content, dict) else None
-        recorded = first(guide)
+        recorded = first(guide) or first(guide.get("source") if isinstance(guide, dict) else None)
         if recorded:
             return recorded
     return None

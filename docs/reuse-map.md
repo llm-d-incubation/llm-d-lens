@@ -16,11 +16,11 @@ Enforce public HTTPS destinations for external AI providers and pin outbound req
 
 ## deploy-hardware-profile
 
-Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, with literal fallbacks.
+Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks.
 
 - Entry point: [llm_d_bench/deploy/providers/hardware_profile.py](../llm_d_bench/deploy/providers/hardware_profile.py)
-- Symbols: `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `set_accelerator_request`
-- Boundaries: Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Do not add guide-specific logic here.
+- Symbols: `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `runtime_image`, `pin_runtime_image`, `set_accelerator_request`
+- Boundaries: Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Model-server image repository and version are data in the profile, never hardcoded here. Do not add guide-specific logic here.
 - Examples: [llm_d_bench/deploy/providers/baseline_vllm.py](../llm_d_bench/deploy/providers/baseline_vllm.py), [llm_d_bench/deploy/providers/pd_disaggregation.py](../llm_d_bench/deploy/providers/pd_disaggregation.py), [llm_d_bench/deploy/providers/gpu_selection.py](../llm_d_bench/deploy/providers/gpu_selection.py), [llm_d_bench/deploy/runtime/composition.py](../llm_d_bench/deploy/runtime/composition.py)
 - Tests: [llm_d_bench/deploy/providers/test_hardware_profile.py](../llm_d_bench/deploy/providers/test_hardware_profile.py)
 
@@ -46,13 +46,13 @@ Browser client for GET /api/v1/hardware/capabilities and a pure mapper from regi
 
 ## accelerator-display-label
 
-Map a benchmark run's accelerator profile/runtime to a display label (XPU/GPU/neutral) for chart titles and metric labels.
+Map a benchmark run's accelerator profile/runtime to a display label (XPU/GPU/neutral) for chart titles and metric labels, and identify the profile-owned default model-server image repositories so hardware realignment never clobbers a custom image.
 
 - Entry point: [src/components/benchmark-results/acceleratorDisplay.js](../src/components/benchmark-results/acceleratorDisplay.js)
-- Symbols: `acceleratorValue`, `acceleratorDisplayLabel`, `utilizationLabel`
-- Boundaries: Display only; no metric computation. Unknown hardware falls back to the neutral 'GPU / XPU' wording.
-- Examples: [src/components/benchmark-results/ResourceExplorer.jsx](../src/components/benchmark-results/ResourceExplorer.jsx)
-- Tests: [src/components/benchmark-results/acceleratorDisplay.test.js](../src/components/benchmark-results/acceleratorDisplay.test.js)
+- Symbols: `acceleratorValue`, `acceleratorDisplayLabel`, `utilizationLabel`, `DEFAULT_RUNTIME_IMAGES`, `MANAGED_RUNTIME_IMAGE_REPOSITORIES`, `runtimeImageRepository`, `runtimeImageForHardware`, `isDefaultRuntimeImage`
+- Boundaries: Display and default-image selection only; no metric computation and no model-server version. The hardware profile owns the model-server repository/version; only repositories are tracked here. Unknown hardware falls back to the neutral 'GPU / XPU' wording.
+- Examples: [src/components/benchmark-results/ResourceExplorer.jsx](../src/components/benchmark-results/ResourceExplorer.jsx), [src/components/EvaluationTaskWizard.jsx](../src/components/EvaluationTaskWizard.jsx), [src/features/evaluation/setup.js](../src/features/evaluation/setup.js)
+- Tests: [src/components/benchmark-results/acceleratorDisplay.test.js](../src/components/benchmark-results/acceleratorDisplay.test.js), [src/features/evaluation/setup.test.js](../src/features/evaluation/setup.test.js)
 
 ## hardware-version-gate
 
@@ -1536,3 +1536,13 @@ Browser and Node copy of the administrator-managed Hugging Face environment poli
 - Boundaries: Mirrors llm_d_bench/configuration/managed_environment.py: matches HF_, HUGGING and TRANSFORMERS_ prefixes case-insensitively. Presentation-safe and React-free so both the browser validator and server/configurationOverrides.ts can import it.
 - Examples: [src/features/evaluation/configurationValidation.js](../src/features/evaluation/configurationValidation.js), [server/configurationOverrides.ts](../server/configurationOverrides.ts)
 - Tests: [src/features/evaluation/configurationValidation.test.js](../src/features/evaluation/configurationValidation.test.js), [server/configurationOverrides.test.ts](../server/configurationOverrides.test.ts)
+
+## model-service-target-resolution
+
+Resolve a Model Service group id to the deployment execution id and published model name of its currently active (health-probed) member, so callers benchmark/simulate an already-published, continuously liveness-checked endpoint instead of a raw deployment execution with no live health signal.
+
+- Entry point: [llm_d_bench/model_service/resolution.py](../llm_d_bench/model_service/resolution.py)
+- Symbols: `resolve_model_service_target`
+- Boundaries: Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself — callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py), [llm_d_bench/simulation/service.py](../llm_d_bench/simulation/service.py)
+- Tests: [llm_d_bench/model_service/test_resolution.py](../llm_d_bench/model_service/test_resolution.py)

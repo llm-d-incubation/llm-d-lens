@@ -86,10 +86,8 @@ def validate_deployment_bundle(bundle: Any, guide: str, source_commit: str) -> d
     if not isinstance(resources, list):
         raise ValueError("Guide deployment bundle resources must be a list")
 
-    all_assets = [*values, *resources]
-    calibration = bundle.get("calibration")
-    if calibration is not None:
-        all_assets.append(calibration)
+    calibration_assets = _calibration_assets(bundle)
+    all_assets = [*values, *resources, *calibration_assets]
     names: set[str] = set()
     for item in all_assets:
         name, content = _validate_asset(item)
@@ -103,11 +101,27 @@ def validate_deployment_bundle(bundle: Any, guide: str, source_commit: str) -> d
     if values[-1].get("name") != "router-effective.yaml":
         raise ValueError("Guide deployment bundle must end with router-effective.yaml")
     if guide == "precise-prefix-cache-routing":
-        if calibration is None:
+        if not calibration_assets:
             raise ValueError("Precise routing deployment bundle requires calibration input")
         if not resources:
             raise ValueError("Precise routing deployment bundle requires auxiliary resources")
     return bundle
+
+
+def _calibration_assets(bundle: dict[str, Any]) -> list[Any]:
+    """Calibration assets to write beside the install output.
+
+    Accepts a single asset (legacy bundles) or a list (a recipe plus the Job
+    templates it reads from its own directory).
+    """
+    calibration = bundle.get("calibration")
+    if calibration is None:
+        return []
+    if isinstance(calibration, dict):
+        return [calibration]
+    if isinstance(calibration, list):
+        return calibration
+    raise ValueError("Guide deployment bundle calibration must be an asset or a list of assets")
 
 
 def materialize_deployment_bundle(
@@ -127,9 +141,8 @@ def materialize_deployment_bundle(
     directory.mkdir(parents=True, exist_ok=True)
 
     paths: dict[str, Path] = {}
-    assets = [*bundle["helm"]["values"], *bundle["resources"]]
-    if bundle.get("calibration") is not None:
-        assets.append(bundle["calibration"])
+    calibration_assets = _calibration_assets(bundle)
+    assets = [*bundle["helm"]["values"], *bundle["resources"], *calibration_assets]
     for asset in assets:
         path = directory / asset["name"]
         if path.is_file() and path.read_text(encoding="utf-8") != asset["content"]:
@@ -137,14 +150,17 @@ def materialize_deployment_bundle(
         if not path.is_file():
             path.write_text(asset["content"], encoding="utf-8")
         paths[asset["name"]] = path
-    calibration = bundle.get("calibration")
+    calibration_script = next(
+        (paths[asset["name"]] for asset in calibration_assets if str(asset["name"]).endswith(".sh")),
+        None,
+    )
     return MaterializedDeploymentBundle(
         chart=bundle["helm"]["chart"],
         version=bundle["helm"]["version"],
         release_name=bundle["helm"]["releaseName"],
         effective_values=paths["router-effective.yaml"],
         resources=tuple(paths[item["name"]] for item in bundle["resources"]),
-        calibration=paths[calibration["name"]] if calibration is not None else None,
+        calibration=calibration_script,
     )
 
 

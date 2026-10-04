@@ -1,5 +1,6 @@
 """Tests for the structured precise-prefix-cache-routing deployment adapter."""
 
+import asyncio
 import hashlib
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from llm_d_bench.deploy.providers.guide_adapter import GuideDeploymentArtifact
 from llm_d_bench.deploy.providers.precise_prefix_cache_routing import (
     UPSTREAM_SAMPLE_PEAK_PREFILL_THROUGHPUT,
     PrecisePrefixCacheRoutingAdapter,
+    _EPP_ENDPOINT_SETTLE_SECONDS,
 )
 
 
@@ -54,6 +56,46 @@ def test_parameters_defaults_router_fields_to_none():
     assert parameters["router_values_override"] is None
     assert parameters["max_model_len"] is None
     assert parameters["gpu_memory_utilization"] is None
+
+
+def test_decode_deployment_follows_contract_and_manifest(tmp_path: Path):
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    contract_artifact = GuideDeploymentArtifact(
+        "precise-prefix-cache-routing",
+        "hash",
+        deployment_contract={"readinessDeployments": ["precise-prefix-cache-routing-gpu-vllm-decode"]},
+    )
+    assert adapter._decode_deployment(contract_artifact) == "precise-prefix-cache-routing-gpu-vllm-decode"
+
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "kind: Deployment\nmetadata:\n  name: precise-prefix-cache-routing-gpu-vllm-decode\n", encoding="utf-8"
+    )
+    manifest_artifact = GuideDeploymentArtifact(
+        "precise-prefix-cache-routing", "hash", manifest_ref=str(manifest), deployment_contract={}
+    )
+    assert adapter._decode_deployment(manifest_artifact) == "precise-prefix-cache-routing-gpu-vllm-decode"
+
+
+def test_parse_peak_prefill_throughput_reads_either_format():
+    from llm_d_bench.deploy.providers.precise_prefix_cache_routing import _parse_peak_prefill_throughput
+
+    assert _parse_peak_prefill_throughput("  Measured peakPrefillThroughput = 12345 tokens/sec\n") == 12345
+    assert _parse_peak_prefill_throughput("PEAK_PREFILL_THROUGHPUT=99\n") == 99
+    assert _parse_peak_prefill_throughput("nothing here") is None
+    assert _parse_peak_prefill_throughput("PEAK_PREFILL_THROUGHPUT=0") is None
+
+
+def test_modelserver_overlay_follows_the_active_accelerator(tmp_path: Path):
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._overlay_variant_value = "gpu"
+    assert adapter._modelserver_overlay(tmp_path) == (
+        tmp_path / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
+    )
+    adapter._overlay_variant_value = "xpu"
+    assert adapter._modelserver_overlay(tmp_path) == (
+        tmp_path / "guides/precise-prefix-cache-routing/modelserver/xpu/vllm"
+    )
 
 
 def _upstream_deployment_documents():
@@ -107,7 +149,9 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
         )
     )
 
-    PrecisePrefixCacheRoutingAdapter._patch_modelserver(documents, parameters)
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._accelerator = None
+    adapter._patch_modelserver(documents, parameters)
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
@@ -137,7 +181,9 @@ def test_patch_modelserver_applies_custom_parameters_and_mount_path():
         )
     )
 
-    PrecisePrefixCacheRoutingAdapter._patch_modelserver(documents, parameters)
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._accelerator = None
+    adapter._patch_modelserver(documents, parameters)
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
@@ -232,7 +278,10 @@ async def test_deploy_uses_saved_precise_resources_values_and_calibration_when_s
             _asset("render.yaml", "kind: Service\nmetadata:\n  name: precise-prefix-cache-routing-render\n"),
             _asset("baseline.yaml", "kind: Service\nmetadata:\n  name: precise-prefix-cache-routing-baseline\n"),
         ],
-        "calibration": _asset("calibrate.sh", calibration),
+        "calibration": [
+            _asset("calibrate.sh", calibration),
+            _asset("calibration-peak-throughput.yaml", "kind: Job\nmetadata:\n  name: calibrate\n"),
+        ],
     }
     artifact = GuideDeploymentArtifact(
         "precise-prefix-cache-routing",
@@ -288,6 +337,12 @@ async def test_calibrated_upgrade_patches_saved_effective_values_and_captures_in
     assert affinity["parameters"]["peakPrefillThroughput"] == 23456
     assert commands[-1] == ["helm", "get", "manifest", "precise-prefix-cache-routing", "--namespace", "llmd-run"]
     assert execution["router_rendered_manifest"].endswith("name: calibrated-router\n")
+    # The post-calibration re-render must keep the plaintext EPP data-plane
+    # values, or the deployment's proxy reverts to TLS and 503s.
+    from llm_d_bench.deploy.data_plane import PLAINTEXT_EPP_VALUES_PATH
+
+    template_command = next(command for command in commands if "template" in command)
+    assert str(PLAINTEXT_EPP_VALUES_PATH) in template_command
 
 
 def test_patched_router_values_updates_model_name_and_peak_prefill_throughput(tmp_path: Path):
@@ -429,7 +484,13 @@ class _ReadinessRunner:
 
 
 @pytest.mark.asyncio
-async def test_readiness_exposes_routed_and_baseline_endpoints(tmp_path: Path):
+async def test_readiness_exposes_routed_and_baseline_endpoints(tmp_path: Path, monkeypatch):
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
     runner = _ReadinessRunner()
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
     adapter._runner = runner
@@ -474,6 +535,7 @@ async def test_readiness_exposes_routed_and_baseline_endpoints(tmp_path: Path):
         "llmd-precise-prefix-cache-routing-run",
         "--timeout=30s",
     ]
+    assert sleep_calls == [_EPP_ENDPOINT_SETTLE_SECONDS]
 
 
 @pytest.mark.asyncio
@@ -499,7 +561,11 @@ async def test_diagnostics_exposes_state_needed_to_restore_calibration():
 
 
 @pytest.mark.asyncio
-async def test_readiness_reuses_successful_calibration():
+async def test_readiness_reuses_successful_calibration(monkeypatch):
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
     runner = _ReadinessRunner()
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
     adapter._runner = runner

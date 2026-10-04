@@ -1,3 +1,15 @@
+import { isDefaultRuntimeImage, runtimeImageRepository } from '../../components/benchmark-results/acceleratorDisplay';
+
+// The hardware profile owns the model-server repository and version, so a saved
+// artifact carries the pinned tag while the wizard setup may hold a repo-only
+// default. Compare managed model-server images by repository.
+function sameRuntimeImage(artifactImage, setupImage) {
+    if (artifactImage === setupImage) return true;
+    return isDefaultRuntimeImage(artifactImage)
+        && isDefaultRuntimeImage(setupImage)
+        && runtimeImageRepository(artifactImage) === runtimeImageRepository(setupImage);
+}
+
 // Saved manifests are immutable: only reuse artifacts matching the task's setup.
 export function matchesEvaluationSetup(artifact, setup) {
     const configuration = artifact?.deployable_configuration || {};
@@ -16,7 +28,7 @@ export function matchesEvaluationSetup(artifact, setup) {
     return cluster.id === setup.cluster.id
         && content.model?.name === setup.model.trim()
         && String(runtime.modelServer || '').toLowerCase() === String(setup.modelServer || '').toLowerCase()
-        && runtime.image === setup.image
+        && sameRuntimeImage(runtime.image, setup.image)
         && modelSource === setupModelSource
         && (runtime.imageMode || 'use-upstream-image') === setup.imageMode
         && sameStorage

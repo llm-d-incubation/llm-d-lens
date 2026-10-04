@@ -162,7 +162,7 @@ Revoke one previously issued model access token for the caller. After revocation
 
 ### List accessible models
 
-List the model groups that the caller is currently allowed to use through the model gateway. Only active groups with at least one authorized active member are returned.
+List the model groups that the caller is currently allowed to use through the model gateway. Only active groups with at least one authorized active member are returned. Each entry includes `clusterName` (resolved from the group's `clusterId`) so callers choosing between several model services -- for example the same public name published in different clusters -- can tell them apart without a separate cluster lookup.
 
 <Tabs>
   <Tab title="REST API">
@@ -170,7 +170,7 @@ List the model groups that the caller is currently allowed to use through the mo
 
     Request: no request body. The caller must be authenticated with a Prism user session.
 
-    Response: returns an `items` array of `ModelServiceGroup` payloads.
+    Response: returns an `items` array of `ModelServiceGroup` payloads, each with an added `clusterName`.
 
     ```json
     {
@@ -183,6 +183,10 @@ List the model groups that the caller is currently allowed to use through the mo
           "description": "Shared Qwen 3 8B service",
           "selectionPolicy": "random",
           "status": "active",
+          "clusterId": "cluster-a",
+          "clusterName": "Cluster A",
+          "servedName": "Qwen/Qwen3-8B",
+          "baseModel": "Qwen/Qwen3-8B",
           "createdByUserId": "user-123",
           "createdAt": "2026-09-20T15:00:00Z",
           "updatedAt": "2026-09-22T11:30:00Z"
@@ -196,9 +200,9 @@ List the model groups that the caller is currently allowed to use through the mo
     from llm_d_bench.model_service.service import default_service
 
     service = default_service()
-    groups = service.list_models_for_user("user-123")
-    for group in groups:
-        print(group.api_payload())
+    entries = service.list_model_entries_for_user("user-123")
+    for entry in entries:
+        print(entry["name"], entry["clusterName"])
     ```
   </Tab>
 </Tabs>

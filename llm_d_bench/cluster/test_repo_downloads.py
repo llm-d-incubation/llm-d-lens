@@ -135,6 +135,9 @@ def test_software_downloads_endpoints_roundtrip(tmp_path, monkeypatch):
     assert body["llmD"]["state"] == "ready"
     assert body["llmDBenchmark"]["state"] == "ready"
 
+    # The request body is ignored: downloads always follow the Lens stack profile.
+    from llm_d_bench import versions
+
     updated_cluster = registry.get_cluster(cluster.id)
-    assert updated_cluster.llm_d_repo_path == "/cache/llm-d/v0.2.0"
-    assert updated_cluster.llm_d_benchmark_repo_path == "/cache/llm-d-benchmark/main"
+    assert updated_cluster.llm_d_repo_path == f"/cache/llm-d/{versions.stack().llm_d}"
+    assert updated_cluster.llm_d_benchmark_repo_path == f"/cache/llm-d-benchmark/{versions.stack().llm_d_benchmark}"

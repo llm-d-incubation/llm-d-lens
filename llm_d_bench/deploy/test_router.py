@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from llm_d_bench.deploy.contracts import DeploymentCaseStatus, DeploymentStatus
+from llm_d_bench.deploy.providers.hardware_profile import runtime_image
 from llm_d_bench.deploy.standard_kubernetes_service import (
     StandardKubernetesServiceRequest,
     build_standard_kubernetes_service_configuration,
@@ -53,7 +54,7 @@ def test_standard_kubernetes_service_configuration_is_an_immutable_baseline_arti
         "maxModelLen": 8192,
     }
     assert configuration.content["runtime"] == {
-        "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
+        "image": runtime_image(),
         "imageMode": "pull-existing",
         "modelSource": "auto-cache",
         "mountPath": "/home/user/.cache",

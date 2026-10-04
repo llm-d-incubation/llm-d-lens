@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import socket
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
+import httpx
 import yaml
 
 from llm_d_bench.auth.service import default_service as default_auth_service
+from llm_d_bench.cluster.gateway_crds import apply_gateway_crds
 from llm_d_bench.cluster.registry import get_cluster, update_cluster
 from llm_d_bench.db.dao.model_service_gateway_operation import GatewayOperationDao
 from llm_d_bench.db.dao.model_service_group import ModelServiceGroupDao
@@ -38,6 +42,7 @@ from llm_d_bench.model_service.gateway_providers import (
     MANAGED_VALUE,
     PoolBinding,
     default_pool_name,
+    ensure_istioctl,
     istio_authz_overlay,
     provider_spec,
     render_inference_gateway,
@@ -59,17 +64,23 @@ from llm_d_bench.utils.kubernetes import (
     scoped_runner,
     stop_port_forward_for,
 )
+from llm_d_bench.versions import (
+    gateway_provider_version,
+    inference_payload_processor_chart,
+    inference_payload_processor_version,
+)
+
+logger = logging.getLogger(__name__)
 
 RunnerFactory = Callable[[str | None], object]
 OnLog = Callable[[str], Awaitable[None]]
 
 DEFAULT_GATEWAY_NAMESPACE = "lens-gateway"
 DEFAULT_GATEWAY_NAME = "lens-inference-gateway"
-#: Published llm-d IPP Helm chart (override with LENS_IPP_CHART / LENS_IPP_VERSION).
-DEFAULT_IPP_CHART = "oci://ghcr.io/llm-d/charts/payload-processor"
-DEFAULT_IPP_VERSION = "v0.1.0"
 #: IPP Deployment/Service name installed per Gateway.
 DEFAULT_IPP_NAME = "lens-ipp"
+#: IPP gRPC (ext_proc) port the gateway connects to.
+IPP_GRPC_PORT = 9004
 #: Fallback ext_authz port used only before the backend has served any request
 #: (so its real listening port is not yet known).
 DEFAULT_AUTHZ_PORT = 8081
@@ -161,6 +172,25 @@ def gateway_base_url(cluster: object, public_host: str, global_url: str | None) 
     return f"http://{address}/v1" if address else ""
 
 
+#: Minimum seconds between automatic data-plane re-reconciles for one cluster.
+HEAL_COOLDOWN_SECONDS = 300.0
+
+
+def _data_plane_degraded(components: dict) -> bool:
+    """True when a member's components show a broken (not merely unready) data plane.
+
+    Distinguishes the shared-Gateway serving path from a deployment that simply
+    has not finished starting: a missing IPP, a failed end-to-end serving probe,
+    or a missing/degraded route/pool warrants a re-reconcile.
+    """
+    return (
+        components.get("ipp") == "missing"
+        or components.get("serving") in {"degraded", "unreachable"}
+        or components.get("httpRoute") in {"missing", "degraded"}
+        or components.get("inferencePool") in {"missing", "degraded"}
+    )
+
+
 class GatewayOpsService:
     def __init__(
         self,
@@ -184,6 +214,7 @@ class GatewayOpsService:
         self._gateway_ready_timeout = gateway_ready_timeout
         self._gateway_poll_interval = gateway_poll_interval
         self._sleep = sleep
+        self._last_heal: dict[str, float] = {}
 
     # --- helpers -------------------------------------------------------------
     def _record(self, operation: GatewayOperation) -> GatewayOperation:
@@ -800,17 +831,34 @@ class GatewayOpsService:
         # Lens' own live serving port. Unset host = ext_authz disabled.
         authz_host, authz_port = resolve_authz_endpoint(getattr(cluster, "gateway_authz_host", None))
         if install_prerequisites:
+            # Apply the pinned Gateway API / Gateway API Inference Extension CRDs
+            # before the provider, so their versions follow the stack profile.
+            try:
+                crds = await apply_gateway_crds(cluster_id)
+                for key, result in crds.items():
+                    await self._log(on_log, f"{key} CRDs: {'applied' if result['ok'] else result['message']}")
+            except Exception as error:  # noqa: BLE001 - provider install reports the real failure
+                await self._log(on_log, f"could not apply pinned CRDs: {error}")
             install_commands = list(spec.install_commands)
-            if authz_host and provider == "istio":
-                # Istio's ext_authz provider lives in meshConfig, which must be applied
-                # at install time; a values overlay is the reliable way to express the
-                # nested extensionProviders config.
-                overlay = tempfile.NamedTemporaryFile(  # noqa: SIM115 - kept for istioctl -f
-                    mode="w", suffix="-istio-authz.yaml", delete=False, prefix="lens-"
-                )
-                overlay.write(istio_authz_overlay(namespace, AUTHZ_SERVICE_PORT, cluster_id))
-                overlay.close()
-                install_commands = [("istioctl", "install", "-y", "-f", overlay.name)]
+            if provider == "istio":
+                # `istioctl install` uses the binary's own version, so run the
+                # istioctl pinned by the Lens stack profile.
+                version = gateway_provider_version("istio") or ""
+                try:
+                    istioctl = str(await asyncio.to_thread(ensure_istioctl, version))
+                except Exception as error:  # noqa: BLE001 - report download failures
+                    return self._finish(operation, ok=False, message=f"could not obtain istioctl {version}: {error}")
+                install_commands = [(istioctl, *command[1:]) for command in install_commands]
+                if authz_host:
+                    # Istio's ext_authz provider lives in meshConfig, which must be applied
+                    # at install time; a values overlay is the reliable way to express the
+                    # nested extensionProviders config.
+                    overlay = tempfile.NamedTemporaryFile(  # noqa: SIM115 - kept for istioctl -f
+                        mode="w", suffix="-istio-authz.yaml", delete=False, prefix="lens-"
+                    )
+                    overlay.write(istio_authz_overlay(namespace, AUTHZ_SERVICE_PORT, cluster_id))
+                    overlay.close()
+                    install_commands = [(istioctl, "install", "-y", "-f", overlay.name)]
             for argv in install_commands:
                 argv = list(argv)
                 await self._log(on_log, f"$ {' '.join(argv)}")
@@ -1047,8 +1095,8 @@ class GatewayOpsService:
         namespace = namespace or cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
         gateway_name = gateway_name or cluster.gateway_name or DEFAULT_GATEWAY_NAME
         provider = provider or cluster.gateway_provider or DEFAULT_PROVIDER
-        chart = (chart or os.environ.get("LENS_IPP_CHART") or DEFAULT_IPP_CHART).strip()
-        version = (version or os.environ.get("LENS_IPP_VERSION") or cluster.ipp_version or DEFAULT_IPP_VERSION).strip()
+        chart = (chart or inference_payload_processor_chart()).strip()
+        version = (version or inference_payload_processor_version()).strip()
         chart_provider = provider if provider in ("istio", "gke") else "none"
         argv = [
             "helm",
@@ -1109,6 +1157,42 @@ class GatewayOpsService:
             )
             if restarted.returncode != 0:
                 await self._log(on_log, f"rollout restart failed: {(restarted.stderr or '').strip()}")
+        # The chart ships no probes, so a hung payload processor stays Ready and
+        # stays in the Service endpoints, silently failing every gateway request.
+        # TCP probes on the gRPC port let kubelet restart it and remove it from
+        # the Service when it stops listening.
+        probe_patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "payload-processor",
+                                "livenessProbe": {
+                                    "tcpSocket": {"port": IPP_GRPC_PORT},
+                                    "initialDelaySeconds": 10,
+                                    "periodSeconds": 20,
+                                    "failureThreshold": 3,
+                                },
+                                "readinessProbe": {
+                                    "tcpSocket": {"port": IPP_GRPC_PORT},
+                                    "initialDelaySeconds": 5,
+                                    "periodSeconds": 10,
+                                    "failureThreshold": 3,
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        patched = await self._kubectl(
+            cluster_id,
+            ["patch", "deploy", name, "-n", namespace, "--type=strategic", "-p", json.dumps(probe_patch)],
+            timeout=30,
+        )
+        if patched.returncode != 0:
+            await self._log(on_log, f"could not add IPP probes: {(patched.stderr or '').strip()}")
         await self._log(on_log, "Waiting for the IPP rollout...")
         exists = await self._kubectl(cluster_id, ["get", "deploy", name, "-n", namespace, "-o", "name"], timeout=20)
         if exists.returncode != 0:
@@ -1314,13 +1398,16 @@ class GatewayOpsService:
                 continue
             # A model service is served per cluster: render a route from the members
             # that live in THIS cluster (a service may also have members elsewhere).
-            active = [m for m in cluster_members if m.status == "active" and member_pool_name(m)]
-            if not active:
+            # Include every published member, not only healthy ones: the health
+            # probe marks a member unhealthy when its route is missing, so routing
+            # only "active" members would never create the route that heals it.
+            published = [m for m in cluster_members if m.status != "disabled" and member_pool_name(m)]
+            if not published:
                 continue
             # llm-d's data plane is one EPP per InferencePool and its gateway chart
             # renders one pool per HTTPRoute, so a model service routes to a single
-            # pool (the first active member in this cluster).
-            member = active[0]
+            # pool (the first published member in this cluster).
+            member = published[0]
             applied_names.add(resource_name(f"{group.name}-{group.id}"))
             documents.append(
                 render_model_route(
@@ -1407,6 +1494,7 @@ class GatewayOpsService:
         deployment was deleted) are removed instead of left dangling.
         """
         updated = 0
+        heal: set[str] = set()
         for member in self.members.list_all():
             if member.status == "disabled":
                 continue
@@ -1423,7 +1511,36 @@ class GatewayOpsService:
             member.status = "active" if healthy else "unhealthy"
             self.members.save(member)
             updated += 1
+            if not healthy and _data_plane_degraded(detail.get("components") or {}):
+                heal.add(member.cluster_id)
+        for cluster_id in heal:
+            await self._heal_data_plane(cluster_id)
         return updated
+
+    async def _heal_data_plane(self, cluster_id: str) -> None:
+        """Reconcile the shared Gateway and IPP when the data plane is broken.
+
+        A stale ext_proc connection (for example after an IPP restart) leaves the
+        resources Ready while every request fails. Re-applying the Gateway and
+        reinstalling the IPP re-establishes it. Cooled down so a permanently
+        broken cluster is not reconciled on every probe.
+        """
+        now = time.monotonic()
+        last = self._last_heal.get(cluster_id)
+        if last is not None and now - last < HEAL_COOLDOWN_SECONDS:
+            return
+        self._last_heal[cluster_id] = now
+        # `created_by_user_id` is a foreign key into `users`; an automatic run
+        # has no human actor, so it must be None (the same convention the
+        # background reconcile loop uses), never a literal placeholder string.
+        try:
+            await self.install_cluster_gateway(cluster_id, actor=None)
+        except Exception as error:  # noqa: BLE001 - best effort; the probe retries
+            logger.warning("data-plane auto-heal gateway failed for %s: %s", cluster_id, error)
+        try:
+            await self.install_ipp(cluster_id, actor=None)
+        except Exception as error:  # noqa: BLE001 - best effort; the probe retries
+            logger.warning("data-plane auto-heal IPP failed for %s: %s", cluster_id, error)
 
     async def _member_health(self, member) -> tuple[bool, dict]:
         checked = utcnow().isoformat()
@@ -1460,12 +1577,19 @@ class GatewayOpsService:
             pool_state, selector = await self._pool_state(member.cluster_id, pool_ns, pool_name)
             components["inferencePool"] = pool_state
             components["modelServer"] = await self._model_server_state(member.cluster_id, pool_ns, selector)
+            # The shared Gateway reaches the model only through the Inference
+            # Payload Processor (ext_proc); a down IPP breaks every request even
+            # though the route/pool/model look healthy.
+            ipp_ready, _ = await self._service_ready(member.cluster_id, DEFAULT_IPP_NAME, gateway_ns)
+            components["ipp"] = "ready" if ipp_ready else "missing"
+            components["serving"] = await self._gateway_serving_state(member, group)
         else:
             # A plain vllm endpoint: no HTTPRoute/InferencePool; the target Service
             # itself is the model server.
             components["httpRoute"] = "n/a"
             components["inferencePool"] = "n/a"
             components["modelServer"] = components["epp"]
+            components["serving"] = "n/a"
 
         ready = status == "ready" and all(state in ("ready", "n/a") for state in components.values())
         detail: dict = {
@@ -1477,6 +1601,38 @@ class GatewayOpsService:
         if status != "ready":
             detail["error"] = f"deployment status is {status or 'unknown'}"
         return ready, detail
+
+    async def _gateway_serving_state(self, member, group) -> str:
+        """End-to-end probe of the shared Gateway data plane.
+
+        The Inference Payload Processor (ext_proc) runs before authentication, so
+        an unauthenticated probe that returns an auth error (401/403) proves the
+        Gateway route, IPP ext_proc, InferencePool and EPP are wired. A 5xx or a
+        transport failure means the data plane is broken (for example a stalled
+        ext_proc connection after the IPP restarted) even when every resource is
+        Ready -- the checks above would otherwise report all-green.
+        """
+        cluster = get_cluster(member.cluster_id)
+        if cluster is None:
+            return "n/a"
+        global_url = os.environ.get("LENS_MODEL_GATEWAY_PUBLIC_URL", "").strip()
+        base = gateway_base_url(cluster, local_public_ip(), global_url)
+        if not base:
+            return "n/a"
+        model = (group.model_ref if group else None) or (group.name if group else None)
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    f"{base}/chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "max_tokens": 1,
+                    },
+                )
+        except Exception:  # noqa: BLE001 - any transport error means unreachable
+            return "unreachable"
+        return "ready" if response.status_code < 500 else "degraded"
 
     async def _service_ready(self, cluster_id: str, service: str, namespace: str) -> tuple[bool, int]:
         """Whether a Service has ready endpoints (its own backing pods)."""

@@ -455,7 +455,7 @@ def test_create_api_keeps_json_shape_and_passes_typed_request(simulation_root, m
     task = task_record(simulation_root, "1234abcd", "queued")
     received = []
 
-    async def fake_create(request):
+    async def fake_create(request, **_kwargs):
         received.append(request)
         return task
 
@@ -2250,3 +2250,71 @@ async def test_tolerated_host_timeout_marks_artifacts_incomplete(simulation_root
     )
     assert result.timed_out
     assert context.artifacts_incomplete
+
+
+@pytest.mark.asyncio
+async def test_create_task_resolves_a_model_service_group_to_its_healthy_member(simulation_root, monkeypatch):
+    """A Simulation task may target a published Model Service instead of picking a
+    deployment execution directly -- only a Model Service is continuously
+    health-probed, so this is the only existing-endpoint path with live backend
+    liveness (see llm_d_bench/model_service/resolution.py).
+    """
+    import types
+
+    trace = simulation_root / "datasets" / "mooncake_trace.jsonl"
+    trace.write_text('{"timestamp":0,"input_length":1,"output_length":1,"hash_ids":[]}\n', encoding="utf-8")
+    monkeypatch.setattr(simulation_service, "_schedule_task", lambda _task: None)
+
+    group = types.SimpleNamespace(id="msg-1", name="qwen3-prod", status="active", selection_policy="random")
+    member = types.SimpleNamespace(execution_id="exec-1")
+
+    class _FakeGroups:
+        def get(self, group_id):
+            return group if group_id == "msg-1" else None
+
+    class _FakeModelService:
+        groups = _FakeGroups()
+
+        def authorized_members(self, group, principal):  # noqa: ARG002
+            return [member]
+
+    monkeypatch.setattr("llm_d_bench.model_service.service.default_service", lambda: _FakeModelService())
+    context = types.SimpleNamespace(
+        endpoint="http://vllm.my-namespace.svc:8000",
+        namespace="my-namespace",
+        cluster_id="cluster-123",
+        display_name="qwen3-0.6b",
+    )
+    monkeypatch.setattr("llm_d_bench.deploy.executions.get_execution_context", lambda execution_id: context)
+
+    request = SimulationTaskCreateRequest(
+        scenario="chat",
+        backend="aiperf",
+        endpoint_mode="external",
+        endpoint_url="http://model-service.internal",
+        model_name="placeholder",
+        model_service_group_id="msg-1",
+        api_key="lens-mk-x",
+        trace_dataset="mooncake-arxiv",
+        trace_path=trace.name,
+    )
+
+    task = await create_task(request)
+
+    assert task.endpoint_mode == "deployment"
+    assert task.endpoint_deployment_execution_id == "exec-1"
+    assert task.model_name == "qwen3-prod"
+    assert task.endpoint_url == "http://vllm.my-namespace.svc:8000"
+
+
+def test_model_service_group_id_requires_an_api_key():
+    with pytest.raises(ValidationError, match="api_key"):
+        SimulationTaskCreateRequest(
+            scenario="chat",
+            backend="aiperf",
+            endpoint_url="http://model-service.internal",
+            model_name="placeholder",
+            model_service_group_id="msg-1",
+            trace_dataset="mooncake-arxiv",
+            trace_path="trace.jsonl",
+        )

@@ -128,7 +128,7 @@ const DEFAULT_DEPLOYMENT_ENVIRONMENT = {
     repository: '', branch: '',
     httpProxy: 'http://proxy.ims.intel.com:911', httpsProxy: 'http://proxy.ims.intel.com:911',
     noProxy: 'intel.com,.intel.com,localhost,127.0.0.1', modelSource: 'download', mountPath: '', mountModelName: '', storageVolumeId: '',
-    imageMode: 'use-upstream-image', upstreamImage: 'ghcr.io/llm-d/llm-d-xpu:v0.9.0', buildSourceUrl: '', targetImageName: '',
+    imageMode: 'use-upstream-image', upstreamImage: 'ghcr.io/llm-d/llm-d-xpu', buildSourceUrl: '', targetImageName: '',
 };
 
 const isValidWorkload = (value) => Boolean(value.model?.trim() && value.accelerator

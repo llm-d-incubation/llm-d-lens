@@ -13,7 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Query, Request, Resp
 from pydantic import ValidationError
 
 from llm_d_bench.auth.access import current_principal, filter_by_cluster
-from llm_d_bench.cluster import registry, repo_downloads, service, sessions
+from llm_d_bench.cluster import gateway_crds, images, registry, repo_downloads, service, sessions
 from llm_d_bench.cluster.deployment_source import resolve_cluster_benchmark_source, resolve_cluster_deployment_source
 from llm_d_bench.cluster.errors import ClusterOverviewError
 from llm_d_bench.cluster.models import (
@@ -24,6 +24,7 @@ from llm_d_bench.cluster.models import (
     CreateClusterResponse,
     HfTokenSecretCreateRequest,
     HfTokenSecretRef,
+    ImagePrepullRequest,
     KubernetesSummary,
     NodeMaintenanceRequest,
     NodeMaintenanceResponse,
@@ -35,6 +36,7 @@ from llm_d_bench.cluster.models import (
 )
 from llm_d_bench.cluster.sdk_discovery import router as planning_discovery_router
 from llm_d_bench.utils.hostinfo import local_host_addresses
+from llm_d_bench.versions import stack as stack_profile
 
 router = APIRouter(prefix="/api/cluster", tags=["cluster"])
 router.include_router(planning_discovery_router)
@@ -378,12 +380,11 @@ async def create_software_downloads(
     wizard's Software Versions step (cached under ``~/.cache/lens/repos``;
     see ``llm_d_bench.cluster.repo_downloads``). Poll via the GET below."""
     registry.require_cluster(cluster_id)
-    llm_d_ref = (payload.llm_d_ref or "").strip()
-    llm_d_benchmark_ref = (payload.llm_d_benchmark_ref or "").strip()
-    if llm_d_ref:
-        asyncio.create_task(_download_and_record(cluster_id, "llm-d", llm_d_ref))
-    if llm_d_benchmark_ref:
-        asyncio.create_task(_download_and_record(cluster_id, "llm-d-benchmark", llm_d_benchmark_ref))
+    # The downloaded revisions always follow the Lens stack profile; the request
+    # body is ignored so a caller cannot pin another revision.
+    current = stack_profile()
+    asyncio.create_task(_download_and_record(cluster_id, "llm-d", current.llm_d))
+    asyncio.create_task(_download_and_record(cluster_id, "llm-d-benchmark", current.llm_d_benchmark))
     return _download_status_response(cluster_id)
 
 
@@ -400,6 +401,93 @@ async def create_software_downloads(
 async def read_software_downloads(cluster_id: str) -> SoftwareDownloadStatusResponse:
     registry.require_cluster(cluster_id)
     return _download_status_response(cluster_id)
+
+
+@router.post(
+    "/clusters/{cluster_id}/images/prepull",
+    summary="Pre-pull the llm-d images for the selected accelerators onto every node.",
+    description=(
+        "Start a privileged DaemonSet that pulls the pinned llm-d-router (EPP, P/D sidecar) and "
+        "model-server images for the selected accelerators onto every cluster node. Poll the GET "
+        "below for per-node readiness."
+    ),
+    operation_id="create_cluster_image_prepull",
+)
+async def create_cluster_image_prepull(cluster_id: str, payload: ImagePrepullRequest) -> dict:
+    cluster = registry.require_cluster(cluster_id)
+    return await images.start_image_prepull(cluster_id, payload.accelerators, cluster.gateway_provider)
+
+
+@router.get(
+    "/clusters/{cluster_id}/images/prepull",
+    summary="Get the current image pre-pull status for a cluster.",
+    description=(
+        "Get the current image pre-pull status for a cluster: overall state, ready/desired node count "
+        "and each puller pod's node readiness."
+    ),
+    operation_id="get_cluster_image_prepull",
+)
+async def read_cluster_image_prepull(cluster_id: str) -> dict:
+    registry.require_cluster(cluster_id)
+    return await images.image_prepull_status(cluster_id)
+
+
+@router.post(
+    "/clusters/{cluster_id}/crds",
+    summary="Apply the pinned Gateway API / Gateway API Inference Extension CRDs.",
+    description=(
+        "Apply the Gateway API and Gateway API Inference Extension CRD bundles pinned by the Lens "
+        "stack profile. Returns a per-bundle result."
+    ),
+    operation_id="create_cluster_crds",
+)
+async def create_cluster_crds(cluster_id: str) -> dict:
+    registry.require_cluster(cluster_id)
+    return await gateway_crds.apply_gateway_crds(cluster_id)
+
+
+@router.get(
+    "/clusters/{cluster_id}/crds",
+    summary="Get Gateway API / Gateway API Inference Extension CRD status.",
+    description=(
+        "Report whether the pinned Gateway API and Gateway API Inference Extension CRDs are present "
+        "on the cluster (ready/missing per bundle)."
+    ),
+    operation_id="get_cluster_crds",
+)
+async def read_cluster_crds(cluster_id: str) -> dict:
+    registry.require_cluster(cluster_id)
+    return await gateway_crds.gateway_crds_status(cluster_id)
+
+
+@router.get(
+    "/clusters/{cluster_id}/kubernetes-version",
+    summary="Check a cluster's reachability and Kubernetes version against the stack minimum.",
+    description=(
+        "Probe the cluster's Kubernetes API for reachability and its server version, and compare it "
+        "with the minimum Kubernetes version pinned by the Lens stack profile."
+    ),
+    operation_id="get_cluster_kubernetes_version",
+)
+async def read_cluster_kubernetes_version(cluster_id: str) -> dict:
+    from llm_d_bench.hardware.version import server_kubernetes_version  # noqa: PLC0415
+    from llm_d_bench.versions import k8s_version_supports, min_k8s_version  # noqa: PLC0415
+
+    registry.require_cluster(cluster_id)
+    minimum = min_k8s_version()
+    try:
+        parsed = await server_kubernetes_version(cluster_id)
+    except Exception as error:  # noqa: BLE001 - report any probe failure to the wizard
+        return {"reachable": False, "error": str(error), "min_k8s_version": minimum}
+    if parsed is None:
+        return {"reachable": False, "min_k8s_version": minimum}
+    version = f"{parsed[0]}.{parsed[1]}"
+    return {
+        "reachable": True,
+        "version": version,
+        "min_k8s_version": minimum,
+        "supported": k8s_version_supports(version),
+    }
 
 
 @router.post(

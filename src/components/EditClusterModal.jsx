@@ -27,8 +27,6 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
     const [httpProxy, setHttpProxy] = useState('');
     const [httpsProxy, setHttpsProxy] = useState('');
     const [noProxy, setNoProxy] = useState('');
-    const [llmDRef, setLlmDRef] = useState('');
-    const [llmDBenchmarkRef, setLlmDBenchmarkRef] = useState('');
     const [gatewayProvider, setGatewayProvider] = useState('istio');
     const [gatewayPort, setGatewayPort] = useState('');
     // Optional externally reachable Gateway host/IP (or full URL); empty = derive.
@@ -49,8 +47,6 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
         setHttpProxy(cluster.proxy?.httpProxy || '');
         setHttpsProxy(cluster.proxy?.httpsProxy || '');
         setNoProxy(cluster.proxy?.noProxy || '');
-        setLlmDRef(cluster.llmDRef || '');
-        setLlmDBenchmarkRef(cluster.llmDBenchmarkRef || '');
         setGatewayProvider(cluster.gatewayProvider || 'istio');
         setGatewayPort(cluster.gatewayPort ? String(cluster.gatewayPort) : '');
         setGatewayPublicUrl(cluster.gatewayPublicUrl || '');
@@ -97,9 +93,6 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
         setBusy(true);
         setError('');
         try {
-            const trimmedLlmDRef = llmDRef.trim();
-            const trimmedBenchmarkRef = llmDBenchmarkRef.trim();
-            const refsChanged = trimmedLlmDRef !== (cluster.llmDRef || '') || trimmedBenchmarkRef !== (cluster.llmDBenchmarkRef || '');
             const payload = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
                 method: 'PATCH',
                 body: JSON.stringify({
@@ -109,8 +102,6 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                         proxyMode === 'custom'
                             ? { mode: 'custom', httpProxy: httpProxy.trim() || null, httpsProxy: httpsProxy.trim() || null, noProxy: noProxy.trim() || null }
                             : { mode: 'auto' },
-                    llmDRef: trimmedLlmDRef || null,
-                    llmDBenchmarkRef: trimmedBenchmarkRef || null,
                     // Only send gateway fields that actually changed, so editing e.g.
                     // the Lens address never overwrites a provider the user didn't touch.
                     ...(gatewayProvider !== (cluster.gatewayProvider || '') && { gatewayProvider: gatewayProvider || null }),
@@ -123,12 +114,11 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                 }),
             });
             let nextCluster = payload.cluster;
-            if (refsChanged && (trimmedLlmDRef || trimmedBenchmarkRef)) {
+            // Versions are profile-fixed; only fetch the sources when this
+            // cluster has not downloaded them yet.
+            if (!nextCluster.llmDRepoPath || !nextCluster.llmDBenchmarkRepoPath) {
                 setDownloadStatus({ downloading: true });
-                nextCluster = await downloadClusterSoftware(nextCluster, {
-                    llmDRef: trimmedLlmDRef || null,
-                    llmDBenchmarkRef: trimmedBenchmarkRef || null,
-                }, { onUpdate: setDownloadStatus });
+                nextCluster = await downloadClusterSoftware(nextCluster, { onUpdate: setDownloadStatus });
             }
             onSaved?.(nextCluster);
         } catch (nextError) {
@@ -215,11 +205,11 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                     <Label htmlFor="edit-inotify-limit">Node inotify limit (fs.inotify.max_user_instances)</Label>
                     <Input id="edit-inotify-limit" type="number" min="1" value={inotifyMaxUserInstances} onChange={(event) => setInotifyMaxUserInstances(event.target.value)} placeholder="8192" disabled={busy} />
                     <p className="text-xs text-slate-500">Applied to every node so a busy node does not exhaust inotify (kind defaults to 128). 8192 is recommended.</p>
-                    <Label htmlFor="edit-llmd-ref">llm-d version</Label>
-                    <Input id="edit-llmd-ref" value={llmDRef} onChange={(event) => setLlmDRef(event.target.value)} placeholder="main, v0.2.0, or a commit SHA" disabled={busy} />
-                    <Label htmlFor="edit-llmd-benchmark-ref">llm-d-benchmark version</Label>
-                    <Input id="edit-llmd-benchmark-ref" value={llmDBenchmarkRef} onChange={(event) => setLlmDBenchmarkRef(event.target.value)} placeholder="main, v0.2.0, or a commit SHA" disabled={busy} />
-                    <p className="text-xs text-slate-500">Changing a version re-downloads that repo to ~/.llm-d-lens before saving.</p>
+                    <p className="text-xs text-slate-500">
+                        llm-d component versions are fixed by this Lens release
+                        {cluster.llmDRef ? ` (llm-d ${cluster.llmDRef}${cluster.llmDBenchmarkRef ? `, llm-d-benchmark ${cluster.llmDBenchmarkRef}` : ''})` : ''}.
+                        The sources download automatically if missing.
+                    </p>
                     {downloadStatus?.llmD && (
                         <p className="text-xs text-cyan-300">llm-d: {downloadStatus.llmD.state}...</p>
                     )}

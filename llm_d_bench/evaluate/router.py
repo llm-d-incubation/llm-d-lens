@@ -42,7 +42,7 @@ from llm_d_bench.deploy.contracts import (
     DeploymentStatus,
     RuntimeBinding,
 )
-from llm_d_bench.deploy.executions import deployment_uses_shared_gateway
+from llm_d_bench.deploy.data_plane import deployment_uses_shared_gateway
 from llm_d_bench.deploy.usage import register_usage_probe
 from llm_d_bench.evaluate.api_models import (
     BenchmarkDefaultsResponse,
@@ -75,6 +75,7 @@ from llm_d_bench.evaluate.models import (
 from llm_d_bench.evaluate.request_evidence import apply_request_evidence, enable_request_reports
 from llm_d_bench.evaluate.workflow_state import TERMINAL_EVALUATION_STATUSES as _TERMINAL_EVALUATE_STATUSES
 from llm_d_bench.hardware.resolver import resolve_by_accelerator_key, resolve_by_device_class
+from llm_d_bench.model_service.resolution import resolve_model_service_target
 from llm_d_bench.monitoring.deployment import service as deployment_monitoring
 from llm_d_bench.monitoring.kv_trace.collector import KVTraceCollector
 from llm_d_bench.monitoring.profiling.service import (
@@ -85,6 +86,7 @@ from llm_d_bench.utils.artifact_store import register_artifacts
 from llm_d_bench.utils.artifacts import configuration_checksum
 from llm_d_bench.utils.kubernetes_proxy import api_server_host
 from llm_d_bench.utils.paths import storage_path
+from llm_d_bench.versions import router_chart_version, stack
 
 router = APIRouter(prefix="/api/v1/evaluate", tags=["evaluate"])
 _store = deployment_run_manager.store
@@ -105,14 +107,13 @@ _run_api_keys: dict[str, str] = {}
 _benchmark_install_lock = asyncio.Lock()
 _MONITORING_PREPARE_TIMEOUT = 30.0
 _OBSERVABILITY_COLLECT_TIMEOUT = 120.0
-_BENCHMARK_REPOSITORY = os.environ.get("LLM_D_BENCHMARK_REPOSITORY", "https://github.com/llm-d/llm-d-benchmark.git")
-_BENCHMARK_REVISION = os.environ.get("LLM_D_BENCHMARK_REVISION", "87d03da11e057e7eb5acf97f2cc01d79a35c7858")
+_BENCHMARK_REPOSITORY = "https://github.com/llm-d/llm-d-benchmark.git"
+_BENCHMARK_REVISION = stack().llm_d_benchmark
 _BENCHMARK_PLANNER = "git+https://github.com/llm-d-incubation/llm-d-planner.git@v0.1.0"
-_BENCHMARK_VERSION_OVERRIDES = (
-    "chartVersions.llmDInfra=v1.4.0",
-    "chartVersions.llmDModelservice=v0.4.9",
-    "wva.image.tag=0.5.1",
-)
+# llm-d-benchmark owns its component versions (its `chartVersions` defaults);
+# Lens only pins the shared llm-d-router release so benchmark and deployment
+# runs stay on the same router.
+_BENCHMARK_VERSION_OVERRIDES = (f"chartVersions.llmDRouter={router_chart_version()}",)
 # Default concurrency sweep for a matrix point when the caller doesn't supply its own
 # concurrency_stages: closed-loop (inference-perf `type: concurrent`) stages, each run
 # in the same llmdbenchmark invocation and read back individually via its own
@@ -1349,9 +1350,11 @@ def _hydrate_benchmark_context(run: dict) -> bool:
     if not run.get("namespace"):
         updates["namespace"] = execution.namespace
     if not run.get("model"):
-        # Keep legacy history readable when model metadata is incomplete.
+        # Keep legacy history readable when model metadata is incomplete. A Model
+        # Service run must display its published name, matching what _execute()
+        # will actually request through the Gateway.
         with contextlib.suppress(ValueError):
-            updates["model"] = _execution_model(execution)
+            updates["model"] = run.get("model_service_published_name") or _execution_model(execution)
     if not run.get("endpoint") and execution.endpoint:
         updates["endpoint"] = (
             execution.endpoint.baseline_url if run.get("use_baseline_endpoint") else execution.endpoint.url
@@ -3122,14 +3125,23 @@ async def _execute(run_id: str) -> None:
                     "this Guide deployment does not expose a kubernetes-service baseline endpoint for comparison"
                 )
             endpoint_url = execution.endpoint.baseline_url
-        elif deployment_uses_shared_gateway(execution):
-            # Provider declared the shared Gateway as this deployment's data
-            # plane: route through it so EPP stays in the path. Standalone
-            # providers and evaluation-owned deployments are reached directly.
+        elif run.get("model_service_group_id") or deployment_uses_shared_gateway(execution):
+            # An "existing endpoint" run always targets a published Model
+            # Service: its HTTPRoute reaches the InferencePool directly,
+            # regardless of what data plane the underlying deployment
+            # happened to resolve at deploy time (it may even still be
+            # rendering its own, unrelated proxy). Design Configuration runs
+            # (no model_service_group_id) fall back to the deployment's
+            # recorded data plane: route through the Gateway only when the
+            # provider declared it as this deployment's data plane.
             gateway_endpoint = await _cluster_gateway_endpoint(execution.provenance.get("cluster_server_id"))
             if gateway_endpoint:
                 endpoint_url = gateway_endpoint
-        run.update(endpoint_used=endpoint_url, namespace=execution.namespace, model=_execution_model(execution))
+        # A Model Service run must request the group's published name, not the
+        # execution's underlying model_ref: the Gateway's HTTPRoute only matches
+        # the BASE_MODEL_HEADER that ext_authz injects after validating that name.
+        model_name = run.get("model_service_published_name") or _execution_model(execution)
+        run.update(endpoint_used=endpoint_url, namespace=execution.namespace, model=model_name)
         session_id = execution.provenance.get("cluster_session_id")
         environment = {**os.environ, **deployment_runtime_overrides(session_id)} if session_id else dict(os.environ)
         harness_environment = _harness_proxy_environment(run, kubeconfig_path=environment.get("KUBECONFIG"))
@@ -3186,7 +3198,7 @@ async def _execute(run_id: str) -> None:
                 "--endpoint-url",
                 endpoint_url,
                 "--model",
-                _execution_model(execution),
+                model_name,
                 "--namespace",
                 execution.namespace or "default",
                 "--kubeconfig",
@@ -3234,7 +3246,6 @@ async def _execute(run_id: str) -> None:
             stages = [ConcurrencyStage(**stage) for stage in (run.get("concurrency_stages") or [])] or list(
                 _DEFAULT_CONCURRENCY_STAGES
             )
-            model_name = _execution_model(execution)
 
             async def _run_workload(workspace: Path, workload_path: Path) -> tuple[int, str, str]:
                 nonlocal process, kv_workspace
@@ -3377,7 +3388,6 @@ async def _execute(run_id: str) -> None:
             # _stage_metric_summary). Guide-agnostic: drives whatever endpoint this run's
             # deployment execution resolved to, regardless of which Guide/provider produced it.
             spec = SharedPrefixWorkloadSpec(**run["shared_prefix"])
-            model_name = _execution_model(execution)
             workload_path = output / "workload.yaml"
             workload_path.write_text(
                 _shared_prefix_workload_yaml(
@@ -3436,7 +3446,7 @@ async def _execute(run_id: str) -> None:
             workload_path.write_text(
                 _inline_workload_yaml(
                     run["workload_yaml"],
-                    _execution_model(execution),
+                    model_name,
                     endpoint_url,
                     run.get("sla_targets"),
                     api_key=api_key,
@@ -3463,7 +3473,7 @@ async def _execute(run_id: str) -> None:
                 "--endpoint-url",
                 "<deployment-endpoint>",
                 "--model",
-                _execution_model(execution),
+                model_name,
                 "--namespace",
                 execution.namespace or "default",
                 "--harness",
@@ -3502,7 +3512,7 @@ async def _execute(run_id: str) -> None:
                 "--endpoint-url",
                 "<deployment-endpoint>",
                 "--model",
-                _execution_model(execution),
+                model_name,
                 "--namespace",
                 execution.namespace or "default",
                 "--harness",
@@ -3849,9 +3859,13 @@ async def _execute_workflow(workflow_id: str) -> None:
 @router.post(
     "/runs",
     status_code=202,
-    summary="Start a benchmark run against a ready deployment execution.",
+    summary="Start a benchmark run against a ready deployment execution or a published Model Service.",
     description=(
         "Start a benchmark using the same runner, monitoring, KV collection and analysis as deployment workflows. "
+        "Set exactly one of deployment_execution_id (a specific deployment) or model_service_group_id (a published "
+        "Model Service; resolves to one of its currently healthy, authorized members and routes through the "
+        "cluster's shared Gateway using its published name and api_key, the same path real clients use -- "
+        "404 if missing, 409 if no member is currently healthy/authorized). "
         "Requires a ready execution and its active cluster session (404 if missing; 409 if not ready or the session "
         "is invalid). Reuses healthy Prometheus targets, otherwise attempts monitor/RBAC setup with a 30-second total "
         "preparation deadline; missing monitoring does not fail the benchmark. Reads existing KV instrumentation "
@@ -3864,7 +3878,13 @@ async def _execute_workflow(workflow_id: str) -> None:
     response_model_exclude_unset=True,
 )
 async def create_run(request: EvaluateRunRequest, http_request: Request = None) -> dict:
-    execution = _store.get_execution(request.deployment_execution_id)
+    model_service_published_name: str | None = None
+    deployment_execution_id = request.deployment_execution_id
+    if request.model_service_group_id:
+        deployment_execution_id, model_service_published_name = resolve_model_service_target(
+            request.model_service_group_id, http_request
+        )
+    execution = _store.get_execution(deployment_execution_id)
     if execution is None:
         raise HTTPException(status_code=404, detail="deployment execution not found")
     if execution.status != DeploymentStatus.READY or execution.endpoint is None:
@@ -3886,6 +3906,8 @@ async def create_run(request: EvaluateRunRequest, http_request: Request = None) 
         "status": "queued",
         "created_at": _now(),
         **request.model_dump(),
+        "deployment_execution_id": deployment_execution_id,
+        "model_service_published_name": model_service_published_name,
         "cluster_session_id": session_id,
         "deployment_ownership": "existing-endpoint",
         "cluster_id": execution.provenance.get("cluster_server_id") or sessions.get_session(session_id).server_id,

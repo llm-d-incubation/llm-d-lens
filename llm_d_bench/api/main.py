@@ -54,6 +54,7 @@ from llm_d_bench.simulation import router as simulation_router
 from llm_d_bench.storage.router import router as storage_router
 from llm_d_bench.utils import hostinfo as _hostinfo
 from llm_d_bench.utils.kubernetes import router as cluster_router
+from llm_d_bench.versions.router import router as versions_router
 
 app = FastAPI(
     title="Lens API",
@@ -297,6 +298,7 @@ app.include_router(model_service_router)
 app.include_router(model_service_admin_router)
 app.include_router(model_service_internal_router)
 app.include_router(model_service_public_router)
+app.include_router(versions_router)
 
 
 @app.get("/api/health", tags=["system"])

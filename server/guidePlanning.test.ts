@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { ROUTER_DISAGG_SIDECAR_IMAGE } from './guideDeploymentBundle.ts';
 import { applyCustomPatches, isAcceleratorDeviceClass, planDocuments, resolveAcceleratorVariant, runtimeClassForAccelerator, validateManifestCapacity } from './guidePlanning.ts';
 
 test('the vendor container runtime is used when the cluster defines one', () => {
@@ -106,7 +107,7 @@ test('PD planning reports prefill and decode tensor parallel sizes independently
     assert.ok(!result.validation.warnings.some((message: string) => message.includes('manifest requests 4')));
     const decode = result.documents.find((item) => item.metadata?.name === 'pd-decode');
     assert.equal(decode.spec.template.spec.containers[0].image, 'ghcr.io/llm-d/llm-d-xpu:v0.9.0');
-    assert.equal(decode.spec.template.spec.initContainers[0].image, 'ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0');
+    assert.equal(decode.spec.template.spec.initContainers[0].image, ROUTER_DISAGG_SIDECAR_IMAGE);
     assert.equal(decode.spec.template.spec.initContainers[0].imagePullPolicy, 'IfNotPresent');
     assert.ok(decode.spec.template.spec.initContainers[0].args.includes('--vllm-port=8200'));
 });

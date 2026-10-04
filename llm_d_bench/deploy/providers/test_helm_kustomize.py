@@ -95,7 +95,9 @@ def test_patch_documents_sets_xpu_startup_budget_and_model_length():
         "environment": {},
     }
 
-    HelmKustomizeGuideAdapter._patch_documents(documents, parameters)
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = None
+    adapter._patch_documents(documents, parameters)
 
     deployment = documents[0]
     command = deployment["spec"]["template"]["spec"]["containers"][0]["args"][0]
@@ -134,7 +136,9 @@ def test_patch_documents_runs_huggingface_offline_for_a_mounted_cache():
         "environment": {},
     }
 
-    HelmKustomizeGuideAdapter._patch_documents(documents, parameters)
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = None
+    adapter._patch_documents(documents, parameters)
 
     container = documents[0]["spec"]["template"]["spec"]["containers"][0]
     assert container["args"][0].startswith("exec vllm serve /model-cache")

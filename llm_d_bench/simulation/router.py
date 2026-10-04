@@ -243,11 +243,11 @@ async def tasks_catalog(
     description="Create a Simulation task that replays a trace dataset against a target model endpoint.",
     operation_id="create_simulation_task",
 )
-async def create_simulation_task(request: SimulationTaskCreateRequest) -> dict[str, Any]:
+async def create_simulation_task(request: SimulationTaskCreateRequest, http_request: Request = None) -> dict[str, Any]:
     try:
         if request.cluster_session_id:
             require_active_session(request.cluster_session_id)
-        task = await create_task(request)
+        task = await create_task(request, http_request=http_request)
         return {"task_id": task.id, "status": "queued", "task": _task_json(task)}
     except SimulationConfigurationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -368,9 +368,10 @@ async def stop_simulation_task(task_id: str) -> dict[str, str]:
 async def rerun_simulation_task(
     task_id: str,
     request: SimulationTaskRerunRequest | None = None,
+    http_request: Request = None,
 ) -> dict[str, Any]:
     try:
-        task = await rerun_task(task_id, override=request)
+        task = await rerun_task(task_id, override=request, http_request=http_request)
         return {"task_id": task.id, "status": "queued", "task": _task_json(task)}
     except SimulationConfigurationError as error:
         code = 404 if str(error) == "Simulation task not found" else 400

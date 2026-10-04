@@ -454,6 +454,11 @@ Create a Simulation task that replays a trace dataset against a target model end
     Request body: `SimulationTaskCreateRequest`
     - `name`, `description`, `scenario`, `backend`, `endpoint_mode`
     - `cluster_session_id`, `endpoint_namespace`, `endpoint_service`, `endpoint_deployment_execution_id`, `endpoint_cluster_id`, `endpoint_cluster_name`, `endpoint_deployment_name`
+    - `model_service_group_id` (`string`, optional) — target a published, continuously health-probed
+      Model Service instead of a raw deployment execution. When set, the backend resolves it to the
+      group's active member and published name and forces `endpoint_mode` to `"deployment"`,
+      overriding any supplied `endpoint_deployment_execution_id`/`model_name`. Requires `api_key`.
+    - `api_key` (`string`, optional) — model access token; required when `model_service_group_id` is set.
     - `endpoint_url`, `model_name`, `trace_dataset`, `trace_path`
     - `duration_seconds`, `scale_factor`, `trace_start_seconds`, `trace_end_seconds`, `trace_timeout_seconds`, `fixed_schedule`, `stream`, `backend_options`
 
@@ -483,6 +488,26 @@ Create a Simulation task that replays a trace dataset against a target model end
       "fixed_schedule": true,
       "stream": true,
       "backend_options": {}
+    }
+    ```
+
+    To target a published Model Service instead, set `model_service_group_id` and `api_key`; the
+    backend discards the supplied `endpoint_deployment_execution_id`/`endpoint_url`/`model_name` and
+    re-resolves them from the group's active member (a syntactically valid placeholder URL still
+    satisfies request validation):
+
+    ```json
+    {
+      "name": "Trace simulation",
+      "scenario": "chat",
+      "backend": "trace-replayer",
+      "endpoint_mode": "deployment",
+      "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+      "api_key": "lens-mk-…",
+      "endpoint_url": "http://model-service.internal",
+      "model_name": "qwen3-8b",
+      "trace_dataset": "mooncake-arxiv",
+      "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl"
     }
     ```
 
@@ -572,6 +597,23 @@ async def main() -> None:
             endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000001",
             endpoint_url="http://127.0.0.1:38000/v1",
             model_name="Qwen/Qwen3-8B",
+            trace_dataset="mooncake-arxiv",
+            trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+        )
+    )
+    print(task.id, task.status)
+
+    # Or target a published Model Service (resolves to its active member and
+    # published name; requires api_key, and endpoint_url/model_name are discarded):
+    task = await create_task(
+        SimulationTaskCreateRequest(
+            scenario="chat",
+            backend="trace-replayer",
+            endpoint_mode="deployment",
+            model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+            api_key="lens-mk-…",
+            endpoint_url="http://model-service.internal",
+            model_name="qwen3-8b",
             trace_dataset="mooncake-arxiv",
             trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
         )
@@ -846,6 +888,9 @@ Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh 
     Request body: `SimulationTaskRerunRequest` (optional)
     - Path parameter: `task_id` (`string`, required)
     - Optional body fields: `endpoint_url`, `endpoint_deployment_execution_id`, `endpoint_cluster_id`, `endpoint_cluster_name`, `endpoint_deployment_name`
+    - `model_service_group_id` (`string`, optional) — re-bind to a published, health-probed Model Service
+      instead of a raw deployment execution; resolved the same way as on task creation and preferred
+      over `endpoint_deployment_execution_id` when both are supplied.
 
     ```json
     {
@@ -941,6 +986,14 @@ async def main() -> None:
             endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000002",
             endpoint_url="http://127.0.0.1:39000/v1",
         ),
+    )
+    print(task.id, task.name)
+
+    # Or re-bind to a published Model Service (preferred over
+    # endpoint_deployment_execution_id when both are supplied):
+    task = await rerun_task(
+        "1a2b3c4d",
+        override=SimulationTaskRerunRequest(model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11"),
     )
     print(task.id, task.name)
 

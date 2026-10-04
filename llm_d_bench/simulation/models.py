@@ -65,6 +65,12 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
     endpoint_namespace: str | None = None
     endpoint_service: str | None = None
     endpoint_deployment_execution_id: str | None = None
+    #: A published Model Service group id. When set, the backend resolves it to
+    #: one of its currently healthy, authorized members and routes through the
+    #: cluster's shared Gateway using its published name, exactly like
+    #: endpoint_mode "deployment" -- the caller does not also pick a deployment
+    #: execution directly. Requires api_key (the HTTPRoute requires auth).
+    model_service_group_id: str | None = Field(default=None, min_length=1)
     endpoint_cluster_id: str | None = None
     endpoint_cluster_name: str | None = None
     endpoint_deployment_name: str | None = None
@@ -99,6 +105,12 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
             raise ValueError("trace_end_seconds must be greater than trace_start_seconds")
         return self
 
+    @model_validator(mode="after")
+    def validate_model_service_target(self) -> SimulationTaskCreateRequest:
+        if self.model_service_group_id and not self.api_key:
+            raise ValueError("model_service_group_id requires api_key (a model access token)")
+        return self
+
 
 class SimulationTaskRerunRequest(FrozenDomainModel):
     """Optional overrides accepted when re-running a simulation task.
@@ -114,6 +126,10 @@ class SimulationTaskRerunRequest(FrozenDomainModel):
     endpoint_cluster_id: str | None = None
     endpoint_cluster_name: str | None = None
     endpoint_deployment_name: str | None = None
+    #: Re-bind the legacy task to a published, health-probed Model Service instead
+    #: of a raw deployment execution id. Mutually preferred over
+    #: ``endpoint_deployment_execution_id`` when both are supplied.
+    model_service_group_id: str | None = None
     #: Re-supply the model access token for a rerun; it is never persisted.
     api_key: str | None = Field(default=None, exclude=True, max_length=4096)
 
@@ -219,6 +235,11 @@ class SimulationTask(BaseModel):
     endpoint_namespace: str | None = None
     endpoint_service: str | None = None
     endpoint_deployment_execution_id: str | None = None
+    # Set when this task targets a published Model Service rather than a raw
+    # deployment: its endpoint always resolves through the shared Gateway
+    # (see ``_resolve_task_endpoint_url``), regardless of what data plane the
+    # underlying deployment happens to have rendered at deploy time.
+    model_service_group_id: str | None = None
     # Legacy identifiers retained so historical task records stay readable.
     endpoint_deployment_run_id: str | None = None
     endpoint_deployment_case_id: str | None = None

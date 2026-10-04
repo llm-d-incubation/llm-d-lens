@@ -582,6 +582,7 @@ async def _resolve_task_endpoint_url(
     endpoint_deployment_execution_id: str | None,
     backend_name: str | None = None,
     backend_capabilities: dict | None = None,
+    force_gateway: bool = False,
 ) -> ResolvedTaskEndpoint:
     """Resolve the reachable endpoint URL for a task.
 
@@ -594,6 +595,11 @@ async def _resolve_task_endpoint_url(
     in the deployment's namespace (see ``llm_d_bench.simulation.incluster``),
     which reaches this in-cluster URL like any other cluster-local client.
     External/in-cluster-endpoint tasks keep their provided URL unchanged.
+
+    ``force_gateway`` is set for tasks that target a published Model Service:
+    its HTTPRoute reaches the InferencePool directly regardless of what data
+    plane the underlying deployment rendered at deploy time (it may even
+    still be rendering its own, unrelated proxy).
     """
     url = endpoint_url.rstrip("/")
     if endpoint_mode != "deployment" or not endpoint_deployment_execution_id:
@@ -630,9 +636,10 @@ async def _resolve_task_endpoint_url(
         cluster_name = cluster.name if cluster else None
     # Only deployments whose provider declared the shared Gateway as their data
     # plane (and that are not evaluation-owned) are reached through it; all other
-    # deployments keep their own callable endpoint.
+    # deployments keep their own callable endpoint. A Model Service run always
+    # forces it: its HTTPRoute reaches the InferencePool directly.
     endpoint_url = context.endpoint
-    if getattr(context, "uses_shared_gateway", False):
+    if force_gateway or getattr(context, "uses_shared_gateway", False):
         endpoint_url = await _cluster_gateway_endpoint(context.cluster_id) or context.endpoint
     return ResolvedTaskEndpoint(
         url=endpoint_url,
@@ -644,9 +651,20 @@ async def _resolve_task_endpoint_url(
     )
 
 
-async def create_task(request: SimulationTaskCreateRequest) -> SimulationTask:
+async def create_task(request: SimulationTaskCreateRequest, *, http_request: object | None = None) -> SimulationTask:
     global pending_creates
     request = request.model_copy(deep=True)
+    if request.model_service_group_id:
+        from llm_d_bench.model_service.resolution import resolve_model_service_target  # noqa: PLC0415
+
+        execution_id, published_name = resolve_model_service_target(request.model_service_group_id, http_request)
+        request = request.model_copy(
+            update={
+                "endpoint_mode": "deployment",
+                "endpoint_deployment_execution_id": execution_id,
+                "model_name": published_name,
+            }
+        )
     async with _get_create_lock():
         pending_creates += 1
     try:
@@ -725,6 +743,7 @@ async def create_task(request: SimulationTaskCreateRequest) -> SimulationTask:
             endpoint_deployment_execution_id=request.endpoint_deployment_execution_id,
             backend_name=request.backend,
             backend_capabilities=descriptor.capabilities,
+            force_gateway=bool(request.model_service_group_id),
         )
         endpoint_url = resolved_endpoint.url
         while True:
@@ -747,6 +766,7 @@ async def create_task(request: SimulationTaskCreateRequest) -> SimulationTask:
             endpoint_url=endpoint_url,
             model_name=request.model_name,
             api_key=request.api_key,
+            model_service_group_id=request.model_service_group_id,
             simulation=SimulationConfig(
                 backend=request.backend,
                 backend_options=request.backend_options,
@@ -807,6 +827,7 @@ async def rerun_task(
     task_id: str,
     *,
     override: SimulationTaskRerunRequest | None = None,
+    http_request: object | None = None,
 ) -> SimulationTask:
     global pending_creates
     source = await load_task(task_id)
@@ -818,10 +839,26 @@ async def rerun_task(
     if source.prompt.dataset.name is None:
         raise SimulationConfigurationError("Simulation task does not reference a trace dataset")
     override = override or SimulationTaskRerunRequest()
-    execution_id = override.endpoint_deployment_execution_id or _task_execution_id(source)
+    override_execution_id = override.endpoint_deployment_execution_id
+    override_deployment_name = override.endpoint_deployment_name
+    if override.model_service_group_id:
+        from llm_d_bench.model_service.resolution import resolve_model_service_target  # noqa: PLC0415
+
+        override_execution_id, override_deployment_name = resolve_model_service_target(
+            override.model_service_group_id, http_request
+        )
+        model_service_group_id = override.model_service_group_id
+    elif override.endpoint_deployment_execution_id:
+        # An explicit raw-deployment override replaces whatever Model Service
+        # the source task targeted.
+        model_service_group_id = None
+    else:
+        # No override at all: keep targeting the same Model Service (if any).
+        model_service_group_id = source.model_service_group_id
+    execution_id = override_execution_id or _task_execution_id(source)
     cluster_id = override.endpoint_cluster_id or source.endpoint_cluster_id
     cluster_name = override.endpoint_cluster_name or source.endpoint_cluster_name
-    deployment_name = override.endpoint_deployment_name or source.endpoint_deployment_name
+    deployment_name = override_deployment_name or source.endpoint_deployment_name
     base_url = override.endpoint_url or source.endpoint_url
     base_name = re.sub(r" · rerun [0-9a-f]{8}$", "", source.name)
     async with _get_create_lock():
@@ -837,6 +874,7 @@ async def rerun_task(
             endpoint_deployment_execution_id=execution_id,
             backend_name=source.simulation.backend,
             backend_capabilities=backend_capabilities,
+            force_gateway=bool(model_service_group_id),
         )
         endpoint_url = resolved_endpoint.url
         cluster_id = cluster_id or resolved_endpoint.cluster_id
@@ -859,6 +897,7 @@ async def rerun_task(
                 "endpoint_cluster_id": cluster_id,
                 "endpoint_cluster_name": cluster_name,
                 "endpoint_deployment_name": deployment_name,
+                "model_service_group_id": model_service_group_id,
                 "name": f"{base_name} · rerun {rerun_id}",
                 "status": "queued",
                 "task_dir": str(task_root() / rerun_id),
@@ -939,6 +978,7 @@ async def _run_task(task: SimulationTask) -> None:
             endpoint_mode=task.endpoint_mode,
             endpoint_url=task.endpoint_url,
             endpoint_deployment_execution_id=_task_execution_id(task),
+            force_gateway=bool(task.model_service_group_id),
         )
         task.endpoint_url = resolved_endpoint.url
         await save_task(task)

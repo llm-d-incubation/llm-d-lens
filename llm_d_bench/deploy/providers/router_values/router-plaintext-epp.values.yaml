@@ -1,0 +1,14 @@
+# Force the router chart's EPP to plaintext h2c ext_proc.
+#
+# Both the deployment's own router proxy (when present) and the cluster-shared
+# Gateway reach the EPP over plaintext gRPC. The chart renders the EPP's
+# `--secure-serving` flag AND its proxy's ext_proc cluster from this same value,
+# so setting it false keeps them consistent. Leaving it at the EPP default
+# (secure-serving=true) means an EPP later flipped to plaintext for Gateway Mode
+# leaves the proxy on TLS, and every request through it returns 503
+# ("no healthy upstream"). `router-gateway-mode.values.yaml` additionally
+# disables the proxy for the shared Gateway.
+router:
+  epp:
+    flags:
+      secure-serving: false

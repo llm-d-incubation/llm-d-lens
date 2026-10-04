@@ -81,6 +81,8 @@ class BaselineVllmAdapter:
             source_ref=self._definition.source_ref,
             guide_content_hash=self._definition.content_hash,
             manifest_checksum=stable_hash({"content": manifest.read_text(encoding="utf-8")}),
+            # Plain vLLM Service, not an llm-d router: never uses the shared Gateway.
+            deployment_contract={"data_plane_kind": "direct"},
         )
 
     async def deploy(self, artifact: GuideDeploymentArtifact, execution_context: dict[str, Any]) -> dict[str, Any]:

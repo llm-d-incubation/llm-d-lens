@@ -523,6 +523,63 @@ async def test_execute_skips_warmup_when_warmup_requests_is_zero(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_execute_routes_model_service_runs_through_the_gateway_regardless_of_data_plane(monkeypatch, tmp_path):
+    # An "existing endpoint" run targets a published Model Service: its
+    # HTTPRoute reaches the InferencePool directly, so the harness must use
+    # the shared Gateway even though the underlying deployment's recorded (or
+    # declared) data plane says it normally keeps its own proxy.
+    run = {
+        "id": "run-model-service",
+        "deployment_execution_id": "exec-1",
+        "model_service_group_id": "msg-1",
+        "model_service_published_name": "Qwen/Qwen3-0.6B",
+        "specification_file": "guides/optimized-baseline",
+        "harness": "inference-perf",
+        "workload": "sanity_random.yaml",
+        "parallelism": 1,
+        "wait_timeout_seconds": 60,
+        "matrix": [{"isl": 1024, "osl": 128}],
+        "concurrency_stages": [{"concurrency": 1, "num_requests": 2}],
+        "warmup_requests": 0,
+    }
+    _patch_execute_dependencies(monkeypatch, tmp_path, run, [_FakeProcess(0)])
+    monkeypatch.setattr(router, "deployment_uses_shared_gateway", lambda _execution: False)
+    monkeypatch.setattr(router, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local"))
+
+    await router._execute(run["id"])
+
+    assert run["endpoint_used"] == "http://gateway.local"
+    assert run["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_execute_keeps_deployment_endpoint_for_design_configuration_runs(monkeypatch, tmp_path):
+    # A Design Configuration run (no model_service_group_id) falls back to the
+    # deployment's own data plane: it must not be routed through the Gateway
+    # just because one happens to be ready in the cluster.
+    run = {
+        "id": "run-design-config",
+        "deployment_execution_id": "exec-1",
+        "specification_file": "guides/optimized-baseline",
+        "harness": "inference-perf",
+        "workload": "sanity_random.yaml",
+        "parallelism": 1,
+        "wait_timeout_seconds": 60,
+        "matrix": [{"isl": 1024, "osl": 128}],
+        "concurrency_stages": [{"concurrency": 1, "num_requests": 2}],
+        "warmup_requests": 0,
+    }
+    _patch_execute_dependencies(monkeypatch, tmp_path, run, [_FakeProcess(0)])
+    monkeypatch.setattr(router, "deployment_uses_shared_gateway", lambda _execution: False)
+    monkeypatch.setattr(router, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local"))
+
+    await router._execute(run["id"])
+
+    assert run["endpoint_used"] == "http://endpoint.local"
+    assert run["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("matrix", [True, False])
 async def test_execute_isolates_cluster_process_from_harness_proxies(monkeypatch, tmp_path, matrix):
     import os
@@ -576,7 +633,7 @@ async def test_execute_isolates_cluster_process_from_harness_proxies(monkeypatch
 
 
 def test_deployment_uses_shared_gateway_from_contract_and_ownership():
-    from llm_d_bench.deploy.executions import deployment_uses_shared_gateway
+    from llm_d_bench.deploy.data_plane import deployment_uses_shared_gateway
 
     def execution(provenance, shares_gateway):
         return SimpleNamespace(

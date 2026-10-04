@@ -57,11 +57,52 @@ export async function waitForSoftwareDownloads(clusterId, { onUpdate, timeoutMs 
     }
 }
 
-export async function downloadClusterSoftware(cluster, refs, options = {}) {
+export function loadStackVersions() {
+    return clusterRequest('/api/v1/versions');
+}
+
+export function loadClusterKubernetesVersion(clusterId) {
+    return clusterRequest(`/api/cluster/clusters/${encodeURIComponent(clusterId)}/kubernetes-version`);
+}
+
+export function loadClusterCrds(clusterId) {
+    return clusterRequest(`/api/cluster/clusters/${encodeURIComponent(clusterId)}/crds`);
+}
+
+export function applyClusterCrds(clusterId) {
+    return clusterRequest(`/api/cluster/clusters/${encodeURIComponent(clusterId)}/crds`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+    });
+}
+
+export function startClusterImagePrepull(clusterId, accelerators) {
+    return clusterRequest(`/api/cluster/clusters/${encodeURIComponent(clusterId)}/images/prepull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accelerators }),
+    });
+}
+
+export async function waitForClusterImagePrepull(clusterId, { onUpdate, timeoutMs = 1800000, intervalMs = 3000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        const status = await clusterRequest(`/api/cluster/clusters/${encodeURIComponent(clusterId)}/images/prepull`);
+        onUpdate?.(status);
+        if (['ready', 'idle', 'failed'].includes(status?.state)) return status;
+        if (Date.now() > deadline) throw new Error('Timed out waiting for the image pre-pull to finish');
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+}
+
+export async function downloadClusterSoftware(cluster, options = {}) {
+    // The backend downloads the revisions pinned by the Lens stack profile; the
+    // request body is intentionally empty.
     await clusterRequest(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}/software-downloads`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(refs),
+        body: JSON.stringify({}),
     });
     const status = await waitForSoftwareDownloads(cluster.id, options);
     const failed = ['llmD', 'llmDBenchmark'].filter((key) => status[key]?.state === 'failed');

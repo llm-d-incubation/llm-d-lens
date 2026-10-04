@@ -126,6 +126,11 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/nodes/uncordon", "cluster:node:operate"),
     RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/software-downloads", "cluster:cluster:read"),
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/software-downloads", "cluster:cluster:update"),
+    RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/images/prepull", "cluster:cluster:read"),
+    RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/images/prepull", "cluster:cluster:update"),
+    RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/crds", "cluster:cluster:read"),
+    RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/crds", "cluster:cluster:update"),
+    RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/kubernetes-version", "cluster:cluster:read"),
     RoutePermission("GET", "/api/cluster/endpoints", "cluster:endpoint:read"),
     RoutePermission("GET", "/api/cluster/lens-hosts", "cluster:cluster:read"),
     RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/gateway-port-check", "cluster:cluster:update"),
@@ -299,6 +304,8 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("GET", "/api/v1/system/secret-key", "system:secret:read"),
     RoutePermission("POST", "/api/v1/system/secret-key/rotate", "system:secret:manage"),
     RoutePermission("DELETE", "/api/v1/system/secret-key/old", "system:secret:manage"),
+    # --- versions ---
+    RoutePermission("GET", "/api/v1/versions", AUTHENTICATED),
     # --- model service: user ---
     RoutePermission("GET", "/api/v1/model-service/tokens", "model-service:token:manage"),
     RoutePermission("POST", "/api/v1/model-service/tokens", "model-service:token:manage"),

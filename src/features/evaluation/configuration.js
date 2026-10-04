@@ -4,9 +4,14 @@ export const RUNTIME_CONTROL_ARGUMENTS = ['max-model-len', 'max-num-seqs', 'gpu-
 
 export function comparisonConfigurationDraft(source, provider) {
     const content = structuredClone(source.deployable_configuration.content);
+    // The comparison arm renders through the legacy per-provider overlay (it
+    // has no officialGuide/renderedManifest of its own), so the cluster's
+    // accelerator must be carried forward explicitly rather than re-derived.
+    const accelerator = content.officialGuide?.source?.accelerator || content.accelerator;
     delete content.officialGuide;
     // Guide-specific cache/network/router tuning must be reviewed for each comparison arm.
     delete content.guideSettings;
+    if (accelerator) content.accelerator = accelerator;
     if (provider.id !== 'pd-disaggregation') {
         delete content.prefill;
         content.customParameters = (content.customParameters || content.custom_parameters || []).filter(item => item.target !== 'prefill');

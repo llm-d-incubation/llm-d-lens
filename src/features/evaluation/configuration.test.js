@@ -39,6 +39,16 @@ test('comparison draft inherits runtime controls but uses target Guide variant a
     assert.equal(source.deployable_configuration.content.decode.replicaCount, 2);
 });
 
+test('comparison draft carries the original hardware selection forward instead of dropping it with officialGuide', () => {
+    const source = { deployable_configuration: { content: {
+        model: { name: 'model' }, decode: { replicaCount: 1 },
+        officialGuide: { source: { accelerator: 'gpu' }, renderedManifest: 'old' },
+    } } };
+    const draft = configuration.comparisonConfigurationDraft(source, { id: 'precise-prefix-cache-routing', evaluation: { default_variant: 'base' }, variants: ['base'] });
+    assert.equal(draft.deployable_configuration.content.officialGuide, undefined);
+    assert.equal(draft.deployable_configuration.content.accelerator, 'gpu');
+});
+
 test('single-pool comparison inherits decode controls and omits prefill-only overrides', () => {
     const draft = configuration.comparisonConfigurationDraft({ deployable_configuration: { content: { customParameters: [
         { target: 'prefill', kind: 'environment', name: 'PREFILL_ONLY', value: '1' },

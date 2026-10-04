@@ -537,11 +537,15 @@ Authentication is no longer a single enum mode, but **a set of enabled `identity
 
 - `GET /api/v1/auth/providers` returns enabled providers (with secrets removed), and the login page renders
   one or more login entries based on that; the `local` provider always exists (that is, the Lens self-managed path).
-- The semantics of `PRISM_AUTH_MODE` are adjusted to: `local` (local only, default), `external` (external only),
-  `hybrid` (local + external, recommended default), `disabled` (**development only**, skip validation, map everyone
-  to built-in `admin`; requires `PRISM_ALLOW_UNAUTHENTICATED=true` and
-  `NODE_ENV!=production`, with a conspicuous warning logged on startup). In `hybrid`, if an unknown user
-  does not exist locally, fall back to the external provider.
+- There is no global `PRISM_AUTH_MODE` local/external/hybrid switch: `POST /api/v1/auth/login` resolves each
+  username to whichever source actually owns that account. A username already provisioned with
+  `auth_source=local` is verified against its local password hash; a username already provisioned from a
+  directory (`auth_source` set to a provider type by a prior login or a directory sync) is verified against
+  that one provider only, never the local hash; a username not provisioned yet is a first-time directory
+  login, so every enabled external provider is tried in turn and the first match JIT-provisions the account.
+  `PRISM_AUTH_MODE` is retained only for its unrelated `disabled` value (**development only**, skip
+  validation, map everyone to built-in `admin`; requires `PRISM_ALLOW_UNAUTHENTICATED=true` and
+  `NODE_ENV!=production`, with a conspicuous warning logged on startup).
 - Backward compatibility for old switch: recognize `SIMULATION_ALLOW_UNAUTHENTICATED=true` as an alias for `disabled`
   (`cluster-monitoring-service-design.md:100-101`), to be deprecated in the next major version.
 - **Two-path conflicts** (decisions D15/D18): `(provider_id, external_id)` is unique; when usernames conflict,
@@ -1533,7 +1537,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PRISM_AUTH_MODE` | `local` | `local` (self-managed only) \| `external` (external only) \| `hybrid` \| `disabled` |
+| `PRISM_AUTH_MODE` | `local` | `disabled` (dev/test only: skip auth entirely) \| any other value (no effect — login routing is decided per-username, see §5) |
 | `PRISM_ALLOW_UNAUTHENTICATED` | `false` | Development only; prerequisite for `disabled` |
 | `LENS_SECRET_KEY` | — | Encrypts LDAP secrets and signatures |
 | `LENS_INTERNAL_AUTH_SECRET` | — | Internal signature between Node↔Python |

@@ -23,6 +23,7 @@ from llm_d_bench.deploy.contracts import (
     DeploymentMetadataUpdateRequest,
     DeploymentStatus,
 )
+from llm_d_bench.deploy.data_plane import deployment_uses_shared_gateway
 from llm_d_bench.deploy.runtime.composition import RuntimeConfigurationError
 from llm_d_bench.deploy.usage import active_usage_reason
 
@@ -305,33 +306,6 @@ def _context(run, case, execution) -> DeploymentExecutionContext:
         ),
         uses_shared_gateway=deployment_uses_shared_gateway(execution),
     )
-
-
-def deployment_uses_shared_gateway(execution: object) -> bool:
-    """True when a benchmark must reach this deployment through the shared Gateway.
-
-    A provider whose data plane is the cluster's shared Gateway disables the
-    deployment's own router proxy and records ``shares_gateway`` in the
-    persisted deployment contract; only those deployments need the Gateway (and
-    the model token it enforces). Evaluation-owned deployments keep their own
-    proxy even then, so they are always reached directly.
-    """
-    provenance = getattr(execution, "provenance", {}) or {}
-    if (
-        provenance.get("evaluate_workflow")
-        or provenance.get("evaluation_id")
-        or provenance.get("evaluation_case_id")
-    ):
-        return False
-    artifact = getattr(execution, "artifact", None)
-    payload = getattr(artifact, "rendered_payload", None)
-    value = getattr(payload, "value", None) or {}
-    contract = value.get("deployment_contract") or {}
-    if "shares_gateway" in contract:
-        return bool(contract["shares_gateway"])
-    # Executions rendered before the contract carried the flag: optimized-baseline
-    # is the only Guide that ever disabled the per-deployment proxy.
-    return value.get("provider_ref") == "optimized-baseline"
 
 
 def _optional_str(value: object | None) -> str | None:

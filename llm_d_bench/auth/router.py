@@ -248,20 +248,11 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
     service = default_service()
     ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
-    result = None
-    if get_settings().auth_mode in ("local", "hybrid"):
-        try:
-            result = service.authenticate(
-                body.username, body.password, ip=ip, user_agent=user_agent, remember=body.remember
-            )
-        except UnauthenticatedError:
-            result = None
-    if result is None and get_settings().auth_mode in ("external", "hybrid"):
-        result = await service.authenticate_external(
-            body.username, body.password, ip=ip, user_agent=user_agent, remember=body.remember
-        )
-    if result is None:
-        raise UnauthenticatedError("invalid username or password")
+    # No global auth-mode switch: ``login`` checks each username against
+    # whichever source actually owns that account (local password, its own
+    # identity provider, or — for a first-time directory login — every
+    # enabled external provider).
+    result = await service.login(body.username, body.password, ip=ip, user_agent=user_agent, remember=body.remember)
     _set_session_cookies(response, result.token, remember=body.remember)
     return {"user": _user_public(result.user), "principal": _principal_view(result.principal)}
 

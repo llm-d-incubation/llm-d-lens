@@ -29,7 +29,7 @@ import { ConfigurationValidationContext, focusConfigurationError } from './evalu
 import { validateConfigurationInputs, configurationServerErrors } from '../features/evaluation/configurationValidation';
 import { TopologyPreview, YamlPreview } from './evaluation/ConfigurationPreview';
 import { StorageVolumeSelect } from './common/StorageVolumeSelect';
-import { acceleratorVariantForHardware, DEFAULT_RUNTIME_IMAGES } from './benchmark-results/acceleratorDisplay';
+import { acceleratorVariantForHardware, DEFAULT_RUNTIME_IMAGES, isDefaultRuntimeImage } from './benchmark-results/acceleratorDisplay';
 
 const PREFILL_KEY = 'prism_evaluate_prefill_workloads';
 const ARTIFACT_KEY = 'prism_evaluate_configuration_artifact';
@@ -553,7 +553,23 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     accelerator: accelerator?.id || '',
                     modelServer: initialTarget.modelServer?.toLowerCase() || modelServer?.id || '',
                 });
-                setGuideVariant(initialTarget.variant || (guide?.id === 'tiered-prefix-cache' ? guide.deploymentCapability?.evaluation?.default_variant || guide.deploymentCapability?.variants?.[0] || '' : guide?.id === 'pd-disaggregation' ? 'vllm' : ''));
+                // Pick a variant valid for the selected cluster's accelerator, so
+                // an NVIDIA cluster never keeps the Intel XPU `vllm`/`vllm-rdma`.
+                const capability = guide?.deploymentCapability;
+                const requestedVariant = initialTarget.variant;
+                let defaultVariant = requestedVariant || '';
+                if (guide?.id === 'tiered-prefix-cache') {
+                    const tieredVariants = capability?.variants || [];
+                    defaultVariant = requestedVariant && tieredVariants.includes(requestedVariant)
+                        ? requestedVariant
+                        : (capability?.evaluation?.default_variant || tieredVariants[0] || '');
+                } else if (guide?.id === 'pd-disaggregation') {
+                    const pdVariants = capability?.variants_by_accelerator?.[accelerator?.id] || [];
+                    defaultVariant = requestedVariant && pdVariants.includes(requestedVariant)
+                        ? requestedVariant
+                        : (pdVariants[0] || '');
+                }
+                setGuideVariant(defaultVariant);
                 if (!pendingIntent?.baseline_types && !pendingIntent?.baseline_type) {
                     setBaselineTypes(guide?.id === 'precise-prefix-cache-routing' ? ['kubernetes-service'] : []);
                 }
@@ -573,31 +589,49 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     // GPU cluster never stays on the Intel XPU variant (and vice versa).
     useEffect(() => {
         const preferred = acceleratorVariantForHardware(clusterHardware);
-        if (!preferred || selection.accelerator === preferred) return;
+        if (!preferred) return;
         const match = accelerators.find((item) => item.id === preferred);
         if (!match) return;
-        setSelection((current) => ({
-            ...current,
-            accelerator: preferred,
-            modelServer: current.modelServer || match.modelServers?.[0]?.id || '',
-        }));
-    }, [clusterHardware, selection.accelerator, accelerators]);
+        if (selection.accelerator !== preferred) {
+            setSelection((current) => ({
+                ...current,
+                accelerator: preferred,
+                modelServer: current.modelServer || match.modelServers?.[0]?.id || '',
+            }));
+        }
+        if (selection.guide === 'pd-disaggregation') {
+            const variants = selectedGuide?.deploymentCapability?.variants_by_accelerator?.[preferred] || [];
+            if (variants.length && !variants.includes(guideVariant)) setGuideVariant(variants[0]);
+        }
+    }, [clusterHardware, selection.accelerator, selection.guide, selectedGuide, accelerators, guideVariant]);
     // Same hardware alignment for the default runtime image: swap only between
     // the known per-vendor defaults so a user-entered image is never clobbered.
     useEffect(() => {
         const variant = acceleratorVariantForHardware(clusterHardware);
         if (!variant) return;
         setImage((current) => (
-            Object.values(DEFAULT_RUNTIME_IMAGES).includes(current) && current !== DEFAULT_RUNTIME_IMAGES[variant]
+            isDefaultRuntimeImage(current) && current !== DEFAULT_RUNTIME_IMAGES[variant]
                 ? DEFAULT_RUNTIME_IMAGES[variant]
                 : current
         ));
     }, [clusterHardware]);
-    const guideVariants = useMemo(() => (
-        selection.guide === 'tiered-prefix-cache'
-            ? selectedGuide?.deploymentCapability?.variants || []
-            : selectedModelServer?.variants || []
-    ), [selection.guide, selectedGuide, selectedModelServer]);
+    // Guide variants available for the selected cluster hardware. PD's variant
+    // set depends on the accelerator (NVIDIA GPU: the vLLM infra-provider
+    // overlay such as `base`; Intel XPU: `vllm` / `vllm-rdma`).
+    const guideVariants = useMemo(() => {
+        if (selection.guide === 'tiered-prefix-cache') return selectedGuide?.deploymentCapability?.variants || [];
+        if (selection.guide === 'pd-disaggregation') {
+            const capability = selectedGuide?.deploymentCapability;
+            return capability?.variants_by_accelerator?.[selection.accelerator] || capability?.variants || [];
+        }
+        return selectedModelServer?.variants || [];
+    }, [selection.guide, selectedGuide, selectedModelServer, selection.accelerator]);
+    const unavailableGuideVariants = useMemo(
+        () => (selection.guide === 'pd-disaggregation'
+            ? selectedGuide?.deploymentCapability?.unavailable_variants_by_accelerator?.[selection.accelerator] || []
+            : []),
+        [selection.guide, selectedGuide, selection.accelerator],
+    );
     useEffect(() => { setOptimizationSelection(selection.guide === initialTarget.guide ? initialOptimizationSelection || ['full'] : ['full']); }, [selection.guide, initialTarget.guide, initialOptimizationSelection]);
     const effectiveBaselineTypes = baselineTypes.filter((baseline) => (
         baseline === 'direct-vllm'
@@ -1336,7 +1370,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                             </div>
                         )}
                         {selection.guide === 'pd-disaggregation' && <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                <ConfigurationField field="guideVariant"><span className={labelClass}>P/D Guide variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}><option value="vllm">vLLM (XPU)</option><option value="vllm-rdma">vLLM + RDMA overlay</option></select><FieldHelp>Set NIC count in Cache & network. Network selectors and alignment constraints come from the selected Guide.</FieldHelp></ConfigurationField>
+                                <ConfigurationField field="guideVariant"><span className={labelClass}>P/D Guide variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}>{guideVariants.map((variant) => <option key={variant} value={variant}>{variant === 'vllm-rdma' ? 'vLLM + RDMA overlay' : variant === 'base' ? 'vLLM (base)' : variant === 'vllm' ? 'vLLM (XPU)' : variant}</option>)}{unavailableGuideVariants.map((item) => <option key={item.id} value={item.id} disabled>{`${item.label} (unavailable)`}</option>)}</select><FieldHelp>Set NIC count in Cache & network. Network selectors and alignment constraints come from the selected Guide.</FieldHelp></ConfigurationField>
                             </div>}
                         {selection.guide === 'tiered-prefix-cache' && <div className="mt-3 grid gap-3 md:grid-cols-2">
                                 <ConfigurationField field="guideVariant"><span className={labelClass}>Tiered-prefix-cache variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}>{guideVariants.map((variant) => <option key={variant} value={variant}>{variant === 'base' ? 'HBM-only baseline' : variant === 'native/cpu/base' ? 'Native CPU offload · capacity from Guide' : variant === 'lmcache-connector/cpu/base' ? 'LMCache CPU offload · capacity from Guide' : variant}</option>)}</select><FieldHelp>Create separate base and offload artifacts, then select both in one Evaluation for a direct pairwise comparison.</FieldHelp></ConfigurationField>

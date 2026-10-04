@@ -80,6 +80,7 @@ include = ["llm_d_bench*"]
 
 [tool.setuptools.package-data]
 "llm_d_bench.hardware" = ["schema.json", "profiles/*.json"]
+"llm_d_bench.versions" = ["*.yaml"]
 
 [tool.ruff]
 line-length = 120

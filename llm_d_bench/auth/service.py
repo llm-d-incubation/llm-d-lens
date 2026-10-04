@@ -190,6 +190,79 @@ class AuthService:
         self.audit("login_failed", result="failure", actor_username=username, ip=ip, detail={"reason": "external"})
         raise UnauthenticatedError("invalid username or password")
 
+    async def login(
+        self,
+        username: str,
+        password: str,
+        *,
+        ip: str | None = None,
+        user_agent: str | None = None,
+        remember: bool = False,
+    ) -> LoginResult:
+        """Authenticate ``username`` against whichever source owns that account.
+
+        There is no global "auth mode" switch: each username is checked the
+        one way that actually applies to it (design section 5/8).
+
+        * Already provisioned locally (``auth_source == "local"``, including
+          the bootstrap admin and any account an admin created by hand) →
+          verified against its local password hash.
+        * Already provisioned from a directory (``auth_source`` is a provider
+          type, set by a prior login or directory sync) → verified against
+          that same identity provider only; the local password hash (which
+          external accounts never have) is never consulted.
+        * Not provisioned yet → a first-time directory login: every enabled
+          external provider is tried in turn, and the first match
+          JIT-provisions the local account.
+        """
+        user = self.user_dao.get_by_username(username)
+        if user is not None and user.auth_source == "local":
+            return self.authenticate(username, password, ip=ip, user_agent=user_agent, remember=remember)
+        if user is not None:
+            return await self._authenticate_existing_external_user(
+                user, password, ip=ip, user_agent=user_agent, remember=remember
+            )
+        return await self.authenticate_external(username, password, ip=ip, user_agent=user_agent, remember=remember)
+
+    async def _authenticate_existing_external_user(
+        self,
+        user: UserRecord,
+        password: str,
+        *,
+        ip: str | None,
+        user_agent: str | None,
+        remember: bool,
+    ) -> LoginResult:
+        """Verify a previously JIT-provisioned directory user against its own provider."""
+        if user.status == "disabled":
+            self.audit("login_failed", result="failure", actor=user, ip=ip, detail={"reason": "disabled"})
+            raise UnauthenticatedError("invalid username or password")
+        now = utcnow()
+        if user.locked_until is not None and user.locked_until > now:
+            self.audit("login_failed", result="failure", actor=user, ip=ip, detail={"reason": "locked"})
+            raise UnauthenticatedError("account is temporarily locked")
+
+        record = self.identity_provider_dao.get(user.provider_id) if user.provider_id else None
+        identity = None
+        if record is not None and record.enabled:
+            try:
+                provider = get_provider(record, secret=self.decrypt_provider_secret(record.secret_encrypted))
+                identity = await provider.authenticate(user.username, password)
+            except IdentityProviderError as error:
+                self.audit("login_failed", result="failure", actor=user, ip=ip, detail={"reason": str(error)})
+                identity = None
+
+        if identity is None:
+            self._register_failure(user)
+            self.audit("login_failed", result="failure", actor=user, ip=ip, detail={"reason": "bad_password"})
+            raise UnauthenticatedError("invalid username or password")
+
+        refreshed_user = self._upsert_external_user(record, identity)
+        self._sync_external_groups(record, refreshed_user, identity)
+        self.user_dao.mark_login(refreshed_user.id)
+        refreshed = self.user_dao.get(refreshed_user.id) or refreshed_user
+        return self._issue_session(refreshed, ip=ip, user_agent=user_agent, remember=remember)
+
     def _upsert_external_user(self, provider, identity: ExternalIdentity) -> UserRecord:
         user = self.user_dao.get_by_username(identity.username) or self.user_dao.get_by_external(
             provider.id, identity.external_id
@@ -606,6 +679,12 @@ class AuthService:
         user = self.user_dao.get(user_id)
         if user is None:
             raise NotFoundError("user not found")
+        if user.auth_source != "local":
+            # The directory (LDAP/OIDC) owns this account's password; setting a
+            # local one here would let it silently bypass the external provider.
+            raise DomainValidationError(
+                "this account's password is managed by its external identity provider and cannot be reset in Lens"
+            )
         validate_password_strength(new_password, username=user.username)
         user.password_hash = hash_password(new_password)
         user.password_changed_at = utcnow()

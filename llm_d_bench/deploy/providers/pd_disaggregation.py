@@ -1,4 +1,4 @@
-"""Structured XPU P/D disaggregation deployment adapter."""
+"""Structured P/D disaggregation deployment adapter (NVIDIA GPU and Intel XPU)."""
 
 from __future__ import annotations
 
@@ -13,15 +13,22 @@ from typing import Any
 import yaml
 
 from llm_d_bench.common.hashing import stable_hash
+from llm_d_bench.deploy.data_plane import router_data_plane_args, router_data_plane_effective_values
 from llm_d_bench.deploy.providers.deployment_bundle import (
     install_deployment_bundle,
     subprocess_bundle_runner,
 )
 from llm_d_bench.deploy.providers.gpu_selection import gpu_device_selectors
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
-from llm_d_bench.deploy.providers.hardware_profile import device_class
+from llm_d_bench.deploy.providers.hardware_profile import (
+    device_class,
+    overlay_variant,
+    requires_dra_claim,
+    set_accelerator_request,
+)
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_bench.utils.paths import prism_temp_root
+from llm_d_bench.versions import router_chart_version
 
 
 class PdDisaggregationAdapter:
@@ -37,10 +44,7 @@ class PdDisaggregationAdapter:
         kubeconfig: str | None,
     ) -> None:
         self._runner = command_runner
-        self._sources = {
-            "vllm": guide_root / "guides/pd-disaggregation/modelserver/xpu/vllm",
-            "vllm-rdma": guide_root / "guides/pd-disaggregation/modelserver/xpu/vllm-rdma",
-        }
+        self._sources = self._guide_sources(guide_root)
         self._root = prism_temp_root("prism-pd-overlays")
         self._namespace_prefix = namespace_prefix
         self._timeout = timeout
@@ -57,8 +61,29 @@ class PdDisaggregationAdapter:
             "local-pd-disaggregation",
             stable_hash({"sources": {name: str(path) for name, path in self._sources.items()}}),
             "supported-core",
-            {"variants": ["vllm", "vllm-rdma"], "default_variant": "vllm", "structured_custom_parameters": True},
+            {
+                "variants": sorted(self._sources),
+                "default_variant": "vllm",
+                "structured_custom_parameters": True,
+            },
         )
+
+    @staticmethod
+    def _guide_sources(guide_root: Path) -> dict[str, Path]:
+        """Modelserver overlays available for the active hardware.
+
+        Intel XPU runs the DRA overlays (plain and RDMA). Every other profile
+        (notably NVIDIA) uses the generic GPU base overlay; the cloud/RDMA GPU
+        overlays need provider-specific networking and are not exposed yet.
+        """
+        base = guide_root / "guides/pd-disaggregation/modelserver"
+        if overlay_variant() == "xpu":
+            # Intel XPU: two model-server overlays, no infra-provider subdir.
+            return {"vllm": base / "xpu/vllm", "vllm-rdma": base / "xpu/vllm-rdma"}
+        # NVIDIA GPU: vLLM overlays live under modelserver/gpu/vllm/<INFRA_PROVIDER>
+        # (base | coreweave | gke/base | ...); only the generic base overlay is
+        # supported today.
+        return {"base": base / f"{overlay_variant()}/vllm/base"}
 
     def discover(self):
         return self._definition
@@ -71,10 +96,15 @@ class PdDisaggregationAdapter:
     def validate_inputs(self, definition, cluster_snapshot, overrides):
         try:
             parameters = self._parameters(overrides)
-            if not self._sources[parameters["variant"]].is_dir():
-                raise ValueError("pd-disaggregation XPU variant source is unavailable")
         except ValueError as error:
             return ValidationResult(False, [str(error)])
+        source = self._sources.get(parameters["variant"])
+        if source is None:
+            return ValidationResult(
+                False, [f"unsupported pd-disaggregation variant for this accelerator: {parameters['variant']}"]
+            )
+        if not source.is_dir():
+            return ValidationResult(False, ["pd-disaggregation variant source is unavailable for this accelerator"])
         return ValidationResult(True)
 
     async def render(self, definition, overrides):
@@ -96,12 +126,14 @@ class PdDisaggregationAdapter:
         if process.returncode:
             raise ValueError(f"Kustomize render failed: {stderr.decode(errors='replace').strip()}")
         documents = [item for item in yaml.safe_load_all(stdout) if isinstance(item, dict)]
+        workload_names: list[str] = []
         for role in ("prefill", "decode"):
             deployment = next(
                 item
                 for item in documents
                 if item.get("kind") == "Deployment" and item["metadata"]["name"].endswith(role)
             )
+            workload_names.append(str(deployment["metadata"]["name"]))
             deployment["spec"]["replicas"] = parameters[role]["replicas"]
             container = next(
                 item for item in deployment["spec"]["template"]["spec"]["containers"] if item["name"] == "modelserver"
@@ -134,9 +166,11 @@ class PdDisaggregationAdapter:
                 container.setdefault("volumeMounts", []).append(
                     {"name": "model-cache", "mountPath": "/model-cache", "readOnly": True}
                 )
-        claim_documents = [item for item in documents if item.get("kind") == "ResourceClaimTemplate"]
+        # Accelerator requests are profile-driven: DRA profiles (e.g. Intel XPU)
+        # rewrite the ResourceClaimTemplate count; extended-resource profiles
+        # (e.g. NVIDIA nvidia.com/gpu) set the container's resource limits.
         selectors = gpu_device_selectors()
-        for claim in claim_documents:
+        for claim in (item for item in documents if item.get("kind") == "ResourceClaimTemplate"):
             role = "prefill" if "prefill" in claim["metadata"]["name"] else "decode"
             requests = claim["spec"]["spec"]["devices"]["requests"]
             gpu_request = next(
@@ -145,10 +179,23 @@ class PdDisaggregationAdapter:
             gpu_request["exactly"]["count"] = parameters[role]["tensor_parallel_size"]
             if selectors:
                 gpu_request["exactly"]["selectors"] = selectors
-        for deployment in [item for item in documents if item.get("kind") == "Deployment"]:
-            next(
-                item for item in deployment["spec"]["template"]["spec"]["containers"] if item["name"] == "modelserver"
-            )["image"] = parameters["image"]
+        for deployment in (item for item in documents if item.get("kind") == "Deployment"):
+            containers = deployment["spec"]["template"]["spec"].get("containers", [])
+            container = next((item for item in containers if item["name"] == "modelserver"), None)
+            if container is None:
+                continue
+            container["image"] = parameters["image"]
+            if not requires_dra_claim():
+                role = next(
+                    (
+                        candidate
+                        for candidate in ("prefill", "decode")
+                        if deployment["metadata"]["name"].endswith(candidate)
+                    ),
+                    None,
+                )
+                if role is not None:
+                    set_accelerator_request(container, None, parameters[role]["tensor_parallel_size"])
         manifest = directory / "manifest.yaml"
         manifest.write_text(yaml.safe_dump_all(documents, sort_keys=False), encoding="utf-8")
         return GuideDeploymentArtifact(
@@ -158,6 +205,14 @@ class PdDisaggregationAdapter:
             source_ref=self._definition.source_ref,
             guide_content_hash=self._definition.content_hash,
             manifest_checksum=stable_hash({"parameters": parameters}),
+            # llm-d router data plane: reached through the shared Gateway unless
+            # the deployment is evaluation-owned (then it keeps its own proxy).
+            # Readiness Deployment names are hardware/engine specific, so the
+            # rendered names travel with the artifact.
+            deployment_contract={
+                "data_plane_kind": "llm-d-router",
+                "readinessDeployments": workload_names,
+            },
         )
 
     async def deploy(self, artifact, context):
@@ -175,6 +230,10 @@ class PdDisaggregationAdapter:
                 namespace=namespace,
                 command_runner=self._bundle_command_runner,
                 output_root=Path(artifact.manifest_ref or "").parent / "deployment-bundle",
+                effective_values_content=router_data_plane_effective_values(
+                    bundle["helm"]["values"][-1]["content"], context
+                ),
+                effective_values_name="router-effective-pd-disaggregation.yaml",
             )
         else:
             base_values = self._guide_root / "guides/recipes/router/base.values.yaml"
@@ -188,11 +247,12 @@ class PdDisaggregationAdapter:
                 "--namespace",
                 namespace,
                 "--version",
-                "v0.9.0",
+                router_chart_version(),
                 "--values",
                 str(base_values),
                 "--values",
                 str(pd_values),
+                *router_data_plane_args(context),
                 env=self._environment,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -212,9 +272,35 @@ class PdDisaggregationAdapter:
             **reproducibility,
         }
 
+    async def _readiness_deployments(self, execution) -> list[str]:
+        """Prefill/decode Deployment names as rendered for the active hardware.
+
+        Names are hardware/engine specific (the NVIDIA overlay renders
+        ``pd-disaggregation-nvidia-gpu-vllm-*`` while Intel XPU renders
+        ``pd-disaggregation-xpu-vllm-*``), so they are read from the deployment
+        contract rather than hardcoded. Records stored before the contract
+        carried them fall back to the namespace's actual Deployments.
+        """
+        artifact = execution.get("_artifact")
+        contract = artifact.deployment_contract if isinstance(artifact, GuideDeploymentArtifact) else {}
+        names = [str(name) for name in contract.get("readinessDeployments") or []]
+        if names:
+            return names
+        namespace = str(execution["namespace"])
+        status, stdout, stderr = await self._runner(
+            ["kubectl", "get", "deployments", "--namespace", namespace, "--output", "json"]
+        )
+        if status != 0:
+            return []
+        return [
+            str(item["metadata"]["name"])
+            for item in json.loads(stdout).get("items", [])
+            if str(item["metadata"]["name"]).endswith(("prefill", "decode"))
+        ]
+
     async def readiness(self, execution):
         namespace = execution["namespace"]
-        for name in ("pd-disaggregation-xpu-vllm-prefill", "pd-disaggregation-xpu-vllm-decode"):
+        for name in await self._readiness_deployments(execution):
             status, stdout, stderr = await self._runner(
                 [
                     "kubectl",
@@ -395,9 +481,10 @@ class PdDisaggregationAdapter:
         model, runtime = overrides.get("model") or {}, overrides.get("runtime") or {}
         if not model.get("name") or not runtime.get("image") or ":" not in runtime["image"]:
             raise ValueError("pd-disaggregation requires model.name and a tagged runtime.image")
+        # The variant id is accelerator-specific (XPU: vllm/vllm-rdma; NVIDIA GPU:
+        # the vLLM infra-provider overlay such as base); the adapter validates it
+        # against the overlays available for the active accelerator.
         variant = str(overrides.get("guideVariant") or "vllm")
-        if variant not in {"vllm", "vllm-rdma"}:
-            raise ValueError(f"unsupported pd-disaggregation variant: {variant}")
         result: dict[str, Any] = {
             "variant": variant,
             "model": model["name"],

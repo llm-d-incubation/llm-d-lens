@@ -35,12 +35,35 @@ export function utilizationLabel(value) {
   return label ? `${label} utilization` : 'GPU / XPU utilization';
 }
 
-// Per-vendor llm-d model-server images. The default must follow the selected
-// cluster's hardware, never stay on the Intel XPU image for an NVIDIA cluster.
+// Per-vendor llm-d model-server image repositories. The repository and version
+// are owned by the hardware profile and applied by the backend, so only the
+// repository is tracked here; the default follows the selected cluster's hardware.
 export const DEFAULT_RUNTIME_IMAGES = {
-  gpu: 'ghcr.io/llm-d/llm-d-cuda:v0.9.0',
-  xpu: 'ghcr.io/llm-d/llm-d-xpu:v0.9.0',
+  gpu: 'ghcr.io/llm-d/llm-d-cuda',
+  xpu: 'ghcr.io/llm-d/llm-d-xpu',
 };
+
+// Every model-server image family the hardware profiles own (older llm-d images
+// and upstream vLLM ones). The backend normalizes any of these to the resolved
+// profile image, so none of them may be mistaken for a user's custom image.
+export const MANAGED_RUNTIME_IMAGE_REPOSITORIES = [
+  'ghcr.io/llm-d/llm-d-cuda',
+  'ghcr.io/llm-d/llm-d-xpu',
+  'ghcr.io/llm-d/llm-d-rocm',
+  'docker.io/vllm/vllm-openai',
+  'docker.io/vllm/vllm-openai-xpu',
+  'docker.io/vllm/vllm-openai-rocm',
+];
+
+export function runtimeImageRepository(image) {
+  return String(image || '').split('@')[0].split(':')[0];
+}
+
+// True when an image belongs to a managed model-server family (ignoring any tag),
+// so hardware realignment never clobbers a custom image.
+export function isDefaultRuntimeImage(image) {
+  return MANAGED_RUNTIME_IMAGE_REPOSITORIES.includes(runtimeImageRepository(image));
+}
 
 // The Guide's upstream variant id for a cluster's discovered hardware: `gpu`
 // (NVIDIA) or `xpu` (Intel). Reads the cluster overview `hardware.accelerators`

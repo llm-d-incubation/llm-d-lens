@@ -32,10 +32,12 @@
         "request_model",
         "requires_dra_claim",
         "resource_name",
+        "runtime_image",
+        "pin_runtime_image",
         "set_accelerator_request"
       ],
-      "purpose": "Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, with literal fallbacks.",
-      "boundaries": "Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Do not add guide-specific logic here.",
+      "purpose": "Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks.",
+      "boundaries": "Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Model-server image repository and version are data in the profile, never hardcoded here. Do not add guide-specific logic here.",
       "examples": [
         "llm_d_bench/deploy/providers/baseline_vllm.py",
         "llm_d_bench/deploy/providers/pd_disaggregation.py",
@@ -86,15 +88,23 @@
       "symbols": [
         "acceleratorValue",
         "acceleratorDisplayLabel",
-        "utilizationLabel"
+        "utilizationLabel",
+        "DEFAULT_RUNTIME_IMAGES",
+        "MANAGED_RUNTIME_IMAGE_REPOSITORIES",
+        "runtimeImageRepository",
+        "runtimeImageForHardware",
+        "isDefaultRuntimeImage"
       ],
-      "purpose": "Map a benchmark run's accelerator profile/runtime to a display label (XPU/GPU/neutral) for chart titles and metric labels.",
-      "boundaries": "Display only; no metric computation. Unknown hardware falls back to the neutral 'GPU / XPU' wording.",
+      "purpose": "Map a benchmark run's accelerator profile/runtime to a display label (XPU/GPU/neutral) for chart titles and metric labels, and identify the profile-owned default model-server image repositories so hardware realignment never clobbers a custom image.",
+      "boundaries": "Display and default-image selection only; no metric computation and no model-server version. The hardware profile owns the model-server repository/version; only repositories are tracked here. Unknown hardware falls back to the neutral 'GPU / XPU' wording.",
       "examples": [
-        "src/components/benchmark-results/ResourceExplorer.jsx"
+        "src/components/benchmark-results/ResourceExplorer.jsx",
+        "src/components/EvaluationTaskWizard.jsx",
+        "src/features/evaluation/setup.js"
       ],
       "tests": [
-        "src/components/benchmark-results/acceleratorDisplay.test.js"
+        "src/components/benchmark-results/acceleratorDisplay.test.js",
+        "src/features/evaluation/setup.test.js"
       ]
     },
     {
@@ -2762,6 +2772,22 @@
       "tests": [
         "src/features/evaluation/configurationValidation.test.js",
         "server/configurationOverrides.test.ts"
+      ]
+    },
+    {
+      "id": "model-service-target-resolution",
+      "path": "llm_d_bench/model_service/resolution.py",
+      "symbols": [
+        "resolve_model_service_target"
+      ],
+      "purpose": "Resolve a Model Service group id to the deployment execution id and published model name of its currently active (health-probed) member, so callers benchmark/simulate an already-published, continuously liveness-checked endpoint instead of a raw deployment execution with no live health signal.",
+      "boundaries": "Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself \u2014 callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.",
+      "examples": [
+        "llm_d_bench/evaluate/router.py",
+        "llm_d_bench/simulation/service.py"
+      ],
+      "tests": [
+        "llm_d_bench/model_service/test_resolution.py"
       ]
     }
   ]

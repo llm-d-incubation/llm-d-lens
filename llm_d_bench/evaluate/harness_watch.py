@@ -7,6 +7,11 @@ from contextlib import aclosing, suppress
 
 _POLL_SECONDS = 10
 
+#: Printed by every upstream harness script once the load generator finished,
+#: before its optional post-processing/analysis step runs. Lens parses the load
+#: generator's own metrics, so a later analysis failure must not fail the run.
+_LOAD_GENERATION_COMPLETED = "Harness completed successfully."
+
 
 async def _read(environment, *args):
     from llm_d_bench.utils.kubernetes_commands import execute_sdk_command, sdk_enabled
@@ -96,7 +101,9 @@ async def _poll_harness(run, namespace, environment, save, now, live=None):
         for pod in payload.get("items", []):
             name = pod["metadata"]["name"]
             failure = failure or pod_failure(pod)
-            if not refresh:
+            # Even off a cached watch event, fetch logs for a failing pod so the
+            # load-generation marker below is seen before deciding to fail.
+            if not refresh and not failure:
                 continue
             try:
                 output = await _read(environment, "-n", namespace, "logs", name, "--all-containers=true", "--tail=80")
@@ -112,6 +119,13 @@ async def _poll_harness(run, namespace, environment, save, now, live=None):
                 failure = warning + " Benchmark stopped because the required dependency is unreachable."
         if logs:
             run["harness_logs"] = "\n".join(logs)[-16000:]
+        if failure and _LOAD_GENERATION_COMPLETED in (run.get("harness_logs") or ""):
+            # The load generator finished and wrote its metrics; only the
+            # harness's optional post-processing (inference-perf --analyze /
+            # benchmark-report) failed afterward. Lens parses the load
+            # generator's own metrics, so this is a warning, not a failure.
+            warning = f"{failure}; the load generator had already completed, so its metrics are used"
+            failure = None
         run["harness_checked_at"] = now()
         run["harness_warning"] = warning
         save(run)

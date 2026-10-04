@@ -106,6 +106,20 @@ def _component_content(component: dict[str, Any] | None) -> dict[str, Any] | Non
     return content
 
 
+def _pin_runtime_image(content: dict[str, Any]) -> None:
+    """Tag an llm-d model-server runtime image with the pinned stack version.
+
+    The rendered manifest already carries the pinned tag, so the configuration's
+    runtime image must match it or the manifest-vs-configuration validation
+    fails (see ``configuration.manifest_facts``).
+    """
+    from llm_d_bench.deploy.providers.hardware_profile import pin_runtime_image  # noqa: PLC0415
+
+    runtime = content.get("runtime")
+    if isinstance(runtime, dict) and isinstance(runtime.get("image"), str):
+        runtime["image"] = pin_runtime_image(runtime["image"])
+
+
 def render_configuration(request: RenderRequest) -> RenderResponse:
     candidate = request.candidate_config
     if request.render.template_ref.startswith("upload/"):
@@ -164,6 +178,7 @@ def render_configuration(request: RenderRequest) -> RenderResponse:
     content["model"] = {key: value for key, value in content["model"].items() if value is not None}
     if request.render.deployment_bundle is not None:
         content["officialGuide"]["deploymentBundle"] = request.render.deployment_bundle
+    _pin_runtime_image(content)
     validate_manifest_facts(content, rendered_manifest)
     validate_configuration_extensions(content, rendered_manifest)
 

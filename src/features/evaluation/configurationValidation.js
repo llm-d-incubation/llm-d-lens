@@ -23,7 +23,7 @@ export function validateConfigurationInputs(input) {
             add('routerValues', error.mark ? `Line ${error.mark.line + 1}, column ${error.mark.column + 1}: ${error.reason}` : error.message);
         }
     }
-    if (isPd && !['vllm', 'vllm-rdma'].includes(guideVariant)) add('guideVariant', 'Select a supported P/D variant.');
+    if (isPd && guideVariants.length && !guideVariants.includes(guideVariant)) add('guideVariant', 'Select a supported P/D variant.');
     if (guide === 'tiered-prefix-cache' && !guideVariants.includes(guideVariant)) add('guideVariant', 'Select a supported cache variant.');
     const topologyFields = ['tensorParallelVariants', ...(isPd ? ['prefillTensorParallelVariants'] : []), ...(!isPd || !input.pdTopologyVariants?.trim() ? ['replicaVariants', ...(isPd ? ['prefillReplicaVariants'] : [])] : [])];
     for (const field of topologyFields) {

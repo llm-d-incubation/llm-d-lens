@@ -259,11 +259,11 @@ async def download_artifact_bundle(artifact_id: str, request: Request = None) ->
         archive.writestr("configuration.json", artifact.model_dump_json(indent=2))
         archive.writestr("modelserver.yaml", official["renderedManifest"])
         archive.writestr("deployment-bundle.json", json.dumps(bundle, indent=2))
-        for asset in [
-            *bundle["helm"]["values"],
-            *bundle["resources"],
-            *([bundle["calibration"]] if bundle.get("calibration") else []),
-        ]:
+        calibration = bundle.get("calibration")
+        calibration_assets = (
+            [calibration] if isinstance(calibration, dict) else (calibration if isinstance(calibration, list) else [])
+        )
+        for asset in [*bundle["helm"]["values"], *bundle["resources"], *calibration_assets]:
             # Persisted assets are validated on publication; retain a path guard for old records.
             if Path(asset["name"]).name != asset["name"] or asset["name"] in {".", ".."}:
                 raise HTTPException(status_code=400, detail="Invalid deployment bundle filename")

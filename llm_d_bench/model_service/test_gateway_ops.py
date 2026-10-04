@@ -718,7 +718,48 @@ async def test_probe_members_reports_per_component_health(monkeypatch):
         "httpRoute": "ready",
         "inferencePool": "ready",
         "modelServer": "ready",
+        "ipp": "ready",
+        "serving": "n/a",
     }
+
+
+def test_data_plane_degraded_detects_broken_paths():
+    assert gateway_ops_module._data_plane_degraded({"ipp": "missing"})
+    assert gateway_ops_module._data_plane_degraded({"serving": "degraded"})
+    assert gateway_ops_module._data_plane_degraded({"serving": "unreachable"})
+    assert gateway_ops_module._data_plane_degraded({"httpRoute": "missing"})
+    assert gateway_ops_module._data_plane_degraded({"inferencePool": "degraded"})
+    assert not gateway_ops_module._data_plane_degraded({"epp": "ready", "ipp": "ready", "serving": "ready"})
+    # A model server still starting is not a data-plane failure.
+    assert not gateway_ops_module._data_plane_degraded({"modelServer": "missing"})
+
+
+@pytest.mark.asyncio
+async def test_heal_data_plane_uses_no_actor_so_the_operation_can_be_recorded(monkeypatch):
+    """`created_by_user_id` is a foreign key into `users`; a literal placeholder
+    actor (for example "auto-heal") violates it and silently breaks the
+    self-heal path, so automatic runs must pass actor=None like every other
+    background reconcile (see GatewayOpsService._finish's `is_automatic` check).
+    """
+    calls: list[tuple[str, object]] = []
+    service = GatewayOpsService(
+        operations=GatewayOperationDao(),
+        members=ModelServiceMemberDao(),
+        groups=ModelServiceGroupDao(),
+    )
+
+    async def fake_install_cluster_gateway(cluster_id, *, actor=None):
+        calls.append(("gateway", actor))
+
+    async def fake_install_ipp(cluster_id, *, actor=None):
+        calls.append(("ipp", actor))
+
+    monkeypatch.setattr(service, "install_cluster_gateway", fake_install_cluster_gateway)
+    monkeypatch.setattr(service, "install_ipp", fake_install_ipp)
+
+    await service._heal_data_plane("cluster-heal")
+
+    assert calls == [("gateway", None), ("ipp", None)]
 
 
 @pytest.mark.asyncio

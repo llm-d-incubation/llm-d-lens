@@ -52,14 +52,18 @@ asyncio.run(main())
 
 ### Start a benchmark run
 
-Start a benchmark run against a ready deployment execution.
+Start a benchmark run against a ready deployment execution or a published Model Service.
 
 <Tabs>
   <Tab title="REST API">
     **`POST /api/v1/evaluate/runs`**
 
     Request body: `EvaluateRunRequest`
-    - `deployment_execution_id` (`string`, required)
+    - `deployment_execution_id` (`string`, optional) — benchmark a specific deployment execution directly.
+    - `model_service_group_id` (`string`, optional) — benchmark a published, continuously health-probed
+      Model Service instead; the harness resolves it to the group's active member and published name and
+      requires `api_key`. Exactly one of `deployment_execution_id` or `model_service_group_id` must be set.
+    - `api_key` (`string`, optional) — model access token; required when `model_service_group_id` is set.
     - `cluster_session_id` (`string`, optional; must match the execution session when supplied)
     - `harness`, `workload`, `workload_yaml`, `parallelism`, `wait_timeout_seconds`, `harness_memory_gib`
     - `accelerator_profile`, `storage_class_name`, `matrix`, `concurrency_stages`, `warmup_requests`, `shared_prefix`
@@ -99,6 +103,18 @@ Start a benchmark run against a ready deployment execution.
         "revision": "main"
       },
       "use_baseline_endpoint": false
+    }
+    ```
+
+    To target a published Model Service instead, replace `deployment_execution_id` with
+    `model_service_group_id` and supply `api_key`:
+
+    ```json
+    {
+      "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+      "api_key": "lens-mk-…",
+      "harness": "inference-perf",
+      "workload": "sanity_random.yaml"
     }
     ```
 
@@ -172,6 +188,17 @@ async def main() -> None:
             parallelism=2,
             matrix=[{"isl": 1024, "osl": 128}],
             concurrency_stages=[{"concurrency": 8, "num_requests": 96}],
+        )
+    )
+    print(run["id"], run["status"])
+
+    # Or target a published Model Service (resolves to its active member and
+    # published name; requires api_key):
+    run = await create_run(
+        EvaluateRunRequest(
+            model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+            api_key="lens-mk-…",
+            workload="sanity_random.yaml",
         )
     )
     print(run["id"], run["status"])

@@ -110,8 +110,13 @@ function isFailingPod(pod) {
 // the deployment is still being created).
 export function derivePodStatusGroup(pods) {
     if (!Array.isArray(pods) || pods.length === 0) return null;
-    if (pods.some(isFailingPod)) return 'Failed';
-    if (pods.some((pod) => !pod.ready)) return 'In progress';
+    // Completed pods (for example the precise-routing calibration Job) are
+    // terminal successes, not part of the deployment's running workload, so they
+    // must never read as "not ready".
+    const livePods = pods.filter((pod) => pod && pod.phase !== 'Succeeded');
+    if (livePods.length === 0) return null;
+    if (livePods.some(isFailingPod)) return 'Failed';
+    if (livePods.some((pod) => !pod.ready)) return 'In progress';
     return 'Ready';
 }
 

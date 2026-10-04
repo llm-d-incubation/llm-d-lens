@@ -40,6 +40,7 @@ backendApiProxyRouter.use([
     '/api/v1/aic',
     '/api/v1/hardware',
     '/api/v1/system',
+    '/api/v1/versions',
     // auth domain
     '/api/v1/auth',
     '/api/v1/users',

@@ -249,6 +249,97 @@ async def test_directory_sync_imports_groups_and_reconciles_members(monkeypatch)
     assert service.identity_provider_dao.get(provider.id).last_sync_at is not None
 
 
+@pytest.mark.asyncio
+async def test_login_routes_a_local_user_through_the_local_password_check():
+    """``login`` picks the local path for a username with ``auth_source=local`` without consulting any provider."""
+    service = _service()
+    service.bootstrap_admin("root", STRONG)
+    service.create_user(username="alice", password=STRONG)
+
+    result = await service.login("alice", STRONG)
+    assert result.user.username == "alice"
+
+    with pytest.raises(UnauthenticatedError):
+        await service.login("alice", "wrong-password")
+
+
+@pytest.mark.asyncio
+async def test_login_routes_an_existing_directory_user_through_its_own_provider_only(monkeypatch):
+    """A username already JIT-provisioned from a directory is verified against that one provider, never a local hash."""
+    from llm_d_bench.auth.providers.base import ExternalIdentity
+    from llm_d_bench.auth.records import IdentityProviderRecord, UserRecord
+
+    service = _service()
+    provider = service.identity_provider_dao.create(
+        IdentityProviderRecord(type="ldap", name="corp", enabled=True, config={})
+    )
+    other_provider = service.identity_provider_dao.create(
+        IdentityProviderRecord(type="ldap", name="other-corp", enabled=True, config={})
+    )
+    user = service.user_dao.create(
+        UserRecord(username="sabrina", auth_source="ldap", provider_id=provider.id, external_id="uid=sabrina,dc=x")
+    )
+    assert user.password_hash is None
+
+    calls: list[str] = []
+
+    def fake_get_provider(record, *, secret=None):
+        calls.append(record.id)
+
+        class _FakeProvider:
+            async def authenticate(self, username, password):
+                if record.id != provider.id:
+                    return None
+                return ExternalIdentity(external_id="uid=sabrina,dc=x", username="sabrina") if password == "real-ldap-pw" else None
+
+        return _FakeProvider()
+
+    monkeypatch.setattr("llm_d_bench.auth.service.get_provider", fake_get_provider)
+
+    result = await service.login("sabrina", "real-ldap-pw")
+    assert result.user.username == "sabrina"
+    # Only the user's own provider was ever consulted, not every enabled one.
+    assert calls == [provider.id]
+    assert other_provider.id not in calls
+
+    with pytest.raises(UnauthenticatedError):
+        await service.login("sabrina", "wrong-password")
+    # A wrong password against the directory never falls back to a local check
+    # and never touches the other configured provider.
+    assert set(calls) == {provider.id}
+
+
+@pytest.mark.asyncio
+async def test_login_tries_every_enabled_provider_for_a_first_time_directory_user(monkeypatch):
+    """A username with no local record yet is JIT-provisioned by whichever enabled provider recognizes it."""
+    from llm_d_bench.auth.providers.base import ExternalIdentity
+    from llm_d_bench.auth.records import IdentityProviderRecord
+
+    service = _service()
+    service.identity_provider_dao.create(IdentityProviderRecord(type="ldap", name="corp-a", enabled=True, config={}))
+    matching = service.identity_provider_dao.create(
+        IdentityProviderRecord(type="ldap", name="corp-b", enabled=True, config={})
+    )
+
+    def fake_get_provider(record, *, secret=None):
+        class _FakeProvider:
+            async def authenticate(self, username, password):
+                if record.id != matching.id:
+                    return None
+                return ExternalIdentity(external_id="uid=new,dc=x", username="newcomer")
+
+        return _FakeProvider()
+
+    monkeypatch.setattr("llm_d_bench.auth.service.get_provider", fake_get_provider)
+
+    result = await service.login("newcomer", "whatever")
+    created = service.user_dao.get_by_username("newcomer")
+    assert created is not None
+    assert created.auth_source == "ldap"
+    assert created.provider_id == matching.id
+    assert result.user.id == created.id
+
+
 def test_login_sync_materializes_directory_groups():
     from llm_d_bench.auth.providers.base import ExternalIdentity
     from llm_d_bench.auth.records import IdentityProviderRecord, UserRecord

@@ -22,7 +22,7 @@ import { executeRemoteInspection } from './remoteDeploy.ts';
 import { applyRuntimeOverrides, runtimeOverrides } from './configurationOverrides.ts';
 import { configureModelServer, configureCpuCache, runtimeArgument } from './modelServerConfiguration.ts';
 import { normalizeGuideSettings } from '../src/features/evaluation/guideSettings.js';
-import { buildGuideDeploymentBundle } from './guideDeploymentBundle.ts';
+import { buildGuideDeploymentBundle, pinModelServerImage, ROUTER_DISAGG_SIDECAR_IMAGE } from './guideDeploymentBundle.ts';
 
 /* YAML manifests and Kubernetes discovery responses are intentionally schema-dynamic. */
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -343,7 +343,7 @@ function setArgument(args: any[], name: string, value: number): void {
 
 
 
-const PD_ROUTING_PROXY_IMAGE = 'ghcr.io/llm-d/llm-d-router-disagg-sidecar:v0.9.0';
+const PD_ROUTING_PROXY_IMAGE = ROUTER_DISAGG_SIDECAR_IMAGE;
 
 // --- User-supplied custom patches -------------------------------------------------
 //
@@ -683,7 +683,8 @@ export function planDocuments(documents: any[], model: string, machine: JsonReco
             let deploymentMemory = 0;
             for (const container of containers) {
                 if (container.name === 'modelserver' && requested.runtimeImage) {
-                    replace(container, 'image', String(requested.runtimeImage), `${pointer}/spec/template/spec/containers/${containers.indexOf(container)}/image`, 'apply selected runtime image');
+                    const image = pinModelServerImage(String(requested.runtimeImage));
+                    replace(container, 'image', image, `${pointer}/spec/template/spec/containers/${containers.indexOf(container)}/image`, 'apply selected runtime image');
                 }
                 if (container.name === 'modelserver' && Array.isArray(container.env)) {
                     for (const item of container.env) {

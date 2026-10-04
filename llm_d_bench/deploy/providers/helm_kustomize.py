@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from llm_d_bench.common.hashing import stable_hash
+from llm_d_bench.deploy.data_plane import router_data_plane_args, router_data_plane_effective_values
 from llm_d_bench.deploy.providers.deployment_bundle import (
     install_deployment_bundle,
     subprocess_bundle_runner,
@@ -38,6 +39,9 @@ class HelmKustomizeGuideDescriptor:
     readiness_deployments: tuple[str, ...]
     endpoint_service: str
     endpoint_port: int
+    #: Static data plane the guide declares: "llm-d-router" routes non-evaluation
+    #: deployments through the shared Gateway; "external" leaves the provider alone.
+    data_plane_kind: str = "external"
     log_selector: str = "llm-d.ai/role=decode"
     log_container: str = "modelserver"
 
@@ -56,6 +60,7 @@ class HelmKustomizeGuideAdapter:
         namespace_prefix: str,
         timeout_seconds: int,
         kubeconfig: str | None,
+        accelerator: str | None = None,
     ) -> None:
         self._descriptor = descriptor
         self._runner = command_runner
@@ -63,6 +68,10 @@ class HelmKustomizeGuideAdapter:
         self._helm_path = helm_path
         self._namespace_prefix = namespace_prefix
         self._timeout = timeout_seconds
+        # Resolved once per adapter instance (one per deployment run) from the
+        # run's own accelerator, never a shared global: concurrent runs for
+        # different clusters/vendors must not race on a single hardware choice.
+        self._accelerator = accelerator
         self._environment = {**os.environ, "KUBECONFIG": kubeconfig} if kubeconfig else None
         self._bundle_command_runner = subprocess_bundle_runner(helm_path, kubectl_path, self._environment)
         self._render_root = prism_temp_root("prism-helm-kustomize", descriptor.guide_id)
@@ -139,7 +148,22 @@ class HelmKustomizeGuideAdapter:
             values_checksum=stable_hash(
                 {"values": [path.read_text(encoding="utf-8") for path in self._descriptor.router_values]}
             ),
+            deployment_contract={"data_plane_kind": self._descriptor.data_plane_kind},
         )
+
+    def _data_plane_kind(self) -> str:
+        # Tolerate adapters built without __init__ (tests use __new__).
+        return getattr(getattr(self, "_descriptor", None), "data_plane_kind", "external")
+
+    def _data_plane_args(self, execution_context) -> list[str]:
+        if self._data_plane_kind() != "llm-d-router":
+            return []
+        return router_data_plane_args(execution_context)
+
+    def _data_plane_effective_values(self, content: str, execution_context) -> str:
+        if self._data_plane_kind() != "llm-d-router":
+            return content
+        return router_data_plane_effective_values(content, execution_context)
 
     async def deploy(self, artifact, execution_context):
         namespace = self._namespace(execution_context)
@@ -156,6 +180,10 @@ class HelmKustomizeGuideAdapter:
                 namespace=namespace,
                 command_runner=self._bundle_command_runner,
                 output_root=Path(artifact.manifest_ref or "").parent / "deployment-bundle",
+                effective_values_content=self._data_plane_effective_values(
+                    bundle["helm"]["values"][-1]["content"], execution_context
+                ),
+                effective_values_name=f"router-effective-{artifact.guide_id}.yaml",
             )
         else:
             helm_command = [
@@ -171,6 +199,7 @@ class HelmKustomizeGuideAdapter:
             ]
             for values in self._descriptor.router_values:
                 helm_command.extend(["--values", str(values)])
+            helm_command.extend(self._data_plane_args(execution_context))
             helm = await spawn(
                 helm_command,
                 env=self._environment,
@@ -321,11 +350,10 @@ class HelmKustomizeGuideAdapter:
             "custom_parameters": overrides.get("customParameters") or [],
         }
 
-    @staticmethod
-    def _patch_documents(documents: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
+    def _patch_documents(self, documents: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
         deployment = next((item for item in documents if item.get("kind") == "Deployment"), None)
         claim = next((item for item in documents if item.get("kind") == "ResourceClaimTemplate"), None)
-        if deployment is None or (requires_dra_claim() and claim is None):
+        if deployment is None or (requires_dra_claim(accelerator=self._accelerator) and claim is None):
             raise ValueError("rendered Guide is missing Deployment or ResourceClaimTemplate")
         deployment["spec"]["replicas"] = parameters["replicas"]
         # XPU model initialization can legitimately take longer than Kubernetes'
@@ -377,7 +405,7 @@ class HelmKustomizeGuideAdapter:
             else:
                 environment.append({"name": name, "value": value})
         container["args"] = [command]
-        set_accelerator_request(container, claim, parameters["tensor_parallel_size"])
+        set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
         if parameters["mount_path"]:
             pod_spec = deployment["spec"]["template"]["spec"]
             pod_spec.setdefault("volumes", []).append(
