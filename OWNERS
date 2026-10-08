@@ -2,18 +2,16 @@
 
 reviewers:
   - maugustosilva
-  - vezio
+  - vezio        # Core Maintainer
   - mengmeiye
-  - yuanwu2017
+  - yuanwu2017   # Core Maintainer
   - WenjiaoYue
   - joshuayao
   - xiaojun-zhang
 
 approvers:
-  - maugustosilva
-  - vezio
-  - mengmeiye
-  - yuanwu2017
+  - vezio        # Core Maintainer
+  - yuanwu2017   # Core Maintainer
   - WenjiaoYue
   - joshuayao
   - xiaojun-zhang
