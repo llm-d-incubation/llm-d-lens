@@ -29,10 +29,9 @@ The Lead Core Maintainer should publicly articulate their decision-making, and g
 
 The Lead Core Maintainer is also responsible for confirming or removing core maintainers.
 
-#### Lead maintainer (as of 05/13/2025)
+#### Lead maintainer (as of 10/08/2026)
 
 - [Tyler Rimaldi](https://github.com/vezio)
-- [Yuan Wu](https://github.com/yuanwu2017)
 
 ### Decision Making
 
