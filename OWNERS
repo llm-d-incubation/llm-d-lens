@@ -1,0 +1,19 @@
+# See https://go.k8s.io/owners for format documentation
+
+reviewers:
+  - maugustosilva
+  - vezio
+  - mengmeiye
+  - yuanwu2017
+  - WenjiaoYue
+  - joshuayao
+  - xiaojun-zhang
+
+approvers:
+  - maugustosilva
+  - vezio
+  - mengmeiye
+  - yuanwu2017
+  - WenjiaoYue
+  - joshuayao
+  - xiaojun-zhang
