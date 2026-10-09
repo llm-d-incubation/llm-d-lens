@@ -23,6 +23,8 @@ Use `-- --text-file /tmp/pr-title.txt --text-file /tmp/pr-body.md` to include
 PR metadata in the check. The scanner reports Han characters in Git-visible text
 and filenames; it is not a natural-language classifier for every other language.
 Do not replace text with escapes or remove useful content to bypass the policy.
+The one exception is `docs/docusaurus/i18n/` (the bilingual docs site's
+Chinese translations), which the scanner skips on purpose.
 
 ## Development and validation
 

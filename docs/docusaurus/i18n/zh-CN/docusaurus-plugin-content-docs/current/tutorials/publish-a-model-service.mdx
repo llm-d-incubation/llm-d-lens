@@ -1,0 +1,44 @@
+---
+title: 发布模型服务
+description: 将集群部署转变为一个稳定的、兼容 OpenAI 的端点。
+---
+
+一旦存在某个部署（参见
+[引导集群并部署模型](/tutorials/bootstrap-and-deploy)），就可以
+通过共享网关发布它，这样无论集群或副本如何变化，调用方都能获得
+同一个稳定的端点。
+
+## 1. 安装集群的共享网关（每个集群只需一次）
+
+在[模型服务](/user-guide/model-services)页面，打开你集群的**网关**
+节点菜单，选择**安装**。提供方是在集群上选择的；参见
+[模型网关前置条件](/user-guide/clusters#model-gateway-prerequisites)
+（需要支持 InferencePool 的提供方以及一个 LoadBalancer 地址）。
+留意实时日志抽屉，直到它报告就绪——Envoy Gateway 在 `kubectl apply`
+之后需要几秒钟才能真正生效路由（如果第一次请求失败，参见
+[故障排查](/troubleshooting)）。
+
+## 2. 创建或选择一个模型服务
+
+创建一个模型服务（管理员操作），填写名称、模型引用和选择策略——
+或者使用一个与你的部署匹配的现有模型服务。
+
+## 3. 将你的部署添加为提供方
+
+将你集群的部署添加为该模型服务的服务提供方（成员）。对于自己
+管理的集群，维护者（而不仅仅是管理员）也可以执行此操作。
+
+## 4. 签发令牌并调用它
+
+在模型服务页面签发一个个人 API 令牌（`lens-mk-...`），然后调用网关：
+
+```bash
+curl http://<gateway-host>/v1/chat/completions \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<your model name>","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+关于如何从 OpenAI SDK 或其他兼容 OpenAI 的框架使用该端点，
+参见[集成](/integrations)；关于事后查看使用情况，参见
+[可观测性](/user-guide/observability)。

@@ -1,0 +1,319 @@
+---
+slug: /resources/add-new-hardware
+---
+
+# 指南：新增一种硬件（硬件提供方）
+
+- **状态：** 该机制已完成设计，正在分阶段落地中。
+  本指南描述的是**目标工作流**：一旦该机制上线，新增一种硬件就按照以下步骤进行。
+- **受众：** 为新的加速器类型添加支持的硬件厂商和 Lens 开发者。
+
+> 一句话概括：新增一种硬件 = **一个 `profiles/<id>.json` + 一个入口点（entry point）**；可选地再加 **一个 provider 代码文件**。部署的 overlay 复用自上游 llm-d。核心代码不会针对厂商分支判断。
+
+---
+
+## 0. 两种集成模式：内置 vs. 外部插件
+
+新增一种硬件恰好有两种方式。两者使用**相同的 JSON 契约、模式校验和快速失败（fail-fast）注册机制**；区别仅在于**文件存放在哪里、由谁声明入口点，以及插件如何分发**。
+
+| 方面 | 内置（在本仓库中） | 外部插件（你自己的包） |
+|---|---|---|
+| 目的 | 随 Lens 一起发布的第一方支持 | 单独分发的厂商/附加组件 |
+| Profile JSON | `llm_d_bench/hardware/profiles/<id>.json`（作为数据打包，自动加载） | **你的**包内的 JSON，由你的 `load_profiles()` 返回 |
+| Provider 代码 | `llm_d_bench/hardware/providers/<id>.py` | **你的**包内的一个模块 |
+| 入口点 | 在**本仓库**的 `pyproject.toml` 中声明 | 在**你的**包的 `pyproject.toml` 中声明 |
+| 发现来源 | 内置的 `profiles/*.json` **以及** `llm_d_bench.hardware.*` 入口点组 | 仅 `llm_d_bench.hardware.*` 入口点组 |
+| 安装方式 | 随 Lens 一起发布（无需额外安装） | 在后端的 Python 环境中 `pip install <你的包>`，然后重启 |
+| 发布耦合 | 随 Lens 一起发布 | 自有版本——新增/更新它**不会**改动任何 Lens 源码 |
+| 测试 | `llm_d_bench/hardware/test_*.py` | 你的包自身的测试（镜像同一契约） |
+| 上游 overlay | 必需（共享） | 必需（共享） |
+
+这两种模式都不会触及任何领域：profile + provider 是唯一的厂商接触面。只有当 Lens 打算第一方支持某种硬件时才选择**内置**；否则就发布一个**外部插件**，让本仓库保持不变。
+
+### 发现机制是如何工作的（两种模式皆然）
+
+`llm_d_bench/hardware/discovery.py` 通过一条路径从两个来源加载：
+
+1. 内置的 `llm_d_bench/hardware/profiles/*.json` 包数据（内置硬件），以及
+2. `llm_d_bench.hardware.profiles` 和 `llm_d_bench.hardware.providers`
+   入口点组——内置硬件在此声明，任何已安装的插件同样如此。
+
+每个载荷在注册前都会针对 `schema.json` 进行校验。具有相同内容的重复 `id` 会被去重，而任何**身份冲突**（同样的 `device_classes`、`resource_prefixes`、加速器键或 `upstream_variant` 被另一个 profile 声明）会快速失败，而不是被静默覆盖。外部插件只有在其包被安装到**后端**的 Python 环境中并且 Lens 重启后，才会可见。
+
+### 交付物
+
+| 制品 | 内置位置 | 外部插件位置 | 是否必需？ |
+|---|---|---|---|
+| 硬件 profile（JSON） | `llm_d_bench/hardware/profiles/<id>.json` | 你的包（由 `load_profiles()` 返回） | 是 |
+| 入口点声明 | 本仓库的 `pyproject.toml` | 你的包的 `pyproject.toml` | 是 |
+| Python provider | `llm_d_bench/hardware/providers/<id>.py` | 你的包 | 可选（用于驱动自动安装 / 遥测时需要） |
+| 部署 overlay | 上游 llm-d 的 `guides/*/modelserver/<variant>/...` | 相同（共享） | 是（通常已经存在） |
+| 测试 | `llm_d_bench/hardware/test_*.py` | 你的包的测试 | 是 |
+
+---
+
+## 1. 确定硬件的身份标识与命名
+
+先填写下表。规范化的 `id` **不得与已有的 profile 冲突**；所有三层命名都映射到同一个 profile。
+
+| 字段 | 你的硬件 | 示例：Intel XPU | 示例：NVIDIA |
+|---|---|---|---|
+| `id`（规范 ID） | ? | `intel-xpu` | `nvidia` |
+| `accelerator_keys`（Lens/AIC） | ? | `["xpu","intel_gpu"]` | `["cuda","nvidia"]` |
+| `benchmark_profile`（llm-d-benchmark） | ? | `intel-xpu` | `nvidia` |
+| `upstream_variant`（上游目录/标签） | ? | `xpu` | `gpu` |
+| `upstream_vendor`（上游标签） | ? | `intel` | `nvidia` |
+| `request_model` | ? | `dra` | `extended-resource` |
+| `resource_prefixes` | ? | `["gpu.intel.com/"]` | `["nvidia.com/gpu"]` |
+| `device_classes`（DRA） | ? | `["gpu.intel.com"]` | `["gpu.nvidia.com"]` |
+| `node_label_selector` | ? | `{"intel.feature.node.kubernetes.io/gpu":"true"}` | `{"feature.node.kubernetes.io/pci-10de.present":"true"}` |
+
+如何选择 `request_model`：当集群通过 **DRA 的 `ResourceClaimTemplate` / `deviceClassName`** 选择设备时使用 `dra`；当集群使用**扩展资源**（容器的 `resources.limits`，例如 `xxx.com/gpu`）时使用 `extended-resource`。这两种形态不可互换。
+
+`benchmark_profile` 必须是 `llm-d-benchmark` 已经支持的值（`nvidia`/`intel-xpu`/`amd`/……，参见 `llm-d-benchmark/llmdbenchmark/parser/cluster_resource_resolver.py` 中的 `ACCELERATOR_PROFILES`）。如果你的硬件在那里还没有 profile，请先在该仓库中添加。
+
+---
+
+## 2. 检查上游是否已存在部署 overlay
+
+上游 llm-d 按厂商目录组织 overlay：`guides/<guide>/modelserver/<variant>/<server>/`。检查你的硬件是否已经存在（例如 NVIDIA 是 `gpu`，Intel 是 `xpu`）：
+
+```bash
+# 使用集群实际使用的 llm-d 检出
+ls "$LLM_D_ROOT/guides/optimized-baseline/modelserver"
+```
+
+- **存在** → 记录 `upstream_variant`（目录名）以及 kustomization 中的 `llm-d.ai/accelerator-variant` / `llm-d.ai/accelerator-vendor` 标签值，并将它们填入 profile。
+- **不存在** → 先向上游 llm-d 贡献该 overlay（不在本指南范围内）；Lens 不负责编写 overlay。
+
+同时确认该 overlay 的资源请求形态（`patch-*.yaml`：`claims:`/`deviceClassName` 还是 `resources.limits: <vendor>/gpu`），以此决定 `request_model`。
+
+---
+
+## 3. 编写 profile JSON
+
+将其放置在 `llm_d_bench/hardware/profiles/<id>.json`（内置）中，或将其打包进**你的**插件并从 `load_profiles()` 返回（外部）。**最小模板**（仅声明式内容：不含驱动安装、不含遥测）：
+
+```jsonc
+{
+  "id": "myvendor",
+  "display_name": "MyVendor GPU",
+  "vendor": "myvendor",
+  "accelerator_keys": ["myvendor"],
+  "benchmark_profile": "myvendor",       // 必须是 llm-d-benchmark 支持的值
+  "upstream_variant": "myvendor",
+  "upstream_vendor": "myvendor",
+  "request_model": "extended-resource",
+  "device_classes": [],
+  "resource_prefixes": ["myvendor.com/gpu"],
+  "node_label_selector": {"myvendor.com/gpu.present": "true"},
+  "access_modes": ["plugin"],
+  "deployment": {
+    "overlay_root": "guides/{guide}/modelserver/{variant}/vllm",
+    "arch": "myvendor",
+    "device_class": "",
+    "claim_request_name": "",
+    "node_selector": {"myvendor.com/gpu.present": "true"},
+    "resource_name": "myvendor.com/gpu",
+    "supports_pci_allowlist": false
+  },
+  "evaluation_profile": "myvendor",
+  "planning": {"aic_system_patterns": ["myvendor"]},
+  "ui": {"icon": "Cpu", "labels": {"vendor": "MyVendor", "metric_group": "GPU"}}
+}
+```
+
+包含驱动安装 / 遥测 / 预检的**完整模板**（镜像 NVIDIA 的写法）：
+
+```jsonc
+{
+  // ...以上字段...
+  "access_modes": ["plugin", "dra"],            // 任意名称；下方每个名称对应一个 "modes" 条目
+  "driver": {
+    "installer": "helm",                          // "helm" | "kustomize"
+    "modes": {
+      "plugin": {
+        "manifest_ref": "my-device-plugin",       // Helm chart 名称（或 kustomize manifest 引用）
+        "chart_version": "0.17.4",                // 固定到一个已发布的版本
+        "repo": "https://myvendor.github.io/charts",
+        "daemonset_matchers": [{"name_contains": "my-device-plugin"}],
+        "options": {"myvendor_flag": true}        // 厂商专属；只有你的 provider 会解析这些值
+      },
+      "dra": {
+        "manifest_ref": "my-dra-driver",
+        "chart_version": "25.8.0",
+        "repo": "https://helm.myvendor.com",
+        "min_kubernetes_version": "1.32.0"        // 预检/安装会拒绝更旧的集群
+      }
+      // 如果某硬件只有一种模式，只声明那一个条目即可
+    }
+  },
+  "presence": {                                   // 阻塞型硬件存在性预检
+    "node_label_selector": {"myvendor.com/gpu.present": "true"},
+    "ensure_refs": [],                            // 需要先应用的 NFD/NodeFeatureRule 引用（可选）
+    "timeout_seconds": 90
+  },
+  "telemetry": {
+    "provider_id": "myvendor",                    // 必须在 monitoring/accelerator 中注册
+    "device_metrics": {"utilization": "myvendor_gpu_util"},
+    "label_schema": {"node": "node", "device": "gpu"},
+    "allocation_join": "none",                    // "dra" | "extended-resource" | "none"
+    "pod_metrics": {"gpu_cache_usage": "vllm:gpu_cache_usage_perc"}
+  }
+}
+```
+
+字段参考：
+
+| 字段 | 用途 | 使用方 |
+|---|---|---|
+| `accelerator_keys` | Lens/AIC 中的硬件键 | `server/candidateSearch.ts`、`deploy/capabilities.py` |
+| `benchmark_profile` / `evaluation_profile` | 基准测试中 `accelerator.profile` 的值 | `evaluate/router.py` |
+| `upstream_variant` / `upstream_vendor` | 定位 overlay、解析身份标识 | `deploy/runtime/composition.py`、解析器 |
+| `request_model` | DRA 还是扩展资源 | `deploy/providers/*`、`server/guidePlanning.ts` |
+| `device_classes` / `resource_prefixes` | 设备计数、DRA/扩展资源检测 | `cluster/service.py` |
+| `node_label_selector` | 节点过滤、GPU 计数 | `cluster/service.py`、驱动 |
+| `driver` | 驱动/插件安装来源 | `monitoring/gpu_driver/` |
+| `presence` | 阻塞型硬件存在性预检 | `gpu_driver` + `accelerator` 预检 |
+| `telemetry` | 指标查询与归因 | `monitoring/profiling/`、`evaluate/router.py` |
+| `planning.aic_system_patterns` | AIC 系统名称匹配 | `configuration/capability.py`、`server/candidateSearch.ts` |
+| `ui` | 厂商选项卡、面板、图表标题 | `src/components/**` |
+
+---
+
+## 4. 注册入口点
+
+两种模式声明相同的两个入口点组；区别仅在于声明它们的文件不同。入口点的**名称**必须与 profile 的 `id` 相同。
+
+**内置** —— 添加到**本仓库**的 `pyproject.toml` 中（JSON 已经自动从 `profiles/` 加载；入口点使 provider 可被解析）：
+
+```toml
+[project.entry-points."llm_d_bench.hardware.profiles"]
+myvendor = "llm_d_bench.hardware.providers.myvendor:load_profiles"
+
+[project.entry-points."llm_d_bench.hardware.providers"]
+myvendor = "llm_d_bench.hardware.providers.myvendor:MyVendorProvider"
+```
+
+**外部插件** —— 在**你的包**的 `pyproject.toml` 中声明同样的两个组，将 JSON 作为包数据发布，并从 `load_profiles()` 中返回（可从你自己的命名空间导入）：
+
+```toml
+[project.entry-points."llm_d_bench.hardware.profiles"]
+myvendor = "myvendor_lens_hardware:load_profiles"
+
+[project.entry-points."llm_d_bench.hardware.providers"]
+myvendor = "myvendor_lens_hardware:MyVendorProvider"
+
+[tool.setuptools.package-data]
+myvendor_lens_hardware = ["profiles/*.json"]
+```
+
+两种模式都遵循以下规则：
+
+- `load_profiles()` 返回一个或多个 `.json` profile 对象；加载器可以位于 Lens 包（内置）中，也可以位于你的插件包（外部）中。
+- `profiles/` 下的内置 profile JSON 会被自动加载；每个 **provider** 以及每个**外部 profile** 都是通过这些入口点组被发现的。
+  没有其他隐式注册方式——**未注册的硬件一旦被显式使用就会被拒绝。**
+- 将插件安装到**后端**的 Python 环境中；更改入口点后需要重新安装/重启
+  （内置使用 `pip install -e .`，外部插件使用 `pip install <你的包>`），否则不会被发现。
+
+---
+
+## 5. 实现 provider（可选）
+
+只有当你需要“驱动自动安装”或“自定义遥测”时才需要这一步。**内置**硬件将其放在 `llm_d_bench/hardware/providers/<id>.py`；**外部插件**则将相同的代码放在自己的包中。除了模块路径以及 `load_profiles()` 读取 JSON 的来源之外，代码完全相同：
+
+```python
+import json
+from importlib.resources import files
+
+from llm_d_bench.hardware.models import HardwareProfile
+from llm_d_bench.hardware.registry import get_profile
+
+
+def load_profiles() -> list[dict]:
+    # 内置：llm_d_bench.hardware 的包数据
+    text = files("llm_d_bench.hardware").joinpath("profiles", "myvendor.json").read_text()
+    # 外部插件：从你自己的包中读取，例如
+    # text = files("myvendor_lens_hardware").joinpath("profiles", "myvendor.json").read_text()
+    return [json.loads(text)]
+
+
+class MyVendorProvider:
+    def profile(self) -> HardwareProfile:
+        return get_profile("myvendor")                  # 解析被发现的 profile
+    async def ensure_presence(self, *, cluster_id): ...  # 默认使用 profile.presence；可以覆盖
+    async def driver_status(self, access_mode, *, cluster_id): ...
+    async def install_driver(self, access_mode, *, cluster_id): ...
+```
+
+**不要**自己调用 `register_provider()`：provider 的入口点已经指定了这个类（或其实例），发现机制会实例化并注册它——自行注册会抛出“already registered”错误。
+
+约定：
+
+- 优先使用厂商官方的 Helm chart / kustomize 来安装驱动，并**固定到最新经过验证的版本**——绝不使用浮动的 `latest`。
+- **不要安装宿主机内核驱动**（假定节点已经就绪）；只安装设备插件 / DRA 驱动。
+- 遥测 provider 复用 `llm_d_bench/monitoring/accelerator/registry.py` 中的接口，遵循 `intel_gpu.py` 的模式。
+- 所有 `kubectl` / `helm` 调用都通过现有的 `CommandRunner` 进行；不要直接调用 `subprocess`。
+
+---
+
+## 6. 准备驱动 / 遥测引用
+
+| 需求 | 从哪里获取 | 说明 |
+|---|---|---|
+| 设备插件 / DRA 驱动 | 厂商官方的 Helm chart 或 kustomize | 固定版本；由 `driver.installer` 选择调用方式 |
+| 遥测导出器 | 厂商官方的 chart（例如 DCGM exporter） | 与现有监控栈集成；不要重新部署 Prometheus/Grafana |
+| NFD / NodeFeatureRule | 厂商或上游的 manifest | 放入 `presence.ensure_refs`，用于标记硬件存在性 |
+
+---
+
+## 7. 测试
+
+在 `llm_d_bench/hardware/`（内置）或你的插件包（外部）下添加测试，覆盖以下内容：
+
+- **契约：** profile 通过 JSON Schema 校验；`id` 唯一；`device_classes`/`resource_prefixes` 不与其他 profile 冲突；每个别名都能解析到这个 profile。
+- **发现：** 使用 `importlib.metadata` fixture 模拟一个入口点；验证加载、校验以及失败隔离。
+- **解析：** 上游标签（`accelerator-variant`/`vendor`）、设备类、扩展资源前缀和 `accelerator_keys` 都能被正确解析。
+- **request_model：** `dra` 需要一个 ResourceClaimTemplate；`extended-resource` 会跳过 claim，转而解析容器的 `resources`。
+- **存在性预检：** 没有标签时快速失败；有标签时通过。
+- **驱动/遥测：** 使用一个伪造的 `kubectl`/`helm` runner（参见 `monitoring/accelerator/test_accelerator.py` 中的 `FakeRunner`）。
+
+运行：
+
+```bash
+.venv/bin/python -m pytest llm_d_bench/hardware -q
+npm run build   # 如果你改动了前端/网关的消费方代码
+```
+
+---
+
+## 8. 验证清单
+
+- [ ] `GET /api/v1/hardware/capabilities` 返回你的 profile，字段完整。
+- [ ] 集群概览显示该硬件的 GPU 数量 / 显存（按厂商分桶）。
+- [ ] 前端的“加速器”区域显示你的厂商选项卡；面板默认值（类型/命名空间）正确。
+- [ ] 部署：该硬件的 guide 能正确解析到对应的 overlay `<variant>` 和请求形态。
+- [ ] 评估：`accelerator.profile` 携带你的 `benchmark_profile`。
+- [ ] 当没有该硬件存在时，预检能快速失败而不是一直等待。
+- [ ] 异构集群（多厂商）能正确解析，不会相互串扰。
+
+---
+
+## 9. 常见错误
+
+| 现象 | 原因 | 解决方法 |
+|---|---|---|
+| 启动时出现“registration conflict” | 两个 profile 声明了相同的 `device_classes`/前缀 | 使 `id` 及身份字段唯一 |
+| 硬件没有出现 | 入口点未安装/未重新安装，或外部插件不在后端环境中 | 执行 `pip install -e .`（内置）或 `pip install <插件>`（外部），然后重启 |
+| 显式使用时出现 `ACCELERATOR_NOT_REGISTERED` | 没有注册 profile，或 `accelerator_keys` 缺少对应的键 | 添加 profile 或别名 |
+| 部署卡在 0 个就绪 | overlay 目录缺失 / `arch` 不对（例如写了 `cuda` 但实际目录是 `gpu`） | 使用 `upstream_variant` |
+| `ResourceClaimTemplate is missing` | 该硬件本是扩展资源却被当作 DRA 处理 | 设置 `request_model="extended-resource"` |
+| 预检等待 5 分钟 | 没有配置 `presence`，或者没有节点标签 | 添加 `presence`；先安装宿主机驱动 |
+| 指标缺失 | `device_metrics`/`pod_metrics` 名称或 `label_schema` 不对 | 匹配厂商导出器的实际指标名称 |
+
+---
+
+## 10. 参考资料
+
+- 现有实现示例：`llm_d_bench/monitoring/accelerator/intel_gpu.py`、`llm_d_bench/monitoring/gpu_driver/`
+- 贡献流程与校验：[CONTRIBUTING.md](https://github.com/llm-d-incubation/llm-d-lens/blob/main/CONTRIBUTING.md)

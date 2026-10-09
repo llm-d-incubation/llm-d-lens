@@ -1,0 +1,26 @@
+{
+  "version.label": {
+    "message": "main",
+    "description": "The label for version current"
+  },
+  "sidebar.docsSidebar.category.User Guide": {
+    "message": "用户指南",
+    "description": "The label for category 'User Guide' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Tutorials": {
+    "message": "教程",
+    "description": "The label for category 'Tutorials' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Architecture": {
+    "message": "架构",
+    "description": "The label for category 'Architecture' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.API Reference": {
+    "message": "API 参考",
+    "description": "The label for category 'API Reference' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Modules": {
+    "message": "模块",
+    "description": "The label for category 'Modules' in sidebar 'docsSidebar'"
+  }
+}

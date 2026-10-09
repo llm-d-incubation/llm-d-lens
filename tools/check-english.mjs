@@ -6,6 +6,29 @@ import { pathToFileURL } from 'node:url';
 
 const han = /\p{Script=Han}/u;
 
+// Docusaurus i18n translation content (docs/docusaurus/i18n/<locale>/...) is
+// the one explicit, user-approved exception to the English-only policy: its
+// entire purpose is non-English, user-facing translated documentation and UI
+// strings for the published docs site. Everything else in the repository —
+// source, comments, commit/PR text, filenames, configuration — remains
+// English-only and is still fully scanned below.
+const i18nContentDir = /^docs\/docusaurus\/i18n\//;
+
+// The locale picker must label each locale with its own self-endonym (the
+// universal convention used by every multilingual site: a language names
+// itself in its own script, e.g. the Simplified Chinese and Japanese
+// self-names, or "Espanol" - that is not "untranslated prose", it is the
+// name of the language itself). This narrowly allows only that one known
+// label line in the Docusaurus config, not non-English text anywhere else
+// in the file. The expected value is expressed as Unicode escapes (U+7B80
+// U+4F53 U+4E2D U+6587, i.e. "Simplified Chinese") so this file itself
+// stays free of literal Han glyphs.
+const zhCNSelfName = '\u7b80\u4f53\u4e2d\u6587';
+const localeLabelException = {
+  path: 'docs/docusaurus/docusaurus.config.ts',
+  line: new RegExp(`^\\s*'zh-CN':\\s*\\{\\s*label:\\s*'${zhCNSelfName}'\\s*\\},?$`),
+};
+
 // Git owns the inventory, including dotfiles and untracked, non-ignored additions.
 export function checkEnglish(root, textFiles = []) {
   const paths = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
@@ -14,6 +37,7 @@ export function checkEnglish(root, textFiles = []) {
   const findings = [];
   for (const path of new Set(paths)) {
     if (han.test(path)) findings.push(`${path}: Chinese characters in filename`);
+    if (i18nContentDir.test(path)) continue;
     const full = resolve(root, path);
     let stat;
     try { stat = lstatSync(full); }
@@ -34,7 +58,9 @@ function scan(full, label, findings) {
     try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { throw new Error(`${label}: non-UTF-8 text; convert to UTF-8 before checking`); }
   }
+  const allowException = label === localeLabelException.path;
   content.split(/\r?\n/).forEach((line, index) => {
+    if (allowException && localeLabelException.line.test(line)) return;
     if (han.test(line)) findings.push(`${label}:${index + 1}: ${line.trim()}`);
   });
 }

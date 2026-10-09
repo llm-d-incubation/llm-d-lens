@@ -1,0 +1,30 @@
+# Dependencies
+/node_modules
+
+# Production
+/build
+
+# Generated files
+.docusaurus
+.cache-loader
+
+# Synced from canonical sources outside docs/docusaurus/ by
+# scripts/sync-external-docs.mjs - do not edit directly or commit.
+/docs/architecture/agentic-deployment.md
+/docs/architecture/agentic-planning-evidence.md
+/docs/resources/contributing.md
+
+# Fetched from the GitHub API by scripts/fetch-github-stats.mjs - do not edit
+# directly or commit; regenerated on every `start`/`build`.
+/src/data/github-stats.json
+
+# Misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

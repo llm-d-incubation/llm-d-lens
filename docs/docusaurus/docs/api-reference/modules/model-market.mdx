@@ -1,0 +1,460 @@
+---
+title: Model Market
+description: Backend touchpoints behind the frontend-only model catalog.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Backend API
+
+Model Market does **not** have a dedicated backend module. Its catalog is static frontend data in `src/data/modelCatalog.js`, so there is no backend catalog API to document. The page only calls shared cluster and deployment APIs.
+
+### List Lens-managed clusters
+
+List Lens-managed clusters, optionally including draft records that have not yet been finalized.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/cluster/clusters`**
+
+Request:
+
+- Query params:
+  - `includeDrafts` (`boolean`, optional): include draft cluster records that have not been finalized yet.
+
+This endpoint has no request body.
+
+Response:
+
+Returns a `ClustersResponse` object with an `items` array of `ClusterRecord` objects.
+
+```json
+{
+  "items": [
+    {
+      "id": "cluster-123",
+      "name": "lab-cluster",
+      "description": "Shared Intel GPU cluster",
+      "createdAt": "2026-09-20T10:15:00+00:00",
+      "ready": true,
+      "proxy": {
+        "mode": "auto",
+        "httpProxy": null,
+        "httpsProxy": null,
+        "noProxy": null
+      },
+      "llmDRef": "v0.9.0",
+      "llmDBenchmarkRef": "main",
+      "llmDRepoPath": "/opt/prism/checkouts/llm-d",
+      "llmDBenchmarkRepoPath": "/opt/prism/checkouts/llm-d-benchmark",
+      "deploymentSource": {
+        "resolved_from": "cluster-registry",
+        "ref": "v0.9.0"
+      },
+      "benchmarkSource": {
+        "resolved_from": "cluster-registry",
+        "ref": "main"
+      },
+      "draft": false
+    }
+  ]
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.cluster import service
+
+
+async def main() -> None:
+    clusters = service.list_clusters(include_drafts=True)
+    readiness = await asyncio.gather(*(service.cluster_is_ready(cluster) for cluster in clusters))
+
+    for cluster, is_ready in zip(clusters, readiness):
+        print(cluster.id, cluster.name, is_ready)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Get a cluster overview
+
+Get the live Kubernetes overview for a Lens-managed cluster, including node, GPU, cached image, and component health summaries.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/cluster/overview`**
+
+Request:
+
+- Query params:
+  - `clusterId` (`string`, required): the Lens-managed cluster id to inspect.
+
+This endpoint has no request body.
+
+Response:
+
+Returns an `OverviewResponse` with the cluster record, fetch timestamp, and a `KubernetesSummary` snapshot.
+
+```json
+{
+  "cluster": {
+    "id": "cluster-123",
+    "name": "lab-cluster",
+    "description": "Shared Intel GPU cluster",
+    "createdAt": "2026-09-20T10:15:00+00:00",
+    "ready": true,
+    "proxy": {
+      "mode": "auto",
+      "httpProxy": null,
+      "httpsProxy": null,
+      "noProxy": null
+    },
+    "llmDRef": "v0.9.0",
+    "llmDBenchmarkRef": "main",
+    "llmDRepoPath": "/opt/prism/checkouts/llm-d",
+    "llmDBenchmarkRepoPath": "/opt/prism/checkouts/llm-d-benchmark",
+    "deploymentSource": {
+      "resolved_from": "cluster-registry",
+      "ref": "v0.9.0"
+    },
+    "benchmarkSource": {
+      "resolved_from": "cluster-registry",
+      "ref": "main"
+    },
+    "draft": false
+  },
+  "fetchedAt": "2026-09-23T09:30:00+00:00",
+  "kubernetes": {
+    "components": {
+      "intelDevicePlugin": {
+        "installed": true,
+        "ready": 1,
+        "desired": 1,
+        "status": "ready"
+      },
+      "monitoring": {
+        "installed": true,
+        "ready": 5,
+        "desired": 5,
+        "status": "ready"
+      }
+    },
+    "nodes": [
+      {
+        "name": "worker-1",
+        "version": "v1.30.2",
+        "osImage": "Ubuntu 22.04.5 LTS",
+        "ready": true,
+        "schedulingDisabled": false,
+        "cpu": 16.0,
+        "cpuUsagePercent": 25.0,
+        "memoryBytes": 68719476736,
+        "memoryUsagePercent": 50.0,
+        "gpu": true,
+        "gpuCount": 2,
+        "gpuUsagePercent": 80.0,
+        "vramBytes": 103079215104,
+        "vramUsagePercent": 40.0,
+        "role": "worker",
+        "cachedImages": [
+          "ghcr.io/llm-d/llm-d-xpu:v0.9.0"
+        ],
+        "gpus": [
+          {
+            "id": "gpu-0",
+            "index": 0,
+            "name": "GPU #0",
+            "pciAddress": "0000:03:00.0",
+            "computeUsagePercent": 80.0,
+            "vramTotalBytes": 51539607552,
+            "vramUsedBytes": 21474836480,
+            "vramUsagePercent": 41.6,
+            "vramReadThroughputBytes": 10000,
+            "vramWriteThroughputBytes": 20000,
+            "vramTotalThroughputBytes": 30000,
+            "vramBandwidthPercent": 15.0
+          }
+        ],
+        "diskBytes": 1099511627776,
+        "diskUsedBytes": 274877906944,
+        "diskUsagePercent": 25.0
+      }
+    ],
+    "namespaces": [
+      {
+        "name": "standard-qwen3",
+        "deployments": [
+          {
+            "name": "qwen3-vllm",
+            "desired": 1,
+            "ready": 1,
+            "available": 1
+          }
+        ],
+        "ready": 1
+      }
+    ],
+    "hardware": {
+      "nodes": 1,
+      "cpuCores": 16.0,
+      "cpuUsagePercent": 25.0,
+      "memoryBytes": 68719476736,
+      "memoryUsagePercent": 50.0,
+      "gpuNodes": 1,
+      "gpuCount": 2,
+      "gpuUsagePercent": 80.0,
+      "vramBytes": 103079215104,
+      "vramUsagePercent": 40.0,
+      "diskBytes": 1099511627776,
+      "diskUsagePercent": 25.0,
+      "allocatedGpuCount": 1,
+      "availableGpuCount": 1,
+      "usableGpuCount": 1,
+      "configuredGpuLimit": null
+    }
+  }
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.cluster import registry, service
+
+
+async def main() -> None:
+    cluster = registry.require_cluster("cluster-123")
+    overview = await service.build_overview(cluster)
+    ready = await service.cluster_is_ready(cluster)
+
+    print(cluster.id, ready)
+    print(overview["hardware"])
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Start a Standard Kubernetes Service deployment run
+
+Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM contract.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/deployments/standard-vllm-runs`**
+
+Request:
+
+- JSON body fields:
+  - `model` (`string`, required)
+  - `deployment_name` (`string`, required)
+  - `description` (`string`, optional)
+  - `cluster_session_id` (`string`, required, 36 chars)
+  - `replicas` (`integer`, required)
+  - `tensor_parallel_size` (`integer`, required)
+  - `storage_type` (`"local-cache" | "pvc" | "model-cache"`, optional)
+  - `storage_volume_id` (`string`, optional)
+  - `model_cache_path` (`string`, optional)
+  - `pvc_name` (`string`, optional)
+  - `max_model_len` (`integer`, optional)
+  - `gpu_memory_utilization` (`number`, optional)
+  - `max_num_seqs` (`integer`, optional)
+  - `max_num_batched_tokens` (`integer`, optional)
+  - `enable_prefix_caching` (`boolean`, optional)
+  - `enforce_eager` (`boolean`, optional)
+  - `vllm_arguments` (`array<object>`, optional; each item uses `name` and `value` string keys)
+  - `use_cluster_proxy` (`boolean`, optional)
+  - `http_proxy` (`string`, optional)
+  - `https_proxy` (`string`, optional)
+  - `no_proxy` (`string`, optional)
+
+```json
+{
+  "model": "Qwen/Qwen3-8B",
+  "deployment_name": "qwen3-8b-standard",
+  "description": "Model Market launch",
+  "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+  "replicas": 2,
+  "tensor_parallel_size": 2,
+  "storage_type": "local-cache",
+  "model_cache_path": "/home/prism/.cache",
+  "max_model_len": 8192,
+  "gpu_memory_utilization": 0.85,
+  "max_num_seqs": 128,
+  "max_num_batched_tokens": 4096,
+  "enable_prefix_caching": true,
+  "enforce_eager": false,
+  "vllm_arguments": [
+    {
+      "name": "enable-auto-tool-choice",
+      "value": "true"
+    }
+  ],
+  "use_cluster_proxy": true,
+  "http_proxy": "http://proxy.example:911",
+  "https_proxy": "http://proxy.example:911",
+  "no_proxy": "localhost,.svc"
+}
+```
+
+Response:
+
+Returns a queued `DeploymentRun`. The `source_configurations` entry is the immutable `DeployableConfiguration` generated from the allowlisted Standard request.
+
+```json
+{
+  "id": "run-123",
+  "status": "queued",
+  "source_configurations": [
+    {
+      "schema_version": "deployable-configuration.v1",
+      "type": "baseline",
+      "format": "helm",
+      "provider_ref": "baseline-vllm",
+      "checksum": "sha256:1d1c9c5b7f4d",
+      "content": {
+        "model": {
+          "name": "Qwen/Qwen3-8B"
+        },
+        "decode": {
+          "replicaCount": 2,
+          "tensorParallelSize": 2,
+          "maxModelLen": 8192
+        },
+        "runtime": {
+          "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
+          "imageMode": "pull-existing",
+          "modelSource": "auto-cache",
+          "mountPath": "/home/prism/.cache",
+          "environment": {
+            "HTTP_PROXY": "http://proxy.example:911",
+            "HTTPS_PROXY": "http://proxy.example:911",
+            "NO_PROXY": "localhost,.svc,127.0.0.1,.cluster.local"
+          }
+        },
+        "customParameters": [
+          {
+            "target": "decode",
+            "kind": "argument",
+            "name": "gpu-memory-utilization",
+            "value": "0.85"
+          },
+          {
+            "target": "decode",
+            "kind": "argument",
+            "name": "enable-prefix-caching",
+            "value": "true"
+          }
+        ]
+      },
+      "provenance": {
+        "source": "standard-kubernetes-service.v1",
+        "deployment_name": "qwen3-8b-standard",
+        "description": "Model Market launch",
+        "storage_type": "local-cache",
+        "namespace_policy": {
+          "prefix": "standard-"
+        }
+      }
+    }
+  ],
+  "cases": [],
+  "failure_policy": "continue",
+  "provenance": {
+    "deployment_source": {
+      "kind": "standard-kubernetes-service"
+    },
+    "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+    "deployment_name": "qwen3-8b-standard",
+    "description": "Model Market launch",
+    "model_market": {
+      "deployment_name": "qwen3-8b-standard",
+      "description": "Model Market launch"
+    }
+  },
+  "created_at": "2026-09-23T09:35:00+00:00",
+  "started_at": null,
+  "finished_at": null
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.deploy.application import deployment_run_manager
+from llm_d_bench.deploy.contracts import DeploymentRunCreateRequest
+from llm_d_bench.deploy.standard_kubernetes_service import (
+    StandardKubernetesServiceRequest,
+    build_standard_kubernetes_service_configuration,
+)
+
+
+async def main() -> None:
+    request = StandardKubernetesServiceRequest(
+        model="Qwen/Qwen3-8B",
+        deployment_name="qwen3-8b-standard",
+        description="Model Market launch",
+        cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
+        replicas=2,
+        tensor_parallel_size=2,
+        storage_type="local-cache",
+        model_cache_path="/home/prism/.cache",
+        max_model_len=8192,
+        gpu_memory_utilization=0.85,
+        max_num_seqs=128,
+        max_num_batched_tokens=4096,
+        enable_prefix_caching=True,
+        vllm_arguments=[{"name": "enable-auto-tool-choice", "value": "true"}],
+        use_cluster_proxy=True,
+        http_proxy="http://proxy.example:911",
+        https_proxy="http://proxy.example:911",
+        no_proxy="localhost,.svc",
+    )
+    configuration = build_standard_kubernetes_service_configuration(request)
+    run = await deployment_run_manager.start_run(
+        DeploymentRunCreateRequest(
+            configurations=[configuration],
+            provenance={
+                "deployment_source": {"kind": "standard-kubernetes-service"},
+                "cluster_session_id": request.cluster_session_id,
+                "deployment_name": request.deployment_name,
+                "description": request.description.strip(),
+                "model_market": {
+                    "deployment_name": request.deployment_name,
+                    "description": request.description.strip(),
+                },
+            },
+        )
+    )
+    print(run.id, run.status)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+Model Market does not expose its own catalog API; see [Clusters](/api-reference/modules/clusters) and [Deployments](/api-reference/modules/deployments) for the full backend-facing module pages.
+
+See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).

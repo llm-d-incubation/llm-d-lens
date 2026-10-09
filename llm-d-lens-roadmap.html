@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="/public/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<title>llm-d-lens — Roadmap</title>
+<style>
+  :root{
+    --bg-primary:#020617;      /* slate-950, matches app shell */
+    --bg-card:#090d16;         /* dark bg-card */
+    --bg-raised:#0f172a;       /* slate-900 */
+    --border-color:#1e293b;    /* slate-800 */
+    --border-soft:#334155;     /* slate-700 */
+    --text-primary:#f8fafc;    /* slate-50 */
+    --text-secondary:#94a3b8;  /* slate-400 */
+    --text-muted:#64748b;      /* slate-500 */
+    --emerald:#34d399;
+    --emerald-bg:rgba(52,211,153,.12);
+    --emerald-border:rgba(52,211,153,.35);
+    --sky:#38bdf8;
+    --sky-bg:rgba(14,165,233,.10);
+    --sky-border:rgba(14,165,233,.30);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--bg-primary);
+    color:var(--text-primary);
+    font-family:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{max-width:1360px;margin:0 auto;padding:40px 24px 72px;}
+
+  /* Header: mirrors the app shell's llm-d logo + "Lens" wordmark */
+  .brand{
+    display:inline-flex;align-items:center;gap:10px;margin-bottom:28px;
+    text-decoration:none;
+  }
+  .brand img{height:26px;width:auto;object-fit:contain;}
+  .brand .word{
+    font-size:22px;font-weight:800;letter-spacing:.01em;
+    background:linear-gradient(90deg,#0ea5e9,#22d3ee,#2dd4bf);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+
+  header.hero{margin-bottom:28px;}
+  header.hero h1{
+    font-size:26px;font-weight:800;color:var(--text-primary);margin:0;
+    letter-spacing:-.01em;
+  }
+
+  /* Card surface, same recipe as the app's <Panel>:
+     bg-theme-card border border-theme-border rounded-xl shadow-lg */
+  .table-wrap{
+    overflow-x:auto;background:var(--bg-card);
+    border:1px solid var(--border-color);
+    border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  table.roadmap{width:100%;border-collapse:collapse;min-width:1180px;table-layout:fixed;}
+  table.roadmap colgroup col.col-label{width:19%;}
+  table.roadmap colgroup col.col-ver{width:20.25%;}
+
+  table.roadmap thead th{
+    position:sticky;top:0;z-index:2;
+    background:var(--bg-raised);color:var(--text-secondary);text-align:left;
+    font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    padding:16px 18px;vertical-align:bottom;border-bottom:1px solid var(--border-color);
+  }
+  table.roadmap thead th.label-head{color:var(--text-muted);}
+  table.roadmap thead th .ver-title{
+    display:inline-block;font-weight:800;font-size:14px;letter-spacing:0;text-transform:none;
+    color:var(--text-primary);
+  }
+  table.roadmap thead th .ver-row{display:flex;align-items:center;gap:8px;}
+  table.roadmap thead th .ver-sub{
+    display:block;font-weight:500;font-size:11.5px;letter-spacing:0;text-transform:none;
+    color:var(--text-secondary);margin-top:4px;
+  }
+  table.roadmap thead th.is-current{background:var(--emerald-bg);box-shadow:inset 0 -2px 0 var(--emerald);}
+  table.roadmap thead th.is-current .ver-title{color:var(--emerald);}
+  .status-badge{
+    display:inline-block;font-size:9.5px;font-weight:700;
+    letter-spacing:.05em;text-transform:uppercase;padding:2.5px 8px;border-radius:999px;
+    background:var(--emerald-bg);color:var(--emerald);border:1px solid var(--emerald-border);
+  }
+
+  tr.category-row th{
+    background:var(--sky-bg);color:rgba(56,189,248,.58);text-align:left;
+    font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+    padding:10px 18px;border-top:1px solid var(--sky-border);border-bottom:1px solid var(--sky-border);
+  }
+
+  tr.top-row td{
+    background:rgba(255,255,255,.03);border-bottom:2px solid var(--border-soft);
+  }
+  tr.top-row td.label-cell{font-weight:700;color:var(--text-primary);}
+
+  tbody td{
+    font-size:13.3px;line-height:1.55;padding:13px 18px;
+    border-bottom:1px solid var(--border-color);vertical-align:top;color:#e2e8f0;
+  }
+  tbody td.label-cell{
+    font-weight:600;color:var(--text-secondary);background:rgba(255,255,255,.015);
+    border-right:1px solid var(--border-color);
+  }
+  tbody tr:nth-child(even) td.data-cell{background:rgba(255,255,255,.015);}
+  tbody td.data-cell.current-col{background:var(--emerald-bg);}
+  tbody tr:nth-child(even) td.data-cell.current-col{background:rgba(52,211,153,.08);}
+  td.data-cell.empty{color:var(--text-muted);text-align:center;}
+  td.data-cell ul{margin:0;padding-left:16px;}
+  td.data-cell li{margin-bottom:4px;}
+  td.data-cell li:last-child{margin-bottom:0;}
+
+  /* Version pill, same recipe as the app's <Badge tone="neutral"> */
+  td.data-cell .mono{
+    display:inline-block;background:var(--bg-raised);color:var(--text-secondary);
+    border:1px solid var(--border-soft);border-radius:4px;
+    padding:1px 8px;font-weight:600;font-size:12.5px;font-family:ui-monospace,monospace;
+  }
+  td.data-cell .tag-tbd{
+    display:inline-block;background:transparent;color:var(--text-muted);
+    border:1px dashed var(--border-soft);border-radius:999px;
+    padding:1.5px 9px;font-weight:700;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  }
+
+  /* Hover tooltip with a clickable link, e.g. "pending on <github issue>" */
+  .info-tip{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px;}
+  /* Invisible bridge so the pointer stays within the hover region while
+     moving from the icon up into the popup across the visual gap. */
+  .info-tip::before{
+    content:"";position:absolute;left:50%;bottom:100%;transform:translateX(-50%);
+    width:28px;height:10px;
+  }
+  .info-icon{
+    display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+    border-radius:50%;background:var(--bg-raised);border:1px solid var(--border-soft);
+    color:var(--text-muted);font-size:9px;font-weight:800;cursor:help;
+  }
+  .info-pop{
+    position:absolute;left:50%;bottom:calc(100% + 7px);transform:translateX(-50%);
+    white-space:nowrap;background:var(--bg-raised);border:1px solid var(--border-soft);
+    border-radius:6px;padding:7px 11px;font-size:11.5px;color:var(--text-secondary);
+    box-shadow:0 10px 24px rgba(0,0,0,.45);opacity:0;visibility:hidden;pointer-events:none;
+    transition:opacity .15s ease;z-index:5;
+  }
+  .info-pop a{color:var(--sky);text-decoration:underline;text-underline-offset:2px;}
+  .info-tip:hover .info-pop,
+  .info-tip:focus-within .info-pop{opacity:1;visibility:visible;pointer-events:auto;}
+
+  footer.note{margin-top:20px;font-size:12px;color:var(--text-muted);line-height:1.6;}
+
+  /* Scrollbars matching the app's .custom-scrollbar recipe */
+  .table-wrap::-webkit-scrollbar{width:6px;height:6px;}
+  .table-wrap::-webkit-scrollbar-track{background:rgba(15,23,42,.4);border-radius:9999px;}
+  .table-wrap::-webkit-scrollbar-thumb{background:var(--border-soft);border-radius:9999px;}
+  .table-wrap::-webkit-scrollbar-thumb:hover{background:#475569;}
+  .table-wrap{scrollbar-width:thin;scrollbar-color:var(--border-soft) rgba(15,23,42,.4);}
+
+  @media (max-width:720px){
+    .page{padding:28px 16px 56px;}
+    header.hero h1{font-size:21px;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <a class="brand" href="https://llm-d.ai" target="_blank" rel="noopener noreferrer" aria-label="llm-d">
+    <img src="https://llm-d.ai/img/llm-d-logotype-and-icon.png" alt="llm-d">
+    <span class="word">Lens</span>
+  </a>
+
+  <header class="hero">
+    <h1>Roadmap</h1>
+  </header>
+
+  <div class="table-wrap">
+    <table class="roadmap">
+      <colgroup>
+        <col class="col-label">
+        <col class="col-ver">
+        <col class="col-ver">
+        <col class="col-ver">
+        <col class="col-ver">
+      </colgroup>
+      <thead>
+        <tr>
+          <th class="label-head">Category / Milestone</th>
+          <th>
+            <span class="ver-title">v0.1.0-dev</span>
+            <span class="ver-sub">llm-d-incubation</span>
+          </th>
+          <th class="is-current">
+            <span class="ver-row">
+              <span class="ver-title">v0.1.0</span>
+              <span class="status-badge">In Progress</span>
+            </span>
+            <span class="ver-sub">llm-d Core</span>
+          </th>
+          <th>
+            <span class="ver-title">v0.2.0</span>
+            <span class="ver-sub">Multi-HW Expansion</span>
+          </th>
+          <th>
+            <span class="ver-title">v0.?.?</span>
+            <span class="ver-sub">Advanced Engine &amp; Planning</span>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+
+        <tr class="top-row">
+          <td class="label-cell">Planned Release Date</td>
+          <td class="data-cell">Oct 3, 2026</td>
+          <td class="data-cell current-col">Oct 17, 2026</td>
+          <td class="data-cell empty"><span class="tag-tbd">TBD</span></td>
+          <td class="data-cell empty"><span class="tag-tbd">TBD</span></td>
+        </tr>
+
+        <tr class="category-row">
+          <th colspan="5">System Stack &amp; Hardware Matrix</th>
+        </tr>
+        <tr>
+          <td class="label-cell">llm-d Stack Version Target</td>
+          <td class="data-cell"><span class="mono">v0.9.0</span></td>
+          <td class="data-cell current-col"><span class="mono">v0.10.0</span></td>
+          <td class="data-cell"><span class="mono">v0.11.0</span></td>
+          <td class="data-cell empty"><span class="tag-tbd">TBD / Future Release</span></td>
+        </tr>
+        <tr>
+          <td class="label-cell">Hardware Architecture Support</td>
+          <td class="data-cell">Intel XPU</td>
+          <td class="data-cell current-col">Intel XPU, Nvidia GPU (Basic)</td>
+          <td class="data-cell">Intel XPU, Nvidia GPU, CPU</td>
+          <td class="data-cell">
+            Intel XPU, Nvidia GPU, AMD Instinct GPU, Google TPU, CPU<br>
+            Heterogenous support
+          </td>
+        </tr>
+        <tr>
+          <td class="label-cell">OS</td>
+          <td class="data-cell">Ubuntu 22.04, Ubuntu 24.04</td>
+          <td class="data-cell current-col">Ubuntu 22.04, Ubuntu 24.04</td>
+          <td class="data-cell">Ubuntu 22.04, Ubuntu 24.04</td>
+          <td class="data-cell">Ubuntu 22.04, Ubuntu 24.04, Debian 12, Debian 13, RHEL 9, RHEL 10, Windows, macOS</td>
+        </tr>
+        <tr>
+          <td class="label-cell">Inference Engine Integration</td>
+          <td class="data-cell">vLLM</td>
+          <td class="data-cell current-col">vLLM</td>
+          <td class="data-cell">vLLM</td>
+          <td class="data-cell">vLLM, vLLM-omni, SGLang</td>
+        </tr>
+
+        <tr class="category-row">
+          <th colspan="5">1. Deployment &amp; Cluster Orchestration</th>
+        </tr>
+        <tr>
+          <td class="label-cell">Template-Based Deployment</td>
+          <td class="data-cell">XPU Deployment Templates:
+            <ul>
+              <li>optimized-baseline</li>
+              <li>pd-disaggregation</li>
+              <li>precise-prefix-cache-routing</li>
+              <li>tiered-prefix-cache</li>
+            </ul>
+          </td>
+          <td class="data-cell current-col">Nvidia GPU Deployment Templates:
+            <ul>
+              <li>optimized-baseline</li>
+              <li>pd-disaggregation</li>
+              <li>precise-prefix-cache-routing</li>
+              <li>tiered-prefix-cache</li>
+            </ul>
+          </td>
+          <td class="data-cell">Deployment Templates:
+            <ul>
+              <li>predicted-latency-routing</li>
+              <li>workload-autoscaling</li>
+            </ul>         
+          </td>
+          <td class="data-cell">Deployment Templates:
+            <ul>
+              <li><span class="tag-tbd">TBD</span></li>
+            </ul>
+            Features:
+            <ul>
+              <li>Heterogenous Deployment</li>
+              <li>Air-Gapped Deployment</li>
+            </ul>
+          </td>
+        </tr>
+        <tr>
+          <td class="label-cell">Agentic Deployment</td>
+          <td class="data-cell">Agentic Deployment on XPU</td>
+          <td class="data-cell current-col empty">—</td>
+          <td class="data-cell">Agentic Config Recommendation (Performance-History-Driven)</td>
+          <td class="data-cell">
+            <ul>
+              <li>Agentic Config Recommendation for Custom Deployment Topologies</li>
+              <li>Add BLIS as one of the performance projection backends</li>
+              <li>Capacity Planning via BLIS</li>
+            </ul>
+          </td>
+        </tr>
+        <tr>
+          <td class="label-cell">Custom Deployment</td>
+          <td class="data-cell empty">N/A</td>
+          <td class="data-cell current-col empty">N/A</td>
+          <td class="data-cell">Parametric Deployment (Composable llm-d Performance Features)</td>
+          <td class="data-cell">
+            <ul>
+              <li>Heterogenous Deployment</li>
+              <li>Air-Gapped Deployment</li>
+            </ul>
+          </td>
+        </tr>
+        <tr>
+          <td class="label-cell">Cluster Scaling &amp; Orchestration</td>
+          <td class="data-cell empty">—</td>
+          <td class="data-cell current-col">Nvidia GPU Cluster Integration</td>
+          <td class="data-cell">
+            <ul>
+              <li>XPU Auto-Scaling Support</li>
+              <li>
+                Multi-cluster llm-d
+                <span class="info-tip" tabindex="0">
+                  <span class="info-icon" aria-hidden="true">?</span>
+                  <span class="info-pop">Pending on <a href="https://github.com/llm-d/llm-d-router/issues/1907" target="_blank" rel="noopener noreferrer">llm-d-router#1907</a></span>
+                </span>
+              </li>
+              <li>Non-Kubernetes Cluster Administration Support</li>
+            </ul>
+          </td>
+          <td class="data-cell empty">—</td>
+        </tr>
+
+        <tr class="category-row">
+          <th colspan="5">2. Benchmarking &amp; Profiling</th>
+        </tr>
+        <tr>
+          <td class="label-cell">Evaluation</td>
+          <td class="data-cell">Inference Perf (llm-d-benchmark)</td>
+          <td class="data-cell current-col empty">—</td>
+          <td class="data-cell empty">—</td>
+          <td class="data-cell">Accuracy Benchmark Suite</td>
+        </tr>
+        <tr>
+          <td class="label-cell">Profiling</td>
+          <td class="data-cell">Request/s and Token/s Flowmap</td>
+          <td class="data-cell current-col empty">—</td>
+          <td class="data-cell empty">—</td>
+          <td class="data-cell">Agentic Profiling</td>
+        </tr>
+        <tr>
+          <td class="label-cell">Simulation (Trace Replayer)</td>
+          <td class="data-cell">Trace Replayer (ai-perf, trace-replayer)</td>
+          <td class="data-cell current-col empty">—</td>
+          <td class="data-cell empty">—</td>
+          <td class="data-cell">TCO & Power Consumption</td>
+        </tr>
+
+        <tr class="category-row">
+          <th colspan="5">3. Observability, Diagnostics &amp; Telemetry</th>
+        </tr>
+        <tr>
+          <td class="label-cell">Telemetry &amp; Metrics</td>
+          <td class="data-cell">XPU Telemetry</td>
+          <td class="data-cell current-col">Nvidia GPU Telemetry</td>
+          <td class="data-cell empty">—</td>
+          <td class="data-cell empty">—</td>
+        </tr>
+        <tr>
+          <td class="label-cell">Interconnect &amp; Hardware Diagnostics</td>
+          <td class="data-cell empty">N/A</td>
+          <td class="data-cell current-col empty">N/A</td>
+          <td class="data-cell">Network &amp; PD Diagnostics (NIXL / RDMA via @llm-d-pd-utils)</td>
+          <td class="data-cell empty">—</td>
+        </tr>
+
+        <tr class="category-row">
+          <th colspan="5">4. Enterprise Platform &amp; Governance</th>
+        </tr>
+        <tr>
+          <td class="label-cell">Model &amp; Asset Management</td>
+          <td class="data-cell">Model Market, Storage Management, Model Cache Management</td>
+          <td class="data-cell current-col empty">—</td>
+          <td class="data-cell">Model Catalog (Inference Engine × Hardware Compatibility Matrix)</td>
+          <td class="data-cell empty">—</td>
+        </tr>
+        <tr>
+          <td class="label-cell">User Service &amp; Token Management</td>
+          <td class="data-cell">Model Services, API Keys &amp; Usage Tracking</td>
+          <td class="data-cell current-col empty">—</td>
+          <td class="data-cell empty">—</td>
+          <td class="data-cell">Token quota</td>
+        </tr>
+        <tr>
+          <td class="label-cell">Platform Security &amp; AuthN/AuthZ</td>
+          <td class="data-cell">Password AuthN, LDAP / IdP Integration, RBAC</td>
+          <td class="data-cell current-col">Master Key Secrets Management</td>
+          <td class="data-cell">
+            <ul>
+              <li>Secure Serving</li>
+              <li>SSO via OIDC</li>
+            </ul>
+          </td>
+          <td class="data-cell">
+            <ul>
+              <li>SCIM Provisioning</li>
+            </ul>
+          </td>
+        </tr>
+        <tr>
+          <td class="label-cell">Extensibility &amp; Usability</td>
+          <td class="data-cell">AI Assistant Interactivity, System Audit Logging</td>
+          <td class="data-cell current-col">Pluggable Hardware Abstraction</td>
+          <td class="data-cell">CLI Support</td>
+          <td class="data-cell">
+            <ul>
+              <li>Pluggable Inference Engine Abstraction</li>
+            </ul>
+          </td>
+        </tr>
+
+      </tbody>
+    </table>
+  </div>
+
+  <footer class="note">
+    "—" indicates no planned work for that milestone in this category; "N/A" indicates
+    the capability does not yet exist at that milestone. Versions and scope are
+    indicative and may shift as upstream llm-d stack releases land.
+  </footer>
+
+</div>
+</body>
+</html>

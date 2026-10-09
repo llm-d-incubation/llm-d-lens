@@ -578,7 +578,7 @@ Core changes replace hardcoding with resolver calls without `if nvidia` branches
 - Delivered: profiles/nvidia.json (extended-resource, gpu.nvidia.com, nvdp/nvidia-device-plugin 0.17.4, nvidia/nvidia-dra-driver-gpu 25.8.0; separate driver.modes.plugin/dra); providers/nvidia.py (profile, read-only presence, Helm driver installation/status); monitoring/accelerator/nvidia_gpu.py (type nvidia_gpu, dcgm-exporter 4.8.4, matching telemetry.provider_id). Entry points are registered; hardware query parameter chooses drivers.
 - Remaining: real-cluster end-to-end verification with upstream modelserver/gpu overlays; unavailable offline without a cluster.
 
-After each phase, run relevant pytest and npm run build. Synchronize docs/fern for UI/API/callable changes as required by AGENTS.md.
+After each phase, run relevant pytest and npm run build. Synchronize the Docusaurus docs under docs/docusaurus/docs/ for UI/API/callable changes as required by AGENTS.md.
 
 ---
 

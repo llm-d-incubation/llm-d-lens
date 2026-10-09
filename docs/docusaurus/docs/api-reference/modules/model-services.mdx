@@ -1,0 +1,1496 @@
+---
+title: Model services
+description: Backend endpoints and direct Python entry points for model gateway routing and operations.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Backend API
+
+Model Service routes are split across `llm_d_bench/model_service/router.py`'s user, admin, public, and internal routers.
+
+### List model access tokens
+
+List the caller's active model access tokens. The response never includes plaintext token values, only the metadata needed to identify and revoke them later.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/tokens`**
+
+    Request: no request body. The caller must be authenticated with a Lens user session.
+
+    Response: returns an `items` array of `ModelAccessToken` records projected through `ModelAccessToken.api_payload()`, so `tokenHash` is omitted.
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "mat-7f2c4a19b6d1",
+          "userId": "user-123",
+          "name": "laptop",
+          "tokenHint": "9mQx",
+          "status": "active",
+          "lastUsedAt": "2026-09-23T08:15:00Z",
+          "lastUsedIp": "10.0.0.25",
+          "createdAt": "2026-09-21T12:00:00Z"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    tokens = service.tokens.list_for_user("user-123", include_revoked=False)
+    for token in tokens:
+        print(token.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Create a model access token
+
+Create a new model access token for the caller. The plaintext token is returned exactly once together with the persisted token metadata.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/tokens`**
+
+    Request body (`TokenCreateRequest`):
+
+    - `name` (`string`): display name for the token.
+
+    ```json
+    {
+      "name": "automation"
+    }
+    ```
+
+    Response: one `ModelAccessToken` payload plus the one-time `token` string.
+
+    ```json
+    {
+      "id": "mat-2c47de48a35b",
+      "userId": "user-123",
+      "name": "automation",
+      "tokenHint": "K8xP",
+      "status": "active",
+      "createdAt": "2026-09-23T09:00:00Z",
+      "token": "lens-mk-bTj9X7mW4zP1qN8sR6uC2yF5hL0aV3dK1mQ"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    token, raw_token = service.tokens.create("user-123", name="automation")
+
+    print(token.api_payload())
+    print(raw_token)
+    ```
+  </TabItem>
+</Tabs>
+
+### Regenerate a model access token
+
+Revoke the caller's current active token or tokens, then issue a fresh token. You can optionally give the replacement token a name.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/tokens/regenerate`**
+
+    Request body: optional `TokenCreateRequest`. If omitted, the route uses `"default"`.
+
+    ```json
+    {
+      "name": "default"
+    }
+    ```
+
+    Response: the newly issued token metadata plus the new plaintext token.
+
+    ```json
+    {
+      "id": "mat-54b2a51d9d93",
+      "userId": "user-123",
+      "name": "default",
+      "tokenHint": "F6rN",
+      "status": "active",
+      "createdAt": "2026-09-23T09:05:00Z",
+      "token": "lens-mk-Gq4nP1sT8uV2xY5zA7bC9dE3fH6jK8mN0pR"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    token, raw_token = service.tokens.regenerate("user-123", name="default")
+
+    print(token.id, raw_token)
+    ```
+  </TabItem>
+</Tabs>
+
+### Revoke a model access token
+
+Revoke one previously issued model access token for the caller. After revocation, the token can no longer be used for gateway access.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/model-service/tokens/{token_id}`**
+
+    Request: no request body.
+
+    - `token_id` (`string`, path): token id such as `mat-7f2c4a19b6d1`.
+
+    Response: `204 No Content`. This endpoint does not return a JSON body.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    revoked = service.tokens.revoke("user-123", "mat-7f2c4a19b6d1")
+    print(revoked)
+    ```
+  </TabItem>
+</Tabs>
+
+### List accessible models
+
+List the model groups that the caller is currently allowed to use through the model gateway. Only active groups with at least one authorized active member are returned. Each entry includes `clusterName` (resolved from the group's `clusterId`) so callers choosing between several model services -- for example the same public name published in different clusters -- can tell them apart without a separate cluster lookup.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/models`**
+
+    Request: no request body. The caller must be authenticated with a Lens user session.
+
+    Response: returns an `items` array of `ModelServiceGroup` payloads, each with an added `clusterName`.
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "msg-4a8b41f3dd6c",
+          "name": "qwen3-8b",
+          "modelRef": "Qwen/Qwen3-8B",
+          "displayName": "Qwen3 8B",
+          "description": "Shared Qwen 3 8B service",
+          "selectionPolicy": "random",
+          "status": "active",
+          "clusterId": "cluster-a",
+          "clusterName": "Cluster A",
+          "servedName": "Qwen/Qwen3-8B",
+          "baseModel": "Qwen/Qwen3-8B",
+          "createdByUserId": "user-123",
+          "createdAt": "2026-09-20T15:00:00Z",
+          "updatedAt": "2026-09-22T11:30:00Z"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    entries = service.list_model_entries_for_user("user-123")
+    for entry in entries:
+        print(entry["name"], entry["clusterName"])
+    ```
+  </TabItem>
+</Tabs>
+
+### Get gateway connection info
+
+Return the Gateway connection info a client copies into its OpenAI client. Each cluster runs its own Gateway, so the response lists one connection per cluster the caller can access; `LENS_MODEL_GATEWAY_PUBLIC_URL`, when set, is a single override applied to every cluster.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/connection`**
+
+    Request: no request body.
+
+    Response: the global override (empty string when unset) plus a per-cluster list.
+
+    ```json
+    {
+      "baseUrl": "",
+      "clusters": [
+        {
+          "clusterId": "cluster-a",
+          "clusterName": "Cluster A",
+          "provider": "istio",
+          "gatewayName": "lens-inference-gateway",
+          "address": "10.0.0.10",
+          "publicUrl": null,
+          "port": null,
+          "baseUrl": "http://10.0.0.10/v1",
+          "ready": true
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import os
+
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService, gateway_base_url
+
+    global_url = os.environ.get("LENS_MODEL_GATEWAY_PUBLIC_URL", "").strip()
+    public_host = os.environ.get("LENS_PUBLIC_HOST", "").strip()
+    status = asyncio.run(GatewayOpsService().status())
+    clusters = [
+        {
+            "clusterId": cluster.cluster_id,
+            "clusterName": cluster.cluster_name,
+            "provider": cluster.gateway_provider,
+            "gatewayName": cluster.gateway_name,
+            "address": cluster.gateway_address,
+            "publicUrl": cluster.gateway_public_url,
+            "port": cluster.gateway_port,
+            "baseUrl": gateway_base_url(cluster, public_host, global_url),
+            "ready": bool(cluster.gateway_ready),
+        }
+        for cluster in status.clusters
+    ]
+
+    print({"baseUrl": global_url, "clusters": clusters})
+    ```
+  </TabItem>
+</Tabs>
+
+### List OpenAI-compatible models
+
+Return an OpenAI-style `GET /v1/models` response for a valid model token. The model list is filtered to the groups visible to that token's owning user.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /v1/models`**
+
+    Request: no request body. Pass the model token with either `Authorization: Bearer <token>` or `x-api-key: <token>`.
+
+    Response: standard OpenAI-compatible model-list payload.
+
+    ```json
+    {
+      "object": "list",
+      "data": [
+        {
+          "id": "qwen3-8b",
+          "object": "model",
+          "created": 1727107200,
+          "owned_by": "lens"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    record = service.tokens.validate("lens-mk-bTj9X7mW4zP1qN8sR6uC2yF5hL0aV3dK1mQ", ip="10.0.0.25")
+    if record is None:
+        raise RuntimeError("token is missing, expired, or revoked")
+
+    payload = {
+        "object": "list",
+        "data": [
+            {
+                "id": group.name,
+                "object": "model",
+                "created": int(group.created_at.timestamp()),
+                "owned_by": "lens",
+            }
+            for group in service.list_models_for_user(record.user_id)
+        ],
+    }
+    print(payload)
+    ```
+  </TabItem>
+</Tabs>
+
+### List usage records
+
+List the caller's recent usage records, with simple paging through `limit` and `offset`. Each item is the stored `UsageRecord` projected with its camelCase API aliases. The llm-d EPP reports only input/output tokens, so `cachedInputTokens` is currently always `0` (the field is kept for engines that expose it).
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/usage/records`**
+
+    Request: no request body.
+
+    - `limit` (`integer`, query, default `100`, max `500`): number of records to return.
+    - `offset` (`integer`, query, default `0`): zero-based offset into the caller's ledger.
+
+    Response: an `items` array of usage records.
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "usg-8c2d9e1fa410",
+          "requestId": "req-20260923-0001",
+          "userId": "user-123",
+          "tokenId": "mat-2c47de48a35b",
+          "groupId": "msg-4a8b41f3dd6c",
+          "groupName": "qwen3-8b",
+          "clusterId": "cluster-a",
+          "executionId": "exec-qwen3-8b",
+          "modelRef": "Qwen/Qwen3-8B",
+          "provider": "vllm",
+          "inputTokens": 512,
+          "cachedInputTokens": 128,
+          "cacheWriteTokens": 0,
+          "outputTokens": 196,
+          "usageSource": "engine",
+          "status": "success",
+          "streaming": false,
+          "ttftMs": 240,
+          "durationMs": 1310,
+          "createdAt": "2026-09-23T08:40:00Z"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    records = service.usage.list_for_user("user-123", limit=100, offset=0)
+    for record in records:
+        print(record.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Get daily usage totals
+
+Aggregate the caller's recent usage records into daily token totals. The handler reuses the same usage ledger and buckets it with `_daily_totals`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/usage/timeseries`**
+
+    Request: no request body.
+
+    - `days` (`integer`, query, default `30`, range `1..365`): number of recent days to include.
+
+    Response: daily usage buckets with totals for each token class.
+
+    ```json
+    {
+      "items": [
+        {
+          "date": "2026-09-22",
+          "requests": 4,
+          "inputTokens": 1200,
+          "cachedInputTokens": 300,
+          "cacheWriteTokens": 0,
+          "outputTokens": 640
+        },
+        {
+          "date": "2026-09-23",
+          "requests": 2,
+          "inputTokens": 530,
+          "cachedInputTokens": 64,
+          "cacheWriteTokens": 0,
+          "outputTokens": 211
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from datetime import datetime, timedelta
+
+    from llm_d_bench.model_service.router import _daily_totals
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    since = datetime.now() - timedelta(days=30)
+    records = service.usage.list_for_user("user-123", since=since, limit=10000)
+    print(_daily_totals(records))
+    ```
+  </TabItem>
+</Tabs>
+
+### List model routing groups
+
+List all configured model routing groups. Each group is a cluster-scoped user-facing model name that routes to one or more deployment-owned InferencePools.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/groups`**
+
+    Request: no request body.
+
+    Response: returns an `items` array of `ModelServiceGroup` payloads.
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "msg-4a8b41f3dd6c",
+          "name": "qwen3-8b",
+          "modelRef": "Qwen/Qwen3-8B",
+          "clusterId": "cluster-a",
+          "servedName": "Qwen/Qwen3-8B",
+          "baseModel": "Qwen/Qwen3-8B",
+          "displayName": "Qwen3 8B",
+          "description": "Shared Qwen 3 8B service",
+          "selectionPolicy": "random",
+          "status": "active",
+          "createdByUserId": "user-123",
+          "createdAt": "2026-09-20T15:00:00Z",
+          "updatedAt": "2026-09-22T11:30:00Z"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    for group in service.list_groups():
+        print(group.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Create a model routing group
+
+Create a routing group that exposes one user-facing model name in a single cluster. `name` and `clusterId` are required; the public name is unique per cluster (`clusterId`) and every provider must be a deployment in that same cluster. Lens derives `modelRef`/`baseModel` from `name` and `displayName` defaults to `name`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/groups`**
+
+    Request body (`GroupCreateRequest`):
+
+    - `name` (`string`): the model name clients use (also the routing/model ref).
+    - `clusterId` (`string`): the cluster the service belongs to (required); its providers must be in this cluster and the name is unique within it.
+    - `displayName` (`string`, optional): UI-friendly label; defaults to `name`.
+    - `description` (`string`, optional): free-form description.
+    - `modelRef` / `servedName` / `baseModel` (`string`, optional, advanced): derived from `name` when omitted.
+    - `selectionPolicy` (`string`, legacy): accepted for compatibility; the llm-d data plane ignores it.
+
+    ```json
+    {
+      "name": "qwen3-8b",
+      "modelRef": "Qwen/Qwen3-8B",
+      "clusterId": "cluster-a",
+      "servedName": "Qwen/Qwen3-8B",
+      "baseModel": "Qwen/Qwen3-8B",
+      "displayName": "Qwen3 8B",
+      "description": "Shared Qwen 3 8B service"
+    }
+    ```
+
+    Response: the created `ModelServiceGroup`.
+
+    ```json
+    {
+      "id": "msg-4a8b41f3dd6c",
+      "name": "qwen3-8b",
+      "modelRef": "Qwen/Qwen3-8B",
+      "clusterId": "cluster-a",
+      "servedName": "Qwen/Qwen3-8B",
+      "baseModel": "Qwen/Qwen3-8B",
+      "displayName": "Qwen3 8B",
+      "description": "Shared Qwen 3 8B service",
+      "selectionPolicy": "random",
+      "status": "active",
+      "createdByUserId": "user-123",
+      "createdAt": "2026-09-23T09:10:00Z",
+      "updatedAt": "2026-09-23T09:10:00Z"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.contracts import GroupCreateRequest
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    group = service.create_group(
+        GroupCreateRequest(
+            name="qwen3-8b",
+            modelRef="Qwen/Qwen3-8B",
+            clusterId="cluster-a",
+            servedName="Qwen/Qwen3-8B",
+            baseModel="Qwen/Qwen3-8B",
+            displayName="Qwen3 8B",
+            description="Shared Qwen 3 8B service",
+        ),
+        created_by="user-123",
+    )
+    print(group.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### List published model service members
+
+List the published members that back routing groups. The route can optionally filter by one group id and adds a human-friendly deployment `name` field derived from `execution_name()`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/members`**
+
+    Request: no request body.
+
+    - `group_id` (`string`, query, optional): only return members for one routing group.
+
+    Response: returns an `items` array of member payloads.
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "msm-32d55cb7f9a1",
+          "groupId": "msg-4a8b41f3dd6c",
+          "executionId": "exec-qwen3-8b",
+          "clusterId": "cluster-a",
+          "targetNamespace": "ns",
+          "targetService": "vllm",
+          "targetPort": 8000,
+          "endpointKind": "vllm",
+          "status": "active",
+          "publishedByUserId": "user-123",
+          "createdAt": "2026-09-23T09:12:00Z",
+          "updatedAt": "2026-09-23T09:12:00Z",
+          "name": "qwen-qwen3-8b-202609210558"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+    from llm_d_bench.model_service.targets import execution_name
+
+    service = default_service()
+    items = []
+    for member in service.list_members("msg-4a8b41f3dd6c"):
+        payload = member.api_payload()
+        payload["name"] = execution_name(member.execution_id) or member.execution_id
+        items.append(payload)
+
+    print(items)
+    ```
+  </TabItem>
+</Tabs>
+
+### Publish a deployment as a member
+
+Publish one ready deployment execution into a routing group. The route derives the actual namespace, service, port, and endpoint kind from the execution id. The execution's cluster must be the group's cluster, otherwise the call is rejected with `409` (`model_member_conflict`).
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/members`**
+
+    Request body (`MemberCreateRequest`):
+
+    - `groupId` (`string`): target routing group id.
+    - `executionId` (`string`): ready deployment execution id.
+    - `poolName` (`string`, optional, advanced): the deployment-owned InferencePool name; defaults to the deployment's pool stored as `namespace/pool` (unique across namespaces).
+
+    ```json
+    {
+      "groupId": "msg-4a8b41f3dd6c",
+      "executionId": "exec-qwen3-8b",
+      "poolName": "ns/qwen"
+    }
+    ```
+
+    Response: the created `ModelServiceMember`.
+
+    ```json
+    {
+      "id": "msm-32d55cb7f9a1",
+      "groupId": "msg-4a8b41f3dd6c",
+      "executionId": "exec-qwen3-8b",
+      "clusterId": "cluster-a",
+      "targetNamespace": "ns",
+      "targetService": "qwen-epp",
+      "targetPort": 8000,
+      "endpointKind": "llm-d-epp",
+      "poolName": "qwen",
+      "eppRef": "qwen-epp",
+      "status": "active",
+      "ownerUserId": "user-123",
+      "publishedByUserId": "user-123",
+      "createdAt": "2026-09-23T09:12:00Z",
+      "updatedAt": "2026-09-23T09:12:00Z"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.contracts import MemberCreateRequest
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    member = service.create_member(
+        MemberCreateRequest(
+            groupId="msg-4a8b41f3dd6c",
+            executionId="exec-qwen3-8b",
+            poolName="ns/qwen",
+        ),
+        published_by="user-123",
+    )
+    print(member.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Get usage analytics
+
+Return aggregated model-service usage analytics for the admin dashboard. The payload includes overall totals, a time series, grouped breakdowns, and filter-facet options.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/usage/analytics`**
+
+    Request: no request body.
+
+    - `since` (`string`, query, optional): ISO timestamp lower bound.
+    - `until` (`string`, query, optional): ISO timestamp upper bound.
+    - `interval` (`string`, query, default `day`): `day` or `hour`.
+    - `group_by` (`string`, query, default `model`): `model`, `user`, or `cluster`.
+    - `user_id` (`string[]`, query, optional): repeated user ids.
+    - `group_id` (`string[]`, query, optional): repeated group ids.
+    - `cluster_id` (`string[]`, query, optional): repeated cluster ids.
+
+    Response: analytics built by `build_usage_analytics()`.
+
+    ```json
+    {
+      "interval": "day",
+      "groupBy": "model",
+      "totals": {
+        "requests": 3,
+        "inputTokens": 17,
+        "cachedInputTokens": 2,
+        "outputTokens": 6,
+        "tokens": 25
+      },
+      "series": [
+        {
+          "bucket": "2026-09-21",
+          "requests": 2,
+          "inputTokens": 13,
+          "cachedInputTokens": 2,
+          "outputTokens": 6,
+          "tokens": 21
+        },
+        {
+          "bucket": "2026-09-22",
+          "requests": 1,
+          "inputTokens": 4,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "tokens": 4
+        }
+      ],
+      "groups": [
+        {
+          "key": "m1",
+          "label": "m1",
+          "totals": {
+            "requests": 2,
+            "inputTokens": 13,
+            "cachedInputTokens": 2,
+            "outputTokens": 6,
+            "tokens": 21
+          },
+          "series": [
+            {
+              "bucket": "2026-09-21",
+              "requests": 2,
+              "inputTokens": 13,
+              "cachedInputTokens": 2,
+              "outputTokens": 6,
+              "tokens": 21
+            }
+          ]
+        }
+      ],
+      "facets": {
+        "models": [
+          {
+            "key": "g-m1",
+            "label": "m1"
+          }
+        ],
+        "users": [
+          {
+            "key": "u1",
+            "label": "u1"
+          }
+        ],
+        "clusters": [
+          {
+            "key": "c1",
+            "label": "c1"
+          }
+        ]
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    analytics = service.usage_analytics(
+        since=None,
+        until=None,
+        interval="day",
+        group_by="model",
+        user_ids=None,
+        group_ids=None,
+        cluster_ids=["cluster-a"],
+        principal=None,
+    )
+    print(analytics)
+    ```
+  </TabItem>
+</Tabs>
+
+### List usage records across clusters
+
+List recent usage records across users/models/clusters for the admin dashboard, optionally filtered by routing group or cluster and capped by `limit`. Cluster visibility is still narrowed to the caller's accessible clusters.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/usage`**
+
+    Request: no request body.
+
+    - `group_id` (`string[]`, query, optional): repeated routing-group ids.
+    - `cluster_id` (`string[]`, query, optional): repeated cluster ids.
+    - `limit` (`integer`, query, default `100`, max `500`): number of records to return.
+
+    Response: an `items` array of usage records (same shape as `/usage/records`).
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "usg-8c2d9e1fa410",
+          "requestId": "req-20260923-0001",
+          "userId": "user-123",
+          "tokenId": "mat-2c47de48a35b",
+          "groupId": "msg-4a8b41f3dd6c",
+          "groupName": "qwen3-8b",
+          "clusterId": "cluster-a",
+          "executionId": "exec-qwen3-8b",
+          "modelRef": "Qwen/Qwen3-8B",
+          "provider": "vllm",
+          "inputTokens": 512,
+          "cachedInputTokens": 0,
+          "cacheWriteTokens": 0,
+          "outputTokens": 196,
+          "usageSource": "engine",
+          "status": "success",
+          "streaming": false,
+          "ttftMs": 240,
+          "durationMs": 1310,
+          "createdAt": "2026-09-23T08:40:00Z"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    records = service.usage.list_all(group_ids=None, cluster_ids=["cluster-a"], limit=100)
+    for record in records:
+        print(record.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Get gateway status
+
+Get the current gateway status across clusters: published members, the pinned provider, and the shared Gateway's programmed state.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/gateway/status`**
+
+    Request: no request body.
+
+    Response: serialized `GatewayStatus` payload.
+
+    ```json
+    {
+      "clusters": [
+        {
+          "clusterId": "cluster-a",
+          "clusterName": "Primary cluster",
+          "members": [
+            {
+              "groupId": "msg-4a8b41f3dd6c",
+              "groupName": "qwen3-8b",
+              "executionId": "exec-qwen3-8b",
+              "endpointKind": "llm-d-epp",
+              "poolName": "qwen",
+              "target": "qwen-epp.ns:8000",
+              "status": "active"
+            }
+          ],
+          "gatewayProvider": "istio",
+          "gatewayState": "installed",
+          "gatewayNamespace": "lens-gateway",
+          "gatewayName": "lens-inference-gateway",
+          "gatewayReady": true,
+          "lastOperation": {
+            "id": "gop-2a7f0d9c0c11",
+            "kind": "reconcile-gateway",
+            "status": "succeeded",
+            "clusterId": "cluster-a",
+            "message": "gateway reconciled (istio); 1 model route(s)",
+            "createdAt": "2026-09-23T09:15:00Z",
+            "finishedAt": "2026-09-23T09:15:18Z"
+          }
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    async def main() -> None:
+        status = await GatewayOpsService().status()
+        print(status.api_payload())
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Reconcile gateway clusters
+
+Schedule a full data-plane reconciliation for every cluster that currently has active members. The route discovers the affected cluster ids, then runs `_reconcile_clusters()` in the background.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/reconcile`**
+
+    Request: no request body.
+
+    Response: confirms that reconciliation was scheduled and lists the target clusters.
+
+    ```json
+    {
+      "scheduled": true,
+      "clusters": [
+        "cluster-a",
+        "cluster-b"
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.router import _reconcile_clusters
+
+    async def main() -> None:
+        await _reconcile_clusters(["cluster-a", "cluster-b"])
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Install or reuse the shared Gateway
+
+Install (or reuse) the cluster's shared llm-d Gateway. The provider is user-selectable (`istio`, `gke`, `agentgateway`, `envoy-ai-gateway`); when omitted, the cluster record's pinned provider is used.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/install`**
+
+    Request body (`ClusterGatewayRequest`):
+
+    - `clusterId` (`string`): target cluster id.
+    - `provider` (`string`, optional): `istio` | `gke` | `agentgateway` | `envoy-ai-gateway`.
+
+    ```json
+    { "clusterId": "cluster-a", "provider": "istio" }
+    ```
+
+    Response: recorded `GatewayOperation` for the install.
+
+    ```json
+    {
+      "id": "gop-9c1a2b3d4e5f",
+      "kind": "install-gateway",
+      "status": "succeeded",
+      "clusterId": "cluster-a",
+      "message": "shared Gateway ready (istio)",
+      "detailJson": { "provider": "istio", "namespace": "lens-gateway", "name": "lens-inference-gateway", "programmed": true },
+      "createdAt": "2026-09-24T16:20:00Z",
+      "finishedAt": "2026-09-24T16:20:12Z"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    async def main() -> None:
+        operation = await GatewayOpsService().install_cluster_gateway("cluster-a", provider="istio")
+        print(operation.api_payload())
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Get a model routing group
+
+Fetch one routing group by id.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/groups/{group_id}`**
+
+    Request: no request body.
+
+    Response: the `ModelServiceGroup` payload (same shape as the list endpoint).
+
+    ```json
+    {
+      "id": "msg-4a8b41f3dd6c",
+      "name": "qwen3-8b",
+      "modelRef": "Qwen/Qwen3-8B",
+      "clusterId": "cluster-a",
+      "servedName": "Qwen/Qwen3-8B",
+      "baseModel": "Qwen/Qwen3-8B",
+      "selectionPolicy": "random",
+      "status": "active"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    group = default_service().get_group("msg-4a8b41f3dd6c")
+    print(group.api_payload() if group else None)
+    ```
+  </TabItem>
+</Tabs>
+
+### Update a model routing group
+
+Update mutable fields of a routing group (name, model references, display name, description, status, cluster, served name, base model).
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PATCH /api/v1/model-service/admin/groups/{group_id}`**
+
+    Request body (`GroupUpdateRequest`; all fields optional): `name`, `modelRef`, `displayName`, `description`, `status` (`active` | `disabled`), `clusterId`, `servedName`, `baseModel`.
+
+    ```json
+    { "displayName": "Qwen3 8B (prod)", "status": "active" }
+    ```
+
+    Response: the updated `ModelServiceGroup`.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.contracts import GroupUpdateRequest
+    from llm_d_bench.model_service.service import default_service
+
+    group = default_service().update_group(
+        "msg-4a8b41f3dd6c",
+        GroupUpdateRequest(displayName="Qwen3 8B (prod)", status="active"),
+    )
+    print(group.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Delete a model routing group
+
+Delete a routing group. The handler schedules a reconcile of the affected clusters so their model HTTPRoutes are removed.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/model-service/admin/groups/{group_id}`**
+
+    Request: no request body. Response: `204 No Content`.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    default_service().delete_group("msg-4a8b41f3dd6c")
+    ```
+  </TabItem>
+</Tabs>
+
+### List publishable deployments
+
+List ready deployments (executions) that can be published as members, with the derived target already filled in.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/deployments`**
+
+    Request: no request body.
+
+    Response: returns an `items` array of `PublishableDeployment` payloads.
+
+    ```json
+    {
+      "items": [
+        {
+          "executionId": "exec-qwen3-8b",
+          "name": "qwen-qwen3-8b-202609210558",
+          "displayName": "Qwen3 8B",
+          "model": "Qwen/Qwen3-8B",
+          "clusterId": "cluster-a",
+          "clusterName": "Cluster A",
+          "namespace": "ns",
+          "service": "qwen-epp",
+          "port": 8000,
+          "endpointKind": "llm-d-epp",
+          "modelRef": "Qwen/Qwen3-8B",
+          "status": "ready"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    for item in default_service().list_publishable_deployments():
+        print(item.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Update a member
+
+Update a published member's status. The handler schedules a reconcile; a model service routes to one InferencePool (the first active member).
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PATCH /api/v1/model-service/admin/members/{member_id}`**
+
+    Request body (`MemberUpdateRequest`; all fields optional): `status` (`active` | `disabled` | `unhealthy`).
+
+    ```json
+    { "status": "unhealthy" }
+    ```
+
+    Response: the updated `ModelServiceMember`.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.contracts import MemberUpdateRequest
+    from llm_d_bench.model_service.service import default_service
+
+    member = default_service().update_member("msm-32d55cb7f9a1", MemberUpdateRequest(status="unhealthy"))
+    print(member.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Remove a member
+
+Remove a published member. The handler schedules a reconcile of its cluster.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/model-service/admin/members/{member_id}`**
+
+    Request: no request body. Response: `204 No Content`.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    default_service().delete_member("msm-32d55cb7f9a1")
+    ```
+  </TabItem>
+</Tabs>
+
+### Probe member backends
+
+Probe every non-disabled member's Kubernetes Endpoints and refresh `health_json` / `last_health_at`, flipping `status` between `active` and `unhealthy`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/probe`**
+
+    Request: no request body.
+
+    Response:
+
+    ```json
+    { "updated": 2 }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    updated = asyncio.run(GatewayOpsService().probe_members())
+    print(updated)
+    ```
+  </TabItem>
+</Tabs>
+
+### Sync gateway usage
+
+Read each cluster's llm-d EPP token counters from Prometheus and write the delta since the last sync into the usage ledger, attributed to the token/user behind the request's `fairness_id` (the Gateway injects `x-llm-d-inference-fairness-id` from the ext_authz decision). Idempotent: unchanged counters add nothing.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/usage/sync`**
+
+    Request: no request body.
+
+    Response: records written per cluster.
+
+    ```json
+    { "written": { "cluster-a": 3 } }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.service import default_service
+    from llm_d_bench.model_service.usage_sync import GatewayUsageSync
+
+    written = asyncio.run(GatewayUsageSync(service=default_service()).sync())
+    print(written)
+    ```
+  </TabItem>
+</Tabs>
+
+### Read the Inference Payload Processor config
+
+Read a cluster's live Inference Payload Processor config from its ConfigMap (Lens does not store it).
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/model-service/admin/gateway/ipp-config?clusterId=cluster-a`**
+
+    Response:
+
+    ```json
+    { "config": "apiVersion: llm-d.ai/v1alpha1\nkind: PayloadProcessorConfig\nplugins: []\n", "custom": false, "default": "plugins: []\n" }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    config = asyncio.run(GatewayOpsService().get_ipp_config("cluster-a"))
+    print(config["custom"], config["config"])
+    ```
+  </TabItem>
+</Tabs>
+
+### Save the Inference Payload Processor config
+
+Apply a `PayloadProcessorConfig` body to the cluster and upgrade IPP (no Lens storage). Empty `config` restores the chart default.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/ipp-config`**
+
+    Request body (`IppConfigRequest`):
+
+    - `clusterId` (`string`): target cluster id.
+    - `config` (`string`): `PayloadProcessorConfig` body (starts at `plugins:`; the chart adds `apiVersion`/`kind`).
+
+    ```json
+    { "clusterId": "cluster-a", "config": "plugins:\n- type: body-field-to-header\n" }
+    ```
+
+    Response: a recorded `GatewayOperation` for the IPP install.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    operation = asyncio.run(GatewayOpsService().set_ipp_config("cluster-a", "plugins:\n- type: body-field-to-header\n"))
+    print(operation.status)
+    ```
+  </TabItem>
+</Tabs>
+
+### Preflight a cluster
+
+Check that the cluster is reachable and has active members before installing or reconciling the data plane.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/preflight`**
+
+    Request body (`ClusterGatewayRequest`):
+
+    - `clusterId` (`string`): target cluster id.
+
+    ```json
+    { "clusterId": "cluster-a" }
+    ```
+
+    Response: a recorded `GatewayOperation` for the preflight.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    operation = asyncio.run(GatewayOpsService().preflight("cluster-a"))
+    print(operation.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Scale a data-plane component
+
+Scale a data-plane Deployment (Gateway data plane, EPP or model server) to a replica count.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/scale`**
+
+    Request body (`ComponentScaleRequest`):
+
+    - `clusterId` (`string`)
+    - `namespace` (`string`)
+    - `name` (`string`)
+    - `replicas` (`integer`, `0`–`100`)
+    - `kind` (`string`, optional, default `deployment`)
+
+    ```json
+    { "clusterId": "cluster-a", "namespace": "ns", "name": "qwen-epp", "replicas": 2 }
+    ```
+
+    Response: the recorded `GatewayOperation` (`detailJson` carries `namespace`, `name`, `replicas`).
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    operation = asyncio.run(
+        GatewayOpsService().scale_component("cluster-a", "ns", "qwen-epp", 2)
+    )
+    print(operation.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### Stream a data-plane operation
+
+Run a data-plane operation and stream its log lines as Server-Sent Events. Used by the admin UI for install/uninstall/reconcile so the log drawer updates live.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/stream`**
+
+    Request body (`GatewayStreamRequest`):
+
+    - `clusterId` (`string`)
+    - `op` (`string`): `install-gateway` | `uninstall-gateway` | `reconcile` | `scale` | `install-ipp` | `uninstall-ipp`
+    - `provider`, `namespace`, `name`, `replicas`, `kind`, `gatewayName`, `ippChart`, `ippVersion` (optional, depending on `op`)
+
+    ```json
+    { "clusterId": "cluster-a", "op": "reconcile" }
+    ```
+
+    Response: `text/event-stream`; each event carries one log line, then the terminal `GatewayOperation` payload.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    The stream is an HTTP transport; the equivalent Python calls run the operation directly.
+
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    async def main() -> None:
+        ops = GatewayOpsService()
+        await ops.reconcile_cluster_gateway("cluster-a")          # op=reconcile
+        await ops.install_cluster_gateway("cluster-a")            # op=install-gateway
+        await ops.uninstall_inference_gateway("cluster-a")        # op=uninstall-gateway
+        await ops.install_ipp("cluster-a")                        # op=install-ipp
+        await ops.uninstall_ipp("cluster-a")                      # op=uninstall-ipp
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Stream a component's logs
+
+Stream live logs (`kubectl logs -f`) for a data-plane component. Used by the admin data-plane diagram to watch Gateway / IPP / EPP output in real time.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/model-service/admin/gateway/logs`**
+
+    Request body (`ComponentLogsRequest`):
+    - `clusterId` (`string`): target cluster.
+    - `component` (`string`, optional): `gateway` or `ipp` — the backend resolves the namespace/name.
+    - `namespace` / `name` (`string`, optional): explicit coordinates when no `component` is given.
+    - `kind` (`string`, default `deployment`), `container` (`string`, optional), `tail` (`integer`, default `200`).
+
+    ```json
+    { "clusterId": "cluster-a", "component": "gateway" }
+    ```
+
+    Response: `text/event-stream`; each `log` event carries one line, then a terminal `complete`.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.model_service.gateway_ops import GatewayOpsService
+
+    async def main() -> None:
+        namespace, name = await GatewayOpsService().resolve_log_target(
+            "cluster-a", component="gateway", namespace=None, name=None
+        )
+        async for line in GatewayOpsService().stream_component_logs("cluster-a", namespace, name, tail=50):
+            print(line)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+## Internal endpoints (Edge ext_authz)
+
+These `/api/v1/internal/model-gateway/*` routes are called only by Edge Envoy's `ext_authz` filter and the llm-d EPP, never by Lens clients directly; they carry no Lens user session.
+
+### Authorize a gateway request
+
+Validate the caller's model token, resolve the requested public model name to an active routing group the token may use, select one backend member, and return routing headers for Edge Envoy to attach upstream. `GET /v1/models` (no model) is token-checked only; every other HTTP method is accepted because Envoy forwards the client's original method.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/internal/model-gateway/authorize`** (also `GET`/`PUT`/`PATCH`/`DELETE`, and `/authorize/{rest:path}` for Envoy's per-cluster path shape, e.g. `.../authorize/cluster/<id>/...`)
+
+    Request: a JSON body `{"token": "...", "model": "..."}`, or the raw OpenAI request body plus `Authorization`/`x-api-key` and `x-lens-model`/`x-gateway-base-model-name` headers.
+
+    Response: `200` with the `AuthorizeResult` payload and `x-lens-*` / `x-ai-eg-model` / `x-llm-d-inference-fairness-id` routing headers Edge forwards upstream; `401` (`token_invalid`) or `404` (`model_not_found`) on failure.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.contracts import AuthorizeRequest
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    result = service.authorize_request(
+        AuthorizeRequest(token="lens-mk-bTj9X7mW4zP1qN8sR6uC2yF5hL0aV3dK1mQ", model="qwen3-8b"),
+        cluster_id="cluster-a",
+    )
+    print(result.model_dump(mode="json", by_alias=True))
+    ```
+  </TabItem>
+</Tabs>
+
+### Record inference usage
+
+Record one completed inference's token usage into the ledger. Called by the llm-d EPP/usage sync path; idempotent on `requestId`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/internal/model-gateway/record-usage`**
+
+    Request body (`UsageRecordRequest`): same fields as a `UsageRecord` (see "List usage records"), keyed by `requestId`.
+
+    Response:
+
+    ```json
+    { "recorded": true, "id": "usg-8c2d9e1fa410" }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.contracts import UsageRecordRequest
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    record = service.record_usage(UsageRecordRequest(requestId="req-20260923-0001", inputTokens=512, outputTokens=196))
+    print(record.id)
+    ```
+  </TabItem>
+</Tabs>
+
+### List models a specific user may call
+
+Return the model names a given user id may call, used to serve that user's `/v1/models`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/internal/model-gateway/models?user_id=user-123`**
+
+    Response: an `items` array of `ModelServiceGroup` payloads (same shape as "List accessible models").
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.model_service.service import default_service
+
+    service = default_service()
+    for group in service.list_models_for_user("user-123"):
+        print(group.api_payload())
+    ```
+  </TabItem>
+</Tabs>

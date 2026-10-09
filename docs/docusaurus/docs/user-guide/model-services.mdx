@@ -1,0 +1,76 @@
+---
+title: Model services
+description: Publish deployments as OpenAI-compatible model services behind a shared gateway.
+---
+
+Use the model-services screens to expose deployments through each cluster's shared Gateway URL, issue personal API keys, and manage which model servers serve each public model name.
+
+## Browse published models and copy request examples
+
+1. Open **My services**.
+2. In **Gateway connections**, each cluster shows its own Gateway base URL — click **Copy** next to the cluster you want to call (a global `LENS_MODEL_GATEWAY_PUBLIC_URL` override, when configured, replaces every cluster's URL).
+3. Find the model you want to call and click **cURL**.
+4. In the drawer titled **cURL examples —** followed by the model name, click **Copy** next to the example you want to reuse. The examples use the base URL of that model's cluster, and include `X-Gateway-Base-Model-Name` for clusters whose provider does **not** auto-inject it (Envoy AI Gateway, Agentgateway; Istio/GKE inject it via the Inference Payload Processor). The button changes to **Copied** after a successful copy.
+5. Replace `lens-mk-...` in the example with one of your own keys before sending the request.
+6. Streaming requests are only counted toward usage when they include `"stream_options": {"include_usage": true}` (the gateway reads token counts from the response `usage`); the generated chat example already sets it.
+
+## Create and store an API key
+
+1. Open **API keys**.
+2. Click **New key**.
+3. In **Create API key**, enter a value in **Key name**.
+4. Click **Create**.
+5. In **Copy your key now**, click **Copy** and store the full token immediately.
+6. After you have saved the token, click **I saved it**.
+
+## Reset or revoke an API key
+
+1. Open **API keys**.
+2. To rotate the default key, click **Reset**. Lens immediately opens **Copy your key now** for the replacement token.
+3. In **Copy your key now**, click **Copy**, save the new token, then click **I saved it**.
+4. To remove a key completely, use the row action button for that key and open **Revoke API key**.
+5. In **Revoke API key**, click **Revoke**.
+
+## Create a model service
+
+1. Open **Model services**.
+2. Click **Add model service**.
+3. In **New service**, choose the **Cluster (required)** the service belongs to. A model service is scoped to that one cluster: its providers must be deployments in that cluster, and the same public name may also exist in another cluster without conflicting.
+4. Fill in **Model name (user-facing)** — this is the name callers use; Lens uses it as the routing/model ref too, deriving the rest automatically.
+5. Optionally fill in **Display name (optional)** and **Description**.
+6. Click **Create**.
+
+## Add a model server to a model service
+
+1. On **Model services**, click **Add model server**.
+2. In the **Add provider** drawer, choose the **Cluster** first, then the **Model service** in that cluster, then one of its **Deployment** options (only deployments in the service's cluster can be providers).
+3. Review **Derived target (from the deployment)** (namespace, service, pool, port, kind). Each provider is one deployment-owned InferencePool, named automatically as `namespace/pool`; there is nothing to fill in.
+4. Click **Add provider**. A model service routes to **one** InferencePool (one EPP per pool); the first active provider is the pool published in the HTTPRoute.
+
+## Remove a model service or a provider
+
+1. Open **Model services**.
+2. On a model service's **HTTPRoute** node, open its menu.
+3. Choose **Remove provider (this cluster)** to remove only that cluster's provider; the service stays available from its other providers (only this cluster's route is reconciled away). When it is the last provider, this removes the whole model service.
+4. Choose **Remove model service (all clusters)** to remove the service and every one of its providers across clusters.
+5. Confirm in the dialog. The affected routes are reconciled away and callers using them stop working.
+
+## Manage the data-plane components
+
+The **Service flow** diagram shows each component as its own node — **Gateway**, **IPP**, **HTTPRoute**, **InferencePool**, **EPP**, and the **model server**. Each node's status dot is color-coded (green healthy, amber degraded or missing, red unhealthy, grey stopped/absent); hover a dot to see the component's exact status text. In a model-service row the four nodes are probed independently: **HTTPRoute** is green when it exists and is Accepted, **InferencePool** when it exists and is Accepted, **EPP** when its Service has endpoints, and **model server** when the InferencePool's selector has a ready endpoint — so deleting just the model-server Deployment turns only that node red. Checks run about every 10s on the backend, and the page refreshes every few seconds, so there is a short delay. Operations stream their log lines into a right-side, full-height log panel. The cluster must satisfy the [model gateway prerequisites](/user-guide/clusters#model-gateway-prerequisites) (Gateway API Inference Extension CRDs, the provider with InferencePool support, and a LoadBalancer address).
+
+1. Open **Model services** and click **Reconcile** to reconcile the shared Gateway and the model routes for every cluster with members.
+2. On a cluster's **Gateway** node, open its menu and choose **Install** (or **Uninstall**) — the provider is selected on the cluster — plus separate **Reconcile**, **Start**/**Stop**, and **View logs** actions.
+3. On the **IPP** node, open its menu to **Install IPP**, **Uninstall IPP**, **Start**, or **Stop**. The payload-processor chart and version are pinned in Lens's bundled stack profile (`llm_d_bench/versions`), not configurable per install.
+4. On an **EPP** node, open its menu and choose **Start** or **Stop** to scale that EPP Deployment.
+5. On the **IPP** node, open its menu and choose **Configure** to edit the Inference Payload Processor `PayloadProcessorConfig`. It is read live from the cluster and saving upgrades IPP; **Use chart default** clears a custom config.
+5. **HTTPRoute** and **InferencePool** are CRDs, so they show state but no start/stop controls.
+6. Every install/uninstall/reconcile/start/stop/**View logs** opens the log panel on the right, which stays the height of the page and closes with its **X**.
+
+## Permissions
+
+Model-service actions are permission-gated. Gateway-wide settings and service-level policy changes require the model-service admin permissions described in [Auth and RBAC](/architecture); users without that access simply do not see the corresponding buttons and menu actions (for example the Gateway/IPP kebab menus, **Add model service**, and **Add model server**), rather than a disabled or read-only control.
+
+## Related pages
+
+Use [Usage reports](/user-guide/observability) to review model-service traffic after requests start flowing, and see [Troubleshooting](/troubleshooting) if a newly added model server has not become reachable yet.

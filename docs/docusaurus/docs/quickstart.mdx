@@ -1,0 +1,101 @@
+---
+title: Quickstart
+description: The fastest way to see Lens running.
+---
+
+The fastest path to a running Lens instance is the bundled installer — no
+manual Node/Python/Postgres setup required.
+
+```bash
+git clone https://github.com/llm-d-incubation/llm-d-lens.git
+cd llm-d-lens
+./scripts/LensInstaller-Ubuntu-x86_64.sh
+```
+
+Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app
+port `3000`, backend port `8081`). The installer provisions Node, Python, an
+embedded PostgreSQL database, builds the app, sets up TLS and starts it.
+
+Once it finishes, open the printed URL (`https://localhost:3000` by default)
+and sign in with the admin credentials it printed.
+
+## Run the full path: cluster → deployment → model service → token call
+
+The rest of this page walks one complete minimal example end to end: register a
+cluster, deploy a **single-GPU `Qwen/Qwen3-0.6B`** with the llm-d
+**optimized-baseline** guide, publish it as a **model service**, then call the
+gateway with a **personal token**. Each step links to the module page for full
+options.
+
+### 1. Create a cluster
+
+1. Open [Clusters](/user-guide/clusters) and click **Add**.
+2. In **Basic Info**, enter a **Cluster name** (and optional **Description**).
+3. Under **Kubeconfig file**, keep **I already have a kubeconfig** and click
+   **Browse** to pick a file, or choose **Bootstrap a new cluster via Kubespray**.
+4. Step through **Network Proxy**, **Accelerator**, **llm-d stack**, and
+   **Model Cache** with **Next**.
+5. On the last step click **Review**, then **Finish**, then **Done**.
+6. Wait until the cluster is ready with a non-zero **Deployable GPU**.
+
+### 2. Deploy Qwen3-0.6B with the optimized-baseline guide (one GPU)
+
+1. Open [Model market](/user-guide/model-market) and click the
+   **`Qwen/Qwen3-0.6B`** card to open **One-click deployment**.
+2. Fill in **Deployment name** (for example
+   `qwen3-0-6b-optimized-baseline`) and an optional **Description**.
+3. Under **Cluster**, choose the cluster from step 1.
+4. In **Mode**, click **Advanced** (Evaluate configuration), then click
+   **Configure deployment**.
+5. On the **Configure deployment** page:
+   - **Basic settings**: leave **Model** at `Qwen/Qwen3-0.6B`, **Runtime** at
+     `vllm`, the default **Runtime image**, **Replicas** `1`, and **TP** `1`
+     (one replica × TP 1 = a single accelerator).
+   - **Model source**: keep **Shared Hugging Face cache first; download if
+     missing**.
+   - **Guide template**: set **Guide** to **optimized-baseline**, and
+     **Accelerator** to your cluster's accelerator type.
+6. Click **Generate YAML**, confirm the resource budget, then
+   **Confirm & generate**.
+7. Review the generated deployable configuration, then click **Next** to deploy.
+8. Lens opens [Deployments](/user-guide/deployments); wait until the deployment
+   reports **Ready**.
+
+### 3. Publish the deployment as a model service
+
+1. Open **Model services**.
+2. Under **Model services**, click **Add**.
+3. In **New service**, set **Model name (user-facing)** (for example
+   `qwen3-0.6b`), **Model ref** `Qwen/Qwen3-0.6B`, and an optional
+   **Display name** / **Description**. Leave **Provider selection policy** on
+   `random`, then click **Create**.
+4. Click **Add provider**, then choose the new **Model service**, the
+   **Cluster**, and the **Deployment** from step 2.
+5. Confirm the derived target (`namespace`, `service`, `port`, `kind`) and click
+   **Add provider**.
+6. Wait for the shared **Gateway** and its **HTTPRoute** to report healthy; use
+   **Sync** if you need to re-run gateway reconciliation.
+
+### 4. Call the service with a token
+
+1. Open **API keys** and click **New key**.
+2. In **Create API key**, enter a **Key name**, click **Create**, then click
+   **Copy** and store the token (it is shown only once), and finally
+   **I saved it**.
+3. Open **My services**, click **Copy endpoint** to copy the shared gateway base
+   URL, and click **cURL** for `qwen3-0.6b` to copy a ready-made request.
+4. Replace `lens-mk-...` with your key and send the request:
+
+```bash
+curl <gateway-base-url>/v1/chat/completions \
+  -H "Authorization: Bearer lens-mk-XXXXXXXX" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"qwen3-0.6b","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+The response is the model's reply, served through the shared gateway. Use
+`GET <gateway-base-url>/v1/models` with the same token to list the model names
+you can call.
+
+For every installer option, upgrading an existing install, or running from
+source instead, see [Installation](/installation).

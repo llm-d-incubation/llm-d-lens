@@ -1,0 +1,103 @@
+---
+title: Overview
+description: What Lens is and the capabilities it provides.
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
+Lens is an open-source control plane for deploying and operating large language
+models on [llm-d](https://llm-d.ai/), the Kubernetes-native distributed
+inference stack, across your Kubernetes clusters. It plans and executes
+inference deployments, runs guided evaluations and traffic simulations, and
+keeps clusters, storage and external providers under one roof — so a team can
+go from a registered model to a benchmarked, production-serving deployment
+without stitching together separate tools.
+
+## Highlights
+
+<CardGroup cols={2}>
+  <Card title="Optimal performance" icon="bolt-lightning">
+    Deployments run on llm-d: prefill/decode disaggregation, KV-cache-aware
+    routing, KV cache offloading to CPU/SSD tiers, and latency-predicted
+    routing raise throughput and cut tail latency on the same GPUs.
+  </Card>
+  <Card title="Multi-cluster deployment" icon="server">
+    Plan, approve and execute inference deployments across Kubernetes clusters
+    from a single UI, with agentic, workload-guided placement.
+  </Card>
+  <Card title="Guided evaluation" icon="chart-line">
+    Design benchmark experiments, run them against live deployments, and
+    analyze and export the results without hand-written scripts.
+  </Card>
+  <Card title="Traffic simulation" icon="flask">
+    Replay registered request traces against an inference endpoint to validate
+    behavior and capacity before real traffic arrives.
+  </Card>
+  <Card title="Model Service gateway" icon="route">
+    Publish cluster deployments as OpenAI-compatible model services behind the
+    cluster's shared Gateway (HTTPRoute → InferencePool → EPP), with per-model
+    selection policies.
+  </Card>
+  <Card title="Governance built in" icon="shield-check">
+    Role-based access control, per-cluster scoping and audit logging apply
+    across every page, from clusters to model services.
+  </Card>
+  <Card title="Observability" icon="gauge-high">
+    Bootstrap and maintain the cluster monitoring stack (Prometheus/Grafana) to
+    watch GPU utilization and deployment health.
+  </Card>
+</CardGroup>
+
+## Capabilities
+
+| Area | Description |
+| --- | --- |
+| Model market | Browse and register models. |
+| Deployments | Plan, approve and execute inference deployments. |
+| Evaluation | Design guided experiments, run benchmarks, analyze and export results. |
+| Simulation | Replay registered request traces against an inference endpoint. |
+| Model services | Publish deployments as model-service providers behind the gateway data plane. |
+| Clusters | Discover, bootstrap and manage Kubernetes clusters. |
+| Storage | Manage model cache and shared storage volumes. |
+| External providers | Configure OpenAI- or Anthropic-compatible AI providers used by Lens's optional AI features. |
+| Observability | Maintain the cluster monitoring stack (Prometheus/Grafana). |
+| Lens Assistant | A tool-calling assistant backed by the MCP tool catalog. |
+
+## Architecture
+
+<img src={useBaseUrl('/img/overview-1-7d83bcc33b.png')} alt="Lens system architecture" width="100%" />
+
+A single Lens server manages any number of Kubernetes clusters, on-premises or
+in the cloud, from one pane of glass: the console talks to an application layer
+over same-origin API routes, and that layer forwards requests to a control plane
+that owns the domain services, persists state to the database, and drives
+clusters, storage and the model-service data plane directly. Access control and
+audit logging are enforced in the control plane, so every page — deployments,
+evaluation, simulation and model services alike — respects the same per-cluster
+permissions.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the full stack locally.
+  </Card>
+  <Card title="User Guide" icon="book-open" href="/user-guide/model-market">
+    Page-by-page guides to every Lens capability.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    How the UI, BFF and Python backend fit together.
+  </Card>
+  <Card title="Model services" icon="route" href="/user-guide/model-services">
+    Publish a gateway-served, OpenAI-compatible model endpoint.
+  </Card>
+  <Card title="Troubleshooting" icon="life-ring" href="/troubleshooting">
+    Fixes for the failure modes you're most likely to hit.
+  </Card>
+  <Card title="Evaluation" icon="chart-line" href="/user-guide/evaluation">
+    Guide-based performance evaluation.
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/faq">
+    Answers to common questions about roles and scope.
+  </Card>
+</CardGroup>

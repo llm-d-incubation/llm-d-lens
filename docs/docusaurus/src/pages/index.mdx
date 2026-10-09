@@ -1,0 +1,144 @@
+---
+title: Lens Documentation
+description: Lens is an open-source control plane for deploying and operating large language models on llm-d.
+hide_table_of_contents: true
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+import Link from '@docusaurus/Link';
+
+import GitHubStats from '@site/src/components/GitHubStats';
+
+<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '2rem 0 1rem' }}>
+  <a href="https://llm-d.ai" target="_blank" rel="noopener noreferrer" aria-label="llm-d" style={{ display: 'inline-flex', alignItems: 'center' }}>
+    <img src="https://llm-d.ai/img/llm-d-logotype-and-icon.png" alt="llm-d" style={{ height: '8rem', width: 'auto', objectFit: 'contain' }} />
+  </a>
+  <span aria-hidden="true" style={{ fontSize: '7rem', lineHeight: 1, color: 'var(--grayscale-a9)' }}>·</span>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
+    <img src={useBaseUrl('/img/home-1-4cea47b661.webp')} alt="Lens" style={{ height: '8rem', width: '8rem', objectFit: 'contain' }} />
+    <span style={{ fontSize: '7rem', fontWeight: 700, letterSpacing: '0.03em', backgroundImage: 'linear-gradient(to right, #0ea5e9, #22d3ee, #2dd4bf)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>Lens</span>
+  </div>
+</div>
+
+<GitHubStats />
+
+<div style={{ fontSize: '1.3rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '960px', margin: '1.5rem auto' }}>
+  An AI-powered <a href="https://llm-d.ai/" target="_blank" rel="noopener noreferrer">llm-d</a> extension
+  for easier deployment with optimal configurations — deployments,
+  benchmarking, trace replay, clusters and storage management, all in one tool.
+</div>
+
+<div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', margin: '2.5rem 0 4.5rem' }}>
+  <Link
+    to="/quickstart"
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '0.875rem 1.75rem',
+      borderRadius: '8px',
+      backgroundColor: '#0ea5e9',
+      color: '#fff',
+      fontWeight: 600,
+      fontSize: '1.0625rem',
+      lineHeight: 1,
+      textDecoration: 'none',
+    }}
+  >{"Get started"}</Link>
+  <a
+    href="https://github.com/llm-d-incubation/llm-d-lens"
+    target="_blank"
+    rel="noopener noreferrer"
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '0.875rem 1.75rem',
+      borderRadius: '8px',
+      border: '1px solid #0ea5e9',
+      color: '#0ea5e9',
+      fontWeight: 600,
+      fontSize: '1.0625rem',
+      lineHeight: 1,
+      textDecoration: 'none',
+    }}
+  >{"View on GitHub"}</a>
+</div>
+
+<img src={useBaseUrl('/img/home-2-b535f6b9af.webp')} alt="Lens clusters dashboard" width="100%" style={{ marginBottom: '3rem' }} />
+
+## Highlights
+
+<CardGroup cols={2}>
+  <Card title="Optimal performance" icon="bolt-lightning">
+    Deployments run on llm-d: prefill/decode disaggregation, KV-cache-aware
+    routing, KV cache offloading to CPU/SSD tiers, and latency-predicted
+    routing raise throughput and cut tail latency on the same GPUs.
+  </Card>
+  <Card title="Multi-cluster deployment" icon="server">
+    Plan, approve and execute inference deployments across Kubernetes clusters
+    from a single UI, with agentic, workload-guided placement.
+  </Card>
+  <Card title="Guided evaluation" icon="chart-line">
+    Design benchmark experiments, run them against live deployments, and
+    analyze and export the results without hand-written scripts.
+  </Card>
+  <Card title="Traffic simulation" icon="flask">
+    Replay registered request traces against an inference endpoint to validate
+    behavior and capacity before real traffic arrives.
+  </Card>
+  <Card title="Model Service gateway" icon="route">
+    Publish cluster deployments as OpenAI-compatible model services behind the
+    cluster's shared Gateway (HTTPRoute → InferencePool → EPP), with per-model
+    selection policies.
+  </Card>
+  <Card title="Governance built in" icon="shield-check">
+    Role-based access control, per-cluster scoping and audit logging apply
+    across every page, from clusters to model services.
+  </Card>
+  <Card title="Observability" icon="gauge-high">
+    Bootstrap and maintain the cluster monitoring stack (Prometheus/Grafana) to
+    watch GPU utilization and deployment health.
+  </Card>
+</CardGroup>
+
+<div style={{ marginTop: '3rem' }} />
+
+## Architecture
+
+<img src={useBaseUrl('/img/home-3-7d83bcc33b.png')} alt="Lens system architecture" width="100%" />
+
+A single Lens server manages any number of Kubernetes clusters, on-premises or
+in the cloud, from one pane of glass: the console talks to an application layer
+over same-origin API routes, and that layer forwards requests to a control plane
+that owns the domain services, persists state to the database, and drives
+clusters, storage and the model-service data plane directly. Access control and
+audit logging are enforced in the control plane, so every page — deployments,
+evaluation, simulation and model services alike — respects the same per-cluster
+permissions.
+
+<div style={{ marginTop: '3rem' }} />
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the full stack locally.
+  </Card>
+  <Card title="User Guide" icon="book-open" href="/user-guide/model-market">
+    Page-by-page guides to every Lens capability.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    How the UI, BFF and Python backend fit together.
+  </Card>
+  <Card title="Model services" icon="route" href="/user-guide/model-services">
+    Publish a gateway-served, OpenAI-compatible model endpoint.
+  </Card>
+  <Card title="Troubleshooting" icon="life-ring" href="/troubleshooting">
+    Fixes for the failure modes you're most likely to hit.
+  </Card>
+  <Card title="Evaluation" icon="chart-line" href="/user-guide/evaluation">
+    Guide-based performance evaluation.
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/faq">
+    Answers to common questions about roles and scope.
+  </Card>
+</CardGroup>

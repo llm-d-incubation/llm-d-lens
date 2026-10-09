@@ -8,7 +8,7 @@ An open-source control plane for AI inference on llm-d
 </h3>
 
 <p align="center">
-| <a href="https://llm-d-lens.docs.buildwithfern.com/"><b>Documentation</b></a> | <a href="https://llm-d-lens.docs.buildwithfern.com/quickstart"><b>Quickstart</b></a> | <a href="https://llm-d-lens.docs.buildwithfern.com/user-guide/model-market"><b>User Guide</b></a> | <a href="https://llm-d-lens.docs.buildwithfern.com/architecture"><b>Architecture</b></a> |
+| <a href="https://llm-d-incubation.github.io/llm-d-lens/"><b>Documentation</b></a> | <a href="https://llm-d-incubation.github.io/llm-d-lens/quickstart"><b>Quickstart</b></a> | <a href="https://llm-d-incubation.github.io/llm-d-lens/user-guide/model-market"><b>User Guide</b></a> | <a href="https://llm-d-incubation.github.io/llm-d-lens/architecture"><b>Architecture</b></a> |
 </p>
 
 ---
@@ -63,7 +63,7 @@ node scripts/generate-mcp-tools.mjs
 npm run dev
 ```
 
-The frontend runs on port `5173`, the Node API on `3000`, and the Python backend is started by `scripts/run-backend.sh`. Use `npm run dev:web` when running the Python backend separately. `scripts/dev.sh` starts, stops and restarts the whole stack and regenerates the MCP tool catalog. See the [CLI Reference](https://llm-d-lens.docs.buildwithfern.com/cli-reference) for every subcommand.
+The frontend runs on port `5173`, the Node API on `3000`, and the Python backend is started by `scripts/run-backend.sh`. Use `npm run dev:web` when running the Python backend separately. `scripts/dev.sh` starts, stops and restarts the whole stack and regenerates the MCP tool catalog. See the [CLI Reference](https://llm-d-incubation.github.io/llm-d-lens/cli-reference) for every subcommand.
 
 Build and test:
 
@@ -74,11 +74,11 @@ make test-js
 make test-python
 ```
 
-Visit the [documentation](https://llm-d-lens.docs.buildwithfern.com/) to learn more:
+Visit the [documentation](https://llm-d-incubation.github.io/llm-d-lens/) to learn more:
 
-- [Installation](https://llm-d-lens.docs.buildwithfern.com/installation)
-- [Quickstart](https://llm-d-lens.docs.buildwithfern.com/quickstart)
-- [User Guide](https://llm-d-lens.docs.buildwithfern.com/user-guide/model-market)
+- [Installation](https://llm-d-incubation.github.io/llm-d-lens/installation)
+- [Quickstart](https://llm-d-incubation.github.io/llm-d-lens/quickstart)
+- [User Guide](https://llm-d-incubation.github.io/llm-d-lens/user-guide/model-market)
 
 ## Contributing
 

@@ -1,0 +1,51 @@
+---
+title: Migration
+description: Applying and authoring database schema migrations (Alembic).
+---
+
+Lens uses [Alembic](https://alembic.sqlalchemy.org/) to evolve the database
+schema. Whether you need to act on this page depends on what you're doing:
+
+- **Upgrading a deployment** to a version that changed the schema — run the
+  migration once, then start the new version.
+- **Changing the schema yourself** (adding/removing a column or table) — you
+  author a new migration script.
+
+## Applying migrations
+
+```bash
+alembic -c alembic.ini upgrade head
+```
+
+Run this after pulling new code and before starting the backend, whenever a
+release notes a schema change. It is not run automatically on backend
+startup — an operator (or the upgrade step of your deployment tooling) must
+run it explicitly.
+
+To check the current revision or roll back one step:
+
+```bash
+alembic -c alembic.ini current
+alembic -c alembic.ini downgrade -1
+```
+
+## Authoring a new migration
+
+If you change a `*Row` model under `llm_d_bench/db/models/` in a way that
+changes the actual table shape (column added/removed/renamed/retyped, a new
+table, a new index or constraint), generate a migration against a real diff:
+
+```bash
+alembic -c alembic.ini revision --autogenerate -m "add foo to bar"
+```
+
+Review the generated script under `llm_d_bench/db/migrations/versions/`
+before committing — autogenerate does not always get defaults, data
+backfills or renames right. See the full
+[migrations README](https://github.com/llm-d-incubation/llm-d-lens/blob/main/llm_d_bench/db/migrations/README.md)
+for the baseline-migration history and edge cases (for example why
+`Base.metadata.create_all()` isn't a substitute for real migrations on an
+already-populated database).
+
+You do **not** need a migration for changes that don't touch the schema, for
+example editing fields inside an existing JSON column such as `extra`.

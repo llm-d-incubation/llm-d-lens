@@ -1,0 +1,101 @@
+---
+title: 安装
+description: 使用 Ubuntu 安装脚本安装 Lens，或从源码运行各项服务。
+---
+
+## 使用 Ubuntu 安装脚本安装
+
+在 Ubuntu 22.04 LTS 或更新版本（x86_64）上，使用内置安装脚本将 Lens
+安装为一个独立的、可用于生产环境的部署。在代码仓库的检出目录中执行：
+
+```bash
+./scripts/LensInstaller-Ubuntu-x86_64.sh
+```
+
+交互模式会询问安装目录（默认 `$HOME/llm-d-lens`）和
+端口（应用端口 `3000`，内部后端端口 `8081`）；按回车即可接受每个默认值。
+安装脚本会获取缺失的系统软件包，配置本地的 Node 和 Python
+虚拟环境，设置内置的 PostgreSQL 数据库，构建应用，配置
+TLS，并写入一个控制脚本。
+
+如需脚本化或 CI 安装，使用静默模式：
+
+```bash
+./scripts/LensInstaller-Ubuntu-x86_64.sh --silent
+```
+
+常用选项：
+
+| 选项 | 作用 |
+| --- | --- |
+| `--install-dir DIR` | 安装位置（默认 `$HOME/llm-d-lens`）。 |
+| `--app-port PORT` | Web 应用/API 端口（默认 `3000`）。 |
+| `--backend-port PORT` | 内部 FastAPI 后端端口（默认 `8081`）。 |
+| `--no-https` | 提供纯 HTTP 服务，而不是自动 HTTPS（自签名证书）。 |
+| `--no-start` | 安装但不启动服务。 |
+| `--db-mode embedded\|external` | 使用内置数据库或外部数据库。 |
+| `-h, --help` | 显示全部选项。 |
+
+## 管理安装
+
+安装脚本会在安装目录中写入 `lensctl.sh`：
+
+```bash
+"$HOME/llm-d-lens/lensctl.sh" start
+"$HOME/llm-d-lens/lensctl.sh" status
+"$HOME/llm-d-lens/lensctl.sh" stop
+```
+
+要移除一个安装，运行带 `--uninstall` 的安装脚本；默认会保留数据。
+使用 `--purge` 可同时移除数据，或使用 `--keep-data` 以非交互方式跳过提示。
+
+如果你要升级现有安装而不是全新安装，请参阅
+[升级指南](/upgrade)。
+
+## 从源码开发
+
+如果你想直接修改代码，而不是运行已安装的部署：
+
+```bash
+npm install
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e '.[dev]'
+node scripts/generate-mcp-tools.mjs
+npm run dev
+```
+
+前端运行在端口 `5173`，Node API 运行在 `3000`，Python 后端
+由 `scripts/run-backend.sh` 启动。如果单独运行 Python 后端，请使用
+`npm run dev:web`。
+
+`scripts/dev.sh start` 和 `restart` 会在更改服务之前重新生成并验证复用地图。
+无效的注册项或待处理的用户决策会阻止启动，但不会停止已有的服务。
+每一个 `scripts/dev.sh` 子命令请参阅 [CLI 参考](/cli-reference)。
+
+## 构建与测试
+
+```bash
+npm run build
+npm run type-check
+make test-js
+make test-python
+```
+
+## 文档站点
+
+本站点使用 [Fern](https://buildwithfern.com) 构建。可在本地预览，
+并支持热重载：
+
+```bash
+npm run docs:dev
+```
+
+校验配置和页面路径：
+
+```bash
+npm run docs:check
+```
+
+生成的 MCP 目录是助手和 Node 服务器所必需的。当后端路由发生变化时，
+需要重新生成它；Docker 构建会自动完成这一步。

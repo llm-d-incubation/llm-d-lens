@@ -1,0 +1,48 @@
+---
+title: 迁移
+description: 应用与编写数据库 schema 迁移脚本（Alembic）。
+---
+
+Lens 使用 [Alembic](https://alembic.sqlalchemy.org/) 来演进数据库
+schema。你是否需要在这个页面上做些什么，取决于你当前的工作内容：
+
+- **将某个部署升级**到一个更改了 schema 的版本——运行一次迁移，
+  然后再启动新版本。
+- **自己更改 schema**（添加/删除列或表）——你需要编写一个新的
+  迁移脚本。
+
+## 应用迁移
+
+```bash
+alembic -c alembic.ini upgrade head
+```
+
+每当某个发行版说明中提到了 schema 变更时，请在拉取新代码之后、
+启动后端之前运行此命令。它不会在后端启动时自动运行——
+必须由操作者（或者部署工具中的升级步骤）显式运行。
+
+要检查当前的修订版本或回退一步：
+
+```bash
+alembic -c alembic.ini current
+alembic -c alembic.ini downgrade -1
+```
+
+## 编写新的迁移脚本
+
+如果你以某种改变实际表结构的方式更改了 `llm_d_bench/db/models/`
+下的某个 `*Row` 模型（新增/删除/重命名/改变类型的列、新表、
+新的索引或约束），请针对真实的差异生成一个迁移脚本：
+
+```bash
+alembic -c alembic.ini revision --autogenerate -m "add foo to bar"
+```
+
+提交之前，先查看 `llm_d_bench/db/migrations/versions/` 下生成的
+脚本——自动生成并不总能正确处理默认值、数据回填或重命名。
+关于基线迁移的历史和边界情况（例如为什么 `Base.metadata.create_all()`
+无法替代已有数据的数据库上的真实迁移），请参见完整的
+[迁移 README](https://github.com/llm-d-incubation/llm-d-lens/blob/main/llm_d_bench/db/migrations/README.md)。
+
+对于不涉及 schema 的更改——例如编辑现有 JSON 列（比如 `extra`）
+内部的字段——你**不**需要编写迁移脚本。

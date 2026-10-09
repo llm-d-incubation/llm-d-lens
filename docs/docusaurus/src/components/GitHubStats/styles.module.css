@@ -1,0 +1,7 @@
+.statsRow {
+  /* Matches the height the previous Star/Watch/Fork icon+text line occupied,
+     so removing that row's content doesn't shrink the page's overall
+     layout. */
+  min-height: 1.5rem;
+  margin: 0 0 3rem;
+}

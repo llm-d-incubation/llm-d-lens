@@ -51,7 +51,7 @@ private/
 var/
 .llm_d_bench/run_store/
 docs/*
-!docs/fern/
+!docs/docusaurus/
 !docs/reuse-map.md
 !docs/design/
 docs/design/*
