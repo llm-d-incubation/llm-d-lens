@@ -41,9 +41,7 @@ def _panel(
             },
             "overrides": [],
         },
-        "targets": [
-            {"refId": "A", "datasource": _DATASOURCE, "expr": expr, "legendFormat": legend}
-        ],
+        "targets": [{"refId": "A", "datasource": _DATASOURCE, "expr": expr, "legendFormat": legend}],
     }
 
 

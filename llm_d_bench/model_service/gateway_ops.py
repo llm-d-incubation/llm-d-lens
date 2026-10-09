@@ -444,9 +444,7 @@ class GatewayOpsService:
             return target
         return await self._discover_gateway_service(cluster_id, namespace, name)
 
-    async def _gateway_node_port(
-        self, cluster_id: str, namespace: str, name: str, provider: str
-    ) -> int | None:
+    async def _gateway_node_port(self, cluster_id: str, namespace: str, name: str, provider: str) -> int | None:
         """The NodePort the data-plane Service exposes for its http (port 80) listener."""
         target = await self._gateway_service(cluster_id, namespace, name, provider)
         if target is None:

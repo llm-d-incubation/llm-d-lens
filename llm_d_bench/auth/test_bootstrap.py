@@ -29,7 +29,7 @@ def test_generated_admin_is_seeded_flagged_and_written(monkeypatch, tmp_path):
     assert initial is not None
     assert initial.generated is True
     assert initial.username == "root"
-    assert initial.password != "admin"
+    assert initial.password != "admin"  # noqa: S105 -- not a secret, asserting against the old insecure default
     validate_password_strength(initial.password, username="root")
     assert cred_file.exists()
     contents = cred_file.read_text(encoding="utf-8")

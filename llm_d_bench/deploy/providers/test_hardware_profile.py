@@ -16,6 +16,14 @@ def test_defaults_match_the_registered_intel_profile():
     assert hardware_profile.resource_name() is None
 
 
+def test_router_topology_defaults_to_single_host_for_every_registered_profile():
+    """No registered profile is multi-host today; the field is neutral unless set."""
+    assert hardware_profile.router_topology(accelerator="xpu") == "single-host"
+    assert hardware_profile.router_topology(accelerator="cuda") == "single-host"
+    assert hardware_profile.router_topology(accelerator="does-not-exist") == "single-host"
+    assert hardware_profile.router_topology(fallback="multi-host", accelerator="does-not-exist") == "multi-host"
+
+
 def test_accelerator_supported_uses_the_registry():
     assert hardware_profile.accelerator_supported("xpu") is True
     assert hardware_profile.accelerator_supported("cuda") is True

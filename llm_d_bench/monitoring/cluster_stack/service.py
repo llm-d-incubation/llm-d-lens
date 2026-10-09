@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from llm_d_bench.monitoring.service_links import (
-    service_name as _service_name, service_port as _service_port, find_service as _find_service,
-)
-
 import json
 import os
 import re
 from pathlib import Path
 
+from llm_d_bench.monitoring.service_links import (
+    find_service as _find_service,
+)
+from llm_d_bench.monitoring.service_links import (
+    service_name as _service_name,
+)
+from llm_d_bench.monitoring.service_links import (
+    service_port as _service_port,
+)
 from llm_d_bench.utils.kubernetes import PortForwardError, ensure_port_forward, kubeconfig_environment, scoped_runner
 from llm_d_bench.utils.kubernetes import validate_namespace as validate_namespace
 from llm_d_bench.utils.shell import CommandRunner, ScopedCommandRunner
@@ -238,12 +243,6 @@ def get_operation(operation_id: str) -> ClusterStackOperationResponse:
 
 _PROMETHEUS_PORT = 9090
 _GRAFANA_PORT = 80
-
-
-
-
-
-
 
 
 async def get_links(namespace: str, *, cluster_id: str | None = None) -> ClusterStackLinksResponse:

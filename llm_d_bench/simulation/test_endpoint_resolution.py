@@ -37,9 +37,7 @@ async def test_force_gateway_overrides_the_endpoint_even_when_data_plane_says_st
         lambda _execution_id: _execution_context(uses_shared_gateway=False),
     )
     monkeypatch.setattr("llm_d_bench.cluster.registry.get_cluster", lambda _cluster_id: None)
-    monkeypatch.setattr(
-        simulation_service, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local")
-    )
+    monkeypatch.setattr(simulation_service, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local"))
 
     resolved = await simulation_service._resolve_task_endpoint_url(
         endpoint_mode="deployment",
@@ -58,9 +56,7 @@ async def test_without_force_gateway_the_deployments_own_data_plane_is_used(monk
         lambda _execution_id: _execution_context(uses_shared_gateway=False),
     )
     monkeypatch.setattr("llm_d_bench.cluster.registry.get_cluster", lambda _cluster_id: None)
-    monkeypatch.setattr(
-        simulation_service, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local")
-    )
+    monkeypatch.setattr(simulation_service, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local"))
 
     resolved = await simulation_service._resolve_task_endpoint_url(
         endpoint_mode="deployment",
@@ -79,9 +75,7 @@ async def test_design_configuration_deployment_still_uses_its_own_shared_gateway
         lambda _execution_id: _execution_context(uses_shared_gateway=True),
     )
     monkeypatch.setattr("llm_d_bench.cluster.registry.get_cluster", lambda _cluster_id: None)
-    monkeypatch.setattr(
-        simulation_service, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local")
-    )
+    monkeypatch.setattr(simulation_service, "_cluster_gateway_endpoint", AsyncMock(return_value="http://gateway.local"))
 
     resolved = await simulation_service._resolve_task_endpoint_url(
         endpoint_mode="deployment",

@@ -412,9 +412,7 @@ def render_gateway_ext_auth(
             "spec": {
                 # Stable provider-facing port; the Endpoints below route it to the
                 # Lens host's live serving port.
-                "ports": [
-                    {"name": "http", "port": AUTHZ_SERVICE_PORT, "targetPort": authz_port, "protocol": "TCP"}
-                ]
+                "ports": [{"name": "http", "port": AUTHZ_SERVICE_PORT, "targetPort": authz_port, "protocol": "TCP"}]
             },
         },
         {

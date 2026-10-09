@@ -1112,7 +1112,8 @@ def test_ai_generator_rejects_first_tool_batch_without_aic_search(monkeypatch):
     provider = Provider()
     monkeypatch.setattr("llm_d_bench.agentic.generator.client_for", lambda **_kwargs: provider)
     generator = AICandidateGenerator(
-        OpenAIPlannerSettings(base_url="http://provider", model="planner"), tools=Tools(),
+        OpenAIPlannerSettings(base_url="http://provider", model="planner"),
+        tools=Tools(),
     )
 
     with pytest.raises(CandidateGenerationError, match="must first call"):
@@ -1137,20 +1138,40 @@ def test_ai_generator_retries_invalid_first_tool_batch_once(monkeypatch):
         async def complete_tool_turn(self, **kwargs):
             requests.append(list(kwargs["messages"]))
             if len(requests) == 1:
-                return AIToolTurn(tool_calls=[AIToolCall(
-                    id="cluster-only", name="get_cluster_overview", arguments={"clusterId": "cluster-a"},
-                )])
+                return AIToolTurn(
+                    tool_calls=[
+                        AIToolCall(
+                            id="cluster-only",
+                            name="get_cluster_overview",
+                            arguments={"clusterId": "cluster-a"},
+                        )
+                    ]
+                )
             if len(requests) == 2:
-                return AIToolTurn(tool_calls=[
-                    AIToolCall(id="cluster", name="get_cluster_overview", arguments={"clusterId": "cluster-a"}),
-                    AIToolCall(id="aic", name="search_candidates", arguments=_aic_arguments()),
-                ])
-            return AIToolTurn(tool_calls=[AIToolCall(
-                id="submit", name="submit_candidate_proposals", arguments={"candidates": [{
-                    "provider_ref": "baseline-vllm", "replicas": 1, "tensor_parallel_size": 1,
-                    "rationale": "Fits the observed cluster.",
-                }]},
-            )])
+                return AIToolTurn(
+                    tool_calls=[
+                        AIToolCall(id="cluster", name="get_cluster_overview", arguments={"clusterId": "cluster-a"}),
+                        AIToolCall(id="aic", name="search_candidates", arguments=_aic_arguments()),
+                    ]
+                )
+            return AIToolTurn(
+                tool_calls=[
+                    AIToolCall(
+                        id="submit",
+                        name="submit_candidate_proposals",
+                        arguments={
+                            "candidates": [
+                                {
+                                    "provider_ref": "baseline-vllm",
+                                    "replicas": 1,
+                                    "tensor_parallel_size": 1,
+                                    "rationale": "Fits the observed cluster.",
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
 
     monkeypatch.setattr("llm_d_bench.agentic.generator.client_for", lambda **_kwargs: Provider())
     generator = AICandidateGenerator(

@@ -43,11 +43,21 @@ def _patch(monkeypatch, *, installed=False, gpu_nodes=True, plugin_ready=False, 
         if resource == "daemonsets" and kwargs.get("all_namespaces"):
             items = []
             if plugin_ready:
-                items.append({"kind": "DaemonSet", "metadata": {"name": "nvidia-device-plugin-daemonset"},
-                              "status": {"desiredNumberScheduled": 1, "numberReady": 1}})
+                items.append(
+                    {
+                        "kind": "DaemonSet",
+                        "metadata": {"name": "nvidia-device-plugin-daemonset"},
+                        "status": {"desiredNumberScheduled": 1, "numberReady": 1},
+                    }
+                )
             if dra_ready:
-                items.append({"kind": "DaemonSet", "metadata": {"name": "nvidia-dra-driver-kubelet-plugin"},
-                              "status": {"desiredNumberScheduled": 1, "numberReady": 1}})
+                items.append(
+                    {
+                        "kind": "DaemonSet",
+                        "metadata": {"name": "nvidia-dra-driver-kubelet-plugin"},
+                        "status": {"desiredNumberScheduled": 1, "numberReady": 1},
+                    }
+                )
             return items
         if resource == "nodes" and kwargs.get("selector"):
             return [{"metadata": {"name": "gpu-node-1"}}] if gpu_nodes else []
@@ -56,8 +66,17 @@ def _patch(monkeypatch, *, installed=False, gpu_nodes=True, plugin_ready=False, 
                 return []
             return [{"metadata": {"name": "gpu-node-1"}, "status": {"allocatable": {"nvidia.com/gpu": "8"}}}]
         if resource == "daemonsets,deployments":
-            return [{"kind": "DaemonSet", "metadata": {"name": "dcgm-exporter"},
-                     "status": {"desiredNumberScheduled": 1, "numberReady": 1}}] if installed else []
+            return (
+                [
+                    {
+                        "kind": "DaemonSet",
+                        "metadata": {"name": "dcgm-exporter"},
+                        "status": {"desiredNumberScheduled": 1, "numberReady": 1},
+                    }
+                ]
+                if installed
+                else []
+            )
         if resource == "servicemonitors":
             return [{"metadata": {"name": "dcgm-exporter"}}] if installed else []
         if resource == "configmaps":

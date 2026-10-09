@@ -16,10 +16,10 @@ Enforce public HTTPS destinations for external AI providers and pin outbound req
 
 ## deploy-hardware-profile
 
-Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks.
+Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks. Also resolves router_topology (the per-guide router-values directory some Guides split by topology, e.g. single-host vs a multi-host LeaderWorkerSet), defaulting to single-host for every profile that does not set it.
 
 - Entry point: [llm_d_bench/deploy/providers/hardware_profile.py](../llm_d_bench/deploy/providers/hardware_profile.py)
-- Symbols: `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `runtime_image`, `pin_runtime_image`, `set_accelerator_request`
+- Symbols: `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `runtime_image`, `pin_runtime_image`, `set_accelerator_request`, `router_topology`
 - Boundaries: Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Model-server image repository and version are data in the profile, never hardcoded here. Do not add guide-specific logic here.
 - Examples: [llm_d_bench/deploy/providers/baseline_vllm.py](../llm_d_bench/deploy/providers/baseline_vllm.py), [llm_d_bench/deploy/providers/pd_disaggregation.py](../llm_d_bench/deploy/providers/pd_disaggregation.py), [llm_d_bench/deploy/providers/gpu_selection.py](../llm_d_bench/deploy/providers/gpu_selection.py), [llm_d_bench/deploy/runtime/composition.py](../llm_d_bench/deploy/runtime/composition.py)
 - Tests: [llm_d_bench/deploy/providers/test_hardware_profile.py](../llm_d_bench/deploy/providers/test_hardware_profile.py)

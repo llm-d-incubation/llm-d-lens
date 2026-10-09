@@ -34,9 +34,10 @@
         "resource_name",
         "runtime_image",
         "pin_runtime_image",
-        "set_accelerator_request"
+        "set_accelerator_request",
+        "router_topology"
       ],
-      "purpose": "Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks.",
+      "purpose": "Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks. Also resolves router_topology (the per-guide router-values directory some Guides split by topology, e.g. single-host vs a multi-host LeaderWorkerSet), defaulting to single-host for every profile that does not set it.",
       "boundaries": "Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Model-server image repository and version are data in the profile, never hardcoded here. Do not add guide-specific logic here.",
       "examples": [
         "llm_d_bench/deploy/providers/baseline_vllm.py",
@@ -594,7 +595,7 @@
         "paginate"
       ],
       "purpose": "Page count, clamping, visible range and slicing for filtered collections.",
-      "boundaries": "Expects nonnegative integer page and positive integer pageSize; filtering and reset conditions belong to callers. Empty collections have one page and range 0\u20130.",
+      "boundaries": "Expects nonnegative integer page and positive integer pageSize; filtering and reset conditions belong to callers. Empty collections have one page and range 0–0.",
       "examples": [
         "src/components/StorageManagement/StorageManagementPage.jsx",
         "src/components/ModelCache/ModelCachePage.jsx",
@@ -1344,7 +1345,7 @@
         "localEmbedder"
       ],
       "purpose": "Local multilingual capability retrieval with configurable distinct-file recall.",
-      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1\u2013100. Lexical mode is separate; offline mode requires cached model.",
+      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1–100. Lexical mode is separate; offline mode requires cached model.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
@@ -1653,7 +1654,7 @@
         "currentInternalPrincipalId",
         "internalAuthEnabled"
       ],
-      "purpose": "Signed Node-to-Python/loopback internal identity (\u00a78.3): HMAC(ts\nMETHOD\npath\nprincipal_id), with AsyncLocalStorage propagating authenticated callers to deeper internal reads.",
+      "purpose": "Signed Node-to-Python/loopback internal identity (§8.3): HMAC(ts\nMETHOD\npath\nprincipal_id), with AsyncLocalStorage propagating authenticated callers to deeper internal reads.",
       "boundaries": "Only the principal id is claimed; Python recomputes permissions/scope from the DB. Requires a shared LENS_INTERNAL_AUTH_SECRET on both sides; empty secret disables signing (cookie fallback). Signatures bind method+path and expire after 60s, so they cannot be replayed or used for a rewritten path.",
       "examples": [
         "server/auth.ts",
@@ -1694,7 +1695,7 @@
         "usePolling"
       ],
       "purpose": "Shared periodic page-data refresh hook with quiet refreshes, unmount cleanup, hidden-tab suspension, immediate refresh on visibility, and overlap prevention.",
-      "boundaries": "Use this for server-state freshness instead of a full page reload or an ad-hoc setInterval. Default interval is 5s; gate with enabled when there is nothing to watch (e.g. only while a download is in flight). Callbacks should refresh quietly \u2014 keep existing rows and reuse the page's load({ quiet: true }) instead of a full-page loading state \u2014 and must not disturb filters, form input, selected rows or open dialogs. Specialized loops with cancellation/streaming semantics (port-forward, logs, clocks) may keep their own timer but must still pause when hidden and clean up on unmount.",
+      "boundaries": "Use this for server-state freshness instead of a full page reload or an ad-hoc setInterval. Default interval is 5s; gate with enabled when there is nothing to watch (e.g. only while a download is in flight). Callbacks should refresh quietly — keep existing rows and reuse the page's load({ quiet: true }) instead of a full-page loading state — and must not disturb filters, form input, selected rows or open dialogs. Specialized loops with cancellation/streaming semantics (port-forward, logs, clocks) may keep their own timer but must still pause when hidden and clean up on unmount.",
       "examples": [
         "src/components/Administration/UsersPage.jsx",
         "src/components/ModelMarketPage.jsx",
@@ -1830,7 +1831,7 @@
       "symbols": [
         "DataPlaneTopology"
       ],
-      "purpose": "Model-service data-plane topology: one Gateway and one IPP per cluster; one HTTPRoute \u2192 InferencePool \u2192 EPP \u2192 model server per (cluster, model service), with one pool per llm-d EPP. Includes status indicators and installation/start/stop/reconciliation menus.",
+      "purpose": "Model-service data-plane topology: one Gateway and one IPP per cluster; one HTTPRoute → InferencePool → EPP → model server per (cluster, model service), with one pool per llm-d EPP. Includes status indicators and installation/start/stop/reconciliation menus.",
       "boundaries": "Presentation only: consumes GatewayStatus (per-cluster gateway/ipp status and members) and model-service summaries, delegating operations to the management page through callbacks without issuing requests. Uses horizontally scrollable cluster sections and top-level Portal menus. Reuses Button, Badge, PermissionGate, and page status-color mappings.",
       "examples": [
         "src/components/ModelService/ModelServiceAdminPage.jsx"
@@ -1919,7 +1920,7 @@
         "split_pool_name",
         "render_node_inotify_daemonset"
       ],
-      "purpose": "Render llm-d Gateway Mode resources: cluster-shared Gateway (istio/gke/agentgateway/envoy-ai-gateway providers) and per-model HTTPRoute \u2192 InferencePool plus IPP model mapping. Also render provider-specific ext_authz resources (SecurityPolicy/AuthorizationPolicy/AgentgatewayPolicy and lens-authz Service/Endpoints) to inject caller identity headers.",
+      "purpose": "Render llm-d Gateway Mode resources: cluster-shared Gateway (istio/gke/agentgateway/envoy-ai-gateway providers) and per-model HTTPRoute → InferencePool plus IPP model mapping. Also render provider-specific ext_authz resources (SecurityPolicy/AuthorizationPolicy/AgentgatewayPolicy and lens-authz Service/Endpoints) to inject caller identity headers.",
       "boundaries": "Pure YAML rendering only; applying/waiting is gateway_ops' responsibility. Pools/EPP are owned by deployments; this module never selects endpoints or splits traffic (weight is passed through to HTTPRoute.backendRefs). Provider install commands mirror the official llm-d gateway recipes. ext_authz rendering is opt-in (authz_host) and HTTP-only; gke has no Gateway-API ext_authz hook. Pool defaults are stored namespace-qualified (qualified_pool_name/split_pool_name) so members in different namespaces stay unique.",
       "examples": [
         "llm_d_bench/model_service/gateway_ops.py"
@@ -2781,7 +2782,7 @@
         "resolve_model_service_target"
       ],
       "purpose": "Resolve a Model Service group id to the deployment execution id and published model name of its currently active (health-probed) member, so callers benchmark/simulate an already-published, continuously liveness-checked endpoint instead of a raw deployment execution with no live health signal.",
-      "boundaries": "Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself \u2014 callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.",
+      "boundaries": "Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself — callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.",
       "examples": [
         "llm_d_bench/evaluate/router.py",
         "llm_d_bench/simulation/service.py"

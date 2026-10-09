@@ -69,7 +69,7 @@ across pools.
   (matching llm-d's `guides/recipes/gateway/istio`).
 - **Istio:** install with
   `istioctl install -y --set values.pilot.env.ENABLE_GATEWAY_API_INFERENCE_EXTENSION=true`
-  (the llm-d guide pins 1.29.2). Lens renders `istio.io/enable-inference-extproc: "true"` on
+  (the llm-d guide pins 1.29.4). Lens renders `istio.io/enable-inference-extproc: "true"` on
   the Gateway; the recipe requires it for EPP inference ext_proc.
 
 ## 3. Environment variables

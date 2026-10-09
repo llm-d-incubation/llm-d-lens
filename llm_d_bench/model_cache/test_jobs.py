@@ -732,7 +732,10 @@ async def test_job_launch_failure_keeps_pending_batch_and_propagates(monkeypatch
     monkeypatch.setattr(jobs_module, "_apply_job", fail_second)
     with pytest.raises(ModelCacheJobError, match="second node failed"):
         await jobs_module.launch_cache_jobs(
-            entry, volume=_nfs_volume(), nodes=["node-1", "node-2"], action=action,
+            entry,
+            volume=_nfs_volume(),
+            nodes=["node-1", "node-2"],
+            action=action,
             command_for_entry=lambda _: ["sh", "-c", "echo test"],
         )
     assert [p.status for p in entry.node_progress] == ["pending", "pending"]

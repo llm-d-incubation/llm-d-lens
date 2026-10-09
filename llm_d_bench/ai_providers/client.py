@@ -29,13 +29,13 @@ response_format at all) for providers not in that table.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
 import re
 import time
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import httpx

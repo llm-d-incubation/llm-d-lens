@@ -210,8 +210,7 @@ def _install_commands(access_mode: GpuAccessMode) -> list[list[str]]:
     mode = driver.mode(access_mode) if driver is not None else None
     if access_mode == "dra":
         ref = (mode.manifest_ref if mode is not None else None) or (
-            "https://github.com/intel/intel-resource-drivers-for-kubernetes/deployments/gpu"
-            f"?ref={_DRA_RELEASE_REF}"
+            f"https://github.com/intel/intel-resource-drivers-for-kubernetes/deployments/gpu?ref={_DRA_RELEASE_REF}"
         )
         return [["apply", "-k", ref]]
     ref = (mode.manifest_ref if mode is not None else None) or (

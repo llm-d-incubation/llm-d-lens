@@ -25,6 +25,10 @@ from llm_d_bench.deploy.service import _readiness_is_transient
         "helm command timed out",
         "endpoint smoke test timed out",
         'Error from server (NotFound): deployments.apps "optimized-baseline-xpu-vllm-decode" not found',
+        # The model server still loading rejects connections (not yet
+        # listening); the smoke test embeds that detail in its reason string
+        # (see composition.py's `_smoke_test_failure_detail`).
+        "endpoint smoke test failed: urllib.error.URLError: <urlopen error [Errno 111] Connection refused>",
     ],
 )
 def test_connectivity_and_timeout_reasons_are_transient(reason):
@@ -37,6 +41,9 @@ def test_connectivity_and_timeout_reasons_are_transient(reason):
         "pod modelserver-0 is in CrashLoopBackOff",
         "ImagePullBackOff: repository does not exist",
         'Error from server (NotFound): secrets "llm-d-hf-token" not found',
+        # A response arrived but failed the smoke test's assertion -- a real
+        # workload problem, not a startup race.
+        "endpoint smoke test failed: AssertionError",
     ],
 )
 def test_workload_failure_reasons_are_not_transient(reason):

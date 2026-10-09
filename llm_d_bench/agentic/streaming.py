@@ -1,4 +1,5 @@
 """Domain-local SSE delivery for Agentic planning and refinement."""
+
 from __future__ import annotations
 
 import asyncio
@@ -51,6 +52,7 @@ def planning_stream_response(
                     await task
 
     return StreamingResponse(
-        events(), media_type="text/event-stream",
+        events(),
+        media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

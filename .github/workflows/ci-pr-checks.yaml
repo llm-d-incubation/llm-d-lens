@@ -106,7 +106,7 @@ jobs:
       - name: Generate MCP catalog
         run: |
           python -m venv .venv
-          .venv/bin/pip install -e .
+          .venv/bin/pip install -e ".[embedded-db]"
           node scripts/generate-mcp-tools.mjs
 
       - name: Type check

@@ -42,8 +42,14 @@ async def _resolve_provider_addresses(hostname: str, port: int) -> list[str]:
 
 async def _public_provider_address(base_url: str) -> str:
     parsed = urlsplit(base_url)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.query or parsed.fragment):
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
         raise UnsafeProviderEndpointError
     decoded_path = parsed.path
     while unquote(decoded_path) != decoded_path:

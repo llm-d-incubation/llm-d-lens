@@ -231,9 +231,7 @@ async def proxy_chat_completions(provider_id: str, request: Annotated[dict, Body
         # exception's type name and/or wrapped cause (e.g. the underlying
         # OSError). Without this, the caller only ever saw "AI provider
         # request failed: ", which gives no hint of what actually went wrong.
-        logger.warning(
-            "event=ai_provider_proxy_failed provider_id=%s error_type=%s", provider_id, type(error).__name__
-        )
+        logger.warning("event=ai_provider_proxy_failed provider_id=%s error_type=%s", provider_id, type(error).__name__)
         raise HTTPException(
             status_code=502,
             detail=f"AI provider request failed ({type(error).__name__}).",

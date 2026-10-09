@@ -1,5 +1,6 @@
 """Shared monitoring Service selection; domain installation and tunnel policies stay local."""
 
+
 def service_name(item: dict) -> str:
     return str((item.get("metadata") or {}).get("name") or "").lower()
 

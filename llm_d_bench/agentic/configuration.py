@@ -12,8 +12,6 @@ from llm_d_bench.utils.artifacts import configuration_checksum
 
 from .planner import PlannedCandidate
 
-_XPU_IMAGE = "ghcr.io/llm-d/llm-d-xpu:v0.9.0"
-
 
 def build_agentic_configuration(
     request: StandardKubernetesServiceRequest,
@@ -45,7 +43,7 @@ def build_agentic_configuration(
     from llm_d_bench.deploy.providers.hardware_profile import runtime_image
 
     runtime = {
-        "image": runtime_image(_XPU_IMAGE),
+        "image": runtime_image(),
         "imageMode": "use-upstream-image",
         "modelSource": "auto-cache",
     }

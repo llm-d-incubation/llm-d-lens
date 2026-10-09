@@ -101,7 +101,7 @@ def validate_guide_settings(content: dict[str, Any], manifest: str, guide: str) 
             for doc in documents
             if doc.get("kind") == "ResourceClaimTemplate"
             for request in doc.get("spec", {}).get("spec", {}).get("devices", {}).get("requests", [])
-        if request.get("exactly", {}).get("deviceClassName") == _rdma_device_class()
+            if request.get("exactly", {}).get("deviceClassName") == _rdma_device_class()
         ]
         if not requests or any(request["exactly"].get("count") != nic_count for request in requests):
             raise ValueError("NIC count does not match the rendered RDMA requests")

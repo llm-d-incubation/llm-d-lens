@@ -9,9 +9,9 @@ import yaml
 
 from llm_d_bench.deploy.providers.guide_adapter import GuideDeploymentArtifact
 from llm_d_bench.deploy.providers.precise_prefix_cache_routing import (
+    _EPP_ENDPOINT_SETTLE_SECONDS,
     UPSTREAM_SAMPLE_PEAK_PREFILL_THROUGHPUT,
     PrecisePrefixCacheRoutingAdapter,
-    _EPP_ENDPOINT_SETTLE_SECONDS,
 )
 
 

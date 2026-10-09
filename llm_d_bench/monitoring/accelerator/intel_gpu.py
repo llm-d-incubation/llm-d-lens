@@ -8,8 +8,6 @@ the existing Cluster infrastructure stack (``prometheus.release`` /
 
 from __future__ import annotations
 
-from llm_d_bench.monitoring.command_output import parse_command_json
-
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -19,6 +17,7 @@ from llm_d_bench.monitoring.cluster_stack.models import (
     ComponentDiagnostic,
     HelmReleaseSummary,
 )
+from llm_d_bench.monitoring.command_output import parse_command_json
 from llm_d_bench.utils.kubernetes import (
     cluster_info,
     current_context,

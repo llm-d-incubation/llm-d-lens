@@ -7,8 +7,6 @@ and token flow between hops, plus per-component queue depth.
 
 from __future__ import annotations
 
-from llm_d_bench.monitoring.prometheus import query_vector as _query
-
 import asyncio
 import logging
 import math
@@ -19,6 +17,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from llm_d_bench.hardware.telemetry import combined_device_query
 from llm_d_bench.monitoring.cluster_stack.service import (
     _PROMETHEUS_PORT,
     _find_service,
@@ -30,12 +29,13 @@ from llm_d_bench.monitoring.deployment.service import (
     _deployment_target,
     _discover_epp_service,
 )
+from llm_d_bench.monitoring.prometheus import query_vector as _query
 from llm_d_bench.utils.kubernetes import (
     PortForwardError,
     ensure_port_forward,
     list_resources,
 )
-from llm_d_bench.hardware.telemetry import combined_device_query
+
 from .models import (
     FlowMapComponent,
     FlowMapEdge,
@@ -92,8 +92,6 @@ async def _prometheus_local_port(cluster_id: str | None) -> int | None:
     except PortForwardError:
         logger.warning("Unable to open Prometheus tunnel for flow map", exc_info=True)
         return None
-
-
 
 
 async def _query_range(
@@ -725,20 +723,12 @@ async def collect_benchmark_observability(
         "kv_restore_time_seconds_per_second": (
             f'sum(rate(vllm:kv_offload_total_time{{namespace="{namespace}", transfer_type=~".*_to_GPU"}}[30s]))'
         ),
-        "nixl_transfer_rate_rps": f'sum(rate(vllm:nixl_xfer_time_seconds_count{matcher}[30s]))',
-        "nixl_failed_transfer_rate_rps": f'sum(rate(vllm:nixl_num_failed_transfers{matcher}[30s]))',
-        "nixl_failed_notification_rate_rps": f'sum(rate(vllm:nixl_num_failed_notifications{matcher}[30s]))',
-        "nixl_expired_request_rate_rps": f'sum(rate(vllm:nixl_num_kv_expired_reqs{matcher}[30s]))',
-        "nixl_transfer_bytes_per_second": f'sum(rate(vllm:nixl_bytes_transferred_sum{matcher}[30s]))',
-        "nixl_transfer_latency_p50_ms": f'histogram_quantile(0.50, sum(rate(vllm:nixl_xfer_time_seconds_bucket{matcher}[30s])) by (le)) * 1000',
-        "nixl_transfer_latency_p95_ms": f'histogram_quantile(0.95, sum(rate(vllm:nixl_xfer_time_seconds_bucket{matcher}[30s])) by (le)) * 1000',
-        "nixl_transfer_latency_p99_ms": f'histogram_quantile(0.99, sum(rate(vllm:nixl_xfer_time_seconds_bucket{matcher}[30s])) by (le)) * 1000',
-        "kv_offload_bytes_per_second": f'sum(rate(vllm:kv_offload_total_bytes{{namespace="{namespace}", transfer_type=~"GPU_to_.*"}}[30s]))',
-        "kv_restore_bytes_per_second": f'sum(rate(vllm:kv_offload_total_bytes{{namespace="{namespace}", transfer_type=~".*_to_GPU"}}[30s]))',
-        "kv_offload_time_seconds_per_second": f'sum(rate(vllm:kv_offload_total_time{{namespace="{namespace}", transfer_type=~"GPU_to_.*"}}[30s]))',
-        "kv_restore_time_seconds_per_second": f'sum(rate(vllm:kv_offload_total_time{{namespace="{namespace}", transfer_type=~".*_to_GPU"}}[30s]))',
-        "network_receive_bytes_per_second": f'sum(rate(container_network_receive_bytes_total{{namespace="{namespace}", pod!=""}}[30s]))',
-        "network_transmit_bytes_per_second": f'sum(rate(container_network_transmit_bytes_total{{namespace="{namespace}", pod!=""}}[30s]))',
+        "network_receive_bytes_per_second": (
+            f'sum(rate(container_network_receive_bytes_total{{namespace="{namespace}", pod!=""}}[30s]))'
+        ),
+        "network_transmit_bytes_per_second": (
+            f'sum(rate(container_network_transmit_bytes_total{{namespace="{namespace}", pod!=""}}[30s]))'
+        ),
     }
     # Engine-side token accounting (vLLM v1). Missing exporter series stay
     # unavailable; router cached-token estimates must never substitute here.
@@ -871,8 +861,8 @@ async def collect_benchmark_observability(
             per_endpoint_results,
             cache_config_results,
             xpu_results,
-                device_total_results,
-                device_pod_results,
+            device_total_results,
+            device_pod_results,
         ) = await asyncio.gather(
             asyncio.gather(*(_query_range(client, query, start, end, step_seconds) for query in queries.values())),
             asyncio.gather(
@@ -901,9 +891,9 @@ async def collect_benchmark_observability(
     }
     device_pod_vectors = {
         key: _range_series(result, ("pod", "instance"))
-        for key, result in zip(device_pod_queries, device_pod_results)
+        for key, result in zip(device_pod_queries, device_pod_results, strict=True)
     }
-    device_sources = {key: "DCGM device telemetry" for key in device_points}
+    device_sources = dict.fromkeys(device_points, "DCGM device telemetry")
     if xpu_allocations:
         for key, samples in zip(XPUM_QUERIES, xpu_results, strict=False):
             total, per_pod_result = aggregate_xpum(samples, xpu_allocations, key)
@@ -958,10 +948,7 @@ async def collect_benchmark_observability(
             for key, result in zip(per_pod_queries, per_pod_results, strict=False)
         },
         **{key: ("available" if points else "unavailable") for key, points in device_points.items()},
-        **{
-            f"per_pod.{key}": ("available" if vector else "unavailable")
-            for key, vector in device_pod_vectors.items()
-        },
+        **{f"per_pod.{key}": ("available" if vector else "unavailable") for key, vector in device_pod_vectors.items()},
         **{
             f"router.{key}": ("available" if result else "unavailable")
             for key, result in zip(router_queries, router_results, strict=False)

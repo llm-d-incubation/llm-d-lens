@@ -86,7 +86,7 @@
     "node_selector": { "intel.feature.node.kubernetes.io/gpu": "true" },
     "resource_name": null,
     "supports_pci_allowlist": true,
-    "runtime_image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0"
+    "runtime_image": "ghcr.io/llm-d/llm-d-xpu:v0.10.0"
   },
   "evaluation_profile": "intel-xpu",
   "planning": {

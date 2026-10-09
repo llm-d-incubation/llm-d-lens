@@ -13,11 +13,11 @@ See ``docs/fern/pages/api-reference/model-cache.mdx`` for the full design.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 import json
 import logging
 import os
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 
 from llm_d_bench.model_cache.contracts import ModelCacheEntry, ModelSourceKind, NodeDownloadStatus, TokenSourceMode
@@ -378,8 +378,12 @@ async def _ensure_token_secret(entry: ModelCacheEntry, *, namespace: str) -> Non
 
 
 async def launch_cache_jobs(
-    entry: ModelCacheEntry, *, volume: StorageVolume, nodes: list[str],
-    action: str, command_for_entry: Callable[[ModelCacheEntry], list[str]],
+    entry: ModelCacheEntry,
+    *,
+    volume: StorageVolume,
+    nodes: list[str],
+    action: str,
+    command_for_entry: Callable[[ModelCacheEntry], list[str]],
     append: bool = False,
 ) -> ModelCacheEntry:
     """Apply per-node Jobs, publishing in-progress only after all submissions succeed.
@@ -409,7 +413,10 @@ async def start_download(
     await _ensure_token_secret(entry, namespace=_pvc_namespace(volume))
     nodes = nodes or await _target_nodes(entry, volume)
     return await launch_cache_jobs(
-        entry, volume=volume, nodes=nodes, action="download",
+        entry,
+        volume=volume,
+        nodes=nodes,
+        action="download",
         command_for_entry=_download_command,
     )
 
@@ -466,8 +473,12 @@ async def start_download_for_new_nodes(entry: ModelCacheEntry, *, volume: Storag
         return None
     await _ensure_token_secret(entry, namespace=_pvc_namespace(volume))
     return await launch_cache_jobs(
-        entry, volume=volume, nodes=new_nodes, action="download",
-        command_for_entry=_download_command, append=True,
+        entry,
+        volume=volume,
+        nodes=new_nodes,
+        action="download",
+        command_for_entry=_download_command,
+        append=True,
     )
 
 
@@ -477,7 +488,10 @@ async def start_delete(
     """Create the delete Job(s) for an entry, mirroring ``start_download``'s topology."""
     nodes = nodes or [progress.node for progress in entry.node_progress] or await _target_nodes(entry, volume)
     return await launch_cache_jobs(
-        entry, volume=volume, nodes=nodes, action="delete",
+        entry,
+        volume=volume,
+        nodes=nodes,
+        action="delete",
         command_for_entry=_delete_command,
     )
 

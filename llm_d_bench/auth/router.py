@@ -718,9 +718,7 @@ async def get_secret_key_status() -> dict[str, Any]:
 async def rotate_secret_key(body: RotateSecretKeyRequest, request: Request) -> dict[str, Any]:
     service = default_service()
     actor = _principal(request)
-    result = master_key.rotate_master_key(
-        get_settings(), body.new_key, provider_dao=service.identity_provider_dao
-    )
+    result = master_key.rotate_master_key(get_settings(), body.new_key, provider_dao=service.identity_provider_dao)
     service.audit(
         "secret_key_rotated",
         actor=actor,

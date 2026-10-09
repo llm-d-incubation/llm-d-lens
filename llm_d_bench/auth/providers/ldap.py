@@ -23,9 +23,7 @@ _FILTER_ESCAPES = {"\\": "\\5c", "*": "\\2a", "(": "\\28", ")": "\\29", "\x00": 
 #: Default filter selecting group entries; overridable via ``group_filter``.
 #: Excludes containers such as ``organizationalUnit`` that a ``(objectClass=*)``
 #: search under ``group_base_dn`` would otherwise import as empty groups.
-_DEFAULT_GROUP_FILTER = (
-    "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))"
-)
+_DEFAULT_GROUP_FILTER = "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))"
 
 
 def escape_filter_value(value: str) -> str:

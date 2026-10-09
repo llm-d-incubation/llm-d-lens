@@ -9,8 +9,7 @@ instead of a per-instance directory.
 
 from __future__ import annotations
 
-from llm_d_bench.monitoring.operation_runtime import MonitoringOperationManager, installation_environment, run_install_command
-
+import asyncio
 import os
 import re
 import time
@@ -21,6 +20,11 @@ from pathlib import Path
 
 from llm_d_bench.db.dao.monitoring_accelerator_operation import (
     MonitoringAcceleratorOperationDao,
+)
+from llm_d_bench.monitoring.operation_runtime import (
+    MonitoringOperationManager,
+    installation_environment,
+    run_install_command,
 )
 from llm_d_bench.utils.kubernetes import kubeconfig_environment
 from llm_d_bench.utils.shell import shell
@@ -78,7 +82,9 @@ class AcceleratorOperationManager(MonitoringOperationManager):
     ) -> AcceleratorOperationResponse:
         key = (context or "", request.namespace)
         return await self.queue_operation(
-            key=key, idempotency_key=idempotency_key, cluster_id=cluster_id,
+            key=key,
+            idempotency_key=idempotency_key,
+            cluster_id=cluster_id,
             create=lambda: AcceleratorOperationResponse(
                 operation_id=uuid.uuid4().hex,
                 status="queued",
@@ -107,6 +113,7 @@ class AcceleratorOperationManager(MonitoringOperationManager):
         allowed_env = installation_environment(cluster_id, kubeconfig_environment)
         timeout = float(os.getenv("MONITORING_INSTALL_TIMEOUT_SECONDS", "900"))
         try:
+
             def on_line(line):
                 lowered = line.lower()
                 if "waiting for" in lowered or "pending" in lowered:
@@ -119,7 +126,11 @@ class AcceleratorOperationManager(MonitoringOperationManager):
                 self.store.save(operation, cluster_id=cluster_id)
 
             operation.exit_code = await run_install_command(
-                argv, spawn=shell.spawn, env=allowed_env, timeout=timeout, on_line=on_line,
+                argv,
+                spawn=shell.spawn,
+                env=allowed_env,
+                timeout=timeout,
+                on_line=on_line,
             )
             if operation.exit_code != 0:
                 raise RuntimeError(f"helm install exited with code {operation.exit_code}")

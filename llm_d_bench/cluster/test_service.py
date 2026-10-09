@@ -776,10 +776,16 @@ async def test_create_hf_token_secret_creates_when_absent(monkeypatch):
 
 def test_component_status_exposes_per_profile_device_plugins():
     resources = [
-        {"kind": "DaemonSet", "metadata": {"name": "intel-gpu-plugin"},
-         "status": {"desiredNumberScheduled": 1, "numberReady": 1}},
-        {"kind": "DaemonSet", "metadata": {"name": "nvidia-device-plugin-daemonset"},
-         "status": {"desiredNumberScheduled": 1, "numberReady": 1}},
+        {
+            "kind": "DaemonSet",
+            "metadata": {"name": "intel-gpu-plugin"},
+            "status": {"desiredNumberScheduled": 1, "numberReady": 1},
+        },
+        {
+            "kind": "DaemonSet",
+            "metadata": {"name": "nvidia-device-plugin-daemonset"},
+            "status": {"desiredNumberScheduled": 1, "numberReady": 1},
+        },
     ]
     status = service.component_status(resources)
     assert status["intelDevicePlugin"]["installed"] is True
@@ -788,10 +794,12 @@ def test_component_status_exposes_per_profile_device_plugins():
 
     from llm_d_bench.cluster.models import ComponentsSummary
 
-    ComponentsSummary.model_validate({
-        **status,
-        "monitoring": {"installed": False, "ready": 0, "desired": 0, "status": "missing"},
-    })
+    ComponentsSummary.model_validate(
+        {
+            **status,
+            "monitoring": {"installed": False, "ready": 0, "desired": 0, "status": "missing"},
+        }
+    )
 
 
 def test_hardware_summary_exposes_per_vendor_buckets():

@@ -64,4 +64,7 @@ def test_routing_workload_instances_do_not_share_nested_mutable_state():
     optimized = provider_capability("optimized-baseline")["evaluation"]
     precise = provider_capability("precise-prefix-cache-routing")["evaluation"]
     assert optimized["recommended_workload"]["shared_prefix"] is not precise["recommended_workload"]["shared_prefix"]
-    assert optimized["recommended_workload"]["shared_prefix"] is not optimized["goals"][0]["scenarios"][0]["benchmark"]["shared_prefix"]
+    assert (
+        optimized["recommended_workload"]["shared_prefix"]
+        is not optimized["goals"][0]["scenarios"][0]["benchmark"]["shared_prefix"]
+    )

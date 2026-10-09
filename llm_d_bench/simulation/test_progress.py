@@ -1,21 +1,25 @@
 """Shared progress must retain request totals and Pod readiness gating."""
+
 import asyncio
 from types import SimpleNamespace
 
 import pytest
 
-from .progress import report_request_progress
 from .backends.aiperf import _error_message as aiperf_error
 from .backends.trace_replayer import _error_message as replayer_error
+from .progress import report_request_progress
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("counts,percent,text", [
-    ((4, 8), 50, "4 / 8 requests completed"),
-    ((10, 8), 99, "10 / 8 requests completed"),
-    ((4, None), 0, "4 requests completed"),
-    ((4, 0), 0, "4 / 0 requests completed"),
-])
+@pytest.mark.parametrize(
+    "counts,percent,text",
+    [
+        ((4, 8), 50, "4 / 8 requests completed"),
+        ((10, 8), 99, "10 / 8 requests completed"),
+        ((4, None), 0, "4 requests completed"),
+        ((4, 0), 0, "4 / 0 requests completed"),
+    ],
+)
 async def test_progress_waits_for_readiness_and_preserves_totals(counts, percent, text):
     ready, observed = asyncio.Event(), asyncio.Event()
     calls, updates = [], []
@@ -28,9 +32,13 @@ async def test_progress_waits_for_readiness_and_preserves_totals(counts, percent
         updates.append((value, message))
         observed.set()
 
-    task = asyncio.create_task(report_request_progress(
-        SimpleNamespace(progress=update), read_counts, ready_event=ready,
-    ))
+    task = asyncio.create_task(
+        report_request_progress(
+            SimpleNamespace(progress=update),
+            read_counts,
+            ready_event=ready,
+        )
+    )
     try:
         await asyncio.sleep(0)
         assert not calls

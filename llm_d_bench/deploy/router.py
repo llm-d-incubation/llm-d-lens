@@ -405,9 +405,13 @@ async def grant_execution_access(execution_id: str, body: ShareRequest, request:
 async def revoke_execution_access(execution_id: str, binding_id: str, request: Request = None) -> Response:
     context = _require_execution(execution_id)
     owner = _owner_for_run(context.run_id)
-    _share_requirements_met(current_principal(request), run_id=context.run_id, cluster_id=context.cluster_id, owner=owner)
+    _share_requirements_met(
+        current_principal(request), run_id=context.run_id, cluster_id=context.cluster_id, owner=owner
+    )
     default_service().revoke_resource_share(
-        binding_id, resource_type="deployment_execution", resource_id=execution_id,
+        binding_id,
+        resource_type="deployment_execution",
+        resource_id=execution_id,
         cluster_id=context.cluster_id,
     )
     return Response(status_code=204)
@@ -502,9 +506,16 @@ async def revoke_run_access(run_id: str, binding_id: str, request: Request = Non
     run = _store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="deployment run not found")
-    _share_requirements_met(current_principal(request), run_id=run_id, cluster_id=run.provenance.get("cluster_server_id"), owner=_owner_for_run(run_id))
+    _share_requirements_met(
+        current_principal(request),
+        run_id=run_id,
+        cluster_id=run.provenance.get("cluster_server_id"),
+        owner=_owner_for_run(run_id),
+    )
     default_service().revoke_resource_share(
-        binding_id, resource_type="deployment_run", resource_id=run_id,
+        binding_id,
+        resource_type="deployment_run",
+        resource_id=run_id,
         cluster_id=run.provenance.get("cluster_server_id"),
     )
     return Response(status_code=204)

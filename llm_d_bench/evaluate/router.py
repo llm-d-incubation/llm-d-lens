@@ -2542,9 +2542,7 @@ async def _kubernetes_resource_snapshot(session_id: str | None, namespace: str |
     pods = await _kubectl_json(["get", "pods", "-n", namespace], environment) if namespace else None
     nodes = await _kubectl_json(["get", "nodes"], environment)
     scrape_path = _xpumd_metrics_proxy_path()
-    gpu_telemetry = (
-        _parse_xpumd_metrics(await _kubectl_raw(scrape_path, environment)) if scrape_path else None
-    )
+    gpu_telemetry = _parse_xpumd_metrics(await _kubectl_raw(scrape_path, environment)) if scrape_path else None
     if pods is None and nodes is None:
         return None
     pod_allocations = []
@@ -3390,9 +3388,7 @@ async def _execute(run_id: str) -> None:
             spec = SharedPrefixWorkloadSpec(**run["shared_prefix"])
             workload_path = output / "workload.yaml"
             workload_path.write_text(
-                _shared_prefix_workload_yaml(
-                    spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key
-                ),
+                _shared_prefix_workload_yaml(spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key),
                 encoding="utf-8",
             )
             command = _base_command(output) + ["--workload-file-path", str(workload_path)]

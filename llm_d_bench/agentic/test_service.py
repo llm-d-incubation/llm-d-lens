@@ -1,7 +1,6 @@
 """Tests for Agentic Deploy's delegation to existing Prism services."""
 
 import asyncio
-from dataclasses import replace
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -605,6 +604,7 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
     )
     monkeypatch.setattr("llm_d_bench.agentic.planner.DeterministicPlanner.score", score_spy)
     monkeypatch.setattr("llm_d_bench.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: Client())
+
     async def validate_provider(_url):
         pass
 
@@ -852,11 +852,17 @@ def test_create_falls_back_only_when_all_ai_generated_candidates_are_invalid(mon
     )
 
 
-@pytest.mark.parametrize(("error_message", "reason", "detail"), [
-    ('MCP tool "search_candidates" failed: unavailable', "mcp_unavailable", None),
-    ("AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
-     "invalid_response", "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)"),
-])
+@pytest.mark.parametrize(
+    ("error_message", "reason", "detail"),
+    [
+        ('MCP tool "search_candidates" failed: unavailable', "mcp_unavailable", None),
+        (
+            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "invalid_response",
+            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+        ),
+    ],
+)
 def test_create_falls_back_when_ai_generator_mcp_is_unavailable(monkeypatch, tmp_path, error_message, reason, detail):
     service = AgenticDeploymentService()
     monkeypatch.setattr(
@@ -897,7 +903,9 @@ def test_create_falls_back_when_ai_generator_mcp_is_unavailable(monkeypatch, tmp
     assert all(candidate.performance_estimate_source == "aic_estimate" for candidate in run.candidates)
     snapshot = json.loads((tmp_path / run.planning_snapshot_path).read_text(encoding="utf-8"))
     assert snapshot["generator"]["fallback_detail"] == detail
-    assert all(candidate["performance_estimate_source"] == "aic_estimate" for candidate in snapshot["candidate_catalog"])
+    assert all(
+        candidate["performance_estimate_source"] == "aic_estimate" for candidate in snapshot["candidate_catalog"]
+    )
 
 
 def test_missing_requested_provider_estimates_fallback_candidates(monkeypatch):
@@ -1284,5 +1292,7 @@ def test_approve_rejects_a_candidate_when_preflight_capacity_validation_fails(mo
     monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", resolve)
     run = asyncio.run(service.create(_request()))
 
-    with pytest.raises(ValueError, match="(fails pre-flight capacity validation|satisfies current resource constraints)"):
+    with pytest.raises(
+        ValueError, match="(fails pre-flight capacity validation|satisfies current resource constraints)"
+    ):
         asyncio.run(service.approve(run.id))

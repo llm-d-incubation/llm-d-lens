@@ -9,8 +9,6 @@ of a per-instance directory.
 
 from __future__ import annotations
 
-from llm_d_bench.monitoring.operation_runtime import MonitoringOperationManager, installation_environment, run_install_command
-
 import os
 import re
 import uuid
@@ -20,6 +18,11 @@ from pathlib import Path
 
 from llm_d_bench.db.dao.monitoring_cluster_stack_operation import (
     MonitoringClusterStackOperationDao,
+)
+from llm_d_bench.monitoring.operation_runtime import (
+    MonitoringOperationManager,
+    installation_environment,
+    run_install_command,
 )
 from llm_d_bench.utils.kubernetes import kubeconfig_environment
 from llm_d_bench.utils.shell import shell
@@ -68,7 +71,9 @@ class ClusterStackOperationManager(MonitoringOperationManager):
     ) -> ClusterStackOperationResponse:
         key = (context or "", request.namespace)
         return await self.queue_operation(
-            key=key, idempotency_key=idempotency_key, cluster_id=cluster_id,
+            key=key,
+            idempotency_key=idempotency_key,
+            cluster_id=cluster_id,
             create=lambda: ClusterStackOperationResponse(
                 operation_id=uuid.uuid4().hex,
                 status="queued",
@@ -145,6 +150,7 @@ class ClusterStackOperationManager(MonitoringOperationManager):
     ) -> int:
         allowed_env = installation_environment(cluster_id, kubeconfig_environment)
         timeout = float(os.getenv("MONITORING_INSTALL_TIMEOUT_SECONDS", "900"))
+
         def on_line(line):
             lowered = line.lower()
             if "uninstall" in lowered or "deleting" in lowered:

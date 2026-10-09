@@ -1195,6 +1195,7 @@ guidePlanningRouter.post('/api/guide-planning/plan', async (req, res) => {
                 : `https://github.com/${manifestSet.source.repository}//${relative}?ref=${manifestSet.source.commit}`;
             deploymentBundle = await measure('bundle', () => buildGuideDeploymentBundle({
                 guide, source: manifestSet.source, model, blockSize: blockSizes[0], routerValues: guideSettings.routerValues,
+                accelerator: resolvedAccelerator,
                 readSource: async (relative) => manifestSet.localRoot
                     ? fs.promises.readFile(sourcePath(relative), 'utf8')
                     : fetchText(githubContentUrl(manifestSet.source.repository, relative, manifestSet.source.commit), 'application/vnd.github.raw+json'),

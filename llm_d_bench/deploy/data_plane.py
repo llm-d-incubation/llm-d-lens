@@ -65,9 +65,7 @@ def evaluation_owned(provenance: Mapping[str, Any] | None) -> bool:
     """
     provenance = provenance or {}
     return bool(
-        provenance.get("evaluate_workflow")
-        or provenance.get("evaluation_id")
-        or provenance.get("evaluation_case_id")
+        provenance.get("evaluate_workflow") or provenance.get("evaluation_id") or provenance.get("evaluation_case_id")
     )
 
 

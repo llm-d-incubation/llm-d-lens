@@ -13,7 +13,6 @@ from .capacity_planner import (
     allocatable_kv_cache_memory,
     available_gpu_memory,
     estimate_vllm_activation_memory,
-    estimate_vllm_cuda_graph_memory,
     estimate_vllm_non_torch_memory,
     find_possible_tp,
     get_text_config,
@@ -22,7 +21,6 @@ from .capacity_planner import (
     max_concurrent_requests,
     max_context_len,
     model_memory_req,
-    model_total_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,7 +73,10 @@ def _log_config_suggestions(msg_fn: Any, params: ValidationParams) -> None:
     msg_fn(f"Suggestion: Increase Tensor Parallelism (e.g. TP={next_tp}) to shard model across more GPUs.")
     if params.max_model_len > 2048:
         half_ctx = max(2048, params.max_model_len // 2)
-        msg_fn(f"Suggestion: Decrease max_model_len from {params.max_model_len} to {half_ctx} to reduce KV cache requirements.")
+        msg_fn(
+            f"Suggestion: Decrease max_model_len from {params.max_model_len} to {half_ctx} "
+            "to reduce KV cache requirements."
+        )
     if params.gpu_memory_util < 0.95:
         msg_fn("Suggestion: If GPU is dedicated, consider increasing gpu_memory_utilization up to 0.95.")
 
@@ -101,7 +102,6 @@ def validate_vllm_params(
         log.info(full)
 
     per_replica_gpus = gpus_required(tp=params.tp, pp=params.pp, dp=params.dp)
-    total_required_gpus = per_replica_gpus * params.replicas if params.replicas > 0 else 0
 
     if params.accelerator_nr > 0 and per_replica_gpus > params.accelerator_nr:
         log_err(
@@ -128,20 +128,14 @@ def validate_vllm_params(
             try:
                 valid_tp = find_possible_tp(model_config)
                 if params.tp not in valid_tp:
-                    log_err(
-                        f"TP={params.tp} is invalid for {model}. "
-                        f"Valid values: {valid_tp}"
-                    )
+                    log_err(f"TP={params.tp} is invalid for {model}. Valid values: {valid_tp}")
             except Exception as exc:
                 log_info(f"Could not compute valid TP values for {model}: {exc}")
 
             try:
                 valid_max_ctx = max_context_len(model_config)
                 if valid_max_ctx and params.max_model_len > valid_max_ctx:
-                    log_err(
-                        f"maxModelLen={params.max_model_len} exceeds "
-                        f"model limit of {valid_max_ctx} for {model}"
-                    )
+                    log_err(f"maxModelLen={params.max_model_len} exceeds model limit of {valid_max_ctx} for {model}")
             except Exception as exc:
                 log_info(f"Could not determine max context length for {model}: {exc}")
 
@@ -160,8 +154,6 @@ def validate_vllm_params(
                 fallback_weight_gib=params.fallback_weight_gib,
             )
             activation_mem = estimate_vllm_activation_memory(model_config, tp=params.tp)
-            cuda_graph_mem = estimate_vllm_cuda_graph_memory()
-            non_torch_mem = estimate_vllm_non_torch_memory(params.tp, params.pp)
 
             avail_kv = allocatable_kv_cache_memory(
                 model,

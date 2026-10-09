@@ -2,12 +2,17 @@
 # artifact -- see scripts/generate-mcp-tools.mjs and server/mcp/specialTools.ts
 # (the real hand-written source). It is gitignored, so it must be produced
 # here rather than assumed to already exist in the build context. Generating
-# it needs BOTH Python (to dump the llm_d_bench FastAPI app's OpenAPI schema)
-# and Node (to run the generator script itself), so this starts from the
-# Python image and layers Node on top via apt -- the reverse (starting from
-# a Node image and installing Python) hit a Python 3.13/numpy wheel
-# incompatibility for the backend's aiconfigurator dependency.
-FROM python:3.14-slim as mcp-tools
+# it needs BOTH Python (to dump the llm_d_bench FastAPI app's OpenAPI schema,
+# which requires the optional "embedded-db" extra -- see
+# llm_d_bench/db/settings.py -- since module import eagerly opens a DB
+# session) and Node (to run the generator script itself), so this starts
+# from the Python image and layers Node on top via apt -- the reverse
+# (starting from a Node image and installing Python) hit a Python
+# 3.13/numpy wheel incompatibility for the backend's aiconfigurator
+# dependency. Pinned to 3.12 (matching the "frontend-and-server" CI job's
+# Python version) because pgserver -- the embedded-db extra's PostgreSQL
+# backend -- does not yet publish a 3.14 build.
+FROM python:3.12-slim as mcp-tools
 
 WORKDIR /app
 
@@ -19,7 +24,7 @@ COPY pyproject.toml ./
 COPY llm_d_bench ./llm_d_bench
 RUN python3 -m venv .venv \
     && .venv/bin/pip install --no-cache-dir --upgrade pip \
-    && .venv/bin/pip install --no-cache-dir -e .
+    && .venv/bin/pip install --no-cache-dir -e ".[embedded-db]"
 
 COPY scripts/generate-mcp-tools.mjs ./scripts/generate-mcp-tools.mjs
 COPY server/mcp/specialTools.ts ./server/mcp/specialTools.ts

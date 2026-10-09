@@ -134,8 +134,12 @@ def aggregate_xpum(samples, allocations, metric):
     utilization = metric == "gpu_utilization_percent"
     for sample in samples:
         labels = sample.get("metric") or {}
-        node = (labels.get(XPUM_LABELS["node"]) or labels.get("nodename")
-                or labels.get("hostname") or labels.get("k8s_node_name"))
+        node = (
+            labels.get(XPUM_LABELS["node"])
+            or labels.get("nodename")
+            or labels.get("hostname")
+            or labels.get("k8s_node_name")
+        )
         identity = (node, str(labels.get(XPUM_LABELS["pci"]) or "").lower())
         allocation = allocations.get(identity)
         if not allocation:

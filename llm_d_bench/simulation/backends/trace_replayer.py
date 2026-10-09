@@ -32,6 +32,7 @@ from ..models import (
 )
 from ..process import CommandResult, RunContext
 from ..traces import BailianTrace, BaseTrace, MooncakeTrace, trace_registry
+from .analytics import artifact_error_message
 from .analytics import (
     completion_timeline as _completion_timeline,
 )
@@ -53,7 +54,6 @@ from .analytics import (
 from .analytics import (
     visit_json_lines as _visit_json_lines,
 )
-from .analytics import artifact_error_message
 from .base import CommandBackend
 from .base import artifact as _artifact
 from .registry import register_backend

@@ -98,16 +98,18 @@ async def resolve_planning_facts(
         if loaded is not None:
             model_config_dict = loaded.raw if hasattr(loaded, "raw") else getattr(loaded, "to_dict", lambda: None)()
             if model_config_dict is not None and isinstance(model_config_dict, dict) and include_supplementary_evidence:
-                evidence.append(PlanningEvidence(
-                    id=f"capacity-planner:{model_name}",
-                    source="capacity-planner",
-                    status="available",
-                    details={
-                        "model_name": model_name,
-                        "architectures": model_config_dict.get("architectures", []),
-                        "num_attention_heads": model_config_dict.get("num_attention_heads"),
-                    },
-                ))
+                evidence.append(
+                    PlanningEvidence(
+                        id=f"capacity-planner:{model_name}",
+                        source="capacity-planner",
+                        status="available",
+                        details={
+                            "model_name": model_name,
+                            "architectures": model_config_dict.get("architectures", []),
+                            "num_attention_heads": model_config_dict.get("num_attention_heads"),
+                        },
+                    )
+                )
 
     aic_predictions = tuple(
         prediction

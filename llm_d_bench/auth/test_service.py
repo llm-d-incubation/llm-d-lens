@@ -290,7 +290,11 @@ async def test_login_routes_an_existing_directory_user_through_its_own_provider_
             async def authenticate(self, username, password):
                 if record.id != provider.id:
                     return None
-                return ExternalIdentity(external_id="uid=sabrina,dc=x", username="sabrina") if password == "real-ldap-pw" else None
+                return (
+                    ExternalIdentity(external_id="uid=sabrina,dc=x", username="sabrina")
+                    if password == "real-ldap-pw"  # noqa: S105 -- test fixture value, not a secret
+                    else None
+                )
 
         return _FakeProvider()
 
@@ -402,9 +406,7 @@ def test_delete_identity_provider_removes_external_identities_and_authorizations
         GroupRecord(name="ldap-del-group", source="ldap", provider_id=provider.id, external_id="cn=del,dc=x")
     )
     maintainer = service.require_role("maintainer")
-    service.user_binding_dao.create(
-        UserRoleBindingRecord(user_id=user.id, role_id=maintainer.id, scope_type="global")
-    )
+    service.user_binding_dao.create(UserRoleBindingRecord(user_id=user.id, role_id=maintainer.id, scope_type="global"))
     service.group_binding_dao.create(
         GroupRoleBindingRecord(group_id=group.id, role_id=maintainer.id, scope_type="global")
     )

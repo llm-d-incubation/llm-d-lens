@@ -139,9 +139,7 @@ def get_driver_provider(profile_id: str | None = None) -> HardwareProvider:
     if profile_id:
         provider = _PROVIDERS.get(profile_id)
         if provider is None or provider.profile().driver is None:
-            raise HardwareProfileNotFoundError(
-                f"hardware profile {profile_id!r} is not registered with driver support"
-            )
+            raise HardwareProfileNotFoundError(f"hardware profile {profile_id!r} is not registered with driver support")
         return provider
     providers = [provider for provider in _PROVIDERS.values() if provider.profile().driver is not None]
     if not providers:

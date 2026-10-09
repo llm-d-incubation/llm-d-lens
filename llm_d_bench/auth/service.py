@@ -729,9 +729,7 @@ class AuthService:
             if not external_id:
                 continue
             try:
-                group = self._upsert_external_group(
-                    record, external_id, str(descriptor.get("name") or external_id)
-                )
+                group = self._upsert_external_group(record, external_id, str(descriptor.get("name") or external_id))
                 members = await provider.list_group_members(external_id)
             except IdentityProviderError as error:
                 failed.append(external_id)

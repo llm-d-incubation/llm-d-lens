@@ -123,7 +123,11 @@ def _exporter_component(resources: list[dict[str, Any]]) -> AcceleratorComponent
     ]
     status = "ready" if desired > 0 and ready >= desired else "progressing"
     return AcceleratorComponent(
-        name="dcgm_exporter", status=status, ready=ready, desired=desired, source="dcgm_exporter",
+        name="dcgm_exporter",
+        status=status,
+        ready=ready,
+        desired=desired,
+        source="dcgm_exporter",
         diagnostics=diagnostics,
     )
 
@@ -140,8 +144,12 @@ def _dashboard_component(items: list[dict[str, Any]]) -> AcceleratorComponent:
     if not items:
         return AcceleratorComponent(name="grafana_dashboard", status="missing", kind="configmap", source="none")
     return AcceleratorComponent(
-        name="grafana_dashboard", status="ready", kind="configmap",
-        ready=len(items), desired=len(items), source="dcgm_exporter",
+        name="grafana_dashboard",
+        status="ready",
+        kind="configmap",
+        ready=len(items),
+        desired=len(items),
+        source="dcgm_exporter",
     )
 
 
@@ -149,7 +157,12 @@ def _gpu_nodes_component(nodes: list[dict[str, Any]]) -> AcceleratorComponent:
     count = len(nodes)
     if count == 0:
         return AcceleratorComponent(
-            name="gpu_nodes", status="missing", kind="node", ready=0, desired=0, source="none",
+            name="gpu_nodes",
+            status="missing",
+            kind="node",
+            ready=0,
+            desired=0,
+            source="none",
             diagnostics=[
                 ComponentDiagnostic(
                     severity="warning",
@@ -167,7 +180,9 @@ def _availability(mode: GpuAccess, items: list[dict[str, Any]]) -> AccessModeAva
     label = _LABEL.get(mode, "driver")
     if not items:
         return AccessModeAvailability(
-            mode=mode, available=False, detected=False,
+            mode=mode,
+            available=False,
+            detected=False,
             message=f"NVIDIA GPU {label} DaemonSet was not detected; deploy it first",
         )
     if any(_daemonset_ready(item) for item in items):
@@ -191,12 +206,7 @@ def _derive_status(
     # a missing dashboard is "not enabled" (optional components are satisfied
     # when absent) and must not keep a healthy install degraded.
     dashboard_ok = dashboard_component.status in {"ready", "missing"}
-    if (
-        release.status == "deployed"
-        and exporter.status == "ready"
-        and sm_component.status == "ready"
-        and dashboard_ok
-    ):
+    if release.status == "deployed" and exporter.status == "ready" and sm_component.status == "ready" and dashboard_ok:
         return "ready", "NVIDIA GPU observability is ready"
     return "degraded", "NVIDIA GPU observability requires attention"
 
@@ -262,7 +272,9 @@ class NvidiaGpuProvider:
         )
 
         resources = await k8s.list_resources(
-            "daemonsets,deployments", namespace=namespace, selector=f"app.kubernetes.io/name={_RELEASE_NAME}",
+            "daemonsets,deployments",
+            namespace=namespace,
+            selector=f"app.kubernetes.io/name={_RELEASE_NAME}",
             cluster_id=cluster_id,
         )
         exporter = _exporter_component(resources)
@@ -338,9 +350,7 @@ class NvidiaGpuProvider:
         if not all(check.passed for check in checks):
             return AcceleratorPreflightResponse(allowed=False, status="unknown", checks=checks)
 
-        monitoring_namespace = (
-            monitoring_status.namespace if monitoring_status else _MONITORING_DEFAULT_NAMESPACE
-        )
+        monitoring_namespace = monitoring_status.namespace if monitoring_status else _MONITORING_DEFAULT_NAMESPACE
         try:
             snapshot = await self.discover_status(
                 request.namespace,

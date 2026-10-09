@@ -4,19 +4,15 @@ import pytest
 
 from llm_d_bench.capacity import (
     AttentionType,
-    ConfigWrapper,
     KVCacheDetail,
     ValidationParams,
     allocatable_kv_cache_memory,
     auto_max_model_len,
     check_model_fits_gpu,
     estimate_vllm_activation_memory,
-    estimate_vllm_non_torch_memory,
     evaluate_capacity,
     find_possible_tp,
     max_concurrent_requests,
-    max_context_len,
-    model_memory_req,
     precision_to_byte,
     total_kv_cache_blocks,
     validate_vllm_params,
@@ -277,6 +273,7 @@ def test_evaluate_capacity(llama3_8b_config):
 def test_estimate_capacity_router(llama3_8b_config, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from llm_d_bench.capacity.router import router
 
     monkeypatch.setattr(

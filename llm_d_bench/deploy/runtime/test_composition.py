@@ -151,7 +151,9 @@ def test_concurrent_runs_with_different_accelerators_do_not_share_overlay_state(
     gpu_adapter_again = _build_precise_prefix_cache_routing_provider(gpu_runtime)
 
     guide_root = gpu_runtime.manifest_root
-    assert gpu_adapter._modelserver_source == guide_root / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
+    assert (
+        gpu_adapter._modelserver_source == guide_root / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
+    )
     assert xpu_adapter._modelserver_source == guide_root / "guides/precise-prefix-cache-routing/modelserver/xpu/vllm"
     assert gpu_adapter_again._modelserver_source == gpu_adapter._modelserver_source
 
@@ -306,3 +308,54 @@ async def test_published_deployment_names_scope_commands_and_smoke_test(tmp_path
     monkeypatch.setattr(composition, "spawn", spawn)
     assert await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80") is None
     assert spawn.call_args.args[0][2] == "deployment/published-decode"
+    # The smoke test must run `python3`: the official vllm/vllm-openai image
+    # only installs `python3` via update-alternatives, not a bare `python`
+    # (a prior `python` command failed with "executable file not found").
+    assert spawn.call_args.args[0][-3] == "python3"
+
+
+@pytest.mark.asyncio
+async def test_smoke_test_failure_reason_preserves_connectivity_detail(tmp_path, monkeypatch):
+    """A model server still loading rejects connections, not a workload bug.
+
+    The reason returned must still contain that connectivity detail (not a
+    generic "failed" string) so `_readiness_is_transient` can tell this
+    startup race apart from a genuine failure (see
+    `test_readiness_transient.py`).
+    """
+    from unittest.mock import AsyncMock
+
+    from llm_d_bench.deploy.runtime import composition
+
+    namespace = "llm-d-bench-smoke-detail"
+    runner = RegisteredGuideCommandRunner(
+        kubectl_path=tmp_path / "kubectl",
+        helm_path=tmp_path / "helm",
+        namespace_prefix="llm-d-bench-",
+        guide=RegisteredGuideRuntime(
+            guide_id="optimized-baseline",
+            source_ref="main",
+            content_hash="test",
+            maturity="supported",
+            manifest_path=tmp_path / "kustomization.yaml",
+            readiness_deployment_name="decode",
+            endpoint_service_name="epp",
+            endpoint_service_port=80,
+        ),
+        timeout_seconds=30,
+        rendered_overlay_root=tmp_path,
+    )
+    process = AsyncMock()
+    process.returncode = 1
+    process.communicate.return_value = (
+        b"",
+        b"urllib.error.URLError: <urlopen error [Errno 111] Connection refused>\n",
+    )
+    monkeypatch.setattr(composition, "spawn", AsyncMock(return_value=process))
+    reason = await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80")
+    assert reason is not None
+    assert "connection refused" in reason.lower()
+
+    process.communicate.return_value = (b"", b"AssertionError\n")
+    reason = await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80")
+    assert reason == "endpoint smoke test failed: AssertionError"

@@ -1,5 +1,7 @@
 """Monitoring query transport retaining legacy empty-on-failure semantics."""
+
 import httpx
+
 
 async def query_vector(client: httpx.AsyncClient, promql: str) -> list[dict]:
     try:

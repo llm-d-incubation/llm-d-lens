@@ -30,7 +30,6 @@ def cluster_deployment_source(session, requested: dict | None = None) -> dict:
     return source
 
 
-
 _ACCELERATOR_KEYS = ("accelerator", "accelerator_variant", "upstream_variant")
 
 

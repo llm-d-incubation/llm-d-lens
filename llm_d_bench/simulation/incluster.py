@@ -35,8 +35,8 @@ from llm_d_bench.utils.shell import spawn
 
 from .errors import SimulationCancelledError, SimulationConfigurationError, SimulationExecutionError
 from .models import SimulationTask
-from .progress import report_request_progress
 from .process import CommandResult, RunContext, _copy_stream, terminate_process, utc_now
+from .progress import report_request_progress
 from .traces import BaseTrace
 
 _IMAGE_ENV_VAR = "SIMULATION_INCLUSTER_IMAGE"
@@ -155,8 +155,12 @@ def _cluster_proxy_env(cluster_id: str | None = None) -> list[dict[str, str]]:
         except Exception:  # pragma: no cover - simulation must not fail on proxy lookup
             resolved = {}
     env_vars = []
-    http_proxy = (resolved.get("HTTP_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or "").strip()
-    https_proxy = (resolved.get("HTTPS_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "").strip()
+    http_proxy = (
+        resolved.get("HTTP_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
+    ).strip()
+    https_proxy = (
+        resolved.get("HTTPS_PROXY") or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+    ).strip()
     no_proxy = (resolved.get("NO_PROXY") or os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").strip()
     no_proxy_entries = [entry.strip() for entry in no_proxy.split(",") if entry.strip()]
     for entry in ("localhost", "127.0.0.1", ".svc", ".cluster.local", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"):
@@ -203,13 +207,17 @@ def _pod_manifest(
     # the cluster's wizard-created secret into this namespace as ``llm-d-hf-token``
     # (see deploy/service.py); reuse the same secret/key, optional so a namespace
     # without one still runs (unauthenticated, as before).
-    container["env"] = [
-        {
-            "name": name,
-            "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN", "optional": True}},
-        }
-        for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
-    ] + _cluster_proxy_env(cluster_id) + [{"name": key, "value": value} for key, value in (extra_env or {}).items()]
+    container["env"] = (
+        [
+            {
+                "name": name,
+                "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN", "optional": True}},
+            }
+            for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
+        ]
+        + _cluster_proxy_env(cluster_id)
+        + [{"name": key, "value": value} for key, value in (extra_env or {}).items()]
+    )
     return {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -495,10 +503,13 @@ async def execute_command_in_pod(
                 sync_task = asyncio.create_task(sync_partial_artifacts())
             progress_task: asyncio.Task | None = None
             if progress_request_counts is not None:
-
-                progress_task = asyncio.create_task(report_request_progress(
-                    context, progress_request_counts, ready_event=ready_event,
-                ))
+                progress_task = asyncio.create_task(
+                    report_request_progress(
+                        context,
+                        progress_request_counts,
+                        ready_event=ready_event,
+                    )
+                )
 
             try:
                 done, _ = await asyncio.wait(

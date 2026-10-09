@@ -125,9 +125,13 @@ async def execute_command(
         if progress_request_counts is not None:
             started_monotonic = asyncio.get_running_loop().time()
 
-            progress_task = asyncio.create_task(report_request_progress(
-                context, progress_request_counts, started_monotonic=started_monotonic,
-            ))
+            progress_task = asyncio.create_task(
+                report_request_progress(
+                    context,
+                    progress_request_counts,
+                    started_monotonic=started_monotonic,
+                )
+            )
 
         try:
             done, _ = await asyncio.wait(

@@ -28,6 +28,29 @@ function loadModelServerImages(): Record<string, string> {
 }
 const modelServerImages = loadModelServerImages();
 
+/* Some Guides (e.g. tiered-prefix-cache) publish router values per topology
+ * (a single-host overlay plus a multi-host LeaderWorkerSet one for multi-chip
+ * accelerators). The topology is owned by the hardware profile registry,
+ * resolved the same way as the model-server image, so the renderer never
+ * hardcodes a single path for the whole guide. */
+function loadRouterTopologies(): Record<string, string> {
+    const directory = new URL('../llm_d_bench/hardware/profiles/', import.meta.url);
+    const topologies: Record<string, string> = {};
+    for (const entry of fs.readdirSync(directory)) {
+        if (!entry.endsWith('.json')) continue;
+        const profile = JSON.parse(fs.readFileSync(new URL(entry, directory), 'utf8')) as RecordValue;
+        const topology = profile?.deployment?.router_topology;
+        if (typeof topology !== 'string' || !topology) continue;
+        for (const key of profile?.accelerator_keys || []) topologies[String(key).toLowerCase()] = topology;
+    }
+    return topologies;
+}
+const routerTopologies = loadRouterTopologies();
+const DEFAULT_ROUTER_TOPOLOGY = 'single-host';
+function routerTopologyForAccelerator(accelerator?: string): string {
+    return routerTopologies[String(accelerator || '').toLowerCase()] ?? DEFAULT_ROUTER_TOPOLOGY;
+}
+
 /* The deployed manifest must carry the model-server image the backend pins, so
  * the configuration validates. A repository a profile owns is replaced by that
  * profile's full image; a custom image passes through unchanged. */
@@ -56,8 +79,26 @@ function merge(base: RecordValue, overlay: RecordValue): RecordValue {
     return base;
 }
 
-export async function buildGuideDeploymentBundle({ guide, source, model, blockSize, routerValues = '', readSource, renderSource }: {
-    guide: string; source: RecordValue; model: string; blockSize?: number; routerValues?: string;
+/* Guides may publish their router values flat (`router/<file>`) or, on llm-d
+ * versions/topologies that split per-topology, under a topology directory
+ * (`router/<topology>/<file>`). Try the topology path first and fall back to
+ * the flat one, so neither an older pinned llm-d ref nor a guide that never
+ * adopted the split breaks, and a new split never needs a code change. */
+async function readRouterValues(
+    guide: string, routerPath: string, accelerator: string | undefined,
+    // eslint-disable-next-line no-unused-vars
+    readSource: (path: string) => Promise<string>,
+): Promise<string> {
+    const topology = routerTopologyForAccelerator(accelerator);
+    try {
+        return await readSource(`guides/${guide}/router/${topology}/${routerPath}`);
+    } catch {
+        return readSource(`guides/${guide}/router/${routerPath}`);
+    }
+}
+
+export async function buildGuideDeploymentBundle({ guide, source, model, blockSize, routerValues = '', accelerator, readSource, renderSource }: {
+    guide: string; source: RecordValue; model: string; blockSize?: number; routerValues?: string; accelerator?: string;
     // eslint-disable-next-line no-unused-vars
     readSource: (path: string) => Promise<string>; renderSource: (path: string) => Promise<string>;
 }) {
@@ -65,7 +106,7 @@ export async function buildGuideDeploymentBundle({ guide, source, model, blockSi
     if (!routerPath) throw new Error('This Guide does not have a supported deployment bundle.');
     const [baseText, guideText] = await Promise.all([
         readSource('guides/recipes/router/base.values.yaml'),
-        readSource(`guides/${guide}/router/${routerPath}`),
+        readRouterValues(guide, routerPath, accelerator, readSource),
     ]);
     const values = merge(valuesYaml(baseText), valuesYaml(guideText));
     if (routerValues.trim()) merge(values, valuesYaml(routerValues));

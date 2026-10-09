@@ -71,6 +71,21 @@ def overlay_variant(fallback: str = DEFAULT_OVERLAY_VARIANT, *, accelerator: str
     return (profile.deployment.arch if profile else "") or fallback
 
 
+DEFAULT_ROUTER_TOPOLOGY = "single-host"
+
+
+def router_topology(fallback: str = DEFAULT_ROUTER_TOPOLOGY, *, accelerator: str | None = None) -> str:
+    """Topology directory some guides publish per-topology router values under.
+
+    Reads ``deployment.router_topology`` from the active hardware profile
+    instead of hardcoding a single path, so a future multi-host profile (e.g.
+    a multi-chip TPU LeaderWorkerSet) only needs to set this field, never a
+    code change in the guide's path-building logic.
+    """
+    profile = active_profile(accelerator)
+    return (profile.deployment.router_topology if profile else "") or fallback
+
+
 def accelerator_supported(key: str | None) -> bool:
     """True when a registered hardware profile supports this accelerator key."""
     if not key:
@@ -97,11 +112,17 @@ def resource_name(fallback: str | None = None, *, accelerator: str | None = None
     return (profile.deployment.resource_name if profile else None) or fallback
 
 
-# Fallback used only before hardware discovery resolves a profile. The profile's
-# ``deployment.runtime_image`` is the source of truth; each profile owns both the
-# repository and the version, so a vendor/version change is data, not a code
-# branch here.
-DEFAULT_RUNTIME_IMAGE = "ghcr.io/llm-d/llm-d-xpu:v0.9.0"
+def _default_runtime_image() -> str:
+    """Fallback image used only before hardware discovery resolves a profile.
+
+    Reads the default accelerator's (``_ACTIVE_ACCELERATOR_KEY``) own pinned
+    ``deployment.runtime_image`` so the repository and version stay data owned
+    by the hardware profile, never a hardcoded literal here. The bare
+    repository below is a last-resort sentinel for the (practically
+    unreachable) case where that profile is itself missing its image.
+    """
+    profile = resolve_by_accelerator_key(_ACTIVE_ACCELERATOR_KEY)
+    return (profile.deployment.runtime_image if profile else None) or "ghcr.io/llm-d/llm-d-xpu"
 
 
 def _image_repository(image: str) -> str:
@@ -136,7 +157,7 @@ def runtime_image(fallback: str | None = None, *, accelerator: str | None = None
     profile = active_profile(accelerator)
     if profile and profile.deployment.runtime_image:
         return profile.deployment.runtime_image
-    return fallback or DEFAULT_RUNTIME_IMAGE
+    return fallback or _default_runtime_image()
 
 
 def _profile_images_by_repository() -> dict[str, str]:

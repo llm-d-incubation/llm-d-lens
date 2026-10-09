@@ -699,7 +699,9 @@ async def test_compute_pending_sync_lists_cluster_nodes_once(monkeypatch, servic
         entry = ModelCacheEntry(
             clusterId="cluster-1",
             storageVolumeId=volume.id,
-            source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId=f"org/model-{index}")),
+            source=ModelSource(
+                kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId=f"org/model-{index}")
+            ),
             cachePath=f"models--org--model-{index}",
             status=ModelCacheEntryStatus.READY,
             nodeProgress=[NodeDownloadStatus(node="node-1", status="ready")],

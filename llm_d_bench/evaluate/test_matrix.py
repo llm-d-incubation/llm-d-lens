@@ -74,9 +74,7 @@ def test_workload_yaml_binds_gateway_api_key_when_routed():
         "data: {type: random}\n"
     )
     parsed = yaml.safe_load(
-        router._inline_workload_yaml(
-            content, "Qwen/Qwen3-0.6B", "http://gateway:30012", api_key="lens-mk-abc"
-        )
+        router._inline_workload_yaml(content, "Qwen/Qwen3-0.6B", "http://gateway:30012", api_key="lens-mk-abc")
     )
     assert parsed["server"]["api_key"] == "lens-mk-abc"
     assert parsed["server"]["base_url"] == "http://gateway:30012"

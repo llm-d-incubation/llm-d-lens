@@ -88,12 +88,11 @@ async def test_resolve_data_plane_evaluation_owned_skips_gateway_lookup(monkeypa
     def boom(*_args, **_kwargs):  # pragma: no cover - must never run
         raise AssertionError("gateway lookup must be skipped for evaluation-owned deployments")
 
-    monkeypatch.setattr(
-        "llm_d_bench.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", boom
+    monkeypatch.setattr("llm_d_bench.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", boom)
+    assert await resolve_data_plane("llm-d-router", provenance={"evaluate_workflow": True}, cluster_id="cluster-1") == (
+        "standalone_router",
+        None,
     )
-    assert await resolve_data_plane(
-        "llm-d-router", provenance={"evaluate_workflow": True}, cluster_id="cluster-1"
-    ) == ("standalone_router", None)
 
 
 @pytest.mark.asyncio
@@ -101,9 +100,7 @@ async def test_resolve_data_plane_uses_a_ready_shared_gateway(monkeypatch):
     async def ready(_self, _cluster_id):
         return "http://gateway:30012/v1"
 
-    monkeypatch.setattr(
-        "llm_d_bench.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", ready
-    )
+    monkeypatch.setattr("llm_d_bench.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", ready)
     assert await resolve_data_plane("llm-d-router", provenance={}, cluster_id="cluster-1") == (
         "shared_gateway",
         None,
@@ -115,9 +112,7 @@ async def test_resolve_data_plane_falls_back_when_gateway_not_ready(monkeypatch)
     async def not_ready(_self, _cluster_id):
         return None
 
-    monkeypatch.setattr(
-        "llm_d_bench.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", not_ready
-    )
+    monkeypatch.setattr("llm_d_bench.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", not_ready)
     data_plane, warning = await resolve_data_plane("llm-d-router", provenance={}, cluster_id="cluster-1")
     assert data_plane == "standalone_router"
     assert warning and "own router proxy" in warning

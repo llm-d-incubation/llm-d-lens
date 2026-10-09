@@ -103,10 +103,7 @@ def render_image_puller_daemonset(images: list[str], *, namespace: str, name: st
     containers = []
     for index, item in enumerate(images):
         done = _done_file(index)
-        command = (
-            f"nsenter -t 1 -m -u -i -n -p -- crictl pull {shlex.quote(item)} "
-            f"&& touch {done} && sleep infinity"
-        )
+        command = f"nsenter -t 1 -m -u -i -n -p -- crictl pull {shlex.quote(item)} && touch {done} && sleep infinity"
         containers.append(
             {
                 "name": f"pull-{index}",
@@ -141,24 +138,16 @@ def render_image_puller_daemonset(images: list[str], *, namespace: str, name: st
     return yaml.safe_dump(manifest, sort_keys=False)
 
 
-async def start_image_prepull(
-    cluster_id: str, accelerators: list[str], provider: str | None = None
-) -> dict[str, Any]:
+async def start_image_prepull(cluster_id: str, accelerators: list[str], provider: str | None = None) -> dict[str, Any]:
     """Apply the puller DaemonSet for the selected accelerators/provider."""
     images = prepull_images(accelerators, provider)
     if not images:
         return {"state": "idle", "desired": 0, "ready": 0, "nodes": [], "images": []}
     _LAST_IMAGES[cluster_id] = images
     runner = scoped_runner(cluster_id)
-    namespace_manifest = json.dumps(
-        {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": IMAGES_NAMESPACE}}
-    )
-    await runner.run(
-        ["kubectl", "apply", "-f", "-"], input=namespace_manifest, timeout=_APPLY_TIMEOUT
-    )
-    manifest = render_image_puller_daemonset(
-        images, namespace=IMAGES_NAMESPACE, name=IMAGES_NAME, image=PULLER_IMAGE
-    )
+    namespace_manifest = json.dumps({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": IMAGES_NAMESPACE}})
+    await runner.run(["kubectl", "apply", "-f", "-"], input=namespace_manifest, timeout=_APPLY_TIMEOUT)
+    manifest = render_image_puller_daemonset(images, namespace=IMAGES_NAMESPACE, name=IMAGES_NAME, image=PULLER_IMAGE)
     await runner.run(["kubectl", "apply", "-f", "-"], input=manifest, timeout=_APPLY_TIMEOUT)
     return await image_prepull_status(cluster_id, images=images)
 
@@ -180,9 +169,7 @@ async def image_prepull_status(cluster_id: str, *, images: list[str] | None = No
         timeout=_QUERY_TIMEOUT,
     )
     # Per-image readiness, keyed by the container name `pull-<index>`.
-    per_image = [
-        {"name": name, "ready": 0, "desired": desired, "state": "pulling"} for name in resolved_images
-    ]
+    per_image = [{"name": name, "ready": 0, "desired": desired, "state": "pulling"} for name in resolved_images]
     nodes: list[dict[str, Any]] = []
     if pods.returncode == 0:
         for item in json.loads(pods.stdout).get("items", []):

@@ -258,7 +258,9 @@ async def test_trusted_provider_proxy_uses_hostname_after_public_validation(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured_proxy, bypass", [("http://other.example:8080", False), ("http://proxy.example:8080", True)])
+@pytest.mark.parametrize(
+    "configured_proxy, bypass", [("http://other.example:8080", False), ("http://proxy.example:8080", True)]
+)
 async def test_trusted_provider_proxy_requires_matching_active_proxy(monkeypatch, configured_proxy, bypass):
     requests = []
 

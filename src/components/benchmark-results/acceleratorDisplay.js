@@ -39,7 +39,7 @@ export function utilizationLabel(value) {
 // are owned by the hardware profile and applied by the backend, so only the
 // repository is tracked here; the default follows the selected cluster's hardware.
 export const DEFAULT_RUNTIME_IMAGES = {
-  gpu: 'ghcr.io/llm-d/llm-d-cuda',
+  gpu: 'docker.io/vllm/vllm-openai',
   xpu: 'ghcr.io/llm-d/llm-d-xpu',
 };
 

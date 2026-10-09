@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from llm_d_bench.monitoring.service_links import (
-    service_name as _service_name, service_port as _service_port, find_service as _find_service,
-)
-
 import base64
 import json
 import os
@@ -15,6 +11,15 @@ from datetime import UTC, datetime
 import httpx
 
 from llm_d_bench.monitoring.cluster_stack import service as cluster_stack_service
+from llm_d_bench.monitoring.service_links import (
+    find_service as _find_service,
+)
+from llm_d_bench.monitoring.service_links import (
+    service_name as _service_name,
+)
+from llm_d_bench.monitoring.service_links import (
+    service_port as _service_port,
+)
 from llm_d_bench.utils.kubernetes import (
     PortForwardError,
     create_namespace,
@@ -121,12 +126,6 @@ async def verify_status(
 
 _PROMETHEUS_PORT = 9090
 _GRAFANA_PORT = 80
-
-
-
-
-
-
 
 
 def _slugify(title: str) -> str:

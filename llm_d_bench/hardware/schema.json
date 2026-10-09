@@ -124,7 +124,8 @@
         "node_selector": { "$ref": "#/$defs/string_map" },
         "resource_name": { "type": ["string", "null"] },
         "supports_pci_allowlist": { "type": "boolean" },
-        "runtime_image": { "type": ["string", "null"] }
+        "runtime_image": { "type": ["string", "null"] },
+        "router_topology": { "enum": ["single-host", "multi-host", null] }
       }
     },
     "planning": {

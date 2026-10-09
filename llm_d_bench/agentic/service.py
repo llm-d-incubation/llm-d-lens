@@ -13,7 +13,7 @@ from typing import Any
 from llm_d_bench.ai_providers.client import AIProviderClientError
 from llm_d_bench.aic.models import AICEstimateRequest
 from llm_d_bench.aic.service import AICError, estimate
-from llm_d_bench.capacity import ValidationParams, evaluate_capacity, validate_vllm_params
+from llm_d_bench.capacity import ValidationParams, evaluate_capacity
 from llm_d_bench.cluster.sessions import require_active_session
 from llm_d_bench.configuration.models import ModelSecretConfiguration
 from llm_d_bench.deploy.application import deployment_run_manager
@@ -537,7 +537,10 @@ class AgenticDeploymentService:
             candidates = DeterministicPlanner().candidates(resolved.facts)
             if provider_requested:
                 candidates, resolved.facts = await self._estimate_fallback_topologies(
-                    model, candidates, resolved.facts, generation["tool_trace"],
+                    model,
+                    candidates,
+                    resolved.facts,
+                    generation["tool_trace"],
                 )
             candidates, seed_count = await self._merge_historical_seeds(
                 model,
@@ -596,7 +599,10 @@ class AgenticDeploymentService:
                 )
                 candidates = DeterministicPlanner().candidates(result.resolved.facts)
                 candidates, result.resolved.facts = await self._estimate_fallback_topologies(
-                    model, candidates, result.resolved.facts, generation["tool_trace"],
+                    model,
+                    candidates,
+                    result.resolved.facts,
+                    generation["tool_trace"],
                 )
                 candidates, seed_count = await self._merge_historical_seeds(
                     model,
@@ -634,7 +640,10 @@ class AgenticDeploymentService:
             resolved = await resolve_planning_facts(cluster_id, model, facts)
             candidates = DeterministicPlanner().candidates(resolved.facts)
             candidates, resolved.facts = await self._estimate_fallback_topologies(
-                model, candidates, resolved.facts, generation["tool_trace"],
+                model,
+                candidates,
+                resolved.facts,
+                generation["tool_trace"],
             )
             candidates, seed_count = await self._merge_historical_seeds(
                 model,
@@ -1042,17 +1051,19 @@ class AgenticDeploymentService:
             )
 
         # Pre-flight capacity guardrail check
-        capacity_res = evaluate_capacity(ValidationParams(
-            models=[run.request.model],
-            gpu_memory=refreshed.facts.vram_per_gpu_gib,
-            tp=selected.tensor_parallel_size,
-            accelerator_nr=refreshed.facts.free_gpu_count,
-            gpu_memory_util=selected.gpu_memory_utilization,
-            max_model_len=selected.max_model_len,
-            replicas=selected.replicas,
-            model_config=refreshed.facts.model_config_dict,
-            fallback_weight_gib=refreshed.facts.model_weight_gib,
-        ))
+        capacity_res = evaluate_capacity(
+            ValidationParams(
+                models=[run.request.model],
+                gpu_memory=refreshed.facts.vram_per_gpu_gib,
+                tp=selected.tensor_parallel_size,
+                accelerator_nr=refreshed.facts.free_gpu_count,
+                gpu_memory_util=selected.gpu_memory_utilization,
+                max_model_len=selected.max_model_len,
+                replicas=selected.replicas,
+                model_config=refreshed.facts.model_config_dict,
+                fallback_weight_gib=refreshed.facts.model_weight_gib,
+            )
+        )
         if not capacity_res.is_deployable and refreshed.facts.model_config_dict is not None:
             raise ValueError(
                 "selected Agentic candidate fails pre-flight capacity validation: "

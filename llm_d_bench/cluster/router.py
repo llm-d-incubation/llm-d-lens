@@ -226,7 +226,7 @@ async def create_cluster(
         gateway_provider=(gateway_provider or "").strip() or None,
         gateway_public_url=(gateway_public_url or "").strip() or None,
         gateway_port=gateway_port,
-    gateway_authz_host=(gateway_authz_host or "").strip() or _default_lens_host(),
+        gateway_authz_host=(gateway_authz_host or "").strip() or _default_lens_host(),
         inotify_max_user_instances=(inotify_max_user_instances if inotify_max_user_instances is not None else 8192),
         draft=draft,
     )

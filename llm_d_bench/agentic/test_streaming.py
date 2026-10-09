@@ -1,4 +1,5 @@
 """Route-level contracts for shared planning SSE delivery."""
+
 import asyncio
 from types import SimpleNamespace
 
@@ -33,13 +34,16 @@ async def test_progress_precedes_one_complete_event(monkeypatch, mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode,error,expected", [
-    ("create", ValueError("invalid"), "invalid"),
-    ("refine", ValueError("invalid"), "invalid"),
-    ("refine", KeyError("missing"), "'missing'"),
-    ("create", KeyError("missing"), "Unable to generate an Agentic recommendation."),
-    ("refine", RuntimeError("internal detail"), "Unable to recalculate the Agentic recommendation."),
-])
+@pytest.mark.parametrize(
+    "mode,error,expected",
+    [
+        ("create", ValueError("invalid"), "invalid"),
+        ("refine", ValueError("invalid"), "invalid"),
+        ("refine", KeyError("missing"), "'missing'"),
+        ("create", KeyError("missing"), "Unable to generate an Agentic recommendation."),
+        ("refine", RuntimeError("internal detail"), "Unable to recalculate the Agentic recommendation."),
+    ],
+)
 async def test_error_contracts_remain_route_specific(monkeypatch, mode, error, expected):
     async def work(*args, **kwargs):
         raise error

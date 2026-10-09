@@ -185,14 +185,18 @@ def test_share_revocation_is_bound_to_authorized_resource(subject_type, mismatch
         add = service.add_group_binding
         dao = service.group_binding_dao
 
-    scope = dict(scope_type="resource", scope_cluster_id=cluster_id,
-                 scope_resource_type="deployment_execution", scope_resource_id="exec-owned")
+    scope = {
+        "scope_type": "resource",
+        "scope_cluster_id": cluster_id,
+        "scope_resource_type": "deployment_execution",
+        "scope_resource_id": "exec-owned",
+    }
     if mismatch in {"global", "cluster"}:
         scope.update(scope_type=mismatch, scope_resource_type=None, scope_resource_id=None)
         if mismatch == "global":
             scope["scope_cluster_id"] = None
     binding = add(subject_id, role_id, **scope)
-    authorized = dict(resource_type="deployment_execution", resource_id="exec-owned", cluster_id=cluster_id)
+    authorized = {"resource_type": "deployment_execution", "resource_id": "exec-owned", "cluster_id": cluster_id}
     if mismatch in authorized:
         authorized[mismatch] = "other-resource"
 
@@ -209,20 +213,32 @@ def test_share_revocation_is_bound_to_authorized_resource(subject_type, mismatch
 @pytest.mark.parametrize("resource_type", ["deployment_execution", "deployment_run"])
 async def test_deployment_revoke_routes_pass_server_derived_resource_scope(monkeypatch, resource_type):
     from types import SimpleNamespace
+
     from llm_d_bench.deploy import router
 
     calls, guards = [], []
-    monkeypatch.setattr(router, "default_service", lambda: SimpleNamespace(
-        revoke_resource_share=lambda binding_id, **scope: calls.append((binding_id, scope))))
+    monkeypatch.setattr(
+        router,
+        "default_service",
+        lambda: SimpleNamespace(revoke_resource_share=lambda binding_id, **scope: calls.append((binding_id, scope))),
+    )
     monkeypatch.setattr(router, "_share_requirements_met", lambda *args, **kwargs: guards.append(kwargs))
     monkeypatch.setattr(router, "_owner_for_run", lambda run_id: ("owner", None))
-    monkeypatch.setattr(router, "_require_execution", lambda execution_id: SimpleNamespace(
-        run_id="run-owned", cluster_id="cluster-owned"))
-    monkeypatch.setattr(router, "_store", SimpleNamespace(get_run=lambda run_id: SimpleNamespace(
-        provenance={"cluster_server_id": "cluster-owned"})))
+    monkeypatch.setattr(
+        router,
+        "_require_execution",
+        lambda execution_id: SimpleNamespace(run_id="run-owned", cluster_id="cluster-owned"),
+    )
+    monkeypatch.setattr(
+        router,
+        "_store",
+        SimpleNamespace(get_run=lambda run_id: SimpleNamespace(provenance={"cluster_server_id": "cluster-owned"})),
+    )
     resource_id = "exec-owned" if resource_type == "deployment_execution" else "run-owned"
     route = router.revoke_execution_access if resource_type == "deployment_execution" else router.revoke_run_access
     response = await route(resource_id, "binding", None)
     assert response.status_code == 204
     assert guards[0]["cluster_id"] == "cluster-owned"
-    assert calls == [("binding", dict(resource_type=resource_type, resource_id=resource_id, cluster_id="cluster-owned"))]
+    assert calls == [
+        ("binding", {"resource_type": resource_type, "resource_id": resource_id, "cluster_id": "cluster-owned"})
+    ]

@@ -283,7 +283,9 @@ class EvaluateRunRequest(BenchmarkSpec):
     deployment_execution_id: str | None = Field(
         default=None,
         min_length=1,
-        description="A specific deployment execution to benchmark directly. Mutually exclusive with model_service_group_id.",
+        description=(
+            "A specific deployment execution to benchmark directly. Mutually exclusive with model_service_group_id."
+        ),
     )
     model_service_group_id: str | None = Field(
         default=None,
@@ -304,6 +306,7 @@ class EvaluateRunRequest(BenchmarkSpec):
         if self.model_service_group_id and not self.api_key:
             raise ValueError("model_service_group_id requires api_key (a model access token)")
         return self
+
     specification_file: str = Field(
         default="guides/optimized-baseline",
         min_length=1,

@@ -104,16 +104,27 @@ async function githubTagExists(repo, tag) {
   return Boolean(response?.ok);
 }
 
+// GHCR's `tags/list` endpoint paginates (via a `Link` header) and does not
+// guarantee recent tags appear on the first page, so checking `tags.includes()`
+// against a single unpaginated page produces false negatives for repositories
+// with many tags. Query the tag's manifest directly instead: a 200 response
+// means the tag resolves, regardless of how many other tags the repository has.
 async function ghcrTagExists(repository, tag) {
   const tokenResponse = await safeFetch(`https://ghcr.io/token?scope=repository:${repository}:pull&service=ghcr.io`);
   if (!tokenResponse?.ok) return false;
   const { token } = await tokenResponse.json().catch(() => ({}));
-  const response = await safeFetch(`https://ghcr.io/v2/${repository}/tags/list`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  const response = await safeFetch(`https://ghcr.io/v2/${repository}/manifests/${tag}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      Accept: [
+        'application/vnd.oci.image.manifest.v1+json',
+        'application/vnd.oci.image.index.v1+json',
+        'application/vnd.docker.distribution.manifest.v2+json',
+        'application/vnd.docker.distribution.manifest.list.v2+json',
+      ].join(','),
+    },
   });
-  if (!response?.ok) return false;
-  const { tags = [] } = await response.json().catch(() => ({}));
-  return tags.includes(tag);
+  return Boolean(response?.ok);
 }
 
 async function fetchText(url) {

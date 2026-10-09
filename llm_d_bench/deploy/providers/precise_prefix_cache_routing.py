@@ -83,9 +83,7 @@ def _parse_peak_prefill_throughput(output: str) -> int | None:
     tokens/sec``; the Job's own ``PEAK_PREFILL_THROUGHPUT=<n>`` line may also be
     echoed on failure. Return the last positive value, or None.
     """
-    matches = re.findall(
-        r"(?m)(?:^PEAK_PREFILL_THROUGHPUT=|Measured peakPrefillThroughput\s*=\s*)(\d+)", output
-    )
+    matches = re.findall(r"(?m)(?:^PEAK_PREFILL_THROUGHPUT=|Measured peakPrefillThroughput\s*=\s*)(\d+)", output)
     for value in reversed(matches):
         parsed = int(value)
         if parsed > 0:
@@ -337,7 +335,8 @@ class PrecisePrefixCacheRoutingAdapter:
                     and str((item.get("metadata") or {}).get("name") or "").endswith("decode")
                 ):
                     return str(item["metadata"]["name"])
-        return f"precise-prefix-cache-routing-{getattr(self, '_overlay_variant_value', None) or overlay_variant()}-vllm-decode"
+        variant = getattr(self, "_overlay_variant_value", None) or overlay_variant()
+        return f"precise-prefix-cache-routing-{variant}-vllm-decode"
 
     async def readiness(self, execution: dict[str, Any]) -> ValidationResult:
         namespace = execution["namespace"]
@@ -490,8 +489,7 @@ class PrecisePrefixCacheRoutingAdapter:
         measured = _parse_peak_prefill_throughput(output)
         if measured is None:
             raise RuntimeError(
-                "upstream calibration recipe emitted no valid PEAK_PREFILL_THROUGHPUT value: "
-                + output[-1500:].strip()
+                "upstream calibration recipe emitted no valid PEAK_PREFILL_THROUGHPUT value: " + output[-1500:].strip()
             )
         # The recipe leaves its Job behind (it only clears the previous one), and
         # its Completed pod would otherwise read as "not ready" in the

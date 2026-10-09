@@ -81,9 +81,7 @@ class GroupDao(BaseDao):
 
     def get_by_external(self, provider_id: str, external_id: str) -> GroupRecord | None:
         with self._read_only() as session:
-            stmt = select(GroupRow).where(
-                GroupRow.provider_id == provider_id, GroupRow.external_id == external_id
-            )
+            stmt = select(GroupRow).where(GroupRow.provider_id == provider_id, GroupRow.external_id == external_id)
             row = session.scalars(stmt).first()
             return _group_to_record(row) if row else None
 

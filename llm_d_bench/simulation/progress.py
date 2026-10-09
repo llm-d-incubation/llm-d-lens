@@ -1,9 +1,9 @@
 """Request-count progress shared by local and in-cluster Simulation execution."""
+
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,7 +29,8 @@ async def report_request_progress(
             percent = min(99, completed / expected * 100) if expected is not None and expected > 0 else 0
             request_progress = (
                 f"{completed} / {expected} requests completed"
-                if expected is not None else f"{completed} requests completed"
+                if expected is not None
+                else f"{completed} requests completed"
             )
             context.progress(percent, f"Simulation running · {elapsed:.0f}s elapsed · {request_progress}")
         await asyncio.sleep(1)

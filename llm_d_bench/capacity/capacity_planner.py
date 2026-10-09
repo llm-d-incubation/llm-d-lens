@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 from .vllm_constants import (
@@ -36,7 +35,6 @@ from .vllm_constants import (
     DEFAULT_KV_CACHE_DTYPE_BYTES,
     FP16_BF16_BYTES,
     MULTIMODAL_ARCHITECTURES,
-    VLLM_NON_TORCH_MEMORY_TP1_GIB,
     VLLM_NON_TORCH_MEMORY_TP1_PP1_GIB,
     VLLM_NON_TORCH_MEMORY_TP1_PPN_GIB,
     VLLM_NON_TORCH_MEMORY_TPN_GIB,
@@ -297,6 +295,7 @@ def inference_dtype_byte(model_config: Any) -> float:
 
 # ---------------------- KV Cache Computation ----------------------
 
+
 @dataclass
 class KVCacheDetail:
     """Structured memory calculations for KV Cache."""
@@ -342,14 +341,10 @@ class KVCacheDetail:
         self.num_hidden_layers = int(text_config.get("num_hidden_layers", 32))
         self.hidden_size = int(text_config.get("hidden_size", 4096))
         self.num_attention_heads = int(text_config.get("num_attention_heads", 32))
-        self.num_key_value_heads = int(
-            text_config.get("num_key_value_heads", self.num_attention_heads)
-        )
+        self.num_key_value_heads = int(text_config.get("num_key_value_heads", self.num_attention_heads))
         head_dim = text_config.get("head_dim")
         self.head_dimension = (
-            int(head_dim)
-            if head_dim is not None
-            else int(self.hidden_size / max(1, self.num_attention_heads))
+            int(head_dim) if head_dim is not None else int(self.hidden_size / max(1, self.num_attention_heads))
         )
 
         if use_mla(self.model_architecture):
@@ -383,16 +378,10 @@ class KVCacheDetail:
                 self.num_hidden_layers * (kv_lora_rank + qk_rope) * self.precision_in_bytes
             )
         else:
-            self.num_attention_group = max(
-                1, int(self.num_attention_heads / max(1, self.num_key_value_heads))
-            )
+            self.num_attention_group = max(1, int(self.num_attention_heads / max(1, self.num_key_value_heads)))
             # Factor of 2 for separate K and V caches
             self.per_token_memory_bytes = int(
-                self.num_hidden_layers
-                * 2
-                * self.head_dimension
-                * self.num_key_value_heads
-                * self.precision_in_bytes
+                self.num_hidden_layers * 2 * self.head_dimension * self.num_key_value_heads * self.precision_in_bytes
             )
 
         self.per_request_kv_cache_bytes = self.per_token_memory_bytes * self.context_len
@@ -402,6 +391,7 @@ class KVCacheDetail:
 
 # ---------------------- Config & Metadata Loading ----------------------
 
+
 def load_local_model_config(path: str | Path) -> ConfigWrapper | None:
     """Load config from a local config.json file or folder."""
     p = Path(path)
@@ -409,7 +399,7 @@ def load_local_model_config(path: str | Path) -> ConfigWrapper | None:
         p = p / "config.json"
     if p.is_file():
         try:
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 data = json.load(f)
                 return wrap_config(data)
         except Exception as e:
@@ -427,8 +417,7 @@ def get_model_config_from_hf(model_name: str, hf_token: str | None = None) -> An
             token=hf_token or None,
         )
     raise ImportError(
-        "Model configuration loading requires 'transformers'. "
-        "Provide a local config or install transformers."
+        "Model configuration loading requires 'transformers'. Provide a local config or install transformers."
     )
 
 
@@ -472,9 +461,7 @@ def load_model_config(
 
 
 @lru_cache(maxsize=128)
-def _get_safetensors_metadata_cached(
-    model_name: str, hf_token: str | None = None
-) -> Any:
+def _get_safetensors_metadata_cached(model_name: str, hf_token: str | None = None) -> Any:
     if not _HF_AVAILABLE or HfApi is None:
         raise ImportError("HuggingFace Hub integration requires huggingface_hub.")
     api = HfApi(token=hf_token)
@@ -501,10 +488,7 @@ def model_total_params(
             if hasattr(metadata, "parameter_count") and metadata.parameter_count:
                 return sum(metadata.parameter_count.values())
         except Exception:
-            pass
-
-    # 2. Try estimating from model_config
-    if model_config is not None:
+            logger.debug("Could not read parameter count from safetensors metadata", exc_info=True)
         text_cfg = get_text_config(model_config)
         hidden_size = text_cfg.get("hidden_size")
         layers = text_cfg.get("num_hidden_layers")
@@ -541,6 +525,7 @@ def max_context_len(model_config: Any) -> int:
 
 
 # ---------------------- Memory Estimations ----------------------
+
 
 def estimate_vllm_non_torch_memory(tp: int = 1, pp: int = 1) -> float:
     """Estimate non-torch runtime & NCCL communication memory in GiB per GPU."""
@@ -617,9 +602,7 @@ def model_memory_req(
                         memory += parameter_memory_req(num, prec)
                 return memory
         except Exception:
-            pass
-
-    # If caller gave an explicit weight in GiB, use it directly
+            logger.debug("Could not estimate model weight memory from model_config", exc_info=True)
     if fallback_weight_gib is not None and fallback_weight_gib > 0:
         return float(fallback_weight_gib)
 
@@ -640,6 +623,7 @@ def kv_cache_req(
 
 
 # ---------------------- Parallelism & Capacity Sizing ----------------------
+
 
 def _pad_vocab_size(vocab_size: int, pad_to: int = _VLLM_VOCAB_PADDING) -> int:
     """Match vLLM's vocab padding logic (rounds up to nearest multiple of pad_to)."""
@@ -727,9 +711,9 @@ def allocatable_kv_cache_memory(
     effective_util = gpu_mem_util if gpu_mem_util is not None else gpu_util
     gpu_count = gpus_required(tp, pp, dp)
     available_memory = available_gpu_memory(gpu_memory, effective_util) * gpu_count
-    model_size = model_memory_req(
-        model_name, model_config, hf_token=hf_token, fallback_weight_gib=fallback_weight_gib
-    ) * dp
+    model_size = (
+        model_memory_req(model_name, model_config, hf_token=hf_token, fallback_weight_gib=fallback_weight_gib) * dp
+    )
 
     activation_memory = estimate_vllm_activation_memory(model_config, tp=tp) * dp
     cuda_graph_memory = estimate_vllm_cuda_graph_memory() * gpu_count
@@ -889,6 +873,7 @@ def total_kv_cache_blocks(
 
 
 # ---------------------- Basic Math Conversion ----------------------
+
 
 def bits_to_bytes(bits: int | float) -> int:
     """Convert number of bits to bytes."""

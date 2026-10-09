@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 
-
 def shared_prefix_routing_workload() -> dict:
     """Fresh routing-comparison workload; provider goals and baselines stay local."""
     return {
-        "num_groups": 150, "num_prompts_per_group": 5,
-        "system_prompt_len": 6000, "question_len": 1200, "output_len": 1000,
-        "enable_multi_turn_chat": False, "interval": 60,
+        "num_groups": 150,
+        "num_prompts_per_group": 5,
+        "system_prompt_len": 6000,
+        "question_len": 1200,
+        "output_len": 1000,
+        "enable_multi_turn_chat": False,
+        "interval": 60,
         "stages": [{"rate": rate, "duration": 60} for rate in (3, 10, 20, 30, 40, 49, 55, 60)],
     }
+
 
 # This flag declares whether a provider exposes a second endpoint on the same warmed pods
 # for a routing-bypassing Kubernetes Service comparison. Evaluate consumes this registry;

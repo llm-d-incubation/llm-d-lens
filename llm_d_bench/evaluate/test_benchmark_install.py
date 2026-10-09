@@ -75,4 +75,3 @@ def test_patch_kubernetes_client_no_proxy_bug_is_idempotent_and_tolerates_missin
     assert configuration_file.read_text(encoding="utf-8") == once_patched
 
     router._patch_kubernetes_client_no_proxy_bug(tmp_path / "does-not-exist")
-

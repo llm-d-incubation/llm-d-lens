@@ -42,7 +42,12 @@ def test_lens_address_none_without_host():
 
 
 def test_serving_port_from_argv():
-    assert hostinfo.serving_port_from_argv(["uvicorn", "app", "--host", "0.0.0.0", "--port", "8084"]) == 8084
+    assert (
+        hostinfo.serving_port_from_argv(
+            ["uvicorn", "app", "--host", "0.0.0.0", "--port", "8084"]  # noqa: S104 -- test fixture, not a real bind
+        )
+        == 8084
+    )
     assert hostinfo.serving_port_from_argv(["uvicorn", "app", "--port=9100"]) == 9100
     assert hostinfo.serving_port_from_argv(["uvicorn", "app"]) is None
     assert hostinfo.serving_port_from_argv(["uvicorn", "app", "--port", "nope"]) is None

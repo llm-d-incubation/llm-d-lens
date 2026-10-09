@@ -1,5 +1,7 @@
 """Shared monitoring operation registration, logging and process transport."""
+
 from __future__ import annotations
+
 import asyncio
 import os
 import re
@@ -47,17 +49,24 @@ class MonitoringOperationManager:
         clean = _SENSITIVE_LOG_VALUE.sub(r"\1\2[REDACTED]", _ANSI.sub("", message)).strip()
         if not clean:
             return
-        operation.logs.append(self._log_entry_type(
-            sequence=operation.logs[-1].sequence + 1 if operation.logs else 1,
-            timestamp=datetime.now(UTC), level=level, message=clean,
-        ))
+        operation.logs.append(
+            self._log_entry_type(
+                sequence=operation.logs[-1].sequence + 1 if operation.logs else 1,
+                timestamp=datetime.now(UTC),
+                level=level,
+                message=clean,
+            )
+        )
         while len(operation.logs) > 2_000 or sum(len(row.message.encode()) for row in operation.logs) > 2 * 1024 * 1024:
             operation.logs.pop(0)
 
 
 def installation_environment(cluster_id, resolve_kubeconfig):
-    allowed = {name: value for name, value in os.environ.items()
-               if name in {"PATH", "HOME", "KUBECONFIG", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE"}}
+    allowed = {
+        name: value
+        for name, value in os.environ.items()
+        if name in {"PATH", "HOME", "KUBECONFIG", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE"}
+    }
     if cluster_id:
         try:
             kubeconfig = resolve_kubeconfig(cluster_id).get("KUBECONFIG")
@@ -69,7 +78,7 @@ def installation_environment(cluster_id, resolve_kubeconfig):
 
 
 async def run_install_command(argv, *, spawn, env, timeout, on_line, cwd=None):
-    options = dict(env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    options = {"env": env, "stdout": asyncio.subprocess.PIPE, "stderr": asyncio.subprocess.STDOUT}
     if cwd is not None:
         options["cwd"] = cwd
     process = await spawn(argv, **options)

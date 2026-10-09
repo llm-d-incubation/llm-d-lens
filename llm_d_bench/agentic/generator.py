@@ -483,18 +483,25 @@ class AICandidateGenerator:
                     if attempted_tools or initial_tool_retries >= 1:
                         raise
                     initial_tool_retries += 1
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"Your initial tool calls were rejected: {error}. "
-                            "Retry once by calling exactly get_cluster_overview and search_candidates "
-                            "together, and no other tools."
-                        ),
-                    })
-                    await _emit_progress(on_progress, {
-                        "phase": "ai", "status": "running", "round": _round + 1,
-                        "message": "The first AI tool batch was invalid; retrying with the required tool pair.",
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Your initial tool calls were rejected: {error}. "
+                                "Retry once by calling exactly get_cluster_overview and search_candidates "
+                                "together, and no other tools."
+                            ),
+                        }
+                    )
+                    await _emit_progress(
+                        on_progress,
+                        {
+                            "phase": "ai",
+                            "status": "running",
+                            "round": _round + 1,
+                            "message": "The first AI tool batch was invalid; retrying with the required tool pair.",
+                        },
+                    )
                     continue
                 attempted_tools.update(call.name for call in turn.tool_calls)
                 await _emit_progress(
@@ -1118,10 +1125,16 @@ class CandidateValidator:
                 valid_tps = find_possible_tp(model_config)
                 if proposal.tensor_parallel_size not in valid_tps:
                     reasons.append(f"TP={proposal.tensor_parallel_size} is invalid for model architecture")
-                if is_pd and proposal.prefill_tensor_parallel_size is not None and proposal.prefill_tensor_parallel_size not in valid_tps:
-                    reasons.append(f"Prefill TP={proposal.prefill_tensor_parallel_size} is invalid for model architecture")
+                if (
+                    is_pd
+                    and proposal.prefill_tensor_parallel_size is not None
+                    and proposal.prefill_tensor_parallel_size not in valid_tps
+                ):
+                    reasons.append(
+                        f"Prefill TP={proposal.prefill_tensor_parallel_size} is invalid for model architecture"
+                    )
             except Exception:
-                pass
+                logger.debug("Could not validate TP values for candidate proposal", exc_info=True)
 
             avail_kv = allocatable_kv_cache_memory(
                 facts.model_name or "model",

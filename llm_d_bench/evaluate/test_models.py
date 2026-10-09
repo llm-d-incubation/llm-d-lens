@@ -327,13 +327,11 @@ async def test_benchmark_storage_creates_prebound_target_node_volume(monkeypatch
     persistent_volume = manifest["items"][1]
     assert storage_class == "prism-benchmark-local"
     assert volume == "prism-benchmark-00000000-0000-4000-8000-000000000003"
-    assert persistent_volume["spec"]["claimRef"] == {
-        "namespace": "deployment-namespace", "name": "workload-pvc"
-    }
+    assert persistent_volume["spec"]["claimRef"] == {"namespace": "deployment-namespace", "name": "workload-pvc"}
     assert persistent_volume["spec"]["accessModes"] == ["ReadWriteOnce", "ReadWriteMany"]
-    assert persistent_volume["spec"]["nodeAffinity"]["required"]["nodeSelectorTerms"][0][
-        "matchExpressions"
-    ][0]["values"] == ["smc-18"]
+    assert persistent_volume["spec"]["nodeAffinity"]["required"]["nodeSelectorTerms"][0]["matchExpressions"][0][
+        "values"
+    ] == ["smc-18"]
 
 
 @pytest.mark.asyncio

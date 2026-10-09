@@ -35,7 +35,10 @@ class HarnessWatchTests(unittest.IsolatedAsyncioTestCase):
                                 "status": {
                                     "phase": "Failed",
                                     "containerStatuses": [
-                                        {"name": "harness", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}
+                                        {
+                                            "name": "harness",
+                                            "state": {"terminated": {"exitCode": 137, "reason": "Error"}},
+                                        }
                                     ],
                                 },
                             }
@@ -85,9 +88,7 @@ class HarnessWatchTests(unittest.IsolatedAsyncioTestCase):
             patch.object(watch, "_POLL_SECONDS", 0.02),
             self.assertRaisesRegex(RuntimeError, r"harness: Error \(exit 1\)"),
         ):
-            await asyncio.wait_for(
-                watch._poll_harness({}, "ns", {}, lambda _: None, lambda: "now"), 1
-            )
+            await asyncio.wait_for(watch._poll_harness({}, "ns", {}, lambda _: None, lambda: "now"), 1)
 
     def test_container_failure_detected_even_with_running_pod(self):
         self.assertIn(

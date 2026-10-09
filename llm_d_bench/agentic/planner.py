@@ -963,7 +963,7 @@ def minimum_tensor_parallelism(facts: PlanningFacts) -> int:
             if valid_fits:
                 return valid_fits[0]
         except Exception:
-            pass
+            logger.debug("Could not check whether the model fits in GPU memory", exc_info=True)
 
     footprint_gib = facts.model_weight_gib * 1.2 + max(1.0, facts.context_length / 4096)
     return max(1, ceil(footprint_gib / (facts.vram_per_gpu_gib * 0.9)))
