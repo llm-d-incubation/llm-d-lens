@@ -132,7 +132,21 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
     service = AgenticDeploymentService()
     session = SimpleNamespace(id="a" * 36, server_id="cluster-a")
     monkeypatch.setattr("llm_d_bench.agentic.service.require_active_session", lambda _session_id: session)
-    monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", _resolve_facts)
+    planning_lengths = []
+    planning_utilizations = []
+
+    async def resolve_facts(_cluster_id, _model, facts, **_kwargs):
+        planning_lengths.append(facts.context_length)
+        planning_utilizations.append(facts.gpu_memory_utilization)
+        resolved = _resolved_facts()
+        resolved.facts = replace(
+            resolved.facts,
+            context_length=facts.context_length,
+            gpu_memory_utilization=facts.gpu_memory_utilization,
+        )
+        return resolved
+
+    monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", resolve_facts)
     saved = {}
 
     async def start_run(request, **_kwargs):
@@ -141,13 +155,18 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
         return SimpleNamespace(id="deploy-run-1")
 
     monkeypatch.setattr("llm_d_bench.agentic.service.deployment_run_manager.start_run", start_run)
-    run = asyncio.run(service.create(_request()))
+    run = asyncio.run(service.create(_request(max_model_len=32768, gpu_memory_utilization=0.6)))
 
     approved = asyncio.run(service.approve(run.id))
 
     assert approved.status == AgenticDeploymentStatus.DEPLOYING
     assert approved.configuration_artifact_id is None
     assert approved.deployment_run_id == "deploy-run-1"
+    assert planning_lengths == [32768, 32768]
+    assert planning_utilizations == [0.6, 0.6]
+    assert run.selected_candidate.gpu_memory_utilization == 0.6
+    assert saved["configuration"].content["decode"]["maxModelLen"] == 32768
+    assert saved["configuration"].content["decode"]["gpuMemoryUtilization"] == 0.6
     assert saved["configuration"].provenance["cluster_ref"]["session_id"] == session.id
     assert saved["deployment"].provenance["agentic_deployment_run_id"] == run.id
 
@@ -200,7 +219,7 @@ def test_approve_carries_model_specific_vllm_arguments_to_deployment(monkeypatch
     assert {item["name"] for item in arguments} >= {"enable-auto-tool-choice", "tool-call-parser"}
 
 
-def test_vllm_fields_are_removed_but_workload_signals_reach_candidate_planning(monkeypatch):
+def test_planning_uses_deployment_context_length_and_preserves_workload_signals(monkeypatch):
     service = AgenticDeploymentService()
     monkeypatch.setattr(
         "llm_d_bench.agentic.service.require_active_session",
@@ -225,7 +244,7 @@ def test_vllm_fields_are_removed_but_workload_signals_reach_candidate_planning(m
                 model_weight_gib=8,
                 vram_per_gpu_gib=32,
                 free_gpu_count=4,
-                context_length=32768,
+                context_length=4096,
                 use_case="long-inputs",
                 workload_profile=WorkloadProfile(mean_input_tokens=16384, concurrency=32),
                 vllm_arguments=(("enforce-eager", "true"),),
@@ -235,7 +254,8 @@ def test_vllm_fields_are_removed_but_workload_signals_reach_candidate_planning(m
     asyncio.run(service.create(request))
 
     facts = captured["facts"]
-    assert facts.context_length == 4096
+    assert facts.context_length == 32768
+    assert facts.gpu_memory_utilization == 0.6
     assert facts.use_case == "long-inputs"
     assert facts.workload_profile is not None
     assert facts.workload_profile.mean_input_tokens == 16384
@@ -995,6 +1015,7 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     )
     monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", _resolve_facts)
     prompts = []
+    planning_lengths = []
 
     class Provider:
         settings = OpenAIPlannerSettings(base_url="http://provider", model="generator-model")
@@ -1004,10 +1025,11 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
 
             return DeterministicPlanner().decide(facts, candidates), DeterministicPlanner().score(facts, candidates)
 
-    async def generate(_self, _cluster_id, _model, _facts, operator_prompt, on_progress=None):
+    async def generate(_self, _cluster_id, _model, facts, operator_prompt, on_progress=None):
         from llm_d_bench.agentic.generator import CandidateGenerationResult
 
         prompts.append(operator_prompt)
+        planning_lengths.append(facts.context_length)
         return CandidateGenerationResult(
             proposals={
                 "candidates": [
@@ -1025,7 +1047,9 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     monkeypatch.setattr("llm_d_bench.agentic.service.OpenAICompatiblePlanner.from_provider_id", lambda _id: Provider())
     monkeypatch.setattr("llm_d_bench.agentic.service.AICandidateGenerator.generate", generate)
 
-    run = asyncio.run(service.create(_request(ai_provider_id="provider-1", planner_prompt="balanced")))
+    run = asyncio.run(
+        service.create(_request(ai_provider_id="provider-1", planner_prompt="balanced", max_model_len=32768))
+    )
     refined = asyncio.run(
         service.refine(
             run.id,
@@ -1034,6 +1058,7 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     )
 
     assert prompts == ["balanced", "prefer fewer replicas"]
+    assert planning_lengths == [32768, 32768]
     assert refined.generator == "ai-mcp"
     assert refined.generator_model == "generator-model"
     assert refined.generator_fallback_reason is None
@@ -1067,6 +1092,46 @@ def test_refine_falls_back_to_deterministic_planning_when_provider_fails(monkeyp
     assert refined.planner == "deterministic"
     assert refined.planner_fallback_reason is not None
     assert refined.decision_metadata.planner == "deterministic"
+    assert all(
+        candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates
+    )
+
+
+def test_refine_without_ai_provider_uses_deterministic_planning(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_bench.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+
+    async def resolve_facts(_cluster_id, _model, facts, **_kwargs):
+        resolved = _resolved_facts()
+        resolved.facts = replace(
+            resolved.facts,
+            operator_preference=facts.operator_preference,
+            gpu_memory_utilization=facts.gpu_memory_utilization,
+        )
+        return resolved
+
+    monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", resolve_facts)
+    monkeypatch.setattr("llm_d_bench.agentic.service.OpenAICompatiblePlanner.from_environment", lambda: None)
+
+    run = asyncio.run(service.create(_request(planner_prompt="balanced", gpu_memory_utilization=0.6)))
+    refined = asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="distributed")))
+
+    assert refined.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+    assert refined.generator == "deterministic"
+    assert refined.generator_fallback_reason is None
+    assert refined.planner == "deterministic"
+    assert refined.planner_fallback_reason is None
+    assert refined.request.planner_prompt == "distributed"
+    assert refined.selected_candidate.id == refined.candidates[0].id
+    assert refined.selected_candidate.provider_ref == "pd-disaggregation"
+    assert refined.selected_candidate.gpu_memory_utilization == 0.6
+    assert all(candidate.gpu_memory_utilization == 0.6 for candidate in refined.candidates)
+    assert all(
+        candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates
+    )
 
 
 def test_refine_allows_external_ranking_of_exact_aic_candidates(monkeypatch):

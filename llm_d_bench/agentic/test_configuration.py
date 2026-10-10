@@ -88,6 +88,14 @@ def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval(
     assert configuration.content["prefill"]["maxModelLen"] == 32768
     parameters = {item["name"]: item["value"] for item in configuration.content["customParameters"]}
     assert parameters["gpu-memory-utilization"] == "0.72"
+    assert (
+        next(
+            item["target"]
+            for item in configuration.content["customParameters"]
+            if item["name"] == "gpu-memory-utilization"
+        )
+        == "both"
+    )
     assert parameters["max-num-batched-tokens"] == "4096"
 
 

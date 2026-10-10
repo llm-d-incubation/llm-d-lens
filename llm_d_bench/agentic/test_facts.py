@@ -30,7 +30,13 @@ def test_resolver_uses_live_cluster_capacity_and_free_memory(monkeypatch):
         resolve_planning_facts(
             "cluster-a",
             "Qwen/Qwen3-8B",
-            PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=1, free_gpu_count=99, cpu_buffer_gib=1),
+            PlanningFacts(
+                model_weight_gib=8,
+                vram_per_gpu_gib=1,
+                free_gpu_count=99,
+                cpu_buffer_gib=1,
+                gpu_memory_utilization=0.6,
+            ),
             include_supplementary_evidence=False,
         )
     )
@@ -38,6 +44,7 @@ def test_resolver_uses_live_cluster_capacity_and_free_memory(monkeypatch):
     assert resolved.facts.free_gpu_count == 3
     assert resolved.facts.vram_per_gpu_gib == 32
     assert resolved.facts.cpu_buffer_gib == 75
+    assert resolved.facts.gpu_memory_utilization == 0.6
     assert resolved.facts.evidence_ids == ("cluster-overview:cluster-a",)
 
 

@@ -34,6 +34,8 @@ are no longer supported.
 3. Use the copy buttons beside values such as **Namespace**, **Cluster Session ID**, **Container Image**, **Internal Endpoint**, **Forwarded Endpoint**, or **Execution ID** when you need to reuse them elsewhere.
 4. If the deployment failed, read the failure banner before making changes.
 
+An endpoint smoke test that reports a connection refusal while the model server is starting keeps the deployment **In progress**. Other smoke-test failures, such as an unexpected response, remain **Failed**; check the failure banner and pod logs for the underlying error.
+
 ## View pods and stream logs
 
 1. To see pod status inline, click the row toggle with tooltip **Show pods**.
@@ -100,5 +102,14 @@ Maintainers can manage deployments on clusters they are bound to; admins can man
 In the deployment creation flow, expand **Why this option** under a validated alternative to see its AIC TTFT, TPOT, and throughput estimate when an exact-topology estimate is available. The estimate can appear even when the AIC candidate search finds no configuration satisfying the original SLO; in that case, the alternative still shows **SLO not met**. Alternatives without a matching estimate show that no exact AIC prediction is available.
 
 The **AI score** shown beside an agentic candidate is a relative ranking score out of 100; the highest-scoring candidate is normalized to 100. It is not a benchmark result, confidence level, or probability of meeting the SLO. A deterministic fallback shows **Deterministic score** instead.
+
+**Recalculate selection** works without an AI provider. It refreshes the recommendation
+using deterministic planning and the new preference; if AI scoring fails, the
+alternatives also retain deterministic scores.
+
+Agentic alternatives are checked using the selected vLLM GPU memory utilization
+and max model length. The same values are applied when the deployment starts;
+actual free KV cache is measured by vLLM at startup and may still be lower than
+the planning estimate.
 
 If you use the agentic planner from the deployment creation flow, see the [Architecture overview](/architecture) for how workload-guided planning works.

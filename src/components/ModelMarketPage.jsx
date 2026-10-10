@@ -328,6 +328,7 @@ export default function ModelMarketPage({ onNavigate }) {
                     model_server: 'vllm',
                     model_source: storageVolumeId ? 'auto-cache' : 'huggingface',
                     storage_volume_id: storageVolumeId,
+                    max_model_len: vllm.maxModelLen ?? plan.maxModelLen,
                 },
             });
             onNavigate('optimization-evaluate-new');

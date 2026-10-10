@@ -125,6 +125,7 @@ async def resolve_planning_facts(
             cpu_buffer_gib=cpu_buffer_gib,
             required_cpu_buffer_gib=requested.required_cpu_buffer_gib,
             context_length=requested.context_length,
+            gpu_memory_utilization=requested.gpu_memory_utilization,
             shared_prefix_ratio=requested.shared_prefix_ratio,
             prefill_heavy=requested.prefill_heavy,
             use_case=requested.use_case,

@@ -90,6 +90,8 @@ class AgenticDeploymentService:
         )
         planning_facts = self._planning_only_facts(
             request.planning_facts,
+            max_model_len=request.max_model_len,
+            gpu_memory_utilization=request.gpu_memory_utilization,
             operator_preference=request.planner_prompt or "",
         )
         deterministic = DeterministicPlanner()
@@ -795,8 +797,6 @@ class AgenticDeploymentService:
         if run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
             raise ValueError("only an awaiting approval Agentic deployment can be recalculated")
         provider = OpenAICompatiblePlanner.from_provider_id(run.request.ai_provider_id)
-        if provider is None:
-            raise ValueError("an OpenAI-compatible planner is not configured")
 
         session = require_active_session(run.request.cluster_session_id)
         await self._emit_progress(
@@ -809,6 +809,8 @@ class AgenticDeploymentService:
         )
         planning_facts = self._planning_only_facts(
             run.request.planning_facts,
+            max_model_len=run.request.max_model_len,
+            gpu_memory_utilization=run.request.gpu_memory_utilization,
             operator_preference=request.planner_prompt,
         )
         deterministic = DeterministicPlanner()
@@ -818,7 +820,7 @@ class AgenticDeploymentService:
             run.request.model,
             planning_facts,
             request.planner_prompt,
-            provider_requested=True,
+            provider_requested=bool(run.request.ai_provider_id),
             on_progress=on_progress,
             principal_id=principal_id,
         )
@@ -863,55 +865,52 @@ class AgenticDeploymentService:
         if decision.action != "select_candidate" or decision.candidate_id is None:
             raise ValueError("no deployable Agentic candidate: " + "; ".join(decision.unmet_constraints))
 
-        planner_name = "openai-compatible"
+        planner_name = "deterministic"
         planner_fallback_reason: str | None = None
-        planner_model = getattr(getattr(provider, "settings", None), "model", None)
-        try:
-            decision, scored_candidates = await provider.recommend(
-                refreshed.facts,
-                [candidate for candidate in candidates if candidate.deployable],
-                operator_prompt=request.planner_prompt,
-                on_progress=on_progress,
-            )
-            validated_candidate_ids = {candidate.id for candidate in candidates if candidate.deployable}
-            if decision.candidate_id not in validated_candidate_ids:
-                raise OpenAIPlannerError("external planner selected an unvalidated candidate")
+        planner_model = None
+        scored_candidates = deterministic.score(refreshed.facts, candidates)[:3]
+        if provider is not None:
+            try:
+                decision, scored_candidates = await provider.recommend(
+                    refreshed.facts,
+                    [candidate for candidate in candidates if candidate.deployable],
+                    operator_prompt=request.planner_prompt,
+                    on_progress=on_progress,
+                )
+                validated_candidate_ids = {candidate.id for candidate in candidates if candidate.deployable}
+                if decision.candidate_id not in validated_candidate_ids:
+                    raise OpenAIPlannerError("external planner selected an unvalidated candidate")
+                planner_name = "openai-compatible"
+                planner_model = getattr(getattr(provider, "settings", None), "model", None)
+                await self._emit_progress(
+                    on_progress,
+                    {
+                        "phase": "scoring",
+                        "status": "complete",
+                        "message": f"AI planner selected {decision.candidate_id} after recalculation.",
+                    },
+                )
+            except Exception as error:
+                logger.warning("External candidate ranking fell back during recalculation: %s", error)
+                decision = deterministic.decide(refreshed.facts, candidates)
+                scored_candidates = deterministic.score(refreshed.facts, candidates)[:3]
+                planner_fallback_reason = self._planner_failure_reason(error)
+                selected_id = decision.candidate_id
+                await self._emit_progress(
+                    on_progress,
+                    {
+                        "phase": "scoring",
+                        "status": "fallback",
+                        "message": f"AI reranking was unavailable; deterministic ranking selected {selected_id}.",
+                    },
+                )
+        else:
             await self._emit_progress(
                 on_progress,
                 {
                     "phase": "scoring",
                     "status": "complete",
-                    "message": f"AI planner selected {decision.candidate_id} after recalculation.",
-                },
-            )
-        except OpenAIPlannerError as error:
-            logger.warning("External candidate ranking fell back during recalculation: %s", error)
-            decision = deterministic.decide(refreshed.facts, candidates)
-            scored_candidates = OpenAICompatiblePlanner._diverse_candidate_catalog(refreshed.facts, candidates)[:3]
-            planner_name = "deterministic"
-            planner_model = None
-            planner_fallback_reason = self._planner_failure_reason(error)
-            await self._emit_progress(
-                on_progress,
-                {
-                    "phase": "scoring",
-                    "status": "fallback",
-                    "message": f"AI reranking was unavailable; deterministic ranking selected {decision.candidate_id}.",
-                },
-            )
-        except Exception as error:
-            logger.warning("External candidate ranking fell back during recalculation: %s", error)
-            decision = deterministic.decide(refreshed.facts, candidates)
-            scored_candidates = OpenAICompatiblePlanner._diverse_candidate_catalog(refreshed.facts, candidates)[:3]
-            planner_name = "deterministic"
-            planner_model = None
-            planner_fallback_reason = self._planner_failure_reason(error)
-            await self._emit_progress(
-                on_progress,
-                {
-                    "phase": "scoring",
-                    "status": "fallback",
-                    "message": f"AI reranking was unavailable; deterministic ranking selected {decision.candidate_id}.",
+                    "message": f"Deterministic ranking selected {decision.candidate_id} after recalculation.",
                 },
             )
         selected = next(candidate for candidate in scored_candidates if candidate.id == decision.candidate_id)
@@ -982,10 +981,13 @@ class AgenticDeploymentService:
         )
 
     @staticmethod
-    def _planning_only_facts(facts, *, operator_preference: str = ""):
+    def _planning_only_facts(
+        facts, *, max_model_len: int, gpu_memory_utilization: float, operator_preference: str = ""
+    ):
         return replace(
             facts,
-            context_length=4096,
+            context_length=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
             operator_preference=operator_preference,
             vllm_arguments=(),
         )
@@ -1028,7 +1030,11 @@ class AgenticDeploymentService:
         refreshed = await resolve_planning_facts(
             session.server_id,
             run.request.model,
-            self._planning_only_facts(run.request.planning_facts),
+            self._planning_only_facts(
+                run.request.planning_facts,
+                max_model_len=run.request.max_model_len,
+                gpu_memory_utilization=run.request.gpu_memory_utilization,
+            ),
             include_supplementary_evidence=False,
         )
         if selected.required_gpus > refreshed.facts.free_gpu_count:

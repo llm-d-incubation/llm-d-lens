@@ -221,7 +221,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [customRows, setCustomRows] = useState([]);
     const [guideSettings, setGuideSettings] = useState({});
     const customParametersText = JSON.stringify(customRows);
-    const [maxModelLen, setMaxModelLen] = useState('');
+    const [maxModelLen, setMaxModelLen] = useState(() => sharedContext?.maxModelLen ?? '');
     const [maxNumSeqs, setMaxNumSeqs] = useState('');
     const [gpuMemoryUtilization, setGpuMemoryUtilization] = useState('');
     const [blockSize, setBlockSize] = useState('');
