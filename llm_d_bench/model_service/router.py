@@ -580,8 +580,9 @@ async def admin_gateway_logs(body: ComponentLogsRequest, request: Request) -> St
                 tail=body.tail,
             ):
                 yield f"event: log\ndata: {json.dumps({'message': line})}\n\n"
-        except Exception as error:  # noqa: BLE001 - relay as an SSE error event
-            yield f"event: error\ndata: {json.dumps({'message': str(error)})}\n\n"
+        except Exception:  # noqa: BLE001 - relay as an SSE error event
+            logger.exception("Unable to stream model service logs")
+            yield f"event: error\ndata: {json.dumps({'message': 'Unable to stream model service logs'})}\n\n"
         yield "event: complete\ndata: {}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream")

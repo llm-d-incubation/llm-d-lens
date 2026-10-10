@@ -21,7 +21,7 @@ def problem(
         "type": "about:blank",
         "status": status,
         "title": title,
-        "detail": detail,
+        "detail": "An unexpected error occurred." if status >= 500 else detail,
         "code": code,
     }
     if extra:

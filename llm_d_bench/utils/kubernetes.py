@@ -411,11 +411,13 @@ async def discover_endpoints(
                     endpoints.append(endpoint)
         return {"endpoints": endpoints, "total": len(endpoints)}
     except FileNotFoundError as error:
-        return {"endpoints": [], "total": 0, "error": str(error)}
+        logger.warning("Unable to query Kubernetes endpoints: %s", error)
+        return {"endpoints": [], "total": 0, "error": "Kubernetes command is unavailable"}
     except TimeoutError:
         return {"endpoints": [], "total": 0, "error": "Timed out while querying Kubernetes"}
     except (json.JSONDecodeError, OSError) as error:
-        raise HTTPException(status_code=502, detail=f"Unable to query Kubernetes: {error}") from error
+        logger.warning("Unable to query Kubernetes endpoints: %s", error)
+        raise HTTPException(status_code=502, detail="Unable to query Kubernetes") from error
 
 
 async def _launch_port_forward(

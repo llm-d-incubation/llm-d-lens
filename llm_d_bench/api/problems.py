@@ -37,8 +37,6 @@ def install_problem_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_problem(request: Request, error: Exception) -> JSONResponse:
-        # Surface a concrete, debuggable message instead of an opaque 500. The
-        # request id ties the response to the full traceback in the server log.
         request_id = uuid.uuid4().hex
         logger.exception(
             "unhandled_error request_id=%s method=%s path=%s",
@@ -49,7 +47,7 @@ def install_problem_handlers(app: FastAPI) -> None:
         return problem(
             500,
             "Internal server error",
-            f"{type(error).__name__}: {error}",
+            "An unexpected error occurred.",
             "internal_error",
             extra={"requestId": request_id},
         )

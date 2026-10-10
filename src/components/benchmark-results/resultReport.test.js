@@ -37,9 +37,10 @@ test('saved configurations and artifact references are retained while live snaps
 });
 
 test('markdown text is escaped and JSON cannot close its containing fence', () => {
-    const markdown = buildResultReport({ workflow: { name: '<script>x</script>\n# injected | title' }, cases: [{ case: { id: 'c', configuration: { model: '```\n# fenced payload' }, metrics: { throughput_tps: Infinity } } }] });
-    assert.doesNotMatch(markdown, /<script>|\n# injected/);
+    const markdown = buildResultReport({ workflow: { name: '<script>x</script><SCRIPT>y</SCRIPT>\n# injected | title' }, cases: [{ case: { id: 'c', configuration: { model: '```\n# fenced payload' }, metrics: { throughput_tps: Infinity } } }] });
+    assert.doesNotMatch(markdown, /<script\b|\n# injected/i);
     assert.match(markdown, /&lt;script&gt;/);
+    assert.match(markdown, /&lt;SCRIPT&gt;/);
     assert.match(markdown, /````json/);
     assert.match(markdown, /Output throughput \| Not recorded/);
     assert.doesNotMatch(markdown, /Infinity/);

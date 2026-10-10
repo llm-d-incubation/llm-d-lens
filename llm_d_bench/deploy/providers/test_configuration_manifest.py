@@ -134,6 +134,36 @@ async def test_deploy_delegates_kustomize_directory_artifact(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_direct_data_plane_contract_delegates_lifecycle(tmp_path: Path):
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("kind: Deployment\n", encoding="utf-8")
+    artifact = GuideDeploymentArtifact(
+        guide_id="baseline-vllm",
+        artifact_hash="hash",
+        manifest_ref=str(manifest),
+        deployment_contract={"data_plane_kind": "direct"},
+    )
+    runner = _Runner()
+    delegate = AsyncMock()
+    delegate.deploy.return_value = {"namespace": "llm-d-bench-run"}
+    adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
+    context = {"namespace": "llm-d-bench-run", "_artifact": artifact}
+
+    await adapter.deploy(artifact, context)
+    await adapter.readiness(context)
+    await adapter.diagnostics(context)
+    await adapter.stop(context, artifact)
+    await adapter.cleanup(context, artifact, force=True)
+
+    delegate.deploy.assert_awaited_once_with(artifact, context)
+    delegate.readiness.assert_awaited_once_with(context)
+    delegate.diagnostics.assert_awaited_once_with(context)
+    delegate.stop.assert_awaited_once_with(context, artifact)
+    delegate.cleanup.assert_awaited_once_with(context, artifact, force=True)
+    assert runner.commands == []
+
+
+@pytest.mark.asyncio
 async def test_deploy_copies_frontend_selected_existing_secret(tmp_path: Path):
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text("env:\n  - secretKeyRef:\n      name: llm-d-hf-token\n", encoding="utf-8")

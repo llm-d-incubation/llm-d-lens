@@ -249,6 +249,8 @@ asyncio.run(main())
 ### Start a standard vLLM deployment run
 
 Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM contract.
+The generated namespace uses the backend's configured deployment prefix (for example, `llmd-baseline-vllm-...`).
+Standard vLLM deployments use the baseline adapter for rollout readiness and cleanup; they do not require a published Guide manifest's `readinessDeployments` contract.
 
 <Tabs>
   <Tab title="REST API">
@@ -337,8 +339,7 @@ Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM
             "source": "standard-kubernetes-service.v1",
             "deployment_name": "qwen3-standard",
             "description": "Standard baseline for smoke tests",
-            "storage_type": "local-cache",
-            "namespace_policy": {"prefix": "standard-"}
+            "storage_type": "local-cache"
           }
         }
       ],

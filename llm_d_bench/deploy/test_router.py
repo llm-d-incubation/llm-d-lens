@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from llm_d_bench.deploy.contracts import DeploymentCaseStatus, DeploymentStatus
 from llm_d_bench.deploy.providers.hardware_profile import runtime_image
+from llm_d_bench.deploy.runtime.composition import build_namespace_factory
 from llm_d_bench.deploy.standard_kubernetes_service import (
     StandardKubernetesServiceRequest,
     build_standard_kubernetes_service_configuration,
@@ -65,6 +66,13 @@ def test_standard_kubernetes_service_configuration_is_an_immutable_baseline_arti
         },
     }
     assert configuration.provenance["deployment_name"] == "qwen3-8b-20260904"
+    assert "namespace_policy" not in configuration.provenance
+    deployment_request = SimpleNamespace(
+        provenance={"guide_id": configuration.provider_ref},
+        deployment_policy=SimpleNamespace(value={"namespace_policy": configuration.provenance.get("namespace_policy")}),
+        configuration_artifacts=[SimpleNamespace(content=json.dumps(configuration.content))],
+    )
+    assert build_namespace_factory("llmd-")(deployment_request).startswith("llmd-baseline-vllm-2-4-")
     assert {item["name"]: item["value"] for item in configuration.content["customParameters"]} == {
         "gpu-memory-utilization": "0.85",
         "enable-prefix-caching": "false",

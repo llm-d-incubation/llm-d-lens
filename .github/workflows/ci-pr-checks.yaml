@@ -54,6 +54,8 @@ jobs:
   # every referenced version must exist (llm_d_bench/versions/llm_d_stack.yaml).
   llm-d-stack:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: check-code-changes
     if: needs.check-code-changes.outputs.has_code_changes == 'true'
     steps:
@@ -80,6 +82,8 @@ jobs:
   # Validate the actual frontend and Node API instead of the old Go placeholder.
   frontend-and-server:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: check-code-changes
     if: needs.check-code-changes.outputs.has_code_changes == 'true'
     steps:
@@ -118,6 +122,8 @@ jobs:
   # Python: lint (only if Python files exist)
   python-lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: check-code-changes
     if: needs.check-code-changes.outputs.has_code_changes == 'true'
     steps:
@@ -154,6 +160,8 @@ jobs:
   # Container: build (no push) to validate Dockerfile
   container-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: check-code-changes
     if: needs.check-code-changes.outputs.has_code_changes == 'true'
     steps:

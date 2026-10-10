@@ -98,7 +98,7 @@ function connectConfig(target: RemoteTarget, credentials: RemoteCredentials): Co
         readyTimeout: 15_000,
         keepaliveInterval: 10_000,
         hostHash: 'sha256',
-        hostVerifier: (hashedKey) => `SHA256:${hashedKey.replace(/=+$/, '')}` === target.hostFingerprint.replace(/=+$/, ''),
+        hostVerifier: (hashedKey) => `SHA256:${hashedKey.split('=')[0]}` === target.hostFingerprint.split('=')[0],
     };
     if (target.authMethod === 'password') {
         if (!credentials.password) throw Object.assign(new Error('Password is required'), { status: 400 });

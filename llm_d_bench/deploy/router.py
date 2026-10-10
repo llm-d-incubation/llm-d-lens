@@ -673,7 +673,13 @@ async def get_execution_pods(execution_id: str, request: Request = None):
             timeout=15,
         )
     except (FileNotFoundError, TimeoutError) as error:
-        return {"execution_id": execution_id, "namespace": context.namespace, "pods": [], "error": str(error)}
+        logger.warning("Unable to list deployment pods for %s: %s", execution_id, error)
+        return {
+            "execution_id": execution_id,
+            "namespace": context.namespace,
+            "pods": [],
+            "error": "Unable to list deployment pods",
+        }
 
     if result.returncode != 0:
         return {

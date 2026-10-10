@@ -9,7 +9,7 @@ Evaluation routes live in `llm_d_bench/evaluate/router.py` with the `/api/v1/eva
 
 Run, workflow, case, and detail responses preserve additional stored fields. Optional fields absent from the record remain omitted; explicitly stored `null` values remain `null`. List responses retain their `{ "items": [...] }` envelope. Python route functions return dictionaries; FastAPI applies the named response models at the HTTP boundary.
 
-Errors use the application's `application/problem+json` response with `type`, `status`, `title`, `detail`, `code`, and an optional `requestId`. `detail` can contain structured validation errors. Authentication and resource permissions still apply; declaring a response model does not grant access.
+Errors use the application's `application/problem+json` response with `type`, `status`, `title`, `detail`, `code`, and an optional `requestId`. Client-error `detail` can contain structured validation errors; server-error `detail` is generic to avoid exposing internal exceptions. Authentication and resource permissions still apply; declaring a response model does not grant access.
 
 ### Get benchmark defaults
 

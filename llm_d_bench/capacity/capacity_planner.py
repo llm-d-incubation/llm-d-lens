@@ -426,27 +426,38 @@ def load_model_config(
     hf_token: str | None = None,
     local_config_path: str | Path | None = None,
 ) -> Any:
-    """Load model config from local path, HuggingFace cache, or remote."""
+    """Load model config from an explicit local path, Hugging Face cache, or remote."""
     if local_config_path:
         cfg = load_local_model_config(local_config_path)
         if cfg is not None:
             return cfg
 
-    # Check if model_name_or_path is itself a local path
-    if os.path.exists(model_name_or_path):
-        cfg = load_local_model_config(model_name_or_path)
-        if cfg is not None:
-            return cfg
+    parts = model_name_or_path.split("/")
+    if not (1 <= len(parts) <= 2 and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", part) for part in parts)):
+        return None
+    if any(".." in part or "--" in part for part in parts):
+        return None
 
     # Check standard HF hub cache path
     hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
-    hub_cache_model_dir = Path(hf_home) / "hub" / f"models--{model_name_or_path.replace('/', '--')}"
-    if hub_cache_model_dir.exists():
-        snapshots = hub_cache_model_dir / "snapshots"
-        if snapshots.exists():
+    hub_cache_root = (Path(hf_home) / "hub").resolve()
+    model_dir_name = f"models--{model_name_or_path.replace('/', '--')}"
+    hub_cache_model_dir = None
+    if hub_cache_root.is_dir():
+        hub_cache_model_dir = next(
+            (entry.resolve() for entry in hub_cache_root.iterdir() if entry.name == model_dir_name), None
+        )
+    if (
+        hub_cache_model_dir is not None
+        and hub_cache_model_dir.is_relative_to(hub_cache_root)
+        and hub_cache_model_dir.is_dir()
+    ):
+        snapshots = (hub_cache_model_dir / "snapshots").resolve()
+        if snapshots.is_relative_to(hub_cache_model_dir) and snapshots.is_dir():
             for snap in snapshots.iterdir():
-                if snap.is_dir() and (snap / "config.json").exists():
-                    cfg = load_local_model_config(snap / "config.json")
+                config_path = (snap / "config.json").resolve()
+                if config_path.is_relative_to(hub_cache_model_dir) and config_path.is_file():
+                    cfg = load_local_model_config(config_path)
                     if cfg is not None:
                         return cfg
 

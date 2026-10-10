@@ -166,7 +166,7 @@ class ConfigurationManifestAdapter:
         )
 
     async def deploy(self, artifact: GuideDeploymentArtifact, execution_context: dict[str, Any]) -> dict[str, Any]:
-        if not artifact.deployment_contract:
+        if not {"readinessDeployments", "endpoint"} <= artifact.deployment_contract.keys():
             return await self._delegate.deploy(artifact, execution_context)
         if Path(artifact.manifest_ref or "").is_dir():
             # Legacy Guide adapters may return a Kustomize overlay directory
@@ -350,8 +350,10 @@ class ConfigurationManifestAdapter:
         return isinstance(overrides.get("officialGuide"), dict)
 
     def _uses_delegate_lifecycle(self, artifact: GuideDeploymentArtifact) -> bool:
-        return artifact.guide_id == "pd-disaggregation" or bool(
-            getattr(type(self._delegate), "published_manifest_lifecycle", False)
+        return (
+            not {"readinessDeployments", "endpoint"} <= artifact.deployment_contract.keys()
+            or artifact.guide_id == "pd-disaggregation"
+            or bool(getattr(type(self._delegate), "published_manifest_lifecycle", False))
         )
 
     def _namespace(self, context: dict[str, Any]) -> str:
