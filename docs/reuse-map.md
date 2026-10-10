@@ -440,7 +440,7 @@ Define validated Agentic candidates and planning facts, with deterministic ranki
 
 - Entry point: [llm_d_bench/agentic/planner.py](../llm_d_bench/agentic/planner.py)
 - Symbols: `PlannedCandidate`, `PlanningFacts`, `DeterministicPlanner`, `OpenAICompatiblePlanner`
-- Boundaries: DeterministicPlanner consumes aggregated PerformanceScoreInput. OpenAICompatiblePlanner consumes only candidates satisfying hard constraints, raw historical samples and candidate-level AIC estimates, prioritizes each candidate's own estimate and requires rationale explaining the relative disadvantage of every returned lower-scored candidate. It must not receive aggregated results or filter candidates using them. Neither planner may create unvalidated configurations or execute deployments. Deterministic operator-preference keyword matching uses English aliases only; Chinese aliases are not supported.
+- Boundaries: PlanningFacts carries the deployment request's GPU memory utilization for deterministic and AI candidate capacity checks; it does not estimate live free GPU memory. DeterministicPlanner consumes aggregated PerformanceScoreInput. OpenAICompatiblePlanner consumes only candidates satisfying hard constraints, raw historical samples and candidate-level AIC estimates, prioritizes each candidate's own estimate and requires rationale explaining the relative disadvantage of every returned lower-scored candidate. It must not receive aggregated results or filter candidates using them. Neither planner may create unvalidated configurations or execute deployments. Deterministic operator-preference keyword matching uses English aliases only; Chinese aliases are not supported.
 - Examples: [llm_d_bench/agentic/service.py](../llm_d_bench/agentic/service.py)
 - Tests: [llm_d_bench/agentic/test_planner.py](../llm_d_bench/agentic/test_planner.py), [llm_d_bench/agentic/test_service.py](../llm_d_bench/agentic/test_service.py)
 
@@ -450,7 +450,7 @@ Coordinate Agentic candidate generation, hard-constraint validation, dual eviden
 
 - Entry point: [llm_d_bench/agentic/service.py](../llm_d_bench/agentic/service.py)
 - Symbols: `AgenticDeploymentService`
-- Boundaries: The deterministic view exclusively owns PerformanceScoreInput and aggregate-based blocking. The AI view contains only raw historical samples and all candidates satisfying hard constraints. Candidates without raw AIC search predictions receive best-effort exact-topology estimates; failures remain unknown. The service creates awaiting_approval plans without deploying automatically.
+- Boundaries: The request's max_model_len and gpu_memory_utilization drive candidate checks, approval revalidation and the deployed configuration, including both PD vLLM roles. The deterministic view exclusively owns PerformanceScoreInput and aggregate-based blocking. The AI view contains only raw historical samples and all candidates satisfying hard constraints. Candidates without raw AIC search predictions receive best-effort exact-topology estimates; failures remain unknown. The service creates awaiting_approval plans without deploying automatically.
 - Examples: [llm_d_bench/agentic/router.py](../llm_d_bench/agentic/router.py)
 - Tests: [llm_d_bench/agentic/test_service.py](../llm_d_bench/agentic/test_service.py)
 

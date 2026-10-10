@@ -224,6 +224,7 @@ class PlanningFacts:
     model_weight_gib: float
     vram_per_gpu_gib: float
     free_gpu_count: int
+    gpu_memory_utilization: float = 0.9
     cpu_buffer_gib: float = 0
     required_cpu_buffer_gib: float = 0
     context_length: int = 4096
@@ -343,14 +344,14 @@ class DeterministicPlanner:
                     if valid_tps is not None and tensor_parallel_size not in valid_tps:
                         reasons.append(f"TP={tensor_parallel_size} is invalid for model architecture")
                 else:
-                    if footprint_gib > facts.vram_per_gpu_gib * tensor_parallel_size * 0.9:
+                    if footprint_gib > facts.vram_per_gpu_gib * tensor_parallel_size * facts.gpu_memory_utilization:
                         reasons.append("estimated model footprint exceeds selected TP VRAM")
 
                 avail_kv = allocatable_kv_cache_memory(
                     facts.model_name or "model",
                     model_config,
                     gpu_memory=facts.vram_per_gpu_gib,
-                    gpu_util=0.9,
+                    gpu_util=facts.gpu_memory_utilization,
                     tp=tensor_parallel_size,
                     pp=1,
                     dp=1,
@@ -369,7 +370,7 @@ class DeterministicPlanner:
                     model_config,
                     max_model_len=facts.context_length,
                     gpu_memory=facts.vram_per_gpu_gib,
-                    gpu_util=0.9,
+                    gpu_util=facts.gpu_memory_utilization,
                     tp=tensor_parallel_size,
                     pp=1,
                     dp=1,
@@ -432,7 +433,7 @@ class DeterministicPlanner:
                 tensor_parallel_size=tensor_parallel_size,
                 guide_variant=variant,
                 max_model_len=facts.context_length,
-                gpu_memory_utilization=0.9,
+                gpu_memory_utilization=facts.gpu_memory_utilization,
                 required_gpus=required_gpus,
                 deployable=not reasons,
                 rejection_reasons=list(reasons),
@@ -464,14 +465,14 @@ class DeterministicPlanner:
             if valid_tps is not None and tensor_parallel_size not in valid_tps:
                 reasons.append(f"TP={tensor_parallel_size} is invalid for model architecture")
         else:
-            if footprint_gib > facts.vram_per_gpu_gib * tensor_parallel_size * 0.9:
+            if footprint_gib > facts.vram_per_gpu_gib * tensor_parallel_size * facts.gpu_memory_utilization:
                 reasons.append("estimated model footprint exceeds selected TP VRAM")
 
         avail_kv = allocatable_kv_cache_memory(
             facts.model_name or "model",
             model_config,
             gpu_memory=facts.vram_per_gpu_gib,
-            gpu_util=0.9,
+            gpu_util=facts.gpu_memory_utilization,
             tp=tensor_parallel_size,
             pp=1,
             dp=1,
@@ -490,7 +491,7 @@ class DeterministicPlanner:
             model_config,
             max_model_len=facts.context_length,
             gpu_memory=facts.vram_per_gpu_gib,
-            gpu_util=0.9,
+            gpu_util=facts.gpu_memory_utilization,
             tp=tensor_parallel_size,
             pp=1,
             dp=1,
@@ -515,7 +516,7 @@ class DeterministicPlanner:
             prefill_tensor_parallel_size=tensor_parallel_size,
             guide_variant="vllm",
             max_model_len=facts.context_length,
-            gpu_memory_utilization=0.9,
+            gpu_memory_utilization=facts.gpu_memory_utilization,
             required_gpus=required_gpus,
             deployable=not reasons,
             rejection_reasons=reasons,
@@ -957,7 +958,7 @@ def minimum_tensor_parallelism(facts: PlanningFacts) -> int:
                 facts.model_name or "model",
                 model_config,
                 gpu_memory_gb=facts.vram_per_gpu_gib,
-                gpu_util=0.9,
+                gpu_util=facts.gpu_memory_utilization,
                 fallback_weight_gib=facts.model_weight_gib,
             )
             if valid_fits:
@@ -966,7 +967,7 @@ def minimum_tensor_parallelism(facts: PlanningFacts) -> int:
             logger.debug("Could not check whether the model fits in GPU memory", exc_info=True)
 
     footprint_gib = facts.model_weight_gib * 1.2 + max(1.0, facts.context_length / 4096)
-    return max(1, ceil(footprint_gib / (facts.vram_per_gpu_gib * 0.9)))
+    return max(1, ceil(footprint_gib / (facts.vram_per_gpu_gib * facts.gpu_memory_utilization)))
 
 
 def _topology_key(candidate: PlannedCandidate) -> tuple[object, ...]:

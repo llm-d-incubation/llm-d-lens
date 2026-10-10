@@ -803,7 +803,7 @@
         "OpenAICompatiblePlanner"
       ],
       "purpose": "Define validated Agentic candidates and planning facts, with deterministic ranking and constrained external-AI candidate scoring.",
-      "boundaries": "DeterministicPlanner consumes aggregated PerformanceScoreInput. OpenAICompatiblePlanner consumes only candidates satisfying hard constraints, raw historical samples and candidate-level AIC estimates, prioritizes each candidate's own estimate and requires rationale explaining the relative disadvantage of every returned lower-scored candidate. It must not receive aggregated results or filter candidates using them. Neither planner may create unvalidated configurations or execute deployments. Deterministic operator-preference keyword matching uses English aliases only; Chinese aliases are not supported.",
+      "boundaries": "PlanningFacts carries the deployment request's GPU memory utilization for deterministic and AI candidate capacity checks; it does not estimate live free GPU memory. DeterministicPlanner consumes aggregated PerformanceScoreInput. OpenAICompatiblePlanner consumes only candidates satisfying hard constraints, raw historical samples and candidate-level AIC estimates, prioritizes each candidate's own estimate and requires rationale explaining the relative disadvantage of every returned lower-scored candidate. It must not receive aggregated results or filter candidates using them. Neither planner may create unvalidated configurations or execute deployments. Deterministic operator-preference keyword matching uses English aliases only; Chinese aliases are not supported.",
       "examples": [
         "llm_d_bench/agentic/service.py"
       ],
@@ -819,7 +819,7 @@
         "AgenticDeploymentService"
       ],
       "purpose": "Coordinate Agentic candidate generation, hard-constraint validation, dual evidence views, optional AI scoring, approval plans, and snapshots.",
-      "boundaries": "The deterministic view exclusively owns PerformanceScoreInput and aggregate-based blocking. The AI view contains only raw historical samples and all candidates satisfying hard constraints. Candidates without raw AIC search predictions receive best-effort exact-topology estimates; failures remain unknown. The service creates awaiting_approval plans without deploying automatically.",
+      "boundaries": "The request's max_model_len and gpu_memory_utilization drive candidate checks, approval revalidation and the deployed configuration, including both PD vLLM roles. The deterministic view exclusively owns PerformanceScoreInput and aggregate-based blocking. The AI view contains only raw historical samples and all candidates satisfying hard constraints. Candidates without raw AIC search predictions receive best-effort exact-topology estimates; failures remain unknown. The service creates awaiting_approval plans without deploying automatically.",
       "examples": [
         "llm_d_bench/agentic/router.py"
       ],

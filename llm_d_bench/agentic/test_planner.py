@@ -38,6 +38,19 @@ def test_planner_selects_the_smallest_feasible_standard_vllm_topology():
     assert decision.candidate_id == "optimized-baseline-tp1-r1"
 
 
+def test_candidates_use_requested_utilization_for_capacity_and_configuration():
+    planner = DeterministicPlanner()
+    low = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=4, gpu_memory_utilization=0.6)
+    high = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=4, gpu_memory_utilization=0.9)
+
+    low_candidate = next(candidate for candidate in planner.candidates(low) if candidate.id == "baseline-vllm-tp1-r1")
+    high_candidate = next(candidate for candidate in planner.candidates(high) if candidate.id == low_candidate.id)
+    pd_candidate = next(candidate for candidate in planner.candidates(low) if candidate.provider_ref == "pd-disaggregation")
+
+    assert low_candidate.gpu_memory_utilization == pd_candidate.gpu_memory_utilization == 0.6
+    assert low_candidate.allocatable_kv_cache_gib < high_candidate.allocatable_kv_cache_gib
+
+
 def test_planner_maps_exact_aggregated_aic_predictions_to_optimized_baseline():
     facts = PlanningFacts(
         model_weight_gib=8,

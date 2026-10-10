@@ -22,6 +22,7 @@ def test_validator_keeps_valid_ai_candidates_when_other_proposals_are_invalid():
         model_weight_gib=8,
         vram_per_gpu_gib=32,
         free_gpu_count=4,
+        gpu_memory_utilization=0.6,
         evidence_ids=("aic:search",),
     )
     proposals = [
@@ -45,6 +46,7 @@ def test_validator_keeps_valid_ai_candidates_when_other_proposals_are_invalid():
     result = CandidateValidator().validate(facts, proposals)
 
     assert [candidate.id for candidate in result.accepted] == ["baseline-vllm-tp1-r1"]
+    assert result.accepted[0].gpu_memory_utilization == 0.6
     assert result.accepted[0].evidence_ids == ["aic:search"]
     assert [candidate.id for candidate in result.rejected] == ["pd-disaggregation-p2-tp2-d2-tp2"]
     assert result.rejected[0].rejection_reasons == ["insufficient free accelerator cards"]

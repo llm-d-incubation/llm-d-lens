@@ -1032,7 +1032,7 @@ class CandidateValidator:
                 facts.model_name or "model",
                 model_config,
                 gpu_memory=facts.vram_per_gpu_gib,
-                gpu_util=0.9,
+                gpu_util=facts.gpu_memory_utilization,
                 tp=proposal.tensor_parallel_size,
                 pp=1,
                 dp=1,
@@ -1051,7 +1051,7 @@ class CandidateValidator:
                 model_config,
                 max_model_len=facts.context_length,
                 gpu_memory=facts.vram_per_gpu_gib,
-                gpu_util=0.9,
+                gpu_util=facts.gpu_memory_utilization,
                 tp=proposal.tensor_parallel_size,
                 pp=1,
                 dp=1,
@@ -1074,7 +1074,7 @@ class CandidateValidator:
                 prefill_tensor_parallel_size=proposal.prefill_tensor_parallel_size,
                 guide_variant=self._guide_variant(proposal.provider_ref),
                 max_model_len=facts.context_length,
-                gpu_memory_utilization=0.9,
+                gpu_memory_utilization=facts.gpu_memory_utilization,
                 required_gpus=required_gpus,
                 deployable=not reasons,
                 rejection_reasons=reasons,
@@ -1140,7 +1140,7 @@ class CandidateValidator:
                 facts.model_name or "model",
                 model_config,
                 gpu_memory=facts.vram_per_gpu_gib,
-                gpu_util=0.9,
+                gpu_util=facts.gpu_memory_utilization,
                 tp=proposal.tensor_parallel_size,
                 pp=1,
                 dp=1,
@@ -1164,7 +1164,7 @@ class CandidateValidator:
                     facts.model_name or "model",
                     model_config,
                     gpu_memory=facts.vram_per_gpu_gib,
-                    gpu_util=0.9,
+                    gpu_util=facts.gpu_memory_utilization,
                     tp=proposal.prefill_tensor_parallel_size,
                     pp=1,
                     dp=1,
@@ -1177,12 +1177,12 @@ class CandidateValidator:
                     reasons.append("insufficient KV cache for prefill context length")
         else:
             footprint_gib = facts.model_weight_gib * 1.2 + max(1.0, facts.context_length / 4096)
-            if footprint_gib > facts.vram_per_gpu_gib * proposal.tensor_parallel_size * 0.9:
+            if footprint_gib > facts.vram_per_gpu_gib * proposal.tensor_parallel_size * facts.gpu_memory_utilization:
                 reasons.append("estimated model footprint exceeds selected decode TP VRAM")
             if (
                 is_pd
                 and proposal.prefill_tensor_parallel_size is not None
-                and footprint_gib > facts.vram_per_gpu_gib * proposal.prefill_tensor_parallel_size * 0.9
+                and footprint_gib > facts.vram_per_gpu_gib * proposal.prefill_tensor_parallel_size * facts.gpu_memory_utilization
             ):
                 reasons.append("estimated model footprint exceeds selected prefill TP VRAM")
         if cls._required_gpus(proposal) > facts.free_gpu_count:

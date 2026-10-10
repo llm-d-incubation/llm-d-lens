@@ -133,11 +133,17 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
     session = SimpleNamespace(id="a" * 36, server_id="cluster-a")
     monkeypatch.setattr("llm_d_bench.agentic.service.require_active_session", lambda _session_id: session)
     planning_lengths = []
+    planning_utilizations = []
 
     async def resolve_facts(_cluster_id, _model, facts, **_kwargs):
         planning_lengths.append(facts.context_length)
+        planning_utilizations.append(facts.gpu_memory_utilization)
         resolved = _resolved_facts()
-        resolved.facts = replace(resolved.facts, context_length=facts.context_length)
+        resolved.facts = replace(
+            resolved.facts,
+            context_length=facts.context_length,
+            gpu_memory_utilization=facts.gpu_memory_utilization,
+        )
         return resolved
 
     monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", resolve_facts)
@@ -149,7 +155,7 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
         return SimpleNamespace(id="deploy-run-1")
 
     monkeypatch.setattr("llm_d_bench.agentic.service.deployment_run_manager.start_run", start_run)
-    run = asyncio.run(service.create(_request(max_model_len=32768)))
+    run = asyncio.run(service.create(_request(max_model_len=32768, gpu_memory_utilization=0.6)))
 
     approved = asyncio.run(service.approve(run.id))
 
@@ -157,7 +163,10 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
     assert approved.configuration_artifact_id is None
     assert approved.deployment_run_id == "deploy-run-1"
     assert planning_lengths == [32768, 32768]
+    assert planning_utilizations == [0.6, 0.6]
+    assert run.selected_candidate.gpu_memory_utilization == 0.6
     assert saved["configuration"].content["decode"]["maxModelLen"] == 32768
+    assert saved["configuration"].content["decode"]["gpuMemoryUtilization"] == 0.6
     assert saved["configuration"].provenance["cluster_ref"]["session_id"] == session.id
     assert saved["deployment"].provenance["agentic_deployment_run_id"] == run.id
 
@@ -246,6 +255,7 @@ def test_planning_uses_deployment_context_length_and_preserves_workload_signals(
 
     facts = captured["facts"]
     assert facts.context_length == 32768
+    assert facts.gpu_memory_utilization == 0.6
     assert facts.use_case == "long-inputs"
     assert facts.workload_profile is not None
     assert facts.workload_profile.mean_input_tokens == 16384
@@ -1092,13 +1102,17 @@ def test_refine_without_ai_provider_uses_deterministic_planning(monkeypatch):
 
     async def resolve_facts(_cluster_id, _model, facts, **_kwargs):
         resolved = _resolved_facts()
-        resolved.facts = replace(resolved.facts, operator_preference=facts.operator_preference)
+        resolved.facts = replace(
+            resolved.facts,
+            operator_preference=facts.operator_preference,
+            gpu_memory_utilization=facts.gpu_memory_utilization,
+        )
         return resolved
 
     monkeypatch.setattr("llm_d_bench.agentic.service.resolve_planning_facts", resolve_facts)
     monkeypatch.setattr("llm_d_bench.agentic.service.OpenAICompatiblePlanner.from_environment", lambda: None)
 
-    run = asyncio.run(service.create(_request(planner_prompt="balanced")))
+    run = asyncio.run(service.create(_request(planner_prompt="balanced", gpu_memory_utilization=0.6)))
     refined = asyncio.run(
         service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="distributed"))
     )
@@ -1111,6 +1125,8 @@ def test_refine_without_ai_provider_uses_deterministic_planning(monkeypatch):
     assert refined.request.planner_prompt == "distributed"
     assert refined.selected_candidate.id == refined.candidates[0].id
     assert refined.selected_candidate.provider_ref == "pd-disaggregation"
+    assert refined.selected_candidate.gpu_memory_utilization == 0.6
+    assert all(candidate.gpu_memory_utilization == 0.6 for candidate in refined.candidates)
     assert all(candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates)
 
 

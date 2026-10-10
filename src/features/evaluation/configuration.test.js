@@ -61,6 +61,7 @@ test('blank runtime controls inherit source values and explicit values are seria
     const { runtimeControlOverrides } = await import('./configuration.js');
     assert.deepEqual(runtimeControlOverrides({ blockSize: '', maxNumBatchedTokens: '', maxModelLen: '', maxNumSeqs: '', gpuMemoryUtilization: '' }, 'vllm'), []);
     assert.deepEqual(runtimeControlOverrides({ blockSize: '32' }, 'vllm'), [{ target: 'both', kind: 'argument', name: 'block-size', value: '32' }]);
+    assert.deepEqual(runtimeControlOverrides({ maxModelLen: 4096 }, 'vllm'), [{ target: 'both', kind: 'argument', name: 'max-model-len', value: '4096' }]);
     assert.deepEqual(runtimeControlOverrides({ blockSize: '32' }, 'sglang'), []);
 });
 

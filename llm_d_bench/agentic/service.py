@@ -91,6 +91,7 @@ class AgenticDeploymentService:
         planning_facts = self._planning_only_facts(
             request.planning_facts,
             max_model_len=request.max_model_len,
+            gpu_memory_utilization=request.gpu_memory_utilization,
             operator_preference=request.planner_prompt or "",
         )
         deterministic = DeterministicPlanner()
@@ -809,6 +810,7 @@ class AgenticDeploymentService:
         planning_facts = self._planning_only_facts(
             run.request.planning_facts,
             max_model_len=run.request.max_model_len,
+            gpu_memory_utilization=run.request.gpu_memory_utilization,
             operator_preference=request.planner_prompt,
         )
         deterministic = DeterministicPlanner()
@@ -978,10 +980,11 @@ class AgenticDeploymentService:
         )
 
     @staticmethod
-    def _planning_only_facts(facts, *, max_model_len: int, operator_preference: str = ""):
+    def _planning_only_facts(facts, *, max_model_len: int, gpu_memory_utilization: float, operator_preference: str = ""):
         return replace(
             facts,
             context_length=max_model_len,
+            gpu_memory_utilization=gpu_memory_utilization,
             operator_preference=operator_preference,
             vllm_arguments=(),
         )
@@ -1024,7 +1027,11 @@ class AgenticDeploymentService:
         refreshed = await resolve_planning_facts(
             session.server_id,
             run.request.model,
-            self._planning_only_facts(run.request.planning_facts, max_model_len=run.request.max_model_len),
+            self._planning_only_facts(
+                run.request.planning_facts,
+                max_model_len=run.request.max_model_len,
+                gpu_memory_utilization=run.request.gpu_memory_utilization,
+            ),
             include_supplementary_evidence=False,
         )
         if selected.required_gpus > refreshed.facts.free_gpu_count:

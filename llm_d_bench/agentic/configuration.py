@@ -67,7 +67,7 @@ def build_agentic_configuration(
         "runtime": runtime,
         "customParameters": [
             {
-                "target": "decode",
+                "target": "both" if candidate.provider_ref == "pd-disaggregation" else "decode",
                 "kind": "argument",
                 "name": "gpu-memory-utilization",
                 "value": str(request.gpu_memory_utilization),
