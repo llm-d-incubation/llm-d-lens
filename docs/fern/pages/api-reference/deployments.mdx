@@ -250,6 +250,7 @@ asyncio.run(main())
 
 Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM contract.
 The generated namespace uses the backend's configured deployment prefix (for example, `llmd-baseline-vllm-...`).
+Standard vLLM deployments use the baseline adapter for rollout readiness and cleanup; they do not require a published Guide manifest's `readinessDeployments` contract.
 
 <Tabs>
   <Tab title="REST API">

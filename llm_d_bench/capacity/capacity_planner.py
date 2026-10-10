@@ -441,13 +441,14 @@ def load_model_config(
     # Check standard HF hub cache path
     hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
     hub_cache_root = (Path(hf_home) / "hub").resolve()
-    hub_cache_model_dir = hub_cache_root / f"models--{model_name_or_path.replace('/', '--')}"
-    if hub_cache_model_dir.is_dir() and hub_cache_model_dir.resolve().is_relative_to(hub_cache_root):
-        snapshots = hub_cache_model_dir / "snapshots"
-        if snapshots.is_dir() and snapshots.resolve().is_relative_to(hub_cache_model_dir.resolve()):
+    hub_cache_model_dir = (hub_cache_root / f"models--{model_name_or_path.replace('/', '--')}").resolve()
+    if hub_cache_model_dir.is_relative_to(hub_cache_root) and hub_cache_model_dir.is_dir():
+        snapshots = (hub_cache_model_dir / "snapshots").resolve()
+        if snapshots.is_relative_to(hub_cache_model_dir) and snapshots.is_dir():
             for snap in snapshots.iterdir():
-                if snap.is_dir() and (snap / "config.json").resolve().is_relative_to(hub_cache_model_dir.resolve()):
-                    cfg = load_local_model_config(snap / "config.json")
+                config_path = (snap / "config.json").resolve()
+                if config_path.is_relative_to(hub_cache_model_dir) and config_path.is_file():
+                    cfg = load_local_model_config(config_path)
                     if cfg is not None:
                         return cfg
 

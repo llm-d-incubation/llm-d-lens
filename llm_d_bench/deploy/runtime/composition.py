@@ -1105,9 +1105,11 @@ def build_namespace_factory(namespace_prefix: str):
         tensor_parallelism = int(decode.get("tensorParallelSize", prefill.get("tensorParallelSize", 1)))
         timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
         if requested_prefix is not None:
-            if not isinstance(requested_prefix, str) or not re.fullmatch(
-                r"[a-z0-9]+(?:-[a-z0-9]+)*-", requested_prefix
-            ) or not requested_prefix.startswith(namespace_prefix):
+            if (
+                not isinstance(requested_prefix, str)
+                or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*-", requested_prefix)
+                or not requested_prefix.startswith(namespace_prefix)
+            ):
                 raise RuntimeConfigurationError("deployment namespace policy prefix is invalid")
             suffix = f"{replicas}-{tensor_parallelism}-{timestamp}"
             if len(requested_prefix) + len(suffix) > 63:

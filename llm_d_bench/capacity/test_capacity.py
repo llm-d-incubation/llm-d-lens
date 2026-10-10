@@ -305,6 +305,19 @@ def test_load_model_config_restricts_cache_symlinks(tmp_path, monkeypatch):
     (snapshot / "config.json").symlink_to(blob)
     assert load_model_config("org/model").hidden_size == 2048
 
+    model_dir = snapshot.parent.parent
+    outside_model = tmp_path / "outside-model"
+    model_dir.rename(outside_model)
+    model_dir.symlink_to(outside_model, target_is_directory=True)
+    assert load_model_config("org/model") is None
+
+    model_dir.unlink()
+    outside_model.rename(model_dir)
+    outside_snapshots = tmp_path / "outside-snapshots"
+    snapshot.parent.rename(outside_snapshots)
+    snapshot.parent.symlink_to(outside_snapshots, target_is_directory=True)
+    assert load_model_config("org/model") is None
+
 
 def test_estimate_capacity_router(llama3_8b_config, monkeypatch):
     from fastapi import FastAPI
