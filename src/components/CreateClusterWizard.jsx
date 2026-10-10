@@ -59,7 +59,7 @@ const CAPACITY_PATTERN = /^\d+(Gi|Mi|Ti)$/;
 const REPO_ID_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
 function shortId() {
-    return Math.random().toString(16).slice(2, 10);
+    return Array.from(crypto.getRandomValues(new Uint8Array(4)), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function request(path, options = {}) {

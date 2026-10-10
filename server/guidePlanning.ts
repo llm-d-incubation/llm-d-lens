@@ -948,7 +948,7 @@ export function selectManifestPaths(paths: string[], guide: string, accelerator:
     let prefix = `guides/${guide}/modelserver/${accelerator}/${modelServer}/`;
     let matching = paths.filter((item) => item.startsWith(prefix));
     if (!matching.length) throw Object.assign(new Error('No official YAML manifests match the selected guide, accelerator, and model server'), { status: 404 });
-    let normalizedVariant = requestedVariant.trim().replace(/^\/+|\/+$/g, '');
+    let normalizedVariant = requestedVariant.trim().replace(/^\/+/, '').replace(/\/+$/, '');
     if (normalizedVariant && (normalizedVariant.split('/').includes('..') || !/^[A-Za-z0-9._/-]+$/.test(normalizedVariant))) {
         throw Object.assign(new Error('Guide variant path is invalid'), { status: 400 });
     }

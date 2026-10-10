@@ -426,26 +426,27 @@ def load_model_config(
     hf_token: str | None = None,
     local_config_path: str | Path | None = None,
 ) -> Any:
-    """Load model config from local path, HuggingFace cache, or remote."""
+    """Load model config from an explicit local path, Hugging Face cache, or remote."""
     if local_config_path:
         cfg = load_local_model_config(local_config_path)
         if cfg is not None:
             return cfg
 
-    # Check if model_name_or_path is itself a local path
-    if os.path.exists(model_name_or_path):
-        cfg = load_local_model_config(model_name_or_path)
-        if cfg is not None:
-            return cfg
+    parts = model_name_or_path.split("/")
+    if not (1 <= len(parts) <= 2 and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", part) for part in parts)):
+        return None
+    if any(".." in part or "--" in part for part in parts):
+        return None
 
     # Check standard HF hub cache path
     hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
-    hub_cache_model_dir = Path(hf_home) / "hub" / f"models--{model_name_or_path.replace('/', '--')}"
-    if hub_cache_model_dir.exists():
+    hub_cache_root = (Path(hf_home) / "hub").resolve()
+    hub_cache_model_dir = hub_cache_root / f"models--{model_name_or_path.replace('/', '--')}"
+    if hub_cache_model_dir.is_dir() and hub_cache_model_dir.resolve().is_relative_to(hub_cache_root):
         snapshots = hub_cache_model_dir / "snapshots"
-        if snapshots.exists():
+        if snapshots.is_dir() and snapshots.resolve().is_relative_to(hub_cache_model_dir.resolve()):
             for snap in snapshots.iterdir():
-                if snap.is_dir() and (snap / "config.json").exists():
+                if snap.is_dir() and (snap / "config.json").resolve().is_relative_to(hub_cache_model_dir.resolve()):
                     cfg = load_local_model_config(snap / "config.json")
                     if cfg is not None:
                         return cfg

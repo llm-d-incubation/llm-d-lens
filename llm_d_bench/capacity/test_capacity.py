@@ -18,6 +18,7 @@ from llm_d_bench.capacity import (
     validate_vllm_params,
     wrap_config,
 )
+from llm_d_bench.capacity.capacity_planner import load_model_config
 from llm_d_bench.capacity.vllm_constants import (
     ACTIVATION_PROFILES,
     VLLM_NON_TORCH_MEMORY_TP1_GIB,
@@ -268,6 +269,41 @@ def test_evaluate_capacity(llama3_8b_config):
     assert result.max_concurrent_requests > 0
     assert "model_weights_gib" in result.memory_breakdown
     assert "activation_memory_gib" in result.memory_breakdown
+
+
+def test_load_model_config_rejects_paths_and_preserves_explicit_local_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    monkeypatch.setattr("llm_d_bench.capacity.capacity_planner._TRANSFORMERS_AVAILABLE", False)
+    local_config = tmp_path / "config.json"
+    local_config.write_text('{"hidden_size": 4096}', encoding="utf-8")
+
+    for model_name in (str(tmp_path), "../config.json", "org/../config", "org/model--snap"):
+        assert load_model_config(model_name) is None
+
+    assert load_model_config("../config.json", local_config_path=local_config).hidden_size == 4096
+
+    snapshot = tmp_path / "hf" / "hub" / "models--org--model" / "snapshots" / "revision"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text('{"hidden_size": 2048}', encoding="utf-8")
+    assert load_model_config("org/model").hidden_size == 2048
+
+
+def test_load_model_config_restricts_cache_symlinks(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    monkeypatch.setattr("llm_d_bench.capacity.capacity_planner._TRANSFORMERS_AVAILABLE", False)
+    snapshot = tmp_path / "hf" / "hub" / "models--org--model" / "snapshots" / "revision"
+    snapshot.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"hidden_size": 1}', encoding="utf-8")
+    (snapshot / "config.json").symlink_to(outside)
+    assert load_model_config("org/model") is None
+
+    (snapshot / "config.json").unlink()
+    blob = snapshot.parent.parent / "blobs" / "hash"
+    blob.parent.mkdir()
+    blob.write_text('{"hidden_size": 2048}', encoding="utf-8")
+    (snapshot / "config.json").symlink_to(blob)
+    assert load_model_config("org/model").hidden_size == 2048
 
 
 def test_estimate_capacity_router(llama3_8b_config, monkeypatch):

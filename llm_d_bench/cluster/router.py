@@ -477,8 +477,9 @@ async def read_cluster_kubernetes_version(cluster_id: str) -> dict:
     minimum = min_k8s_version()
     try:
         parsed = await server_kubernetes_version(cluster_id)
-    except Exception as error:  # noqa: BLE001 - report any probe failure to the wizard
-        return {"reachable": False, "error": str(error), "min_k8s_version": minimum}
+    except Exception:  # noqa: BLE001 - report any probe failure to the wizard
+        logger.exception("Unable to query Kubernetes version for cluster %s", cluster_id)
+        return {"reachable": False, "error": "Unable to query Kubernetes version", "min_k8s_version": minimum}
     if parsed is None:
         return {"reachable": False, "min_k8s_version": minimum}
     version = f"{parsed[0]}.{parsed[1]}"

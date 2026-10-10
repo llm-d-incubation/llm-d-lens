@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import test, { after, before, beforeEach } from 'node:test';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 
 import { authMiddleware } from './auth.ts';
 import { backendApiProxyRouter } from './backend-api-proxy.ts';
@@ -76,6 +77,7 @@ before(async () => {
 
     const app = express();
     app.use(express.json());
+    app.use('/api', rateLimit({ windowMs: 60_000, max: 1000, standardHeaders: true, legacyHeaders: false }));
     app.use(authMiddleware);
     app.get('/api/config', (_req, res) => res.json({ ok: true }));
     app.post('/api/deploy-poc/start', (req, res) => {
@@ -103,6 +105,7 @@ beforeEach(() => {
 test('public config endpoint is reachable without a session', async () => {
     const response = await fetch(`${gatewayUrl}/api/config`);
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('ratelimit-limit'), '1000');
 });
 
 test('protected proxied route rejects an anonymous request', async () => {

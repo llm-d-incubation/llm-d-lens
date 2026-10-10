@@ -287,6 +287,16 @@ async def test_intel_hardware_presence_probe_detects_label_dra_or_extended_resou
         present[signal] = False
 
 
+def test_extended_resource_node_names_requires_exact_resource_domain():
+    from llm_d_bench.monitoring.accelerator.intel_gpu import _extended_resource_node_names
+
+    nodes = [
+        {"metadata": {"name": "valid"}, "status": {"allocatable": {"gpu.intel.com/xe": "8"}}},
+        {"metadata": {"name": "invalid"}, "status": {"allocatable": {"gpu.intel.com.evil/xe": "8"}}},
+    ]
+    assert _extended_resource_node_names(nodes) == {"valid"}
+
+
 @pytest.mark.asyncio
 async def test_preflight_access_label_only_for_dra(monkeypatch):
     provider = IntelGpuProvider()

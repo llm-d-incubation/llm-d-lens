@@ -335,9 +335,10 @@ def _resource_slice_node_names(items: list[dict[str, Any]]) -> set[str]:
 def _extended_resource_node_names(nodes: list[dict[str, Any]]) -> set[str]:
     """Return node names that advertise ``gpu.intel.com/*`` extended resources."""
     names: set[str] = set()
+    resource_domains = {prefix.removesuffix("/") for prefix in _resource_prefixes()}
     for node in nodes:
         allocatable = (node.get("status") or {}).get("allocatable") or {}
-        if any(str(key).startswith("gpu.intel.com/") for key in allocatable):
+        if any(str(key).partition("/")[0] in resource_domains and "/" in str(key) for key in allocatable):
             name = _metadata(node).get("name")
             if name:
                 names.add(str(name))

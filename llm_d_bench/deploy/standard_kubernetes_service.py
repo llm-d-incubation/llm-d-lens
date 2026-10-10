@@ -139,6 +139,5 @@ def build_standard_kubernetes_service_configuration(
             "deployment_name": request.deployment_name,
             "description": request.description.strip(),
             "storage_type": request.storage_type,
-            "namespace_policy": {"prefix": "standard-"},
         },
     )

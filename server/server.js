@@ -49,7 +49,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Apply API rate limiting before feature routers.
 const limiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
-    max: 50000, // Effectively unlimited for local dev
+    max: 1000,
     standardHeaders: true,
     legacyHeaders: false,
 });
