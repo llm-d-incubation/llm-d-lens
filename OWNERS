@@ -1,0 +1,17 @@
+# See https://go.k8s.io/owners for format documentation
+
+reviewers:
+  - maugustosilva
+  - vezio        # Core Maintainer
+  - mengmeiye
+  - yuanwu2017   # Core Maintainer
+  - WenjiaoYue
+  - joshuayao
+  - xiaojun-zhang
+
+approvers:
+  - vezio        # Core Maintainer
+  - yuanwu2017   # Core Maintainer
+  - WenjiaoYue
+  - joshuayao
+  - xiaojun-zhang

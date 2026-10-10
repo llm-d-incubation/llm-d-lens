@@ -26,7 +26,7 @@ def _self_scoped_principal(cluster_id: str, user_id: str) -> Principal:
     )
 
 
-def test_self_scoped_user_sees_own_evaluate_record_but_not_anothers():
+def test_self_scoped_user_sees_own_evaluate_record_but_not_another_user():
     cluster_id = ClusterDao().create(f"eval-{uuid4().hex[:6]}", "", "apiVersion: v1\nkind: Config").id
     owner = _self_scoped_principal(cluster_id, "owner")
     other = _self_scoped_principal(cluster_id, "other")

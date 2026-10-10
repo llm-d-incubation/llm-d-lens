@@ -15,3 +15,8 @@ MAPE = "MAPE"
 
 # Add repo-specific false positives here:
 # word = "word"
+# False positives from nightly typo scan (#2)
+# Last-4-chars API key preview (e.g. sk-secret-value -> ...alue)
+alue = "alue"
+# bash shell-detection regex: (?:ba)?sh$ matches sh and bash intentionally
+ba = "ba"
