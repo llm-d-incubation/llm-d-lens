@@ -1,9 +1,12 @@
+import { usePolling } from '../hooks/usePolling.js';
+import { createLatestResourceRequest } from '../utils/resourceLoader.js';
+import { useHardwareProfiles } from '../hooks/useHardwareProfiles.js';
 import { resolveEvaluationTarget } from '../features/evaluation/client';
 import { editedEvaluationConfiguration } from '../features/evaluation/configuration';
 import OptimizationSelectionSummary from './evaluation/OptimizationSelectionSummary.jsx';
 import { selectedOptimizationPlan } from '../features/evaluation/experimentDesign.js';
 import { confirmDelete } from "./ui/confirmDelete";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     AlertTriangle, ArrowLeft, Boxes, Check, ChevronDown, ChevronLeft,
     ChevronRight, Code2, Cpu, Ellipsis, ExternalLink, GitCompareArrows, Layers3, Pencil, Play, Plus, RefreshCw, Server, Settings2, SlidersHorizontal, Trash2,
@@ -48,7 +51,7 @@ function benchmarkFor(provider) {
         harness: "inference-perf",
         workload: "sanity_random.yaml",
         parallelism: 1,
-        wait_timeout_seconds: 1800,
+        wait_timeout_seconds: null,
         warmup_requests: 2,
         matrix: [],
         concurrency_stages: [],
@@ -105,6 +108,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     // consumes the same session key after this screen renders; reading it again on
     // subsequent renders would silently turn a Model Market deploy-only flow back
     // into the normal benchmark wizard.
+    const hardwareProfiles = useHardwareProfiles();
     const [returningIntent] = useState(() => readEvaluationIntent());
     const deployOnly = returningIntent?.operation === "deploy-only";
     const { can } = useAuth();
@@ -139,7 +143,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const [deploymentName, setDeploymentName] = useState(returningIntent?.deployment_name || "evaluation-serving");
     const [deploymentDescription, setDeploymentDescription] = useState(returningIntent?.deployment_description || "");
     const [imageMode] = useState("use-upstream-image");
-    const [runtimeImage, setRuntimeImage] = useState(DEFAULT_RUNTIME_IMAGES.xpu);
+    const [runtimeImage, setRuntimeImage] = useState('');
     const [buildSourceUrl] = useState("");
     const [clusters, setClusters] = useState([]);
     const [selectedClusterId, setSelectedClusterId] = useState(() => returningIntent?.cluster_id || sessionStorage.getItem("prism_cluster_server_id") || "");
@@ -156,7 +160,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const [customBenchmark, setCustomBenchmark] = useState(null);
     const [slaTargets, setSlaTargets] = useState({ success_rate_min_percent: 99, ttft_ms: "", ttft_percentile: "p99", tpot_ms: "", tpot_percentile: "p99" });
     const [workloadMode, setWorkloadMode] = useState("profile");
-    const [preserveDeployment, setPreserveDeployment] = useState(false);
+    const preserveDeployment = false;
     const [configurationEditor, setConfigurationEditor] = useState(null);
     const [existingConfigurationsOpen, setExistingConfigurationsOpen] = useState(false);
     const [highlightedArtifactIds, setHighlightedArtifactIds] = useState([]);
@@ -168,6 +172,44 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+
+    const [hardwareRequest] = useState(createLatestResourceRequest);
+    const refreshClusterHardware = useCallback(async ({ quiet = false } = {}) => {
+        if (!selectedClusterId) return null;
+        if (!quiet) setClusterHardwareLoading(true);
+        let hardware = null;
+        let failure;
+        await hardwareRequest.run(() => loadClusterOverview(selectedClusterId), {
+            onSuccess: (overview) => {
+                hardware = overview?.kubernetes?.hardware || null;
+                setClusterHardware(hardware);
+                const workers = (overview?.kubernetes?.nodes || []).filter((node) => node.ready && !node.schedulingDisabled);
+                const sharedImages = workers.length
+                    ? [...workers.slice(1).reduce(
+                        (images, node) => new Set([...images].filter((image) => (node.cachedImages || []).includes(image))),
+                        new Set(workers[0].cachedImages || []),
+                    )].sort()
+                    : [];
+                setCachedRuntimeImages(sharedImages);
+            },
+            onError: (error) => { failure = error; },
+            onSettled: () => setClusterHardwareLoading(false),
+        }, { skipIfPending: quiet });
+        if (failure) throw failure;
+        return hardware;
+    }, [selectedClusterId, hardwareRequest]);
+
+    useEffect(() => {
+        setClusterHardware(null);
+        setCachedRuntimeImages([]);
+        setClusterHardwareLoading(Boolean(selectedClusterId));
+        refreshClusterHardware().catch(() => null);
+        return () => hardwareRequest.cancel();
+    }, [selectedClusterId, refreshClusterHardware, hardwareRequest]);
+
+    usePolling(() => refreshClusterHardware({ quiet: true }).catch(() => null), {
+        enabled: Boolean(selectedClusterId),
+    });
 
     // A benchmark-only user can never switch to the deploy-a-configuration flow.
     useEffect(() => {
@@ -182,11 +224,11 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         const variant = acceleratorVariantForHardware(clusterHardware);
         if (!variant) return;
         setRuntimeImage((current) => (
-            isDefaultRuntimeImage(current) && current !== DEFAULT_RUNTIME_IMAGES[variant]
+            (!current || isDefaultRuntimeImage(current)) && current !== DEFAULT_RUNTIME_IMAGES[variant]
                 ? DEFAULT_RUNTIME_IMAGES[variant]
                 : current
         ));
-    }, [clusterHardware]);
+    }, [clusterHardware, hardwareProfiles]);
 
     useEffect(() => {
         if (!openMenuId) return undefined;
@@ -283,24 +325,6 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             .catch((nextError) => active && setError(nextError.message || "Unable to activate cluster"))
             .finally(() => active && setClusterLoading(false));
 
-        // Fill hardware, shared cached images and the runtime-image default in the
-        // background; a slow or failed overview must not block the cluster field.
-        setClusterHardwareLoading(true);
-        loadClusterOverview(selectedClusterId)
-            .then((overview) => {
-                if (!active) return;
-                setClusterHardware(overview?.kubernetes?.hardware || null);
-                const workers = (overview?.kubernetes?.nodes || []).filter((node) => node.ready && !node.schedulingDisabled);
-                const sharedImages = workers.length
-                    ? [...workers.slice(1).reduce(
-                        (images, node) => new Set([...images].filter((image) => (node.cachedImages || []).includes(image))),
-                        new Set(workers[0].cachedImages || []),
-                    )].sort()
-                    : [];
-                setCachedRuntimeImages(sharedImages);
-            })
-            .catch(() => active && setClusterHardware(null))
-            .finally(() => active && setClusterHardwareLoading(false));
         return () => { active = false; };
     }, [selectedClusterId]);
 
@@ -369,7 +393,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         : cachedModelsLoading ? { state: 'loading' }
         : modelCacheMismatch ? { state: 'model-mismatch', message: `${trimmedSharedModel} was not found in this Model Cache storage.` }
         : { state: 'ready' };
-    const sharedContext = { cluster: clusterLoading ? {} : cluster, clusterHardware, cachedRuntimeImages, model: sharedModel, modelSource, modelPath: modelSource === 'auto-cache' ? storageVolumes.find((item) => item.id === storageVolumeId)?.localDisk?.hostPath || '' : modelPath, storageVolumeId, modelServer: sharedRuntime, deploymentName, imageMode, image: runtimeImage, buildSourceUrl, storageVolume: storageVolumes.find((item) => item.id === storageVolumeId), cacheValidation, replicas: returningIntent?.workloads?.[0]?.replicas, tensorParallelSize: returningIntent?.workloads?.[0]?.tensor_parallel_size };
+    const sharedContext = { cluster: clusterLoading ? {} : cluster, clusterHardware, refreshClusterHardware, cachedRuntimeImages, model: sharedModel, modelSource, modelPath: modelSource === 'auto-cache' ? storageVolumes.find((item) => item.id === storageVolumeId)?.localDisk?.hostPath || '' : modelPath, storageVolumeId, modelServer: sharedRuntime, deploymentName, imageMode, image: runtimeImage, buildSourceUrl, storageVolume: storageVolumes.find((item) => item.id === storageVolumeId), cacheValidation, replicas: returningIntent?.workloads?.[0]?.replicas, tensorParallelSize: returningIntent?.workloads?.[0]?.tensor_parallel_size };
     const compatibleSavedArtifacts = artifacts.filter((item) => matchesEvaluationSetup(item, sharedContext));
     const modelOptions = [...new Set([...MODELS.map((item) => item.repository), ...cachedModelIds])].filter(Boolean).sort();
     const recommendedBenchmark = benchmarkFor(provider);
@@ -453,6 +477,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             clearEvaluationIntent();
             onNavigate("optimization-deployments");
         } catch (nextError) {
+            await refreshClusterHardware().catch(() => null);
             setError(nextError.message || "Deployment could not be created");
             window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
         } finally {
@@ -709,6 +734,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             window.dispatchEvent(new CustomEvent("prism:evaluation-created", { detail: { workflow: createdWorkflow } }));
             onNavigate("optimization-evaluate");
         } catch (nextError) {
+            await refreshClusterHardware().catch(() => null);
             setError(nextError.message || "Evaluation could not be created");
             window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
         } finally {
@@ -741,7 +767,13 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 <p className="mt-1 text-xs leading-5 text-slate-400">{deployOnly ? `Advanced-edit the deployment configuration for ${sharedModel}, then deploy it directly.` : "Design the complete experiment before deployment starts."}</p>
             </div>
         </header>
-        {error && <div role="alert" className="flex min-w-0 items-start gap-3 rounded-xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><div className="min-w-0"><p className="font-semibold">{step === 3 ? 'Evaluation could not start' : 'Unable to continue'}</p><p className="mt-1 break-words text-xs leading-6">{error}</p></div></div>}
+        {error && <div role="alert" className="flex min-w-0 items-start gap-3 rounded-xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><div className="min-w-0"><p className="font-semibold">{step === 3 ? 'Evaluation could not start' : 'Unable to continue'}</p><p className="mt-1 break-words text-xs leading-6">{error}</p>
+            {(!selectedClusterId || !clusters.some(item => item.id === selectedClusterId && item.ready) || error.includes('Software Versions')) && (
+                <Button type="button" variant="link" size="xs" className="mt-2" onClick={() => onNavigate('clusters')}>
+                    Select or manage a cluster
+                </Button>
+            )}
+        </div></div>}
         {!deployOnly && <ol className="grid grid-cols-4 gap-2 rounded-2xl border border-slate-800/60 bg-slate-950/30 p-2 shadow-inner" aria-label="Task creation progress">{STEPS.map((label, index) => <li key={label}><button disabled={editorBusy || index > step || (targetMode === "existing" && index === 1)} onClick={() => setStep(index)} className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition disabled:cursor-not-allowed ${index === step ? "bg-cyan-500/10 shadow-sm ring-1 ring-cyan-400/25" : index < step ? "hover:bg-slate-800/50" : "opacity-55"}`}><span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${index < step ? "bg-emerald-400/15 text-emerald-300" : index === step ? "bg-cyan-400 text-slate-950 shadow-[0_0_14px_rgba(34,211,238,.35)]" : "bg-slate-800 text-slate-500"}`}>{index < step ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className={`hidden truncate text-[9px] font-bold uppercase tracking-wide sm:block lg:text-[10px] ${index === step ? "text-cyan-200" : index < step ? "text-slate-300" : "text-slate-500"}`}>{label}</span></button></li>)}</ol>}
         {loading ? <div className="flex min-h-80 items-center justify-center"><RefreshCw className="h-6 w-6 animate-spin text-cyan-400" /></div> : <div>
             <main className="rounded-3xl border border-slate-800/70 bg-[#080d17]/95 p-5 shadow-[0_24px_80px_rgba(2,6,23,.32)] backdrop-blur-sm lg:p-6">
@@ -836,6 +868,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     slaTargets={slaTargets} setSlaTargets={setSlaTargets}
                     targetCount={runCount} summary={artifactSummaries.map(item => `${item.guide} · ${item.model} · ${item.topology}`).join("; ")}
                     issues={benchmarkErrors} recommendedBenchmark={recommendedBenchmark}
+                    fullBenchmark={provider?.evaluation?.full_workload?.shared_prefix}
                 />}
 
                 {!deployOnly && step === 3 && <EvaluationPlan
@@ -865,7 +898,6 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         {!deployOnly && !(step === 1 && configurationEditor) && <footer className="grid grid-cols-1 items-center gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
             <p className={`min-w-0 break-words text-xs leading-5 ${error ? "text-rose-300" : busy ? "text-cyan-300" : "text-amber-300"}`}>{error ? "Review the issue above, then retry." : (busy ? "Creating evaluation and scheduling deployment…" : step === 0 ? (!canContinue && (targetMode === "existing" ? "Select an endpoint" : `Required: ${setupIssues.join(" · ")}`)) : step === 1 ? ((!canContinue || combinationErrors.length > 0) && (combinationErrors[0] || "Add or select a valid configuration")) : step === 2 ? (canContinue ? `${tests.length ? runCount / tests.length : 0} targets × ${tests.length} tests = ${runCount} runs · Sequential` : benchmarkErrors[0] || "Benchmark Plan has no selected tests") : null)}</p>
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 sm:max-w-lg">
-            {targetMode === "configurations" && step >= 2 && <label className="mr-2 inline-flex min-h-9 items-center gap-2 rounded-lg bg-slate-800/50 px-3 text-xs text-slate-300"><input type="checkbox" checked={preserveDeployment} onChange={(event) => setPreserveDeployment(event.target.checked)} />Keep successful deployments</label>}
             {step > 0 && <button onClick={() => setStep((current) => targetMode === "existing" && current === 2 ? 0 : current - 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-700 px-4 text-xs"><ChevronLeft className="h-4 w-4" />Back</button>}
             {step < 3 ? <button disabled={combinationErrors.length > 0 && step > 0 || !canContinue} onClick={continueWizard} className="inline-flex h-9 items-center gap-1 rounded-lg bg-cyan-400 px-4 text-xs font-bold text-slate-950 disabled:opacity-40">{step === 0 && configurationEditor && targetMode === "configurations" ? "Return to configuration" : step === 1 ? "Continue to Benchmark" : "Continue"}<ChevronRight className="h-4 w-4" /></button> : <button disabled={busy} onClick={create} className="inline-flex h-10 min-w-40 shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-300 to-sky-400 px-5 text-xs font-bold text-slate-950 shadow-lg shadow-cyan-500/15 transition hover:brightness-110 disabled:cursor-wait disabled:opacity-70">{busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}{busy ? "Creating…" : "Start Evaluation"}</button>}
             </div>

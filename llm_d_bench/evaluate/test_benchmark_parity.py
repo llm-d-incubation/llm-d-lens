@@ -40,7 +40,7 @@ async def test_monitoring_setup_is_shared_and_reuses_healthy_targets(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ownership", OWNERS)
-async def test_monitoring_discovery_is_bounded_and_does_not_fail_run(monkeypatch, ownership):
+async def test_monitoring_discovery_is_bounded_and_prevents_unmonitored_run(monkeypatch, ownership):
     cancelled = asyncio.Event()
 
     async def blocked(*_args, **_kwargs):
@@ -53,7 +53,8 @@ async def test_monitoring_discovery_is_bounded_and_does_not_fail_run(monkeypatch
     monkeypatch.setattr(router, "wait_for_deployment_metrics", blocked)
     monkeypatch.setattr(router, "_MONITORING_PREPARE_TIMEOUT", 0.01)
     run = {"deployment_execution_id": "execution", "deployment_ownership": ownership}
-    await router._prepare_benchmark_monitoring(run)
+    with pytest.raises(RuntimeError, match="Benchmark traffic was not started"):
+        await router._prepare_benchmark_monitoring(run)
     assert cancelled.is_set()
     assert run["monitoring"]["status"] == "unavailable"
     assert "exceeded" in run["monitoring"]["message"]
@@ -72,7 +73,7 @@ async def test_monitoring_cancellation_is_not_swallowed(monkeypatch, ownership):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ownership", OWNERS)
-async def test_runner_collects_existing_metrics_even_when_setup_fails(monkeypatch, tmp_path, ownership):
+async def test_runner_never_starts_traffic_when_monitoring_setup_fails(monkeypatch, tmp_path, ownership):
     run = {
         "id": "parity",
         "deployment_execution_id": "execution",
@@ -84,29 +85,16 @@ async def test_runner_collects_existing_metrics_even_when_setup_fails(monkeypatc
         "wait_timeout_seconds": 60,
     }
     calls = _patch_execute_dependencies(monkeypatch, tmp_path, run, [_FakeProcess(0)])
-    run["cluster_session_id"] = "session"
     monkeypatch.setattr(router, "wait_for_deployment_metrics", AsyncMock(return_value=False))
     monkeypatch.setattr(router.deployment_monitoring, "enable", AsyncMock(side_effect=ValueError("RBAC forbidden")))
-    observation = {
-        "status": "available",
-        "window": {"start": "2026-09-16T00:00:00Z", "end": "2026-09-16T00:01:00Z"},
-        "series": [],
-        "summary": {"queue_depth": {"mean": 2}},
-    }
-    collect = AsyncMock(return_value=observation)
+    collect = AsyncMock()
     monkeypatch.setattr(router, "collect_benchmark_observability", collect)
-    snapshot = {"source": "kubernetes-api", "pods": [{"name": "model"}]}
-    monkeypatch.setattr(router, "_kubernetes_resource_snapshot", AsyncMock(return_value=snapshot))
     await router._execute(run["id"])
-    assert run["status"] == "succeeded", run.get("error")
-    assert len(calls) == 1
-    collect.assert_awaited_once()
-    assert collect.call_args.args[0] == "execution"
-    assert run["metrics"]["observability"] == observation
-    assert run["metrics"]["system_metrics"]["queue_depth"] == 2
-    assert run["resource_snapshot"] == snapshot
-    assert run["deployment_ownership"] == ownership
-    assert (tmp_path / run["id"] / "summary_kv_access.json").exists()
+    assert run["status"] == "failed"
+    assert "RBAC forbidden" in run["error"]
+    assert "traffic was not started" in run["monitoring"]["message"]
+    assert calls == []
+    collect.assert_not_awaited()
 
 
 def make_record(ownership):
@@ -197,17 +185,63 @@ async def test_standalone_hydrates_read_only_context_without_recapturing_history
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("healthy", [False, True])
-async def test_prometheus_readiness_requires_up_one(monkeypatch, healthy):
+@pytest.mark.parametrize(
+    "up_pods,sample_pods,epp_up,expected",
+    [
+        (["exporter"], [], True, False),
+        (["decode"], ["decode"], True, False),
+        (["decode", "prefill"], ["decode", "prefill"], False, False),
+        (["decode", "prefill"], ["decode", "prefill"], True, True),
+    ],
+)
+async def test_readiness_requires_every_serving_pod_and_epp(monkeypatch, up_pods, sample_pods, epp_up, expected):
     monkeypatch.setattr(profiling, "_deployment_target", lambda *_: (None, "model-ns", "cluster"))
     monkeypatch.setattr(profiling, "_prometheus_local_port", AsyncMock(return_value=12345))
+    monkeypatch.setattr(
+        profiling,
+        "_discover_components",
+        AsyncMock(return_value={"prefill": ["prefill"], "decode": ["decode"], "epp": ["router"]}),
+    )
 
     async def query(_client, expression):
-        assert expression == 'sum(up{namespace="model-ns"} == 1)'
-        return [{"value": [0, "1"]}] if healthy else []
+        if expression.startswith("up{"):
+            return [{"metric": {"pod": p}, "value": [0, "1"]} for p in up_pods] + (
+                [{"metric": {"service": "router"}, "value": [0, "1"]}] if epp_up else []
+            )
+        assert expression == 'count_over_time(vllm:num_requests_running{namespace="model-ns"}[30s])'
+        return [{"metric": {"pod": p}, "value": [0, "2"]} for p in sample_pods]
 
     monkeypatch.setattr(profiling, "_query", query)
-    assert await profiling.wait_for_deployment_metrics("execution", timeout_seconds=0) is healthy
+    assert await profiling.wait_for_deployment_metrics("execution", timeout_seconds=0) is expected
+
+
+@pytest.mark.asyncio
+async def test_delayed_targets_block_preparation_until_ready(monkeypatch):
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    calls = 0
+
+    async def ready(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return False
+        entered.set()
+        await release.wait()
+        return True
+
+    monkeypatch.setattr(router, "_save", lambda _: None)
+    monkeypatch.setattr(router, "wait_for_deployment_metrics", ready)
+    monkeypatch.setattr(router.deployment_monitoring, "enable", AsyncMock(return_value={}))
+    run = {"deployment_execution_id": "execution", "wait_timeout_seconds": 60}
+    task = asyncio.create_task(router._prepare_benchmark_monitoring(run))
+    await entered.wait()
+    assert not task.done()
+    assert run["monitoring"]["status"] == "preparing"
+    assert run["heartbeat_at"]
+    release.set()
+    await task
+    assert run["monitoring"]["status"] == "ready"
 
 
 def test_openapi_describes_shared_result_contract():
@@ -228,3 +262,31 @@ def test_workflow_and_standalone_share_all_workload_defaults_and_validation():
             router.EvaluateRunRequest.model_json_schema()["properties"][field]
             == BenchmarkSpec.model_json_schema()["properties"][field]
         )
+
+
+@pytest.mark.asyncio
+async def test_cancelling_monitoring_wait_cancels_child_poll(monkeypatch):
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def ready(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return False
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(router, "_save", lambda _: None)
+    monkeypatch.setattr(router, "wait_for_deployment_metrics", ready)
+    monkeypatch.setattr(router.deployment_monitoring, "enable", AsyncMock(return_value={}))
+    task = asyncio.create_task(router._prepare_benchmark_monitoring({"deployment_execution_id": "execution"}))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cancelled.is_set()

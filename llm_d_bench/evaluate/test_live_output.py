@@ -27,6 +27,7 @@ async def test_output_is_published_before_exit(monkeypatch):
     assert b"working" in out and b"diagnostic" in err
     assert any(item.get("stdout") and item.get("heartbeat_at") for item in saved[:-1])
     assert run["last_log_at"]
+    assert run["benchmark_started_at"] == run["phase_started_at"]
 
 
 @pytest.mark.asyncio

@@ -47,3 +47,16 @@ def test_missing_benchmark_and_invalid_input_keep_http_status(monkeypatch):
     client = TestClient(app())
     assert client.get(f"/api/v1/evaluate/runs/{uuid4()}").status_code == 404
     assert client.post("/api/v1/evaluate/runs", json={}).status_code == 422
+
+
+def test_timing_preview_returns_the_same_budget_as_execution_and_validates_input():
+    from llm_d_bench.deploy.capabilities import shared_prefix_routing_workload
+    from llm_d_bench.evaluate.models import BenchmarkSpec
+    from llm_d_bench.evaluate.timing import benchmark_timing
+
+    client = TestClient(app())
+    payload = {"shared_prefix": shared_prefix_routing_workload(), "wait_timeout_seconds": None}
+    response = client.post("/api/v1/evaluate/timing-estimate", json=payload)
+    assert response.status_code == 200
+    assert response.json() == benchmark_timing(BenchmarkSpec(**payload))
+    assert client.post("/api/v1/evaluate/timing-estimate", json={"parallelism": 0}).status_code == 422

@@ -88,14 +88,12 @@ def test_parse_peak_prefill_throughput_reads_either_format():
 
 def test_modelserver_overlay_follows_the_active_accelerator(tmp_path: Path):
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
-    adapter._overlay_variant_value = "gpu"
-    assert adapter._modelserver_overlay(tmp_path) == (
-        tmp_path / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
-    )
-    adapter._overlay_variant_value = "xpu"
-    assert adapter._modelserver_overlay(tmp_path) == (
-        tmp_path / "guides/precise-prefix-cache-routing/modelserver/xpu/vllm"
-    )
+    for key, variant in (("gpu", "base"), ("xpu", ".")):
+        overlay = tmp_path / f"guides/precise-prefix-cache-routing/modelserver/{key}/vllm" / variant
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+        adapter._accelerator = key
+        assert adapter._modelserver_overlay(tmp_path) == overlay
 
 
 def _upstream_deployment_documents():
@@ -150,7 +148,7 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
     )
 
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
-    adapter._accelerator = None
+    adapter._accelerator = "intel-xpu"
     adapter._patch_modelserver(documents, parameters)
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")
@@ -182,7 +180,7 @@ def test_patch_modelserver_applies_custom_parameters_and_mount_path():
     )
 
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
-    adapter._accelerator = None
+    adapter._accelerator = "intel-xpu"
     adapter._patch_modelserver(documents, parameters)
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")

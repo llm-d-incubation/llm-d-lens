@@ -55,6 +55,66 @@ class _ReadinessRunner:
         return 0, "deployment successfully rolled out", ""
 
 
+@pytest.mark.asyncio
+async def test_direct_deploy_adapts_legacy_pd_plugins_without_changing_guide(tmp_path, monkeypatch):
+    import llm_d_bench.deploy.providers.pd_disaggregation as pd
+
+    base = tmp_path / "guides/recipes/router/base.values.yaml"
+    guide = tmp_path / "guides/pd-disaggregation/router/pd-disaggregation.values.yaml"
+    base.parent.mkdir(parents=True)
+    guide.parent.mkdir(parents=True)
+    base.write_text("router:\n  epp:\n    replicas: 1\n")
+    original = yaml.safe_dump(
+        {
+            "router": {
+                "epp": {
+                    "pluginsConfigFile": "pd.yaml",
+                    "pluginsCustomConfig": {
+                        "pd.yaml": yaml.safe_dump(
+                            {
+                                "plugins": [
+                                    {"type": "disagg-headers-handler"},
+                                    {"type": "always-disagg-pd-decider"},
+                                    {
+                                        "type": "disagg-profile-handler",
+                                        "parameters": {"deciderPluginName": "always-disagg-pd-decider"},
+                                    },
+                                ]
+                            }
+                        )
+                    },
+                }
+            }
+        }
+    )
+    guide.write_text(original)
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("kind: Deployment\n")
+    captured = []
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def spawn(*args, **kwargs):
+        captured.extend(args)
+        return Process()
+
+    monkeypatch.setattr(pd.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(pd, "router_chart_version", lambda: "v0.11.0")
+    adapter = PdDisaggregationAdapter(_ReadinessRunner(), tmp_path, "llmd-", 30, Path("helm"), None)
+    artifact = GuideDeploymentArtifact("pd-disaggregation", "hash", manifest_ref=str(manifest))
+    await adapter.deploy(artifact, {"namespace": "llmd-test", "data_plane": "standalone_router"})
+    assert str(tmp_path / "router-compatible-pd.yaml") in captured
+    installed = (tmp_path / "router-compatible-pd.yaml").read_text()
+    assert "disagg-headers-handler" not in installed
+    assert "deciderPluginName" not in installed
+    assert "deciders:" in installed
+    assert guide.read_text() == original
+
+
 def _asset(name: str, content: str) -> dict[str, str]:
     return {"name": name, "content": content, "checksum": f"sha256:{hashlib.sha256(content.encode()).hexdigest()}"}
 
@@ -168,12 +228,10 @@ async def test_readiness_uses_contract_deployment_names():
 
 
 def test_guide_sources_follow_the_active_accelerator(monkeypatch, tmp_path):
-    import llm_d_bench.deploy.providers.pd_disaggregation as pd
 
-    monkeypatch.setattr(pd, "overlay_variant", lambda: "gpu")
-    assert PdDisaggregationAdapter._guide_sources(tmp_path) == {
-        "base": tmp_path / "guides/pd-disaggregation/modelserver/gpu/vllm/base"
-    }
-
-    monkeypatch.setattr(pd, "overlay_variant", lambda: "xpu")
-    assert set(PdDisaggregationAdapter._guide_sources(tmp_path)) == {"vllm", "vllm-rdma"}
+    for relative in ("gpu/vllm/base", "xpu/vllm", "xpu/vllm-rdma"):
+        overlay = tmp_path / "guides/pd-disaggregation/modelserver" / relative
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+    assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "gpu")) == {"base"}
+    assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "xpu")) == {".", "vllm", "vllm-rdma"}

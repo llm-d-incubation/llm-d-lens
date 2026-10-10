@@ -752,7 +752,7 @@ def test_missing_aic_predictions_estimate_each_supported_candidate_for_ai_scorin
                     "tool": "search_candidates",
                     "arguments": {
                         "workload": {"isl": 1024, "osl": 256},
-                        "searchConfig": {},
+                        "searchConfig": {"aicSystemName": "h100_sxm"},
                     },
                 }
             ],
@@ -790,7 +790,12 @@ def test_relaxed_candidate_keeps_unknown_performance_when_estimate_fails(monkeyp
             "Qwen/Qwen3-8B",
             [candidate],
             facts,
-            [{"tool": "search_candidates", "arguments": {"workload": {}, "searchConfig": {}}}],
+            [
+                {
+                    "tool": "search_candidates",
+                    "arguments": {"workload": {}, "searchConfig": {"aicSystemName": "h100_sxm"}},
+                }
+            ],
         )
     )
 
@@ -899,12 +904,12 @@ def test_create_falls_back_when_ai_generator_mcp_is_unavailable(monkeypatch, tmp
     assert run.generator == "deterministic"
     assert run.generator_fallback_reason == reason
     assert run.generator_fallback_detail == detail
-    assert len(estimate_requests) == 3
-    assert all(candidate.performance_estimate_source == "aic_estimate" for candidate in run.candidates)
+    assert estimate_requests == []
+    assert all(candidate.performance_estimate_source != "aic_estimate" for candidate in run.candidates)
     snapshot = json.loads((tmp_path / run.planning_snapshot_path).read_text(encoding="utf-8"))
     assert snapshot["generator"]["fallback_detail"] == detail
     assert all(
-        candidate["performance_estimate_source"] == "aic_estimate" for candidate in snapshot["candidate_catalog"]
+        candidate["performance_estimate_source"] != "aic_estimate" for candidate in snapshot["candidate_catalog"]
     )
 
 
@@ -927,8 +932,8 @@ def test_missing_requested_provider_estimates_fallback_candidates(monkeypatch):
     run = asyncio.run(service.create(_request(ai_provider_id="provider-1")))
 
     assert run.generator_fallback_reason == "provider_unavailable"
-    assert len(estimate_requests) == 3
-    assert all(candidate.performance_estimate_source == "aic_estimate" for candidate in run.candidates)
+    assert estimate_requests == []
+    assert all(candidate.performance_estimate_source != "aic_estimate" for candidate in run.candidates)
 
 
 def test_generator_provider_http_error_is_not_classified_as_invalid_candidate_response():

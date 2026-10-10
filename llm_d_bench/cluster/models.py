@@ -204,6 +204,7 @@ class NodeSummary(StrictModel):
     gpu: bool = False
     gpu_count: int = Field(default=0, alias="gpuCount")
     gpu_by_profile: dict[str, int] = Field(default_factory=dict, alias="gpuByProfile")
+    gpu_models_by_profile: dict[str, list[str]] = Field(default_factory=dict, alias="gpuModelsByProfile")
     gpu_usage_percent: float | None = Field(default=None, alias="gpuUsagePercent")
     vram_bytes: int = Field(default=0, alias="vramBytes")
     vram_usage_percent: float | None = Field(default=None, alias="vramUsagePercent")
@@ -220,6 +221,7 @@ class AcceleratorBucket(StrictModel):
 
     id: str
     gpu_count: int = Field(default=0, alias="gpuCount")
+    models: list[str] = Field(default_factory=list)
 
 
 class ClusterHardwareSummary(StrictModel):

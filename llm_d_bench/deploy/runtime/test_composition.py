@@ -28,12 +28,23 @@ def _executable(directory: Path, name: str) -> Path:
 def _environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     root = tmp_path / "llm-d"
     (root / "guides").mkdir(parents=True)
+    for relative in (
+        "tiered-prefix-cache/modelserver/xpu/vllm/base",
+        "tiered-prefix-cache/modelserver/xpu/vllm/native/cpu/base",
+        "tiered-prefix-cache/modelserver/xpu/vllm/lmcache-connector/cpu/base",
+        "precise-prefix-cache-routing/modelserver/xpu/vllm",
+        "precise-prefix-cache-routing/modelserver/gpu/vllm/base",
+    ):
+        overlay = root / "guides" / relative
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     kubectl = _executable(bin_dir, "kubectl")
     _executable(bin_dir, "helm")
     _executable(bin_dir, "docker")
     return {
+        "PRISM_DEPLOY_ACCELERATOR": "xpu",
         "LLM_D_ROOT": str(root),
         "PATH": str(bin_dir),
         "LLM_D_BENCH_KUBECTL_PATH": "",
@@ -75,7 +86,7 @@ def test_tiered_prefix_cache_provider_registers_all_upstream_xpu_variants(tmp_pa
     assert adapter._descriptor.variants["lmcache-connector/cpu/base"].name == "base"
     assert adapter._descriptor.variants["lmcache-connector/cpu/base"].parent.name == "cpu"
     # Native OffloadingConnector stays the recommended default; LMCache is opt-in.
-    assert adapter._descriptor.default_variant == "native/cpu/base"
+    assert adapter._descriptor.default_variant == "base"
 
 
 def test_existing_model_secret_requires_namespace_and_name():

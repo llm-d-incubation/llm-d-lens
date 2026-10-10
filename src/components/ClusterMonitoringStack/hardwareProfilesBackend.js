@@ -1,3 +1,4 @@
+import { setHardwareProfiles } from '../benchmark-results/acceleratorDisplay.js';
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +18,7 @@ const BASE_PATH = '/api/v1/hardware';
 export const DEFAULT_ACCESS_MODES = ['dra', 'plugin'];
 
 export function getHardwareProfiles({ signal } = {}) {
-    return requestJson(`${BASE_PATH}/capabilities`, { signal });
+    return requestJson(`${BASE_PATH}/capabilities`, { signal }).then(payload => { setHardwareProfiles(payload.profiles || []); return payload; });
 }
 
 // Map registered hardware profiles to accelerator vendor tabs. Each entry keeps

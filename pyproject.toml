@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Simulation backend for llm-d-prism"
 requires-python = ">=3.11"
 dependencies = [
-    "aiconfigurator==0.11.0.dev20260728",
+    "aiconfigurator==0.12.0",
     "aiohttp>=3.9",
     "alembic>=1.13",
     "argon2-cffi>=23",

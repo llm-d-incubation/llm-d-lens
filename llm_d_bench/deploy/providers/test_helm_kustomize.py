@@ -81,7 +81,9 @@ def test_patch_documents_sets_xpu_startup_budget_and_model_length():
         },
         {
             "kind": "ResourceClaimTemplate",
-            "spec": {"spec": {"devices": {"requests": [{"exactly": {"count": 1}}]}}},
+            "spec": {
+                "spec": {"devices": {"requests": [{"exactly": {"deviceClassName": "gpu.intel.com", "count": 1}}]}}
+            },
         },
     ]
     parameters = {
@@ -96,7 +98,7 @@ def test_patch_documents_sets_xpu_startup_budget_and_model_length():
     }
 
     adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
-    adapter._accelerator = None
+    adapter._accelerator = "intel-xpu"
     adapter._patch_documents(documents, parameters)
 
     deployment = documents[0]
@@ -122,7 +124,9 @@ def test_patch_documents_runs_huggingface_offline_for_a_mounted_cache():
         },
         {
             "kind": "ResourceClaimTemplate",
-            "spec": {"spec": {"devices": {"requests": [{"exactly": {"count": 1}}]}}},
+            "spec": {
+                "spec": {"devices": {"requests": [{"exactly": {"deviceClassName": "gpu.intel.com", "count": 1}}]}}
+            },
         },
     ]
     parameters = {
@@ -137,7 +141,7 @@ def test_patch_documents_runs_huggingface_offline_for_a_mounted_cache():
     }
 
     adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
-    adapter._accelerator = None
+    adapter._accelerator = "intel-xpu"
     adapter._patch_documents(documents, parameters)
 
     container = documents[0]["spec"]["template"]["spec"]["containers"][0]

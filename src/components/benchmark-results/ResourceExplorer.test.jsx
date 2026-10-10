@@ -66,3 +66,9 @@ test('Pod ranking shows mean, peak and deviation from the Pod average', () => {
   assert.match(html, />5<\/td>/);
   assert.ok(html.indexOf('title="b"') < html.indexOf('title="a"'));
 });
+
+
+test('device allocation failures remain visible alongside engine samples', () => {
+  const html = renderToStaticMarkup(<ResourceExplorer run={{ observability: { window, series: [{ timestamp: window.start, cpu_memory_usage_bytes: 1024 }], device_telemetry: { profiles: [{ id: 'example', status: 'unavailable', reason: 'No exclusive device identity' }] } } }} />);
+  assert.match(html, /example: No exclusive device identity/);
+});

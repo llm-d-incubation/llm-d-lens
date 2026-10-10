@@ -717,6 +717,9 @@ class AgenticDeploymentService:
             "osl": profile.mean_output_tokens if profile else 256,
         }
         config = arguments.get("searchConfig") or {}
+        aic_system_name = config.get("aicSystemName")
+        if not aic_system_name:
+            return candidates, facts
         predictions = list(facts.aic_predictions)
         updated = []
         for candidate in candidates:
@@ -734,7 +737,7 @@ class AgenticDeploymentService:
                     gpu_count=candidate.required_gpus,
                     mean_input_tokens=int(workload.get("isl") or facts.context_length),
                     mean_output_tokens=int(workload.get("osl") or 256),
-                    aic_system_name=config.get("aicSystemName") or "b60",
+                    aic_system_name=aic_system_name,
                     aic_backend_name=config.get("aicBackendName") or "vllm",
                     aic_database_mode=config.get("aicDatabaseMode") or "SILICON",
                     tp=candidate.tensor_parallel_size,

@@ -227,6 +227,7 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("GET", "/api/v1/deployments/runs/{run_id}/access/options", "deployment:run:share"),
     # --- evaluate ---
     RoutePermission("GET", "/api/v1/evaluate/benchmark-defaults", "evaluate:run:read"),
+    RoutePermission("POST", "/api/v1/evaluate/timing-estimate", "evaluate:run:read"),
     RoutePermission("POST", "/api/v1/evaluate/evaluations", "evaluate:workflow:create"),
     RoutePermission("GET", "/api/v1/evaluate/runs", "evaluate:run:read"),
     RoutePermission("POST", "/api/v1/evaluate/runs", "evaluate:run:create"),

@@ -1,3 +1,5 @@
+import { hardwareProfileSnapshot } from './hardwareProfiles.ts';
+import { managedImageProfile, profileForKey } from '../src/features/hardware/profiles.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import yaml from 'js-yaml';
@@ -12,51 +14,17 @@ const stackProfile = yaml.load(fs.readFileSync(new URL('../llm_d_bench/versions/
 export const ROUTER_CHART_VERSION = String(stackProfile.llm_d_router);
 export const ROUTER_DISAGG_SIDECAR_IMAGE = `ghcr.io/llm-d/llm-d-router-disagg-sidecar:${ROUTER_CHART_VERSION}`;
 
-/* Model-server images are owned by the hardware profiles (repository and
- * version), resolved from the profile registry directory so the planner never
- * branches on a vendor or hardcodes a file path. */
-function loadModelServerImages(): Record<string, string> {
-    const directory = new URL('../llm_d_bench/hardware/profiles/', import.meta.url);
-    const images: Record<string, string> = {};
-    for (const entry of fs.readdirSync(directory)) {
-        if (!entry.endsWith('.json')) continue;
-        const profile = JSON.parse(fs.readFileSync(new URL(entry, directory), 'utf8')) as RecordValue;
-        const image = profile?.deployment?.runtime_image;
-        if (typeof image === 'string' && image) images[image.split('@')[0].split(':')[0]] = image;
-    }
-    return images;
-}
-const modelServerImages = loadModelServerImages();
-
 /* Some Guides (e.g. tiered-prefix-cache) publish router values per topology
  * (a single-host overlay plus a multi-host LeaderWorkerSet one for multi-chip
  * accelerators). The topology is owned by the hardware profile registry,
  * resolved the same way as the model-server image, so the renderer never
  * hardcodes a single path for the whole guide. */
-function loadRouterTopologies(): Record<string, string> {
-    const directory = new URL('../llm_d_bench/hardware/profiles/', import.meta.url);
-    const topologies: Record<string, string> = {};
-    for (const entry of fs.readdirSync(directory)) {
-        if (!entry.endsWith('.json')) continue;
-        const profile = JSON.parse(fs.readFileSync(new URL(entry, directory), 'utf8')) as RecordValue;
-        const topology = profile?.deployment?.router_topology;
-        if (typeof topology !== 'string' || !topology) continue;
-        for (const key of profile?.accelerator_keys || []) topologies[String(key).toLowerCase()] = topology;
-    }
-    return topologies;
-}
-const routerTopologies = loadRouterTopologies();
-const DEFAULT_ROUTER_TOPOLOGY = 'single-host';
 function routerTopologyForAccelerator(accelerator?: string): string {
-    return routerTopologies[String(accelerator || '').toLowerCase()] ?? DEFAULT_ROUTER_TOPOLOGY;
+    return profileForKey(hardwareProfileSnapshot(), accelerator)?.deployment?.router_topology || 'single-host';
 }
 
-/* The deployed manifest must carry the model-server image the backend pins, so
- * the configuration validates. A repository a profile owns is replaced by that
- * profile's full image; a custom image passes through unchanged. */
-export function pinModelServerImage(image: string): string {
-    const repository = image.split('@')[0].split(':')[0];
-    return modelServerImages[repository] ?? image;
+export function pinModelServerImage(image: string, profiles = hardwareProfileSnapshot()): string {
+    return managedImageProfile(profiles, image)?.deployment?.runtime_image || image;
 }
 const routerPaths = {
     'optimized-baseline': 'optimized-baseline.values.yaml',
@@ -77,6 +45,42 @@ function merge(base: RecordValue, overlay: RecordValue): RecordValue {
         base[key] = mapping(value) && mapping(base[key]) ? merge(base[key], value) : value;
     }
     return base;
+}
+
+/* Mirror configuration/router_compatibility.py for the planning boundary.
+ * Original source layers remain intact; only effective values are adapted. */
+function adaptRouterPlugins(values: RecordValue): void {
+    const epp = values.router?.epp;
+    const image = epp?.image || {};
+    if (!mapping(image) || (image.repository || 'llm-d-router-endpoint-picker') !== 'llm-d-router-endpoint-picker') return;
+    if (!/^v?0\.11\.\d+$/.test(String(image.tag || ROUTER_CHART_VERSION))) return;
+    const key = epp?.pluginsConfigFile;
+    if (!key || typeof epp.pluginsCustomConfig?.[key] !== 'string') return;
+    const document = valuesYaml(epp.pluginsCustomConfig[key]);
+    if (!Array.isArray(document.plugins)) throw new Error('Router plugin configuration requires a plugins list');
+    const handlers = document.plugins.filter(p => p.type === 'disagg-profile-handler');
+    const headers = document.plugins.filter(p => p.type === 'disagg-headers-handler');
+    if (headers.length && (handlers.length !== 1 || headers.some(p => p.parameters && Object.keys(p.parameters).length))) {
+        throw new Error('Legacy disaggregation headers require one profile handler and no custom header parameters');
+    }
+    let changed = headers.length > 0;
+    for (const handler of handlers) {
+        const parameters = handler.parameters || {};
+        if (!Object.hasOwn(parameters, 'deciderPluginName')) continue;
+        const legacy = parameters.deciderPluginName;
+        parameters.deciders ||= {};
+        if (Object.hasOwn(parameters.deciders, 'prefill') && parameters.deciders.prefill !== legacy) {
+            throw new Error('Conflicting legacy and current P/D deciders');
+        }
+        parameters.deciders.prefill = legacy;
+        delete parameters.deciderPluginName;
+        handler.parameters = parameters;
+        changed = true;
+    }
+    if (changed) {
+        document.plugins = document.plugins.filter(p => p.type !== 'disagg-headers-handler');
+        epp.pluginsCustomConfig[key] = yaml.dump(document, { lineWidth: -1 });
+    }
 }
 
 /* Guides may publish their router values flat (`router/<file>`) or, on llm-d
@@ -124,6 +128,7 @@ export async function buildGuideDeploymentBundle({ guide, source, model, blockSi
         epp.pluginsCustomConfig[key] = yaml.dump(plugins, { lineWidth: -1 });
         if (Number(epp.replicas ?? 1) !== 1) throw new Error('Precise token-load routing currently requires one EPP replica.');
     }
+    adaptRouterPlugins(values);
     const resources: ReturnType<typeof asset>[] = [];
     let calibration: ReturnType<typeof asset>[] | undefined;
     if (guide === 'precise-prefix-cache-routing') {

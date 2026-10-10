@@ -1,74 +1,47 @@
 """Hardware identity for rendered deployment overlays.
 
 These helpers read device class, claim request name and overlay variant from
-the registered hardware profile instead of hardcoding them. Every function
-accepts an explicit ``accelerator`` keyword: callers pass the specific run's
-accelerator (the UI selection recorded on that run's configuration/provenance),
-so concurrent deployments for different clusters/vendors never share state.
-``PRISM_DEPLOY_ACCELERATOR``/the hardcoded Intel default are consulted only
-when a caller omits ``accelerator`` (legacy/no-op-safe fallback for callers
-that have no per-run value yet).
+the registered hardware profile instead of hardcoding them. Callers pass the
+specific run's accelerator, so concurrent deployments for different hardware
+never share selection state. PRISM_DEPLOY_ACCELERATOR is consulted only when
+an explicit accelerator is omitted; unresolved hardware stays neutral.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from llm_d_bench.hardware.models import HardwareProfile
 from llm_d_bench.hardware.registry import all_profiles
-from llm_d_bench.hardware.resolver import resolve_by_accelerator_key
+from llm_d_bench.hardware.resolver import deployment_mode, resolve_by_accelerator_key
 
-_ACTIVE_ACCELERATOR_KEY = "xpu"
-_ACCELERATOR_ENV = "PRISM_DEPLOY_ACCELERATOR"
-_ACCELERATOR_ALIASES = {
-    "xpu": "xpu",
-    "intel": "intel_gpu",
-    "intel-xpu": "intel_gpu",
-    "intel_gpu": "intel_gpu",
-    "gpu": "cuda",
-    "nvidia": "cuda",
-    "cuda": "cuda",
-    "nvidia_gpu": "cuda",
-}
-
-DEFAULT_DEVICE_CLASS = "gpu.intel.com"
-DEFAULT_CLAIM_REQUEST_NAME = "intel"
-DEFAULT_OVERLAY_VARIANT = "xpu"
-
-
-def _active_accelerator_key(accelerator: str | None = None) -> str:
-    """Resolve the accelerator key for one render/deploy call.
-
-    ``accelerator`` is the explicit, per-run value (from the run's own
-    provenance/UI selection); it always wins. Only when nothing recorded one
-    does this fall back to ``PRISM_DEPLOY_ACCELERATOR``/the Intel default, so
-    legacy callers (and tests) keep working unchanged.
-    """
-    explicit = (accelerator or "").strip().lower()
-    if explicit:
-        return _ACCELERATOR_ALIASES.get(explicit, explicit)
-    value = (os.environ.get(_ACCELERATOR_ENV) or "").strip().lower()
-    return _ACCELERATOR_ALIASES.get(value, _ACTIVE_ACCELERATOR_KEY)
+DEFAULT_DEVICE_CLASS = ""
+DEFAULT_CLAIM_REQUEST_NAME = ""
+DEFAULT_OVERLAY_VARIANT = ""
+DEFAULT_REQUEST_MODEL = ""
+DEFAULT_RUNTIME_IMAGE = ""
 
 
 def active_profile(accelerator: str | None = None) -> HardwareProfile | None:
     """The hardware profile to render for, honoring an explicit per-run accelerator."""
-    return resolve_by_accelerator_key(_active_accelerator_key(accelerator))
+    key = (accelerator or os.environ.get("PRISM_DEPLOY_ACCELERATOR") or "").strip().lower()
+    return resolve_by_accelerator_key(key) if key else None
 
 
-def device_class(fallback: str = DEFAULT_DEVICE_CLASS, *, accelerator: str | None = None) -> str:
+def device_class(fallback: str = "", *, accelerator: str | None = None, access_mode: str | None = None) -> str:
     profile = active_profile(accelerator)
-    return (profile.deployment.device_class if profile else "") or fallback
+    return str(deployment_mode(profile, access_mode).get("device_class") or "") if profile else fallback
 
 
-def claim_request_name(fallback: str = DEFAULT_CLAIM_REQUEST_NAME, *, accelerator: str | None = None) -> str:
+def claim_request_name(fallback: str = "", *, accelerator: str | None = None, access_mode: str | None = None) -> str:
     profile = active_profile(accelerator)
-    return (profile.deployment.claim_request_name if profile else "") or fallback
+    return str(deployment_mode(profile, access_mode).get("claim_request_name") or "") if profile else fallback
 
 
-def overlay_variant(fallback: str = DEFAULT_OVERLAY_VARIANT, *, accelerator: str | None = None) -> str:
+def overlay_variant(fallback: str = "", *, accelerator: str | None = None) -> str:
     profile = active_profile(accelerator)
-    return (profile.deployment.arch if profile else "") or fallback
+    return profile.upstream_variant if profile else fallback
 
 
 DEFAULT_ROUTER_TOPOLOGY = "single-host"
@@ -88,122 +61,117 @@ def router_topology(fallback: str = DEFAULT_ROUTER_TOPOLOGY, *, accelerator: str
 
 def accelerator_supported(key: str | None) -> bool:
     """True when a registered hardware profile supports this accelerator key."""
-    if not key:
-        return False
-    return resolve_by_accelerator_key(str(key)) is not None
+    return bool(key and resolve_by_accelerator_key(str(key)))
 
 
-DEFAULT_REQUEST_MODEL = "dra"
-
-
-def request_model(fallback: str = DEFAULT_REQUEST_MODEL, *, accelerator: str | None = None) -> str:
-    """How the profile requests accelerators: ``dra`` or ``extended-resource``."""
+def request_model(fallback: str = "", *, accelerator: str | None = None, access_mode: str | None = None) -> str:
+    """How the selected profile mode requests accelerators: DRA or extended resources."""
     profile = active_profile(accelerator)
-    return (profile.request_model if profile else "") or fallback
+    if profile is None:
+        return fallback
+    return str(deployment_mode(profile, access_mode)["request_model"])
 
 
 def requires_dra_claim(*, accelerator: str | None = None) -> bool:
     return request_model(accelerator=accelerator) == "dra"
 
 
-def resource_name(fallback: str | None = None, *, accelerator: str | None = None) -> str | None:
-    """Extended-resource key (e.g. ``nvidia.com/gpu``) for non-DRA profiles."""
+def resource_name(
+    fallback: str | None = None, *, accelerator: str | None = None, access_mode: str | None = None
+) -> str | None:
+    """Return the selected mode's resource key when it has one unambiguous choice."""
     profile = active_profile(accelerator)
-    return (profile.deployment.resource_name if profile else None) or fallback
-
-
-def _default_runtime_image() -> str:
-    """Fallback image used only before hardware discovery resolves a profile.
-
-    Reads the default accelerator's (``_ACTIVE_ACCELERATOR_KEY``) own pinned
-    ``deployment.runtime_image`` so the repository and version stay data owned
-    by the hardware profile, never a hardcoded literal here. The bare
-    repository below is a last-resort sentinel for the (practically
-    unreachable) case where that profile is itself missing its image.
-    """
-    profile = resolve_by_accelerator_key(_ACTIVE_ACCELERATOR_KEY)
-    return (profile.deployment.runtime_image if profile else None) or "ghcr.io/llm-d/llm-d-xpu"
-
-
-def _image_repository(image: str) -> str:
-    """Strip any tag/digest so two references to the same repository compare equal."""
-    if "@" in image:
-        return image.split("@", 1)[0]
-    last = image.rsplit("/", 1)[-1]
-    return image.rsplit(":", 1)[0] if ":" in last else image
-
-
-# Model-server image families Lens manages. A stored configuration may carry an
-# older llm-d image (``llm-d-cuda``/``llm-d-xpu``) or an upstream vLLM one; both are
-# normalized to the active profile's ``runtime_image``. Anything else is custom and
-# left untouched.
-_MANAGED_MODEL_IMAGE_REPOSITORIES = {
-    "ghcr.io/llm-d/llm-d-cuda",
-    "ghcr.io/llm-d/llm-d-xpu",
-    "ghcr.io/llm-d/llm-d-rocm",
-    "docker.io/vllm/vllm-openai",
-    "docker.io/vllm/vllm-openai-xpu",
-    "docker.io/vllm/vllm-openai-rocm",
-}
+    if profile is None:
+        return fallback
+    names = deployment_mode(profile, access_mode).get("resource_names", [])
+    return names[0] if len(names) == 1 else None
 
 
 def runtime_image(fallback: str | None = None, *, accelerator: str | None = None) -> str:
     """The active hardware profile's model-server image (repository and version).
 
-    The profile resolved for the deployment's accelerator supplies the full image;
-    ``fallback`` (then a neutral upstream default) is used only when hardware
-    discovery has not resolved a profile yet.
+    The profile supplies the full image. If it has no image or cannot be resolved,
+    use the caller's fallback, or stay neutral when no fallback was supplied.
     """
     profile = active_profile(accelerator)
-    if profile and profile.deployment.runtime_image:
-        return profile.deployment.runtime_image
-    return fallback or _default_runtime_image()
+    return (profile.deployment.runtime_image if profile else None) or fallback or ""
 
 
-def _profile_images_by_repository() -> dict[str, str]:
-    """Map each profile's runtime-image repository to that profile's full image."""
-    images: dict[str, str] = {}
-    for profile in all_profiles():
-        pinned = profile.deployment.runtime_image
-        if pinned:
-            images[_image_repository(pinned)] = pinned
-    return images
+def _image_repository(image: str) -> str:
+    """Strip any tag/digest so two references to the same repository compare equal."""
+    image = image.split("@", 1)[0]
+    return image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
 
 
 def pin_runtime_image(image: str, *, accelerator: str | None = None) -> str:
-    """Normalize a managed model-server image to the profile that owns it.
+    """Normalize a managed model-server image using profile-owned repositories.
 
-    The hardware profiles own both repository and version. An image whose
-    repository a profile defines is replaced with that profile's full image (so a
-    GPU config keeps the GPU pin even when the active process accelerator is
-    unset); a managed family with no owning profile falls back to the active
-    profile. Custom images pass through unchanged.
+    An explicit accelerator selects the target profile; otherwise use the image's
+    owning profile. Custom images pass through unchanged.
     """
     repository = _image_repository(image)
-    owner = _profile_images_by_repository().get(repository)
-    if owner:
-        return owner
+    owners = [
+        p
+        for p in all_profiles()
+        if repository in {*p.deployment.managed_image_repositories, _image_repository(p.deployment.runtime_image or "")}
+    ]
+    profile = active_profile(accelerator) if accelerator else (owners[0] if owners else None)
+    return profile.deployment.runtime_image if owners and profile and profile.deployment.runtime_image else image
+
+
+def guide_overlays(
+    root: Path, guide: str, *, accelerator: str | None = None, model_server: str = "vllm"
+) -> dict[str, Path]:
+    """Discover actual Kustomization entry points under the profile's source root."""
     profile = active_profile(accelerator)
-    pinned = profile.deployment.runtime_image if profile else None
-    if pinned and repository in _MANAGED_MODEL_IMAGE_REPOSITORIES:
-        return pinned
-    return image
+    if profile is None:
+        return {}
+    base = root / profile.deployment.overlay_root.format(
+        guide=guide, variant=profile.upstream_variant, model_server=model_server
+    )
+    paths = {
+        p.parent for name in ("kustomization.yaml", "kustomization.yml", "Kustomization") for p in base.rglob(name)
+    }
+    return {str(p.relative_to(base)): p for p in sorted(paths) if p.resolve().is_relative_to(root.resolve())}
 
 
-def set_accelerator_request(container: dict, claim: dict | None, count: int, *, accelerator: str | None = None) -> None:
+def set_accelerator_request(
+    container: dict, claim: dict | None, count: int, *, accelerator: str | None = None, access_mode: str | None = None
+) -> None:
     """Set a tensor-parallel accelerator count on a rendered pod.
 
-    DRA profiles rewrite the ResourceClaimTemplate count; extended-resource
-    profiles set the container's ``resources.limits``/``requests`` entry for the
-    profile's resource name.
+    Update matching accelerator requests in a DRA ResourceClaimTemplate, or the
+    selected mode's extended resource in container limits and requests. Preserve
+    unrelated requests, including NIC claims.
     """
+    profile = active_profile(accelerator)
+    if profile is None:
+        raise ValueError("Deployment hardware profile is unresolved")
     if claim is not None:
-        request = claim["spec"]["spec"]["devices"]["requests"][0]
-        request.setdefault("exactly", {})["count"] = count
+        requests = claim["spec"]["spec"]["devices"]["requests"]
+        matched = [
+            r.setdefault("exactly", {})
+            for r in requests
+            if r.get("exactly", {}).get("deviceClassName") in profile.device_classes
+        ]
+        if not matched:
+            raise ValueError("No accelerator request matches the deployment hardware")
+        for request in matched:
+            request["count"] = count
         return
-    name = resource_name(accelerator=accelerator)
-    if not name:
-        raise ValueError("hardware profile defines neither a DRA claim nor an extended resource name")
+    mode = deployment_mode(profile, access_mode, request_model="extended-resource")
     resources = container.setdefault("resources", {})
-    resources.setdefault("limits", {})[name] = str(count)
-    resources.setdefault("requests", {})[name] = str(count)
+    names = set(mode.get("resource_names", []))
+    existing = {name for group in ("limits", "requests") for name in resources.get(group, {}) if name in names}
+    if len(existing) > 1:
+        raise ValueError("Multiple accelerator resource names require an explicit selection")
+    name = next(iter(existing)) if existing else next(iter(names)) if len(names) == 1 else None
+    if not name:
+        raise ValueError("Hardware requires an explicit extended resource or a DRA claim")
+    for group in ("limits", "requests"):
+        resources.setdefault(group, {})[name] = str(count)
+
+
+def default_guide_variant(variants) -> str:
+    """Choose only an entry point present in the selected source."""
+    return next((name for name in (".", "base") if name in variants), next(iter(sorted(variants)), ""))

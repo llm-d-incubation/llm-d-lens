@@ -8,7 +8,45 @@ When specifying an operator preference for deployment planning, use English, suc
 The deterministic planner matches English preference keywords; Chinese keyword aliases
 are no longer supported.
 
+## Hardware rendering contract
+
+Deployment capability metadata describes provider behavior; its `variants` array is
+empty because variants belong to the selected source catalog. Rendering and
+Evaluation use the resolved hardware profile for images, accelerator resources and
+scheduling. Legacy configurations can resolve hardware from their rendered DRA or
+extended-resource requests; conflicting hardware evidence is rejected.
+
+Python callers can inspect the same source entry points before rendering:
+
+```python
+from pathlib import Path
+from llm_d_bench.deploy.providers.hardware_profile import guide_overlays
+
+variants = guide_overlays(
+    Path("/path/to/llm-d"), "optimized-baseline", accelerator="nvidia",
+)
+print(sorted(variants))
+```
+
 ## Backend API
+
+### Prepare Guide source (Node)
+
+`POST /api/guide-planning/prepare` accepts `guide`, `accelerator`, `modelServer`,
+`guideVariant` and the selected `clusterId`. It prepares the official source
+without deploying and returns its commit plus manifest-derived controls:
+
+```json
+{"ready": true, "commit": "selected-source-commit", "capabilities": {"cacheCpuGiB": false, "rdmaNicCount": true}}
+```
+
+The booleans describe supported CPU-cache mutation and a matching profile NIC
+claim. They do not depend on variant names. This endpoint is owned by
+`server/guidePlanning.ts`; there is no Python callable for this Node operation.
+Python deployment providers use `guide_overlays` (above) and
+`llm_d_bench.hardware.resolver.deployment_mode(profile, access_mode)` for the
+corresponding source and hardware contracts.
+
 
 Agentic create and refinement streams use `llm_d_bench.agentic.streaming.planning_stream_response`. The routes retain principal resolution, expected-error classification, and their existing generic error messages. Streams emit `progress` followed by `complete` or `error`; disconnect cleanup cancels and awaits unfinished planning. Gateway operation/log streams remain separate.
 
@@ -41,6 +79,14 @@ of GPU savings. Unknown estimates are not treated as failures.
 When an external planner scores multiple candidates, its selection rationale explains why each
 lower-scored returned candidate ranks below the top choice using the supplied planning facts. Only
 the returned top three are scored; no reason is inferred for candidates outside that set.
+
+AIC support checks and estimates use the SDK release pinned in `pyproject.toml`
+(currently 0.12.0), including its bundled support matrix and performance data.
+An unsupported P/D result describes that installed matrix, not a hardware-level
+prohibition. The 0.12.0 matrix passes Qwen/Qwen3-0.6B on B60/vLLM for P/D;
+candidate availability still depends on the requested workload and GPU budget.
+After changing the dependency pin, reinstall project dependencies and restart
+the backend so support checks and searches use the same SDK release.
 
 ### Estimate an AIC topology
 
@@ -89,6 +135,25 @@ the returned top three are scored; no reason is inferred for candidates outside 
 ### Start a deployment run
 
 Start a deployment run from one or more already-rendered deployable configurations.
+
+For Router 0.11 endpoint-picker images, planning and installation adapt legacy P/D
+plugin settings: `disagg-headers-handler` is handled by `disagg-profile-handler`,
+and `parameters.deciderPluginName` becomes `parameters.deciders.prefill`. This also
+applies when retrying saved bundles. Source assets and their checksums remain
+unchanged; deployment evidence records the derived values actually installed.
+Conflicting old/new deciders and custom legacy header parameters are rejected.
+Other Router versions and custom image repositories retain their own settings.
+
+The same pure Python transformation is shared by configuration validation and
+`llm_d_bench.deploy.providers.deployment_bundle.install_deployment_bundle`:
+
+```python
+import yaml
+from llm_d_bench.configuration.router_compatibility import compatible_router_values
+
+values = yaml.safe_load(saved_router_values_yaml)
+effective_values = compatible_router_values(values, chart_version="v0.11.0")
+```
 
 <Tabs>
   <Tab title="REST API">

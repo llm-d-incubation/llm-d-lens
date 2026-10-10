@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""In-process adapter around the pip-installed AIConfigurator nightly SDK."""
+"""In-process adapter around the pip-installed AIConfigurator SDK."""
 
 from __future__ import annotations
 
@@ -34,7 +34,9 @@ def _cli():
     try:
         from aiconfigurator.cli import cli_default, cli_exp, cli_support
     except ImportError as error:
-        raise AICError("AIConfigurator nightly is not installed; install aiconfigurator==0.11.0.dev20260728") from error
+        raise AICError(
+            "AIConfigurator is unavailable; install the project dependencies with python -m pip install -e ."
+        ) from error
     return cli_default, cli_exp, cli_support
 
 

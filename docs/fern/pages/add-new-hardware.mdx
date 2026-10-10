@@ -8,6 +8,31 @@
 
 ---
 
+## Deployment and evaluation configuration
+
+For Deploy and Evaluation, extend the existing profile instead of adding vendor
+branches to domain code. `deployment.overlay_root` accepts `{guide}`, `{variant}`
+(the profile's `upstream_variant`) and `{model_server}`. Actual guide variants are
+discovered from the selected source's Kustomization files; do not enumerate them in
+JSON. Nested overlay paths are preserved.
+
+Configure `deployment.runtime_image`, `managed_image_repositories`,
+`runtime_class_matchers`, `node_selector`, and `modes`. Each mode declares
+`request_model` and either DRA `device_class` / `claim_request_name`, or extended
+`resource_names`. PCI filtering additionally requires `supports_pci_allowlist`,
+`pci_attribute_domain` and `pci_attribute`. Defaults do not override custom images.
+
+In `telemetry`, declare `device_metric_sources` with metric names, matchers, units,
+scales, `output_unit`, `aggregation` and `tile_aggregation`. Configure `label_schema`,
+`allocation_join`, `allocation` (drivers, PCI attributes, node labels and optional
+device-name pattern), `source_label`, and an optional `scrape_path` for direct
+snapshots. Keep Prometheus expressions in `device_metrics` consistent with these
+sources. `planning.discovery` owns the discovery command and parser settings;
+`planning.memory_models` contains hardware-specific capacity fallbacks.
+
+Run the hardware/deploy/evaluate tests after changing a profile. A new profile must
+also pass `schema.json`; verify guide rendering against its intended llm-d revision.
+
 ## 0. Two integration models: built-in vs. external plugin
 
 There are exactly two ways to add a hardware. Both use the **same JSON contract,
@@ -337,3 +362,25 @@ npm run build   # if you changed frontend/gateway consumers
 
 - Existing implementation examples: `llm_d_bench/monitoring/accelerator/intel_gpu.py`, `llm_d_bench/monitoring/gpu_driver/`
 - Contribution process and validation: [CONTRIBUTING.md](https://github.com/intel-sandbox/llm-d-prism/blob/main/CONTRIBUTING.md)
+
+
+## Deployment and telemetry access modes
+
+Declare each supported access mode in `deployment.modes`, including its
+`request_model` and either DRA `device_class` / `claim_request_name` or
+extended `resource_names`. Consumers resolve the selected mode rather than
+assuming that top-level deployment defaults apply to every driver.
+
+`telemetry.modes` maps the same mode names to their `allocation_join` strategy.
+For exporters without Pod labels, `pod-status` uses kubelet
+`status.containerStatuses[].allocatedResourcesStatus` and
+`telemetry.allocation.resource_id_pattern`, a regular expression containing a
+named `pci` capture. Resource IDs must actually contain that device identity;
+opaque card indices cannot be guessed into PCI addresses. Missing identities
+and duplicate owners in the namespace are unavailable, not node-wide samples.
+Use this strategy with exclusive plugin device resources. DRA continues to use
+ResourceClaims and ResourceSlices. Mixed request models remain unattributed.
+
+Guide variants are discovered from Kustomization entry points under
+`deployment.overlay_root` in the selected llm-d source. Do not maintain a
+second hardware-specific runtime or variant whitelist in deployment metadata.

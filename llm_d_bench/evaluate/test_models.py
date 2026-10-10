@@ -255,7 +255,8 @@ def test_accelerator_profile_is_derived_from_deployment_manifest():
     )
 
     assert _execution_accelerator_profile(execution) == "intel-xpu"
-    assert _execution_accelerator_profile(execution, "custom.xpu.example") == "custom.xpu.example"
+    with pytest.raises(ValueError, match="does not match"):
+        _execution_accelerator_profile(execution, "custom.xpu.example")
 
 
 def test_accelerator_profile_is_derived_for_generated_xpu_baseline():
@@ -432,3 +433,14 @@ def test_harness_budget_overrides_xpu_request_and_limit(tmp_path, separate_limit
 )
 def test_harness_oom_diagnostic_does_not_misclassify_other_failures(message):
     assert evaluate_router._benchmark_failure_message(message, {}) == message
+
+
+@pytest.mark.parametrize("profile", ["nvidia", "intel-xpu", "custom.device"])
+def test_benchmark_request_accepts_profile_identifiers(profile):
+    from llm_d_bench.evaluate.models import EvaluateRunRequest
+
+    request = EvaluateRunRequest(
+        deployment_execution_id="00000000-0000-4000-8000-000000000001",
+        accelerator_profile=profile,
+    )
+    assert request.accelerator_profile == profile

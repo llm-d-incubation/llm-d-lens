@@ -20,10 +20,9 @@ export function runtimeArgument(container: Container, name: string): string | un
     return valuesFound[0];
 }
 
-export function configureCpuCache(container: Container, gib: number, variant: string) {
+export function configureCpuCache(container: Container, gib: number) {
     const connector = JSON.parse(runtimeArgument(container, 'kv-transfer-config') || '{}');
-    if (variant === 'native/cpu/base') {
-        if (connector.kv_connector !== 'OffloadingConnector') throw new Error('CPU capacity requires the native OffloadingConnector.');
+    if (connector.kv_connector === 'OffloadingConnector') {
         connector.kv_connector_extra_config = { ...connector.kv_connector_extra_config, cpu_bytes_to_use: Math.floor(gib * 1024 ** 3) };
         applyRuntimeOverrides(container, [{ target: 'both', kind: 'argument', name: 'kv-transfer-config', value: JSON.stringify(connector) }]);
     } else {
@@ -104,4 +103,20 @@ export function configureModelServer(container: Container, model: string, tp: nu
     }
     if (tp > 0) applyRuntimeOverrides(container, [{ target: 'both', kind: 'argument', name: 'tensor-parallel-size', value: String(tp) }]);
     if (model !== identity) applyRuntimeOverrides(container, [{ target: 'both', kind: 'argument', name: 'served-model-name', value: identity }]);
+}
+
+// YAML document shapes are checked below before use.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function guideSettingsCapabilities(documents: Array<Record<string, any>>, deviceClass?: string | null) {
+    const servers = documents.filter(doc => doc?.kind === 'Deployment').flatMap(doc => doc.spec?.template?.spec?.containers || []).filter(container => container.name === 'modelserver');
+    const cpu = servers.length > 0 && servers.every(container => {
+        try {
+            const clone = structuredClone(container);
+            configureCpuCache(clone, 1);
+            return true;
+        } catch { return false; }
+    });
+    const nic = Boolean(deviceClass) && documents.some(doc => doc?.kind === 'ResourceClaimTemplate'
+        && (doc.spec?.spec?.devices?.requests || []).some(request => request.exactly?.deviceClassName === deviceClass));
+    return { cacheCpuGiB: cpu, rdmaNicCount: nic };
 }

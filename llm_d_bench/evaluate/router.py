@@ -48,6 +48,7 @@ from llm_d_bench.evaluate.api_models import (
     BenchmarkDefaultsResponse,
     BenchmarkRunListResponse,
     BenchmarkRunResponse,
+    BenchmarkTimingResponse,
     EvaluationCancelResponse,
     EvaluationDetailsResponse,
     EvaluationWorkflowListResponse,
@@ -72,9 +73,17 @@ from llm_d_bench.evaluate.models import (
     WorkloadMatrixPoint,
     validate_inline_workload,
 )
+from llm_d_bench.evaluate.ownership import evaluation_lock, owned_control, owned_execution
 from llm_d_bench.evaluate.request_evidence import apply_request_evidence, enable_request_reports
+from llm_d_bench.evaluate.timing import benchmark_timing
 from llm_d_bench.evaluate.workflow_state import TERMINAL_EVALUATION_STATUSES as _TERMINAL_EVALUATE_STATUSES
-from llm_d_bench.hardware.resolver import resolve_by_accelerator_key, resolve_by_device_class
+from llm_d_bench.hardware.resolver import (
+    resolve_by_accelerator_key,
+    resolve_by_node_label,
+    resolve_by_resource,
+    resolve_configuration_profile,
+)
+from llm_d_bench.hardware.telemetry import parse_device_metrics
 from llm_d_bench.model_service.resolution import resolve_model_service_target
 from llm_d_bench.monitoring.deployment import service as deployment_monitoring
 from llm_d_bench.monitoring.kv_trace.collector import KVTraceCollector
@@ -105,7 +114,7 @@ _active_workflows: dict[str, dict] = {}
 #: Run-only model access tokens (never persisted) keyed by benchmark run id.
 _run_api_keys: dict[str, str] = {}
 _benchmark_install_lock = asyncio.Lock()
-_MONITORING_PREPARE_TIMEOUT = 30.0
+_MONITORING_PREPARE_TIMEOUT = 600.0
 _OBSERVABILITY_COLLECT_TIMEOUT = 120.0
 _BENCHMARK_REPOSITORY = "https://github.com/llm-d/llm-d-benchmark.git"
 _BENCHMARK_REVISION = stack().llm_d_benchmark
@@ -136,9 +145,7 @@ def _cluster_benchmark_runtime(session_id: str) -> dict[str, str | None]:
 def _validate_evaluation_capacity(configuration: DeployableConfiguration) -> None:
     """Reject clearly impossible XPU topologies before any cluster mutation."""
     content = configuration.content
-    runtime = content.get("runtime") or {}
-    source = (content.get("officialGuide") or {}).get("source") or {}
-    if source.get("accelerator") != "xpu" and "xpu" not in str(runtime.get("image") or "").lower():
+    if resolve_configuration_profile(content) is None:
         return
     match = re.search(
         r"(?:^|[-_/])(\d+(?:\.\d+)?)b(?:[-_/]|$)", str((content.get("model") or {}).get("name") or ""), re.IGNORECASE
@@ -239,6 +246,12 @@ def _baseline_configuration(
             else {}
         ),
     }
+    profile = resolve_configuration_profile(source_content)
+    if profile:
+        baseline_content["hardware_profile"] = profile.id
+        from llm_d_bench.hardware.resolver import configuration_resource_request
+
+        baseline_content["hardware_request"] = configuration_resource_request(source_content, profile)
     provider_ref = "baseline-vllm"
     if baseline_type in {"router-neutral", "router-round-robin", "load-only", "affinity-only", "optimized-baseline"}:
         provider_ref = "optimized-baseline"
@@ -1425,13 +1438,13 @@ def _benchmark_response(run: dict) -> dict:
 
 
 async def _prepare_benchmark_monitoring(run: dict) -> None:
-    """Reuse existing scrapes first; setup is optional and bounded for every entry point."""
+    """Require serving scrapes before starting traffic, including borrowed endpoints."""
+    timeout = float(run.get("wait_timeout_seconds") or _MONITORING_PREPARE_TIMEOUT)
     run["monitoring"] = {"status": "preparing", "enabled": False}
     _save(run)
     try:
-        async with asyncio.timeout(_MONITORING_PREPARE_TIMEOUT):
+        async with asyncio.timeout(timeout):
             execution_id = run["deployment_execution_id"]
-            # A healthy target needs no monitor/RBAC mutation, regardless of owner.
             if await wait_for_deployment_metrics(execution_id, timeout_seconds=0):
                 run["monitoring"].update(
                     status="ready", enabled=True, source="existing", message="Using existing Prometheus targets"
@@ -1439,29 +1452,36 @@ async def _prepare_benchmark_monitoring(run: dict) -> None:
             else:
                 status = await deployment_monitoring.enable(execution_id)
                 run["monitoring"].update(
-                    enabled=True,
                     resources={
                         "servicemonitors": status.get("servicemonitors", []),
                         "podmonitors": status.get("podmonitors", []),
                     },
+                    message="Waiting for Prometheus to load deployment targets and collect serving samples",
                 )
-                ready = await wait_for_deployment_metrics(execution_id)
-                run["monitoring"].update(
-                    status="ready" if ready else "warming",
-                    message="Prometheus target is ready"
-                    if ready
-                    else "Prometheus targets are warming; benchmark will proceed",
-                )
-    except TimeoutError:
-        run["monitoring"].update(
-            status="unavailable",
-            message=(
-                f"Monitoring preparation exceeded {_MONITORING_PREPARE_TIMEOUT:g}s; benchmark will proceed and "
-                "query recorded metrics afterwards"
-            ),
+                _save(run)
+                pending = asyncio.create_task(wait_for_deployment_metrics(execution_id, timeout_seconds=timeout))
+                try:
+                    while not pending.done():
+                        run["heartbeat_at"] = _now()
+                        _save(run)
+                        await asyncio.wait({pending}, timeout=5.0)
+                    if not await pending:
+                        raise TimeoutError
+                finally:
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+                run["monitoring"].update(status="ready", enabled=True, message="Serving metrics are ready")
+    except TimeoutError as error:
+        message = (
+            f"Monitoring preparation exceeded {timeout:g}s. Benchmark traffic was not started. "
+            "Check Prometheus configuration reloads, serving targets and Monitor selectors, then retry."
         )
+        run["monitoring"].update(status="unavailable", message=message)
+        raise RuntimeError(message) from error
     except Exception as error:
-        run["monitoring"].update(status="unavailable", message=str(error))
+        message = f"Monitoring preparation failed; benchmark traffic was not started: {error}"
+        run["monitoring"].update(status="unavailable", message=message)
+        raise RuntimeError(message) from error
     finally:
         _save(run)
 
@@ -1472,7 +1492,11 @@ async def _wait_for_benchmark(run_id: str) -> dict:
         if benchmark is None:
             raise ValueError("benchmark run is no longer available")
         if benchmark["status"] in _TERMINAL_EVALUATE_STATUSES:
-            return benchmark
+            # Terminal metrics can be saved before the runner's async finally
+            # finishes. Do not release its deployment while it is still active.
+            with evaluation_lock("benchmark", run_id) as settled:
+                if settled:
+                    return benchmark
         await asyncio.sleep(3)
 
 
@@ -1640,6 +1664,14 @@ async def _run_case_benchmark(workflow, case, execution_id, *, use_baseline_endp
         enrich=_enrich_benchmark_result,
         now=_now,
     )
+    if workflow.get("status") == "running" and all(item["status"] == "succeeded" for item in workflow["cases"]):
+        workflow.update(
+            status="succeeded",
+            report=_comparison_report(workflow),
+            active_case_id=None,
+            finished_at=_now(),
+        )
+        _save(workflow)
 
 
 async def _execute_shared_pods_baseline_case(workflow: dict, case: dict) -> None:
@@ -1708,18 +1740,20 @@ async def _execute_shared_pods_baseline_case(workflow: dict, case: dict) -> None
             and deployment_case_id
         ):
             try:
-                await deployment_run_manager.worker_for_run(deployment_run_id).clean_case(
-                    deployment_run_id,
-                    deployment_case_id,
-                )
-            except ValueError as cleanup_error:
+                with _deployment_cleanup_guard(guide_case["execution_id"]):
+                    await deployment_run_manager.worker_for_run(deployment_run_id).clean_case(
+                        deployment_run_id,
+                        deployment_case_id,
+                    )
+            except Exception as cleanup_error:
                 guide_case["cleanup_error"] = str(cleanup_error)
                 _save(workflow)
 
 
+@owned_execution("workflow")
 async def _execute_evaluation(workflow_id: str) -> None:
     workflow = _get("workflow", workflow_id)
-    if workflow is None:
+    if workflow is None or workflow.get("status") in _TERMINAL_EVALUATE_STATUSES:
         return
     current_task = asyncio.current_task()
     registered_task = _workflow_tasks.get(workflow_id)
@@ -1846,24 +1880,27 @@ async def _execute_evaluation(workflow_id: str) -> None:
                     and ready_case is not None
                 ):
                     try:
-                        await deployment_run_manager.worker_for_run(deployment.id).clean_case(
-                            deployment.id, ready_case.id
-                        )
-                    except ValueError as cleanup_error:
+                        with _deployment_cleanup_guard(ready_case.execution_id):
+                            await deployment_run_manager.worker_for_run(deployment.id).clean_case(
+                                deployment.id, ready_case.id
+                            )
+                    except Exception as cleanup_error:
                         case["cleanup_error"] = str(cleanup_error)
                         _save(workflow)
-        workflow.update(
-            status="cancelled" if any(case.get("cancel_requested") for case in workflow["cases"]) else "succeeded",
-            report=_comparison_report(workflow),
-            active_case_id=None,
-            finished_at=_now(),
-        )
+        if workflow.get("status") != "succeeded":
+            workflow.update(
+                status="cancelled" if any(case.get("cancel_requested") for case in workflow["cases"]) else "succeeded",
+                report=_comparison_report(workflow),
+                active_case_id=None,
+                finished_at=_now(),
+            )
     except asyncio.CancelledError:
-        workflow.update(
-            status="cancelling" if workflow.get("status") == "cancelling" else "cancelled",
-            active_case_id=None,
-            finished_at=_now(),
-        )
+        if workflow.get("status") != "succeeded":
+            workflow.update(
+                status="cancelling" if workflow.get("status") == "cancelling" else "cancelled",
+                active_case_id=None,
+                finished_at=_now(),
+            )
         raise
     except Exception as error:
         active = next((case for case in workflow["cases"] if case["id"] == workflow.get("active_case_id")), None)
@@ -2052,6 +2089,25 @@ def _delete(kind: str, run_id: str) -> None:
         _workflow_records.delete(record_id)
         return
     raise ValueError("evaluate record kind is invalid")
+
+
+@contextlib.contextmanager
+def _deployment_cleanup_guard(execution_id: str):
+    with evaluation_lock("deployment", execution_id) as acquired:
+        if not acquired:
+            raise ValueError("Deployment still has an active benchmark; cleanup deferred")
+        _ensure_benchmark_consumers_finished(execution_id)
+        yield
+
+
+def _ensure_benchmark_consumers_finished(execution_id: str) -> None:
+    for record in _records("benchmark"):
+        if record.get("deployment_execution_id") != execution_id:
+            continue
+        with evaluation_lock("benchmark", record["id"]) as idle:
+            current = _get("benchmark", record["id"])
+            if not idle or (current and current.get("status") not in _TERMINAL_EVALUATE_STATUSES):
+                raise ValueError(f"Deployment is still used by benchmark {record['id']}; cleanup deferred")
 
 
 def _deployment_usage_reason(execution_id: str) -> str | None:
@@ -2456,82 +2512,14 @@ async def _kubectl_raw(path: str, environment: dict[str, str]) -> str | None:
     return stdout.decode() if process.returncode == 0 else None
 
 
-# Semantic key for each ``device_metric_sources`` entry the direct scrape
-# reports; an entry the profile does not configure is omitted from the scrape
-# (empty value == disabled).
-_XPUMD_METRIC_KEYS = {
-    "utilization": "utilization_ratio",
-    "framebuffer_used": "memory_used_bytes",
-    "vram": "memory_total_bytes",
-    "memory_utilization": "memory_utilization_ratio",
-    "power": "power_watts",
-    "temperature": "temperature_celsius",
-}
+def _parse_xpumd_metrics(payload: str | None, profile=None) -> dict | None:
+    """Compatibility name; callers must supply the target hardware profile."""
+    return parse_device_metrics(payload, profile)
 
 
-def _intel_telemetry():
-    profile = resolve_by_accelerator_key("intel_gpu")
-    return profile.telemetry if profile is not None else None
-
-
-def _parse_xpumd_metrics(payload: str | None) -> dict | None:
-    if not payload:
-        return None
-    telemetry = _intel_telemetry()
-    if telemetry is None:
-        return None
-    sources = telemetry.device_metric_sources
-    wanted = {
-        source.metric: semantic
-        for source_name, semantic in _XPUMD_METRIC_KEYS.items()
-        if (source := sources.get(source_name)) is not None and source.metric
-    }
-    if not wanted:
-        return None
-    utilization = sources.get("utilization")
-    utilization_metric = utilization.metric if utilization is not None else None
-    utilization_match = dict(utilization.match) if utilization is not None else {}
-    pci_label = telemetry.label_schema.get("pci") or "pci_bdf"
-    devices: dict[str, dict] = {}
-    pattern = re.compile(r"^(\w+)\{([^}]*)\}\s+([-+\deE.]+)$")
-    for line in payload.splitlines():
-        match = pattern.match(line)
-        if not match or match.group(1) not in wanted:
-            continue
-        labels = dict(re.findall(r'(\w+)="([^"]*)"', match.group(2)))
-        if match.group(1) == utilization_metric and any(
-            labels.get(key) != value for key, value in utilization_match.items()
-        ):
-            continue
-        device_id = labels.get(pci_label) or labels.get("hw_id")
-        if not device_id:
-            continue
-        device = devices.setdefault(device_id, {"id": device_id, "name": labels.get("hw_name")})
-        device[wanted[match.group(1)]] = float(match.group(3))
-    if not devices:
-        return None
-    values = list(devices.values())
-    utilization_values = [item["utilization_ratio"] for item in values if "utilization_ratio" in item]
-    return {
-        "source": "xpumd-direct",
-        "captured_at": _now(),
-        "scope": "cluster-device",
-        "device_count": len(values),
-        "devices": values,
-        "average_utilization_ratio": sum(utilization_values) / len(utilization_values) if utilization_values else None,
-        "maximum_utilization_ratio": max(utilization_values) if utilization_values else None,
-    }
-
-
-def _xpumd_metrics_proxy_path() -> str | None:
-    """Device-telemetry scrape path from the hardware profile (None = disabled)."""
-    telemetry = _intel_telemetry()
-    if telemetry is not None:
-        return telemetry.scrape_path or None
-    return "/api/v1/namespaces/intel-xpumd/services/http:xpumd:8080/proxy/metrics"
-
-
-async def _kubernetes_resource_snapshot(session_id: str | None, namespace: str | None) -> dict | None:
+async def _kubernetes_resource_snapshot(
+    session_id: str | None, namespace: str | None, hardware_profile: str | None = None
+) -> dict | None:
     """Return configured allocation/capacity, not runtime utilization."""
     if not session_id:
         return None
@@ -2541,8 +2529,25 @@ async def _kubernetes_resource_snapshot(session_id: str | None, namespace: str |
         return None
     pods = await _kubectl_json(["get", "pods", "-n", namespace], environment) if namespace else None
     nodes = await _kubectl_json(["get", "nodes"], environment)
-    scrape_path = _xpumd_metrics_proxy_path()
-    gpu_telemetry = _parse_xpumd_metrics(await _kubectl_raw(scrape_path, environment)) if scrape_path else None
+    profiles = {}
+    for node in (nodes or {}).get("items", []):
+        for key in node.get("status", {}).get("allocatable") or {}:
+            profile = resolve_by_resource(key)
+            if profile:
+                profiles[profile.id] = profile
+        profile = resolve_by_node_label(node.get("metadata", {}).get("labels") or {})
+        if profile:
+            profiles[profile.id] = profile
+    if hardware_profile:
+        selected = resolve_by_accelerator_key(hardware_profile)
+        profiles = {selected.id: selected} if selected else {}
+    snapshots = []
+    for profile in profiles.values():
+        if profile.telemetry and profile.telemetry.scrape_path:
+            snapshot = parse_device_metrics(await _kubectl_raw(profile.telemetry.scrape_path, environment), profile)
+            if snapshot:
+                snapshots.append(snapshot)
+    gpu_telemetry = snapshots[0] if len(snapshots) == 1 else None
     if pods is None and nodes is None:
         return None
     pod_allocations = []
@@ -2556,7 +2561,9 @@ async def _kubernetes_resource_snapshot(session_id: str | None, namespace: str |
             requested_gpus += sum(
                 int(value)
                 for key, value in {**requests, **limits}.items()
-                if ("gpu" in key.lower() or "xpu" in key.lower()) and str(value).isdigit()
+                if (profile := resolve_by_resource(key))
+                and not any(key.endswith(suffix) for suffix in profile.monitor_resource_suffixes)
+                and str(value).isdigit()
             )
             containers.append({"name": container.get("name"), "requests": requests, "limits": limits})
         pod_allocations.append(
@@ -2572,7 +2579,10 @@ async def _kubernetes_resource_snapshot(session_id: str | None, namespace: str |
     for node in (nodes or {}).get("items", []):
         allocatable = node.get("status", {}).get("allocatable") or {}
         gpu_resources = {
-            key: value for key, value in allocatable.items() if "gpu" in key.lower() or "xpu" in key.lower()
+            key: value
+            for key, value in allocatable.items()
+            if (profile := resolve_by_resource(key))
+            and not any(key.endswith(suffix) for suffix in profile.monitor_resource_suffixes)
         }
         allocatable_gpus += sum(int(value) for value in gpu_resources.values() if str(value).isdigit())
         node_capacity.append(
@@ -2593,6 +2603,7 @@ async def _kubernetes_resource_snapshot(session_id: str | None, namespace: str |
         "nodes": node_capacity,
         "utilization_available": gpu_telemetry is not None,
         "gpu_telemetry": gpu_telemetry,
+        "hardware_telemetry": snapshots,
     }
 
 
@@ -2820,7 +2831,7 @@ def _harness_resource_overrides(run: dict, benchmark_root: Path) -> list[str]:
 def _benchmark_failure_message(message: str, run: dict) -> str:
     # Exit 137 alone is also possible for other SIGKILL causes; require the
     # Kubernetes OOM reason and the harness container identity before classifying.
-    if re.search(r"[^\s/]+/harness\s+\(terminated:\s*OOMKilled\b", message):
+    if re.search(r"(?:[^\s/]+/harness\s+\(terminated:\s*OOMKilled\b|harness:\s*OOMKilled\s+\(exit\s+137\))", message):
         memory = run.get("harness_memory_gib", 32)
         return (
             f"Benchmark load generator (harness) was OOMKilled: its host memory budget was {memory} GiB "
@@ -2844,34 +2855,23 @@ def _execution_model(execution) -> str:
 
 
 def _execution_accelerator_profile(execution, configured: str | None = None) -> str | None:
-    """Resolve a benchmark runtime profile from request or the deployment's DRA driver."""
-    if configured:
-        return configured
-    candidates: set[str] = set()
-    xpu_runtime = False
+    """Use the deployment's recorded hardware identity across benchmark stages."""
+    profiles = {}
     for artifact in execution.configuration_artifacts:
         try:
-            content = json.loads(artifact.content or "{}")
+            profile = resolve_configuration_profile(json.loads(artifact.content or "{}"))
         except json.JSONDecodeError:
             continue
-        manifest = str((content.get("officialGuide") or {}).get("renderedManifest") or "")
-        candidates.update(
-            re.findall(
-                r"^\s*deviceClassName:\s*['\"]?([a-z0-9.-]+)",
-                manifest,
-                flags=re.IGNORECASE | re.MULTILINE,
-            )
-        )
-        runtime = content.get("runtime") or {}
-        xpu_runtime = xpu_runtime or "xpu" in str(runtime.get("image") or "").lower()
-        xpu_runtime = xpu_runtime or getattr(artifact, "provider_ref", "") == "baseline-vllm"
-    accelerator_drivers = sorted(
-        candidate for candidate in candidates if re.search(r"gpu|xpu|gaudi|tpu", candidate, flags=re.IGNORECASE)
-    )
-    if len(accelerator_drivers) == 1:
-        profile = resolve_by_device_class(accelerator_drivers[0])
-        return profile.benchmark_profile if profile else None
-    profile = resolve_by_accelerator_key("xpu") if xpu_runtime else None
+        if profile:
+            profiles[profile.id] = profile
+    if len(profiles) > 1:
+        raise ValueError("Benchmark execution has ambiguous hardware profiles")
+    profile = next(iter(profiles.values()), None)
+    if configured:
+        selected = resolve_by_accelerator_key(configured)
+        if selected is None or (profile and selected.id != profile.id):
+            raise ValueError("Benchmark hardware profile does not match the deployment")
+        profile = selected
     return profile.benchmark_profile if profile else None
 
 
@@ -3023,6 +3023,7 @@ async def _stream_benchmark_process(
         if path.is_symlink():
             raise ValueError("evaluation process log must not be a symlink")
     run.update(phase=phase, phase_started_at=_now())
+    run.setdefault("benchmark_started_at", run["phase_started_at"])
 
     async def drain(stream, name):
         while True:
@@ -3052,7 +3053,10 @@ async def _stream_benchmark_process(
             pending, timeout=run.get("wait_timeout_seconds", 7200), return_when=asyncio.FIRST_COMPLETED
         )
         if not done:
-            raise RuntimeError("Benchmark exceeded its configured execution timeout")
+            raise RuntimeError(
+                f"Benchmark exceeded its configured execution timeout ({run.get('wait_timeout_seconds', 7200)}s) "
+                f"during {phase}. Reduce the workload or select automatic/a longer timeout and retry."
+            )
         if watcher and watcher in done:
             await watcher
         await streams
@@ -3087,9 +3091,24 @@ async def _cluster_gateway_endpoint(cluster_id: str | None) -> str | None:
     return base.removesuffix("/v1") if base else None
 
 
+@owned_execution("benchmark")
 async def _execute(run_id: str) -> None:
     run = _get("benchmark", run_id)
-    if run is None:
+    if run is None or run.get("status") in _TERMINAL_EVALUATE_STATUSES:
+        return
+    # Shared consumers exclude automatic deployment deletion, including the
+    # interval between checking durable records and deleting cluster resources.
+    with evaluation_lock("deployment", run.get("deployment_execution_id"), shared=True) as acquired:
+        if not acquired:
+            run.update(status="failed", error="Deployment cleanup is in progress", finished_at=_now())
+            _save(run)
+            return
+        await _execute_owned(run_id)
+
+
+async def _execute_owned(run_id: str) -> None:
+    run = _get("benchmark", run_id)
+    if run is None or run.get("status") in _TERMINAL_EVALUATE_STATUSES:
         return
     run.update(status="running", started_at=_now(), phase="preparing", phase_started_at=_now())
     _save(run)
@@ -3183,9 +3202,17 @@ async def _execute(run_id: str) -> None:
             run.get("storage_class_name"),
         )
         accelerator_profile = _execution_accelerator_profile(execution, run.get("accelerator_profile"))
+        selected_hardware = resolve_by_accelerator_key(accelerator_profile) if accelerator_profile else None
+        if selected_hardware:
+            run["hardware_profile"] = selected_hardware.to_dict()
         observability_started_at = _now()
 
         def _base_command(workspace: Path) -> list[str]:
+            # Upstream cleanup, wait and rendering all consume this label. A
+            # fresh identity also isolates warmup and successive matrix points.
+            run["harness_pod_label"] = f"lens-harness-{uuid4().hex}"
+            run.pop("harness_logs", None)
+            run.pop("harness_pods", None)
             command = [
                 cli,
                 "--spec",
@@ -3210,11 +3237,31 @@ async def _execute(run_id: str) -> None:
                 "--output",
                 "local",
             ]
+            command.extend(["--set", f"harness.podLabel={run['harness_pod_label']}"])
             proxy_override = _harness_proxy_override(harness_environment)
             if proxy_override:
                 command.extend(["--set", proxy_override])
             if accelerator_profile:
                 command.extend(["--set", f"accelerator.profile={accelerator_profile}"])
+                if selected_hardware and selected_hardware.telemetry:
+                    defaults_path = benchmark_root / "config/templates/values/defaults.yaml"
+                    defaults = (
+                        yaml.safe_load(defaults_path.read_text(encoding="utf-8")) if defaults_path.is_file() else {}
+                    )
+                    metrics = list((defaults or {}).get("monitoring", {}).get("timeSeriesMetrics") or [])
+                    metrics = list(
+                        dict.fromkeys(
+                            [
+                                *metrics,
+                                *(
+                                    source.metric
+                                    for source in selected_hardware.telemetry.device_metric_sources.values()
+                                    if source.metric
+                                ),
+                            ]
+                        )
+                    )
+                    command.extend(["--set", "monitoring.timeSeriesMetrics=" + json.dumps(metrics)])
             command.extend(["--set", f"storage.workloadPvc.storageClassName={storage_class}"])
             for resource_override in _harness_resource_overrides(run, benchmark_root):
                 command.extend(["--set", resource_override])
@@ -3754,9 +3801,12 @@ async def _execute(run_id: str) -> None:
                 )
                 run["monitoring"] = {
                     **run.get("monitoring", {}),
-                    "status": observability["status"],
+                    "preparation": dict(run.get("monitoring", {})),
+                    "status": "partial"
+                    if observability["status"] == "available" and observability.get("flow_status") == "unavailable"
+                    else observability["status"],
                     "window": observability["window"],
-                    "message": observability.get("reason"),
+                    "message": observability.get("flow_reason") or observability.get("reason"),
                 }
             except Exception as monitoring_error:
                 run["monitoring"] = {
@@ -3782,6 +3832,7 @@ async def _execute(run_id: str) -> None:
                     _kubernetes_resource_snapshot(
                         run["cluster_session_id"],
                         benchmark_namespace,
+                        (run.get("hardware_profile") or {}).get("id"),
                     ),
                     timeout=30.0,
                 )
@@ -3794,9 +3845,10 @@ async def _execute(run_id: str) -> None:
         _tasks.pop(run_id, None)
 
 
+@owned_execution("workflow")
 async def _execute_workflow(workflow_id: str) -> None:
     workflow = _get("workflow", workflow_id)
-    if workflow is None:
+    if workflow is None or workflow.get("status") in _TERMINAL_EVALUATE_STATUSES:
         return
     _active_workflows[workflow_id] = workflow
     try:
@@ -3863,8 +3915,9 @@ async def _execute_workflow(workflow_id: str) -> None:
         "cluster's shared Gateway using its published name and api_key, the same path real clients use -- "
         "404 if missing, 409 if no member is currently healthy/authorized). "
         "Requires a ready execution and its active cluster session (404 if missing; 409 if not ready or the session "
-        "is invalid). Reuses healthy Prometheus targets, otherwise attempts monitor/RBAC setup with a 30-second total "
-        "preparation deadline; missing monitoring does not fail the benchmark. Reads existing KV instrumentation "
+        "is invalid). Requires healthy serving scrapes before traffic, reusing existing targets or enabling monitors. "
+        "Preparation uses wait_timeout_seconds (600 seconds when unset); failure stops the run before traffic. "
+        "Reads existing KV instrumentation "
         "when supported; never installs probes or redeploys the model. Persists deployment facts and completion-time "
         "resources without taking lifecycle ownership of an existing deployment. Returns the queued run with HTTP 202."
     ),
@@ -3913,6 +3966,8 @@ async def create_run(request: EvaluateRunRequest, http_request: Request = None) 
         "benchmark_runtime": benchmark_runtime,
     }
     run["benchmark"] = request.model_dump(include=set(BenchmarkSpec.model_fields))
+    run["timing"] = benchmark_timing(request)
+    run["wait_timeout_seconds"] = run["timing"]["timeout_seconds"]
     if request.api_key:
         # Run-only, in-memory: never part of the persisted run dict.
         _run_api_keys[run["id"]] = request.api_key
@@ -3926,6 +3981,18 @@ async def create_run(request: EvaluateRunRequest, http_request: Request = None) 
     _save(run)
     _tasks[run["id"]] = asyncio.create_task(_execute(run["id"]))
     return run
+
+
+@router.post(
+    "/timing-estimate",
+    summary="Estimate benchmark time and resolve its automatic execution budget",
+    operation_id="estimate_benchmark_timing",
+    response_model=BenchmarkTimingResponse,
+    responses=evaluation_problem_responses(401, 403, 422),
+)
+async def estimate_benchmark_timing(request: BenchmarkSpec) -> dict:
+    """Preview a configuration-only estimate without reading or creating cluster resources."""
+    return benchmark_timing(request)
 
 
 @router.post(
@@ -4098,6 +4165,7 @@ async def create_evaluation(request: EvaluationCreateRequest, http_request: Requ
     response_model=EvaluationWorkflowResponse,
     response_model_exclude_unset=True,
 )
+@owned_control("workflow")
 async def retry_workflow_run(workflow_id: str) -> dict:
     workflow = _get("workflow", workflow_id)
     if workflow is None:
@@ -4231,6 +4299,7 @@ def _cancel_targets(workflow: dict, case_id: str | None) -> list[dict]:
         targets.extend(linked)
 
 
+@owned_control("workflow")
 async def _cancel_evaluation(workflow: dict, case_id: str | None = None) -> dict:
     async with _cancellation_locks.setdefault(workflow["id"], asyncio.Lock()):
         workflow = _active_workflows.get(workflow["id"]) or _get("workflow", workflow["id"]) or workflow
@@ -4360,6 +4429,7 @@ async def cancel_workflow_run(workflow_id: str) -> dict:
     operation_id="delete_evaluation_workflow",
     responses=evaluation_problem_responses(401, 403, 404, 409, 422),
 )
+@owned_control("workflow")
 async def delete_workflow_run(workflow_id: str, request: Request = None) -> None:
     workflow = _get("workflow", workflow_id)
     if workflow is None:
@@ -4373,6 +4443,9 @@ async def delete_workflow_run(workflow_id: str, request: Request = None) -> None
     )
     if workflow.get("status") not in _TERMINAL_EVALUATE_STATUSES:
         raise HTTPException(status_code=409, detail="active evaluation must be cancelled before deletion")
+    cleanup_task = _workflow_tasks.get(workflow_id)
+    if cleanup_task is not None and not cleanup_task.done():
+        await asyncio.shield(cleanup_task)
     deployment_run_ids = {
         deployment_run_id
         for deployment_run_id in [
@@ -4406,46 +4479,66 @@ async def reconcile_evaluate_runs() -> None:
     """Reconcile persisted work whose in-memory task was lost on restart."""
     active_statuses = {"queued", "running", "cancelling", "deploying", "benchmarking"}
     benchmark_records = _records("benchmark")
+    parents = {
+        case.get("evaluation_run_id"): workflow["id"]
+        for workflow in _records("workflow")
+        for case in workflow.get("cases") or [workflow]
+        if case.get("evaluation_run_id")
+    }
     for record in benchmark_records:
-        if record.get("status") not in active_statuses:
-            continue
-        record.update(
-            status="cancelled" if record.get("status") == "cancelling" else "failed",
-            error="evaluation process was interrupted by a service restart",
-            process_logs_incomplete=True,
-            finished_at=_now(),
-        )
-        _save(record)
-    for workflow in _records("workflow"):
-        if workflow.get("status") == "cancelling":
-            # The persisted cancellation error remains visible and retryable.
-            with contextlib.suppress(HTTPException):
-                await _cancel_evaluation(workflow, workflow.get("cancellation_scope"))
-            continue
-        if "cases" in workflow:
-            if workflow.get("status") in {"queued", "running", "deploying", "benchmarking"}:
-                _workflow_tasks[workflow["id"]] = asyncio.create_task(_execute_evaluation(workflow["id"]))
-            continue
-        if workflow.get("status") not in {"deploying", "benchmarking"}:
-            continue
-        deployment = _store.get_run(workflow["deployment_run_id"])
-        if deployment is None:
-            workflow.update(
-                status="failed", error="deployment run was unavailable after service restart", finished_at=_now()
-            )
-            _save(workflow)
-            continue
-        if deployment.status.value == "queued":
-            deployment_run_manager.resume_run(deployment.id)
-        elif deployment.status.value == "running" and not any(case.execution_id for case in deployment.cases):
-            workflow.update(
-                status="failed",
-                error="deployment was interrupted before creating an execution",
+        parent_id = record.get("evaluation_workflow_id") or parents.get(record["id"])
+        with contextlib.ExitStack() as locks:
+            if parent_id and not locks.enter_context(evaluation_lock("workflow", parent_id)):
+                continue
+            if not locks.enter_context(evaluation_lock("benchmark", record["id"])):
+                continue
+            # The listing may predate another executor finishing. Re-read under ownership.
+            record = _get("benchmark", record["id"])
+            if record is None or record.get("status") not in active_statuses:
+                continue
+            record.update(
+                status="cancelled" if record.get("status") == "cancelling" else "failed",
+                error="evaluation process was interrupted by a service restart",
+                process_logs_incomplete=True,
                 finished_at=_now(),
             )
-            _save(workflow)
-            continue
-        _workflow_tasks[workflow["id"]] = asyncio.create_task(_execute_workflow(workflow["id"]))
+            _save(record)
+    for workflow in _records("workflow"):
+        with evaluation_lock("workflow", workflow["id"]) as acquired:
+            if not acquired:
+                continue
+            workflow = _get("workflow", workflow["id"])
+            if workflow is None:
+                continue
+            if workflow.get("status") == "cancelling":
+                # The persisted cancellation error remains visible and retryable.
+                with contextlib.suppress(HTTPException):
+                    await _cancel_evaluation(workflow, workflow.get("cancellation_scope"))
+                continue
+            if "cases" in workflow:
+                if workflow.get("status") in {"queued", "running", "deploying", "benchmarking"}:
+                    _workflow_tasks[workflow["id"]] = asyncio.create_task(_execute_evaluation(workflow["id"]))
+                continue
+            if workflow.get("status") not in {"deploying", "benchmarking"}:
+                continue
+            deployment = _store.get_run(workflow["deployment_run_id"])
+            if deployment is None:
+                workflow.update(
+                    status="failed", error="deployment run was unavailable after service restart", finished_at=_now()
+                )
+                _save(workflow)
+                continue
+            if deployment.status.value == "queued":
+                deployment_run_manager.resume_run(deployment.id)
+            elif deployment.status.value == "running" and not any(case.execution_id for case in deployment.cases):
+                workflow.update(
+                    status="failed",
+                    error="deployment was interrupted before creating an execution",
+                    finished_at=_now(),
+                )
+                _save(workflow)
+                continue
+            _workflow_tasks[workflow["id"]] = asyncio.create_task(_execute_workflow(workflow["id"]))
 
 
 @router.get(
@@ -4523,6 +4616,7 @@ def _delete_benchmark_history(run_id: str) -> None:
     operation_id="delete_evaluate_run",
     responses=evaluation_problem_responses(401, 403, 404, 409, 422),
 )
+@owned_control("benchmark")
 async def delete_benchmark_run(run_id: str, request: Request = None) -> None:
     try:
         run = _get("benchmark", run_id)
@@ -4810,6 +4904,7 @@ async def get_workflow_run_details(workflow_id: str, request: Request = None) ->
     response_model=EvaluationCancelResponse,
     response_model_exclude_unset=True,
 )
+@owned_control("benchmark")
 async def cancel_run(run_id: str) -> dict:
     task = _tasks.get(run_id)
     try:

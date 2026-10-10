@@ -3,6 +3,36 @@ title: Evaluation
 description: Benchmark-run and evaluation-workflow APIs behind Lens Evaluate.
 ---
 
+Benchmark execution records may include `harness_pod_label` (the current CLI
+invocation's unique app label) and `harness_pods` (Pod names mapped to UID, phase
+and container states). The existing execution path in
+`llm_d_bench.evaluate.router` passes this label as `harness.podLabel` to upstream
+and calls `llm_d_bench.evaluate.harness_watch.watch_harness` with the same run
+record. These fields are diagnostics, not user-supplied selectors. Explicit
+harness `OOMKilled` errors receive host-memory guidance; plain exit 137 remains
+unclassified.
+
+
+## Concurrent backend instances
+
+Evaluation execution is protected by operating-system locks under
+`LENS_DATA_DIR/metadata/evaluations/locks`. Backends sharing evaluation records
+must share this directory on a filesystem supporting `flock`; sharing only the
+database with independent data directories is not supported by this guard.
+All participating backends must run the updated code. Separate development
+installations should use independent databases and data directories.
+
+Starting another backend does not mark a live owner's benchmark interrupted or
+launch the same workflow again. Locks remain held through asynchronous cleanup
+and are released automatically when the owning process exits. Automatic deployment
+cleanup is deferred while a benchmark still uses the deployment. A delayed duplicate
+executor cannot replay a completed workflow.
+
+Cancel, retry, and delete requests targeting work owned by another backend return
+HTTP `409` before changing records or cluster resources. Send the request to the
+backend executing that evaluation. Local cancellation retains ownership until its
+cleanup completes. The Python control callables enforce the same ownership checks.
+
 ## Backend API
 
 Evaluation routes live in `llm_d_bench/evaluate/router.py` with the `/api/v1/evaluate` prefix. Request models are defined in `llm_d_bench.evaluate.models`; named HTTP response models are defined in `llm_d_bench.evaluate.api_models`.
@@ -50,9 +80,102 @@ asyncio.run(main())
   </Tab>
 </Tabs>
 
+### Estimate benchmark timing
+
+<Tabs>
+  <Tab title="REST API">
+
+**`POST /api/v1/evaluate/timing-estimate`**
+
+Accepts `BenchmarkSpec`, returns HTTP `200` with `BenchmarkTimingResponse`.
+Requires `evaluate:run:read` and the normal session/CSRF checks. This is a pure
+configuration preview: it does not access or launch a cluster resource.
+
+```json
+{
+  "wait_timeout_seconds": null,
+  "parallelism": 1,
+  "shared_prefix": {
+    "num_groups": 4,
+    "num_prompts_per_group": 5,
+    "system_prompt_len": 512,
+    "question_len": 128,
+    "output_len": 64,
+    "stages": [{"rate": 0.4, "duration": 20}, {"rate": 0.8, "duration": 20}]
+  }
+}
+```
+
+For this input, `measured_requests` is 24, `lower_seconds` is 160,
+`upper_seconds` is 340, and `timeout_seconds` is 900. The response also includes
+`basis` (`configuration` or `unknown`), `confidence` (`low`), `phases` (per-invocation
+lower/upper seconds), `timeout_mode`, `recommended_timeout_seconds`, nullable
+`timeout_warning`, and the explicit `assumptions` used for the estimate.
+
+Null or omitted `wait_timeout_seconds` selects automatic budgeting: 1.5 times the
+largest invocation's upper estimate plus 120 seconds, bounded to 900-14400 seconds.
+Explicit values from 1-14400 remain manual hard limits. Unknown workload timing
+returns null estimates/counts and an empty phase map, with a 7200-second automatic
+fallback. Supported estimates cover generated single-turn shared-prefix and
+explicit matrix/concurrency workloads with inference-perf; custom YAML and
+repository profiles remain unknown. Invalid input returns `422`.
+
+  </Tab>
+  <Tab title="Python API">
+
+```python
+from llm_d_bench.deploy.capabilities import shared_prefix_routing_workload
+from llm_d_bench.evaluate.models import BenchmarkSpec
+from llm_d_bench.evaluate.timing import benchmark_timing
+
+spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload())
+timing = benchmark_timing(spec)
+print(timing["lower_seconds"], timing["upper_seconds"], timing["timeout_seconds"])
+
+full_spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload(full=True))
+print(benchmark_timing(full_spec))
+```
+
+The HTTP callable is `await llm_d_bench.evaluate.router.estimate_benchmark_timing(spec)`;
+it uses the same pure function as `create_run`.
+
+  </Tab>
+</Tabs>
+
 ### Start a benchmark run
 
+Both REST `create_evaluate_run` and Python `create_run(EvaluateRunRequest(...))`
+require serving monitoring readiness before starting traffic. Preparation uses
+the resolved `wait_timeout_seconds` budget (600 seconds for legacy records with
+no budget); this is separate from each benchmark invocation's execution limit.
+Every discovered serving Pod needs `up=1` and two inference gauge samples, and a
+discovered EPP service needs a healthy target. Setup errors or timeout fail the
+queued run before traffic. Poll run details for `phase=preparing-monitoring`,
+`heartbeat_at` and `monitoring.message`; HTTP submission still returns 202.
+
+Recorded `metrics.observability.status` retains its aggregate sample-availability
+meaning. `flow_status` and `flow_reason` separately describe request/token sample
+availability. `monitoring.status=partial` means resources were saved but traffic
+samples are absent; `monitoring.preparation` retains the preflight evidence.
+For example: `{"status":"available","flow_status":"unavailable","flow_reason":"No inference request or token samples were recorded during the benchmark window. Resource samples do not establish serving traffic monitoring."}`.
+
 Start a benchmark run against a ready deployment execution or a published Model Service.
+
+`EvaluateRunRequest.accelerator_profile` accepts registered IDs and aliases, including
+IDs without dots. When omitted, the execution's configuration supplies the profile.
+The benchmark worker records a `hardware_profile` snapshot and adds its declared
+device metrics to `monitoring.timeSeriesMetrics` in llm-d-benchmark. The Python
+`create_run` route below applies the same resolution and validation as REST.
+
+`wait_timeout_seconds` now defaults to null (automatic), while explicit numeric
+limits remain unchanged. `create_run` stores the original intent in `benchmark`,
+the resolved integer at the run's top-level `wait_timeout_seconds`, and the
+configuration estimate under `timing`. The CLI wait and Lens subprocess deadline
+use the same resolved limit per invocation. `benchmark_started_at` records the
+first subprocess start; `phase_started_at` resets for warm-up and each matrix
+point. Run/detail responses retain these fields. Failed historical runs are not
+reconfigured automatically. Both REST and Python `EvaluateRunRequest` calls use
+this behavior.
 
 <Tabs>
   <Tab title="REST API">
@@ -66,7 +189,7 @@ Start a benchmark run against a ready deployment execution or a published Model 
     - `api_key` (`string`, optional) — model access token; required when `model_service_group_id` is set.
     - `cluster_session_id` (`string`, optional; must match the execution session when supplied)
     - `harness`, `workload`, `workload_yaml`, `parallelism`, `wait_timeout_seconds`, `harness_memory_gib`
-    - `accelerator_profile`, `storage_class_name`, `matrix`, `concurrency_stages`, `warmup_requests`, `shared_prefix`
+    - `accelerator_profile` (optional registered hardware identifier, for example `intel-xpu` or `nvidia`; must match the deployment), `storage_class_name`, `matrix`, `concurrency_stages`, `warmup_requests`, `shared_prefix`
     - `sla_targets` (`BenchmarkSlaTargets`)
     - `specification_file`, `http_proxy`, `https_proxy`, `no_proxy`, `benchmark_source`, `use_baseline_endpoint`
 
@@ -804,6 +927,16 @@ for workflow in _records("workflow"):
 
 Get the current top-level record for one evaluation workflow run.
 
+For configuration evaluations, `status: "succeeded"`, `report`, and `finished_at`
+are persisted as soon as all benchmark cases succeed and the report is ready.
+The orchestration coroutine then continues final deployment cleanup without
+extending `finished_at`. This applies to both REST reads and Python `_get` reads;
+success is not a guarantee that deployment resources have already been released.
+Cleanup errors remain in the owning case's `cleanup_error` and do not replace a
+successful result. Deleting the workflow waits for its in-flight cleanup before
+removing history. Cancellation retains its existing cleanup-before-cancelled
+contract.
+
 <Tabs>
   <Tab title="REST API">
     **`GET /api/v1/evaluate/workflow-runs/{workflow_id}`**
@@ -1160,3 +1293,35 @@ asyncio.run(main())
 </Tabs>
 
 See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
+
+
+Guide workload defaults returned through deployment capabilities use two stages
+for each recommended workload and the default P/D long-input scenario. Python
+consumers obtain the same fresh values with
+`llm_d_bench.deploy.capabilities.provider_capability(provider_id)`; saved
+benchmark specifications and explicitly selected throughput presets are unchanged.
+
+### Benchmark monitoring clock alignment
+
+`metrics.observability.clock_alignment` records `status` (`measured` or
+`unavailable`), `offset_seconds` (Prometheus minus Lens time, or null), and
+`query_window` (`start`, `end`) used for the Prometheus range queries. The original
+`window` and persisted series timestamps stay on the Lens timeline, including
+rate-stage slicing. If clock measurement fails, collection retains the original
+window and reports alignment as unavailable.
+
+The existing Python callable
+`llm_d_bench.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)`
+performs this alignment without changing its signature. For example:
+
+```python
+from llm_d_bench.monitoring.profiling.service import collect_benchmark_observability
+
+observability = await collect_benchmark_observability(
+    execution_id="deployment-id",
+    start="2026-10-09T09:50:00Z",
+    end="2026-10-09T09:55:00Z",
+    cluster_id="cluster-id",
+)
+print(observability.get("clock_alignment"))
+```

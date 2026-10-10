@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import subprocess
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from llm_d_bench.deploy.providers.guide_adapter import (
     GuideDeploymentArtifact,
     ValidationResult,
 )
+from llm_d_bench.deploy.providers.hardware_profile import active_profile, set_accelerator_request
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_bench.deploy.providers.storage_mount import resolve_mount
 from llm_d_bench.deploy.providers.target_node import configured_target_node
@@ -55,6 +57,7 @@ class OptimizedBaselineGuidePolicy:
     baseline_service_name: str
     baseline_service_port: int
     model_token_file: Path | None = None
+    accelerator: str | None = None
     rendered_overlay_root: Path = Path()
     proxy_environment: dict[str, str] = field(default_factory=dict)
     retain_namespace_on_failure: bool = False
@@ -572,71 +575,125 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
         if rendered_overlay.exists():
             shutil.rmtree(rendered_overlay)
         rendered_overlay.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(self._policy.overlay_path, rendered_overlay)
-        patch_path = rendered_overlay / "patch-vllm.yaml"
-        claim_path = rendered_overlay / "resource-claim-template.yaml"
-        source_document = runtime.get("configuration_source_document")
-        if source_document is not None:
-            (rendered_overlay / "configuration-source.yaml").write_text(
-                yaml.safe_dump(source_document, sort_keys=False), encoding="utf-8"
-            )
-        patch = patch_path.read_text(encoding="utf-8")
-        patch = re.sub(r"(?m)^(\s*replicas:)\s*\d+", rf"\g<1> {deployment['replicas']}", patch, count=1)
-        model_argument = re.search(r'(?m)^(?P<indent>\s*)-\s+["\'](?P<model>[^"\']+)["\']$', patch)
-        if model_argument is None:
-            raise ValueError("registered vLLM patch is missing the positional model argument")
-        indent = model_argument.group("indent")
-        patch = f"{patch[: model_argument.start('model')]}{served_model}{patch[model_argument.end('model') :]}"
-        model_argument = re.search(r'(?m)^(?P<indent>\s*)-\s+["\'](?P<model>[^"\']+)["\']$', patch)
-        if model_argument is None:
-            raise ValueError("rendered vLLM patch is missing the positional model argument")
-        optional_arguments = [f'{indent}- "--tensor-parallel-size={deployment["tensor_parallel_size"]}"']
-        if deployment["max_num_seqs"] is not None:
-            optional_arguments.append(f'{indent}- "--max-num-seqs={deployment["max_num_seqs"]}"')
-        if deployment["max_model_len"] is not None:
-            optional_arguments.append(f'{indent}- "--max-model-len={deployment["max_model_len"]}"')
-        patch = patch[: model_argument.end()] + "\n" + "\n".join(optional_arguments) + patch[model_argument.end() :]
-        if resolved_mount is not None:
-            patch = self._inject_model_cache_volume(
-                patch, resolved_mount["volume_source"], read_only=resolved_mount["read_only"]
-            )
-        elif runtime["mount_host_path"]:
-            patch = self._inject_model_cache_mount(
-                patch, runtime["mount_host_path"], read_only=runtime["model_source"] == "shared-path"
-            )
-        cache_environment = model_cache_environment(active_model_source, cache_mounted=cache_mounted)
-        patch = self._inject_model_environment(
-            patch,
-            {**(runtime.get("environment") or {}), **cache_environment},
+        rendered_overlay.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [
+                str(getattr(self._command_runner, "_kubectl_path", "kubectl")),
+                "kustomize",
+                str(self._policy.overlay_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
         )
-        target_node = configured_target_node()
-        if target_node:
-            patch_document = yaml.safe_load(patch)
-            pod_spec = patch_document["spec"]["template"]["spec"]
-            pod_spec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = target_node
-            patch = yaml.safe_dump(patch_document, sort_keys=False)
-        patch_path.write_text(patch, encoding="utf-8")
-        image_path = rendered_overlay / "kustomization.yaml"
-        image_config = image_path.read_text(encoding="utf-8")
-        image_name, image_tag = _image_parts(image)
-        # Remap whichever image reference the guide base uses: current guides
-        # use the REPLACE_MODEL_SERVER_IMAGE placeholder, older ones the xpu name.
-        image_path.write_text(
-            f"{image_config.rstrip()}\n\nimages:\n"
-            f"  - name: REPLACE_MODEL_SERVER_IMAGE\n    newName: {image_name}\n    newTag: {image_tag}\n"
-            f"  - name: ghcr.io/llm-d/llm-d-xpu\n    newName: {image_name}\n    newTag: {image_tag}\n",
-            encoding="utf-8",
+        documents = [item for item in yaml.safe_load_all(result.stdout) if isinstance(item, dict)]
+        profile = active_profile(self._policy.accelerator)
+        if profile is None:
+            raise ValueError("Deployment hardware profile is unresolved")
+        claims = {item["metadata"]["name"]: item for item in documents if item.get("kind") == "ResourceClaimTemplate"}
+        workload_names = []
+        for workload in documents:
+            if workload.get("kind") != "Deployment":
+                continue
+            pod = workload["spec"]["template"]["spec"]
+            container = next((item for item in pod.get("containers", []) if item.get("name") == "modelserver"), None)
+            if container is None:
+                continue
+            workload_names.append(workload["metadata"]["name"])
+            workload["spec"]["replicas"] = deployment["replicas"]
+            container["image"] = image
+            args = container.setdefault("args", [])
+            options = {
+                "tensor-parallel-size": deployment["tensor_parallel_size"],
+                "max-model-len": deployment["max_model_len"],
+                "max-num-seqs": deployment["max_num_seqs"],
+            }
+            shell = bool(args and "vllm serve" in args[0])
+            if shell:
+                import shlex
+
+                from llm_d_bench.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter
+
+                command = re.sub(
+                    r"(vllm serve\s+)([^\s]+)", lambda match: match[1] + shlex.quote(served_model), args[0], count=1
+                )
+                for key, value in options.items():
+                    if value is not None:
+                        command = HelmKustomizeGuideAdapter._set_shell_argument(command, key, value)
+                args[0] = command
+            else:
+                if not args:
+                    args.append(served_model)
+                elif args[0] == "serve":
+                    args[1] = served_model
+                else:
+                    args[0] = served_model
+                for key, value in options.items():
+                    if value is None:
+                        continue
+                    for index in range(len(args) - 1, -1, -1):
+                        if args[index] == "--" + key:
+                            del args[index : index + 2]
+                        elif args[index].startswith("--" + key + "="):
+                            del args[index]
+                    args.append(f"--{key}={value}")
+            claim = next(
+                (
+                    claims.get(item.get("resourceClaimTemplateName"))
+                    for item in pod.get("resourceClaims", [])
+                    if claims.get(item.get("resourceClaimTemplateName"))
+                    and any(
+                        request.get("exactly", {}).get("deviceClassName") in profile.device_classes
+                        for request in claims[item["resourceClaimTemplateName"]]["spec"]["spec"]["devices"]["requests"]
+                    )
+                ),
+                None,
+            )
+            set_accelerator_request(container, claim, deployment["accelerator_count"], accelerator=profile.id)
+            selectors = gpu_device_selectors(accelerator=profile.id)
+            if selectors and claim:
+                for request in claim["spec"]["spec"]["devices"]["requests"]:
+                    if request.get("exactly", {}).get("deviceClassName") in profile.device_classes:
+                        request["exactly"].setdefault("selectors", []).extend(selectors)
+            pod.setdefault("nodeSelector", {}).update(profile.deployment.node_selector)
+            if configured_target_node():
+                pod["nodeSelector"]["kubernetes.io/hostname"] = configured_target_node()
+            environment = {
+                **(runtime.get("environment") or {}),
+                **model_cache_environment(active_model_source, cache_mounted=cache_mounted),
+            }
+            for name, value in environment.items():
+                entries = container.setdefault("env", [])
+                entries[:] = [item for item in entries if item.get("name") != name]
+                entries.append({"name": name, "value": str(value)})
+            if resolved_mount or runtime["mount_host_path"]:
+                volume = (
+                    resolved_mount["volume_source"]
+                    if resolved_mount
+                    else {"hostPath": {"path": runtime["mount_host_path"], "type": "DirectoryOrCreate"}}
+                )
+                mount_path = resolved_mount["mount_path"] if resolved_mount else "/model-cache"
+                pod.setdefault("volumes", []).append({"name": "model-cache", **volume})
+                container.setdefault("volumeMounts", []).append(
+                    {
+                        "name": "model-cache",
+                        "mountPath": mount_path,
+                        "readOnly": resolved_mount["read_only"]
+                        if resolved_mount
+                        else active_model_source == "shared-path",
+                    }
+                )
+        if not workload_names:
+            raise ValueError("Selected overlay has no model-server Deployment")
+        self._policy = replace(self._policy, model_deployment_name=workload_names[0])
+        guide = getattr(self._command_runner, "_guide", None)
+        if guide is not None:
+            self._command_runner._guide = replace(guide, readiness_deployment_name=workload_names[0])
+        (rendered_overlay / "manifest.yaml").write_text(
+            yaml.safe_dump_all(documents, sort_keys=False), encoding="utf-8"
         )
-        claim = claim_path.read_text(encoding="utf-8")
-        if not re.search(r"(?m)^\s*count:\s*\d+", claim):
-            raise ValueError("registered resource claim template is missing its card count")
-        claim_data = yaml.safe_load(claim)
-        gpu_request = claim_data["spec"]["spec"]["devices"]["requests"][0]
-        gpu_request["exactly"]["count"] = deployment["accelerator_count"]
-        selectors = gpu_device_selectors()
-        if selectors:
-            gpu_request["exactly"]["selectors"] = selectors
-        claim_path.write_text(yaml.safe_dump(claim_data, sort_keys=False), encoding="utf-8")
+        (rendered_overlay / "kustomization.yaml").write_text("resources:\n  - manifest.yaml\n", encoding="utf-8")
         return rendered_overlay.resolve()
 
     def _deployment_parameters(self, overrides: dict[str, Any]) -> tuple[dict[str, int | None], str, dict[str, Any]]:
@@ -724,11 +781,10 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
         mode = source.get("mode")
         if mode == "suggested-yaml":
             file_path = source.get("filePath")
-            expected_path = (
-                self._policy.guide_root / "guides/optimized-baseline/modelserver/xpu/vllm/patch-vllm.yaml"
-            ).resolve()
+            expected_path = (self._policy.overlay_path / "patch-vllm.yaml").resolve()
             if (
-                file_path != "llm-d/guides/optimized-baseline/modelserver/xpu/vllm/patch-vllm.yaml"
+                file_path
+                != "llm-d/" + str((self._policy.overlay_path / "patch-vllm.yaml").relative_to(self._policy.guide_root))
                 or not expected_path.is_file()
             ):
                 raise ValueError("suggested deployment YAML is not available from the registered Guide")

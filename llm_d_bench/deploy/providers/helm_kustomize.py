@@ -20,7 +20,7 @@ from llm_d_bench.deploy.providers.deployment_bundle import (
     subprocess_bundle_runner,
 )
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
-from llm_d_bench.deploy.providers.hardware_profile import requires_dra_claim, set_accelerator_request
+from llm_d_bench.deploy.providers.hardware_profile import active_profile, default_guide_variant, set_accelerator_request
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_bench.utils.paths import prism_temp_root
 from llm_d_bench.utils.shell import spawn
@@ -327,7 +327,7 @@ class HelmKustomizeGuideAdapter:
         model = overrides.get("model") or {}
         decode = overrides.get("decode") or {}
         runtime = overrides.get("runtime") or {}
-        variant = str(overrides.get("guideVariant") or self._descriptor.default_variant)
+        variant = str(overrides.get("guideVariant") or default_guide_variant(self._descriptor.variants))
         if variant not in self._descriptor.variants:
             raise ValueError(f"unsupported {self._descriptor.guide_id} variant: {variant}")
         if not isinstance(model.get("name"), str) or not model["name"]:
@@ -352,11 +352,24 @@ class HelmKustomizeGuideAdapter:
 
     def _patch_documents(self, documents: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
         deployment = next((item for item in documents if item.get("kind") == "Deployment"), None)
-        claim = next((item for item in documents if item.get("kind") == "ResourceClaimTemplate"), None)
-        if deployment is None or (requires_dra_claim(accelerator=self._accelerator) and claim is None):
+        profile = active_profile(self._accelerator)
+        claim = next(
+            (
+                item
+                for item in documents
+                if item.get("kind") == "ResourceClaimTemplate"
+                and profile
+                and any(
+                    request.get("exactly", {}).get("deviceClassName") in profile.device_classes
+                    for request in item.get("spec", {}).get("spec", {}).get("devices", {}).get("requests", [])
+                )
+            ),
+            None,
+        )
+        if deployment is None:
             raise ValueError("rendered Guide is missing Deployment or ResourceClaimTemplate")
         deployment["spec"]["replicas"] = parameters["replicas"]
-        # XPU model initialization can legitimately take longer than Kubernetes'
+        # Accelerator model initialization can legitimately take longer than Kubernetes'
         # default ten-minute Deployment progress deadline, especially while a DRA
         # claim is being prepared.
         deployment["spec"]["progressDeadlineSeconds"] = 1800

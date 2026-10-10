@@ -13,6 +13,7 @@ def _base_overrides():
 
 def _container(overrides):
     parameters = BaselineVllmAdapter._parameters(overrides)
+    parameters["accelerator"] = "intel-xpu"
     resources = BaselineVllmAdapter._resources(parameters)
     deployment = next(item for item in resources if item["kind"] == "Deployment")
     return deployment["spec"]["template"]["spec"]["containers"][0]

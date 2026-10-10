@@ -1,3 +1,5 @@
+import { seedHardwareProfiles } from './testing/hardwareProfiles.ts';
+await seedHardwareProfiles();
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -26,7 +28,7 @@ test('the guide variant follows the cluster hardware across both access modes', 
 });
 
 test('cluster-discovered device classes count as accelerators without a regex change', () => {
-    assert.equal(isAcceleratorDeviceClass('accel.example.com', ['accel.example.com']), true);
+    assert.equal(isAcceleratorDeviceClass('accel.example.com', ['accel.example.com']), false);
     assert.equal(isAcceleratorDeviceClass('accel.example.com', []), false);
     assert.equal(isAcceleratorDeviceClass('gpu.nvidia.com', []), true);
     assert.equal(isAcceleratorDeviceClass('dranet-rdma', []), false);

@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import { setHardwareProfiles } from '../../components/benchmark-results/acceleratorDisplay.js';
+setHardwareProfiles(['intel_xpu', 'nvidia'].map(name => JSON.parse(fs.readFileSync(new URL(`../../../llm_d_bench/hardware/profiles/${name}.json`, import.meta.url), 'utf8'))));
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { matchesEvaluationSetup, retainCompatibleConfigurations } from './setup.js';

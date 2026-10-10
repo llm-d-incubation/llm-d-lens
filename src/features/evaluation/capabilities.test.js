@@ -33,3 +33,17 @@ test("benchmark helpers tolerate an unset benchmark during configuration changes
         matrix: [], concurrency_stages: [], shared_prefix: null, workload_yaml: null,
     });
 });
+
+test('source runtime variants retain selection and use readable root labels', async () => {
+    const { guideVariantOptions, selectedGuideVariant } = await import('./capabilities.js');
+    const options = guideVariantOptions([
+        { id: 'vllm', variants: ['.'] },
+        { id: 'vllm-rdma', variants: ['.'] },
+        { id: 'vllm-special', variants: ['new/deep'] },
+    ], 'vllm');
+    assert.deepEqual(options.map(option => option.value), ['.', 'vllm-rdma', 'vllm-special/new/deep']);
+    assert.equal(options[0].label, 'Default (vllm)');
+    assert.equal(selectedGuideVariant(options, 'vllm-rdma'), 'vllm-rdma');
+    assert.equal(selectedGuideVariant(options, 'vllm-special/new/deep'), 'vllm-special/new/deep');
+    assert.equal(selectedGuideVariant([{value: 'custom/path'}], 'removed'), 'custom/path');
+});

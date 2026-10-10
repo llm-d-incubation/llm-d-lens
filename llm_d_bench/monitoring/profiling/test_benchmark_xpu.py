@@ -47,6 +47,8 @@ def sample(i, values, **labels):
             "node": "node-a",
             "pci_bdf": f"0000:0{i}:00.0",
             "namespace": "intel-xpumd",
+            "hw_gpu_task": "compute-all",
+            "hw_memory_location": "device",
             "pod": "xpumd-exporter",
             **labels,
         },
@@ -75,6 +77,10 @@ async def collect(monkeypatch, inventory, utilization, memory):
             return memory
         return []
 
+    async def clock(_client):
+        return 0.0
+
+    monkeypatch.setattr(service, "_prometheus_clock_offset", clock)
     monkeypatch.setattr(service, "_prometheus_local_port", port)
     monkeypatch.setattr(service, "list_resources", resources)
     monkeypatch.setattr(service, "_discover_components", components)
@@ -95,6 +101,9 @@ async def test_xpum_history_is_scoped_to_allocated_devices_and_pods(monkeypatch,
     ]
     memory = [sample(i, [value, value]) for i, value in enumerate([100, 200, 300, 9999])]
     result = await collect(monkeypatch, inventory, util, memory)
+    assert result["status"] == "available"
+    assert result["flow_status"] == "unavailable"
+    assert "No inference request or token samples" in result["flow_reason"]
     assert result["series"][0]["gpu_utilization_percent"] == 50
     assert result["summary"]["gpu_framebuffer_used_bytes"]["mean"] == 600
     pods = {p["pod"]: p for p in result["per_pod"]}
@@ -165,11 +174,10 @@ def test_xpum_queries_and_labels_come_from_intel_profile():
 
     telemetry = get_profile("intel-xpu").telemetry
     assert telemetry is not None
-    queries = xpu_metrics.xpum_queries()
+    queries = xpu_metrics.xpum_queries(get_profile("intel-xpu"))
     assert queries["gpu_utilization_percent"] == telemetry.device_metrics["utilization"]
     assert queries["gpu_framebuffer_used_bytes"] == telemetry.device_metrics["framebuffer_used"]
-    assert xpu_metrics.XPUM_LABELS["pci"] == telemetry.label_schema["pci"]
-    assert xpu_metrics.XPUM_LABELS["device"] == telemetry.label_schema["device"]
+    assert xpu_metrics.xpum_queries() == {}
 
 
 @pytest.mark.asyncio

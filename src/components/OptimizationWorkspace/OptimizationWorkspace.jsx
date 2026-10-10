@@ -800,7 +800,7 @@ function StageBody({ stageId, ctx }) {
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                             <div><Label>Model</Label><Input value={workload.model} onChange={(event) => setWorkload({ ...workload, model: event.target.value })} /></div>
-                            <div><Label>Hardware profile</Label><Input value={candidateSearchConfig.aicSystemName} placeholder="b60 / h100_sxm" onChange={(event) => setCandidateSearchConfig({ ...candidateSearchConfig, aicSystemName: event.target.value })} /></div>
+                            <div><Label>AIC system</Label><Input value={candidateSearchConfig.aicSystemName} placeholder="System name" onChange={(event) => setCandidateSearchConfig({ ...candidateSearchConfig, aicSystemName: event.target.value })} /></div>
                             <div><Label>Serving backend</Label><Select value={candidateSearchConfig.aicBackendName} onChange={(event) => setCandidateSearchConfig({ ...candidateSearchConfig, aicBackendName: event.target.value })}><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TRT-LLM</option></Select></div>
                             <div><Label>Available accelerators</Label><Input type="number" min="1" max="64" value={candidateSearchConfig.totalGpus} onChange={(event) => setCandidateSearchConfig({ ...candidateSearchConfig, totalGpus: event.target.value })} /></div>
                         </div>

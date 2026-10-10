@@ -100,6 +100,7 @@ def test_baseline_vllm_renders_boolean_arguments_as_cli_flags():
 
     resources = BaselineVllmAdapter._resources(
         {
+            "accelerator": "intel-xpu",
             "model": "Qwen/Qwen3-0.6B",
             "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
             "replicas": 1,
@@ -327,6 +328,7 @@ def test_baseline_vllm_renders_model_cache_pvc():
 
     resources = BaselineVllmAdapter._resources(
         {
+            "accelerator": "intel-xpu",
             "model": "Qwen/Qwen3-0.6B",
             "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
             "replicas": 1,

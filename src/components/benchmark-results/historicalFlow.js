@@ -26,8 +26,11 @@ export function historicalFlow(run) {
             name:'EPP (all instances)', ...metrics(router), queue_length:mean(observation.summary?.epp_inflight_requests),
         }]});
     }
-    if (!components.length) return null;
-    return {namespace:observation.namespace, window:observation.window, components};
+    if (!components.length && !observation.series?.length && !observation.per_pod?.length && !Object.keys(observation.summary || {}).length) return null;
+    const hasTraffic = ['request_rate_rps', 'input_token_rate_tps', 'output_token_rate_tps'].some(key => mean(observation.summary?.[key]) != null) || components.some(component => component.instances.some(instance =>
+        ['request_rate', 'input_token_rate', 'output_token_rate'].some(key => Number.isFinite(instance[key]))));
+    return {namespace:observation.namespace, window:observation.window, components, hasTraffic,
+        reason: hasTraffic ? null : observation.flow_reason || observation.reason || 'No inference request or token samples were recorded during this benchmark. Resource monitoring alone cannot populate the flow map.'};
 }
 
 export function historicalFlows(details) {

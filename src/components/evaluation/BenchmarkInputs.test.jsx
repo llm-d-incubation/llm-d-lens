@@ -41,6 +41,29 @@ function findElement(tree, predicate) {
  return [tree.props?.children].flat(Infinity).map(child => findElement(child,predicate)).find(Boolean);
 }
 
+test('automatic and manual timeout modes preserve the workload', () => {
+ let benchmark = applyBenchmarkPreset('quick');
+ const matrix = benchmark.matrix;
+ const tree = inputTree({benchmark,setBenchmark(update) { benchmark = update(benchmark); }});
+ findElement(tree, node => node.props?.['aria-label'] === 'Timeout mode').props.onChange({target:{value:'manual'}});
+ assert.equal(benchmark.wait_timeout_seconds,1800);
+ assert.equal(benchmark.matrix,matrix);
+ const next = inputTree({benchmark,setBenchmark(update) { benchmark = update(benchmark); }});
+ findElement(next, node => node.props?.['aria-label'] === 'Timeout mode').props.onChange({target:{value:'auto'}});
+ assert.equal(benchmark.wait_timeout_seconds,null);
+});
+
+test('full traffic is an explicit preset and does not mutate the registry default', () => {
+ const quick = {num_groups:4,stages:[{rate:0.4,duration:20}]};
+ const full = {num_groups:150,stages:[{rate:3,duration:60}]};
+ let benchmark = {shared_prefix:quick};
+ const tree = inputTree({benchmark,workloadMode:'shared-prefix',recommendedBenchmark:{shared_prefix:quick},fullBenchmark:full,setBenchmark(update) { benchmark=update(benchmark); }});
+ findElement(tree,node=>node.props?.['aria-label']==='Traffic preset').props.onChange({target:{value:'full'}});
+ assert.deepEqual(benchmark.shared_prefix,full);
+ assert.notEqual(benchmark.shared_prefix,full);
+ assert.equal(quick.num_groups,4);
+});
+
 
 
 test('reference selection belongs to Configuration, not Benchmark inputs', () => {

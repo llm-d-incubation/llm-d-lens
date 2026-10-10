@@ -1,3 +1,5 @@
+import { seedHardwareProfiles } from './testing/hardwareProfiles.ts';
+await seedHardwareProfiles();
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { planDocuments } from './guidePlanning.ts';
@@ -13,7 +15,7 @@ function fixture(args: string[], command = ['vllm', 'serve']) {
     ];
 }
 const modelserver = (result) => result.documents[1].spec.template.spec.containers[0];
-const plan = (documents, request = {}) => planDocuments(documents, 'New/Model', machine, null, { guide: 'optimized-baseline', replicas: 1, tensorParallelSize: 2, ...request });
+const plan = (documents, request = {}) => planDocuments(documents, 'New/Model', machine, null, { accelerator: 'xpu', guide: 'optimized-baseline', replicas: 1, tensorParallelSize: 2, ...request });
 
 test('TP updates remove separated and aliased old values', () => {
     for (const name of ['tensor-parallel-size', 'tensor_parallel_size', 'tp_size']) {

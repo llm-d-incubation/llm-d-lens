@@ -14,7 +14,12 @@ import yaml
 from llm_d_bench.common.hashing import stable_hash
 from llm_d_bench.deploy.providers.gpu_selection import gpu_device_selectors
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
-from llm_d_bench.deploy.providers.hardware_profile import claim_request_name, device_class
+from llm_d_bench.deploy.providers.hardware_profile import (
+    active_profile,
+    claim_request_name,
+    device_class,
+    set_accelerator_request,
+)
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_bench.deploy.providers.storage_mount import resolve_mount
 from llm_d_bench.utils.paths import prism_temp_root
@@ -22,8 +27,14 @@ from llm_d_bench.utils.paths import prism_temp_root
 
 class BaselineVllmAdapter:
     def __init__(
-        self, command_runner, namespace_prefix: str, readiness_timeout_seconds: int, docker_path: Path | None
+        self,
+        command_runner,
+        namespace_prefix: str,
+        readiness_timeout_seconds: int,
+        docker_path: Path | None,
+        accelerator: str | None = None,
     ) -> None:
+        self._accelerator = accelerator
         self._runner = command_runner
         self._namespace_prefix = namespace_prefix
         self._timeout = readiness_timeout_seconds
@@ -60,6 +71,7 @@ class BaselineVllmAdapter:
 
     async def render(self, definition, overrides: dict[str, Any]) -> GuideDeploymentArtifact:
         parameters = self._parameters(overrides)
+        parameters["accelerator"] = self._accelerator or parameters.get("accelerator")
         parameters["resolved_mount"] = await resolve_mount(
             overrides.get("runtime") or {},
             cluster_id=overrides.get("_cluster_id"),
@@ -250,6 +262,8 @@ class BaselineVllmAdapter:
         ):
             raise ValueError("baseline runtime.pvcName must be a valid Kubernetes PVC name")
         return {
+            "accelerator": overrides.get("hardware_profile"),
+            "hardware_request": overrides.get("hardware_request") or {},
             "model": model["name"],
             "image": image,
             "replicas": replicas,
@@ -300,6 +314,10 @@ class BaselineVllmAdapter:
 
     @staticmethod
     def _resources(parameters: dict[str, Any]) -> list[dict[str, Any]]:
+        accelerator = parameters.get("accelerator")
+        profile = active_profile(accelerator)
+        if profile is None:
+            raise ValueError("Baseline requires a resolved hardware profile")
         resolved_mount = parameters.get("resolved_mount")
         active_model_source = resolved_mount["model_source"] if resolved_mount else parameters["model_source"]
         mount_active = bool(resolved_mount) or bool(parameters["mount_path"]) or bool(parameters["pvc_name"])
@@ -342,7 +360,14 @@ class BaselineVllmAdapter:
                     args.append(f"--{name}={item['value']}")
             elif item.get("kind") == "environment":
                 environment.append({"name": item["name"], "value": item["value"]})
-        claim_name = f"{claim_request_name()}-claim"
+        from llm_d_bench.hardware.resolver import configuration_resource_request
+
+        binding = configuration_resource_request(
+            {"hardware_request": parameters.get("hardware_request") or {"request_model": profile.request_model}},
+            profile,
+        )
+        access_mode = binding.get("access_mode")
+        claim_name = f"{claim_request_name(accelerator=accelerator, access_mode=access_mode)}-claim"
         pod_spec: dict[str, Any] = {
             "enableServiceLinks": False,
             "containers": [
@@ -396,13 +421,16 @@ class BaselineVllmAdapter:
                 pod_spec["containers"][0]["args"][0] = "/model-cache"
         labels = {"app": "vllm", "llm-d.ai/role": "decode", "prism.ai/evaluation-kind": "baseline"}
         gpu_request: dict[str, Any] = {
-            "name": claim_request_name(),
-            "exactly": {"deviceClassName": device_class(), "count": parameters["tensor_parallel_size"]},
+            "name": claim_request_name(accelerator=accelerator, access_mode=access_mode),
+            "exactly": {
+                "deviceClassName": device_class(accelerator=accelerator, access_mode=access_mode),
+                "count": parameters["tensor_parallel_size"],
+            },
         }
-        selectors = gpu_device_selectors()
+        selectors = gpu_device_selectors(accelerator=accelerator)
         if selectors:
             gpu_request["exactly"]["selectors"] = selectors
-        return [
+        documents = [
             {
                 "apiVersion": "resource.k8s.io/v1",
                 "kind": "ResourceClaimTemplate",
@@ -427,3 +455,15 @@ class BaselineVllmAdapter:
                 "spec": {"selector": labels, "ports": [{"name": "http", "port": 8000, "targetPort": 8000}]},
             },
         ]
+        pod_spec.setdefault("nodeSelector", {}).update(profile.deployment.node_selector)
+        if binding.get("request_model", profile.request_model) == "extended-resource":
+            documents = [doc for doc in documents if doc.get("kind") != "ResourceClaimTemplate"]
+            pod_spec.pop("resourceClaims", None)
+            container = pod_spec["containers"][0]
+            container["resources"].pop("claims", None)
+            if binding.get("resource_name"):
+                container["resources"].setdefault("limits", {})[binding["resource_name"]] = "0"
+            set_accelerator_request(
+                container, None, parameters["tensor_parallel_size"], accelerator=accelerator, access_mode=access_mode
+            )
+        return documents

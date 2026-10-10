@@ -30,7 +30,7 @@ def cluster_deployment_source(session, requested: dict | None = None) -> dict:
     return source
 
 
-_ACCELERATOR_KEYS = ("accelerator", "accelerator_variant", "upstream_variant")
+_ACCELERATOR_KEYS = ("hardware_profile", "accelerator", "accelerator_variant", "upstream_variant")
 
 
 def _deploy_accelerator(run) -> str | None:
@@ -64,6 +64,12 @@ def _deploy_accelerator(run) -> str | None:
         recorded = first(guide) or first(guide.get("source") if isinstance(guide, dict) else None)
         if recorded:
             return recorded
+        if isinstance(content, dict):
+            from llm_d_bench.hardware.resolver import resolve_configuration_profile
+
+            profile = resolve_configuration_profile(content)
+            if profile:
+                return profile.id
     return None
 
 
@@ -243,9 +249,7 @@ class DeploymentRunManager:
         if not resolved_repository:
             if runtime_overrides:
                 return self._build_worker({**runtime_overrides, **accelerator_env, **proxy_env}, lifecycle_error)
-            if self._default_worker is None:
-                self._default_worker = self._build_worker({**accelerator_env, **proxy_env} or None)
-            return self._default_worker
+            return self._build_worker({**accelerator_env, **proxy_env} or None)
         return self._build_worker(
             {"LLM_D_ROOT": str(resolved_repository), **runtime_overrides, **accelerator_env, **proxy_env},
             lifecycle_error,

@@ -14395,6 +14395,191 @@
           }
         }
       }
+    },
+    "/api/v1/evaluate/timing-estimate": {
+      "post": {
+        "tags": [
+          "evaluate"
+        ],
+        "summary": "Estimate benchmark time and resolve its automatic execution budget",
+        "description": "Preview a configuration-only estimate without reading or creating cluster resources.",
+        "operationId": "estimate_benchmark_timing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchmarkSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchmarkTimingResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "title": "Type"
+                    },
+                    "status": {
+                      "type": "integer",
+                      "title": "Status"
+                    },
+                    "title": {
+                      "type": "string",
+                      "title": "Title"
+                    },
+                    "detail": {
+                      "title": "Detail"
+                    },
+                    "code": {
+                      "type": "string",
+                      "title": "Code"
+                    },
+                    "requestId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Requestid"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "status",
+                    "title",
+                    "detail",
+                    "code"
+                  ],
+                  "title": "EvaluationProblem",
+                  "description": "Wire shape emitted by the existing application Problem Details handlers."
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "title": "Type"
+                    },
+                    "status": {
+                      "type": "integer",
+                      "title": "Status"
+                    },
+                    "title": {
+                      "type": "string",
+                      "title": "Title"
+                    },
+                    "detail": {
+                      "title": "Detail"
+                    },
+                    "code": {
+                      "type": "string",
+                      "title": "Code"
+                    },
+                    "requestId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Requestid"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "status",
+                    "title",
+                    "detail",
+                    "code"
+                  ],
+                  "title": "EvaluationProblem",
+                  "description": "Wire shape emitted by the existing application Problem Details handlers."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "title": "Type"
+                    },
+                    "status": {
+                      "type": "integer",
+                      "title": "Status"
+                    },
+                    "title": {
+                      "type": "string",
+                      "title": "Title"
+                    },
+                    "detail": {
+                      "title": "Detail"
+                    },
+                    "code": {
+                      "type": "string",
+                      "title": "Code"
+                    },
+                    "requestId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Requestid"
+                    }
+                  },
+                  "type": "object",
+                  "required": [
+                    "type",
+                    "status",
+                    "title",
+                    "detail",
+                    "code"
+                  ],
+                  "title": "EvaluationProblem",
+                  "description": "Wire shape emitted by the existing application Problem Details handlers."
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -16417,6 +16602,16 @@
               }
             ],
             "title": "Error"
+          },
+          "timing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BenchmarkTimingResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": true,
@@ -16602,11 +16797,18 @@
             "default": 1
           },
           "wait_timeout_seconds": {
-            "type": "integer",
-            "maximum": 14400.0,
-            "minimum": 1.0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 14400,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Wait Timeout Seconds",
-            "default": 1800
+            "description": "Per-invocation execution limit in seconds. Null selects a workload-based automatic budget."
           },
           "harness_memory_gib": {
             "type": "integer",
@@ -19305,11 +19507,18 @@
             "default": 1
           },
           "wait_timeout_seconds": {
-            "type": "integer",
-            "maximum": 14400.0,
-            "minimum": 1.0,
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 14400,
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Wait Timeout Seconds",
-            "default": 1800
+            "description": "Per-invocation execution limit in seconds. Null selects a workload-based automatic budget."
           },
           "harness_memory_gib": {
             "type": "integer",
@@ -24504,6 +24713,127 @@
         "additionalProperties": false,
         "type": "object",
         "title": "GroupUpdateRequest"
+      },
+      "BenchmarkPhaseTiming": {
+        "properties": {
+          "lower_seconds": {
+            "type": "integer",
+            "title": "Lower Seconds"
+          },
+          "upper_seconds": {
+            "type": "integer",
+            "title": "Upper Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lower_seconds",
+          "upper_seconds"
+        ],
+        "title": "BenchmarkPhaseTiming"
+      },
+      "BenchmarkTimingResponse": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "configuration",
+              "unknown"
+            ],
+            "title": "Basis"
+          },
+          "confidence": {
+            "type": "string",
+            "const": "low",
+            "title": "Confidence"
+          },
+          "measured_requests": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Requests"
+          },
+          "lower_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lower Seconds"
+          },
+          "upper_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upper Seconds"
+          },
+          "phases": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BenchmarkPhaseTiming"
+            },
+            "type": "object",
+            "title": "Phases"
+          },
+          "timeout_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual"
+            ],
+            "title": "Timeout Mode"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "title": "Timeout Seconds"
+          },
+          "recommended_timeout_seconds": {
+            "type": "integer",
+            "title": "Recommended Timeout Seconds"
+          },
+          "timeout_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Warning"
+          },
+          "assumptions": {
+            "type": "string",
+            "title": "Assumptions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "basis",
+          "confidence",
+          "measured_requests",
+          "lower_seconds",
+          "upper_seconds",
+          "phases",
+          "timeout_mode",
+          "timeout_seconds",
+          "recommended_timeout_seconds",
+          "timeout_warning",
+          "assumptions"
+        ],
+        "title": "BenchmarkTimingResponse"
       }
     }
   }

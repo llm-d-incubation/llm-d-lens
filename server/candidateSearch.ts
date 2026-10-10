@@ -60,7 +60,7 @@ function predictPayload(workload: JsonRecord, searchConfig: JsonRecord, profiles
         mean_output_tokens: positiveInteger(workload.osl, 256, 1_000_000),
         ttft_target_ms: finiteNumber(workload.ttftMs),
         tpot_target_ms: finiteNumber(workload.tpotMs),
-        aic_system_name: aicSystemName || 'b60',
+        aic_system_name: aicSystemName,
         aic_backend_name: String(searchConfig.aicBackendName || 'vllm').trim().toLowerCase(),
         aic_database_mode: String(searchConfig.aicDatabaseMode || 'SILICON').trim().toUpperCase(),
         accelerator: acceleratorForSystem(aicSystemName, profiles),
@@ -413,7 +413,7 @@ candidateSearchRouter.post('/api/candidate-search', async (req, res) => {
 
         const totalGpus = positiveInteger(searchConfig.totalGpus, 8, 64);
         const maxCandidatesPerMode = positiveInteger(searchConfig.maxCandidatesPerMode, 10, 50);
-        const aicSystemName = String(searchConfig.aicSystemName || 'b60').trim();
+        const aicSystemName = String(searchConfig.aicSystemName || '').trim();
         const aicBackendName = String(searchConfig.aicBackendName || 'vllm').trim().toLowerCase();
         const candidates: JsonRecord[] = [];
         const hardwareProfiles = await loadHardwareProfiles();

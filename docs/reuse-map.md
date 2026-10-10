@@ -4,6 +4,16 @@
 
 This is a starting point for discovery, not a complete function inventory. Source code, callers, and tests are authoritative. See the [reuse development guide](refactoring/reuse-first-agent-design.md) for usage.
 
+## router-pd-plugin-compatibility
+
+Adapt legacy P/D plugin configurations to Router 0.11 while preserving source snapshots and disaggregation decisions.
+
+- Entry point: [llm_d_bench/configuration/router_compatibility.py](../llm_d_bench/configuration/router_compatibility.py)
+- Symbols: `compatible_router_values`
+- Boundaries: Only known Router 0.11 endpoint-picker runtimes are adapted. The profile handler owns former header handling; deciderPluginName maps to deciders.prefill. Conflicting decisions and custom legacy header parameters are rejected. Node planning mirrors this contract; Python validation and bundle installation share this implementation. Original asset checksums are retained and installed derived values are recorded separately.
+- Examples: [server/guideDeploymentBundle.ts](../server/guideDeploymentBundle.ts), [llm_d_bench/configuration/guide_settings.py](../llm_d_bench/configuration/guide_settings.py), [llm_d_bench/deploy/providers/deployment_bundle.py](../llm_d_bench/deploy/providers/deployment_bundle.py), [llm_d_bench/deploy/providers/pd_disaggregation.py](../llm_d_bench/deploy/providers/pd_disaggregation.py)
+- Tests: [llm_d_bench/configuration/test_router_compatibility.py](../llm_d_bench/configuration/test_router_compatibility.py), [server/guideDeploymentBundle.test.ts](../server/guideDeploymentBundle.test.ts), [llm_d_bench/deploy/providers/test_pd_disaggregation.py](../llm_d_bench/deploy/providers/test_pd_disaggregation.py)
+
 ## public-ai-provider-transport
 
 Enforce public HTTPS destinations for external AI providers and pin outbound requests to validated IP addresses by default; explicitly trusted egress proxies may receive the original hostname.
@@ -16,21 +26,21 @@ Enforce public HTTPS destinations for external AI providers and pin outbound req
 
 ## deploy-hardware-profile
 
-Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks. Also resolves router_topology (the per-guide router-values directory some Guides split by topology, e.g. single-host vs a multi-host LeaderWorkerSet), defaulting to single-host for every profile that does not set it.
+Resolve per-deployment hardware settings and discover source Kustomization entry points through the hardware registry. Resolve profile-owned router topology for per-topology guide values, defaulting to single-host when unset.
 
 - Entry point: [llm_d_bench/deploy/providers/hardware_profile.py](../llm_d_bench/deploy/providers/hardware_profile.py)
-- Symbols: `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `runtime_image`, `pin_runtime_image`, `set_accelerator_request`, `router_topology`
-- Boundaries: Deploy rendering only. Profile semantics live in llm_d_bench.hardware; this module picks the deploy accelerator key ('xpu') and exposes fallbacks for discovery failures. Model-server image repository and version are data in the profile, never hardcoded here. Do not add guide-specific logic here.
+- Symbols: `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `runtime_image`, `pin_runtime_image`, `set_accelerator_request`, `guide_overlays`, `default_guide_variant`, `router_topology`
+- Boundaries: Deployment rendering only. Unknown hardware stays neutral. Profiles own managed images and resource identities; selected upstream source owns guide variants. Never mutate NIC requests as accelerator requests.
 - Examples: [llm_d_bench/deploy/providers/baseline_vllm.py](../llm_d_bench/deploy/providers/baseline_vllm.py), [llm_d_bench/deploy/providers/pd_disaggregation.py](../llm_d_bench/deploy/providers/pd_disaggregation.py), [llm_d_bench/deploy/providers/gpu_selection.py](../llm_d_bench/deploy/providers/gpu_selection.py), [llm_d_bench/deploy/runtime/composition.py](../llm_d_bench/deploy/runtime/composition.py)
-- Tests: [llm_d_bench/deploy/providers/test_hardware_profile.py](../llm_d_bench/deploy/providers/test_hardware_profile.py)
+- Tests: [llm_d_bench/deploy/providers/test_hardware_profile.py](../llm_d_bench/deploy/providers/test_hardware_profile.py), [llm_d_bench/hardware/test_deployment_telemetry_contract.py](../llm_d_bench/hardware/test_deployment_telemetry_contract.py)
 
 ## node-hardware-profiles
 
 Node client for the hardware profile registry plus pure helpers that resolve the AIC accelerator and known DRA device classes from registered profiles.
 
 - Entry point: [server/hardwareProfiles.ts](../server/hardwareProfiles.ts)
-- Symbols: `loadHardwareProfiles`, `aicAcceleratorForSystem`, `isKnownDeviceClass`
-- Boundaries: Read-only, cached, non-blocking (returns the previous snapshot or [] on failure); callers keep their own regex defaults. Vendor names come from the backend registry, not this module.
+- Symbols: `loadHardwareProfiles`, `aicAcceleratorForSystem`, `isKnownDeviceClass`, `hardwareProfileSnapshot`
+- Boundaries: Read-only cached registry client; consumers use shared profile matching and remain neutral when hardware is unresolved.
 - Examples: [server/candidateSearch.ts](../server/candidateSearch.ts)
 - Tests: [server/hardwareProfiles.test.ts](../server/hardwareProfiles.test.ts)
 
@@ -49,7 +59,7 @@ Browser client for GET /api/v1/hardware/capabilities and a pure mapper from regi
 Map a benchmark run's accelerator profile/runtime to a display label (XPU/GPU/neutral) for chart titles and metric labels, and identify the profile-owned default model-server image repositories so hardware realignment never clobbers a custom image.
 
 - Entry point: [src/components/benchmark-results/acceleratorDisplay.js](../src/components/benchmark-results/acceleratorDisplay.js)
-- Symbols: `acceleratorValue`, `acceleratorDisplayLabel`, `utilizationLabel`, `DEFAULT_RUNTIME_IMAGES`, `MANAGED_RUNTIME_IMAGE_REPOSITORIES`, `runtimeImageRepository`, `runtimeImageForHardware`, `isDefaultRuntimeImage`
+- Symbols: `acceleratorValue`, `acceleratorDisplayLabel`, `utilizationLabel`, `DEFAULT_RUNTIME_IMAGES`, `MANAGED_RUNTIME_IMAGE_REPOSITORIES`, `runtimeImageRepository`, `runtimeImageForHardware`, `isDefaultRuntimeImage`, `setHardwareProfiles`, `acceleratorVariantForHardware`
 - Boundaries: Display and default-image selection only; no metric computation and no model-server version. The hardware profile owns the model-server repository/version; only repositories are tracked here. Unknown hardware falls back to the neutral 'GPU / XPU' wording.
 - Examples: [src/components/benchmark-results/ResourceExplorer.jsx](../src/components/benchmark-results/ResourceExplorer.jsx), [src/components/EvaluationTaskWizard.jsx](../src/components/EvaluationTaskWizard.jsx), [src/features/evaluation/setup.js](../src/features/evaluation/setup.js)
 - Tests: [src/components/benchmark-results/acceleratorDisplay.test.js](../src/components/benchmark-results/acceleratorDisplay.test.js), [src/features/evaluation/setup.test.js](../src/features/evaluation/setup.test.js)
@@ -76,20 +86,20 @@ In-process hardware profile/provider registry populated once from bundled JSON a
 
 ## hardware-telemetry-query
 
-Build namespace/pod-scoped, unit-aware device PromQL from a hardware profile's telemetry.device_metric_sources, treating an empty or missing entry as disabled.
+Build namespace/pod-scoped, unit-aware device PromQL from a hardware profile's telemetry.device_metric_sources, treating an empty or missing entry as disabled. Parse direct device snapshots using declared labels, matchers, scales and tile aggregation.
 
 - Entry point: [llm_d_bench/hardware/telemetry.py](../llm_d_bench/hardware/telemetry.py)
-- Symbols: `device_metric_source`, `scoped_device_query`, `combined_device_query`
-- Boundaries: Reads profile config only; never hardcodes vendor metric names. device_metrics (full PromQL) stays the cluster-overview source; device_metric_sources carries the bare metric name, unit, scale and required label matchers for selector injection into profiling/evaluate queries. combined_device_query OR-combines one metric across profiles so only the vendor present returns samples; an empty metric means the hardware does not report it (skip). Does not decide readiness or units for the cluster page.
+- Symbols: `device_metric_source`, `scoped_device_query`, `combined_device_query`, `parse_device_metrics`, `workload_telemetry_profiles`
+- Boundaries: Reads profile config only; never hardcodes vendor metric names. device_metrics (full PromQL) stays the cluster-overview source; device_metric_sources carries the bare metric name, unit, scale and required label matchers for selector injection into profiling/evaluate queries. combined_device_query OR-combines one metric across profiles so only the vendor present returns samples; an empty metric means the hardware does not report it (skip). Does not decide readiness or units for the cluster page. Effective allocation joins are selected from telemetry.modes using actual workload resource requests.
 - Examples: [llm_d_bench/monitoring/profiling/service.py](../llm_d_bench/monitoring/profiling/service.py), [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
-- Tests: [llm_d_bench/monitoring/profiling/test_benchmark_xpu.py](../llm_d_bench/monitoring/profiling/test_benchmark_xpu.py)
+- Tests: [llm_d_bench/monitoring/profiling/test_benchmark_xpu.py](../llm_d_bench/monitoring/profiling/test_benchmark_xpu.py), [llm_d_bench/hardware/test_deployment_telemetry_contract.py](../llm_d_bench/hardware/test_deployment_telemetry_contract.py)
 
 ## hardware-profile-model
 
 Typed hardware profile contract: frozen dataclasses for each contribution plus the capabilities API response model.
 
 - Entry point: [llm_d_bench/hardware/models.py](../llm_d_bench/hardware/models.py)
-- Symbols: `DriverContribution`, `HardwarePresence`, `TelemetryContribution`, `DeploymentContribution`, `PlanningContribution`, `UiContribution`, `HardwareProfile`, `HardwareCapabilitiesResponse`
+- Symbols: `DriverContribution`, `HardwarePresence`, `TelemetryContribution`, `DeploymentContribution`, `PlanningContribution`, `UiContribution`, `HardwareProfile`, `HardwareCapabilitiesResponse`, `DeviceMetricSource`
 - Boundaries: Data model only. The authoritative form is profiles/*.json validated by schema.json; this module maps JSON to typed objects and back. Do not add resolver or vendor-specific logic here.
 - Examples: [llm_d_bench/hardware/registry.py](../llm_d_bench/hardware/registry.py), [llm_d_bench/hardware/discovery.py](../llm_d_bench/hardware/discovery.py), [llm_d_bench/hardware/service.py](../llm_d_bench/hardware/service.py)
 - Tests: [llm_d_bench/hardware/test_hardware.py](../llm_d_bench/hardware/test_hardware.py)
@@ -106,13 +116,13 @@ Load hardware profiles/providers from bundled JSON and entry points, validate pa
 
 ## hardware-profile-resolver
 
-Resolve a hardware profile by the identity a caller actually has: DRA device class, extended-resource key, node label, upstream variant, accelerator key or AIC system name.
+Resolve a hardware profile by the identity a caller actually has: DRA device class, extended-resource key, node label, upstream variant, accelerator key or AIC system name. Resolve saved deployment hardware and preserve source DRA or extended-resource requests for evaluation baselines.
 
 - Entry point: [llm_d_bench/hardware/resolver.py](../llm_d_bench/hardware/resolver.py)
-- Symbols: `resolve_by_device_class`, `resolve_by_resource`, `resolve_by_node_label`, `resolve_by_upstream_variant`, `resolve_by_accelerator_key`, `resolve_by_aic_system`, `require_accelerator`
+- Symbols: `resolve_by_device_class`, `resolve_by_resource`, `resolve_by_node_label`, `resolve_by_upstream_variant`, `resolve_by_accelerator_key`, `resolve_by_aic_system`, `require_accelerator`, `resolve_configuration_profile`, `configuration_resource_request`, `deployment_mode`
 - Boundaries: Read-only resolution. Unknown identity returns None so discovery can degrade; require_accelerator raises ACCELERATOR_NOT_REGISTERED for explicit use (design decision 4/D5). Callers must resolve by identity, not branch on vendor names.
 - Examples: [llm_d_bench/hardware/__init__.py](../llm_d_bench/hardware/__init__.py), [llm_d_bench/monitoring/accelerator/models.py](../llm_d_bench/monitoring/accelerator/models.py), [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py), [llm_d_bench/monitoring/profiling/xpu_metrics.py](../llm_d_bench/monitoring/profiling/xpu_metrics.py), [llm_d_bench/cluster/service.py](../llm_d_bench/cluster/service.py), [llm_d_bench/monitoring/gpu_driver/service.py](../llm_d_bench/monitoring/gpu_driver/service.py), [llm_d_bench/monitoring/accelerator/intel_gpu.py](../llm_d_bench/monitoring/accelerator/intel_gpu.py)
-- Tests: [llm_d_bench/hardware/test_hardware.py](../llm_d_bench/hardware/test_hardware.py)
+- Tests: [llm_d_bench/hardware/test_hardware.py](../llm_d_bench/hardware/test_hardware.py), [llm_d_bench/hardware/test_deployment_telemetry_contract.py](../llm_d_bench/hardware/test_deployment_telemetry_contract.py)
 
 ## json-http
 
@@ -526,13 +536,73 @@ Append deployment diagnostics independently of Kubernetes and register partial s
 
 ## deployment-routing-workload
 
-Fresh shared-prefix defaults for optimized and precise routing comparisons.
+Fresh lightweight shared-prefix defaults and explicit full routing workloads for optimized and precise comparisons.
 
 - Entry point: [llm_d_bench/deploy/capabilities.py](../llm_d_bench/deploy/capabilities.py)
 - Symbols: `shared_prefix_routing_workload`
-- Boundaries: New nested data per call. Provider goals, baselines, tiered-cache and PD workload definitions remain distinct.
+- Boundaries: New nested data per call. Defaults to 24 requests; full=True preserves the 780-request performance profile. Provider goals, baselines, tiered-cache and PD workload definitions remain distinct.
 - Examples: [llm_d_bench/deploy/capabilities.py](../llm_d_bench/deploy/capabilities.py)
 - Tests: [llm_d_bench/deploy/test_capabilities.py](../llm_d_bench/deploy/test_capabilities.py)
+
+## evaluation-benchmark-timing
+
+Estimate generated benchmark workload duration and resolve bounded automatic or explicit manual execution budgets.
+
+- Entry point: [llm_d_bench/evaluate/timing.py](../llm_d_bench/evaluate/timing.py)
+- Symbols: `benchmark_timing`
+- Boundaries: Pure Evaluation-domain configuration heuristic, not measured hardware prediction. Includes request drain, parallel traffic and warmup; excludes deployment and final analysis. Unsupported workloads have unknown estimates. Explicit manual limits survive unchanged; automatic budgets are capped.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Tests: [llm_d_bench/evaluate/test_timing.py](../llm_d_bench/evaluate/test_timing.py), [llm_d_bench/evaluate/test_api_contract.py](../llm_d_bench/evaluate/test_api_contract.py)
+
+## evaluation-benchmark-budget-api
+
+Expose benchmark timing previews and resolve the same execution budget at run creation.
+
+- Entry point: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Symbols: `create_run`, `estimate_benchmark_timing`
+- Boundaries: Evaluation API adaptation over benchmark_timing. Preview is pure configuration analysis; run creation retains existing target validation, authorization and tracked execution. Explicit manual limits are preserved.
+- Examples: [src/components/evaluation/BenchmarkTiming.jsx](../src/components/evaluation/BenchmarkTiming.jsx), [llm_d_bench/evaluate/execution.py](../llm_d_bench/evaluate/execution.py)
+- Tests: [llm_d_bench/evaluate/test_timing.py](../llm_d_bench/evaluate/test_timing.py), [llm_d_bench/evaluate/test_api_contract.py](../llm_d_bench/evaluate/test_api_contract.py)
+
+## evaluation-benchmark-settings
+
+Apply benchmark presets, count planned traffic and validate benchmark form values.
+
+- Entry point: [src/features/evaluation/benchmarkSettings.js](../src/features/evaluation/benchmarkSettings.js)
+- Symbols: `applyBenchmarkPreset`, `benchmarkSummary`, `benchmarkIssues`
+- Boundaries: Pure Evaluation form logic. Counts include targets and parallel instances, exclude warm-up, and leave unsupported workloads unknown. Null or omitted execution timeout means automatic; backend validation remains authoritative.
+- Examples: [src/components/EvaluationDashboard.jsx](../src/components/EvaluationDashboard.jsx), [src/components/EvaluationTaskWizard.jsx](../src/components/EvaluationTaskWizard.jsx), [src/components/evaluation/BenchmarkInputs.jsx](../src/components/evaluation/BenchmarkInputs.jsx)
+- Tests: [src/features/evaluation/benchmarkSettings.test.js](../src/features/evaluation/benchmarkSettings.test.js)
+
+## evaluation-benchmark-inputs
+
+Compose workload, traffic, SLO, timeout and timing-preview controls for Evaluation creation surfaces.
+
+- Entry point: [src/components/evaluation/BenchmarkInputs.jsx](../src/components/evaluation/BenchmarkInputs.jsx)
+- Symbols: `BenchmarkInputs`
+- Boundaries: Controlled Evaluation form. Uses shared benchmark settings and timing components; workload selection and submission stay with callers. Full routing traffic is explicit and preset objects are cloned before editing.
+- Examples: [src/components/EvaluationDashboard.jsx](../src/components/EvaluationDashboard.jsx), [src/components/EvaluationTaskWizard.jsx](../src/components/EvaluationTaskWizard.jsx)
+- Tests: [src/components/evaluation/BenchmarkInputs.test.jsx](../src/components/evaluation/BenchmarkInputs.test.jsx)
+
+## evaluation-benchmark-timing-display
+
+Display shared backend timing estimates before submission and an optional compact remaining-time badge during execution.
+
+- Entry point: [src/components/evaluation/BenchmarkTiming.jsx](../src/components/evaluation/BenchmarkTiming.jsx)
+- Symbols: `BenchmarkTiming`
+- Boundaries: Uses authenticated Evaluation transport for debounced previews and visibility-aware polling for runtime display. Compact mode shows only remaining time and hides terminal runs; configuration previews retain detailed budgets. Does not infer hardware throughput, whole-workflow ETA or request progress. Handles unavailable estimates and overruns without false countdowns.
+- Examples: [src/components/evaluation/BenchmarkInputs.jsx](../src/components/evaluation/BenchmarkInputs.jsx), [src/components/OptimizationEvaluationDetails.jsx](../src/components/OptimizationEvaluationDetails.jsx)
+- Tests: [src/components/evaluation/BenchmarkTiming.test.jsx](../src/components/evaluation/BenchmarkTiming.test.jsx), [src/components/evaluation/BenchmarkInputs.test.jsx](../src/components/evaluation/BenchmarkInputs.test.jsx)
+
+## evaluation-benchmark-time-values
+
+Format backend timing estimates, elapsed time and active phase deadlines for Evaluation views.
+
+- Entry point: [src/features/evaluation/benchmarkSettings.js](../src/features/evaluation/benchmarkSettings.js)
+- Symbols: `benchmarkTimeDisplay`, `formatBenchmarkMinutes`
+- Boundaries: Pure presentation of persisted timing and timestamps. Terminal runs stop counting, unknown workloads stay unknown and overdue estimates do not claim zero remaining. No request-progress inference.
+- Examples: [src/components/evaluation/BenchmarkTiming.jsx](../src/components/evaluation/BenchmarkTiming.jsx)
+- Tests: [src/components/evaluation/BenchmarkTiming.test.jsx](../src/components/evaluation/BenchmarkTiming.test.jsx)
 
 ## remote-repository-preparation
 
@@ -934,7 +1004,7 @@ Shared periodic page-data refresh hook with quiet refreshes, unmount cleanup, hi
 - Entry point: [src/hooks/usePolling.js](../src/hooks/usePolling.js)
 - Symbols: `usePolling`
 - Boundaries: Use this for server-state freshness instead of a full page reload or an ad-hoc setInterval. Default interval is 5s; gate with enabled when there is nothing to watch (e.g. only while a download is in flight). Callbacks should refresh quietly — keep existing rows and reuse the page's load({ quiet: true }) instead of a full-page loading state — and must not disturb filters, form input, selected rows or open dialogs. Specialized loops with cancellation/streaming semantics (port-forward, logs, clocks) may keep their own timer but must still pause when hidden and clean up on unmount.
-- Examples: [src/components/Administration/UsersPage.jsx](../src/components/Administration/UsersPage.jsx), [src/components/ModelMarketPage.jsx](../src/components/ModelMarketPage.jsx), [src/components/AIProviders/AIProvidersPage.jsx](../src/components/AIProviders/AIProvidersPage.jsx), [src/components/DeploymentManagement/DeploymentManagementPage.jsx](../src/components/DeploymentManagement/DeploymentManagementPage.jsx), [src/components/EvaluationDashboard.jsx](../src/components/EvaluationDashboard.jsx), [src/components/ModelCache/ModelCachePage.jsx](../src/components/ModelCache/ModelCachePage.jsx)
+- Examples: [src/components/Administration/UsersPage.jsx](../src/components/Administration/UsersPage.jsx), [src/components/ModelMarketPage.jsx](../src/components/ModelMarketPage.jsx), [src/components/AIProviders/AIProvidersPage.jsx](../src/components/AIProviders/AIProvidersPage.jsx), [src/components/DeploymentManagement/DeploymentManagementPage.jsx](../src/components/DeploymentManagement/DeploymentManagementPage.jsx), [src/components/EvaluationDashboard.jsx](../src/components/EvaluationDashboard.jsx), [src/components/ModelCache/ModelCachePage.jsx](../src/components/ModelCache/ModelCachePage.jsx), [src/components/EvaluationTaskWizard.jsx](../src/components/EvaluationTaskWizard.jsx)
 - Tests: No dedicated unit test: this repo has no jsdom/testing-library setup, so the timer, visibility-pause and overlap guards are covered indirectly by the pages that use usePolling plus the type/build checks.
 
 ## agentic-deployment-workspace
@@ -1287,6 +1357,16 @@ Evaluation case request construction, submission correlation, and result collect
 - Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
 - Tests: [llm_d_bench/evaluate/test_execution.py](../llm_d_bench/evaluate/test_execution.py), [llm_d_bench/evaluate/test_cancellation.py](../llm_d_bench/evaluate/test_cancellation.py), [llm_d_bench/evaluate/test_kubernetes_service_baseline.py](../llm_d_bench/evaluate/test_kubernetes_service_baseline.py)
 
+## evaluation-workflow-completion
+
+Publish successful evaluation results before final owned-deployment cleanup finishes.
+
+- Entry point: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Symbols: `_run_case_benchmark`, `_execute_evaluation`, `delete_workflow_run`
+- Boundaries: Evaluation orchestration only. All cases must succeed before report and completion time are published. Existing tracked orchestration continues final cleanup, records cleanup errors separately and preserves successful outcomes. Intermediate cleanup still precedes later independent cases; shared-pod baselines retain deployment ownership. Deletion waits for in-flight cleanup to prevent history recreation. Explicit cancellation semantics are unchanged.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Tests: [llm_d_bench/evaluate/test_deployments.py](../llm_d_bench/evaluate/test_deployments.py), [llm_d_bench/evaluate/test_cancellation.py](../llm_d_bench/evaluate/test_cancellation.py), [llm_d_bench/evaluate/test_kubernetes_service_baseline.py](../llm_d_bench/evaluate/test_kubernetes_service_baseline.py)
+
 ## evaluation-target-submission
 
 Evaluation endpoint resolution and domain HTTP submission.
@@ -1312,7 +1392,7 @@ Evaluation metric labels, units, and comparison directions.
 Evaluation response DTOs and existing Problem Details error declarations.
 
 - Entry point: [llm_d_bench/evaluate/api_models.py](../llm_d_bench/evaluate/api_models.py)
-- Symbols: `EvaluationResponse`, `BenchmarkDefaultsResponse`, `BenchmarkRunResponse`, `EvaluationCaseResponse`, `EvaluationWorkflowResponse`, `BenchmarkRunListResponse`, `EvaluationWorkflowListResponse`, `EvaluationCaseDetailsResponse`, `EvaluationDetailsResponse`, `EvaluationCancelResponse`, `EvaluationProblem`, `evaluation_problem_responses`
+- Symbols: `EvaluationResponse`, `BenchmarkDefaultsResponse`, `BenchmarkPhaseTiming`, `BenchmarkTimingResponse`, `BenchmarkRunResponse`, `EvaluationCaseResponse`, `EvaluationWorkflowResponse`, `BenchmarkRunListResponse`, `EvaluationWorkflowListResponse`, `EvaluationCaseDetailsResponse`, `EvaluationDetailsResponse`, `EvaluationCancelResponse`, `EvaluationProblem`, `evaluation_problem_responses`
 - Boundaries: Preserve existing routes, operation IDs, items envelopes, explicit nulls and legacy extensions. Exclude unset optional fields during serialization. Domain requests remain models.py; DB persistence wrappers are not HTTP DTOs.
 - Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
 - Tests: [llm_d_bench/evaluate/test_api_contract.py](../llm_d_bench/evaluate/test_api_contract.py)
@@ -1342,7 +1422,7 @@ Construct immutable edited Evaluation YAML configurations, provenance, and both 
 Evaluation requests for standalone benchmarks, simple workflows, and multi-configuration evaluations.
 
 - Entry point: [llm_d_bench/evaluate/models.py](../llm_d_bench/evaluate/models.py)
-- Symbols: `EvaluateRunRequest`, `EvaluateWorkflowRequest`, `EvaluationCreateRequest`
+- Symbols: `BenchmarkSpec`, `EvaluateRunRequest`, `EvaluateWorkflowRequest`, `EvaluationCreateRequest`
 - Boundaries: Separate operation semantics; preserve existing defaults, validation and API operation IDs. Router re-exports legacy imports.
 - Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py), [llm_d_bench/evaluate/execution.py](../llm_d_bench/evaluate/execution.py)
 - Tests: [llm_d_bench/evaluate/test_models.py](../llm_d_bench/evaluate/test_models.py), [llm_d_bench/evaluate/test_execution.py](../llm_d_bench/evaluate/test_execution.py), [llm_d_bench/evaluate/test_api_contract.py](../llm_d_bench/evaluate/test_api_contract.py)
@@ -1546,3 +1626,143 @@ Resolve a Model Service group id to the deployment execution id and published mo
 - Boundaries: Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself — callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.
 - Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py), [llm_d_bench/simulation/service.py](../llm_d_bench/simulation/service.py)
 - Tests: [llm_d_bench/model_service/test_resolution.py](../llm_d_bench/model_service/test_resolution.py)
+
+## hardware-profile-matching
+
+Shared profile identity, managed image and source overlay matching for Node and browser deployment consumers.
+
+- Entry point: [src/features/hardware/profiles.js](../src/features/hardware/profiles.js)
+- Symbols: `profileForKey`, `profileForHardware`, `profileForResource`, `imageRepository`, `managedImageProfile`, `overlayRoot`, `matchOverlayPath`
+- Boundaries: Pure data helpers. No vendor tables or network access. Source variants remain discovered from actual Kustomization files.
+- Examples: [server/guidePlanning.ts](../server/guidePlanning.ts), [src/components/benchmark-results/acceleratorDisplay.js](../src/components/benchmark-results/acceleratorDisplay.js)
+- Tests: [server/guideCatalog.test.ts](../server/guideCatalog.test.ts), [src/components/benchmark-results/acceleratorDisplay.test.js](../src/components/benchmark-results/acceleratorDisplay.test.js)
+
+## hardware-profile-hook
+
+Load registry capabilities and notify React consumers when hardware defaults become available.
+
+- Entry point: [src/hooks/useHardwareProfiles.js](../src/hooks/useHardwareProfiles.js)
+- Symbols: `useHardwareProfiles`
+- Boundaries: Composes the existing cached hardware API client; components retain user selections and custom images.
+- Examples: [src/components/OptimizationConfiguration.jsx](../src/components/OptimizationConfiguration.jsx), [src/components/EvaluationTaskWizard.jsx](../src/components/EvaluationTaskWizard.jsx)
+- Tests: [src/components/benchmark-results/acceleratorDisplay.test.js](../src/components/benchmark-results/acceleratorDisplay.test.js)
+
+## profile-device-attribution
+
+Build profile-defined telemetry queries and attribute DRA device metrics to pods by node and PCI identity.
+
+- Entry point: [llm_d_bench/monitoring/profiling/xpu_metrics.py](../llm_d_bench/monitoring/profiling/xpu_metrics.py)
+- Symbols: `xpum_queries`, `device_allocations`, `aggregate_xpum`, `plugin_device_allocations`
+- Boundaries: Retains the historical module name. Hardware identity, labels and scaling come from profiles; callers own query transport. Plugin allocation requires kubelet allocatedResourcesStatus and a profile-declared PCI resource ID pattern; missing or ambiguous identities produce no attribution.
+- Examples: [llm_d_bench/monitoring/profiling/service.py](../llm_d_bench/monitoring/profiling/service.py)
+- Tests: [llm_d_bench/monitoring/profiling/test_benchmark_xpu.py](../llm_d_bench/monitoring/profiling/test_benchmark_xpu.py)
+
+## source-guide-planning
+
+Discover upstream guide entry points and render hardware-aware deployment plans.
+
+- Entry point: [server/guidePlanning.ts](../server/guidePlanning.ts)
+- Symbols: `catalogFromPaths`, `selectManifestPaths`, `planDocuments`, `runtimeClassForAccelerator`, `isAcceleratorDeviceClass`, `resolveAcceleratorVariant`, `validateManifestCapacity`
+- Boundaries: Profiles own hardware settings; selected source owns variants; cluster state supplies actual resource availability.
+- Examples: [server/guideConfiguration.test.ts](../server/guideConfiguration.test.ts)
+- Tests: [server/guideCatalog.test.ts](../server/guideCatalog.test.ts), [server/guidePlanning.test.ts](../server/guidePlanning.test.ts)
+
+## profile-pci-selectors
+
+Render accelerator PCI selectors from profile attribute configuration and run-selected devices.
+
+- Entry point: [llm_d_bench/deploy/providers/gpu_selection.py](../llm_d_bench/deploy/providers/gpu_selection.py)
+- Symbols: `gpu_device_selectors`
+- Boundaries: No vendor defaults; reject PCI filtering when the selected profile lacks support.
+- Examples: [llm_d_bench/deploy/providers/pd_disaggregation.py](../llm_d_bench/deploy/providers/pd_disaggregation.py)
+- Tests: [llm_d_bench/deploy/providers/test_hardware_profile.py](../llm_d_bench/deploy/providers/test_hardware_profile.py)
+
+## evaluation-guide-variants
+
+Build readable Guide options from source-discovered runtimes and preserve valid sibling and nested selections.
+
+- Entry point: [src/features/evaluation/capabilities.js](../src/features/evaluation/capabilities.js)
+- Symbols: `guideVariantOptions`, `selectedGuideVariant`
+- Boundaries: Guide planning only. Source manifests determine support; directory names and vendor tables do not.
+- Examples: [src/components/OptimizationConfiguration.jsx](../src/components/OptimizationConfiguration.jsx)
+- Tests: [src/features/evaluation/capabilities.test.js](../src/features/evaluation/capabilities.test.js)
+
+## guide-manifest-settings
+
+Derive cache and NIC controls from rendered Guide connectors and profile-declared NIC classes.
+
+- Entry point: [server/modelServerConfiguration.ts](../server/modelServerConfiguration.ts)
+- Symbols: `configureCpuCache`, `guideSettingsCapabilities`
+- Boundaries: Guide planning only. Source manifests determine support; directory names and vendor tables do not.
+- Examples: [server/guidePlanning.ts](../server/guidePlanning.ts)
+- Tests: [server/guideCatalog.test.ts](../server/guideCatalog.test.ts)
+
+## evaluation-harness-watch
+
+Observe only the current benchmark invocation and preserve its Pod container exit states for diagnostics.
+
+- Entry point: [llm_d_bench/evaluate/harness_watch.py](../llm_d_bench/evaluate/harness_watch.py)
+- Symbols: `watch_harness`, `pod_failure`
+- Boundaries: Evaluation supplies a fresh harness.podLabel per CLI invocation, shared by upstream rendering, cleanup and waits. Watch and polling use the same selector and reject mismatched events. Exit 137 alone does not establish OOM. Legacy callers without a label retain the upstream default.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Tests: [llm_d_bench/evaluate/test_harness_watch.py](../llm_d_bench/evaluate/test_harness_watch.py), [llm_d_bench/evaluate/test_matrix.py](../llm_d_bench/evaluate/test_matrix.py)
+
+## evaluation-serving-monitoring-readiness
+
+Wait for discovered serving pods and EPP monitoring before benchmark traffic.
+
+- Entry point: [llm_d_bench/monitoring/profiling/service.py](../llm_d_bench/monitoring/profiling/service.py)
+- Symbols: `wait_for_deployment_metrics`
+- Boundaries: Scoped Prometheus reads; all serving pods need healthy targets and two inference gauge samples. Zero timeout checks once; cancellation propagates. Hardware telemetry remains profile-driven. Evaluate owns the total timeout and pre-traffic failure.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Tests: [llm_d_bench/evaluate/test_benchmark_parity.py](../llm_d_bench/evaluate/test_benchmark_parity.py)
+
+## evaluation-recorded-flow
+
+Adapt saved case monitoring into recorded flow and explicit traffic availability.
+
+- Entry point: [src/components/benchmark-results/historicalFlow.js](../src/components/benchmark-results/historicalFlow.js)
+- Symbols: `historicalFlow`, `historicalFlows`
+- Boundaries: Never infer traffic from CPU, memory or device data. Preserve real zero values, case windows and serving roles; resource-only evidence carries an explanation.
+- Examples: [src/components/benchmark-results/BenchmarkLiveFlow.jsx](../src/components/benchmark-results/BenchmarkLiveFlow.jsx)
+- Tests: [src/components/benchmark-results/historicalFlow.test.js](../src/components/benchmark-results/historicalFlow.test.js), [src/components/benchmark-results/BenchmarkLiveFlow.test.jsx](../src/components/benchmark-results/BenchmarkLiveFlow.test.jsx)
+
+## evaluation-window-observability
+
+Collect persisted benchmark-window resource, serving and routing telemetry with separate traffic availability.
+
+- Entry point: [llm_d_bench/monitoring/profiling/service.py](../llm_d_bench/monitoring/profiling/service.py)
+- Symbols: `collect_benchmark_observability`
+- Boundaries: Hardware queries derive from profiles. Aggregate status reports any saved samples; flow_status and flow_reason explicitly distinguish resource-only evidence. Evaluate retains preparation state and marks resource-only collection partial. No reconstruction of missing historical traffic.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Tests: [llm_d_bench/monitoring/profiling/test_benchmark_observability.py](../llm_d_bench/monitoring/profiling/test_benchmark_observability.py), [llm_d_bench/monitoring/profiling/test_benchmark_xpu.py](../llm_d_bench/monitoring/profiling/test_benchmark_xpu.py)
+
+## evaluation-recorded-monitoring-panel
+
+Render live or recorded deployment monitoring while preserving saved topology and resource measurements when traffic samples are missing.
+
+- Entry point: [src/components/benchmark-results/BenchmarkLiveFlow.jsx](../src/components/benchmark-results/BenchmarkLiveFlow.jsx)
+- Symbols: `BenchmarkLiveFlow`
+- Boundaries: Composes existing FlowMap, historicalFlows and ResourceExplorer. Recorded resources use the complete case window; missing traffic remains missing. Parent owns navigation to the Resources section.
+- Examples: [src/components/OptimizationEvaluationDetails.jsx](../src/components/OptimizationEvaluationDetails.jsx)
+- Tests: [src/components/benchmark-results/BenchmarkLiveFlow.test.jsx](../src/components/benchmark-results/BenchmarkLiveFlow.test.jsx), [src/components/benchmark-results/historicalFlow.test.js](../src/components/benchmark-results/historicalFlow.test.js)
+
+## evaluation-process-ownership
+
+Exclude duplicate evaluation executors and cross-process control mutations using kernel-managed locks shared by backend instances.
+
+- Entry point: [llm_d_bench/evaluate/ownership.py](../llm_d_bench/evaluate/ownership.py)
+- Symbols: `evaluation_lock`, `owned_execution`, `owned_control`
+- Boundaries: Evaluation lifecycle only. All instances sharing records must share LENS_DATA_DIR on a filesystem with flock semantics and run the updated code. Locks span asynchronous cleanup, survive local nested controls, and are never unlinked. Shared deployment consumers exclude automatic cleanup; independent data directories are not coordinated.
+- Examples: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Tests: [llm_d_bench/evaluate/test_ownership.py](../llm_d_bench/evaluate/test_ownership.py)
+
+## evaluation-startup-recovery
+
+Recover interrupted evaluation records without interrupting tasks owned by another backend sharing the data directory.
+
+- Entry point: [llm_d_bench/evaluate/router.py](../llm_d_bench/evaluate/router.py)
+- Symbols: `reconcile_evaluate_runs`
+- Boundaries: Startup hook re-reads records under workflow and benchmark locks. Live owners are skipped; orphaned attempts retain interruption evidence and eligible workflows are scheduled through the same owned execution entry points. Requires shared flock-capable LENS_DATA_DIR across participating updated backends.
+- Examples: [llm_d_bench/api/main.py](../llm_d_bench/api/main.py)
+- Tests: [llm_d_bench/evaluate/test_ownership.py](../llm_d_bench/evaluate/test_ownership.py), [llm_d_bench/evaluate/test_cancellation.py](../llm_d_bench/evaluate/test_cancellation.py), [llm_d_bench/evaluate/test_artifact_storage.py](../llm_d_bench/evaluate/test_artifact_storage.py)

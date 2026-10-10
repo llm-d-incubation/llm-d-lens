@@ -3,6 +3,26 @@ title: Deployments
 description: Plan, approve and execute inference deployments across clusters.
 ---
 
+P/D deployments using Router 0.11 automatically adapt legacy plugin settings when
+created or retried. The original configuration is retained, and deployment
+diagnostics record the effective Router values. A legacy `disagg-headers-handler`
+entry is replaced by the profile handler's built-in header handling; the saved
+prefill/decode decision is preserved. A conflicting old and new decider setting
+must be corrected before deployment.
+
+## Hardware profiles and guide variants
+
+Deployment rendering resolves hardware through the profile registry. The selected
+profile supplies the runtime image, scheduling labels, accelerator resource request
+and PCI-selection capability. Custom runtime images remain user-controlled; unknown
+hardware does not silently select another vendor's defaults.
+
+Guide variants come from actual Kustomization entry points in the selected llm-d
+repository revision, including nested overlays. Changing hardware or source can
+change the available variants. A listed overlay can still require cluster resources
+such as NIC device classes, storage or runtime support; planning validates these
+requirements before deployment.
+
 Use the **Deployments** page to find active services, inspect their runtime details, and manage the deployment records you already created. Every action below is based on controls that exist in the current frontend.
 
 The deployment list cancels superseded filter requests so older results cannot replace the current selection. Cluster names are shown when available, with IDs as a fallback. Deletion still requires the displayed confirmation phrase and preserves the namespace choice; while deletion is pending, submission and dialog dismissal are disabled.
@@ -102,3 +122,26 @@ In the deployment creation flow, expand **Why this option** under a validated al
 The **AI score** shown beside an agentic candidate is a relative ranking score out of 100; the highest-scoring candidate is normalized to 100. It is not a benchmark result, confidence level, or probability of meeting the SLO. A deterministic fallback shows **Deterministic score** instead.
 
 If you use the agentic planner from the deployment creation flow, see the [Architecture overview](/architecture) for how workload-guided planning works.
+
+
+## Verify profile-driven Guide configuration
+
+Choose a cluster with downloaded Software Versions and refresh the page. The
+hardware profile selects the Guide source root; the selected llm-d checkout
+supplies its model servers and Kustomization variants, including nested paths.
+Root overlays display as `Default (vllm)` or `Default (vllm-rdma)` instead of `.`.
+Selecting a sibling runtime variant remains stable while editing other fields.
+
+For official sources, cache and NIC controls appear after source preparation:
+CPU capacity requires a supported cache connector in the rendered containers;
+NIC count requires a claim matching the profile's NIC device class. Inspect the
+generated YAML and source provenance before deployment. Access-mode settings
+come from `deployment.modes`; DRA uses a device claim and plugin mode uses the
+declared extended resource. User-selected runtime images remain overrides.
+
+In Evaluation results, open Resources during benchmark. Device allocation
+failures display a reason even when engine metrics are available. Plugin device
+metrics require kubelet-reported, profile-recognized device identities; an
+exporter alone cannot establish which devices belong to the workload. Profile
+file edits require restarting the development services and refreshing the page;
+this is not a live JSON editor. Existing saved results are not recollected.

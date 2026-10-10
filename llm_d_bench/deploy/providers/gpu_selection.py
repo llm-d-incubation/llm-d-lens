@@ -9,9 +9,10 @@ letting the driver pick any of the node's available GPUs.
 
 from __future__ import annotations
 
+import json
 import os
 
-from .hardware_profile import device_class
+from .hardware_profile import active_profile
 
 _ALLOWLIST_ENV_VAR = "PRISM_GPU_PCI_ALLOWLIST"
 
@@ -22,11 +23,20 @@ def gpu_pci_allowlist() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def gpu_device_selectors() -> list[dict[str, dict[str, str]]] | None:
+def gpu_device_selectors(*, accelerator: str | None = None) -> list[dict[str, dict[str, str]]] | None:
     """CEL selector list restricting gpu.intel.com claims to the allowlist, if configured."""
     addresses = gpu_pci_allowlist()
     if not addresses:
         return None
+    profile = active_profile(accelerator)
+    if not profile or not profile.deployment.supports_pci_allowlist:
+        raise ValueError("Selected hardware does not support PCI allowlists")
+    deployment = profile.deployment
+    if not deployment.pci_attribute or not deployment.pci_attribute_domain:
+        raise ValueError("Hardware profile has no PCI selector attributes")
     values = ", ".join(f'"{address}"' for address in addresses)
-    expression = f'device.attributes["{device_class()}"].pciAddress in [{values}]'
+    expression = (
+        f"device.attributes[{json.dumps(deployment.pci_attribute_domain)}]"
+        f"[{json.dumps(deployment.pci_attribute)}] in [{values}]"
+    )
     return [{"cel": {"expression": expression}}]

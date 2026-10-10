@@ -83,7 +83,7 @@ export default function EvaluationPlan({
                 <p>Minimum success: {slaTargets.success_rate_min_percent ?? '—'}%</p>
                 {['ttft', 'tpot'].map(key => <p key={key}>{key.toUpperCase()}: {slaTargets[`${key}_ms`] ? `${String(slaTargets[`${key}_percentile`] || 'p99').toUpperCase()} ≤ ${slaTargets[`${key}_ms`]} ms` : 'Measure only'}</p>)}
             </div>
-            <p className="mt-3 text-xs leading-6 text-slate-500">Timeout: {benchmark.wait_timeout_seconds ?? '—'}s · Parallel benchmark instances: {benchmark.parallelism ?? 1}{matrix.length > 0 && ` · Warm-up: ${benchmark.warmup_requests ?? 2} requests per task`}</p>
+            <p className="mt-3 text-xs leading-6 text-slate-500">Timeout: {benchmark.wait_timeout_seconds == null ? 'Automatic (workload-based)' : `${benchmark.wait_timeout_seconds}s`} · Parallel benchmark instances: {benchmark.parallelism ?? 1}{matrix.length > 0 && ` · Warm-up: ${benchmark.warmup_requests ?? 2} requests per task`}</p>
         </section>
 
         <p className="text-xs leading-5 text-slate-500">This plan summarizes your selections. Deployment readiness is checked during execution.</p>

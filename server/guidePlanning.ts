@@ -1,3 +1,5 @@
+import { loadHardwareProfiles, hardwareProfileSnapshot, type HardwareProfile } from './hardwareProfiles.ts';
+import { profileForKey, profileForResource, overlayRoot, matchOverlayPath } from '../src/features/hardware/profiles.js';
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,7 +22,7 @@ import { loadClusterSources } from './clusterSources.ts';
 import { clusterSessionKubeconfig } from './clusterSession.ts';
 import { executeRemoteInspection } from './remoteDeploy.ts';
 import { applyRuntimeOverrides, runtimeOverrides } from './configurationOverrides.ts';
-import { configureModelServer, configureCpuCache, runtimeArgument } from './modelServerConfiguration.ts';
+import { configureModelServer, configureCpuCache, runtimeArgument, guideSettingsCapabilities } from './modelServerConfiguration.ts';
 import { normalizeGuideSettings } from '../src/features/evaluation/guideSettings.js';
 import { buildGuideDeploymentBundle, pinModelServerImage, ROUTER_DISAGG_SIDECAR_IMAGE } from './guideDeploymentBundle.ts';
 
@@ -71,20 +73,22 @@ async function loadGuidePaths(selection: { clusterId?: unknown; clusterSessionId
     const localRoot = cluster.llmDRepoPath!;
     const commit = commandOutput('git', ['-C', localRoot, 'rev-parse', 'HEAD']);
     const paths = commandOutput('git', ['-C', localRoot, 'ls-files', 'guides'])
-        .split('\n').filter((item) => /^guides\/[^/]+\/modelserver\/.+\.ya?ml$/i.test(item));
+        .split('\n').filter((item) => /^guides\/.+(?:\.ya?ml|Kustomization)$/i.test(item));
     if (!/^[0-9a-f]{40}$/.test(commit) || !paths.length) {
         throw Object.assign(new Error('The cluster llm-d source has no usable guides; download its Software Versions'), { status: 409 });
     }
     return { paths, commit, localRoot, ref: cluster.llmDRef || '' };
 }
 
-function catalogFromPaths(paths: string[]): CatalogEntry[] {
+export function catalogFromPaths(paths: string[], profiles: HardwareProfile[] = hardwareProfileSnapshot()): CatalogEntry[] {
     const guides = new Map<string, Map<string, Map<string, Set<string>>>>();
     for (const manifestPath of paths) {
-        const parts = manifestPath.split('/');
-        if (parts.length < 5 || parts[0] !== 'guides' || parts[2] !== 'modelserver') continue;
-        const [, guide, , accelerator, modelServer, ...rest] = parts;
-        const variant = rest.length > 1 ? rest[0] : '.';
+        if (!/(?:^|\/)(?:kustomization\.ya?ml|Kustomization)$/i.test(manifestPath)) continue;
+        const profile = profiles.find(item => matchOverlayPath(item, manifestPath));
+        if (!profile) continue;
+        const { guide, modelServer, relative } = matchOverlayPath(profile, manifestPath)!;
+        const accelerator = profile.upstream_variant;
+        const variant = relative.split('/').slice(0, -1).join('/') || '.';
         if (!guides.has(guide)) guides.set(guide, new Map());
         const accelerators = guides.get(guide)!;
         if (!accelerators.has(accelerator)) accelerators.set(accelerator, new Map());
@@ -106,8 +110,9 @@ function catalogFromPaths(paths: string[]): CatalogEntry[] {
 }
 
 async function getCatalog(selection: { clusterId?: unknown; clusterSessionId?: unknown }) {
-    const source = await loadGuidePaths(selection);
-    return { ...source, catalog: catalogFromPaths(source.paths) };
+    const [source, profiles] = await Promise.all([loadGuidePaths(selection), loadHardwareProfiles()]);
+    if (!profiles.length) throw new Error("Hardware profiles are unavailable");
+    return { ...source, catalog: catalogFromPaths(source.paths, profiles) };
 }
 
 function commandOutput(command: string, args: string[], timeout = 4000): string {
@@ -118,20 +123,27 @@ function commandOutput(command: string, args: string[], timeout = 4000): string 
     }
 }
 
-function parseAccelerators(): JsonRecord {
-    const nvidia = commandOutput('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits']);
-    if (nvidia) {
-        const devices = nvidia.split('\n').filter(Boolean).map((line) => {
-            const [model, memoryMiB] = line.split(',').map((value) => value.trim());
-            return { model, memoryGiB: Math.round(Number(memoryMiB) / 1024) };
+function acceleratorOutput(profile: HardwareProfile, output: string): JsonRecord | null {
+    if (!output.trim()) return null;
+    const settings = profile.planning?.discovery || {};
+    if (settings.format === 'csv') {
+        const devices = output.trim().split('\n').map(line => {
+            const [model, memory] = line.split(',').map(value => value.trim());
+            return { model, memoryGiB: Number(memory) / Number(settings.memory_divisor || 1) };
         });
-        return { vendor: 'nvidia', model: devices[0]?.model, count: devices.length, memoryGiB: devices[0]?.memoryGiB, devices };
+        return { vendor: profile.vendor, model: devices[0]?.model, count: devices.length, memoryGiB: devices[0]?.memoryGiB, devices };
     }
-    const rocm = commandOutput('rocm-smi', ['--showproductname', '--showmeminfo', 'vram', '--csv']);
-    if (rocm) return { vendor: 'amd', model: 'AMD accelerator', count: Math.max(1, (rocm.match(/^card\d+/gm) || []).length), raw: rocm.slice(0, 2000) };
-    const xpu = commandOutput('xpu-smi', ['discovery', '-d']);
-    if (xpu) return { vendor: 'intel', model: xpu.match(/Device Name\s*:\s*(.+)/i)?.[1]?.trim() || 'Intel XPU', count: Math.max(1, (xpu.match(/Device ID\s*:/gi) || []).length), raw: xpu.slice(0, 2000) };
-    return { vendor: 'none', model: null, count: 0, memoryGiB: null, devices: [] };
+    return { vendor: profile.vendor, model: settings.model_pattern ? output.match(new RegExp(settings.model_pattern, 'i'))?.[1]?.trim() : profile.display_name, count: settings.device_pattern ? (output.match(new RegExp(settings.device_pattern, 'gi')) || []).length : 0, raw: output.slice(0, 2000) };
+}
+
+function parseAccelerators(): JsonRecord {
+    for (const profile of hardwareProfileSnapshot()) {
+        const argv = profile.planning?.discovery?.command || [];
+        if (!argv.length) continue;
+        const result = acceleratorOutput(profile, commandOutput(argv[0], argv.slice(1)));
+        if (result) return result;
+    }
+    return { vendor: 'unknown', count: 0, devices: [] };
 }
 
 function machineProfile(inspectAccelerators = true): JsonRecord {
@@ -168,7 +180,7 @@ function clusterProfile(version: JsonRecord, nodes: JsonRecord, deviceClasses: J
         totals.cpu += quantityNumber(node.allocatable.cpu);
         totals.memoryGiB += quantityNumber(node.allocatable.memory);
         for (const [resource, value] of Object.entries(node.allocatable)) {
-            if (/gpu|gaudi|xpu|tpu/i.test(resource) && !/monitor/i.test(resource)) {
+            if (profileForResource(hardwareProfileSnapshot(), resource)) {
                 totals.accelerators[resource] = (totals.accelerators[resource] || 0) + quantityNumber(value);
             }
         }
@@ -181,9 +193,8 @@ function clusterProfile(version: JsonRecord, nodes: JsonRecord, deviceClasses: J
     }));
     const draDevices = slices.flatMap((slice: JsonRecord) =>
         (slice.devices || [])
-        .filter((device: JsonRecord) => (
-            /gpu|xpu/i.test(String(slice.driver || ''))
-            || String(device.attributes?.type?.string || '').toLowerCase() === 'gpu'
+        .filter(() => (
+            hardwareProfileSnapshot().some(profile => (profile.device_classes || []).includes(slice.driver))
         ))
         .map((device: JsonRecord) => ({
             name: device.name,
@@ -198,7 +209,7 @@ function clusterProfile(version: JsonRecord, nodes: JsonRecord, deviceClasses: J
     const firstDevice = draDevices[0];
     const firstDriver = String(firstDevice?.driver || '');
     const accelerator = draDevices.length ? {
-        vendor: /intel/i.test(firstDriver) ? 'intel' : /nvidia/i.test(firstDriver) ? 'nvidia' : /amd/i.test(firstDriver) ? 'amd' : firstDriver || 'unknown',
+        vendor: hardwareProfileSnapshot().find(profile => (profile.device_classes || []).includes(firstDriver))?.vendor || 'unknown',
         model: firstDevice.model,
         count: draDevices.length,
         memoryGiB: firstDevice.memoryGiB || null,
@@ -222,9 +233,8 @@ function clusterProfile(version: JsonRecord, nodes: JsonRecord, deviceClasses: J
 // runtime is not the vendor's (otherwise the container cannot see the device).
 export function runtimeClassForAccelerator(cluster: JsonRecord | null, accelerator: string): string | null {
     const classes = (cluster?.runtimeClasses || []) as JsonRecord[];
-    const needle = accelerator === 'gpu' ? 'nvidia' : accelerator === 'xpu' ? 'intel' : '';
-    if (!needle) return null;
-    const match = classes.find((item) => `${item?.name || ''} ${item?.handler || ''}`.toLowerCase().includes(needle));
+    const needles = profileForKey(hardwareProfileSnapshot(), accelerator)?.deployment?.runtime_class_matchers || [];
+    const match = classes.find((item) => needles.some((needle: string) => `${item?.name || ''} ${item?.handler || ''}`.toLowerCase().includes(needle.toLowerCase())));
     return match ? String(match.name || '') || null : null;
 }
 
@@ -258,16 +268,11 @@ function parseJsonSection(sections: Record<string, string>, name: string): JsonR
 }
 
 function remoteAccelerators(sections: Record<string, string>): JsonRecord {
-    if (sections.NVIDIA) {
-        const devices = sections.NVIDIA.split('\n').filter(Boolean).map((line) => {
-            const [model, memoryMiB] = line.split(',').map((value) => value.trim());
-            return { model, memoryGiB: Math.round(Number(memoryMiB) / 1024) };
-        });
-        return { vendor: 'nvidia', model: devices[0]?.model, count: devices.length, memoryGiB: devices[0]?.memoryGiB, devices };
+    for (const [index, profile] of hardwareProfileSnapshot().entries()) {
+        const result = acceleratorOutput(profile, sections[`HARDWARE_${index}`] || '');
+        if (result) return result;
     }
-    if (sections.ROCM) return { vendor: 'amd', model: 'AMD accelerator', count: Math.max(1, (sections.ROCM.match(/^card\d+/gm) || []).length), raw: sections.ROCM.slice(0, 2000) };
-    if (sections.XPU) return { vendor: 'intel', model: sections.XPU.match(/Device Name\s*:\s*(.+)/i)?.[1]?.trim() || 'Intel XPU', count: Math.max(1, (sections.XPU.match(/Device ID\s*:/gi) || []).length), raw: sections.XPU.slice(0, 2000) };
-    return { vendor: 'none', model: null, count: 0, memoryGiB: null, devices: [] };
+    return { vendor: 'unknown', count: 0, devices: [] };
 }
 
 async function discoverRemoteEnvironment(target: unknown, requestCredentials: unknown): Promise<{ machine: JsonRecord; cluster: JsonRecord | null }> {
@@ -277,9 +282,11 @@ async function discoverRemoteEnvironment(target: unknown, requestCredentials: un
         'printf "__PRISM_CPU__\\n"; (lscpu -J 2>/dev/null || true)',
         'printf "__PRISM_CORES__\\n"; (getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0)',
         'printf "__PRISM_MEMORY__\\n"; awk \'/MemTotal/ {print $2}\' /proc/meminfo 2>/dev/null',
-        'printf "__PRISM_NVIDIA__\\n"; (nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)',
-        'printf "__PRISM_ROCM__\\n"; (rocm-smi --showproductname --showmeminfo vram --csv 2>/dev/null || true)',
-        'printf "__PRISM_XPU__\\n"; (xpu-smi discovery -d 2>/dev/null || true)',
+        ...hardwareProfileSnapshot().flatMap((profile, index) => {
+            const argv = profile.planning?.discovery?.command || [];
+            const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+            return argv.length ? [`printf '__PRISM_HARDWARE_${index}__\\n'; (${argv.map(quote).join(' ')} 2>/dev/null || true)`] : [];
+        }),
         'printf "__PRISM_K8S_VERSION__\\n"; (kubectl version -o json 2>/dev/null || true)',
         'printf "__PRISM_K8S_NODES__\\n"; (kubectl get nodes -o json 2>/dev/null || true)',
         'printf "__PRISM_DEVICE_CLASSES__\\n"; (kubectl get deviceclasses.resource.k8s.io -o json 2>/dev/null || true)',
@@ -315,16 +322,17 @@ function estimateModel(model: string): JsonRecord {
 }
 
 function knownAcceleratorMemoryGiB(model: unknown): number {
-    const name = String(model || '').toLowerCase();
-    if (/\bb60\b/.test(name)) return 24;
-    if (/max\s*1550|max_1550/.test(name)) return 48;
-    if (/max\s*1100|max_1100/.test(name)) return 48;
+    const name = String(model || '');
+    for (const profile of hardwareProfileSnapshot()) {
+        const match = (profile.planning?.memory_models || []).find((item: JsonRecord) => new RegExp(item.pattern, 'i').test(name));
+        if (match) return Number(match.gib);
+    }
     return 0;
 }
 
 function acceleratorResource(resources: JsonRecord): [string, number] | null {
     for (const [name, value] of Object.entries(resources || {})) {
-        if (/gpu|gaudi|xpu|tpu/i.test(name)) return [name, Number(value) || 0];
+        if (profileForResource(hardwareProfileSnapshot(), name)) return [name, Number(value) || 0];
     }
     return null;
 }
@@ -480,7 +488,7 @@ export function validateManifestCapacity(documents: any[], budget: number, basis
         const containers = pod.containers || [];
         const containerDemand = (container: JsonRecord) => {
             const resources = { ...container.resources?.limits, ...container.resources?.requests };
-            return Object.entries(resources).filter(([name]) => /gpu|gaudi|xpu|tpu/i.test(name)).reduce((sum, [, value]) => sum + Number(value), 0);
+            return Object.entries(resources).filter(([name]) => profileForResource(hardwareProfileSnapshot(), name)).reduce((sum, [, value]) => sum + Number(value), 0);
         };
         const regularDemand = containers.reduce((sum: number, container: JsonRecord) => sum + containerDemand(container), 0);
         let persistentInit = 0, initPeak = 0;
@@ -496,7 +504,7 @@ export function validateManifestCapacity(documents: any[], budget: number, basis
             const requests = (claim?.kind === 'ResourceClaimTemplate' ? claim.spec?.spec : claim?.spec)?.devices?.requests || [];
             return sum + requests.reduce((count: number, request: JsonRecord) => {
                 const alternatives = request.exactly ? [request.exactly] : request.firstAvailable || [request];
-                return count + Math.max(0, ...alternatives.filter((item: JsonRecord) => /gpu|gaudi|xpu|tpu/i.test(item.deviceClassName || '')).map((item: JsonRecord) => Number(item.count ?? 1)));
+                return count + Math.max(0, ...alternatives.filter((item: JsonRecord) => isAcceleratorDeviceClass(item.deviceClassName, null)).map((item: JsonRecord) => Number(item.count ?? 1)));
             }, 0);
         }, 0);
         const modelTp = containers.filter((container: JsonRecord) => container.name === 'modelserver').reduce((sum: number, container: JsonRecord) => sum + Number(runtimeArgument(container, 'tensor-parallel-size') || 1), 0);
@@ -517,9 +525,8 @@ export function validateManifestCapacity(documents: any[], budget: number, basis
 export function isAcceleratorDeviceClass(deviceClass: string, clusterDeviceClasses: unknown): boolean {
     const value = String(deviceClass || '');
     if (!value) return false;
-    const known = Array.isArray(clusterDeviceClasses) ? clusterDeviceClasses.map(String) : [];
-    if (known.includes(value)) return true;
-    return /^(?:gpu\.|.*\.gpu\.|nvidia\.com|amd\.com)/.test(value);
+    void clusterDeviceClasses;
+    return hardwareProfileSnapshot().some(profile => (profile.device_classes || []).includes(value));
 }
 
 // The Guide's upstream variant (xpu/gpu) is a vendor identity, so it must follow
@@ -531,11 +538,10 @@ export function resolveAcceleratorVariant(requested: string, cluster: JsonRecord
     const resourceKeys = Object.keys(cluster.allocatable?.accelerators || {}).map((key) => key.toLowerCase());
     const deviceClasses = (cluster.deviceClasses || []).map((value: unknown) => String(value).toLowerCase());
     const driver = String(cluster.accelerator?.devices?.[0]?.driver || '').toLowerCase();
-    const has = (needle: string) => resourceKeys.some((key) => key.includes(needle)) || deviceClasses.some((value) => value.includes(needle)) || driver.includes(needle);
-    const intel = has('intel');
-    const nvidia = has('nvidia');
-    if (nvidia && !intel) return 'gpu';
-    if (intel && !nvidia) return 'xpu';
+    const matches = hardwareProfileSnapshot().filter(profile => resourceKeys.some(key => profileForResource([profile], key))
+        || deviceClasses.some((key: string) => (profile.device_classes || []).includes(key))
+        || (profile.device_classes || []).includes(driver));
+    if (matches.length === 1) return matches[0].upstream_variant;
     return requested;
 }
 
@@ -645,7 +651,7 @@ export function planDocuments(documents: any[], model: string, machine: JsonReco
             if (cluster && deviceClassName && !cluster.deviceClasses?.includes(deviceClassName)) {
                 errors.push(`DRA device class ${deviceClassName} is not available in the selected cluster.`);
             }
-            if (deviceClassName === 'dranet-rdma') {
+            if (deviceClassName && deviceClassName === profileForKey(hardwareProfileSnapshot(), requested.accelerator)?.dranet_device_class) {
                 nicRequests++;
                 if (guideSettings.rdmaNicCount != null) replace(exactly, 'count', guideSettings.rdmaNicCount, `/documents/${documentIndex}/spec/spec/devices/requests/${requestIndex}/exactly/count`, 'apply requested NIC count independently of GPU topology');
             }
@@ -656,8 +662,10 @@ export function planDocuments(documents: any[], model: string, machine: JsonReco
             const claimCount = requestedTp > 0 ? requestedTp : Number(exactly.count || 0);
             claimCountByRole[role] = Math.max(claimCountByRole[role] || 0, claimCount);
             if (validConfiguredDevices.length) {
-                const attributeDomain = String(cluster?.accelerator?.devices?.[0]?.driver || 'gpu.intel.com');
-                const selectors = [...(exactly.selectors || []), { cel: { expression: `device.attributes[${JSON.stringify(attributeDomain)}].pciAddress in [${validConfiguredDevices.map((item) => JSON.stringify(item)).join(', ')}]` } }];
+                const deployment = profileForKey(hardwareProfileSnapshot(), requested.accelerator)?.deployment;
+                if (!deployment?.supports_pci_allowlist || !deployment.pci_attribute_domain || !deployment.pci_attribute) { errors.push('Selected hardware does not support PCI selectors'); continue; }
+                const attributeDomain = deployment.pci_attribute_domain;
+                const selectors = [...(exactly.selectors || []), { cel: { expression: `device.attributes[${JSON.stringify(attributeDomain)}][${JSON.stringify(deployment.pci_attribute)}] in [${validConfiguredDevices.map((item) => JSON.stringify(item)).join(', ')}]` } }];
                 replace(exactly, 'selectors', selectors, `/documents/${documentIndex}/spec/spec/devices/requests/${requestIndex}/exactly/selectors`, 'restrict allocation to configured devices present in the selected cluster');
             }
         }
@@ -671,19 +679,24 @@ export function planDocuments(documents: any[], model: string, machine: JsonReco
         const currentRole = resourceRole(value, inheritedRole);
         if (value.kind === 'Deployment' && value.spec) {
             if (Number(value.spec.progressDeadlineSeconds || 0) < 1800) {
-                replace(value.spec, 'progressDeadlineSeconds', 1800, `${pointer}/spec/progressDeadlineSeconds`, 'allow XPU DRA allocation and model initialization to complete');
+                replace(value.spec, 'progressDeadlineSeconds', 1800, `${pointer}/spec/progressDeadlineSeconds`, 'allow accelerator allocation and model initialization to complete');
             }
             const role = currentRole;
             const guideCount = Number(value.spec.replicas || 1);
             guideReplicas += guideCount;
             guideReplicasByRole[role] = (guideReplicasByRole[role] || 0) + guideCount;
+            const hardwareDeployment = profileForKey(hardwareProfileSnapshot(), requested.accelerator)?.deployment;
+            const podSpec = value.spec.template?.spec;
+            if (podSpec && hardwareDeployment?.node_selector) {
+                replace(podSpec, 'nodeSelector', { ...hardwareDeployment.node_selector, ...podSpec.nodeSelector }, `${pointer}/spec/template/spec/nodeSelector`, 'apply hardware scheduling defaults');
+            }
             const containers = value.spec.template?.spec?.containers || [];
             let perReplica = 0;
             let deploymentCpu = 0;
             let deploymentMemory = 0;
             for (const container of containers) {
-                if (container.name === 'modelserver' && requested.runtimeImage) {
-                    const image = pinModelServerImage(String(requested.runtimeImage));
+                if (container.name === 'modelserver' && (requested.runtimeImage || hardwareDeployment?.runtime_image)) {
+                    const image = pinModelServerImage(String(requested.runtimeImage || hardwareDeployment?.runtime_image));
                     replace(container, 'image', image, `${pointer}/spec/template/spec/containers/${containers.indexOf(container)}/image`, 'apply selected runtime image');
                 }
                 if (container.name === 'modelserver' && Array.isArray(container.env)) {
@@ -800,6 +813,14 @@ export function planDocuments(documents: any[], model: string, machine: JsonReco
                 const selected = overrides.filter(item => item.target === 'both' || item.target === (isDualRoleGuide ? role : 'decode'));
                 const before = structuredClone(container);
                 const requestedTp = Number(requested[`${role}TensorParallelSize`] || ((!isDualRoleGuide || role === 'serving') ? requested.tensorParallelSize : 0));
+                const profile = profileForKey(hardwareProfileSnapshot(), requested.accelerator);
+                if (profile && requestedTp > 0) {
+                    for (const group of ['limits', 'requests']) {
+                        for (const key of Object.keys(container.resources?.[group] || {})) {
+                            if (profileForResource([profile], key)) container.resources[group][key] = String(requestedTp);
+                        }
+                    }
+                }
                 configureModelServer(container, modelArgument, requestedTp, model, requested.guide === 'precise-prefix-cache-routing');
                 if (requestedTp > 0) { tensorParallelSize = requestedTp; tensorParallelSizeByRole[role] = requestedTp; }
                 applyRuntimeOverrides(container, selected);
@@ -809,7 +830,7 @@ export function planDocuments(documents: any[], model: string, machine: JsonReco
                 }
                 if (guideSettings.cacheCpuGiB != null) {
                     if (selected.some(item => item.name === 'kv-transfer-config' || item.name === 'LMCACHE_MAX_LOCAL_CPU_SIZE')) throw new Error('CPU cache capacity conflicts with a custom connector/cache override.');
-                    configureCpuCache(container, guideSettings.cacheCpuGiB, requested.guideVariant);
+                    configureCpuCache(container, guideSettings.cacheCpuGiB);
                 }
                 for (const key of ['command', 'args', 'env']) {
                     if (JSON.stringify(before[key]) !== JSON.stringify(container[key])) patches.push({
@@ -945,7 +966,8 @@ function deploymentContract(documents: any[], guide: string): JsonRecord {
 
 export function selectManifestPaths(paths: string[], guide: string, accelerator: string, requestedModelServer: string, requestedVariant = '') {
     let modelServer = requestedModelServer;
-    let prefix = `guides/${guide}/modelserver/${accelerator}/${modelServer}/`;
+    const profile = profileForKey(hardwareProfileSnapshot(), accelerator);
+    let prefix = overlayRoot(profile, guide, modelServer) + '/';
     let matching = paths.filter((item) => item.startsWith(prefix));
     if (!matching.length) throw Object.assign(new Error('No official YAML manifests match the selected guide, accelerator, and model server'), { status: 404 });
     let normalizedVariant = requestedVariant.trim().replace(/^\/+|\/+$/g, '');
@@ -954,19 +976,21 @@ export function selectManifestPaths(paths: string[], guide: string, accelerator:
     }
     const explicitVariantPrefix = `${prefix}${normalizedVariant}/`;
     if (normalizedVariant && !matching.some((item) => item.startsWith(explicitVariantPrefix))) {
-        const alternatePrefix = `guides/${guide}/modelserver/${accelerator}/${normalizedVariant}/`;
+        const [alternateServer, ...alternateVariant] = normalizedVariant.split('/');
+        const alternatePrefix = overlayRoot(profile, guide, alternateServer) + '/';
         const alternateMatching = paths.filter((item) => item.startsWith(alternatePrefix));
         const alternateRoots = alternateMatching.filter((item) => !item.slice(alternatePrefix.length).includes('/'));
-        if (alternateRoots.length) {
-            modelServer = normalizedVariant;
+        if (alternateRoots.length || alternateVariant.length && alternateMatching.length) {
+            modelServer = alternateServer;
             prefix = alternatePrefix;
             matching = alternateMatching;
-            normalizedVariant = '';
+            normalizedVariant = alternateVariant.join('/');
         }
     }
     const relative = matching.map((item) => item.slice(prefix.length));
-    const roots = relative.filter((item) => !item.includes('/'));
-    const variant = normalizedVariant || (roots.length ? '.' : relative.some((item) => item.startsWith('base/')) ? 'base' : relative[0].split('/')[0]);
+    const entries = relative.filter(item => /(?:^|\/)(?:kustomization\.ya?ml|Kustomization)$/i.test(item)).map(item => item.split('/').slice(0, -1).join('/') || '.');
+    const variant = normalizedVariant || (entries.includes('.') ? '.' : entries.includes('base') ? 'base' : entries.sort()[0]);
+    if (!entries.includes(variant)) throw Object.assign(new Error('Selected variant has no Kustomization entry point'), { status: 404 });
     const selected = matching.filter((item) => variant === '.' ? !item.slice(prefix.length).includes('/') : item.startsWith(`${prefix}${variant}/`));
     if (!selected.length) throw Object.assign(new Error(`No official YAML manifests match Guide variant ${variant}`), { status: 404 });
     const guidePath = variant === '.' ? prefix.slice(0, -1) : `${prefix}${variant}`;
@@ -1106,7 +1130,9 @@ guidePlanningRouter.post('/api/guide-planning/prepare', async (req, res) => {
             return res.status(400).json({ error: 'Guide, accelerator and model server are required' });
         }
         const source = await loadManifests(guide, accelerator, modelServer, String(guideVariant), req.body);
-        return res.json({ ready: true, commit: source.source.commit });
+        const documents = yaml.loadAll(source.rendered).filter(doc => doc && typeof doc === 'object') as JsonRecord[];
+        const profile = profileForKey(hardwareProfileSnapshot(), accelerator);
+        return res.json({ ready: true, commit: source.source.commit, capabilities: guideSettingsCapabilities(documents, profile?.dranet_device_class) });
     } catch {
         // A prefetch failure is non-fatal; an explicit plan will retry it.
         return res.status(502).json({ error: 'Guide preparation failed; retry when generating configuration' });
@@ -1126,6 +1152,7 @@ guidePlanningRouter.post('/api/guide-planning/plan', async (req, res) => {
         res.setHeader('Server-Timing', Object.entries(timings).map(([name, duration]) => `${name};dur=${duration}`).join(', '));
     };
     try {
+        await loadHardwareProfiles();
         const guide = String(req.body?.guide || '').trim();
         const accelerator = String(req.body?.accelerator || '').trim();
         const modelServer = String(req.body?.modelServer || '').trim();

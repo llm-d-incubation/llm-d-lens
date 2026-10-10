@@ -3,9 +3,99 @@ title: Evaluation
 description: Design guided benchmark experiments and analyze the results.
 ---
 
+The Evaluation creation wizard uses automatic cleanup for deployments created from
+configurations; it does not offer a deployment-retention checkbox.
+
+Once every benchmark case succeeds and the comparison report is ready, the
+evaluation shows **Succeeded** and stops counting time. Final deployment cleanup
+continues in the background without an evaluation progress step. A successful
+result does not mean accelerators have already been released. Cleanup failures
+are recorded separately and do not change successful benchmark results. Deleting
+the evaluation waits for any in-flight cleanup before removing its history.
+
+The creation wizard refreshes the selected cluster's **Available** accelerator
+count every five seconds while the tab is visible, and when you return to the tab.
+Counts reflect Kubernetes allocations, so a newly queued task may not reduce the
+count until deployment allocates its devices. You do not need to leave and reopen
+the wizard. Background refreshes preserve your configuration inputs and retain the
+last successful count if a request temporarily fails.
+
+## Hardware configuration across evaluation stages
+
+Evaluation deployment and generated baselines resolve the same hardware profile as
+the selected configuration. Baselines preserve the source accelerator request type
+(DRA or an extended resource), including when a hardware family supports both.
+
+Benchmark runs resolve hardware from the deployment and record its profile snapshot.
+The profile supplies device metrics, label names, scaling and allocation attribution.
+Declared device metrics are added to llm-d-benchmark monitoring settings; live
+snapshots and profiling use the same registry contract. Missing telemetry remains
+unavailable instead of falling back to another hardware family's metrics.
+
 Use the **Evaluation** area to create benchmark tasks, compare deployment configurations, and review the evidence collected for each run. The operations below only mention controls that exist in the current task list, creation modal, wizard, and result screens.
 
 Benchmark result scenario and outcome selectors retain their existing options and selection behavior while using the shared select control.
+
+If setup reports **Unable to continue** because no valid cluster is selected or
+its Software Versions must be downloaded, click **Select or manage a cluster**
+in the error message to open **Clusters**. Select or prepare a ready cluster,
+then return to Evaluation and choose it in the **Cluster** field.
+
+New P/D Disaggregation evaluations default to two **Load stages**: concurrency 1
+with 16 requests and concurrency 8 with 32 requests, for each token-length pair.
+Use **Add concurrency stage** for a larger capacity sweep. Existing custom settings
+and saved evaluations retain their configured stages.
+
+## Workload size and execution time
+
+New optimized-baseline and precise-prefix routing tasks default to a **Lightweight
+check**: 24 measured requests per target and worker, with 512 shared input tokens,
+128 unique input tokens and 64 output tokens. **Full routing workload** remains an
+explicit traffic preset for longer performance evaluations. Existing saved tasks
+keep their workload and manual timeout settings; retrying an old task does not
+replace them with new defaults.
+
+**Timeout mode** defaults to **Automatic (workload-based)**. Lens computes a
+per-invocation budget from the configured request counts, lengths, stages and
+parallel instances, with setup and safety allowances. Automatic budgets are
+bounded between 15 minutes and 4 hours; workloads without a supported estimate
+use a 2-hour fallback. **Manual limit** preserves your chosen hard limit and warns
+when it is shorter than the estimated execution time.
+
+The benchmark settings show an estimated time range per target, not the duration
+of the entire deployment/comparison workflow. These are low-confidence estimates
+based on stated throughput assumptions, not measured hardware predictions. Runtime
+installation, deployment and final analysis are excluded. Repository profiles,
+custom YAML, unsupported harnesses and multi-turn workloads currently show timing
+as unavailable rather than inventing a completion time.
+
+During execution, the details page shows only a compact remaining-time badge
+above the benchmark result tabs. If execution outlasts the estimate, the badge
+displays **Taking longer than estimated**. Terminal runs hide the badge.
+Matrix points and warm-up are separate invocations, each with its own hard limit.
+Rate-stage duration is the offered traffic window: queued requests still need to
+finish afterward. More parallel benchmark instances multiply the request count.
+
+
+## Concurrent backend instances
+
+Evaluation execution is protected by operating-system locks under
+`LENS_DATA_DIR/metadata/evaluations/locks`. Backends sharing evaluation records
+must share this directory on a filesystem supporting `flock`; sharing only the
+database with independent data directories is not supported by this guard.
+All participating backends must run the updated code. Separate development
+installations should use independent databases and data directories.
+
+Starting another backend does not mark a live owner's benchmark interrupted or
+launch the same workflow again. Locks remain held through asynchronous cleanup
+and are released automatically when the owning process exits. Automatic deployment
+cleanup is deferred while a benchmark still uses the deployment. A delayed duplicate
+executor cannot replay a completed workflow.
+
+Cancel, retry, and delete requests targeting work owned by another backend return
+HTTP `409` before changing records or cluster resources. Send the request to the
+backend executing that evaluation. Local cancellation retains ownership until its
+cleanup completes. The Python control callables enforce the same ownership checks.
 
 ## Find an evaluation task
 
@@ -92,3 +182,73 @@ Ratios are guide divided by baseline: higher throughput ratios favor the guide, 
 ## Related references
 
 If you need the reusable evaluation presets behind these screens, see [Guides](/evaluation/guides) and [Parameters](/evaluation/parameters).
+
+
+## Verify profile-driven Guide configuration
+
+Choose a cluster with downloaded Software Versions and refresh the page. The
+hardware profile selects the Guide source root; the selected llm-d checkout
+supplies its model servers and Kustomization variants, including nested paths.
+Root overlays display as `Default (vllm)` or `Default (vllm-rdma)` instead of `.`.
+Selecting a sibling runtime variant remains stable while editing other fields.
+
+For official sources, cache and NIC controls appear after source preparation:
+CPU capacity requires a supported cache connector in the rendered containers;
+NIC count requires a claim matching the profile's NIC device class. Inspect the
+generated YAML and source provenance before deployment. Access-mode settings
+come from `deployment.modes`; DRA uses a device claim and plugin mode uses the
+declared extended resource. User-selected runtime images remain overrides.
+
+In Evaluation results, open Resources during benchmark. Device allocation
+failures display a reason even when engine metrics are available. Plugin device
+metrics require kubelet-reported, profile-recognized device identities; an
+exporter alone cannot establish which devices belong to the workload. Profile
+file edits require restarting the development services and refreshing the page;
+this is not a live JSON editor. Existing saved results are not recollected.
+
+
+## Harness exits and retries
+
+Each benchmark invocation, including warmup and individual matrix points, uses a
+unique harness Pod label. Cleanup and diagnostics are scoped to that invocation,
+so a failed Pod from a previous run cannot fail the next one or be confused with a
+parallel evaluation. A local backend restart interrupts active evaluations;
+retry the interrupted case after the services are ready.
+
+Exit 137 indicates SIGKILL, not proof of an out-of-memory condition. Lens reports
+host-memory guidance only when Kubernetes explicitly records `OOMKilled` for the
+harness container. Optional Hugging Face tokenizer-file 404 responses are not
+fatal when the load stages subsequently start. Some benchmark revisions warn
+that `harness.extraEnvVars` is absent from their strict schema even though their
+Pod template supports it; this warning is distinct from a harness exit.
+
+
+New Guide configurations start with two load stages, including their default
+scenario: Optimized baseline and Precise prefix-cache routing use 3 and 10
+requests/s for 60 seconds each; Tiered prefix cache uses 1 and 1.5 requests/s
+for 60 seconds each; P/D uses concurrency 1 / 16 requests and 8 / 32 requests.
+Add stages explicitly for a larger sweep. Existing saved configurations retain
+their stages; create a new configuration to use these defaults.
+
+### Monitoring readiness and missing recorded flow
+
+Before traffic starts, Evaluation waits for every discovered serving Pod to have
+healthy Prometheus scrapes and at least two inference gauge samples. A discovered
+EPP service must also have a healthy target. Creating a Monitor does not mean
+Prometheus has loaded it. The preparation deadline uses the resolved benchmark
+**Timeout mode / Manual limit** budget, separately from each traffic invocation.
+A missing budget on a legacy run uses 600 seconds. The phase remains
+`preparing-monitoring` with heartbeat updates until ready. A timeout or setup
+error fails the run before traffic; check Monitor selection, Prometheus reloads
+and targets, then retry. This applies equally to existing endpoints and workflows.
+
+Recorded monitoring keeps the saved topology, resource charts and Pod resource
+ranking visible even when request/token samples are missing. Missing traffic is
+explained inline; it never hides CPU, device memory or network measurements, and
+resource measurements are never converted into invented traffic values.
+
+Benchmark collection measures the Prometheus clock offset before querying the
+saved window. Queries use the Prometheus timeline; returned chart timestamps are
+mapped back to the evaluation timeline. This prevents a clock difference between
+the Lens host and the cluster from selecting a window before benchmark traffic.
+Previously saved results are not automatically rewritten.

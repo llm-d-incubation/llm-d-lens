@@ -24,14 +24,11 @@ const BACKEND_URL = (
 const REQUEST_TIMEOUT_MS = Number(process.env.HARDWARE_PROFILES_TIMEOUT_MS || 5_000);
 const CACHE_TTL_MS = Number(process.env.HARDWARE_PROFILES_CACHE_TTL_MS || 30_000);
 
-export type HardwareProfile = {
-    id?: string;
-    display_name?: string;
-    vendor?: string;
-    accelerator_keys?: string[];
-    device_classes?: string[];
-    planning?: { aic_system_patterns?: string[] };
-};
+// Profile payload is validated by the Python registry's JSON Schema.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type HardwareProfile = Record<string, any>;
+
+export function hardwareProfileSnapshot(): HardwareProfile[] { return cache?.profiles || []; }
 
 let cache: { at: number; profiles: HardwareProfile[] } | null = null;
 

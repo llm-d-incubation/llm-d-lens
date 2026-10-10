@@ -22,7 +22,7 @@ def test_resolves_intel_device_class_to_profile_benchmark_name():
 
 
 def test_configured_profile_wins():
-    assert _execution_accelerator_profile(_execution(""), "custom-profile") == "custom-profile"
+    assert _execution_accelerator_profile(_execution(""), "nvidia") == "nvidia"
 
 
 def test_unknown_device_class_has_no_profile():

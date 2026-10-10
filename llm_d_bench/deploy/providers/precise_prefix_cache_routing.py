@@ -39,6 +39,7 @@ from llm_d_bench.deploy.providers.deployment_bundle import (
 )
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_bench.deploy.providers.hardware_profile import (
+    guide_overlays,
     overlay_variant,
     requires_dra_claim,
     set_accelerator_request,
@@ -163,10 +164,10 @@ class PrecisePrefixCacheRoutingAdapter:
         every other profile (notably NVIDIA) uses the generic ``gpu/vllm/base``
         overlay.
         """
-        modelserver = guide_root / "guides/precise-prefix-cache-routing/modelserver"
-        if self._overlay_variant_value == "xpu":
-            return modelserver / "xpu/vllm"
-        return modelserver / f"{self._overlay_variant_value}/vllm/base"
+        sources = guide_overlays(guide_root, "precise-prefix-cache-routing", accelerator=self._accelerator)
+        return (
+            sources.get(".") or sources.get("base") or next(iter(sources.values()), guide_root / "unavailable-overlay")
+        )
 
     def discover(self) -> GuideDefinition:
         return self._definition
