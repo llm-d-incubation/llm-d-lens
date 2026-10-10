@@ -12,6 +12,17 @@ are no longer supported.
 
 Agentic create and refinement streams use `llm_d_bench.agentic.streaming.planning_stream_response`. The routes retain principal resolution, expected-error classification, and their existing generic error messages. Streams emit `progress` followed by `complete` or `error`; disconnect cleanup cancels and awaits unfinished planning. Gateway operation/log streams remain separate.
 
+Recalculating an Agentic plan does not require an AI provider. Without one,
+`AgenticDeploymentService.refine()` refreshes planning facts and uses deterministic
+candidate generation and scoring with the new preference. If an available AI
+scorer fails, recalculation keeps the validated candidates and returns
+deterministically scored alternatives instead.
+
+Agentic candidate planning and approval revalidation use the deployment request's
+`max_model_len` for memory and KV-cache checks, including when the supplied
+`planning_facts.context_length` differs. The deployed configuration uses the same
+`max_model_len`.
+
 Deployments live under the FastAPI router in `llm_d_bench/deploy/router.py` with the `/api/v1/deployments` prefix.
 
 Optimized and precise routing capability metadata reuse `shared_prefix_routing_workload()` in `llm_d_bench.deploy.capabilities`. Each scenario and recommended workload receives independent nested values; provider-specific baselines and goals are unchanged. Precise-provider calibration and model discovery share lazy modelserver invocation traversal while retaining their respective last-value and first-model selection rules.

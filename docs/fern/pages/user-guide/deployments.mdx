@@ -101,4 +101,8 @@ In the deployment creation flow, expand **Why this option** under a validated al
 
 The **AI score** shown beside an agentic candidate is a relative ranking score out of 100; the highest-scoring candidate is normalized to 100. It is not a benchmark result, confidence level, or probability of meeting the SLO. A deterministic fallback shows **Deterministic score** instead.
 
+**Recalculate selection** works without an AI provider. It refreshes the recommendation
+using deterministic planning and the new preference; if AI scoring fails, the
+alternatives also retain deterministic scores.
+
 If you use the agentic planner from the deployment creation flow, see the [Architecture overview](/architecture) for how workload-guided planning works.
