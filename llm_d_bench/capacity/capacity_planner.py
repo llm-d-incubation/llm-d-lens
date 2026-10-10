@@ -441,8 +441,17 @@ def load_model_config(
     # Check standard HF hub cache path
     hf_home = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
     hub_cache_root = (Path(hf_home) / "hub").resolve()
-    hub_cache_model_dir = (hub_cache_root / f"models--{model_name_or_path.replace('/', '--')}").resolve()
-    if hub_cache_model_dir.is_relative_to(hub_cache_root) and hub_cache_model_dir.is_dir():
+    model_dir_name = f"models--{model_name_or_path.replace('/', '--')}"
+    hub_cache_model_dir = None
+    if hub_cache_root.is_dir():
+        hub_cache_model_dir = next(
+            (entry.resolve() for entry in hub_cache_root.iterdir() if entry.name == model_dir_name), None
+        )
+    if (
+        hub_cache_model_dir is not None
+        and hub_cache_model_dir.is_relative_to(hub_cache_root)
+        and hub_cache_model_dir.is_dir()
+    ):
         snapshots = (hub_cache_model_dir / "snapshots").resolve()
         if snapshots.is_relative_to(hub_cache_model_dir) and snapshots.is_dir():
             for snap in snapshots.iterdir():
