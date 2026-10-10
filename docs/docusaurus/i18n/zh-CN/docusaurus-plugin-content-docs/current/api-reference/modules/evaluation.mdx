@@ -1,0 +1,1165 @@
+---
+title: 评估
+description: Lens Evaluate 背后的基准测试运行与评估工作流 API。
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## 后端 API
+
+评估相关的路由位于 `llm_d_bench/evaluate/router.py` 中，前缀为 `/api/v1/evaluate`。请求模型定义在 `llm_d_bench.evaluate.models` 中；命名的 HTTP 响应模型定义在 `llm_d_bench.evaluate.api_models` 中。
+
+运行、工作流、用例和详情响应会保留额外的已存储字段。记录中不存在的可选字段会保持省略状态；显式存储的 `null` 值会保持为 `null`。列表响应会保留其 `{ "items": [...] }` 信封结构。Python 路由函数返回字典；FastAPI 会在 HTTP 边界处应用对应的命名响应模型。
+
+错误使用应用的 `application/problem+json` 响应格式，包含 `type`、`status`、`title`、`detail`、`code` 以及可选的 `requestId`。`detail` 字段可以包含结构化的校验错误。认证和资源权限仍然适用；声明一个响应模型并不会授予访问权限。
+
+### 获取基准测试默认值
+
+获取 Lens Evaluate 将使用的 llm-d-benchmark 默认仓库和运行时设置。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/benchmark-defaults`**
+
+    请求：无请求体。
+
+    响应：HTTP `200`，`BenchmarkDefaultsResponse`。
+
+    ```json
+    {
+      "mode": "managed-source",
+      "repository": "https://github.com/llm-d/llm-d-benchmark.git",
+      "revision": "main",
+      "localRuntimeConfigured": false
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import benchmark_defaults
+
+
+async def main() -> None:
+    defaults = await benchmark_defaults()
+    print(defaults["mode"], defaults["repository"], defaults["revision"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 启动一次基准测试运行
+
+针对一个就绪的部署执行记录，或一个已发布的模型服务，启动一次基准测试运行。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/runs`**
+
+    请求体：`EvaluateRunRequest`
+    - `deployment_execution_id`（`string`，可选）——直接对某个特定的部署执行记录进行基准测试。
+    - `model_service_group_id`（`string`，可选）——改为对一个已发布、持续健康探测的
+      模型服务进行基准测试；测试工具会将其解析为该组的活跃成员及已发布名称，并且
+      要求提供 `api_key`。`deployment_execution_id` 与 `model_service_group_id` 二者必须恰好设置其中一个。
+    - `api_key`（`string`，可选）——模型访问令牌；当设置了 `model_service_group_id` 时为必填项。
+    - `cluster_session_id`（`string`，可选；提供时必须与执行记录所属的会话一致）
+    - `harness`、`workload`、`workload_yaml`、`parallelism`、`wait_timeout_seconds`、`harness_memory_gib`
+    - `accelerator_profile`、`storage_class_name`、`matrix`、`concurrency_stages`、`warmup_requests`、`shared_prefix`
+    - `sla_targets`（`BenchmarkSlaTargets`）
+    - `specification_file`、`http_proxy`、`https_proxy`、`no_proxy`、`benchmark_source`、`use_baseline_endpoint`
+
+    ```json
+    {
+      "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "harness": "inference-perf",
+      "workload": "sanity_random.yaml",
+      "parallelism": 2,
+      "wait_timeout_seconds": 1800,
+      "harness_memory_gib": 8,
+      "matrix": [
+        {"isl": 1024, "osl": 128}
+      ],
+      "concurrency_stages": [
+        {"concurrency": 8, "num_requests": 96}
+      ],
+      "warmup_requests": 2,
+      "sla_targets": {
+        "ttft_ms": 500,
+        "ttft_percentile": "p99",
+        "tpot_ms": 50,
+        "tpot_percentile": "p99",
+        "throughput_min_tps": 1000,
+        "success_rate_min_percent": 99
+      },
+      "specification_file": "guides/optimized-baseline",
+      "http_proxy": "",
+      "https_proxy": "",
+      "no_proxy": "",
+      "benchmark_source": {
+        "repository": "https://github.com/llm-d/llm-d-benchmark.git",
+        "revision": "main"
+      },
+      "use_baseline_endpoint": false
+    }
+    ```
+
+    要改为针对一个已发布的模型服务，请将 `deployment_execution_id` 替换为
+    `model_service_group_id` 并提供 `api_key`：
+
+    ```json
+    {
+      "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+      "api_key": "lens-mk-…",
+      "harness": "inference-perf",
+      "workload": "sanity_random.yaml"
+    }
+    ```
+
+    响应：HTTP `202`，`BenchmarkRunResponse`。已排队的基准测试运行记录。
+
+    ```json
+    {
+      "kind": "benchmark",
+      "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
+      "status": "queued",
+      "created_at": "2026-09-23T09:18:24.287000Z",
+      "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "cluster_id": "cluster-1",
+      "deployment_ownership": "existing-endpoint",
+      "owner_user_id": "user-1",
+      "harness": "inference-perf",
+      "workload": "sanity_random.yaml",
+      "parallelism": 2,
+      "wait_timeout_seconds": 1800,
+      "harness_memory_gib": 8,
+      "matrix": [{"isl": 1024, "osl": 128}],
+      "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
+      "warmup_requests": 2,
+      "sla_targets": {
+        "ttft_ms": 500,
+        "ttft_percentile": "p99",
+        "tpot_ms": 50,
+        "tpot_percentile": "p99",
+        "throughput_min_tps": 1000,
+        "success_rate_min_percent": 99
+      },
+      "benchmark_source": {
+        "repository": "https://github.com/llm-d/llm-d-benchmark.git",
+        "revision": "main"
+      },
+      "benchmark_runtime": {},
+      "benchmark": {
+        "harness": "inference-perf",
+        "workload": "sanity_random.yaml",
+        "parallelism": 2,
+        "wait_timeout_seconds": 1800,
+        "harness_memory_gib": 8,
+        "matrix": [{"isl": 1024, "osl": 128}],
+        "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
+        "warmup_requests": 2,
+        "shared_prefix": null,
+        "workload_yaml": null,
+        "accelerator_profile": null,
+        "storage_class_name": null
+      },
+      "specification_file": "guides/optimized-baseline"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.models import EvaluateRunRequest
+from llm_d_bench.evaluate.router import create_run
+
+
+async def main() -> None:
+    run = await create_run(
+        EvaluateRunRequest(
+            deployment_execution_id="00000000-0000-4000-8000-000000000001",
+            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
+            workload="sanity_random.yaml",
+            parallelism=2,
+            matrix=[{"isl": 1024, "osl": 128}],
+            concurrency_stages=[{"concurrency": 8, "num_requests": 96}],
+        )
+    )
+    print(run["id"], run["status"])
+
+    # Or target a published Model Service (resolves to its active member and
+    # published name; requires api_key):
+    run = await create_run(
+        EvaluateRunRequest(
+            model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+            api_key="lens-mk-…",
+            workload="sanity_random.yaml",
+        )
+    )
+    print(run["id"], run["status"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 列出基准测试运行记录
+
+列出 Lens Evaluate 已记录的一次性基准测试运行记录。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/runs`**
+
+    请求：无请求体。
+
+    响应：HTTP `200`，`BenchmarkRunListResponse`。
+
+    ```json
+    {
+      "items": [
+        {
+          "kind": "benchmark",
+          "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
+          "status": "succeeded",
+          "created_at": "2026-09-23T09:18:24.287000Z",
+          "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+          "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+          "model": "Qwen/Qwen3-8B",
+          "endpoint": "http://127.0.0.1:38000/v1",
+          "deployment": {
+            "name": "00000000-0000-4000-8000-000000000001",
+            "namespace": "prism-eval-1",
+            "endpoint": "http://127.0.0.1:38000/v1"
+          }
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.evaluate.router import _records
+
+for run in _records("benchmark"):
+    print(run["id"], run["status"])
+```
+  </TabItem>
+</Tabs>
+
+### 获取一次基准测试运行记录
+
+获取基准测试结果以及只读的部署证据信息。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/runs/{run_id}`**
+
+    请求：无请求体。
+    - 路径参数：`run_id`（`string`，必填）
+
+    响应：HTTP `200`，`BenchmarkRunResponse`。
+
+    ```json
+    {
+      "kind": "benchmark",
+      "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
+      "status": "succeeded",
+      "created_at": "2026-09-23T09:18:24.287000Z",
+      "finished_at": "2026-09-23T09:24:10.000000Z",
+      "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+      "deployment_run_id": "deployment-1",
+      "deployment_case_id": "case-1",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "model": "Qwen/Qwen3-8B",
+      "namespace": "prism-eval-1",
+      "endpoint": "http://127.0.0.1:38000/v1",
+      "endpoint_used": "http://127.0.0.1:38000/v1",
+      "guide": "optimized-baseline",
+      "deployment_configuration": {
+        "schema_version": "deployable-configuration.v1",
+        "type": "baseline",
+        "format": "helm",
+        "provider_ref": "optimized-baseline",
+        "checksum": "sha256:9eb2d61d",
+        "content": {"model": {"name": "Qwen/Qwen3-8B"}},
+        "provenance": {}
+      },
+      "configuration": {
+        "configuration_artifact_id": "00000000-0000-4000-8000-000000000101",
+        "model": "Qwen/Qwen3-8B",
+        "guide": "optimized-baseline",
+        "guide_variant": null,
+        "runtime": null,
+        "accelerator": null,
+        "image": null,
+        "replicas": null,
+        "tensor_parallel_size": null,
+        "decode_replicas": null,
+        "decode_tensor_parallel_size": null,
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "benchmark": {
+          "harness": "inference-perf",
+          "workload": "sanity_random.yaml",
+          "parallelism": 2,
+          "wait_timeout_seconds": 1800,
+          "harness_memory_gib": 8,
+          "matrix": [{"isl": 1024, "osl": 128}],
+          "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
+          "warmup_requests": 2,
+          "shared_prefix": null,
+          "workload_yaml": null,
+          "accelerator_profile": null,
+          "storage_class_name": null
+        }
+      },
+      "metrics": {
+        "throughput_tps": 1210.5,
+        "success_rate": 99.6,
+        "latency_distributions": {
+          "ttft": {"p99_ms": 420.0},
+          "tpot": {"p99_ms": 42.0}
+        }
+      },
+      "resource_snapshot": {},
+      "deployment_cases": [
+        {
+          "id": "case-1",
+          "execution_id": "00000000-0000-4000-8000-000000000001",
+          "guide": "optimized-baseline",
+          "namespace": "prism-eval-1",
+          "endpoint": "http://127.0.0.1:38000/v1",
+          "status": "ready",
+          "execution_status": "ready",
+          "monitoring_setup": null,
+          "diagnostics": null,
+          "resource_snapshot": {}
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.evaluate.router import _benchmark_response, _get
+
+run = _get("benchmark", "7d698fda-8e2e-44b2-86aa-14d24098350d")
+if run is not None:
+    detail = _benchmark_response(run)
+    print(detail["id"], detail["status"])
+```
+  </TabItem>
+</Tabs>
+
+### 取消一次基准测试运行
+
+取消一次正在进行中的一次性基准测试运行。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/runs/{run_id}/cancel`**
+
+    请求：无请求体。
+    - 路径参数：`run_id`（`string`，必填）
+
+    响应：HTTP `200`，`EvaluationCancelResponse`。
+
+    ```json
+    {
+      "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
+      "status": "cancelled"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import cancel_run
+
+
+async def main() -> None:
+    result = await cancel_run("7d698fda-8e2e-44b2-86aa-14d24098350d")
+    print(result["id"], result["status"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 删除一次基准测试运行
+
+删除一次已处于终态的独立基准测试及其已保存的结果。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/evaluate/runs/{run_id}`**
+
+    请求：无请求体。
+    - 路径参数：`run_id`（`string`，必填）
+
+    响应：HTTP `204 No Content`。不返回任何 JSON 响应体。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.evaluate.router import _delete_benchmark_history, _get
+
+run_id = "7d698fda-8e2e-44b2-86aa-14d24098350d"
+run = _get("benchmark", run_id)
+if run is not None and run.get("status") in {"succeeded", "failed", "cancelled"}:
+    _delete_benchmark_history(run_id)
+```
+  </TabItem>
+</Tabs>
+
+### 启动一次“部署+基准测试”工作流
+
+启动一个简单的“部署+基准测试”工作流：先创建一个经过优化的基线部署，然后对其进行基准测试。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/workflow-runs`**
+
+    请求体：`EvaluateWorkflowRequest`
+    - `model`（`string`，必填）
+    - `cluster_session_id`（`string`，必填）
+    - `replicas`、`tensor_parallel_size`、`image`、`harness`、`workload`、`parallelism`
+
+    ```json
+    {
+      "model": "Qwen/Qwen3-8B",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "replicas": 1,
+      "tensor_parallel_size": 1,
+      "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
+      "harness": "inference-perf",
+      "workload": "sanity_random.yaml",
+      "parallelism": 1
+    }
+    ```
+
+    响应：HTTP `202`，`EvaluationWorkflowResponse`。
+
+    ```json
+    {
+      "kind": "workflow",
+      "deployment_ownership": "evaluation",
+      "id": "0e8dd5de-8a1c-4f96-9756-fd91c1da4faa",
+      "status": "deploying",
+      "created_at": "2026-09-23T09:18:24.287000Z",
+      "deployment_run_id": "deployment-1",
+      "cluster_id": "cluster-1",
+      "owner_user_id": "user-1",
+      "model": "Qwen/Qwen3-8B",
+      "harness": "inference-perf",
+      "workload": "sanity_random.yaml",
+      "parallelism": 1,
+      "benchmark_runtime": {}
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.models import EvaluateWorkflowRequest
+from llm_d_bench.evaluate.router import create_workflow_run
+
+
+async def main() -> None:
+    workflow = await create_workflow_run(
+        EvaluateWorkflowRequest(
+            model="Qwen/Qwen3-8B",
+            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
+            replicas=1,
+            tensor_parallel_size=1,
+            workload="sanity_random.yaml",
+        )
+    )
+    print(workflow["id"], workflow["status"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 启动一次多配置评估
+
+启动一个多配置评估工作流，它可以部署、基准测试、比较多个已发布的配置工件，并可选地建立基线。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/evaluations`**
+
+    请求体：`EvaluationCreateRequest`
+    - `name`（`string`，默认值 `"Evaluation"`）
+    - `cluster_session_id`（`string`，必填）
+    - `runtime`（`RuntimeSpec`）
+    - `benchmark_source`（`BenchmarkSource`，可选）
+    - `benchmark_plans`（`BenchmarkPlan[]`，必填）
+    - `compare_configurations`（`boolean`，默认值 `true`）
+
+    ```json
+    {
+      "name": "Qwen comparison",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "runtime": {
+        "http_proxy": "",
+        "https_proxy": "",
+        "no_proxy": ""
+      },
+      "benchmark_source": {
+        "repository": "https://github.com/llm-d/llm-d-benchmark.git",
+        "revision": "main"
+      },
+      "benchmark_plans": [
+        {
+          "id": "candidate",
+          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+          "deployment_name": "qwen3-guide",
+          "deployment_description": "Candidate guide deployment",
+          "benchmark": {
+            "harness": "inference-perf",
+            "workload": "sanity_random.yaml",
+            "parallelism": 1,
+            "wait_timeout_seconds": 1800,
+            "harness_memory_gib": 8,
+            "matrix": [{"isl": 128, "osl": 64}],
+            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
+            "warmup_requests": 2,
+            "shared_prefix": null,
+            "workload_yaml": null,
+            "accelerator_profile": null,
+            "storage_class_name": null
+          },
+          "include_configuration": true,
+          "include_baseline": true,
+          "baseline_type": "direct-vllm",
+          "baseline_types": ["direct-vllm", "optimized-baseline"],
+          "baseline_parameters": {},
+          "preserve_deployment": false,
+          "scenarios": []
+        }
+      ],
+      "compare_configurations": true
+    }
+    ```
+
+    响应：HTTP `202`，`EvaluationWorkflowResponse`。已排队的工作流记录，包含已生成的用例。
+
+    ```json
+    {
+      "kind": "workflow",
+      "deployment_ownership": "evaluation",
+      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
+      "name": "Qwen comparison",
+      "status": "queued",
+      "created_at": "2026-09-23T09:18:24.287000Z",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "cluster_id": "cluster-1",
+      "owner_user_id": "user-1",
+      "benchmark_runtime": {},
+      "deployment_source": {},
+      "runtime": {
+        "http_proxy": "",
+        "https_proxy": "",
+        "no_proxy": ""
+      },
+      "configuration_artifacts": {
+        "00000000-0000-4000-8000-000000000001": "sha256:9eb2d61d"
+      },
+      "benchmark_plans": [
+        {
+          "id": "candidate",
+          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+          "deployment_name": "qwen3-guide",
+          "deployment_description": "Candidate guide deployment",
+          "benchmark": {
+            "harness": "inference-perf",
+            "workload": "sanity_random.yaml",
+            "parallelism": 1,
+            "wait_timeout_seconds": 1800,
+            "harness_memory_gib": 8,
+            "matrix": [{"isl": 128, "osl": 64}],
+            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
+            "warmup_requests": 2,
+            "shared_prefix": null,
+            "workload_yaml": null,
+            "accelerator_profile": null,
+            "storage_class_name": null
+          },
+          "include_configuration": true,
+          "include_baseline": true,
+          "baseline_type": "direct-vllm",
+          "baseline_types": ["direct-vllm", "optimized-baseline"],
+          "baseline_parameters": {},
+          "preserve_deployment": false,
+          "scenarios": []
+        }
+      ],
+      "compare_configurations": true,
+      "cases": [
+        {
+          "id": "guide-1",
+          "kind": "guide",
+          "status": "queued",
+          "workload_ids": ["candidate"],
+          "baseline_case_id": "baseline-1",
+          "baseline_case_ids": ["baseline-1", "baseline-2"],
+          "benchmark": {
+            "harness": "inference-perf",
+            "workload": "sanity_random.yaml",
+            "parallelism": 1,
+            "wait_timeout_seconds": 1800,
+            "harness_memory_gib": 8,
+            "matrix": [{"isl": 128, "osl": 64}],
+            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
+            "warmup_requests": 2,
+            "shared_prefix": null,
+            "workload_yaml": null,
+            "accelerator_profile": null,
+            "storage_class_name": null
+          },
+          "deployment_run_id": null,
+          "evaluation_run_id": null,
+          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+          "benchmark_plan_id": "candidate",
+          "deployment_group_id": "candidate:guide",
+          "preserve_deployment": false,
+          "deployment_configuration": {
+            "schema_version": "deployable-configuration.v1",
+            "type": "baseline",
+            "format": "helm",
+            "provider_ref": "optimized-baseline",
+            "checksum": "sha256:9eb2d61d",
+            "content": {"model": {"name": "Qwen/Qwen3-8B"}},
+            "provenance": {}
+          }
+        },
+        {
+          "id": "baseline-1",
+          "kind": "baseline",
+          "status": "queued",
+          "workload_ids": ["candidate"],
+          "benchmark": {
+            "harness": "inference-perf",
+            "workload": "sanity_random.yaml",
+            "parallelism": 1,
+            "wait_timeout_seconds": 1800,
+            "harness_memory_gib": 8,
+            "matrix": [{"isl": 128, "osl": 64}],
+            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
+            "warmup_requests": 2,
+            "shared_prefix": null,
+            "workload_yaml": null,
+            "accelerator_profile": null,
+            "storage_class_name": null,
+            "baseline_type": "direct-vllm",
+            "baseline_parameters": {}
+          },
+          "deployment_run_id": null,
+          "evaluation_run_id": null,
+          "configuration_artifact_id": null,
+          "benchmark_plan_id": "candidate",
+          "deployment_group_id": "candidate:baseline:direct-vllm",
+          "baseline_type": "direct-vllm",
+          "baseline_parameters": {},
+          "dependent_guide_case_id": null,
+          "preserve_deployment": false,
+          "deployment_configuration": {
+            "schema_version": "deployable-configuration.v1",
+            "type": "baseline",
+            "format": "helm",
+            "provider_ref": "baseline-vllm",
+            "checksum": "sha256:12b3ef20",
+            "content": {"model": {"name": "Qwen/Qwen3-8B"}},
+            "provenance": {"system_generated": true}
+          }
+        }
+      ],
+      "report": null
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.models import EvaluationCreateRequest
+from llm_d_bench.evaluate.router import create_evaluation
+
+
+async def main() -> None:
+    workflow = await create_evaluation(
+        EvaluationCreateRequest(
+            name="Qwen comparison",
+            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
+            benchmark_plans=[
+                {
+                    "id": "candidate",
+                    "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+                }
+            ],
+        )
+    )
+    print(workflow["id"], workflow["status"], len(workflow["cases"]))
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 列出评估工作流运行记录
+
+列出 Lens 已记录的评估工作流运行记录，包括多配置评估以及简单的“部署+基准测试”工作流。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/workflow-runs`**
+
+    请求：无请求体。
+
+    响应：HTTP `200`，`EvaluationWorkflowListResponse`。
+
+    ```json
+    {
+      "items": [
+        {
+          "kind": "workflow",
+          "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
+          "name": "Qwen comparison",
+          "status": "running",
+          "created_at": "2026-09-23T09:18:24.287000Z",
+          "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+          "cases": [
+            {
+              "id": "guide-1",
+              "kind": "guide",
+              "status": "benchmarking",
+              "benchmark_plan_id": "candidate",
+              "configuration": {
+                "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+                "model": "Qwen/Qwen3-8B",
+                "guide": "optimized-baseline",
+                "guide_variant": null,
+                "runtime": null,
+                "accelerator": null,
+                "image": null,
+                "replicas": null,
+                "tensor_parallel_size": null,
+                "decode_replicas": null,
+                "decode_tensor_parallel_size": null,
+                "prefill_replicas": null,
+                "prefill_tensor_parallel_size": null,
+                "benchmark": {
+                  "harness": "inference-perf",
+                  "workload": "sanity_random.yaml",
+                  "parallelism": 1,
+                  "wait_timeout_seconds": 1800,
+                  "harness_memory_gib": 8,
+                  "matrix": [{"isl": 128, "osl": 64}],
+                  "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
+                  "warmup_requests": 2,
+                  "shared_prefix": null,
+                  "workload_yaml": null,
+                  "accelerator_profile": null,
+                  "storage_class_name": null
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.evaluate.router import _records
+
+for workflow in _records("workflow"):
+    print(workflow["id"], workflow["status"])
+```
+  </TabItem>
+</Tabs>
+
+### 获取一次评估工作流运行记录
+
+获取一次评估工作流运行记录当前的顶层记录。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/workflow-runs/{workflow_id}`**
+
+    请求：无请求体。
+    - 路径参数：`workflow_id`（`string`，必填）
+
+    响应：HTTP `200`，`EvaluationWorkflowResponse`。
+
+    ```json
+    {
+      "kind": "workflow",
+      "deployment_ownership": "evaluation",
+      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
+      "name": "Qwen comparison",
+      "status": "running",
+      "created_at": "2026-09-23T09:18:24.287000Z",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "cluster_id": "cluster-1",
+      "runtime": {
+        "http_proxy": "",
+        "https_proxy": "",
+        "no_proxy": ""
+      },
+      "configuration_artifacts": {
+        "00000000-0000-4000-8000-000000000001": "sha256:9eb2d61d"
+      },
+      "benchmark_plans": [
+        {
+          "id": "candidate",
+          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+          "baseline_types": ["direct-vllm", "optimized-baseline"],
+          "preserve_deployment": false,
+          "scenarios": []
+        }
+      ],
+      "compare_configurations": true,
+      "cases": [
+        {
+          "id": "guide-1",
+          "kind": "guide",
+          "status": "benchmarking",
+          "workload_ids": ["candidate"],
+          "baseline_case_id": "baseline-1",
+          "baseline_case_ids": ["baseline-1", "baseline-2"],
+          "benchmark": {
+            "harness": "inference-perf",
+            "workload": "sanity_random.yaml",
+            "parallelism": 1,
+            "wait_timeout_seconds": 1800,
+            "harness_memory_gib": 8,
+            "matrix": [{"isl": 128, "osl": 64}],
+            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
+            "warmup_requests": 2,
+            "shared_prefix": null,
+            "workload_yaml": null,
+            "accelerator_profile": null,
+            "storage_class_name": null
+          },
+          "deployment_run_id": "deployment-1",
+          "evaluation_run_id": "benchmark-1",
+          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
+          "benchmark_plan_id": "candidate",
+          "deployment_group_id": "candidate:guide",
+          "preserve_deployment": false
+        }
+      ],
+      "report": null
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.evaluate.router import _get
+
+workflow = _get("workflow", "2d52bd97-a873-4d39-aa17-a182bf456922")
+if workflow is not None:
+    print(workflow["id"], workflow["status"])
+```
+  </TabItem>
+</Tabs>
+
+### 获取详细的评估工作流结果
+
+获取展开后的评估工作流结果以及部署关联信息。
+
+对于包含用例的工作流，报告使用 `comparison_version: 2`。在读取详情时，较旧的缓存报告会根据保留下来的证据数据重新生成。矩阵行会匹配唯一的、成功的 `(isl, osl)` 数据点以及显式的 `concurrency`；速率阶段会匹配显式的 `rate`。缺失、非有限、负数或重复的负载键不构成匹配，数组位置也永远不会作为回退依据。没有匹配行时，对应的统计信息为 `null`。
+
+比值等于 guide 值除以 baseline 值。有效的零分子会被保留，包括在几何平均值的计算中；零分母则不产生比值。按套件归一化的吞吐量仅使用那些两侧输出 token 数均非负、且实测时长均为正数的匹配配对。均值、P90 和 P99 聚合值保持相互独立。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/workflow-runs/{workflow_id}/details`**
+
+    请求：无请求体。
+    - 路径参数：`workflow_id`（`string`，必填）
+
+    响应：HTTP `200`，`EvaluationDetailsResponse`。
+
+    ```json
+    {
+      "workflow": {
+        "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
+        "name": "Qwen comparison",
+        "status": "succeeded",
+        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+        "cases": [
+          {
+            "id": "guide-1",
+            "kind": "guide",
+            "status": "succeeded",
+            "deployment_run_id": "deployment-1",
+            "evaluation_run_id": "benchmark-1"
+          }
+        ]
+      },
+      "cases": [
+        {
+          "case": {
+            "id": "guide-1",
+            "kind": "guide",
+            "status": "succeeded",
+            "deployment_run_id": "deployment-1",
+            "evaluation_run_id": "benchmark-1"
+          },
+          "deployment": {
+            "id": "deployment-1",
+            "status": "succeeded"
+          },
+          "deployment_cases": [
+            {
+              "id": "case-1",
+              "status": "ready",
+              "guide": "optimized-baseline",
+              "attempt": 1,
+              "failure": null,
+              "execution_id": "00000000-0000-4000-8000-000000000001",
+              "namespace": "prism-eval-1",
+              "endpoint": "http://127.0.0.1:38000/v1",
+              "execution_status": "ready",
+              "monitoring_setup": null,
+              "diagnostics": null,
+              "resource_snapshot": {}
+            }
+          ],
+          "deployment_warning": null,
+          "evaluation": {
+            "id": "benchmark-1",
+            "status": "succeeded",
+            "deployment_cases": [
+              {
+                "id": "case-1",
+                "execution_id": "00000000-0000-4000-8000-000000000001",
+                "guide": "optimized-baseline",
+                "namespace": "prism-eval-1",
+                "endpoint": "http://127.0.0.1:38000/v1",
+                "status": "ready",
+                "execution_status": "ready",
+                "monitoring_setup": null,
+                "diagnostics": null,
+                "resource_snapshot": {}
+              }
+            ]
+          }
+        }
+      ],
+      "report": null
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import get_workflow_run_details
+
+
+async def main() -> None:
+    detail = await get_workflow_run_details("2d52bd97-a873-4d39-aa17-a182bf456922")
+    print(detail["workflow"]["id"], len(detail.get("cases", [])))
+    report = detail.get("report") or {}
+    print(report.get("comparison_version"))
+    for comparison in report.get("comparisons", []):
+        print(comparison.get("matrix_statistics"), comparison.get("rate_stage_statistics"))
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 重试一次评估工作流
+
+重试一个已失败或已取消的多工作负载评估工作流。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/workflow-runs/{workflow_id}/retry`**
+
+    请求：无请求体。
+    - 路径参数：`workflow_id`（`string`，必填）
+
+    响应：HTTP `202`，`EvaluationWorkflowResponse`。
+
+    ```json
+    {
+      "kind": "workflow",
+      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
+      "name": "Qwen comparison",
+      "status": "queued",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "cases": [
+        {
+          "id": "guide-1",
+          "kind": "guide",
+          "status": "queued",
+          "deployment_run_id": null,
+          "evaluation_run_id": null,
+          "execution_id": null,
+          "error": null
+        }
+      ],
+      "report": null
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import retry_workflow_run
+
+
+async def main() -> None:
+    workflow = await retry_workflow_run("2d52bd97-a873-4d39-aa17-a182bf456922")
+    print(workflow["id"], workflow["status"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 取消一次评估工作流
+
+取消一个评估工作流，并清理其拥有的部署。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/workflow-runs/{workflow_id}/cancel`**
+
+    请求：无请求体。
+    - 路径参数：`workflow_id`（`string`，必填）
+
+    响应：HTTP `200`，`EvaluationCancelResponse`。
+
+    ```json
+    {
+      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
+      "status": "cancelled"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import cancel_workflow_run
+
+
+async def main() -> None:
+    result = await cancel_workflow_run("2d52bd97-a873-4d39-aa17-a182bf456922")
+    print(result["id"], result["status"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 取消一个评估用例
+
+取消一个评估用例，并清理其拥有的部署。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/evaluate/workflow-runs/{workflow_id}/cases/{case_id}/cancel`**
+
+    请求：无请求体。
+    - 路径参数：`workflow_id`（`string`，必填）、`case_id`（`string`，必填）
+
+    响应：HTTP `200`，`EvaluationCancelResponse`。
+
+    ```json
+    {
+      "id": "guide-1",
+      "status": "cancelled"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import cancel_evaluation_case
+
+
+async def main() -> None:
+    result = await cancel_evaluation_case(
+        "2d52bd97-a873-4d39-aa17-a182bf456922",
+        "guide-1",
+    )
+    print(result["id"], result["status"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 删除一个评估工作流
+
+删除一个已处于终态的评估工作流，以及它所拥有的、仍被保留的子基准测试记录。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/evaluate/workflow-runs/{workflow_id}`**
+
+    请求：无请求体。
+    - 路径参数：`workflow_id`（`string`，必填）
+
+    响应：HTTP `204 No Content`。不返回任何 JSON 响应体。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.evaluate.router import delete_workflow_run
+
+
+async def main() -> None:
+    await delete_workflow_run("2d52bd97-a873-4d39-aa17-a182bf456922")
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+完整的请求/响应 schema 请参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。

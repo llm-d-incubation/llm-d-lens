@@ -4,6 +4,13 @@
 
 All repository-authored text must be English: documentation, comments, messages,
 UI labels, examples, tests, configuration, filenames, and agent instructions.
+The one explicit exception is published documentation translations under
+`docs/docusaurus/i18n/` — Docusaurus's i18n locale content (translated Markdown
+docs, the standalone homepage, and UI strings such as the navbar/footer) for
+the bilingual (English/Chinese) docs site. Its whole purpose is non-English,
+user-facing content, so `npm run check:english` skips that directory; every
+other path, including source, comments, commit/PR text and configuration,
+remains English-only and is still fully scanned.
 Before every commit and before creating or updating a PR, agents MUST:
 
 1. Run `npm run check:english` over the entire repository, not only the diff.
@@ -15,8 +22,9 @@ Before every commit and before creating or updating a PR, agents MUST:
 4. Rerun after the final edits. Do not commit or submit the PR while findings remain.
 
 The CI English check runs for every PR, including documentation-only changes.
-It scans tracked and untracked non-ignored text; ignored dependencies, runtime
-files and binary assets are outside this repository-text policy.
+It scans tracked and untracked non-ignored text (excluding the
+`docs/docusaurus/i18n/` translation exception above); ignored dependencies,
+runtime files and binary assets are outside this repository-text policy.
 
 ## Dev workflow
 
@@ -136,30 +144,32 @@ be applied when their description matches the requested work.
 | Startup scripts, containers, CI deployment or cluster lifecycle | [Deployment](.agents/skills/deployment/SKILL.md) |
 | Table schemas, DAOs or Alembic migrations under `llm_d_bench/db/` | [Database](.agents/skills/database/SKILL.md) |
 | Authenticated routes, permissions, roles, scopes, ownership, resource sharing, sessions or login | [Auth](.agents/skills/auth/SKILL.md) |
-| A page, REST endpoint, or Python callable changed | [Keep the docs site in sync](#keep-the-docs-site-in-sync) below — update the matching Fern doc page in the same task |
+| A page, REST endpoint, or Python callable changed | [Keep the docs site in sync](#keep-the-docs-site-in-sync) below — update the matching Docusaurus doc page in the same task |
 
 Documentation-only edits: check references and consistency; read domain skills
 only when their contracts are relevant. Do not run model downloads for link edits.
 
 ## Keep the docs site in sync
 
-Lens ships a Fern documentation site under `docs/fern/` (preview: `npm run
-docs:dev`; lint: `npm run docs:check`). Every Lens frontend module has three
-doc surfaces, and a code change must update whichever of them its change
-affects, in the same task — do not defer this to a separate follow-up:
+Lens ships a Docusaurus documentation site under `docs/docusaurus/` (preview: `npm run
+docs:dev`; build/link-check: `npm run docs:check`), published to GitHub Pages
+at `https://llm-d-incubation.github.io/llm-d-lens/`. Every Lens frontend
+module has three doc surfaces, and a code change must update whichever of
+them its change affects, in the same task — do not defer this to a separate
+follow-up:
 
 1. **Frontend page behavior** (a React page/component under `src/`) →
    update the matching User Guide page at
-   `docs/fern/pages/user-guide/<module>.mdx`.
+   `docs/docusaurus/docs/user-guide/<module>.mdx`.
 2. **A FastAPI/Node REST endpoint** (added, changed, removed) →
    update the `## Backend API` section of the matching module page at
-   `docs/fern/pages/api-reference/<module>.mdx`: keep its `### <endpoint
+   `docs/docusaurus/docs/api-reference/modules/<module>.mdx`: keep its `### <endpoint
    name>` entry and REST API tab (method, path, request/response fields and
    a real JSON example) accurate to the actual route and Pydantic/TS contract.
 3. **The underlying Python callable a REST endpoint uses** (service/DAO
    method signature, module path, or behavior change) → update that same
    `### <endpoint name>` entry's Python API tab on
-   `docs/fern/pages/api-reference/<module>.mdx` so the sample code still
+   `docs/docusaurus/docs/api-reference/modules/<module>.mdx` so the sample code still
    imports and calls the real function. Every Backend API row must keep a
    matching, concrete Python usage example — never leave one updated
    without the other.
@@ -172,9 +182,19 @@ backend (for example Model market, Lens Assistant), say so honestly on the
 page and cross-link to the module that actually owns the call instead of
 fabricating one.
 
-After any doc edit, run `npm run docs:check` and fix reported errors before
-finishing the task. Documentation-only edits still follow the reuse workflow's
+After any doc edit, run `npm run docs:check` (builds the Docusaurus site and
+fails on reported errors) and fix anything it surfaces before finishing the
+task. Documentation-only edits still follow the reuse workflow's
 reference-check guidance, not a full duplicate/model-download scan.
+
+Three pages are synced in from canonical sources outside `docs/docusaurus/docs/` by
+`docs/docusaurus/scripts/sync-external-docs.mjs` — `docs/design/agentic-deployment-architecture.zh-CN.md`,
+`docs/design/agentic-planning-evidence-and-rag.zh-CN.md`, and
+`CONTRIBUTING.md` — so edit those source files directly rather than their
+generated copies under `docs/docusaurus/docs/architecture/` and
+`docs/docusaurus/docs/resources/contributing.md` (gitignored, regenerated by
+`npm run docs:dev` / `npm run docs:check`).
+
 
 ## Existing contracts
 
@@ -230,5 +250,5 @@ or an `if vendor == …` branch in `llm_d_bench/`, `server/` or `src/`.
 - Vendor/hardware defaults, labels and metric availability come from the hardware
   profile (see [Hardware is profile-driven](#hardware-is-profile-driven-never-hardcoded)),
   not a hardcoded vendor constant.
-- Keep the create and edit surfaces consistent, and keep the matching Fern doc
-  pages in the same wording.
+- Keep the create and edit surfaces consistent, and keep the matching Docusaurus
+  doc pages in the same wording.

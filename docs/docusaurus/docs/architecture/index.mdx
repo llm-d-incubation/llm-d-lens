@@ -1,0 +1,48 @@
+---
+title: Architecture
+description: A high-level view of how Lens is structured and how requests flow.
+slug: /architecture
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
+Lens is a three-tier system: a browser single-page app, an application layer that serves the UI and brokers API traffic, and a control plane that owns the domain logic, access control, persistence, Kubernetes access, and the model-service control plane. The same control plane provisions and reconciles the model-service data plane, while model inference traffic flows through a shared gateway rather than the browser API paths.
+
+<img src={useBaseUrl('/img/index-1-7d83bcc33b.png')} alt="Lens system architecture" width="100%" />
+
+## Layers
+
+| Layer | Responsibility |
+| --- | --- |
+| Clients | Browsers using the Lens console, OpenAI-compatible model clients, and MCP clients such as IDE agents. |
+| Application layer | Serves the web console, resolves the signed-in user, applies route-level authorization, brokers API traffic to the control plane, and hosts the stateless MCP endpoint. |
+| Control plane | Owns domain services, access control and cluster scoping, persistence, file and artifact storage, cluster operations, deployment planning, and the model-service control plane. |
+| Data plane | A cluster-shared llm-d Gateway (provider-selectable at cluster creation) plus a per-model HTTPRoute/IPP; each deployment owns an InferencePool + EPP and the vLLM replicas. |
+| Storage | A relational database for application state, and file storage for artifacts and deployment bundles. |
+
+## Request flow
+
+1. The browser calls a same-origin Lens endpoint.
+2. The application layer resolves the caller's session, strips spoofable headers, enforces any route-level permissions it owns, and forwards API calls to the control plane with the caller's identity.
+3. The control plane re-resolves the caller, checks the permission the route requires, and rejects unauthenticated, unauthorized, or CSRF-failing requests.
+4. A matched domain service handles the request, reads or writes the database, touches file storage when needed, and uses cluster access to act on Kubernetes.
+5. Cluster-scoped resources are narrowed to the clusters the caller can reach, or writes are rejected outright.
+6. Model inference is a separate path: clients call the shared gateway with a gateway token, which authorizes the request, selects a target, and forwards it to the right cluster and deployment.
+
+## Access model
+
+Access is modeled around a principal with role bindings at global, cluster, or resource scope. A global admin reaches every cluster; a cluster-scoped maintainer reaches only the clusters granted to them. Requests are denied by default, each route maps to a required permission, and the same scoping is applied consistently across domains, so listing, publishing, usage reporting, and gateway operations stay within the caller's reachable clusters.
+
+## Deployment planning
+
+Agentic deployment planning is a deploy-time, retrieval-augmented recommendation step rather than a runtime scheduler. It validates a request, gathers live cluster facts, and retrieves supporting evidence from capacity estimates, prior deployments, completed simulations, and benchmark results. It then ranks only validated candidates and stores a recommendation; nothing is deployed until a person approves it.
+
+## Model service gateway
+
+The model service gateway publishes cluster deployments as OpenAI-compatible services behind the cluster's shared llm-d Gateway. The control plane manages services, providers, tokens, and usage, and installs the shared Gateway at cluster creation; the Gateway authorizes each request and routes it to the model service's InferencePool, whose Endpoint Picker selects the endpoint. Deployments keep their own InferencePool + EPP but run no proxy.
+
+## Related
+
+- [Clusters](/user-guide/clusters), [Deployments](/user-guide/deployments), and [Model services](/user-guide/model-services)
+- [Administration](/user-guide/administration) for roles and scopes
+- [MCP integration](/mcp)

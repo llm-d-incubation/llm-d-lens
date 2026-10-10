@@ -1,0 +1,96 @@
+---
+title: Lens Assistant
+description: 一个基于 MCP 工具目录的工具调用聊天助手。
+---
+
+Lens Assistant 是一个聊天工作区，你可以通过它让 Lens 检查集群、部署以及其他
+平台资源。该页面允许你选择 AI 后端、发送消息，并逐轮查看助手的工具调用活动。
+
+## 与内部部署开始对话
+
+1. 打开 **Lens Assistant**。
+2. 在右侧的 **AI provider**（AI 提供方）面板中，保持 **Internal**（内部）被
+   选中。
+3. 在 **1. Cluster**（集群）下，打开 **Select a Cluster…**（选择一个集群…）
+   并选择一个已就绪的集群。
+4. 在 **2. Deployment (model service)**（部署/模型服务）下，打开
+   **Select a Deployment…**（选择一个部署…）并选择一个已就绪的部署。
+5. 当消息框的占位符变为 **Message Lens…**（给 Lens 发消息…）时，点击进入
+   消息框。
+6. 输入你的问题，并按 <kbd>Enter</kbd> 发送。
+7. 查看以 **Talking to**（正在与……对话）开头的状态卡片，确认助手已连接。
+
+## 与外部服务提供方开始对话
+
+1. 在 **AI provider** 中，点击 **External**（外部）。
+2. 在 **External AI provider**（外部 AI 提供方）下，打开
+   **Select an AI provider…**（选择一个 AI 提供方…）并选择一个已配置的
+   提供方。
+3. 当消息框的占位符显示 **Message Lens…** 时，点击进入消息框。
+4. 输入你的问题，并按 <kbd>Enter</kbd>。
+
+## 开始新的对话
+
+1. 在页头点击 **New chat**（新建对话）。
+2. 如有需要，重新选择 **Internal** 或 **External**，然后选择要使用的服务。
+3. 在已清空的对话中发送第一条消息。
+
+## 查看助手的推理过程与工具调用活动
+
+1. 发送消息后，展开 **Thinking**（思考过程）查看助手的推理摘要。
+2. 展开 **Tool call**（工具调用）条目，查看工具名称、参数和结果。
+3. 如果助手显示 **Permission required**（需要权限），请停止操作，改用你的
+   账户拥有所需权限的页面。
+4. 如果某个工具不可用（或者当前轮次来自语音输入，而助手试图调用写入或破坏
+   性工具——语音轮次无法运行这类工具），Lens 会在工具时间线中显示
+   **Blocked (unknown tool)**（已阻止：未知工具）。
+5. 留意消息框旁边的 token 用量指示器；当其接近模型的上下文上限时，Lens 会
+   显示 **Compacting conversation to fit the context window…**
+   （正在压缩对话以适应上下文窗口…），并自动裁剪较早的历史记录。
+
+## 批准或拒绝一个请求中的操作
+
+只有具有破坏性、难以撤销的工具调用（例如删除集群或删除部署）才会暂停等待
+你的决定。读取和写入类操作（列出资源、启动部署等）会立即执行，不会弹出
+确认提示。
+
+1. 当某一轮次停留在 **Needs approval**（需要批准）时，展开该条目。
+2. 查看请求的详情和参数。
+3. 勾选复选框 **I reviewed the arguments above and want to proceed.**
+   （我已审阅以上参数并希望继续。）
+4. 点击 **Approve**（批准）以继续，或点击 **Reject**（拒绝）以阻止该操作。
+5. 留意状态变化为 **Approving…**（批准中…）、**Rejecting…**（拒绝中…）、
+   **Approved**（已批准）或 **Rejected**（已拒绝）。
+
+## 发送语音消息
+
+语音发起的轮次仅限于使用只读工具；如果助手针对语音提出的问题试图执行写入
+或破坏性操作，Lens 会阻止它而不是执行它。
+
+1. 如果你的浏览器支持语音输入，从 **Voice input language**（语音输入语言）
+   中选择一种语言。语言名称以英文显示（例如 **Chinese**）。
+2. 点击带有提示文字 **Speak your question (runs locally in your browser)**
+   （说出你的问题，在浏览器本地运行）的麦克风按钮。
+3. 说出你的请求。
+4. 当麦克风按钮的提示变为 **Stop recording**（停止录音）时，再次点击它。
+5. 等待 **Transcribing your voice message…**（正在转写你的语音消息…），
+   然后让 Lens 发送转写后的消息。
+
+## 前置条件
+
+对于 **External**（外部）模式，Lens 需要有一个出现在
+**Select an AI provider…** 中的服务提供方。如果面板显示
+**No External AI providers configured yet.**（尚未配置任何外部 AI
+提供方。），则需要管理员在[外部服务提供方](/user-guide/external-providers)
+页面添加一个——此处只支持兼容 OpenAI 的提供方；暂不支持 Anthropic 类型的
+提供方。
+
+无论选择哪种后端，都请选择上下文窗口至少为 32K token（建议 64K 以上）的
+模型：Lens Assistant 会在每一轮都重新发送完整的工具目录，因此窗口较小时
+留给对话与工具结果的空间就会很有限。
+
+## 连接外部 MCP 客户端
+
+Lens Assistant 使用的是 Lens 内置的 MCP 工具目录。如果想用你自己的 MCP
+客户端（MCP Inspector、某个 IDE 智能体等）驱动同一套工具，请参阅
+[MCP 集成](/mcp)。

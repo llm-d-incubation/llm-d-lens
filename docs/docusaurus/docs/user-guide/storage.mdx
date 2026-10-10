@@ -1,0 +1,52 @@
+---
+title: Storage
+description: Manage the model cache and shared storage volumes used by deployments.
+---
+
+Use the Storage page to register reusable volumes, inspect their live PVC and PV status, and clean them up when they are no longer needed.
+
+Filtering cancels superseded list requests. Creation and deletion prevent duplicate submissions and show failures in the dialog so you can retry. When a volume has model cache entries, deletion keeps its two-step confirmation: first review the affected entries, then choose **Keep model files** or **Delete model files**.
+
+## Create a storage volume
+
+1. Open **Storage** and click **New storage volume**.
+2. In **New storage volume**, choose the target **Cluster**.
+3. Choose **Type**.
+4. If **Type** is **hostPath**, fill in **Host path**. If **Type** is **NFS**, fill in **Server** and **Export path**. If **Type** is **Dynamic PVC**, fill in **StorageClass**, **Namespace**, and **Access mode**.
+5. Fill in **Name (optional)** and **Capacity**.
+6. If needed, turn **Read-only when mounted** on or off.
+7. Under **Purpose (optional)**, keep **General** or choose **Model cache**. Model cache is only available for **hostPath** and **NFS** volumes (Dynamic PVC is disabled while Model cache is selected, and vice versa); choosing it also forces **Read-only when mounted** off, since model downloads must write to the volume.
+8. Click **Create storage volume**.
+
+## Filter the volume list and inspect live status
+
+1. Open **Storage**.
+2. Use **All clusters**, **Search by name**, **All types**, and **All purposes** to narrow the list.
+3. Review the summary cards **Total**, **Ready**, **Pending**, **Attention**, and **Failed**.
+4. Click a storage volume in the list.
+5. In **Status**, review **ID**, **Type**, **Cluster**, **Capacity**, and **Location**.
+6. Check the **Persistent Volume Claim** and **Persistent Volume** panels for the live Kubernetes resource state.
+
+## Acknowledge node changes on a hostPath volume
+
+1. Select the storage volume that shows the orange drift warning.
+2. Read the warning in **Status**.
+3. Click **Acknowledge** to clear the warning after you have verified the node change.
+
+## Delete a storage volume
+
+A volume referenced by one or more deployments shows an **In use** badge and its delete control is disabled; release it from those deployments first.
+
+1. In the volume list, click the delete control titled **Delete storage volume**.
+2. In **Delete storage volume**, review the warning about the Kubernetes PVC and PV objects.
+3. If the volume has model-cache entries, click **Continue**.
+4. On the follow-up **Delete storage volume** step, choose **Keep model files** if you want to keep files on NFS or hostPath, or choose **Delete model files** if you want Lens to remove those files first.
+5. If the volume has no model-cache entries, click **Delete storage volume** directly.
+
+## Model cache
+
+Use [Model cache](/user-guide/model-cache) when you need to manage downloaded model weights themselves. That page covers cache entries and download logs, while **Storage** manages the underlying reusable volumes.
+
+## Permissions
+
+Storage actions are cluster-scoped like the rest of Lens: maintainers can manage volumes only on clusters they are bound to, while admins can manage volumes on every cluster.

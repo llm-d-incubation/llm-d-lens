@@ -1,0 +1,460 @@
+---
+title: Model Market
+description: 支撑纯前端模型目录的后端交互点。
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## 后端 API
+
+模型市场**没有**专门的后端模块。它的目录是 `src/data/modelCatalog.js` 中的静态前端数据，因此没有需要文档化的后端目录 API。该页面只调用共享的集群和部署 API。
+
+### 列出 Lens 管理的集群
+
+列出 Lens 管理的集群，可选择包含尚未完成的草稿记录。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/cluster/clusters`**
+
+请求：
+
+- 查询参数：
+  - `includeDrafts`（`boolean`，可选）：是否包含尚未完成的草稿集群记录。
+
+该端点没有请求体。
+
+响应：
+
+返回一个 `ClustersResponse` 对象，其中包含一个 `ClusterRecord` 对象数组 `items`。
+
+```json
+{
+  "items": [
+    {
+      "id": "cluster-123",
+      "name": "lab-cluster",
+      "description": "Shared Intel GPU cluster",
+      "createdAt": "2026-09-20T10:15:00+00:00",
+      "ready": true,
+      "proxy": {
+        "mode": "auto",
+        "httpProxy": null,
+        "httpsProxy": null,
+        "noProxy": null
+      },
+      "llmDRef": "v0.9.0",
+      "llmDBenchmarkRef": "main",
+      "llmDRepoPath": "/opt/prism/checkouts/llm-d",
+      "llmDBenchmarkRepoPath": "/opt/prism/checkouts/llm-d-benchmark",
+      "deploymentSource": {
+        "resolved_from": "cluster-registry",
+        "ref": "v0.9.0"
+      },
+      "benchmarkSource": {
+        "resolved_from": "cluster-registry",
+        "ref": "main"
+      },
+      "draft": false
+    }
+  ]
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.cluster import service
+
+
+async def main() -> None:
+    clusters = service.list_clusters(include_drafts=True)
+    readiness = await asyncio.gather(*(service.cluster_is_ready(cluster) for cluster in clusters))
+
+    for cluster, is_ready in zip(clusters, readiness):
+        print(cluster.id, cluster.name, is_ready)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 获取集群概览
+
+获取 Lens 管理的集群的实时 Kubernetes 概览，包括节点、GPU、缓存镜像和组件健康状况摘要。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/cluster/overview`**
+
+请求：
+
+- 查询参数：
+  - `clusterId`（`string`，必需）：要查看的 Lens 管理集群 id。
+
+该端点没有请求体。
+
+响应：
+
+返回一个 `OverviewResponse`，其中包含集群记录、获取时间戳以及一份 `KubernetesSummary` 快照。
+
+```json
+{
+  "cluster": {
+    "id": "cluster-123",
+    "name": "lab-cluster",
+    "description": "Shared Intel GPU cluster",
+    "createdAt": "2026-09-20T10:15:00+00:00",
+    "ready": true,
+    "proxy": {
+      "mode": "auto",
+      "httpProxy": null,
+      "httpsProxy": null,
+      "noProxy": null
+    },
+    "llmDRef": "v0.9.0",
+    "llmDBenchmarkRef": "main",
+    "llmDRepoPath": "/opt/prism/checkouts/llm-d",
+    "llmDBenchmarkRepoPath": "/opt/prism/checkouts/llm-d-benchmark",
+    "deploymentSource": {
+      "resolved_from": "cluster-registry",
+      "ref": "v0.9.0"
+    },
+    "benchmarkSource": {
+      "resolved_from": "cluster-registry",
+      "ref": "main"
+    },
+    "draft": false
+  },
+  "fetchedAt": "2026-09-23T09:30:00+00:00",
+  "kubernetes": {
+    "components": {
+      "intelDevicePlugin": {
+        "installed": true,
+        "ready": 1,
+        "desired": 1,
+        "status": "ready"
+      },
+      "monitoring": {
+        "installed": true,
+        "ready": 5,
+        "desired": 5,
+        "status": "ready"
+      }
+    },
+    "nodes": [
+      {
+        "name": "worker-1",
+        "version": "v1.30.2",
+        "osImage": "Ubuntu 22.04.5 LTS",
+        "ready": true,
+        "schedulingDisabled": false,
+        "cpu": 16.0,
+        "cpuUsagePercent": 25.0,
+        "memoryBytes": 68719476736,
+        "memoryUsagePercent": 50.0,
+        "gpu": true,
+        "gpuCount": 2,
+        "gpuUsagePercent": 80.0,
+        "vramBytes": 103079215104,
+        "vramUsagePercent": 40.0,
+        "role": "worker",
+        "cachedImages": [
+          "ghcr.io/llm-d/llm-d-xpu:v0.9.0"
+        ],
+        "gpus": [
+          {
+            "id": "gpu-0",
+            "index": 0,
+            "name": "GPU #0",
+            "pciAddress": "0000:03:00.0",
+            "computeUsagePercent": 80.0,
+            "vramTotalBytes": 51539607552,
+            "vramUsedBytes": 21474836480,
+            "vramUsagePercent": 41.6,
+            "vramReadThroughputBytes": 10000,
+            "vramWriteThroughputBytes": 20000,
+            "vramTotalThroughputBytes": 30000,
+            "vramBandwidthPercent": 15.0
+          }
+        ],
+        "diskBytes": 1099511627776,
+        "diskUsedBytes": 274877906944,
+        "diskUsagePercent": 25.0
+      }
+    ],
+    "namespaces": [
+      {
+        "name": "standard-qwen3",
+        "deployments": [
+          {
+            "name": "qwen3-vllm",
+            "desired": 1,
+            "ready": 1,
+            "available": 1
+          }
+        ],
+        "ready": 1
+      }
+    ],
+    "hardware": {
+      "nodes": 1,
+      "cpuCores": 16.0,
+      "cpuUsagePercent": 25.0,
+      "memoryBytes": 68719476736,
+      "memoryUsagePercent": 50.0,
+      "gpuNodes": 1,
+      "gpuCount": 2,
+      "gpuUsagePercent": 80.0,
+      "vramBytes": 103079215104,
+      "vramUsagePercent": 40.0,
+      "diskBytes": 1099511627776,
+      "diskUsagePercent": 25.0,
+      "allocatedGpuCount": 1,
+      "availableGpuCount": 1,
+      "usableGpuCount": 1,
+      "configuredGpuLimit": null
+    }
+  }
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.cluster import registry, service
+
+
+async def main() -> None:
+    cluster = registry.require_cluster("cluster-123")
+    overview = await service.build_overview(cluster)
+    ready = await service.cluster_is_ready(cluster)
+
+    print(cluster.id, ready)
+    print(overview["hardware"])
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 启动一次 Standard Kubernetes Service 部署运行
+
+使用 Lens 的白名单 vLLM 契约启动一次 Standard Kubernetes Service 部署运行。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/deployments/standard-vllm-runs`**
+
+请求：
+
+- JSON 请求体字段：
+  - `model`（`string`，必需）
+  - `deployment_name`（`string`，必需）
+  - `description`（`string`，可选）
+  - `cluster_session_id`（`string`，必需，36 个字符）
+  - `replicas`（`integer`，必需）
+  - `tensor_parallel_size`（`integer`，必需）
+  - `storage_type`（`"local-cache" | "pvc" | "model-cache"`，可选）
+  - `storage_volume_id`（`string`，可选）
+  - `model_cache_path`（`string`，可选）
+  - `pvc_name`（`string`，可选）
+  - `max_model_len`（`integer`，可选）
+  - `gpu_memory_utilization`（`number`，可选）
+  - `max_num_seqs`（`integer`，可选）
+  - `max_num_batched_tokens`（`integer`，可选）
+  - `enable_prefix_caching`（`boolean`，可选）
+  - `enforce_eager`（`boolean`，可选）
+  - `vllm_arguments`（`array<object>`，可选；每项使用 `name` 和 `value` 两个字符串键）
+  - `use_cluster_proxy`（`boolean`，可选）
+  - `http_proxy`（`string`，可选）
+  - `https_proxy`（`string`，可选）
+  - `no_proxy`（`string`，可选）
+
+```json
+{
+  "model": "Qwen/Qwen3-8B",
+  "deployment_name": "qwen3-8b-standard",
+  "description": "Model Market launch",
+  "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+  "replicas": 2,
+  "tensor_parallel_size": 2,
+  "storage_type": "local-cache",
+  "model_cache_path": "/home/prism/.cache",
+  "max_model_len": 8192,
+  "gpu_memory_utilization": 0.85,
+  "max_num_seqs": 128,
+  "max_num_batched_tokens": 4096,
+  "enable_prefix_caching": true,
+  "enforce_eager": false,
+  "vllm_arguments": [
+    {
+      "name": "enable-auto-tool-choice",
+      "value": "true"
+    }
+  ],
+  "use_cluster_proxy": true,
+  "http_proxy": "http://proxy.example:911",
+  "https_proxy": "http://proxy.example:911",
+  "no_proxy": "localhost,.svc"
+}
+```
+
+响应：
+
+返回一个处于排队状态的 `DeploymentRun`。其中的 `source_configurations` 条目是根据白名单 Standard 请求生成的不可变 `DeployableConfiguration`。
+
+```json
+{
+  "id": "run-123",
+  "status": "queued",
+  "source_configurations": [
+    {
+      "schema_version": "deployable-configuration.v1",
+      "type": "baseline",
+      "format": "helm",
+      "provider_ref": "baseline-vllm",
+      "checksum": "sha256:1d1c9c5b7f4d",
+      "content": {
+        "model": {
+          "name": "Qwen/Qwen3-8B"
+        },
+        "decode": {
+          "replicaCount": 2,
+          "tensorParallelSize": 2,
+          "maxModelLen": 8192
+        },
+        "runtime": {
+          "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
+          "imageMode": "pull-existing",
+          "modelSource": "auto-cache",
+          "mountPath": "/home/prism/.cache",
+          "environment": {
+            "HTTP_PROXY": "http://proxy.example:911",
+            "HTTPS_PROXY": "http://proxy.example:911",
+            "NO_PROXY": "localhost,.svc,127.0.0.1,.cluster.local"
+          }
+        },
+        "customParameters": [
+          {
+            "target": "decode",
+            "kind": "argument",
+            "name": "gpu-memory-utilization",
+            "value": "0.85"
+          },
+          {
+            "target": "decode",
+            "kind": "argument",
+            "name": "enable-prefix-caching",
+            "value": "true"
+          }
+        ]
+      },
+      "provenance": {
+        "source": "standard-kubernetes-service.v1",
+        "deployment_name": "qwen3-8b-standard",
+        "description": "Model Market launch",
+        "storage_type": "local-cache",
+        "namespace_policy": {
+          "prefix": "standard-"
+        }
+      }
+    }
+  ],
+  "cases": [],
+  "failure_policy": "continue",
+  "provenance": {
+    "deployment_source": {
+      "kind": "standard-kubernetes-service"
+    },
+    "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+    "deployment_name": "qwen3-8b-standard",
+    "description": "Model Market launch",
+    "model_market": {
+      "deployment_name": "qwen3-8b-standard",
+      "description": "Model Market launch"
+    }
+  },
+  "created_at": "2026-09-23T09:35:00+00:00",
+  "started_at": null,
+  "finished_at": null
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.deploy.application import deployment_run_manager
+from llm_d_bench.deploy.contracts import DeploymentRunCreateRequest
+from llm_d_bench.deploy.standard_kubernetes_service import (
+    StandardKubernetesServiceRequest,
+    build_standard_kubernetes_service_configuration,
+)
+
+
+async def main() -> None:
+    request = StandardKubernetesServiceRequest(
+        model="Qwen/Qwen3-8B",
+        deployment_name="qwen3-8b-standard",
+        description="Model Market launch",
+        cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
+        replicas=2,
+        tensor_parallel_size=2,
+        storage_type="local-cache",
+        model_cache_path="/home/prism/.cache",
+        max_model_len=8192,
+        gpu_memory_utilization=0.85,
+        max_num_seqs=128,
+        max_num_batched_tokens=4096,
+        enable_prefix_caching=True,
+        vllm_arguments=[{"name": "enable-auto-tool-choice", "value": "true"}],
+        use_cluster_proxy=True,
+        http_proxy="http://proxy.example:911",
+        https_proxy="http://proxy.example:911",
+        no_proxy="localhost,.svc",
+    )
+    configuration = build_standard_kubernetes_service_configuration(request)
+    run = await deployment_run_manager.start_run(
+        DeploymentRunCreateRequest(
+            configurations=[configuration],
+            provenance={
+                "deployment_source": {"kind": "standard-kubernetes-service"},
+                "cluster_session_id": request.cluster_session_id,
+                "deployment_name": request.deployment_name,
+                "description": request.description.strip(),
+                "model_market": {
+                    "deployment_name": request.deployment_name,
+                    "description": request.description.strip(),
+                },
+            },
+        )
+    )
+    print(run.id, run.status)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+模型市场并不暴露自己的目录 API；完整的后端相关模块页面请参见 [Clusters](/api-reference/modules/clusters) 和 [Deployments](/api-reference/modules/deployments)。
+
+完整的请求/响应模式请参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。

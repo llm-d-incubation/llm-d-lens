@@ -1,0 +1,391 @@
+---
+title: 外部服务提供方
+description: 用于保存的 AI 提供方连接的后端端点与直接 Python 入口点。
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## 后端 API
+
+路由位于 `llm_d_bench/ai_providers/router.py` 中。以下每个端点都记录了其 REST 契约，以及它所使用的 `AIProviderService` 对应方法、连通性探测或代理调用。
+
+出站请求会校验 HTTPS 提供方 URL 以及公网 DNS 解析结果。默认情况下，后端会在保留原始 Host 请求头和 TLS SNI 的同时，连接到一个经过校验的 IP。若要使用经过验证的出口代理——该代理会解析每个 CONNECT 主机名、拒绝非公网的 IPv4/IPv6 结果，并且只连接到已验证的地址——请将 `LENS_TRUSTED_AI_PROVIDER_PROXY` 设置为确切生效的 HTTPS 代理 URL（例如 `http://proxy.example:8080`）。设置后，后端会将原始主机名通过该代理发送；若该设置缺失或不匹配，或者代理被绕过，则仍保留应用层的 IP 绑定。系统不会跟随重定向。请勿为未经验证的代理启用此设置。
+
+### 列出已保存的 AI 提供方
+
+列出 Lens 已知的、已保存的外部 AI 提供方连接。返回的记录会屏蔽已存储的 API 密钥，仅展示安全的预览信息。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/ai-providers`**
+
+    请求：无请求体。
+
+    响应：返回一个 `items` 数组，包含已保存的 `AIProvider` 记录，其中以 `hasApiKey` 和 `apiKeyPreview` 代替原始的 `apiKey`。
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "ai-provider-7f3a2c1d",
+          "name": "OpenAI-compatible gateway",
+          "baseUrl": "https://llm.example.com/",
+          "model": "gpt-4o-mini",
+          "providerType": "openai",
+          "timeoutSeconds": 15,
+          "createdAt": "2026-09-23T08:00:00Z",
+          "updatedAt": "2026-09-23T08:00:00Z",
+          "hasApiKey": true,
+          "apiKeyPreview": "...cdef"
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.ai_providers.service import default_service
+
+    service = default_service()
+    providers = [provider.api_payload() for provider in service.list()]
+    print(providers)
+    ```
+  </TabItem>
+</Tabs>
+
+### 获取某个已保存的 AI 提供方
+
+通过 id 获取某个已保存的外部 AI 提供方连接。响应会屏蔽存储的 API 密钥，只包含安全的元数据。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/ai-providers/{provider_id}`**
+
+    请求：无请求体。路径参数：`provider_id`（`str`）。
+
+    响应：返回一个经过屏蔽处理的 `AIProvider` 负载。
+
+    ```json
+    {
+      "id": "ai-provider-7f3a2c1d",
+      "name": "OpenAI-compatible gateway",
+      "baseUrl": "https://llm.example.com/",
+      "model": "gpt-4o-mini",
+      "providerType": "openai",
+      "timeoutSeconds": 15,
+      "createdAt": "2026-09-23T08:00:00Z",
+      "updatedAt": "2026-09-23T08:00:00Z",
+      "hasApiKey": true,
+      "apiKeyPreview": "...cdef"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.ai_providers.service import default_service
+
+    service = default_service()
+    provider = service.get("ai-provider-7f3a2c1d")
+    if provider is None:
+        raise RuntimeError("provider not found")
+    print(provider.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### 创建一个 AI 提供方
+
+创建并持久化一个新的外部 AI 提供方配置。当需要为代理式规划或其他集成功能持久保存可复用的提供方定义时，使用此端点。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/ai-providers`**
+
+    请求：请求体字段为 `name`（`str`）、`baseUrl`（`HttpUrl`）、`model`（`str`）、`apiKey`（`str`，可选）、`providerType`（`"openai" | "anthropic"`）以及 `timeoutSeconds`（`float`）。
+
+    ```json
+    {
+      "name": "OpenAI-compatible gateway",
+      "baseUrl": "https://llm.example.com/",
+      "model": "gpt-4o-mini",
+      "apiKey": "sk-example-secret",
+      "providerType": "openai",
+      "timeoutSeconds": 15
+    }
+    ```
+
+    响应：返回新创建的提供方，其密钥已被屏蔽。
+
+    ```json
+    {
+      "id": "ai-provider-7f3a2c1d",
+      "name": "OpenAI-compatible gateway",
+      "baseUrl": "https://llm.example.com/",
+      "model": "gpt-4o-mini",
+      "providerType": "openai",
+      "timeoutSeconds": 15,
+      "createdAt": "2026-09-23T08:00:00Z",
+      "updatedAt": "2026-09-23T08:00:00Z",
+      "hasApiKey": true,
+      "apiKeyPreview": "...cret"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.ai_providers.contracts import AIProviderCreateRequest
+    from llm_d_bench.ai_providers.service import default_service
+
+    service = default_service()
+    provider = service.create(
+        AIProviderCreateRequest(
+            name="OpenAI-compatible gateway",
+            baseUrl="https://llm.example.com/",
+            model="gpt-4o-mini",
+            apiKey="sk-example-secret",
+            providerType="openai",
+            timeoutSeconds=15,
+        )
+    )
+    print(provider.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### 更新一个 AI 提供方
+
+通过 id 更新一个已存在的外部 AI 提供方配置。省略 `apiKey` 可保持已存储的密钥不变，传入空字符串则可清除它。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PUT /api/v1/ai-providers/{provider_id}`**
+
+    请求：路径参数 `provider_id`（`str`）。请求体为 `AIProviderUpdateRequest`，其中每个字段都是可选的。
+
+    ```json
+    {
+      "name": "OpenAI-compatible gateway",
+      "model": "gpt-4.1-mini",
+      "timeoutSeconds": 30
+    }
+    ```
+
+    响应：返回更新后的提供方，存储的密钥仍然被屏蔽。
+
+    ```json
+    {
+      "id": "ai-provider-7f3a2c1d",
+      "name": "OpenAI-compatible gateway",
+      "baseUrl": "https://llm.example.com/",
+      "model": "gpt-4.1-mini",
+      "providerType": "openai",
+      "timeoutSeconds": 30,
+      "createdAt": "2026-09-23T08:00:00Z",
+      "updatedAt": "2026-09-23T08:05:00Z",
+      "hasApiKey": true,
+      "apiKeyPreview": "...cret"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.ai_providers.contracts import AIProviderUpdateRequest
+    from llm_d_bench.ai_providers.service import default_service
+
+    service = default_service()
+    provider = service.update(
+        "ai-provider-7f3a2c1d",
+        AIProviderUpdateRequest(model="gpt-4.1-mini", timeoutSeconds=30),
+    )
+    print(provider.api_payload())
+    ```
+  </TabItem>
+</Tabs>
+
+### 删除一个 AI 提供方
+
+删除一个已保存的外部 AI 提供方配置。当某个提供方不应再对 Lens 可用时，使用此端点。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/ai-providers/{provider_id}`**
+
+    请求：无请求体。路径参数：`provider_id`（`str`）。
+
+    响应：无响应体。删除成功时端点返回 **204 No Content**。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.ai_providers.service import default_service
+
+    service = default_service()
+    service.delete("ai-provider-7f3a2c1d")
+    print("deleted")
+    ```
+  </TabItem>
+</Tabs>
+
+### 测试一个尚未保存的 AI 提供方草稿
+
+测试一个尚未保存的外部 AI 提供方配置的连通性。在创建或更新一个持久化的提供方记录之前，使用此端点。
+
+URL 必须使用公网 HTTPS 目标地址，且不得包含内嵌凭据、查询参数或片段标识符。支持带版本段的基础路径（例如 `/openai/v1.0`）。同样的目标地址规则也适用于已保存提供方的聊天请求和代理式请求。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/ai-providers/test`**
+
+    请求：请求体字段为 `baseUrl`（`HttpUrl`）、`model`（`str`）、`apiKey`（`str`，可选）、`providerType`（`"openai" | "anthropic"`）以及 `timeoutSeconds`（`float`）。
+
+    ```json
+    {
+      "baseUrl": "https://api.openai.com/",
+      "model": "gpt-4o-mini",
+      "apiKey": "sk-abc",
+      "providerType": "openai",
+      "timeoutSeconds": 15
+    }
+    ```
+
+    响应：返回一个 `AIProviderTestResult`，包含是否成功、模型查找状态和延迟。
+
+    ```json
+    {
+      "success": true,
+      "message": "Connected successfully.",
+      "modelFound": true,
+      "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
+      "latencyMs": 182.4
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.ai_providers.service import check_connection
+
+
+    async def main() -> None:
+        result = await check_connection(
+            "https://api.openai.com/",
+            "gpt-4o-mini",
+            "sk-abc",
+            15,
+            "openai",
+        )
+        print(result.model_dump(mode="json", by_alias=True))
+
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 测试一个已保存的 AI 提供方
+
+通过 id 测试一个已保存的外部 AI 提供方的连通性，复用其存储的 API 密钥。当需要验证一个已存在的提供方定义时，使用此端点。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/ai-providers/{provider_id}/test`**
+
+    请求：无请求体。路径参数：`provider_id`（`str`）。
+
+    响应：使用该提供方持久化保存的 `baseUrl`、`model`、`apiKey`、`timeoutSeconds` 和 `providerType`，返回一个 `AIProviderTestResult`。
+
+    ```json
+    {
+      "success": true,
+      "message": "Connected successfully.",
+      "modelFound": true,
+      "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
+      "latencyMs": 176.9
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.ai_providers.service import check_connection, default_service
+
+
+    async def main() -> None:
+        service = default_service()
+        provider = service.get("ai-provider-7f3a2c1d")
+        if provider is None:
+            raise RuntimeError("provider not found")
+        result = await check_connection(
+            str(provider.base_url),
+            provider.model,
+            provider.api_key,
+            provider.timeout_seconds,
+            provider.provider_type,
+        )
+        print(result.model_dump(mode="json", by_alias=True))
+
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 通过已保存的提供方代理一次聊天补全请求
+
+通过一个已保存的 AI 提供方发送一次聊天补全请求。该路由仅支持已保存的 `openai` 类型提供方，并会转发一个兼容 OpenAI 的 JSON 请求体，同时附加服务端保存的 API 密钥。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/ai-providers/{provider_id}/chat/completions`**
+
+    请求：路径参数 `provider_id`（`str`）。请求体会作为 OpenAI 风格的 `chat/completions` 负载被转发。如果省略了 `model`，路由会在代理之前填入已保存提供方的模型。
+
+    ```json
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Give me a one-line health summary for cluster-123."
+        }
+      ]
+    }
+    ```
+
+    响应：返回上游提供方的 JSON 响应。
+
+    ```json
+    {
+      "choices": [
+        {
+          "message": {
+            "role": "assistant",
+            "content": "Cluster cluster-123 is reachable and reports healthy control-plane status."
+          }
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.ai_providers.router import proxy_chat_completions
+
+
+    async def main() -> None:
+        response = await proxy_chat_completions(
+            "ai-provider-7f3a2c1d",
+            {"messages": [{"role": "user", "content": "Say hello in one sentence."}]},
+        )
+        print(response)
+
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+完整的请求/响应模式请参见 FastAPI 的 OpenAPI schema（可通过 `npm run docs:api` 重新生成）。

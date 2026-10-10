@@ -49,8 +49,8 @@ Tracked work for the (in-progress) **multi-cluster / public-port** redesign.
 - [ ] Remove `clusters.gateway_public_url` if the exposed-port mechanism fully
   replaces it (kept only as an optional API-level override; not in the UI).
 - [ ] Docs: `model-service-gateway-deployment.md`,
-  `docs/fern/pages/user-guide/{clusters,model-services}.mdx`,
-  `docs/fern/pages/api-reference/{clusters,model-services}.mdx` — exposed-port flow
+  `docs/docusaurus/docs/user-guide/{clusters,model-services}.mdx`,
+  `docs/docusaurus/docs/api-reference/modules/{clusters,model-services}.mdx` — exposed-port flow
   and per-cluster models.
 - [ ] `sprocean-benchuser` member of `Qwen/Qwen3-0.6B`: confirm the per-cluster
   HTTPRoute + model entry appear (test on the live cluster).

@@ -1,0 +1,58 @@
+---
+title: CLI 参考
+description: 用于运行、安装和管理 Lens 的命令行工具。
+---
+
+## `scripts/dev.sh`（本地开发）
+
+| 命令 | 用途 |
+| --- | --- |
+| `scripts/dev.sh check` | 在不启动任何服务的情况下校验环境。 |
+| `scripts/dev.sh start` | 启动前端、Node API 和 Python 后端（在后台运行，日志位于 `.dev-logs/`）。会先重新生成并校验复用地图。 |
+| `scripts/dev.sh stop` | 停止由本脚本启动的所有服务。 |
+| `scripts/dev.sh restart` | 校验复用地图，然后停止并重新启动。 |
+| `scripts/dev.sh status` | 显示哪些服务正在运行以及对应的端口。 |
+| `scripts/dev.sh clean [-y\|--yes]` | 停止服务，并删除内嵌数据库以及 `~/.llm-d-lens` 下的所有本地应用数据。 |
+| `scripts/dev.sh install-node` | 将受支持的 Node.js 安装到 `.dev-tools/`（当系统的 Node 缺失或版本过旧时会自动使用）。 |
+
+端口可以通过 `FRONTEND_PORT`、`SERVER_PORT` 和 `BACKEND_PORT`
+环境变量来配置；参见[环境变量](/environment-variables)。
+
+## `lensctl.sh`（已安装的部署）
+
+由 Ubuntu 安装程序写入安装目录：
+
+| 命令 | 用途 |
+| --- | --- |
+| `lensctl.sh start` | 启动已安装部署的服务。 |
+| `lensctl.sh status` | 显示服务是否正在运行。 |
+| `lensctl.sh stop` | 停止已安装部署的服务。 |
+
+## `LensInstaller-Ubuntu-x86_64.sh`
+
+| 标志 | 用途 |
+| --- | --- |
+| `--install-dir DIR` | 安装位置（默认 `$HOME/llm-d-lens`）。 |
+| `--app-port PORT` | Web 应用/API 端口（默认 `3000`）。 |
+| `--backend-port PORT` | 内部 FastAPI 后端端口（默认 `8081`）。 |
+| `--silent` | 仅使用默认值/标志进行非交互式安装。 |
+| `--no-https` | 提供纯 HTTP 服务，而不是自动 HTTPS。 |
+| `--no-start` | 安装但不启动服务。 |
+| `--db-mode embedded\|external` | 使用内置数据库还是外部数据库。 |
+| `--uninstall` | 移除一个安装（默认保留数据）。 |
+| `--keep-data` / `--purge` | 配合 `--uninstall`：非交互式地保留或删除数据。 |
+| `--keep-db` / `--purge-db` | 配合 `--uninstall`：非交互式地保留或删除内嵌数据库。 |
+| `-h`、`--help` | 显示所有选项。 |
+
+完整用法参见[安装](/installation)和[升级](/upgrade)。
+
+## `node scripts/generate-mcp-tools.mjs`
+
+根据后端当前的 API 接口，重新生成 Node BFF 暴露给
+[Lens Assistant](/user-guide/lens-assistant) 的 MCP 工具目录。
+每当后端路由发生变化时运行它；`scripts/dev.sh start`/`restart`
+以及 Docker 构建会自动执行此操作。
+
+## `alembic`
+
+应用或编写数据库 schema 迁移脚本——参见[迁移](/migration)。

@@ -1,0 +1,568 @@
+---
+title: 存储
+description: Lens 存储卷的后端端点与直接 Python 入口点。
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## 后端 API
+
+存储路由实现于 `llm_d_bench/storage/router.py`，由 `llm_d_bench/storage/service.py` 与 `StorageVolumeService` 提供支持。
+
+### 列出存储卷
+
+列出 Lens 存储卷，并可选按集群、类型、就绪状态、用途或名称子串进行过滤。响应中还包含由存储服务计算得到的漂移与使用情况元数据。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/volumes`**
+
+    请求：无请求体。
+
+    - `cluster_id`（`string`，query，可选）：按单个集群过滤。
+    - `kind`（`string`，query，可选）：取值为 `local-disk`、`nfs` 或 `dynamic-pvc` 之一。
+    - `status`（`string`，query，可选）：取值为 `pending`、`ready`、`failed` 或 `deleting` 之一。
+    - `purpose`（`string`，query，可选）：目前仅支持 `model-cache`。
+    - `query`（`string`，query，可选）：与 `name` 匹配的大小写不敏感子串。
+
+    响应：返回一个 `items` 数组，其中的存储卷负载对象附加了 `inUseCount`、`nodesAdded` 和 `modelCacheCount` 字段。`usedBytes` 为未来使用量跟踪预留，目前始终为 `null`。
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "storage-3e9a0f52",
+          "clusterId": "cluster-a",
+          "name": "shared-model-cache",
+          "kind": "local-disk",
+          "status": "ready",
+          "capacity": "500Gi",
+          "usedBytes": null,
+          "readOnly": false,
+          "purposes": [
+            "model-cache"
+          ],
+          "localDisk": {
+            "hostPath": "/srv/model-cache"
+          },
+          "pvcName": "prism-storage-storage-3e9a0f52",
+          "pvName": "prism-storage-storage-3e9a0f52",
+          "knownNodes": [
+            "worker-1",
+            "worker-2"
+          ],
+          "createdAt": "2026-09-23T08:30:00Z",
+          "updatedAt": "2026-09-23T08:31:12Z",
+          "inUseCount": 1,
+          "nodesAdded": [],
+          "modelCacheCount": 2
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import compute_node_drift, default_service
+
+    async def main() -> None:
+        service = default_service()
+        volumes = service.list()
+        drift = await compute_node_drift(volumes)
+        for volume in volumes:
+            print(volume.api_payload(), drift.get(volume.id, []))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 获取单个存储卷
+
+根据 id 获取单个 Lens 存储卷，包括其当前的节点漂移和使用情况元数据。访问权限通过该卷所属的集群进行范围限定。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/volumes/{volume_id}`**
+
+    请求：无请求体。
+
+    - `volume_id`（`string`，path）：存储卷 id。
+
+    响应：单个存储卷负载对象，包含与列表端点相同的附加字段。
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "ready",
+      "capacity": "500Gi",
+      "usedBytes": null,
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "pvcName": "prism-storage-storage-3e9a0f52",
+      "pvName": "prism-storage-storage-3e9a0f52",
+      "knownNodes": [
+        "worker-1",
+        "worker-2"
+      ],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T08:31:12Z",
+      "inUseCount": 1,
+      "nodesAdded": [],
+      "modelCacheCount": 2
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import compute_node_drift, default_service
+
+    async def main() -> None:
+        service = default_service()
+        volume = service.get("storage-3e9a0f52")
+        drift = await compute_node_drift([volume]) if volume is not None else {}
+        print(volume.api_payload(), drift.get(volume.id, []))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 获取存储资源状态
+
+获取所选存储卷的实时 PVC 和 PV 状态。未知 id 将被忽略，重复的查询 id 会在执行 Kubernetes 读取之前去重。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/volume-resource-status`**
+
+    请求：无请求体。
+
+    - `volume_id`（`string[]`，query，可重复）：一个或多个存储卷 id。
+
+    响应：以存储卷 id 为键的 `items` 对象。
+
+    ```json
+    {
+      "items": {
+        "storage-3e9a0f52": {
+          "persistentVolumeClaims": [
+            {
+              "name": "prism-storage-storage-3e9a0f52",
+              "namespace": "llm-d-bench-storage",
+              "phase": "Bound",
+              "capacity": "500Gi",
+              "accessModes": [
+                "ReadWriteMany"
+              ],
+              "storageClassName": null,
+              "volumeMode": "Filesystem",
+              "createdAt": "2026-09-23T08:31:12Z",
+              "uid": "6ac7d2ef-1b9f-48df-9006-e4dff0b6cc02",
+              "volumeName": "prism-storage-storage-3e9a0f52",
+              "persistentVolume": {
+                "name": "prism-storage-storage-3e9a0f52",
+                "namespace": null,
+                "phase": "Bound",
+                "capacity": "500Gi",
+                "accessModes": [
+                  "ReadWriteMany"
+                ],
+                "storageClassName": null,
+                "volumeMode": "Filesystem",
+                "createdAt": "2026-09-23T08:31:12Z",
+                "uid": "3b84cf34-4a04-44b5-baf0-a57f7efc7ff1",
+                "reclaimPolicy": "Retain",
+                "source": {
+                  "type": "hostPath",
+                  "detail": "/srv/model-cache"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service, storage_resource_statuses
+
+    async def main() -> None:
+        service = default_service()
+        volume = service.get("storage-3e9a0f52")
+        statuses = await storage_resource_statuses([volume] if volume is not None else [])
+        print(statuses)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 创建存储卷
+
+创建并配置一个新的 Lens 存储卷。该路由会立即注册待处理记录，并在后台配置相应的 Kubernetes 对象。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/storage/volumes`**
+
+    请求体（`StorageVolumeCreateRequest`）：
+
+    - `clusterId`（`string`）：所属集群 id。
+    - `name`（`string`）：卷名称；留空则由路由自动生成。如果（自动生成的或指定的）名称与现有卷冲突，对于显式指定的名称路由会返回 `409` `storage_volume_name_conflict` 问题，对于自动生成的名称则会通过添加数字后缀来消除歧义。
+    - `kind`（`"local-disk" | "nfs" | "dynamic-pvc"`）
+    - `capacity`（`string`）：Kubernetes 数量格式，例如 `500Gi`。
+    - `readOnly`（`boolean`，默认 `true`）
+    - `purposes`（`StorageVolumePurpose[]`）：例如 `model-cache`。`model-cache` 用途不能与 `kind: "dynamic-pvc"` 组合使用（校验错误）；请改用 `local-disk` 或 `nfs`。
+    - `localDisk`（`LocalDiskSpec`，用于 `local-disk` 时可选）
+    - `nfs`（`NfsSpec`，用于 `nfs` 时可选）
+    - `dynamicPvc`（`DynamicPvcSpec`，用于 `dynamic-pvc` 时可选）
+
+    `local-disk` 卷示例：
+
+    ```json
+    {
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      }
+    }
+    ```
+
+    响应：处于 `pending` 状态的新注册卷。
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "pending",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "knownNodes": [],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T08:30:00Z",
+      "inUseCount": 0,
+      "nodesAdded": [],
+      "modelCacheCount": 0
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.contracts import (
+        LocalDiskSpec,
+        StorageVolume,
+        StorageVolumeKind,
+        StorageVolumePurpose,
+        StorageVolumeStatus,
+    )
+    from llm_d_bench.storage.service import default_service
+
+    async def main() -> None:
+        service = default_service()
+        volume = StorageVolume(
+            clusterId="cluster-a",
+            name="shared-model-cache",
+            kind=StorageVolumeKind.LOCAL_DISK,
+            status=StorageVolumeStatus.PENDING,
+            capacity="500Gi",
+            readOnly=False,
+            purposes=[StorageVolumePurpose.MODEL_CACHE],
+            localDisk=LocalDiskSpec(hostPath="/srv/model-cache"),
+        )
+        service.register_pending(volume)
+        await service.provision(volume.id)
+        print(service.get(volume.id).api_payload())
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 确认新增的 local-disk 节点
+
+在你完成底层内容的复制后，确认为 `local-disk` 存储卷新增的节点。该操作会重置存储的节点基线并清除漂移警告。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/storage/volumes/{volume_id}/acknowledge-nodes`**
+
+    请求：无请求体。
+
+    - `volume_id`（`string`，path）：存储卷 id。
+
+    响应：更新后的存储卷负载对象，其中 `nodesAdded` 已被清空。
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "ready",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "knownNodes": [
+        "worker-1",
+        "worker-2",
+        "worker-3"
+      ],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T09:05:00Z",
+      "inUseCount": 1,
+      "nodesAdded": [],
+      "modelCacheCount": 2
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service
+
+    async def main() -> None:
+        volume = await default_service().acknowledge_nodes("storage-3e9a0f52")
+        print(volume.api_payload())
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 扫描卷中已有的模型
+
+重新扫描一个已就绪的 Lens 存储卷，查找磁盘上已经存在的模型文件，然后为任何已发现的模型自动注册 Model Cache 条目。导入工作在后台运行。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/storage/volumes/{volume_id}/scan-models`**
+
+    请求：无请求体。
+
+    - `volume_id`（`string`，path）：已就绪的存储卷 id。
+
+    响应：立即确认扫描已经开始。如果该卷的 `status` 不是 `ready`，则返回 `409` `storage_volume_not_ready` 问题。
+
+    ```json
+    {
+      "status": "scanning"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service, import_existing_models_for_volume
+
+    async def main() -> None:
+        service = default_service()
+        volume = service.get("storage-3e9a0f52")
+        if volume is None:
+            raise RuntimeError("storage volume not found")
+        await import_existing_models_for_volume(volume)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 删除存储卷
+
+删除一个 Lens 存储卷注册记录，并在相关情况下删除其 Kubernetes 资源。该路由会立即将该卷标记为 `deleting`，然后在后台完成清理。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/storage/volumes/{volume_id}`**
+
+    请求：无请求体。
+
+    - `volume_id`（`string`，path）：存储卷 id。
+    - `keep_model_files`（`boolean`，query，默认 `false`）：在删除时仅移除其 Lens 记录，而在磁盘上保留模型文件。
+
+    当该卷被一个或多个部署执行引用时，删除操作会被直接阻止（`409` `storage_volume_in_use`）；该卷上的 Model Cache 条目不再阻止删除——它们会在后台清理过程中被级联删除（可选择保留其文件）。
+
+    响应：进入 `deleting` 状态的卷记录。
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "deleting",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "pvcName": "prism-storage-storage-3e9a0f52",
+      "pvName": "prism-storage-storage-3e9a0f52",
+      "knownNodes": [
+        "worker-1",
+        "worker-2"
+      ],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T09:20:00Z",
+      "inUseCount": 0,
+      "nodesAdded": [],
+      "modelCacheCount": 2
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service
+
+    async def main() -> None:
+        service = default_service()
+        volume = await service.delete("storage-3e9a0f52")
+        await service.finish_delete(volume.id, keep_model_files=True)
+        print(volume.status.value)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 列出存储类
+
+列出某个集群可见的 Kubernetes `StorageClass` 对象。在创建 `dynamic-pvc` 存储卷之前请先使用此接口。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/storage-classes`**
+
+    请求：无请求体。
+
+    - `cluster_id`（`string`，query）：目标集群 id。
+
+    响应：`StorageClassSummary` 负载对象组成的 `items` 数组。
+
+    ```json
+    {
+      "items": [
+        {
+          "name": "rook-cephfs",
+          "provisioner": "rook-ceph.cephfs.csi.ceph.com",
+          "isDefault": true
+        },
+        {
+          "name": "local-path",
+          "provisioner": "rancher.io/local-path",
+          "isDefault": false
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import discover_storage_classes
+
+    async def main() -> None:
+        classes = await discover_storage_classes("cluster-a")
+        for storage_class in classes:
+            print(storage_class.model_dump(mode="json", by_alias=True))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### 列出存储节点
+
+列出存储模块所观察到的集群节点。每一项都会报告该节点是否就绪，以及是否可以在其上调度无需容忍污点的存储任务。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/nodes`**
+
+    请求：无请求体。
+
+    - `cluster_id`（`string`，query）：目标集群 id。
+
+    响应：`StorageNodeSummary` 负载对象组成的 `items` 数组。
+
+    ```json
+    {
+      "items": [
+        {
+          "name": "worker-1",
+          "ready": true,
+          "schedulable": true
+        },
+        {
+          "name": "control-plane-1",
+          "ready": true,
+          "schedulable": false
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import discover_nodes
+
+    async def main() -> None:
+        nodes = await discover_nodes("cluster-a")
+        for node in nodes:
+            print(node.model_dump(mode="json", by_alias=True))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+完整的请求/响应 schema 请参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。

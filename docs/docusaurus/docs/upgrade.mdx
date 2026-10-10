@@ -1,0 +1,43 @@
+---
+title: Upgrade
+description: Upgrade an existing Lens installation to a newer version.
+---
+
+## Upgrading an installer-based deployment
+
+Lens doesn't ship a separate "upgrade" installer mode — re-running the same
+installer against an existing `--install-dir` picks up the new code, rebuilds
+the app, and reuses the existing configuration and database:
+
+```bash
+git -C /path/to/llm-d-lens pull
+./scripts/LensInstaller-Ubuntu-x86_64.sh --install-dir "$HOME/llm-d-lens" --silent
+```
+
+The installer detects the existing install directory, stops the running
+services, rebuilds, and restarts them with `lensctl.sh`. Your data (embedded
+database, model cache, storage volumes) is untouched.
+
+If the new version added a database migration, run it before starting
+traffic again — see [Migration](/migration).
+
+## Upgrading a from-source development checkout
+
+```bash
+git pull
+npm install
+python3 -m pip install -e '.[dev]'
+node scripts/generate-mcp-tools.mjs
+scripts/dev.sh restart
+```
+
+`scripts/dev.sh restart` regenerates and validates the reuse map, and
+regenerates the MCP tool catalog, before restarting services.
+
+## Rolling back
+
+Because the installer's rebuild is in place, rolling back is `git checkout`
+to the previous tag/commit and re-running the installer/`scripts/dev.sh
+restart` the same way. If a database migration ran as part of the upgrade,
+roll it back first with `alembic downgrade -1` (see [Migration](/migration))
+before switching the code back.

@@ -1,0 +1,84 @@
+---
+title: 环境变量
+description: 用于配置 Lens 后端、数据库和模型服务网关的环境变量。
+---
+
+请在启动后端（`scripts/run-backend.sh`）之前设置这些变量，或者在你的
+shell/Compose/Helm values 中导出它们。大多数变量在本地开发环境下都有可用的
+默认值；生产环境以及模型服务网关部署通常需要显式设置认证和网关这两组变量。
+
+## 认证与安全
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `PRISM_AUTH_MODE` | 认证模式（默认为 `local`）。 | `local` |
+| `PRISM_ADMIN_USERNAME` / `PRISM_ADMIN_PASSWORD` | 在首次启动时初始化管理员账户。 | `PRISM_ADMIN_USERNAME`：`admin`<br />`PRISM_ADMIN_PASSWORD`：`""` |
+| `PRISM_ADMIN_AUTOSEED` | 是否自动创建初始管理员账户（默认开启）。 | `True` |
+| `LENS_SECRET_KEY` | 用于加密已存储的外部服务提供方密钥的主密钥。未设置时，Lens 会在首次启动时在 `<LENS_DATA_DIR>/credentials/master_key.json`（权限 600）下生成一个；设置该变量可以固定密钥，或使**主密钥**页面变为只读。 | 首次启动时生成并存储 |
+| `LENS_SECRET_KEYS_OLD` | 以逗号分隔的历史主密钥列表，在轮换之后用作解密回退。 | `""` |
+| `LENS_INTERNAL_AUTH_SECRET` | 用于内部服务间调用（例如智能体式部署规划回调）的共享密钥。 | `""` |
+| `PRISM_EXPOSE_API_DOCS` | 是否暴露 FastAPI 的 `/docs` 页面。 | `True` |
+
+## 数据库
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `LLM_D_BENCH_DB_MODE` | `embedded`（内置 Postgres）或 `external`。 | 当未设置 `LLM_D_BENCH_DATABASE_URL` 时为 `embedded`；否则为 `external` |
+| `LLM_D_BENCH_DATABASE_URL` | 使用外部数据库时的连接字符串。 | —（必填，无默认值） |
+| `LLM_D_BENCH_EMBEDDED_DB_DIR` / `LLM_D_BENCH_EMBEDDED_DB_PASSWORD` | 内置数据库的数据目录和密码。 | `LLM_D_BENCH_EMBEDDED_DB_DIR`：`~/.llm-d-lens/db/data`<br />`LLM_D_BENCH_EMBEDDED_DB_PASSWORD`：—（必填，无默认值） |
+| `LLM_D_BENCH_DB_BOOTSTRAP_FILE` | 首次启动引导时应用的可选 SQL/种子文件。 | `~/.llm-d-lens/db-bootstrap.json` |
+
+## 模型服务网关（共享的 llm-d Gateway）
+
+网关模式：每个集群安装一个共享的 Gateway（在创建集群时可选择提供方）；
+模型服务会针对它发布 HTTPRoute/IPP 资源。Lens 不再保留 Edge 代理或隧道。
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `LENS_MODEL_GATEWAY_PUBLIC_URL` | 调用方用于访问每个集群 Gateway 的单一公开 URL（会覆盖各集群的独立 URL）。 | `""` |
+| `LENS_PUBLIC_HOST` | 外部客户端用于访问 Lens 主机的主机名/IP；会与每个集群暴露的端口组合，形成 Gateway URL。默认为请求的主机名。 | `""` |
+| `LENS_GATEWAY_SERVICE_TYPE` | 为没有 LoadBalancer 的集群（例如本地 kind）设置 Gateway 数据面 Service 的类型。可取 `LoadBalancer`、`NodePort` 或 `ClusterIP`；未设置时保留提供方默认值。该设置通过提供方自身机制渲染：对 Envoy AI Gateway 是一个 `EnvoyProxy`，对 Istio 是一个 `ConfigMap` 的 `infrastructure.parametersRef`。 | 未设置 |
+| `LENS_NODE_SYSCTL_IMAGE` | node-sysctl DaemonSet 运行的镜像，用于在每个节点上设置 `fs.inotify.max_user_instances`（需要 `sh`/`nsenter`/`sysctl`）；当集群无法拉取默认镜像时可覆盖该值。 | `busybox:1.36` |
+| `LENS_MODEL_HEALTH_INTERVAL_SECONDS` | 已发布提供方的健康检查间隔（每次运行都会重新探测 HTTPRoute / InferencePool / EPP / 模型服务器）。 | `10` |
+| `LENS_MODEL_RECONCILE_INTERVAL_SECONDS` | 共享 Gateway 和模型路由自动协调的间隔。 | `300` |
+| `LENS_GATEWAY_EXPOSURE_INTERVAL_SECONDS` | Lens 为每个集群已暴露的 Gateway 端口重新建立公共 `0.0.0.0` 隧道的间隔。 | `60` |
+| `LENS_GATEWAY_USAGE_INTERVAL_SECONDS` | Lens 将每个集群 Prometheus 中的 llm-d EPP token 计数同步到用量台账的间隔。设为 `0` 可禁用。 | `60` |
+| `LENS_MODEL_GATEWAY_AUTHZ_HOST` | 当某个集群未设置自己的**Lens authz 地址**时，作为后备使用的 Lens ext_authz 地址。优先使用按集群配置的值（创建/编辑集群表单 → `GET /api/cluster/lens-hosts`）。设置后，Gateway 会注入调用方身份（`x-llm-d-inference-fairness-id`）以支持按用户统计用量。 | *(未设置)* |
+| `LENS_MODEL_GATEWAY_AUTHZ_PORT` | Gateway 使用的 Lens ext_authz 后端端口。 | `8081` |
+
+Inference Payload Processor 的 Helm chart 和版本无法通过环境变量配置——它们
+是 `llm_d_bench/versions/__init__.py` 中固定的常量
+（`oci://ghcr.io/llm-d/charts/payload-processor`），版本号固定在
+`llm_d_bench/versions/llm_d_stack.yaml` 中。
+
+## 存储与缓存路径
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `MODEL_CACHE_DIR` | 按集群缓存已下载模型权重的位置。 | `~/.llm-d-bench/model-cache`（遗留导入回退路径） |
+| `STORAGE_VOLUME_DIR` | 受管存储卷的根目录。 | `~/.cache/llm-d-bench/storage`（遗留导入回退路径） |
+| `AI_PROVIDER_DIR` | 外部服务提供方配置的持久化位置。 | `~/.cache/llm-d-bench/ai-providers`（遗留导入回退路径） |
+| `LENS_RUNTIME_DIR` / `LENS_SCRATCH_DIR` | 后端管理进程（端口转发、临时文件）使用的运行时/暂存目录。 | `LENS_RUNTIME_DIR`：如果设置了 `XDG_RUNTIME_DIR`，则为 `$XDG_RUNTIME_DIR/lens`；否则为 `~/.cache/lens/tmp/runtime`<br />`LENS_SCRATCH_DIR`：`~/.cache/lens/tmp` |
+| `HF_TOKEN` | 用于下载受限（gated）模型的 Hugging Face 令牌。 | —（必填，无默认值） |
+
+## 评估、模拟与智能体式规划
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `LLM_D_BENCH_EVALUATE_STORE` | 评估任务产物的根目录。 | `~/.llm_d_bench/run_store/evaluate`（遗留导入回退路径） |
+| `CONFIGURATION_ARTIFACT_DIR` / `CONFIGURATION_OUTPUT_DIR` | 渲染后的评估配置的写入位置。 | `CONFIGURATION_ARTIFACT_DIR`：`~/.cache/llm-d-bench/configurations/.artifacts`（遗留导入回退路径）<br />`CONFIGURATION_OUTPUT_DIR`：`~/.cache/llm-d-bench/configurations`（遗留导入回退路径） |
+| `SIMULATION_TASK_ROOT` | 模拟任务状态和轨迹的根目录。 | `~/.cache/llm-d-bench/simulations`（遗留导入回退路径） |
+| `SIMULATION_MAX_CONCURRENT_DOWNLOADS` | 限制模拟过程中并发下载轨迹/资源的数量上限。 | `1` |
+| `AGENTIC_OPENAI_BASE_URL` / `AGENTIC_OPENAI_API_KEY` / `AGENTIC_OPENAI_MODEL` / `AGENTIC_OPENAI_TIMEOUT_SECONDS` | 当某次请求未选择特定提供方时，智能体式部署规划所使用的默认聊天模型。 | `AGENTIC_OPENAI_BASE_URL`：`""`<br />`AGENTIC_OPENAI_API_KEY`：`""`<br />`AGENTIC_OPENAI_MODEL`：`""`<br />`AGENTIC_OPENAI_TIMEOUT_SECONDS`：`30` |
+| `LLM_D_BENCHMARK_ROOT` / `LLM_D_BENCH_SPECIFICATION_FILE` | 用于驱动基准测试运行的 `llm-d-benchmark` 检出目录及其规格文件的位置。 | `LLM_D_BENCHMARK_ROOT`：`""`<br />`LLM_D_BENCH_SPECIFICATION_FILE`：基线/默认运行时为 `guides/optimized-baseline`；未设置时则根据所选指南计算得出 |
+
+## Kubernetes 与网络
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `KUBECONFIG` | 当未注册集群专属 kubeconfig 时使用的后备 kubeconfig。 | —（必填，无默认值） |
+| `PRISM_KUBERNETES_BACKEND` / `PRISM_KUBERNETES_READ_BACKEND` | 选择由哪种 Kubernetes 客户端实现来处理写入/读取操作。 | `PRISM_KUBERNETES_BACKEND`：`sdk`<br />`PRISM_KUBERNETES_READ_BACKEND`：`sdk` |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 标准代理变量；无论继承到什么值，后端总会将每个集群自身的 API server 主机添加到 `NO_PROXY` 中，以避免将集群本地流量通过出站代理转发。 | `HTTP_PROXY`：`""`<br />`HTTPS_PROXY`：`""`<br />`NO_PROXY`：`""` |
+
+在 `llm_d_bench/` 下搜索 `os.environ.get(...)`/`os.getenv(...)`，可获取完整、
+权威的变量列表——本页只覆盖了你最可能需要设置的那些变量。

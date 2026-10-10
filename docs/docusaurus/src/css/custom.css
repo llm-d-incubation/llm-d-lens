@@ -1,0 +1,76 @@
+/**
+ * Global theme overrides. Infima variables below reproduce the former Fern
+ * site's palette (docs/fern/docs.yml `colors:` block): accent #0046c8 on
+ * white in light mode, accent #4DB8FF on navy #000f28 in dark mode.
+ */
+:root {
+  --ifm-color-primary: #0046c8;
+  --ifm-color-primary-dark: #003fb4;
+  --ifm-color-primary-darker: #003ba9;
+  --ifm-color-primary-darkest: #00318c;
+  --ifm-color-primary-light: #004ddc;
+  --ifm-color-primary-lighter: #0051e7;
+  --ifm-color-primary-lightest: #1a63ea;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #4db8ff;
+  --ifm-color-primary-dark: #2cabff;
+  --ifm-color-primary-darker: #1ba4ff;
+  --ifm-color-primary-darkest: #0089e8;
+  --ifm-color-primary-light: #6ec5ff;
+  --ifm-color-primary-lighter: #7fcdff;
+  --ifm-color-primary-lightest: #b2e1ff;
+  --ifm-background-color: #000f28;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/**
+ * Icon links (navbar + footer) for GitHub and Slack. Icons are inline SVGs
+ * rendered via navbar/footer `html` items in docusaurus.config.ts, so they
+ * need no extra static image assets and a `className` hook here is enough
+ * to size/align them and swap color with the active color scheme.
+ */
+.navbar__icon-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem;
+  color: var(--ifm-navbar-link-color);
+}
+
+.navbar__icon-link:hover {
+  color: var(--ifm-navbar-link-hover-color);
+}
+
+.navbar__icon-link svg {
+  width: 1.3rem;
+  height: 1.3rem;
+  fill: currentColor;
+}
+
+/* "Join Slack" navbar link: icon-only sizing above, plus a text label. */
+.navbar__icon-link--labeled {
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.navbar__icon-link--labeled span {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.footer__icon-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.footer__icon-link svg {
+  width: 1rem;
+  height: 1rem;
+  fill: currentColor;
+  flex: none;
+}

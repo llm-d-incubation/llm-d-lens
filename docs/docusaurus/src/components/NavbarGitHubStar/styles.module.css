@@ -1,0 +1,23 @@
+.githubStar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* Override the generic `.navbar__icon-link svg` 1.3rem sizing (meant for
+   single-icon links like Slack) - the star glyph here sits inline with a
+   text count, so it needs to be compact like a typical "GitHub star count"
+   badge, not full icon size. Two classes of specificity so this wins
+   regardless of stylesheet load order. */
+.githubStar .starCount svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.starCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}

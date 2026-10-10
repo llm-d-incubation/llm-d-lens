@@ -1,0 +1,65 @@
+---
+title: 故障排查
+description: 针对运行 Lens 时最可能遇到的故障模式的解决方法。
+---
+
+## 安装/发布模型服务后首次请求失败，重试即可成功
+
+**现象：** 刚安装完共享 Gateway 或发布新的服务提供方后，第一次向网关发起
+`curl` 请求会返回 `upstream connect error or disconnect/reset before
+headers ... Connection refused`，但几秒钟后进行完全相同的重试却能成功。
+
+**原因：** `kubectl apply` 只意味着 Envoy Gateway 控制器已经*看到*了期望的
+`Gateway`/`HTTPRoute` 资源——它仍然需要一点时间才能把这些资源翻译成真正的
+Envoy xDS 配置并下发给代理。Lens 会在应用之后轮询 `Gateway` 的
+`status.conditions[Programmed]`，只有当该状态变为 `True` 后才会报告安装已
+就绪（默认超时时间为 30 秒）；如果你在这个时间窗口内仍然遇到该问题，请稍等
+几秒后重试，或在安装操作的日志抽屉中查看是否有 "still programming the
+route" 的提示信息。
+
+## Gateway 一直停留在 `Programmed=False`（`AddressNotAssigned`）
+
+**原因：** Gateway 对应的 `LoadBalancer` Service 没有外部地址，因此 Envoy
+Gateway 永远不会为其分配地址。**解决方法：** 在云端集群上，由云厂商负责
+分配地址；在本地 kind 集群上，请安装 `cloud-provider-kind` 或 MetalLB。
+可以使用 `kubectl get svc -n envoy-gateway-system` 来检查。
+
+## InferencePool 对应的 HTTPRoute 出现 `ResolvedRefs=False`（`InvalidKind`）
+
+**原因：** Envoy Gateway 安装时没有附带 inference-pool 插件，因此它不接受
+`inference.networking.k8s.io` 类型的后端，并会用 500 直接响应替换掉该路由。
+**解决方法：** 安装 Envoy Gateway 时附带
+[inference-pool 插件](/user-guide/clusters#model-gateway-prerequisites)。
+
+## 安装 Gateway 时出现 "no matches for kind ... ensure CRDs are installed first"
+
+**原因：** `kubectl` 的客户端发现缓存可能会在 CRD 刚变为 `Established`
+后的短暂窗口期内，仍将其报告为未知类型；或者此前某次失败的安装尝试缓存了
+过期的"未知 API 组"信息。Lens 会在应用前先使发现缓存失效，并对 apply 操作
+进行若干次带短暂延迟的重试；如果仍然失败，请重新运行安装——此时 CRD 本身
+其实已经存在。
+
+## 模型服务权限的变更没有在 UI 中显示出来
+
+**原因：** 会话的权限集合是在浏览器标签页加载时获取一次并缓存在内存中的；
+在角色或后端权限目录发生变更后，它不会自动重新获取。**解决方法：**
+强制刷新页面，或者退出登录后重新登录。
+
+## 代码/依赖变更后后端启动失败
+
+请查看 `~/.local/state/lens/logs/dev/backend.log` 以了解实际的异常信息。
+常见原因包括：`[project.dependencies]` 变更后缺少某个 Python 依赖
+（运行 `python3 -m pip install -e '.[dev]'` 解决），或者端口已被占用——
+`scripts/dev.sh` 会自动选择空闲端口，并在日志中记录实际使用的端口。
+
+## MCP 工具目录中缺少刚刚添加的路由
+
+请重新生成它：`node scripts/generate-mcp-tools.mjs`。`scripts/dev.sh
+start`/`restart` 会自动执行此操作；只有绕过 `scripts/dev.sh` 手动重启后端
+时，才可能导致该目录信息过期。
+
+## 复用能力图谱/任务启动验证阻止了 `scripts/dev.sh start`
+
+复用优先工作流会在启动服务前校验能力图谱；无效的注册信息或未解决的待定
+决策会阻止启动，但不会停止已经在运行的服务。关于如何解决该问题，请参阅
+[复用工作流](/development/reuse-workflow)。

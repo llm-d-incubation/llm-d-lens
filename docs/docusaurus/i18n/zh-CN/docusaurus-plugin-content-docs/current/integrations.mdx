@@ -1,0 +1,47 @@
+---
+title: 集成
+description: 将兼容 OpenAI 的客户端和工具指向一个已发布的模型服务。
+---
+
+一个已发布的[模型服务](/user-guide/model-services)是一个标准的、
+兼容 OpenAI 的端点，因此任何支持该 API 的客户端或框架都可以
+通过设置其基础 URL 和 API 密钥来调用它——无需任何 Lens 专属客户端。
+
+## curl
+
+```bash
+curl http://<edge-host>:<edge-port>/v1/chat/completions \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+## OpenAI Python SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://<edge-host>:<edge-port>/v1",
+    api_key="lens-mk-...",
+)
+response = client.chat.completions.create(
+    model="Qwen/Qwen3-8B",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+## LangChain / LlamaIndex / 其他兼容 OpenAI 的框架
+
+任何接受为"兼容 OpenAI"的提供方自定义 `base_url` 和 `api_key` 的框架，
+使用方式都是一样的——将它指向 `http://<edge-host>:<edge-port>/v1`，
+并使用一个 Lens API 令牌（`lens-mk-...`，从
+[模型服务](/user-guide/model-services)页面签发）。
+
+## Lens Assistant 自己的提供方
+
+[Lens Assistant](/user-guide/lens-assistant) 和智能体部署规划走的是
+相反的方向：此时 Lens 是*客户端*，它会调用你所配置的
+[外部服务提供方](/user-guide/external-providers)（OpenAI、
+Azure OpenAI、Anthropic，或一台自托管的兼容 OpenAI 的服务器——
+而这台服务器本身也可以是另一个 Lens 模型服务）。

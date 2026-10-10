@@ -1,0 +1,94 @@
+---
+title: Evaluation
+description: Design guided benchmark experiments and analyze the results.
+---
+
+Use the **Evaluation** area to create benchmark tasks, compare deployment configurations, and review the evidence collected for each run. The operations below only mention controls that exist in the current task list, creation modal, wizard, and result screens.
+
+Benchmark result scenario and outcome selectors retain their existing options and selection behavior while using the shared select control.
+
+## Find an evaluation task
+
+1. Open **Evaluation** from the left navigation.
+2. Use the summary cards **Evaluation Tasks**, **Succeeded**, **Running**, **Queued**, **Failed**, and **Cancelled** to narrow the task list.
+3. Type in **Search evaluation, workload, or harness...** to match a task by name, model, ID, mode, workload, or harness.
+4. Open **Mode** to switch between **Deploy + benchmark** and **Existing endpoint** tasks.
+5. Open **Workload** to filter by workload name.
+6. Click **Clear Filters** to reset the current filters.
+7. If needed, change **Tasks per page** and use **Previous** or **Next**.
+
+## Create a new task from the Evaluation dashboard
+
+1. Click **New Task**.
+2. In **Create a new task**, choose the target type:
+   - **Deploy configurations** to benchmark saved deployment artifacts.
+   - **Use existing endpoint** to benchmark a live service without creating a deployment.
+3. If you chose **Deploy configurations**, stay on the **Select** tab to pick deployment artifacts, use **View YAML** to inspect one, or click **Create configuration** if you need a new artifact first.
+4. If you chose **Use existing endpoint**, pick a published service from **Model service**, then fill **Model access token**.
+5. Continue to **Benchmark & comparison**.
+6. Pick a benchmark suite such as **Custom workload** or one of the built-in suites.
+7. When the footer shows the target is ready, click **Launch evaluation**.
+
+**Model service** only lists published, continuously health-probed Model Services; a model service with no healthy member shows "No model service is published and healthy yet." Raw deployment URLs cannot be submitted through this flow. The dashboard and full wizard apply the same target validation, and the token is used only for this run and is never stored.
+
+## Run the full New Benchmark Task wizard
+
+1. Open the full wizard when Lens routes you to **New Benchmark Task**.
+2. In **Evaluation Setup**, enter **Task name**.
+3. Under **How should this evaluation run?**, choose **Use existing endpoint** or **Design configurations**.
+4. If you are benchmarking an existing service, pick a published service from **Model service**, then fill **Model access token**.
+5. If you are designing a deployment-backed run, fill the shared setup fields such as **Cluster**, **Model ID**, **Model Cache Storage**, **Deployment Name**, and **Deployment description**.
+6. In **Configurations**, review the selected deployment artifacts. Use **Edit setup**, **Add from saved configurations**, **Edit**, **Edit YAML**, or **Delete deployed configuration** only when you need to change the candidate set.
+7. In **Benchmark**, configure the benchmark plan and resolve any validation messages.
+8. In **Execution plan**, review the sections **Execution plan**, **Targets & execution order**, and **Performance targets**.
+9. Click **Start Evaluation**.
+
+**Model service** only lists published, continuously health-probed Model Services; the token authenticates the harness through the cluster's shared Gateway and is used only for this run.
+
+Editing a saved configuration's YAML creates a new artifact with updated checksums and edit provenance; the original artifact is preserved. This applies to both creation surfaces.
+
+## Open task results and export evidence
+
+1. In the task list, click **Results** on the task card.
+2. On the detail page, use the section tabs **Benchmark results**, **Compare**, **Live monitoring** or **Recorded monitoring**, **Resources**, **Benchmark logs**, and **Deployments**.
+3. Click **Download Report** to export the benchmark report.
+4. Click **Send to Simulate & TCO** if you want to pass the benchmark data into the simulation workflow.
+5. Use the refresh action with tooltip **Refresh deployment status and details** when you need a fresh status snapshot.
+
+Active result pages refresh persisted progress every five seconds without showing the initial loading state again. Refresh pauses while the browser tab is hidden and resumes when visible; it stops when the task reaches a terminal state. Deployment readiness refresh remains an explicit action. A task that is **Stopping** is still active until cleanup finishes.
+
+### Read guide and baseline comparisons
+
+Matrix comparisons pair results with the same input length, output length, and concurrency. Rate comparisons pair stages with the same target rate. Missing or ambiguous load values are excluded instead of matching by row position. A valid zero measurement stays zero; a missing measurement or zero baseline does not produce a ratio. Suite throughput comparisons include only matched pairs with token counts and positive durations on both sides.
+
+Ratios are guide divided by baseline: higher throughput ratios favor the guide, while lower latency ratios favor the guide. Older cached comparison reports are refreshed from saved evidence when results are opened; unavailable historical measurements are not invented.
+
+## Inspect benchmark logs and deployment cases
+
+1. Open a task’s **Results** page.
+2. Click **Benchmark logs** to review **Harness pod logs**, **Benchmark output**, and **Benchmark diagnostics**.
+3. Click **Deployments** to review **Deployment cases**.
+4. Use the deployment filters **All**, **Failed**, **Active**, **Ready**, and **Retry history** or **Hide history**.
+5. In a deployment case, click **Deploy logs** to open the deployment diagnostics.
+6. Review **Deploy and Kubernetes logs**, **Kubernetes pods**, **Kubernetes events**, **Modelserver logs**, and **Latest readiness check**.
+
+## Retry, cancel, resume, or delete evaluation-created deployments
+
+1. Open the task’s **Results** page and go to **Deployments**.
+2. If a deployment case failed, click **Retry**.
+3. If a deployment case is paused, click **Resume**.
+4. To stop execution, click **Cancel benchmark & deployment** for evaluation-created services, or **Cancel benchmark** for tasks that target an existing endpoint.
+5. If a failed or cleaned deployment is no longer needed, click **Delete**.
+6. If the run requires a private model token for the retry, fill **Hugging Face token for this retry** before clicking **Retry**.
+
+## Remove or retry tasks from the task list
+
+1. In the task list, use the task-card actions on the right.
+2. Click **Results** to open completed evidence.
+3. For a failed or cancelled task, use the action with aria-label **Retry task** and tooltip **Retry**.
+4. For a running task, use the action with aria-label **Cancel task**.
+5. For a terminal task, use the action with aria-label **Delete task** and confirm the deletion.
+
+## Related references
+
+If you need the reusable evaluation presets behind these screens, see [Guides](/evaluation/guides) and [Parameters](/evaluation/parameters).

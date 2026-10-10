@@ -1,0 +1,898 @@
+---
+title: 管理
+description: 支撑 Lens 管理模块的身份验证、RBAC、会话和系统设置相关 API。
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## 后端 API
+
+管理模块涵盖 `llm_d_bench/auth/router.py` 中的身份验证路由，以及 `llm_d_bench/db/system_router.py` 中的系统设置路由。
+
+身份验证与管理相关路由位于 `llm_d_bench/auth/router.py` 中的 `/api/v1` 前缀下。
+
+### 列出用户
+
+列出用户，包括直接角色、群组成员关系以及继承的角色。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/users`**
+
+请求：
+
+- 查询参数：
+  - `query`（`string`，可选）：按用户名或其他用户搜索文本进行过滤。
+  - `status`（`string`，可选）：按用户状态过滤，例如 `active` 或 `disabled`。
+
+该端点没有请求体。
+
+响应：
+
+返回用户记录数组，并附带直接 `roles`（角色）、`groups`（群组）和 `inheritedRoles`（继承角色）信息。
+
+```json
+[
+  {
+    "username": "alice",
+    "display_name": "Alice Admin",
+    "id": "user-1",
+    "email": "alice@example.com",
+    "provider_id": null,
+    "auth_source": "local",
+    "external_id": null,
+    "status": "active",
+    "failed_login_count": 0,
+    "locked_until": null,
+    "must_change_password": false,
+    "password_changed_at": "2026-09-21T08:00:00+00:00",
+    "last_login_at": "2026-09-23T08:45:00+00:00",
+    "principal_version": 3,
+    "created_at": "2026-09-20T10:00:00+00:00",
+    "updated_at": "2026-09-23T08:45:00+00:00",
+    "has_password": true,
+    "protected": false,
+    "roles": [
+      {
+        "name": "maintainer",
+        "scopeType": "cluster",
+        "scopeClusterId": "cluster-123"
+      }
+    ],
+    "groups": [
+      {
+        "id": "group-ops",
+        "name": "ops",
+        "source": "manual"
+      }
+    ],
+    "inheritedRoles": [
+      {
+        "name": "end-user",
+        "scopeType": "global",
+        "scopeClusterId": null,
+        "scopeResourceType": null,
+        "scopeResourceId": null,
+        "groupId": "group-ops",
+        "groupName": "ops"
+      }
+    ]
+  }
+]
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+service = default_service()
+role_names = {role.id: role.name for role in service.role_dao.list()}
+group_names = {group.id: group.name for group in service.group_dao.list()}
+user_bindings = service.user_binding_dao.list_all()
+group_bindings = service.group_binding_dao.list_all()
+memberships = service.user_group_dao.list_all()
+users = service.user_dao.list(query="alice", status="active")
+
+print(len(users), len(user_bindings), len(group_bindings), len(memberships))
+print(role_names)
+print(group_names)
+```
+
+  </TabItem>
+</Tabs>
+
+### 创建用户
+
+创建一个用户账户。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/users`**
+
+请求：
+
+- JSON 请求体字段：
+  - `username`（`string`，必填）
+  - `password`（`string`，可选）
+  - `displayName`（`string`，可选）
+  - `email`（`string`，可选）
+
+```json
+{
+  "username": "alice",
+  "password": "<strong-password>",
+  "displayName": "Alice Admin",
+  "email": "alice@example.com"
+}
+```
+
+响应：
+
+返回由 `_user_public(...)` 生成的新建用户记录。
+
+```json
+{
+  "username": "alice",
+  "display_name": "Alice Admin",
+  "id": "user-1",
+  "email": "alice@example.com",
+  "provider_id": null,
+  "auth_source": "local",
+  "external_id": null,
+  "status": "active",
+  "failed_login_count": 0,
+  "locked_until": null,
+  "must_change_password": false,
+  "password_changed_at": null,
+  "last_login_at": null,
+  "principal_version": 1,
+  "created_at": "2026-09-23T09:00:00+00:00",
+  "updated_at": "2026-09-23T09:00:00+00:00",
+  "has_password": true,
+  "protected": false
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+user = default_service().create_user(
+    username="alice",
+    password="<strong-password>",
+    display_name="Alice Admin",
+    email="alice@example.com",
+)
+print(user.id, user.username, user.status)
+```
+
+  </TabItem>
+</Tabs>
+
+### 更新用户
+
+更新用户的显示名称、邮箱或状态。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`PATCH /api/v1/users/{user_id}`**
+
+请求：
+
+- 路径参数：
+  - `user_id`（`string`，必填）：要更新的用户记录。
+- JSON 请求体字段：
+  - `displayName`（`string`，可选）
+  - `email`（`string`，可选）
+  - `status`（`string`，可选）
+
+```json
+{
+  "displayName": "Alice Operations",
+  "email": "alice.ops@example.com",
+  "status": "active"
+}
+```
+
+响应：
+
+返回更新后的用户记录。
+
+```json
+{
+  "username": "alice",
+  "display_name": "Alice Operations",
+  "id": "user-1",
+  "email": "alice.ops@example.com",
+  "provider_id": null,
+  "auth_source": "local",
+  "external_id": null,
+  "status": "active",
+  "failed_login_count": 0,
+  "locked_until": null,
+  "must_change_password": false,
+  "password_changed_at": null,
+  "last_login_at": "2026-09-23T08:45:00+00:00",
+  "principal_version": 2,
+  "created_at": "2026-09-20T10:00:00+00:00",
+  "updated_at": "2026-09-23T09:05:00+00:00",
+  "has_password": true,
+  "protected": false
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.router import UserUpdateRequest
+from llm_d_bench.auth.service import default_service
+
+body = UserUpdateRequest(displayName="Alice Operations", email="alice.ops@example.com", status="active")
+updates = body.model_dump(exclude_none=True)
+user = default_service().update_user("user-1", **updates)
+print(user.display_name, user.email, user.status)
+```
+
+  </TabItem>
+</Tabs>
+
+### 列出角色
+
+列出角色。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/roles`**
+
+请求：
+
+该端点没有请求体。
+
+响应：
+
+返回角色记录数组，其中包含已解析的权限码。
+
+```json
+[
+  {
+    "name": "maintainer",
+    "description": "Manage clusters and workloads",
+    "id": "role-maintainer",
+    "is_builtin": true,
+    "created_at": "2026-09-20T09:00:00+00:00",
+    "updated_at": "2026-09-20T09:00:00+00:00",
+    "permissions": [
+      "cluster:cluster:read",
+      "deployment:run:read",
+      "session:session:revoke"
+    ]
+  }
+]
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+roles = default_service().role_dao.list()
+print([(role.id, role.name) for role in roles])
+```
+
+  </TabItem>
+</Tabs>
+
+### 创建角色
+
+创建一个角色。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/roles`**
+
+请求：
+
+- JSON 请求体字段：
+  - `name`（`string`，必填）
+  - `description`（`string`，可选）
+  - `permissions`（`array<string>`，可选）
+
+```json
+{
+  "name": "auditor",
+  "description": "Read-only compliance role",
+  "permissions": [
+    "deployment:run:read",
+    "cluster:cluster:read"
+  ]
+}
+```
+
+响应：
+
+返回新建角色及其权限集合。
+
+```json
+{
+  "name": "auditor",
+  "description": "Read-only compliance role",
+  "id": "role-auditor",
+  "is_builtin": false,
+  "created_at": "2026-09-23T09:10:00+00:00",
+  "updated_at": "2026-09-23T09:10:00+00:00",
+  "permissions": [
+    "cluster:cluster:read",
+    "deployment:run:read"
+  ]
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+role = default_service().create_role(
+    name="auditor",
+    description="Read-only compliance role",
+    permissions={"deployment:run:read", "cluster:cluster:read"},
+)
+print(role.id, role.name)
+```
+
+  </TabItem>
+</Tabs>
+
+### 设置角色权限
+
+设置自定义角色的权限。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`PUT /api/v1/roles/{role_id}/permissions`**
+
+请求：
+
+- 路径参数：
+  - `role_id`（`string`，必填）：要更新的自定义角色。
+- JSON 请求体字段：
+  - `permissions`（`array<string>`，必填）
+
+```json
+{
+  "permissions": [
+    "cluster:cluster:read",
+    "deployment:run:read",
+    "session:session:revoke"
+  ]
+}
+```
+
+响应：
+
+当权限集合成功保存时，返回 `204 No Content`。该端点不返回 JSON 响应体。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+default_service().set_role_permissions(
+    "role-auditor",
+    {"cluster:cluster:read", "deployment:run:read", "session:session:revoke"},
+)
+print("permissions updated")
+```
+
+  </TabItem>
+</Tabs>
+
+### 列出会话
+
+列出会话；管理员可以包含已吊销的会话，而其他调用者只能看到自己的会话。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/sessions`**
+
+请求：
+
+- 查询参数：
+  - `include_revoked`（`boolean`，可选）：管理员可以在结果集中包含已吊销的会话。
+
+该端点没有请求体。
+
+响应：
+
+返回会话记录列表。管理员调用者会收到每个会话以及 `username` 字段；非管理员调用者只能收到自己的会话。
+
+```json
+[
+  {
+    "user_id": "user-1",
+    "token_hash": "$argon2id$v=19$m=65536,t=3,p=4$sessionhash",
+    "id": "session-1",
+    "created_at": "2026-09-23T08:45:00+00:00",
+    "expires_at": "2026-09-23T16:45:00+00:00",
+    "idle_expires_at": "2026-09-23T10:45:00+00:00",
+    "last_seen_at": "2026-09-23T09:15:00+00:00",
+    "revoked_at": null,
+    "auth_source": "local",
+    "ip": "127.0.0.1",
+    "user_agent": "Mozilla/5.0",
+    "username": "alice"
+  }
+]
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+service = default_service()
+admin_view = service.session_dao.list_all(include_revoked=True)
+self_view = service.list_sessions("user-1")
+
+print(len(admin_view), len(self_view))
+```
+
+  </TabItem>
+</Tabs>
+
+### 吊销会话
+
+吊销一个会话。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`DELETE /api/v1/sessions/{session_id}`**
+
+请求：
+
+- 路径参数：
+  - `session_id`（`string`，必填）：要吊销的会话记录。
+
+该端点没有请求体。
+
+响应：
+
+目标会话被吊销后，返回 `204 No Content`。该端点不返回 JSON 响应体。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+service = default_service()
+service.revoke_session("session-1", allow_any=True)
+print("session revoked")
+```
+
+  </TabItem>
+</Tabs>
+
+### 列出集群访问绑定
+
+列出某个集群的集群级访问绑定。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/clusters/{cluster_id}/access`**
+
+请求：
+
+- 路径参数：
+  - `cluster_id`（`string`，必填）：要列出其用户和群组绑定的集群。
+
+该端点没有请求体。
+
+响应：
+
+返回用户和群组绑定的列表，每条记录都标有 `subjectType`。
+
+```json
+[
+  {
+    "subjectType": "user",
+    "user_id": "user-1",
+    "role_id": "role-maintainer",
+    "id": "binding-user-1",
+    "scope_type": "cluster",
+    "scope_cluster_id": "cluster-123",
+    "scope_resource_type": null,
+    "scope_resource_id": null,
+    "granted_by_user_id": "admin-1",
+    "expires_at": null,
+    "created_at": "2026-09-23T09:20:00+00:00"
+  },
+  {
+    "subjectType": "group",
+    "group_id": "group-ops",
+    "role_id": "role-end-user",
+    "id": "binding-group-1",
+    "scope_type": "cluster",
+    "scope_cluster_id": "cluster-123",
+    "scope_resource_type": null,
+    "scope_resource_id": null,
+    "granted_by_user_id": "admin-1",
+    "expires_at": null,
+    "created_at": "2026-09-23T09:21:00+00:00"
+  }
+]
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.router import _list_access
+from llm_d_bench.auth.service import default_service
+
+items = _list_access("cluster-123", None, default_service())
+print(items)
+```
+
+  </TabItem>
+</Tabs>
+
+### 授予集群访问权限
+
+向用户或群组授予集群级访问权限。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/clusters/{cluster_id}/access`**
+
+请求：
+
+- 路径参数：
+  - `cluster_id`（`string`，必填）：该绑定的权威集群范围。
+- JSON 请求体字段：
+  - `subjectType`（`"user" | "group"`，必填）
+  - `subjectId`（`string`，必填）
+  - `roleId`（`string`，必填）
+  - `clusterId`（`string`，可选）：出现在请求模型中，但路由实际使用 `{cluster_id}` 路径参数作为作用域。
+
+```json
+{
+  "subjectType": "user",
+  "subjectId": "user-1",
+  "roleId": "role-maintainer"
+}
+```
+
+响应：
+
+返回新建的绑定记录。
+
+```json
+{
+  "user_id": "user-1",
+  "role_id": "role-maintainer",
+  "id": "binding-user-1",
+  "scope_type": "cluster",
+  "scope_cluster_id": "cluster-123",
+  "scope_resource_type": null,
+  "scope_resource_id": null,
+  "granted_by_user_id": "admin-1",
+  "expires_at": null,
+  "created_at": "2026-09-23T09:20:00+00:00"
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+binding = default_service().add_user_binding(
+    "user-1",
+    "role-maintainer",
+    scope_type="cluster",
+    scope_cluster_id="cluster-123",
+    granted_by="admin-1",
+)
+print(binding.id, binding.scope_cluster_id)
+```
+
+  </TabItem>
+</Tabs>
+
+### 撤销集群访问权限
+
+撤销一个集群级访问绑定。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`DELETE /api/v1/clusters/{cluster_id}/access/{binding_id}`**
+
+请求：
+
+- 路径参数：
+  - `cluster_id`（`string`，必填）：要移除其绑定的集群。
+  - `binding_id`（`string`，必填）：要撤销的用户或群组绑定 ID。
+
+该端点没有请求体。
+
+响应：
+
+绑定被移除后，返回 `204 No Content`。该端点不返回 JSON 响应体。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.service import default_service
+
+service = default_service()
+for binding in service.user_binding_dao.list_all():
+    if binding.id == "binding-user-1":
+        service.remove_user_binding(binding.user_id, binding.id)
+        break
+else:
+    for binding in service.group_binding_dao.list_all():
+        if binding.id == "binding-group-1":
+            service.remove_group_binding(binding.group_id, binding.id)
+            break
+
+print("binding revoked")
+```
+
+  </TabItem>
+</Tabs>
+
+下面的数据库设置相关路由位于 `llm_d_bench/db/system_router.py` 中的 `/api/v1/system` 路径下。
+
+### 读取数据库设置状态
+
+读取 Lens 自身的数据库是否已经配置完成。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/system/database`**
+
+请求：
+
+该端点没有请求体。
+
+响应：
+
+返回一个 `DatabaseStatus` 对象。`displayTarget` 仅包含经过脱敏处理的主机/端口/数据库信息，绝不会回显凭据。
+
+```json
+{
+  "configured": true,
+  "mode": "external",
+  "engine": "postgresql",
+  "displayTarget": "db.example.com:5432/prism"
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.db.system_router import get_database_status
+
+status = get_database_status()
+print(status.configured, status.mode, status.display_target)
+```
+
+  </TabItem>
+</Tabs>
+
+### 配置后端数据库
+
+配置 Lens 自身的数据库连接（外部或内嵌），并创建初始数据表。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/system/database`**
+
+请求：
+
+- JSON 请求体字段：
+  - `mode`（`"external" | "embedded"`，必填）
+  - `engine`（`"postgresql" | "mysql" | "oracle" | "mssql"`，可选）
+  - `databaseUrl`（`string`，`external` 模式下必填）
+  - `embeddedPassword`（`string`，可选；仅在 `embedded` 模式下有意义）
+
+外部数据库示例：
+
+```json
+{
+  "mode": "external",
+  "engine": "mysql",
+  "databaseUrl": "mysql://prism:secret@db.example.com:3306/prism"
+}
+```
+
+响应：
+
+连接探测、引擎配置和初始数据表创建成功后，返回最终的 `DatabaseStatus`。
+
+```json
+{
+  "configured": true,
+  "mode": "external",
+  "engine": "mysql",
+  "displayTarget": "db.example.com:3306/prism"
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.db.system_router import DatabaseSetupRequest, apply_database_setup
+
+status = apply_database_setup(
+    DatabaseSetupRequest(
+        mode="external",
+        engine="mysql",
+        databaseUrl="mysql://prism:secret@db.example.com:3306/prism",
+    )
+)
+print(status.configured, status.mode, status.engine)
+```
+
+  </TabItem>
+</Tabs>
+
+下面的主密钥相关路由同样位于 `/api/v1/system/...` 路径下，但它们是由 `llm_d_bench/auth/router.py`（而非 `system_router.py`）注册的，与其他身份验证及管理端点放在一起。
+
+### 读取存储密钥主密钥状态
+
+读取当前生效的主密钥（`LENS_SECRET_KEY`）来源、不可逆指纹，以及现有的服务提供方密钥数量和旧的备用密钥数量。密钥本身的值永远不会被返回。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/system/secret-key`**
+
+请求：
+
+该端点没有请求体。
+
+响应：
+
+```json
+{
+  "source": "file",
+  "envLocked": false,
+  "configured": true,
+  "fingerprint": "3f9a1c7b52e0d4a6",
+  "keyLength": 64,
+  "oldKeyCount": 1,
+  "path": "/home/user/.local/share/lens/credentials/master_key.json",
+  "providerSecretCount": 2
+}
+```
+
+`source` 的取值为 `environment`、`file` 或 `unconfigured`；当 `LENS_SECRET_KEY` 通过环境变量提供时，`envLocked` 为 `true`（此时存储的密钥会被忽略，并且通过 API 进行密钥轮换的请求会被拒绝）。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.master_key import status
+from llm_d_bench.auth.settings import get_settings
+
+print(status(get_settings())["source"], status(get_settings())["fingerprint"])
+```
+
+  </TabItem>
+</Tabs>
+
+### 轮换存储密钥主密钥
+
+生成一个新的主密钥（或使用指定的密钥），用它重新加密每一个已存储的服务提供方密钥，并保留此前的密钥作为解密回退。当 `LENS_SECRET_KEY` 被环境变量锁定时，该操作会被拒绝。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/system/secret-key/rotate`**
+
+请求：
+
+- JSON 请求体字段：
+  - `newKey`（`string`，可选；留空则自动生成一个强密钥）
+
+```json
+{
+  "newKey": "a-manually-chosen-strong-key"
+}
+```
+
+响应：
+
+返回新的状态，以及 `rotatedSecrets`（已重新加密的服务提供方密钥数量）。
+
+```json
+{
+  "source": "file",
+  "envLocked": false,
+  "configured": true,
+  "fingerprint": "b71e0c9d3a4f8215",
+  "keyLength": 28,
+  "oldKeyCount": 1,
+  "path": "/home/user/.local/share/lens/credentials/master_key.json",
+  "providerSecretCount": 2,
+  "rotatedSecrets": 2
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.master_key import rotate_master_key
+from llm_d_bench.auth.settings import get_settings
+from llm_d_bench.db.dao.identity_provider import IdentityProviderDao
+
+result = rotate_master_key(get_settings(), None, provider_dao=IdentityProviderDao())
+print(result["fingerprint"], result["rotatedSecrets"])
+```
+
+  </TabItem>
+</Tabs>
+
+### 清除旧的主密钥
+
+在所有服务提供方密钥都已重新加密之后，删除保留的备用密钥。仍使用旧密钥加密的密钥将变得不可读，因此请先重新保存那些服务提供方的配置。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`DELETE /api/v1/system/secret-key/old`**
+
+请求：
+
+该端点没有请求体。
+
+响应：
+
+返回 `oldKeyCount` 设为 `0` 的状态。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.auth.master_key import clear_old_keys
+from llm_d_bench.auth.settings import get_settings
+
+print(clear_old_keys(get_settings())["oldKeyCount"])
+```
+
+  </TabItem>
+</Tabs>
+
+此外还存在其他身份验证端点，用于登录/会话状态、群组、身份提供方、审计日志、密码修改以及初始化引导；请参阅 OpenAPI 参考文档。
+
+完整的请求/响应 Schema 请参阅 FastAPI OpenAPI schema（可通过 `npm run docs:api` 重新生成）。

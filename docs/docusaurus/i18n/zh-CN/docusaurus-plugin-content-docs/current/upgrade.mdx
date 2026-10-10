@@ -1,0 +1,43 @@
+---
+title: 升级
+description: 将现有的 Lens 安装升级到更新版本。
+---
+
+## 升级基于安装程序的部署
+
+Lens 并没有提供独立的"升级"安装模式——针对已有的 `--install-dir`
+重新运行同一个安装程序，就会拉取新代码、重新构建应用，
+并沿用现有的配置和数据库：
+
+```bash
+git -C /path/to/llm-d-lens pull
+./scripts/LensInstaller-Ubuntu-x86_64.sh --install-dir "$HOME/llm-d-lens" --silent
+```
+
+安装程序会检测到已有的安装目录，停止正在运行的服务，重新构建，
+然后通过 `lensctl.sh` 重启它们。你的数据（内嵌数据库、模型缓存、
+存储卷）不会受到影响。
+
+如果新版本新增了数据库迁移，请在恢复流量之前先运行它——
+参见[迁移](/migration)。
+
+## 升级从源码构建的开发环境
+
+```bash
+git pull
+npm install
+python3 -m pip install -e '.[dev]'
+node scripts/generate-mcp-tools.mjs
+scripts/dev.sh restart
+```
+
+`scripts/dev.sh restart` 会在重启服务之前重新生成并校验复用地图，
+并重新生成 MCP 工具目录。
+
+## 回滚
+
+由于安装程序的重建是原地进行的，回滚的方式就是 `git checkout`
+到之前的标签/提交，再以同样方式重新运行安装程序或
+`scripts/dev.sh restart`。如果升级过程中运行了数据库迁移，
+请在切回旧代码之前先用 `alembic downgrade -1` 回滚它
+（参见[迁移](/migration)）。

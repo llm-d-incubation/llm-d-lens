@@ -1,0 +1,1045 @@
+---
+title: 模拟
+description: 用于模拟任务发现与回放的后端接口与直接 Python 入口点。
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## 后端 API
+
+本地执行与 Pod 执行通过 `llm_d_bench.simulation.progress.report_request_progress` 共享请求进度报告。Pod 报告仍会等待就绪；本地报告则保留其原始开始时间。后端适配器通过 `backends.analytics.artifact_error_message` 共享产物错误格式化逻辑，同时各自保留自身的错误/超时字段优先级、状态映射和指标单位。任务 API 与后端环境准备逻辑保持不变。
+
+模拟相关路由位于 `llm_d_bench/simulation/router.py`，前缀为 `/api/simulation`。
+
+### 列出模拟后端
+
+列出 Lens 已知的模拟（Simulation）后端，以及每个后端在当前环境中是否可用。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/backends`**
+
+    请求：无请求体。
+
+    响应：
+
+    ```json
+    {
+      "backends": [
+        {
+          "name": "aiperf",
+          "display_name": "AIPerf",
+          "api_version": 1,
+          "available": true,
+          "version": "0.12.0",
+          "unavailable_reason": null,
+          "scenarios": [
+            {
+              "name": "chat",
+              "display_name": "Chat",
+              "description": "Conversational and general assistant traffic.",
+              "supported_backends": []
+            },
+            {
+              "name": "api-calling",
+              "display_name": "Tool & API Use",
+              "description": "Tool-use, agent, and business API traffic.",
+              "supported_backends": []
+            }
+          ],
+          "capabilities": {
+            "prompt_kinds": ["trace"],
+            "arrival_patterns": [],
+            "supports_duration": true,
+            "supports_request_count": false,
+            "supports_request_rate": false,
+            "supports_streaming": true,
+            "supports_per_request_results": true,
+            "supports_cancellation": true,
+            "supports_trace_range": true,
+            "scale_factor_trace_formats": ["baseten_trace"],
+            "trace_format_capabilities": {
+              "mooncake_trace": {"supports_trace_range": true, "supports_scale_factor": false}
+            },
+            "advanced_options": [],
+            "trace_formats": [
+              "mooncake_trace",
+              "bailian_trace",
+              "baseten_trace",
+              "burst_gpt_trace",
+              "weka_public_dataset"
+            ]
+          },
+          "managed_installation": false
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.simulation.backends import list_backends
+
+for backend in list_backends():
+    print(backend.name, backend.available, backend.version)
+```
+  </TabItem>
+</Tabs>
+
+### 发现端点模型
+
+探测某个模型端点，发现它报告了哪些模型。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/models/discover`**
+
+    请求体：`ModelDiscoveryRequest`
+    - `endpoint_url` (`string`，必填)
+
+    ```json
+    {
+      "endpoint_url": "http://127.0.0.1:38000/v1"
+    }
+    ```
+
+    响应：
+
+    ```json
+    {
+      "endpoint": "http://127.0.0.1:38000/v1",
+      "models": [
+        "Qwen/Qwen3-8B",
+        "Qwen/Qwen3-8B-Instruct"
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.endpoints import discover_models
+
+
+async def main() -> None:
+    models = await discover_models("http://127.0.0.1:38000/v1")
+    print(models["endpoint"], models["models"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 列出模拟场景
+
+列出 Lens 暴露的模拟场景目录，例如聊天（chat）、API 调用（API-calling）和代码生成（coding）。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/scenarios`**
+
+    请求：无请求体。
+
+    响应：
+
+    ```json
+    {
+      "scenarios": [
+        {
+          "name": "chat",
+          "display_name": "Chat",
+          "description": "Conversational and general assistant traffic.",
+          "supported_backends": ["aiperf", "trace-replayer"]
+        },
+        {
+          "name": "coding",
+          "display_name": "Code Generation",
+          "description": "Code generation and software engineering traffic.",
+          "supported_backends": ["aiperf"]
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.simulation.backends import list_scenarios
+
+for scenario in list_scenarios():
+    print(scenario.name, scenario.supported_backends)
+```
+  </TabItem>
+</Tabs>
+
+### 列出跟踪数据集
+
+列出已注册的跟踪（trace）数据集，以及能够回放每个数据集的后端。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/trace-datasets`**
+
+    请求：无请求体。
+
+    响应：
+
+    ```json
+    {
+      "data_dir": "/home/prism/.local/share/prism/data/datasets",
+      "datasets": [
+        {
+          "name": "mooncake-arxiv",
+          "filename": "mooncake_trace.jsonl",
+          "scenario": "chat",
+          "trace_format": "mooncake_trace",
+          "description": "Mooncake chat trace derived from Arxiv summarization prompts.",
+          "downloaded": false,
+          "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+          "artifact_uri": "artifact://dataset/mooncake-arxiv/mooncake_trace.jsonl",
+          "size_bytes": null,
+          "license": "Apache-2.0",
+          "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
+          "source_repository": "https://github.com/kvcache-ai/Mooncake.git",
+          "supported_backends": ["aiperf", "trace-replayer"]
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_bench.simulation.backends import list_backends
+from llm_d_bench.simulation.traces import trace_registry
+
+backends = list_backends()
+for dataset in trace_registry.list():
+    supported = [
+        backend.name
+        for backend in backends
+        if any(scenario.name == dataset["scenario"] for scenario in backend.scenarios)
+        and dataset["trace_format"] in backend.capabilities.get("trace_formats", [])
+    ]
+    print(dataset["name"], supported)
+```
+  </TabItem>
+</Tabs>
+
+### 下载跟踪数据集
+
+将已注册的跟踪数据集下载到 Lens 的本地跟踪存储中。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/trace-datasets/download`**
+
+    请求体：`TraceDatasetDownloadRequest`
+    - `dataset` (`string`，必填)
+    - `force` (`boolean`，默认 `false`)
+
+    ```json
+    {
+      "dataset": "mooncake-arxiv",
+      "force": false
+    }
+    ```
+
+    响应：
+
+    ```json
+    {
+      "artifact_uri": "artifact://dataset/mooncake-arxiv/mooncake_trace.jsonl",
+      "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+      "trace_format": "mooncake_trace",
+      "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
+      "metadata_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl.metadata.json",
+      "size_bytes": 1048576
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.traces import BaseTrace
+
+
+async def main() -> None:
+    result = await BaseTrace.download("mooncake-arxiv", force=False)
+    print(result["path"], result["sha256"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 获取跟踪数据集时间线
+
+获取某个跟踪数据集的预聚合时间线视图。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/trace-datasets/{dataset_name}/timeline`**
+
+    请求：无请求体。
+    - 路径参数：`dataset_name`（`string`，必填）
+    - 查询参数：`bins`（`integer`，默认 `800`，范围 `50`-`2000`）
+
+    响应：
+
+    ```json
+    {
+      "dataset": "mooncake-arxiv",
+      "trace_format": "mooncake_trace",
+      "request_count": 12000,
+      "duration_seconds": 3600.0,
+      "source_size_bytes": 1048576,
+      "bin_width_seconds": 4.5,
+      "bins": [
+        {"start_seconds": 0.0, "end_seconds": 4.5, "request_count": 12},
+        {"start_seconds": 4.5, "end_seconds": 9.0, "request_count": 18}
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.traces import get_trace_timeline
+
+
+async def main() -> None:
+    timeline = await get_trace_timeline("mooncake-arxiv", 800)
+    print(timeline["dataset"], timeline["request_count"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 列出模拟任务
+
+列出模拟（Simulation）任务，可按状态、场景、后端、模型、数据集、端点和创建时间区间等可选条件进行过滤。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks`**
+
+    请求：无请求体。
+    - 查询参数：`status`、`scenario`、`search`、`backend`、`model`、`dataset`、`trace_format`、`endpoint`、`created_after`、`created_before`、`offset`、`limit`。
+
+    响应：
+
+    ```json
+    {
+      "tasks": [
+        {
+          "id": "1a2b3c4d",
+          "name": "Trace simulation",
+          "description": "Replay a chat trace against a ready deployment",
+          "scenario": "chat",
+          "status": "running",
+          "endpoint_mode": "deployment",
+          "endpoint_namespace": "prism-sim",
+          "endpoint_service": "qwen-router",
+          "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+          "endpoint_deployment_run_id": null,
+          "endpoint_deployment_case_id": null,
+          "endpoint_cluster_id": "cluster-1",
+          "endpoint_cluster_name": "dev-cluster",
+          "endpoint_deployment_name": "qwen3-guide",
+          "endpoint_url": "http://127.0.0.1:38000/v1",
+          "model_name": "Qwen/Qwen3-8B",
+          "simulation": {
+            "backend": "trace-replayer",
+            "backend_options": {},
+            "duration_seconds": 60.0,
+            "num_requests": null,
+            "stream": true,
+            "warmup_enabled": false,
+            "grace_period_seconds": 30.0
+          },
+          "prompt": {
+            "type": "trace",
+            "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
+            "trace": {
+              "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+              "format": "mooncake_trace",
+              "fixed_schedule": true,
+              "timeout_seconds": 3600.0,
+              "synthesis_speedup_ratio": 1.0,
+              "start_seconds": 0.0,
+              "end_seconds": null
+            }
+          },
+          "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
+          "artifact_uri": null,
+          "artifact_error": null,
+          "logs_truncated": false,
+          "artifacts_incomplete": false,
+          "backend_version_inferred": false,
+          "backend_version": null,
+          "configuration_ids": ["config-1"],
+          "progress_percent": 42.5,
+          "progress_message": "Simulation running",
+          "logs": [],
+          "result": null,
+          "error_message": null,
+          "created_at": "2026-09-23T09:18:24.287000Z",
+          "started_at": "2026-09-23T09:18:25.000000Z",
+          "execution_started_at": "2026-09-23T09:18:27.000000Z",
+          "completed_at": null,
+          "owner_pid": null,
+          "owner_instance_id": null,
+          "live_summary": {
+            "completed_requests": 420,
+            "successful_requests": 418
+          }
+        }
+      ],
+      "total": 1,
+      "offset": 0,
+      "limit": 10,
+      "counts": {
+        "queued": 0,
+        "running": 1,
+        "completed": 0,
+        "failed": 0,
+        "cancelled": 0
+      },
+      "facets": {
+        "backends": ["trace-replayer"],
+        "models": ["Qwen/Qwen3-8B"],
+        "datasets": ["mooncake-arxiv"],
+        "trace_formats": ["mooncake_trace"],
+        "endpoints": ["http://127.0.0.1:38000/v1"]
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.service import list_tasks
+
+
+async def main() -> None:
+    page = await list_tasks(status="running", limit=20)
+    print(page.total, [task.id for task in page.tasks])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 创建模拟任务
+
+创建一个模拟（Simulation）任务，对目标模型端点回放某个跟踪数据集。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/tasks`**
+
+    请求体：`SimulationTaskCreateRequest`
+    - `name`, `description`, `scenario`, `backend`, `endpoint_mode`
+    - `cluster_session_id`, `endpoint_namespace`, `endpoint_service`, `endpoint_deployment_execution_id`, `endpoint_cluster_id`, `endpoint_cluster_name`, `endpoint_deployment_name`
+    - `model_service_group_id` (`string`，可选) — 用于指定一个已发布、持续进行健康探测的
+      模型服务（Model Service），而非原始的部署执行实例。设置该字段后，后端会将其解析为该
+      分组当前活跃成员及其已发布名称，并强制将 `endpoint_mode` 设为 `"deployment"`，
+      覆盖任何传入的 `endpoint_deployment_execution_id`/`model_name`。需要同时提供 `api_key`。
+    - `api_key` (`string`，可选) — 模型访问令牌；当设置了 `model_service_group_id` 时为必填。
+    - `endpoint_url`, `model_name`, `trace_dataset`, `trace_path`
+    - `duration_seconds`, `scale_factor`, `trace_start_seconds`, `trace_end_seconds`, `trace_timeout_seconds`, `fixed_schedule`, `stream`, `backend_options`
+
+    ```json
+    {
+      "name": "Trace simulation",
+      "description": "Replay a chat trace against a ready deployment",
+      "scenario": "chat",
+      "backend": "trace-replayer",
+      "endpoint_mode": "deployment",
+      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+      "endpoint_namespace": "prism-sim",
+      "endpoint_service": "qwen-router",
+      "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+      "endpoint_cluster_id": "cluster-1",
+      "endpoint_cluster_name": "dev-cluster",
+      "endpoint_deployment_name": "qwen3-guide",
+      "endpoint_url": "http://127.0.0.1:38000/v1",
+      "model_name": "Qwen/Qwen3-8B",
+      "trace_dataset": "mooncake-arxiv",
+      "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+      "duration_seconds": 60,
+      "scale_factor": 1,
+      "trace_start_seconds": 0,
+      "trace_end_seconds": null,
+      "trace_timeout_seconds": 3600,
+      "fixed_schedule": true,
+      "stream": true,
+      "backend_options": {}
+    }
+    ```
+
+    若要改为指定一个已发布的模型服务，请设置 `model_service_group_id` 和 `api_key`；后端会丢弃传入的
+    `endpoint_deployment_execution_id`/`endpoint_url`/`model_name`，并根据该分组的活跃成员重新解析这些值
+    （一个语法上合法的占位 URL 仍可满足请求校验）：
+
+    ```json
+    {
+      "name": "Trace simulation",
+      "scenario": "chat",
+      "backend": "trace-replayer",
+      "endpoint_mode": "deployment",
+      "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+      "api_key": "lens-mk-…",
+      "endpoint_url": "http://model-service.internal",
+      "model_name": "qwen3-8b",
+      "trace_dataset": "mooncake-arxiv",
+      "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl"
+    }
+    ```
+
+    响应：
+
+    ```json
+    {
+      "task_id": "1a2b3c4d",
+      "status": "queued",
+      "task": {
+        "id": "1a2b3c4d",
+        "name": "Trace simulation",
+        "description": "Replay a chat trace against a ready deployment",
+        "scenario": "chat",
+        "status": "queued",
+        "endpoint_mode": "deployment",
+        "endpoint_namespace": "prism-sim",
+        "endpoint_service": "qwen-router",
+        "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+        "endpoint_deployment_run_id": null,
+        "endpoint_deployment_case_id": null,
+        "endpoint_cluster_id": "cluster-1",
+        "endpoint_cluster_name": "dev-cluster",
+        "endpoint_deployment_name": "qwen3-guide",
+        "endpoint_url": "http://127.0.0.1:38000/v1",
+        "model_name": "Qwen/Qwen3-8B",
+        "simulation": {
+          "backend": "trace-replayer",
+          "backend_options": {},
+          "duration_seconds": 60.0,
+          "num_requests": null,
+          "stream": true,
+          "warmup_enabled": false,
+          "grace_period_seconds": 30.0
+        },
+        "prompt": {
+          "type": "trace",
+          "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
+          "trace": {
+            "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+            "format": "mooncake_trace",
+            "fixed_schedule": true,
+            "timeout_seconds": 3600.0,
+            "synthesis_speedup_ratio": 1.0,
+            "start_seconds": 0.0,
+            "end_seconds": null
+          }
+        },
+        "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
+        "artifact_uri": null,
+        "artifact_error": null,
+        "logs_truncated": false,
+        "artifacts_incomplete": false,
+        "backend_version_inferred": false,
+        "backend_version": null,
+        "configuration_ids": ["config-1"],
+        "progress_percent": 0.0,
+        "progress_message": "Queued",
+        "logs": [],
+        "result": null,
+        "error_message": null,
+        "created_at": "2026-09-23T09:18:24.287000Z",
+        "started_at": null,
+        "execution_started_at": null,
+        "completed_at": null,
+        "owner_pid": null,
+        "owner_instance_id": null
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.models import SimulationTaskCreateRequest
+from llm_d_bench.simulation.service import create_task
+
+
+async def main() -> None:
+    task = await create_task(
+        SimulationTaskCreateRequest(
+            scenario="chat",
+            backend="trace-replayer",
+            endpoint_mode="deployment",
+            endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000001",
+            endpoint_url="http://127.0.0.1:38000/v1",
+            model_name="Qwen/Qwen3-8B",
+            trace_dataset="mooncake-arxiv",
+            trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+        )
+    )
+    print(task.id, task.status)
+
+    # Or target a published Model Service (resolves to its active member and
+    # published name; requires api_key, and endpoint_url/model_name are discarded):
+    task = await create_task(
+        SimulationTaskCreateRequest(
+            scenario="chat",
+            backend="trace-replayer",
+            endpoint_mode="deployment",
+            model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
+            api_key="lens-mk-…",
+            endpoint_url="http://model-service.internal",
+            model_name="qwen3-8b",
+            trace_dataset="mooncake-arxiv",
+            trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+        )
+    )
+    print(task.id, task.status)
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 获取模拟任务
+
+根据 id 获取某个模拟任务，包括进度、日志以及（如果存在的话）结果产物。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）
+
+    响应：
+
+    ```json
+    {
+      "id": "1a2b3c4d",
+      "name": "Trace simulation",
+      "description": "Replay a chat trace against a ready deployment",
+      "scenario": "chat",
+      "status": "completed",
+      "endpoint_mode": "deployment",
+      "endpoint_namespace": "prism-sim",
+      "endpoint_service": "qwen-router",
+      "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
+      "endpoint_deployment_run_id": null,
+      "endpoint_deployment_case_id": null,
+      "endpoint_cluster_id": "cluster-1",
+      "endpoint_cluster_name": "dev-cluster",
+      "endpoint_deployment_name": "qwen3-guide",
+      "endpoint_url": "http://127.0.0.1:38000/v1",
+      "model_name": "Qwen/Qwen3-8B",
+      "simulation": {
+        "backend": "trace-replayer",
+        "backend_options": {},
+        "duration_seconds": 60.0,
+        "num_requests": null,
+        "stream": true,
+        "warmup_enabled": false,
+        "grace_period_seconds": 30.0
+      },
+      "prompt": {
+        "type": "trace",
+        "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
+        "trace": {
+          "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+          "format": "mooncake_trace",
+          "fixed_schedule": true,
+          "timeout_seconds": 3600.0,
+          "synthesis_speedup_ratio": 1.0,
+          "start_seconds": 0.0,
+          "end_seconds": null
+        }
+      },
+      "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
+      "artifact_uri": "artifact://simulation/1a2b3c4d",
+      "artifact_error": null,
+      "logs_truncated": false,
+      "artifacts_incomplete": false,
+      "backend_version_inferred": false,
+      "backend_version": "0.2.0",
+      "configuration_ids": ["config-1"],
+      "progress_percent": 100.0,
+      "progress_message": "Simulation completed",
+      "logs": ["Starting trace-replayer", "Simulation completed"],
+      "result": {
+        "run_id": "trace-replayer-1",
+        "backend": "trace-replayer",
+        "backend_version": "0.2.0",
+        "summary": {
+          "throughput_tps": 1180.4,
+          "success_rate": 99.8,
+          "completion_timeline": []
+        },
+        "artifacts": [
+          {
+            "uri": "artifact://simulation/1a2b3c4d/summary.json",
+            "kind": "summary-json",
+            "path": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d/summary.json",
+            "media_type": "application/json"
+          }
+        ],
+        "per_request": [
+          {
+            "request_id": 1,
+            "status_code": 200,
+            "successful": true,
+            "error": null,
+            "started_at_seconds": 0.0,
+            "completed_at_seconds": 0.42,
+            "latency_ms": 420.0,
+            "ttft_ms": 110.0,
+            "tpot_ms": 8.3,
+            "input_tokens": 512.0,
+            "output_tokens": 128.0,
+            "metadata": {}
+          }
+        ],
+        "backend_metrics": {},
+        "warnings": []
+      },
+      "error_message": null,
+      "created_at": "2026-09-23T09:18:24.287000Z",
+      "started_at": "2026-09-23T09:18:25.000000Z",
+      "execution_started_at": "2026-09-23T09:18:27.000000Z",
+      "completed_at": "2026-09-23T09:19:32.000000Z",
+      "owner_pid": null,
+      "owner_instance_id": null
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.service import get_task
+
+
+async def main() -> None:
+    task = await get_task("1a2b3c4d")
+    if task is not None:
+        print(task.id, task.status, task.progress_percent)
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 下载模拟产物
+
+根据任务 id 和产物类型，以文件附件形式下载已保存的模拟产物。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}/artifacts/{kind}`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）、`kind`（`string`，必填）
+
+    响应：文件附件，从已保存的产物路径流式传输。不返回 JSON 响应体。任务的 `result.artifacts` 列表会告知哪些 `kind` 值可用。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.router import download_simulation_artifact
+
+
+async def main() -> None:
+    response = await download_simulation_artifact("1a2b3c4d", "summary-json")
+    print(response.media_type)
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 获取模拟任务的响应状态码问题
+
+获取某个模拟任务中返回特定 HTTP 状态码的请求。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}/response-code-issues`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）
+    - 查询参数：`status_code`（`string`，必填；缺失状态码时使用 `unknown`）、`offset`（`integer`，默认 `0`）、`limit`（`integer`，默认 `100`，最大 `500`）
+
+    响应：
+
+    ```json
+    {
+      "task_id": "1a2b3c4d",
+      "status_code": 500,
+      "issues": [
+        {
+          "request_number": 12,
+          "request_id": 12,
+          "status_code": 500,
+          "error": "Transport error: upstream reset the connection",
+          "started_at_seconds": 14.2,
+          "latency_ms": 982.5,
+          "input_tokens": 512.0,
+          "output_tokens": 0.0
+        }
+      ],
+      "total": 1,
+      "offset": 0,
+      "limit": 100
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.service import get_response_code_issues
+
+
+async def main() -> None:
+    issues = await get_response_code_issues("1a2b3c4d", 500, offset=0, limit=20)
+    print(issues.task_id, issues.total)
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 停止模拟任务
+
+停止一个正在运行的模拟任务。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/tasks/{task_id}/stop`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）
+
+    响应：
+
+    ```json
+    {
+      "task_id": "1a2b3c4d",
+      "status": "cancelling"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.service import stop_task
+
+
+async def main() -> None:
+    await stop_task("1a2b3c4d")
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 重新运行模拟任务
+
+将之前的模拟任务重新排队运行，可选择将其重新绑定到新的端点或部署执行实例。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/tasks/{task_id}/rerun`**
+
+    请求体：`SimulationTaskRerunRequest`（可选）
+    - 路径参数：`task_id`（`string`，必填）
+    - 可选的请求体字段：`endpoint_url`、`endpoint_deployment_execution_id`、`endpoint_cluster_id`、`endpoint_cluster_name`、`endpoint_deployment_name`
+    - `model_service_group_id` (`string`，可选) — 重新绑定到一个已发布、经过健康探测的模型服务，
+      而非原始的部署执行实例；其解析方式与创建任务时相同，当两者同时提供时优先于
+      `endpoint_deployment_execution_id`。
+
+    ```json
+    {
+      "endpoint_url": "http://127.0.0.1:39000/v1",
+      "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000002",
+      "endpoint_cluster_id": "cluster-1",
+      "endpoint_cluster_name": "dev-cluster",
+      "endpoint_deployment_name": "qwen3-guide-rerun"
+    }
+    ```
+
+    响应：
+
+    ```json
+    {
+      "task_id": "5e6f7a8b",
+      "status": "queued",
+      "task": {
+        "id": "5e6f7a8b",
+        "name": "Trace simulation · rerun 5e6f7a8b",
+        "description": "Replay a chat trace against a ready deployment",
+        "scenario": "chat",
+        "status": "queued",
+        "endpoint_mode": "deployment",
+        "endpoint_namespace": "prism-sim",
+        "endpoint_service": "qwen-router",
+        "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000002",
+        "endpoint_deployment_run_id": null,
+        "endpoint_deployment_case_id": null,
+        "endpoint_cluster_id": "cluster-1",
+        "endpoint_cluster_name": "dev-cluster",
+        "endpoint_deployment_name": "qwen3-guide-rerun",
+        "endpoint_url": "http://127.0.0.1:39000/v1",
+        "model_name": "Qwen/Qwen3-8B",
+        "simulation": {
+          "backend": "trace-replayer",
+          "backend_options": {},
+          "duration_seconds": 60.0,
+          "num_requests": null,
+          "stream": true,
+          "warmup_enabled": false,
+          "grace_period_seconds": 30.0
+        },
+        "prompt": {
+          "type": "trace",
+          "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
+          "trace": {
+            "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+            "format": "mooncake_trace",
+            "fixed_schedule": true,
+            "timeout_seconds": 3600.0,
+            "synthesis_speedup_ratio": 1.0,
+            "start_seconds": 0.0,
+            "end_seconds": null
+          }
+        },
+        "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/5e6f7a8b",
+        "artifact_uri": null,
+        "artifact_error": null,
+        "logs_truncated": false,
+        "artifacts_incomplete": false,
+        "backend_version_inferred": false,
+        "backend_version": null,
+        "configuration_ids": ["config-2"],
+        "progress_percent": 0.0,
+        "progress_message": "Queued",
+        "logs": [],
+        "result": null,
+        "error_message": null,
+        "created_at": "2026-09-23T09:25:24.287000Z",
+        "started_at": null,
+        "execution_started_at": null,
+        "completed_at": null,
+        "owner_pid": null,
+        "owner_instance_id": null
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.models import SimulationTaskRerunRequest
+from llm_d_bench.simulation.service import rerun_task
+
+
+async def main() -> None:
+    task = await rerun_task(
+        "1a2b3c4d",
+        override=SimulationTaskRerunRequest(
+            endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000002",
+            endpoint_url="http://127.0.0.1:39000/v1",
+        ),
+    )
+    print(task.id, task.name)
+
+    # Or re-bind to a published Model Service (preferred over
+    # endpoint_deployment_execution_id when both are supplied):
+    task = await rerun_task(
+        "1a2b3c4d",
+        override=SimulationTaskRerunRequest(model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11"),
+    )
+    print(task.id, task.name)
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 删除模拟任务
+
+删除一条模拟任务记录。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/simulation/tasks/{task_id}`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）
+
+    响应：
+
+    ```json
+    {
+      "task_id": "1a2b3c4d",
+      "status": "deleted"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_bench.simulation.service import delete_task
+
+
+async def main() -> None:
+    await delete_task("1a2b3c4d")
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+在 FastAPI 的 OpenAPI schema 中可查看完整的请求/响应结构（使用 `npm run docs:api` 重新生成）。

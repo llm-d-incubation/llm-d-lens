@@ -1,0 +1,568 @@
+---
+title: Storage
+description: Backend endpoints and direct Python entry points for Lens storage volumes.
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Backend API
+
+Storage routes are implemented in `llm_d_bench/storage/router.py`, backed by `llm_d_bench/storage/service.py` and `StorageVolumeService`.
+
+### List storage volumes
+
+List Lens storage volumes and optionally filter by cluster, kind, readiness, purpose, or a name substring. The response also includes drift and usage metadata derived from the storage service.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/volumes`**
+
+    Request: no request body.
+
+    - `cluster_id` (`string`, query, optional): filter to one cluster.
+    - `kind` (`string`, query, optional): one of `local-disk`, `nfs`, or `dynamic-pvc`.
+    - `status` (`string`, query, optional): one of `pending`, `ready`, `failed`, or `deleting`.
+    - `purpose` (`string`, query, optional): currently `model-cache`.
+    - `query` (`string`, query, optional): case-insensitive substring matched against `name`.
+
+    Response: returns an `items` array of storage-volume payloads augmented with `inUseCount`, `nodesAdded`, and `modelCacheCount`. `usedBytes` is reserved for future usage tracking and is currently always `null`.
+
+    ```json
+    {
+      "items": [
+        {
+          "id": "storage-3e9a0f52",
+          "clusterId": "cluster-a",
+          "name": "shared-model-cache",
+          "kind": "local-disk",
+          "status": "ready",
+          "capacity": "500Gi",
+          "usedBytes": null,
+          "readOnly": false,
+          "purposes": [
+            "model-cache"
+          ],
+          "localDisk": {
+            "hostPath": "/srv/model-cache"
+          },
+          "pvcName": "prism-storage-storage-3e9a0f52",
+          "pvName": "prism-storage-storage-3e9a0f52",
+          "knownNodes": [
+            "worker-1",
+            "worker-2"
+          ],
+          "createdAt": "2026-09-23T08:30:00Z",
+          "updatedAt": "2026-09-23T08:31:12Z",
+          "inUseCount": 1,
+          "nodesAdded": [],
+          "modelCacheCount": 2
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import compute_node_drift, default_service
+
+    async def main() -> None:
+        service = default_service()
+        volumes = service.list()
+        drift = await compute_node_drift(volumes)
+        for volume in volumes:
+            print(volume.api_payload(), drift.get(volume.id, []))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Get a storage volume
+
+Get one Lens storage volume by id, including its current node-drift and usage metadata. Access is cluster-scoped through the volume's owning cluster.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/volumes/{volume_id}`**
+
+    Request: no request body.
+
+    - `volume_id` (`string`, path): storage volume id.
+
+    Response: one storage-volume payload with the same augmented fields used by the list endpoint.
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "ready",
+      "capacity": "500Gi",
+      "usedBytes": null,
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "pvcName": "prism-storage-storage-3e9a0f52",
+      "pvName": "prism-storage-storage-3e9a0f52",
+      "knownNodes": [
+        "worker-1",
+        "worker-2"
+      ],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T08:31:12Z",
+      "inUseCount": 1,
+      "nodesAdded": [],
+      "modelCacheCount": 2
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import compute_node_drift, default_service
+
+    async def main() -> None:
+        service = default_service()
+        volume = service.get("storage-3e9a0f52")
+        drift = await compute_node_drift([volume]) if volume is not None else {}
+        print(volume.api_payload(), drift.get(volume.id, []))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Get storage resource status
+
+Get live PVC and PV status for selected storage volumes. Unknown ids are ignored and duplicate query ids are deduplicated before the Kubernetes read.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/volume-resource-status`**
+
+    Request: no request body.
+
+    - `volume_id` (`string[]`, query, repeated): one or more storage volume ids.
+
+    Response: `items` keyed by storage volume id.
+
+    ```json
+    {
+      "items": {
+        "storage-3e9a0f52": {
+          "persistentVolumeClaims": [
+            {
+              "name": "prism-storage-storage-3e9a0f52",
+              "namespace": "llm-d-bench-storage",
+              "phase": "Bound",
+              "capacity": "500Gi",
+              "accessModes": [
+                "ReadWriteMany"
+              ],
+              "storageClassName": null,
+              "volumeMode": "Filesystem",
+              "createdAt": "2026-09-23T08:31:12Z",
+              "uid": "6ac7d2ef-1b9f-48df-9006-e4dff0b6cc02",
+              "volumeName": "prism-storage-storage-3e9a0f52",
+              "persistentVolume": {
+                "name": "prism-storage-storage-3e9a0f52",
+                "namespace": null,
+                "phase": "Bound",
+                "capacity": "500Gi",
+                "accessModes": [
+                  "ReadWriteMany"
+                ],
+                "storageClassName": null,
+                "volumeMode": "Filesystem",
+                "createdAt": "2026-09-23T08:31:12Z",
+                "uid": "3b84cf34-4a04-44b5-baf0-a57f7efc7ff1",
+                "reclaimPolicy": "Retain",
+                "source": {
+                  "type": "hostPath",
+                  "detail": "/srv/model-cache"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service, storage_resource_statuses
+
+    async def main() -> None:
+        service = default_service()
+        volume = service.get("storage-3e9a0f52")
+        statuses = await storage_resource_statuses([volume] if volume is not None else [])
+        print(statuses)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Create a storage volume
+
+Create and provision a new Lens storage volume. The route registers the pending record immediately and provisions the Kubernetes objects in the background.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/storage/volumes`**
+
+    Request body (`StorageVolumeCreateRequest`):
+
+    - `clusterId` (`string`): owning cluster id.
+    - `name` (`string`): volume name; blank allows the route to auto-generate one. If the (auto-generated or given) name collides with an existing volume, the route returns a `409` `storage_volume_name_conflict` problem for an explicit name, or disambiguates an auto-generated name with a numeric suffix.
+    - `kind` (`"local-disk" | "nfs" | "dynamic-pvc"`)
+    - `capacity` (`string`): Kubernetes quantity like `500Gi`.
+    - `readOnly` (`boolean`, default `true`)
+    - `purposes` (`StorageVolumePurpose[]`): for example `model-cache`. A `model-cache` purpose cannot be combined with `kind: "dynamic-pvc"` (validation error); use `local-disk` or `nfs` instead.
+    - `localDisk` (`LocalDiskSpec`, optional for `local-disk`)
+    - `nfs` (`NfsSpec`, optional for `nfs`)
+    - `dynamicPvc` (`DynamicPvcSpec`, optional for `dynamic-pvc`)
+
+    Example for a `local-disk` volume:
+
+    ```json
+    {
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      }
+    }
+    ```
+
+    Response: the newly registered volume in `pending` state.
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "pending",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "knownNodes": [],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T08:30:00Z",
+      "inUseCount": 0,
+      "nodesAdded": [],
+      "modelCacheCount": 0
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.contracts import (
+        LocalDiskSpec,
+        StorageVolume,
+        StorageVolumeKind,
+        StorageVolumePurpose,
+        StorageVolumeStatus,
+    )
+    from llm_d_bench.storage.service import default_service
+
+    async def main() -> None:
+        service = default_service()
+        volume = StorageVolume(
+            clusterId="cluster-a",
+            name="shared-model-cache",
+            kind=StorageVolumeKind.LOCAL_DISK,
+            status=StorageVolumeStatus.PENDING,
+            capacity="500Gi",
+            readOnly=False,
+            purposes=[StorageVolumePurpose.MODEL_CACHE],
+            localDisk=LocalDiskSpec(hostPath="/srv/model-cache"),
+        )
+        service.register_pending(volume)
+        await service.provision(volume.id)
+        print(service.get(volume.id).api_payload())
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Acknowledge new local-disk nodes
+
+Acknowledge newly added nodes for a `local-disk` storage volume after you have replicated the underlying contents. This resets the stored node baseline and clears drift warnings.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/storage/volumes/{volume_id}/acknowledge-nodes`**
+
+    Request: no request body.
+
+    - `volume_id` (`string`, path): storage volume id.
+
+    Response: the updated storage-volume payload with `nodesAdded` cleared.
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "ready",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "knownNodes": [
+        "worker-1",
+        "worker-2",
+        "worker-3"
+      ],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T09:05:00Z",
+      "inUseCount": 1,
+      "nodesAdded": [],
+      "modelCacheCount": 2
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service
+
+    async def main() -> None:
+        volume = await default_service().acknowledge_nodes("storage-3e9a0f52")
+        print(volume.api_payload())
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Scan a volume for existing models
+
+Re-scan a ready Lens storage volume for model files that already exist on disk, then auto-register Model Cache entries for any discovered models. The import work runs in the background.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/storage/volumes/{volume_id}/scan-models`**
+
+    Request: no request body.
+
+    - `volume_id` (`string`, path): ready storage volume id.
+
+    Response: immediate acknowledgement that the scan has started. Returns a `409` `storage_volume_not_ready` problem if the volume's `status` is not `ready`.
+
+    ```json
+    {
+      "status": "scanning"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service, import_existing_models_for_volume
+
+    async def main() -> None:
+        service = default_service()
+        volume = service.get("storage-3e9a0f52")
+        if volume is None:
+            raise RuntimeError("storage volume not found")
+        await import_existing_models_for_volume(volume)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### Delete a storage volume
+
+Delete a Lens storage volume registration and, where relevant, its Kubernetes resources. The route marks the volume as `deleting` immediately, then finishes cleanup in the background.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`DELETE /api/v1/storage/volumes/{volume_id}`**
+
+    Request: no request body.
+
+    - `volume_id` (`string`, path): storage volume id.
+    - `keep_model_files` (`boolean`, query, default `false`): keep model files on disk while deleting only their Lens records.
+
+    Deletion is blocked outright (`409` `storage_volume_in_use`) while the volume is referenced by one or more deployment executions; Model Cache entries on the volume no longer block deletion -- they are cascade-deleted (optionally keeping their files) as part of the background cleanup instead.
+
+    Response: the volume record as it enters `deleting` state.
+
+    ```json
+    {
+      "id": "storage-3e9a0f52",
+      "clusterId": "cluster-a",
+      "name": "shared-model-cache",
+      "kind": "local-disk",
+      "status": "deleting",
+      "capacity": "500Gi",
+      "readOnly": false,
+      "purposes": [
+        "model-cache"
+      ],
+      "localDisk": {
+        "hostPath": "/srv/model-cache"
+      },
+      "pvcName": "prism-storage-storage-3e9a0f52",
+      "pvName": "prism-storage-storage-3e9a0f52",
+      "knownNodes": [
+        "worker-1",
+        "worker-2"
+      ],
+      "createdAt": "2026-09-23T08:30:00Z",
+      "updatedAt": "2026-09-23T09:20:00Z",
+      "inUseCount": 0,
+      "nodesAdded": [],
+      "modelCacheCount": 2
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import default_service
+
+    async def main() -> None:
+        service = default_service()
+        volume = await service.delete("storage-3e9a0f52")
+        await service.finish_delete(volume.id, keep_model_files=True)
+        print(volume.status.value)
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### List storage classes
+
+List the Kubernetes `StorageClass` objects visible to one cluster. Use this before creating `dynamic-pvc` storage volumes.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/storage-classes`**
+
+    Request: no request body.
+
+    - `cluster_id` (`string`, query): target cluster id.
+
+    Response: `items` array of `StorageClassSummary` payloads.
+
+    ```json
+    {
+      "items": [
+        {
+          "name": "rook-cephfs",
+          "provisioner": "rook-ceph.cephfs.csi.ceph.com",
+          "isDefault": true
+        },
+        {
+          "name": "local-path",
+          "provisioner": "rancher.io/local-path",
+          "isDefault": false
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import discover_storage_classes
+
+    async def main() -> None:
+        classes = await discover_storage_classes("cluster-a")
+        for storage_class in classes:
+            print(storage_class.model_dump(mode="json", by_alias=True))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+### List storage nodes
+
+List the cluster nodes as seen by the Storage module. Each item reports whether the node is ready and whether untolerated storage jobs can be scheduled there.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/storage/nodes`**
+
+    Request: no request body.
+
+    - `cluster_id` (`string`, query): target cluster id.
+
+    Response: `items` array of `StorageNodeSummary` payloads.
+
+    ```json
+    {
+      "items": [
+        {
+          "name": "worker-1",
+          "ready": true,
+          "schedulable": true
+        },
+        {
+          "name": "control-plane-1",
+          "ready": true,
+          "schedulable": false
+        }
+      ]
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_bench.storage.service import discover_nodes
+
+    async def main() -> None:
+        nodes = await discover_nodes("cluster-a")
+        for node in nodes:
+            print(node.model_dump(mode="json", by_alias=True))
+
+    asyncio.run(main())
+    ```
+  </TabItem>
+</Tabs>
+
+See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).

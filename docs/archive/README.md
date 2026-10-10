@@ -2,7 +2,7 @@
 
 One-off task records and initial planning drafts kept for history. Not
 maintained going forward and not linked from the docs site navigation; the
-current, maintained specs live under `docs/refactoring/`, `docs/fern/`, and
+current, maintained specs live under `docs/refactoring/`, `docs/docusaurus/docs/`, and
 `specs/changes/`.
 
 - `prism-cleanup.md` — record of removing upstream-only Prism features/pages

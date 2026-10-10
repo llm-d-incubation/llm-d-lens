@@ -1,0 +1,141 @@
+---
+title: Lens Documentation
+description: Lens 是一个开源控制平面，用于在 llm-d 上部署和运维大语言模型。
+hide_table_of_contents: true
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+import Link from '@docusaurus/Link';
+
+import GitHubStats from '@site/src/components/GitHubStats';
+
+<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', margin: '2rem 0 1rem' }}>
+  <a href="https://llm-d.ai" target="_blank" rel="noopener noreferrer" aria-label="llm-d" style={{ display: 'inline-flex', alignItems: 'center' }}>
+    <img src="https://llm-d.ai/img/llm-d-logotype-and-icon.png" alt="llm-d" style={{ height: '8rem', width: 'auto', objectFit: 'contain' }} />
+  </a>
+  <span aria-hidden="true" style={{ fontSize: '7rem', lineHeight: 1, color: 'var(--grayscale-a9)' }}>·</span>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
+    <img src={useBaseUrl('/img/home-1-4cea47b661.webp')} alt="Lens" style={{ height: '8rem', width: '8rem', objectFit: 'contain' }} />
+    <span style={{ fontSize: '7rem', fontWeight: 700, letterSpacing: '0.03em', backgroundImage: 'linear-gradient(to right, #0ea5e9, #22d3ee, #2dd4bf)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>Lens</span>
+  </div>
+</div>
+
+<GitHubStats />
+
+<div style={{ fontSize: '1.3rem', lineHeight: 1.6, textAlign: 'center', maxWidth: '960px', margin: '1.5rem auto' }}>
+  一个由 AI 驱动的 <a href="https://llm-d.ai/" target="_blank" rel="noopener noreferrer">llm-d</a> 扩展，
+  以最优配置简化部署 —— 部署、基准测试、流量回放、
+  集群与存储管理，一站式搞定。
+</div>
+
+<div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', margin: '2.5rem 0 4.5rem' }}>
+  <Link
+    to="/quickstart"
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '0.875rem 1.75rem',
+      borderRadius: '8px',
+      backgroundColor: '#0ea5e9',
+      color: '#fff',
+      fontWeight: 600,
+      fontSize: '1.0625rem',
+      lineHeight: 1,
+      textDecoration: 'none',
+    }}
+  >{"开始使用"}</Link>
+  <a
+    href="https://github.com/llm-d-incubation/llm-d-lens"
+    target="_blank"
+    rel="noopener noreferrer"
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '0.875rem 1.75rem',
+      borderRadius: '8px',
+      border: '1px solid #0ea5e9',
+      color: '#0ea5e9',
+      fontWeight: 600,
+      fontSize: '1.0625rem',
+      lineHeight: 1,
+      textDecoration: 'none',
+    }}
+  >{"在 GitHub 上查看"}</a>
+</div>
+
+<img src={useBaseUrl('/img/home-2-b535f6b9af.webp')} alt="Lens clusters dashboard" width="100%" style={{ marginBottom: '3rem' }} />
+
+## 亮点功能
+
+<CardGroup cols={2}>
+  <Card title="最优性能" icon="bolt-lightning">
+    部署运行在 llm-d 之上：预填充/解码分离、感知 KV 缓存的路由、
+    KV 缓存向 CPU/SSD 分层卸载，以及基于延迟预测的路由，
+    在同样的 GPU 上提升吞吐并降低尾延迟。
+  </Card>
+  <Card title="多集群部署" icon="server">
+    在单一界面中规划、审批并执行跨 Kubernetes 集群的推理部署，
+    并支持具备智能体能力、按负载引导的放置策略。
+  </Card>
+  <Card title="引导式评估" icon="chart-line">
+    设计基准测试实验，针对线上部署运行测试，
+    并分析和导出结果，无需手写脚本。
+  </Card>
+  <Card title="流量模拟" icon="flask">
+    对推理端点重放已注册的请求轨迹，
+    在真实流量到来前验证行为与容量。
+  </Card>
+  <Card title="模型服务网关" icon="route">
+    将集群部署发布为兼容 OpenAI 的模型服务，
+    运行在集群共享网关之后（HTTPRoute → InferencePool → EPP），
+    并支持按模型配置选择策略。
+  </Card>
+  <Card title="内置治理能力" icon="shield-check">
+    基于角色的访问控制、按集群的权限范围和审计日志，
+    覆盖从集群到模型服务的每一个页面。
+  </Card>
+  <Card title="可观测性" icon="gauge-high">
+    一键搭建并维护集群监控栈（Prometheus/Grafana），
+    用于查看 GPU 利用率和部署健康状况。
+  </Card>
+</CardGroup>
+
+<div style={{ marginTop: '3rem' }} />
+
+## 架构
+
+<img src={useBaseUrl('/img/home-3-7d83bcc33b.png')} alt="Lens system architecture" width="100%" />
+
+一台 Lens 服务器可以从统一的控制台管理任意数量的 Kubernetes 集群（无论是本地还是云端）：
+控制台通过同源 API 路由与应用层通信，应用层再将请求转发给负责各领域服务的控制平面，
+该控制平面将状态持久化到数据库，并直接驱动集群、存储与模型服务数据面。
+访问控制和审计日志都在控制平面中强制执行，因此每个页面——部署、评估、模拟和模型服务——
+都遵循同一套按集群划分的权限。
+
+<div style={{ marginTop: '3rem' }} />
+
+## 接下来去哪里
+
+<CardGroup cols={2}>
+  <Card title="快速开始" icon="rocket" href="/quickstart">
+    在本地运行完整的技术栈。
+  </Card>
+  <Card title="用户指南" icon="book-open" href="/user-guide/model-market">
+    涵盖每一项 Lens 功能的逐页指南。
+  </Card>
+  <Card title="架构" icon="sitemap" href="/architecture">
+    了解 UI、BFF 和 Python 后端如何协同工作。
+  </Card>
+  <Card title="模型服务" icon="route" href="/user-guide/model-services">
+    发布一个由网关提供、兼容 OpenAI 的模型端点。
+  </Card>
+  <Card title="故障排查" icon="life-ring" href="/troubleshooting">
+    针对你最可能遇到的故障模式的解决方法。
+  </Card>
+  <Card title="评估" icon="chart-line" href="/user-guide/evaluation">
+    基于指引的性能评估。
+  </Card>
+  <Card title="常见问题" icon="circle-question" href="/faq">
+    关于角色和权限范围的常见问题解答。
+  </Card>
+</CardGroup>

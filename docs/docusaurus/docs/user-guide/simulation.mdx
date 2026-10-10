@@ -1,0 +1,70 @@
+---
+title: Simulation
+description: Replay registered request traces against an inference endpoint.
+---
+
+Use **Simulation** to replay a trace dataset against a deployed service or a URL you already control. The page combines a task list, a guided **New Simulation Task** modal, and a task-detail view with performance charts and downloadable artifacts.
+
+The pagination summary uses the total task count returned by the server, including tasks on other pages. Changing **Rows per page** returns to the first page; the previous and next controls are disabled at the respective boundaries.
+
+## Find simulation tasks
+
+1. Open **Simulation** from the left navigation.
+2. Use the status pipeline cards **Completed**, **Running**, **Queued**, **Failed**, and **Cancelled** to narrow the list.
+3. Type in **Search task name, scenario, backend, or dataset...** to filter by text.
+4. Use the quick filters **Model** and **Dataset**.
+5. Click **Advanced Filters** for additional filters such as **Backend**, **Trace format**, **Endpoint contains**, **From**, and **To**.
+6. Click **Apply Filters** to use the advanced filters, or **Clear All** to reset them inside the drawer.
+7. In the main list header, click **Refresh** or **Clear Filters** when needed.
+8. Change **Rows per page** and use the pager buttons to move through the results.
+
+## Create a simulation task
+
+1. Click **New Task**.
+2. In **New Simulation Task**, step through **Benchmark & Endpoint**, **Scenario & Prompt**, **Load & Backend**, and **Task Details**.
+3. In **Benchmark & Endpoint**, choose **Benchmark tool**.
+4. If you need backend-specific knobs, expand **Advanced backend settings**.
+5. In **Inference Endpoint**, choose **Model Service** or **Endpoint URL**.
+6. If you chose **Model Service**, choose a published, health-probed service from **Model service**, then click **Refresh** if you need to reload the list.
+7. Fill **Model access token** (required for **Model Service**, optional for **Endpoint URL**), then confirm **Model** after Lens resolves it.
+8. In **Scenario**, choose one of the supported scenarios for the selected backend.
+9. In **Workload**, choose a **Trace dataset**.
+10. If the dataset is not local yet, click **Download dataset**. If it is already local and you want a fresh copy, click **Download again**.
+11. If the dataset provides a timeline, review **Request Timeline** and set **Replay start (seconds)**, **Replay end (seconds)**, **Scale factor**, and **Duration (seconds)**.
+12. In **Load & SLA Parameters**, review **Stream responses** and optionally fill **TTFT SLO (milliseconds)**, **TPOT SLO (milliseconds)**, and **Error Rate SLO (%)**.
+13. In **Basic Information**, fill **Task name** and **Description**.
+14. Click **Create Task**.
+
+## Stop, rerun, or delete a task from the task list
+
+1. In the task list, locate the task card you want to manage.
+2. If the task is running, click **Stop**.
+3. If the task has already finished, click **Rerun** to create a new task with the same configuration.
+4. If the task is finished and you want to remove it, click **Delete**.
+5. In **Delete Simulation Task**, confirm by clicking **Delete Task**, or click **Cancel** to keep the task.
+
+## Open task details and review the run
+
+1. Click a task card to open its detail page.
+2. Use the header actions **Refresh**, **Stop**, **Rerun**, or **Delete** as needed.
+3. On the detail page, switch between **Summary**, **Latency**, **Throughput**, and **Errors & Logs**.
+4. In **Summary**, review **Task overview**, **Key performance metrics**, **Request Processing Timeline**, and **Task Configuration**.
+5. In **Latency**, review **Latency under Load**, **TTFT over Time**, **TPOT over Time**, **TTFT by Time and Input Sequence Length**, **TPOT by Time and Output Sequence Length**, and **Latency Distribution**.
+6. In **Throughput**, review **Throughput over Time** and **Throughput Metrics**.
+7. In **Errors & Logs**, review **Error Summary**, **Task Log**, and **Artifacts**.
+8. If the backend returned files, click **Download** beside the artifact you need.
+9. Expand **Raw backend metrics** or **Raw normalized result** when you need the raw payloads.
+
+## Reopen a finished task and export artifacts
+
+1. Open the task detail page for a completed or failed task.
+2. Go to **Errors & Logs**.
+3. In **Artifacts**, click **Download** for each file you want to keep.
+4. If you need another run with the same setup, click **Rerun** from the page header instead of recreating the task by hand.
+## Related references
+
+For the underlying API and runner contract behind these screens, see [Simulation runner design and API](/api/simulation).
+
+## Consistent result presentation
+
+The task list and task details share Simulation status, duration, numeric formatting and result components. Missing measurements remain unavailable, and queued runs show preparation until benchmark execution begins. Latency chart tooltips distinguish request arrival rate (req/s) from latency (ms); the shared legend identifies each series.
