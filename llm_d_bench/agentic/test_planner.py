@@ -45,7 +45,9 @@ def test_candidates_use_requested_utilization_for_capacity_and_configuration():
 
     low_candidate = next(candidate for candidate in planner.candidates(low) if candidate.id == "baseline-vllm-tp1-r1")
     high_candidate = next(candidate for candidate in planner.candidates(high) if candidate.id == low_candidate.id)
-    pd_candidate = next(candidate for candidate in planner.candidates(low) if candidate.provider_ref == "pd-disaggregation")
+    pd_candidate = next(
+        candidate for candidate in planner.candidates(low) if candidate.provider_ref == "pd-disaggregation"
+    )
 
     assert low_candidate.gpu_memory_utilization == pd_candidate.gpu_memory_utilization == 0.6
     assert low_candidate.allocatable_kv_cache_gib < high_candidate.allocatable_kv_cache_gib

@@ -1182,7 +1182,8 @@ class CandidateValidator:
             if (
                 is_pd
                 and proposal.prefill_tensor_parallel_size is not None
-                and footprint_gib > facts.vram_per_gpu_gib * proposal.prefill_tensor_parallel_size * facts.gpu_memory_utilization
+                and footprint_gib
+                > facts.vram_per_gpu_gib * proposal.prefill_tensor_parallel_size * facts.gpu_memory_utilization
             ):
                 reasons.append("estimated model footprint exceeds selected prefill TP VRAM")
         if cls._required_gpus(proposal) > facts.free_gpu_count:

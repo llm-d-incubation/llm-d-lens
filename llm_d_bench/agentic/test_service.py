@@ -1047,7 +1047,9 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     monkeypatch.setattr("llm_d_bench.agentic.service.OpenAICompatiblePlanner.from_provider_id", lambda _id: Provider())
     monkeypatch.setattr("llm_d_bench.agentic.service.AICandidateGenerator.generate", generate)
 
-    run = asyncio.run(service.create(_request(ai_provider_id="provider-1", planner_prompt="balanced", max_model_len=32768)))
+    run = asyncio.run(
+        service.create(_request(ai_provider_id="provider-1", planner_prompt="balanced", max_model_len=32768))
+    )
     refined = asyncio.run(
         service.refine(
             run.id,
@@ -1090,7 +1092,9 @@ def test_refine_falls_back_to_deterministic_planning_when_provider_fails(monkeyp
     assert refined.planner == "deterministic"
     assert refined.planner_fallback_reason is not None
     assert refined.decision_metadata.planner == "deterministic"
-    assert all(candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates)
+    assert all(
+        candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates
+    )
 
 
 def test_refine_without_ai_provider_uses_deterministic_planning(monkeypatch):
@@ -1113,9 +1117,7 @@ def test_refine_without_ai_provider_uses_deterministic_planning(monkeypatch):
     monkeypatch.setattr("llm_d_bench.agentic.service.OpenAICompatiblePlanner.from_environment", lambda: None)
 
     run = asyncio.run(service.create(_request(planner_prompt="balanced", gpu_memory_utilization=0.6)))
-    refined = asyncio.run(
-        service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="distributed"))
-    )
+    refined = asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="distributed")))
 
     assert refined.status == AgenticDeploymentStatus.AWAITING_APPROVAL
     assert refined.generator == "deterministic"
@@ -1127,7 +1129,9 @@ def test_refine_without_ai_provider_uses_deterministic_planning(monkeypatch):
     assert refined.selected_candidate.provider_ref == "pd-disaggregation"
     assert refined.selected_candidate.gpu_memory_utilization == 0.6
     assert all(candidate.gpu_memory_utilization == 0.6 for candidate in refined.candidates)
-    assert all(candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates)
+    assert all(
+        candidate.score_source == "deterministic" and candidate.score is not None for candidate in refined.candidates
+    )
 
 
 def test_refine_allows_external_ranking_of_exact_aic_candidates(monkeypatch):

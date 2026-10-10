@@ -895,12 +895,13 @@ class AgenticDeploymentService:
                 decision = deterministic.decide(refreshed.facts, candidates)
                 scored_candidates = deterministic.score(refreshed.facts, candidates)[:3]
                 planner_fallback_reason = self._planner_failure_reason(error)
+                selected_id = decision.candidate_id
                 await self._emit_progress(
                     on_progress,
                     {
                         "phase": "scoring",
                         "status": "fallback",
-                        "message": f"AI reranking was unavailable; deterministic ranking selected {decision.candidate_id}.",
+                        "message": f"AI reranking was unavailable; deterministic ranking selected {selected_id}.",
                     },
                 )
         else:
@@ -980,7 +981,9 @@ class AgenticDeploymentService:
         )
 
     @staticmethod
-    def _planning_only_facts(facts, *, max_model_len: int, gpu_memory_utilization: float, operator_preference: str = ""):
+    def _planning_only_facts(
+        facts, *, max_model_len: int, gpu_memory_utilization: float, operator_preference: str = ""
+    ):
         return replace(
             facts,
             context_length=max_model_len,
