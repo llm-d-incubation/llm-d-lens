@@ -27,6 +27,7 @@ from llm_d_bench.deploy.providers.hardware_profile import (
     set_accelerator_request,
 )
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
+from llm_d_bench.deploy.providers.storage_mount import resolve_mount
 from llm_d_bench.utils.paths import prism_temp_root
 from llm_d_bench.versions import router_chart_version
 
@@ -109,6 +110,11 @@ class PdDisaggregationAdapter:
 
     async def render(self, definition, overrides):
         parameters = self._parameters(overrides)
+        parameters["resolved_mount"] = await resolve_mount(
+            overrides.get("runtime") or {},
+            cluster_id=overrides.get("_cluster_id"),
+            namespace=overrides.get("_deployment_namespace"),
+        )
         digest = stable_hash(parameters)
         directory = self._root / digest
         if directory.exists():
@@ -138,8 +144,11 @@ class PdDisaggregationAdapter:
             container = next(
                 item for item in deployment["spec"]["template"]["spec"]["containers"] if item["name"] == "modelserver"
             )
+            resolved_mount = parameters["resolved_mount"]
+            model_source = resolved_mount["model_source"] if resolved_mount else "shared-path"
+            cache_mounted = bool(resolved_mount or parameters["mount_path"])
             args = list(container.get("args") or [])
-            args[0] = "/model-cache" if parameters["mount_path"] else parameters["model"]
+            args[0] = "/model-cache" if cache_mounted and model_source == "shared-path" else parameters["model"]
             args = self._set_argument(args, "tensor-parallel-size", str(parameters[role]["tensor_parallel_size"]))
             environment = list(container.get("env") or [])
             for name, value in sorted(parameters["environment"].items()):
@@ -153,18 +162,19 @@ class PdDisaggregationAdapter:
                 else:
                     environment = self._set_environment(environment, custom["name"], custom["value"])
             for name, value in model_cache_environment(
-                "shared-path", cache_mounted=bool(parameters["mount_path"])
+                model_source, cache_mounted=cache_mounted
             ).items():
                 environment = self._set_environment(environment, name, value)
             container["args"] = args
             container["env"] = environment
-            if parameters["mount_path"]:
+            if resolved_mount or parameters["mount_path"]:
                 pod_spec = deployment["spec"]["template"]["spec"]
-                pod_spec.setdefault("volumes", []).append(
-                    {"name": "model-cache", "hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}}
-                )
+                volume_source = resolved_mount["volume_source"] if resolved_mount else {
+                    "hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}
+                }
+                pod_spec.setdefault("volumes", []).append({"name": "model-cache", **volume_source})
                 container.setdefault("volumeMounts", []).append(
-                    {"name": "model-cache", "mountPath": "/model-cache", "readOnly": True}
+                    {"name": "model-cache", "mountPath": "/model-cache", "readOnly": resolved_mount["read_only"] if resolved_mount else True}
                 )
         # Accelerator requests are profile-driven: DRA profiles (e.g. Intel XPU)
         # rewrite the ResourceClaimTemplate count; extended-resource profiles
@@ -220,6 +230,11 @@ class PdDisaggregationAdapter:
         status, stdout, stderr = await self._runner(["kubectl", "create", "namespace", namespace])
         if status != 0 and "AlreadyExists" not in stderr:
             raise RuntimeError((stderr or stdout).strip())
+        model_secret = (context.get("deployment_policy") or {}).get("model_secret") or {}
+        if "endpoint" not in artifact.deployment_contract and model_secret.get("mode") == "existing-secret":
+            await self._runner.copy_model_secret(
+                namespace, model_secret["sourceNamespace"], model_secret["sourceName"]
+            )
         bundle = artifact.deployment_contract.get("deploymentBundle")
         reproducibility = {}
         if bundle is not None:
