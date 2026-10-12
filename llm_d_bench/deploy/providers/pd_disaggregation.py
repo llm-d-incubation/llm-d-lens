@@ -161,20 +161,24 @@ class PdDisaggregationAdapter:
                     args = self._set_argument(args, custom["name"], custom["value"])
                 else:
                     environment = self._set_environment(environment, custom["name"], custom["value"])
-            for name, value in model_cache_environment(
-                model_source, cache_mounted=cache_mounted
-            ).items():
+            for name, value in model_cache_environment(model_source, cache_mounted=cache_mounted).items():
                 environment = self._set_environment(environment, name, value)
             container["args"] = args
             container["env"] = environment
             if resolved_mount or parameters["mount_path"]:
                 pod_spec = deployment["spec"]["template"]["spec"]
-                volume_source = resolved_mount["volume_source"] if resolved_mount else {
-                    "hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}
-                }
+                volume_source = (
+                    resolved_mount["volume_source"]
+                    if resolved_mount
+                    else {"hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}}
+                )
                 pod_spec.setdefault("volumes", []).append({"name": "model-cache", **volume_source})
                 container.setdefault("volumeMounts", []).append(
-                    {"name": "model-cache", "mountPath": "/model-cache", "readOnly": resolved_mount["read_only"] if resolved_mount else True}
+                    {
+                        "name": "model-cache",
+                        "mountPath": "/model-cache",
+                        "readOnly": resolved_mount["read_only"] if resolved_mount else True,
+                    }
                 )
         # Accelerator requests are profile-driven: DRA profiles (e.g. Intel XPU)
         # rewrite the ResourceClaimTemplate count; extended-resource profiles
@@ -232,9 +236,7 @@ class PdDisaggregationAdapter:
             raise RuntimeError((stderr or stdout).strip())
         model_secret = (context.get("deployment_policy") or {}).get("model_secret") or {}
         if "endpoint" not in artifact.deployment_contract and model_secret.get("mode") == "existing-secret":
-            await self._runner.copy_model_secret(
-                namespace, model_secret["sourceNamespace"], model_secret["sourceName"]
-            )
+            await self._runner.copy_model_secret(namespace, model_secret["sourceNamespace"], model_secret["sourceName"])
         bundle = artifact.deployment_contract.get("deploymentBundle")
         reproducibility = {}
         if bundle is not None:

@@ -250,9 +250,7 @@ def test_patch_modelserver_uses_selected_storage_volume_cache(read_only):
     assert pod_spec["volumes"] == [
         {"name": "model-cache", "persistentVolumeClaim": {"claimName": "cache-in-deployment-namespace"}}
     ]
-    assert container["volumeMounts"] == [
-        {"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}
-    ]
+    assert container["volumeMounts"] == [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
     assert container["args"][0] == ("/model-cache" if read_only else "Qwen/Qwen3-30B-A3B")
     environment = {item["name"]: item["value"] for item in container["env"]}
     assert environment["HF_HUB_OFFLINE"] == "1"

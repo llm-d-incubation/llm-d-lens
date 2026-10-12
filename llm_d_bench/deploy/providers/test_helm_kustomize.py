@@ -32,7 +32,11 @@ async def test_render_resolves_selected_storage_volume(monkeypatch, tmp_path: Pa
     adapter._environment = None
     adapter._render_root = tmp_path
     adapter._patch_documents = Mock()
-    overrides = {"runtime": {"storageVolumeId": "volume-id"}, "_cluster_id": "cluster-id", "_deployment_namespace": "llmd-run"}
+    overrides = {
+        "runtime": {"storageVolumeId": "volume-id"},
+        "_cluster_id": "cluster-id",
+        "_deployment_namespace": "llmd-run",
+    }
 
     await adapter.render(adapter._definition, overrides)
 
@@ -235,9 +239,7 @@ def test_patch_documents_uses_selected_storage_volume_cache(read_only):
     assert pod_spec["volumes"] == [
         {"name": "model-cache", "persistentVolumeClaim": {"claimName": "cache-in-deployment-namespace"}}
     ]
-    assert container["volumeMounts"] == [
-        {"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}
-    ]
+    assert container["volumeMounts"] == [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
     environment = {item["name"]: item.get("value") for item in container["env"]}
     assert environment["HF_HUB_OFFLINE"] == "1"
     assert environment["TRANSFORMERS_OFFLINE"] == "1"

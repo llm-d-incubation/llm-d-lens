@@ -103,9 +103,7 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(monkeypatch, t
 
     artifact = await adapter.render(adapter._definition, overrides)
 
-    resolve.assert_awaited_once_with(
-        overrides["runtime"], cluster_id="cluster-id", namespace="deployment-namespace"
-    )
+    resolve.assert_awaited_once_with(overrides["runtime"], cluster_id="cluster-id", namespace="deployment-namespace")
     rendered = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text(encoding="utf-8")))
     for deployment in rendered:
         pod_spec = deployment["spec"]["template"]["spec"]

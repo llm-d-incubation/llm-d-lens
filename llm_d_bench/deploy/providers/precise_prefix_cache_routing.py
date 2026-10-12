@@ -239,9 +239,7 @@ class PrecisePrefixCacheRoutingAdapter:
             raise RuntimeError((stderr or stdout).strip())
         model_secret = (execution_context.get("deployment_policy") or {}).get("model_secret") or {}
         if "endpoint" not in artifact.deployment_contract and model_secret.get("mode") == "existing-secret":
-            await self._runner.copy_model_secret(
-                namespace, model_secret["sourceNamespace"], model_secret["sourceName"]
-            )
+            await self._runner.copy_model_secret(namespace, model_secret["sourceNamespace"], model_secret["sourceName"])
         bundle = artifact.deployment_contract.get("deploymentBundle")
         reproducibility = {}
         if bundle is not None:
@@ -837,9 +835,11 @@ class PrecisePrefixCacheRoutingAdapter:
         set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
         if cache_mounted:
             pod_spec = deployment["spec"]["template"]["spec"]
-            volume_source = resolved_mount["volume_source"] if resolved_mount else {
-                "hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}
-            }
+            volume_source = (
+                resolved_mount["volume_source"]
+                if resolved_mount
+                else {"hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}}
+            )
             pod_spec.setdefault("volumes", []).append({"name": "model-cache", **volume_source})
             container.setdefault("volumeMounts", []).append(
                 {
