@@ -35,7 +35,7 @@ export default function OptimizationConfigurationEntry({ onNavigate }) {
                 deployment_name: intent?.deployment_name,
                 description: intent?.deployment_description,
                 model_market: { deployment_name: intent?.deployment_name },
-            });
+            }, configurations[0].provenance?.placement || { replicas: 'prefer-same-node' });
             onNavigate('optimization-deployments');
         } finally {
             deployInFlight.current = false;

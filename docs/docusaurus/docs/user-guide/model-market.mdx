@@ -21,6 +21,7 @@ The Model Market page helps you choose a catalog model and hand it off to deploy
 5. Wait until the page shows **This model is ready in the selected cache.** If it shows **This model is not downloaded in the selected storage. Clear it or download the model there first.**, fix the cache first.
 6. Leave **Mode** on **Standard**. Lens pre-fills **Replicas** and **Tensor parallelism** from the recommended plan; adjust either field if you need a different topology (an error appears if the combination exceeds the cluster's available GPUs).
 7. Optional: expand **vLLM parameters** and adjust fields such as **GPU memory utilization**, **Max model length**, **Max number of sequences**, **Max batched tokens**, **Prefix caching**, **Enforce eager execution**, **Enable automatic tool choice** (reveals **Tool call parser**), or **Custom vLLM parameters**.
+	Expand **Pod placement** below it to change **Replica placement**. The default **Prefer one node** favors co-location without requiring it. **Require one node** reveals an optional **Node** selector populated from the selected cluster; choosing a node constrains replicas to its hostname label. **Distribute evenly across nodes** and **Require separate nodes** add scheduling constraints that may leave replicas Pending if eligible nodes or capacity are insufficient.
 8. Optional: expand **Deployment environment** and change **Use cluster proxy**, **HTTP proxy**, **HTTPS proxy**, or **NO_PROXY**.
 9. Review **Standard vLLM plan**.
 10. Click **Create deployment** to open the resource-budget chooser, pick **Currently available** or **All physical cards**, then confirm with **Confirm & deploy**.
@@ -42,6 +43,8 @@ The configuration editor pre-fills **Max context (tokens)** with the Model Marke
 2. Fill in the basic form fields you already know, such as **Deployment name**, **Cluster**, and **Model cache storage**.
 3. In **Mode**, click **Agentic** (marked **Experimental**).
 4. Continue in the embedded planner that opens below the form.
+
+Before generating a recommendation, expand **Pod placement** below **Workload estimate** to change the replica placement preset. It defaults to **Prefer one node**; **Require one node** also allows selecting a node by hostname. The selected preset and node are applied when you approve a candidate. For PD disaggregation, Prefill and Decode model-server Pods share one placement group; routing Pods do not participate. LeaderWorkerSet candidates do not support the balanced or separate-node presets.
 
 ## Permissions
 

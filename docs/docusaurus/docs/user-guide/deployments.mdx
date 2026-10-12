@@ -18,6 +18,8 @@ are no longer supported.
 2. In the page header, click **Create**.
 3. Lens routes you to the deployment creation flow in Model Market. When you return, new deployment records appear in **Deployments** automatically.
 
+In **Advanced**, open **Advanced settings** in the configuration editor and select **Replica placement**. The default prefers one node but can use others when necessary. The presets group all model-server Pods in the same rendered deployment manifest, including separate Prefill and Decode Deployments; router Pods are excluded. **Require one node** keeps the group on the same node; optionally select a live Node label to restrict eligible nodes. **Distribute evenly across nodes** balances the group across eligible nodes using hostname topology spread (up to one Pod of skew); Pods may remain Pending if the balance cannot be maintained with available capacity. **Require separate nodes** needs one eligible node per Pod in the group and leaves extra Pods Pending if there are not enough nodes. Neither distribution preset supports LeaderWorkerSet workloads. The label list comes from the selected cluster. Standard and Agentic deployments use the soft same-node replica preference without an affinity selector in their forms. Tensor-parallel devices are requested by each model-server Pod, so TP stays within that Pod; multi-Pod LeaderWorkerSet workers prefer the same node but can spread when necessary.
+
 ## Find a deployment in the list
 
 1. Review the summary cards at the top of the page: **Total**, **Ready**, **In progress**, **Failed**, and **Cleaned**.

@@ -103,6 +103,29 @@ the returned top three are scored; no reason is inferred for candidates outside 
   </TabItem>
 </Tabs>
 
+### List deployment node labels
+
+List the distinct key/value labels on nodes of a cluster the caller can access. Advanced placement uses these values to populate its optional node-label selector.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/deployments/node-labels?cluster_id=cluster-a`**
+
+    Query: `cluster_id` (required cluster ID). Response:
+
+    ```json
+    {"items": [{"key": "pool", "value": "accelerator"}]}
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_bench.deploy.router import list_deployment_node_labels
+
+    labels = await list_deployment_node_labels(cluster_id="cluster-a", request=authenticated_request)
+    ```
+  </TabItem>
+</Tabs>
+
 ### Start a deployment run
 
 Start a deployment run from one or more already-rendered deployable configurations.
@@ -115,7 +138,7 @@ Start a deployment run from one or more already-rendered deployable configuratio
     - `configurations` (`DeployableConfiguration[]`, required): rendered deployment payloads to execute.
     - `failure_policy` (`"stop" | "continue"`, default `"continue"`): whether later cases should continue after a failure.
     - `provenance` (`object`, optional): caller-owned origin metadata.
-    - `runtime_binding` (`RuntimeBinding`, optional): environment overrides and cluster session binding.
+    - `runtime_binding` (`RuntimeBinding`, optional): environment overrides, cluster session binding, and `placement` (`{"replicas":"prefer-same-node"|"same-node"|"balanced"|"spread"|"none","nodeLabel"?:{"key":string,"value":string}}`). Model-server Deployments in the same rendered manifest share a placement group, including PD Prefill and Decode; router Pods are excluded. `nodeLabel` is accepted only with `same-node` and must exist on a node in the cluster identified by `provenance.cluster_server_id`. LeaderWorkerSet cannot use `balanced` or `spread` because its leader/worker Pods are not separate replicas.
 
     ```json
     {
@@ -154,7 +177,8 @@ Start a deployment run from one or more already-rendered deployable configuratio
         "environment": {
           "HTTP_PROXY": "http://proxy.example:911"
         },
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000"
+        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
+        "placement": {"replicas": "same-node", "nodeLabel": {"key": "pool", "value": "accelerator"}}
       }
     }
     ```
@@ -268,6 +292,7 @@ asyncio.run(main())
 Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM contract.
 The generated namespace uses the backend's configured deployment prefix (for example, `llmd-baseline-vllm-...`).
 Standard vLLM deployments use the baseline adapter for rollout readiness and cleanup; they do not require a published Guide manifest's `readinessDeployments` contract.
+The generated run defaults to preferring replicas on one node without making it mandatory. `placement_replicas` also supports required co-location, balanced distribution, or required separation across model-server Pods in the same rendered manifest. For required co-location, `placement_node_label` can restrict the Pods to a selected cluster node by its `kubernetes.io/hostname` label; the label is checked against that cluster before deployment. Tensor-parallel accelerator claims are requested by each model-server Pod, keeping its TP devices in that Pod. Agentic planning inherits the same fields and applies the selected preset on approval.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -280,6 +305,8 @@ Standard vLLM deployments use the baseline adapter for rollout readiness and cle
     - `cluster_session_id` (`string`, required)
     - `replicas` (`integer`, required)
     - `tensor_parallel_size` (`integer`, required)
+    - `placement_replicas` (`"prefer-same-node" | "same-node" | "balanced" | "spread"`, default `"prefer-same-node"`)
+    - `placement_node_label` (`{"key":"kubernetes.io/hostname","value":"node-name"}` or `null`, optional; requires `placement_replicas: "same-node"`)
     - `storage_type` (`"local-cache" | "pvc" | "model-cache"`, default `"local-cache"`)
     - `storage_volume_id`, `model_cache_path`, `pvc_name` (storage-specific settings)
     - `max_model_len`, `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`

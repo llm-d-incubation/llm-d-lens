@@ -23,6 +23,12 @@ router = importlib.import_module("llm_d_bench.deploy.router")
 executions = importlib.import_module("llm_d_bench.deploy.executions")
 
 
+def test_deployment_run_route_requires_request_body_not_cluster_query():
+    route = next(route for route in router.router.routes if route.path.endswith("/runs") and "POST" in route.methods)
+    assert route.endpoint is router.create_run
+    assert not [parameter for parameter in route.dependant.query_params if parameter.required]
+
+
 def test_standard_kubernetes_service_configuration_is_an_immutable_baseline_artifact():
     request = StandardKubernetesServiceRequest(
         model="Qwen/Qwen3-8B",
@@ -101,6 +107,50 @@ def test_standard_kubernetes_service_run_keeps_the_requested_name_in_run_provena
     asyncio.run(router.create_standard_kubernetes_service_run(request))
 
     assert captured["request"].provenance["deployment_name"] == "qwen3-standard"
+    assert captured["request"].runtime_binding.placement == {"replicas": "prefer-same-node"}
+
+    request.placement_replicas = "balanced"
+    asyncio.run(router.create_standard_kubernetes_service_run(request))
+    assert captured["request"].runtime_binding.placement == {"replicas": "balanced"}
+
+
+def test_standard_run_restricts_required_colocation_to_selected_node(monkeypatch):
+    captured = {}
+
+    async def start_run(request, **_kwargs):
+        captured["request"] = request
+        return request
+
+    async def nodes(*_args, **_kwargs):
+        return [{"metadata": {"labels": {"kubernetes.io/hostname": "smc-22"}}}]
+
+    monkeypatch.setattr(router.deployment_run_manager, "start_run", start_run)
+    monkeypatch.setattr(
+        "llm_d_bench.cluster.sessions.require_active_session",
+        lambda _session_id: SimpleNamespace(server_id="cluster-a"),
+    )
+    monkeypatch.setattr(router, "current_principal", lambda _request: None)
+    monkeypatch.setattr(router, "require_cluster_access", lambda *_args: None)
+    monkeypatch.setattr(router, "list_resources", nodes)
+    request = StandardKubernetesServiceRequest(
+        model="Qwen/Qwen3-0.6B",
+        deployment_name="qwen3-standard",
+        cluster_session_id="a" * 36,
+        replicas=1,
+        tensor_parallel_size=1,
+        placement_replicas="same-node",
+        placement_node_label={"key": "kubernetes.io/hostname", "value": "smc-22"},
+    )
+
+    asyncio.run(router.create_standard_kubernetes_service_run(request))
+    assert captured["request"].runtime_binding.placement == {
+        "replicas": "same-node",
+        "nodeLabel": {"key": "kubernetes.io/hostname", "value": "smc-22"},
+    }
+
+    request.placement_node_label = {"key": "kubernetes.io/hostname", "value": "missing"}
+    with pytest.raises(HTTPException, match="selected node label is not present"):
+        asyncio.run(router.create_standard_kubernetes_service_run(request))
 
 
 def test_baseline_vllm_renders_boolean_arguments_as_cli_flags():

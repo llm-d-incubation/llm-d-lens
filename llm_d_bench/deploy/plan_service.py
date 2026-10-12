@@ -46,6 +46,11 @@ class DeploymentPlanService:
                     if request.runtime_binding
                     else {}
                 ),
+                **(
+                    {"placement": request.runtime_binding.placement}
+                    if request.runtime_binding and request.runtime_binding.placement is not None
+                    else {}
+                ),
             },
         )
         run.cases = self._planner.plan(configurations, run_id=run.id, provenance=run.provenance)

@@ -16,10 +16,16 @@ export async function getRemoteDeploymentDefaults() {
     return payload;
 }
 
-export async function startLocalDeployment(configurations, provenance) {
+export async function listDeploymentNodeLabels(clusterId, signal) {
+    const payload = await requestJson(`/api/v1/deployments/node-labels?cluster_id=${encodeURIComponent(clusterId)}`, { signal });
+    return payload.items || [];
+}
+
+export async function startLocalDeployment(configurations, provenance, placement) {
     return post('/api/v1/deployments/runs', {
         configurations,
         provenance,
+        ...(placement ? { runtime_binding: { placement } } : {}),
     });
 }
 

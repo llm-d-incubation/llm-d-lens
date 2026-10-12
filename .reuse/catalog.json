@@ -21,6 +21,15 @@
       ]
     },
     {
+      "id": "deployment-placement-presets",
+      "path": "llm_d_bench/deploy/providers/target_node.py",
+      "symbols": ["validate_placement", "apply_placement"],
+      "purpose": "Apply replica placement presets across rendered Kubernetes modelserver Pod templates in one manifest.",
+      "boundaries": "Modelserver Deployments in one rendered manifest share a placement group; non-modelserver workloads do not join it. Required Pod affinity keeps their Pods on one node, required anti-affinity separates them, hostname topology spread balances them with maxSkew 1, and preferred affinity favors co-location without blocking cross-node scheduling. LeaderWorkerSet does not support the balanced or separate-node preset. An optional selected node label further limits the same-node preset. Existing accelerator claims keep TP devices in each modelserver Pod; LeaderWorkerSet leader/worker Pods receive a soft same-node preference.",
+      "examples": ["llm_d_bench/deploy/providers/configuration_manifest.py", "llm_d_bench/deploy/router.py"],
+      "tests": ["llm_d_bench/deploy/providers/test_configuration_manifest.py"]
+    },
+    {
       "id": "deploy-hardware-profile",
       "path": "llm_d_bench/deploy/providers/hardware_profile.py",
       "symbols": [
@@ -283,6 +292,15 @@
       "tests": [
         "src/components/shared/AsyncState.test.jsx"
       ]
+    },
+    {
+      "id": "pod-placement-control",
+      "path": "src/components/shared/PodPlacementControl.jsx",
+      "symbols": ["PodPlacementControl"],
+      "purpose": "Show a collapsed replica placement selector with scheduling guidance for Standard and Agentic model deployments.",
+      "boundaries": "Presentation only. The parent owns selection state and sends placement_replicas and optional placement_node_label; the control lists hostname labels from the selected cluster and the deployment backend validates the chosen label before scheduling.",
+      "examples": ["src/components/ModelMarketPage.jsx", "src/components/AgenticDeploymentWorkspace.jsx"],
+      "tests": ["src/components/shared/PodPlacementControl.test.jsx"]
     },
     {
       "id": "modal",

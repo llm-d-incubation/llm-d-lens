@@ -155,7 +155,21 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
         return SimpleNamespace(id="deploy-run-1")
 
     monkeypatch.setattr("llm_d_bench.agentic.service.deployment_run_manager.start_run", start_run)
-    run = asyncio.run(service.create(_request(max_model_len=32768, gpu_memory_utilization=0.6)))
+
+    async def nodes(*_args, **_kwargs):
+        return [{"metadata": {"labels": {"kubernetes.io/hostname": "smc-22"}}}]
+
+    monkeypatch.setattr("llm_d_bench.agentic.service.list_resources", nodes)
+    run = asyncio.run(
+        service.create(
+            _request(
+                max_model_len=32768,
+                gpu_memory_utilization=0.6,
+                placement_replicas="same-node",
+                placement_node_label={"key": "kubernetes.io/hostname", "value": "smc-22"},
+            )
+        )
+    )
 
     approved = asyncio.run(service.approve(run.id))
 
@@ -168,6 +182,10 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
     assert saved["configuration"].content["decode"]["maxModelLen"] == 32768
     assert saved["configuration"].content["decode"]["gpuMemoryUtilization"] == 0.6
     assert saved["configuration"].provenance["cluster_ref"]["session_id"] == session.id
+    assert saved["deployment"].runtime_binding.placement == {
+        "replicas": "same-node",
+        "nodeLabel": {"key": "kubernetes.io/hostname", "value": "smc-22"},
+    }
     assert saved["deployment"].provenance["agentic_deployment_run_id"] == run.id
 
 

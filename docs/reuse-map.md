@@ -14,6 +14,16 @@ Enforce public HTTPS destinations for external AI providers and pin outbound req
 - Examples: [llm_d_bench/ai_providers/client.py](../llm_d_bench/ai_providers/client.py), [llm_d_bench/ai_providers/router.py](../llm_d_bench/ai_providers/router.py)
 - Tests: [llm_d_bench/ai_providers/test_service.py](../llm_d_bench/ai_providers/test_service.py), [llm_d_bench/ai_providers/test_client.py](../llm_d_bench/ai_providers/test_client.py)
 
+## deployment-placement-presets
+
+Apply replica placement presets across rendered Kubernetes modelserver Pod templates in one manifest.
+
+- Entry point: [llm_d_bench/deploy/providers/target_node.py](../llm_d_bench/deploy/providers/target_node.py)
+- Symbols: `validate_placement`, `apply_placement`
+- Boundaries: Modelserver Deployments in one rendered manifest share a placement group; non-modelserver workloads do not join it. Required Pod affinity keeps their Pods on one node, required anti-affinity separates them, hostname topology spread balances them with maxSkew 1, and preferred affinity favors co-location without blocking cross-node scheduling. LeaderWorkerSet does not support the balanced or separate-node preset. An optional selected node label further limits the same-node preset. Existing accelerator claims keep TP devices in each modelserver Pod; LeaderWorkerSet leader/worker Pods receive a soft same-node preference.
+- Examples: [llm_d_bench/deploy/providers/configuration_manifest.py](../llm_d_bench/deploy/providers/configuration_manifest.py), [llm_d_bench/deploy/router.py](../llm_d_bench/deploy/router.py)
+- Tests: [llm_d_bench/deploy/providers/test_configuration_manifest.py](../llm_d_bench/deploy/providers/test_configuration_manifest.py)
+
 ## deploy-hardware-profile
 
 Resolve the deployment hardware identity (DRA device class, claim request name, overlay variant, accelerator support) from the registered profile, and return the profile-owned model-server runtime image (repository and version) with normalization of stored managed images, using literal fallbacks. Also resolves router_topology (the per-guide router-values directory some Guides split by topology, e.g. single-host vs a multi-host LeaderWorkerSet), defaulting to single-host for every profile that does not set it.
@@ -133,6 +143,16 @@ Loading, error, retry, empty-state, and content presentation.
 - Boundaries: Presentation only. Request lifecycle, cancellation and retry policy belong to callers. Order is loading, error, empty, children. Optional loadingContent/errorContent/emptyContent preserve domain copy and actions. Callers decide whether refresh errors hide cached data.
 - Examples: [src/components/AIProviders/AIProvidersPage.jsx](../src/components/AIProviders/AIProvidersPage.jsx), [src/components/StorageManagement/StorageManagementPage.jsx](../src/components/StorageManagement/StorageManagementPage.jsx), [src/components/ModelCache/ModelCachePage.jsx](../src/components/ModelCache/ModelCachePage.jsx), [src/components/DeploymentManagement/DeploymentManagementPage.jsx](../src/components/DeploymentManagement/DeploymentManagementPage.jsx)
 - Tests: [src/components/shared/AsyncState.test.jsx](../src/components/shared/AsyncState.test.jsx)
+
+## pod-placement-control
+
+Show a collapsed replica placement selector with scheduling guidance for Standard and Agentic model deployments.
+
+- Entry point: [src/components/shared/PodPlacementControl.jsx](../src/components/shared/PodPlacementControl.jsx)
+- Symbols: `PodPlacementControl`
+- Boundaries: Presentation only. The parent owns selection state and sends placement_replicas and optional placement_node_label; the control lists hostname labels from the selected cluster and the deployment backend validates the chosen label before scheduling.
+- Examples: [src/components/ModelMarketPage.jsx](../src/components/ModelMarketPage.jsx), [src/components/AgenticDeploymentWorkspace.jsx](../src/components/AgenticDeploymentWorkspace.jsx)
+- Tests: [src/components/shared/PodPlacementControl.test.jsx](../src/components/shared/PodPlacementControl.test.jsx)
 
 ## modal
 

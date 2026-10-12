@@ -23,6 +23,7 @@ import { listModelCacheEntries } from './ModelCache/modelCacheBackend';
 import { sourceRepository } from './ModelCache/modelCachePresentation';
 import { configurationCustomRows, expandConfigurationTopologies, runtimeControlOverrides, configurationRuntimeValues } from '../features/evaluation/configuration';
 import { normalizeGuideSettings } from '../features/evaluation/guideSettings';
+import { listDeploymentNodeLabels } from './OptimizationWorkspace/remoteDeployBackend';
 import { createPlanningSession } from '../features/evaluation/planningSession';
 import ConfigurationField, { FieldHelp } from './evaluation/ConfigurationField';
 import { ConfigurationValidationContext, focusConfigurationError } from './evaluation/configurationFieldState';
@@ -220,6 +221,13 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [guideVariant, setGuideVariant] = useState('vllm');
     const [customRows, setCustomRows] = useState([]);
     const [guideSettings, setGuideSettings] = useState({});
+    const [placementReplicas, setPlacementReplicas] = useState(() => initialArtifact?.deployable_configuration?.provenance?.placement?.replicas || 'prefer-same-node');
+    const [placementNodeLabel, setPlacementNodeLabel] = useState(() => {
+        const label = initialArtifact?.deployable_configuration?.provenance?.placement?.nodeLabel;
+        return label ? JSON.stringify(label) : '';
+    });
+    const [nodeLabels, setNodeLabels] = useState([]);
+    const [nodeLabelError, setNodeLabelError] = useState('');
     const customParametersText = JSON.stringify(customRows);
     const [maxModelLen, setMaxModelLen] = useState(() => sharedContext?.maxModelLen ?? '');
     const [maxNumSeqs, setMaxNumSeqs] = useState('');
@@ -297,6 +305,9 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     useEffect(() => {
         const content = initialArtifact?.deployable_configuration?.content;
         if (!content) return;
+        const placement = initialArtifact.deployable_configuration.provenance?.placement;
+        setPlacementReplicas(placement?.replicas || 'prefer-same-node');
+        setPlacementNodeLabel(placement?.nodeLabel ? JSON.stringify(placement.nodeLabel) : '');
         const editorSource = initialArtifact.deployable_configuration.provenance?.editor_source;
         if (editorSource) {
             setGuideSourceMode(editorSource.guideSourceMode || 'official');
@@ -329,6 +340,18 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setCustomRows(configurationCustomRows(content));
         setGuideSettings(content.guideSettings || {});
     }, [initialArtifact]);
+
+    useEffect(() => {
+        if (placementReplicas !== 'same-node' || !selectedClusterId) return undefined;
+        const controller = new AbortController();
+        listDeploymentNodeLabels(selectedClusterId, controller.signal).then((items) => {
+            setNodeLabels(items);
+            setNodeLabelError('');
+        }).catch((error) => {
+            if (!controller.signal.aborted) { setNodeLabels([]); setNodeLabelError(error.message); }
+        });
+        return () => controller.abort();
+    }, [placementReplicas, selectedClusterId]);
 
     useEffect(() => {
         if (!modelMarketDraft) return;
@@ -939,6 +962,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     { ...rendered.deployable_configuration, provenance: {
                         ...rendered.deployable_configuration.provenance,
                         editor_source: { guideSourceMode, localGuidePath, remoteGuideRepository, remoteGuideRef, remoteGuidePath },
+                        placement: { replicas: placementReplicas, ...(placementReplicas === 'same-node' && placementNodeLabel ? { nodeLabel: JSON.parse(placementNodeLabel) } : {}) },
                         configuration_validation: variantPlan.validation,
                     } },
                     `${slug(workload.guide)}-${isPd ? `p${variant.prefillReplicaCount}d${variant.replicaCount}-ptp${variant.prefillTpCount}-dtp${variant.tpCount}` : `r${variant.replicaCount}-tp${variant.tpCount}`}-${Date.now().toString(36)}.yaml`,
@@ -1445,6 +1469,16 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                         <details className="configuration-disclosure group/advanced mt-4 overflow-hidden rounded-xl border border-cyan-500/40">
                             <summary className="cursor-pointer list-none px-5 py-4 text-sm font-semibold text-cyan-100 [&::-webkit-details-marker]:hidden"><ChevronRight aria-hidden="true" className="float-right mt-1 h-4 w-4 text-cyan-300 transition-transform group-open/advanced:rotate-90" />Advanced settings <span className="ml-2 text-xs text-slate-500">{customRows.length + Object.values({ maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens, ...guideSettings }).filter(value => value != null && String(value).trim()).length} overrides</span><span className="mt-1 block text-xs font-normal leading-5 text-slate-400">Optional runtime tuning, environment variables, cache, and routing. Leave blank to use Guide defaults.</span></summary>
                             <div className="space-y-6 border-t border-slate-700/70 p-5">
+                            <section><h3 className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Pod placement</h3><div className="mt-3 grid gap-4 md:grid-cols-2">
+                                <label className="block"><span className={labelClass}>Replica placement</span><select className={inputClass} value={placementReplicas} onChange={(event) => { setPlacementReplicas(event.target.value); setPlacementNodeLabel(''); }}>
+                                    <option value="prefer-same-node">Prefer one node (default)</option>
+                                    <option value="same-node">Require one node</option>
+                                    <option value="balanced">Distribute evenly across nodes</option>
+                                    <option value="spread">Require separate nodes</option>
+                                </select></label>
+                                {placementReplicas === 'spread' && <p className="text-xs text-amber-300 md:col-span-2">Requires one eligible node per replica. Extra replicas stay Pending if there are not enough nodes.</p>}
+                                {placementReplicas === 'same-node' && <label className="block"><span className={labelClass}>Node label (optional)</span><select className={inputClass} value={placementNodeLabel} onChange={(event) => setPlacementNodeLabel(event.target.value)}><option value="">Any eligible node</option>{nodeLabels.map((label) => <option key={JSON.stringify(label)} value={JSON.stringify(label)}>{label.key}={label.value}</option>)}</select>{nodeLabelError && <span role="alert" className="mt-1 block text-xs text-red-300">Unable to load node labels: {nodeLabelError}</span>}</label>}
+                            </div></section>
                             {selection.modelServer === 'vllm' && <>
                                 <section><h3 className="text-xs font-semibold uppercase tracking-wide text-violet-300">Runtime batching</h3><p className="mt-2 text-xs text-slate-400">Batching controls for the generated model-server YAML. Leave blank to use Guide defaults.</p><div className="mt-4 grid gap-4 md:grid-cols-2"><ConfigurationField field="blockSize"><span className={labelClass}>Block size (tokens)</span><input type="number" min="1" className={inputClass} value={blockSize} placeholder="Guide default" onChange={(event) => setBlockSize(event.target.value)} /><FieldHelp>vLLM --block-size. Use a value supported by the selected runtime image and accelerator.</FieldHelp></ConfigurationField>
 <ConfigurationField field="maxNumBatchedTokens"><span className={labelClass}>Max batched tokens</span><input type="number" min="1" className={inputClass} value={maxNumBatchedTokens} placeholder="Guide default" onChange={(event) => setMaxNumBatchedTokens(event.target.value)} /><FieldHelp>vLLM --max-num-batched-tokens. Leave blank to keep the Guide batching configuration.</FieldHelp></ConfigurationField></div></section>

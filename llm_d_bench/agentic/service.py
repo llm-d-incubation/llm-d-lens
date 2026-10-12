@@ -17,7 +17,9 @@ from llm_d_bench.capacity import ValidationParams, evaluate_capacity
 from llm_d_bench.cluster.sessions import require_active_session
 from llm_d_bench.configuration.models import ModelSecretConfiguration
 from llm_d_bench.deploy.application import deployment_run_manager
-from llm_d_bench.deploy.contracts import DeploymentRunCreateRequest
+from llm_d_bench.deploy.contracts import DeploymentRunCreateRequest, RuntimeBinding
+from llm_d_bench.deploy.providers.target_node import validate_placement
+from llm_d_bench.utils.kubernetes import list_resources
 
 from .configuration import build_agentic_configuration
 from .facts import resolve_planning_facts
@@ -1026,6 +1028,17 @@ class AgenticDeploymentService:
             raise ValueError("only an awaiting approval Agentic deployment can be approved")
 
         session = require_active_session(run.request.cluster_session_id)
+        placement = {"replicas": run.request.placement_replicas}
+        if run.request.placement_node_label:
+            placement["nodeLabel"] = run.request.placement_node_label
+        validate_placement(placement)
+        if run.request.placement_node_label:
+            nodes = await list_resources("nodes", cluster_id=session.server_id)
+            label = run.request.placement_node_label
+            if not any(
+                (node.get("metadata") or {}).get("labels", {}).get(label["key"]) == label["value"] for node in nodes
+            ):
+                raise ValueError("selected node label is not present in the cluster")
         selected = next(candidate for candidate in run.candidates if candidate.id == run.selected_candidate.id)
         refreshed = await resolve_planning_facts(
             session.server_id,
@@ -1089,6 +1102,7 @@ class AgenticDeploymentService:
         deployment = await deployment_run_manager.start_run(
             DeploymentRunCreateRequest(
                 configurations=[configuration],
+                runtime_binding=RuntimeBinding(placement=placement),
                 provenance={
                     "deployment_source": {"kind": "agentic-deployment"},
                     "cluster_session_id": session.id,

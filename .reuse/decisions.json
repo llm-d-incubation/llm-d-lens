@@ -306,8 +306,8 @@
       "approvedBy": "user",
       "approvalRef": "VS Code user response to SSH Trust decision e0327565-6da1-429e-bc18-dfbf81f0ece9",
       "resolvedAt": "2026-09-29T07:42:03.409Z"
-        },
-        {
+    },
+    {
       "id": "b6665735-4f2f-4e3a-bf94-4e75d9e5f048",
       "status": "resolved",
       "kind": "semantic",
@@ -375,6 +375,32 @@
       "approvedBy": "User",
       "approvalRef": "This conversation: 2026-09-30 user affirmative reply to the explicit proxy-policy confirmation request",
       "resolvedAt": "2026-09-30T09:07:31.858Z"
+    },
+    {
+      "id": "dcf8989b-199c-4ef6-8bd4-4e8270e5fa1e",
+      "status": "resolved",
+      "kind": "semantic",
+      "summary": "Deployment placement scope and modes are unspecified: per-replica TP co-location, cross-replica co-location or spreading, and hard versus preferred affinity require a product decision.",
+      "options": [
+        "Per-replica TP Pods co-located on a node; spread replicas across nodes; optional explicit node pinning",
+        "All replicas and TP Pods co-located on the same node",
+        "Expose generic Kubernetes affinity configuration per deployment without opinionated placement presets"
+      ],
+      "createdAt": "2026-10-12T03:40:01.351Z",
+      "evidence": [
+        {
+          "path": "llm_d_bench/deploy/providers/target_node.py",
+          "hash": "52d671940dd5963aeccd978f37987bf151f7117552121e71f34a58430ff12cd5"
+        },
+        {
+          "path": "llm_d_bench/deploy/providers/configuration_manifest.py",
+          "hash": "cd71904672e759778d8db269a8fdc455b0a1ceff6caf67ff1b5a85bed9ae85c3"
+        }
+      ],
+      "decision": "Offer frontend presets: replicas same node with optional selected cluster node label; replicas on different nodes; TP defaults to soft same-node preference with cross-node fallback.",
+      "approvedBy": "User",
+      "approvalRef": "User reply in current conversation, 2026-10-12",
+      "resolvedAt": "2026-10-12T03:46:50.083Z"
     }
   ]
 }

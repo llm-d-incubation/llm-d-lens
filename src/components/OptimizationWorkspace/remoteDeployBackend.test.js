@@ -1,7 +1,25 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { listDeploymentExecutions, getDeploymentExecutions, stopLocalDeploymentCase, deleteDeploymentExecution, testRemoteTarget } from './remoteDeployBackend.js';
+import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution, testRemoteTarget } from './remoteDeployBackend.js';
+
+test('Advanced deployment binds placement and loads labels for the selected cluster', async (t) => {
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        calls.push([url, options]);
+        return Response.json(url.includes('node-labels') ? { items: [{ key: 'pool', value: 'gpu' }] } : { id: 'run-1' });
+    });
+    assert.deepEqual(await listDeploymentNodeLabels('cluster/a'), [{ key: 'pool', value: 'gpu' }]);
+    assert.match(calls[0][0], /cluster_id=cluster%2Fa/);
+    await startLocalDeployment([{ provider_ref: 'baseline-vllm' }], { cluster_server_id: 'cluster/a' }, {
+        replicas: 'same-node', nodeLabel: { key: 'pool', value: 'gpu' },
+    });
+    assert.deepEqual(JSON.parse(calls[1][1].body).runtime_binding.placement, {
+        replicas: 'same-node', nodeLabel: { key: 'pool', value: 'gpu' },
+    });
+    await startLocalDeployment([{ provider_ref: 'baseline-vllm' }], { cluster_server_id: 'cluster/a' }, { replicas: 'balanced' });
+    assert.deepEqual(JSON.parse(calls[2][1].body).runtime_binding.placement, { replicas: 'balanced' });
+});
 
 test('deployment list preserves repeated status filters and response validation', async (t) => {
     const signal = new AbortController().signal;

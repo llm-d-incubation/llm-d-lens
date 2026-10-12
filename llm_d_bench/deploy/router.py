@@ -48,11 +48,12 @@ from llm_d_bench.deploy.orphans import (
     namespace_prefix,
     scan_orphan_namespaces,
 )
+from llm_d_bench.deploy.providers.target_node import validate_placement
 from llm_d_bench.deploy.standard_kubernetes_service import (
     StandardKubernetesServiceRequest,
     build_standard_kubernetes_service_configuration,
 )
-from llm_d_bench.utils.kubernetes import PortForwardError
+from llm_d_bench.utils.kubernetes import PortForwardError, list_resources
 from llm_d_bench.utils.problems import problem
 
 router = APIRouter(prefix="/api/v1/deployments", tags=["deployments"])
@@ -164,6 +165,23 @@ async def stop_deployment_record_refresh() -> None:
         _refresh_task = None
 
 
+async def _validate_cluster_placement(placement: dict | None, cluster_id: str | None, http_request: Request) -> None:
+    if placement is None:
+        return
+    validate_placement(placement)
+    node_label = placement.get("nodeLabel")
+    if node_label is not None:
+        if not cluster_id:
+            raise ValueError("cluster_server_id is required for a node label")
+        require_cluster_access(current_principal(http_request), cluster_id)
+        nodes = await list_resources("nodes", cluster_id=cluster_id)
+        if not any(
+            (node.get("metadata") or {}).get("labels", {}).get(node_label["key"]) == node_label["value"]
+            for node in nodes
+        ):
+            raise ValueError("selected node label is not present in the cluster")
+
+
 @router.post(
     "/runs",
     summary="Start a deployment run from one or more already-rendered deployable configurations.",
@@ -178,11 +196,30 @@ async def stop_deployment_record_refresh() -> None:
 )
 async def create_run(request: DeploymentRunCreateRequest, http_request: Request = None):
     try:
+        placement = request.runtime_binding.placement if request.runtime_binding else None
+        await _validate_cluster_placement(placement, request.provenance.get("cluster_server_id"), http_request)
         return await deployment_run_manager.start_run(
             request, owner_user_id=owner_for_create(current_principal(http_request))
         )
     except ValueError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.get(
+    "/node-labels",
+    summary="List available node labels for deployment placement.",
+    operation_id="list_deployment_node_labels",
+)
+async def list_deployment_node_labels(cluster_id: str = Query(..., min_length=1), request: Request = None) -> dict:
+    require_cluster_access(current_principal(request), cluster_id)
+    nodes = await list_resources("nodes", cluster_id=cluster_id)
+    labels = {
+        (key, value)
+        for node in nodes
+        for key, value in ((node.get("metadata") or {}).get("labels") or {}).items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    return {"items": [{"key": key, "value": value} for key, value in sorted(labels)]}
 
 
 @router.post(
@@ -199,13 +236,26 @@ async def create_standard_kubernetes_service_run(
 ):
     """Create the current vLLM implementation of a Standard service run."""
     try:
+        from llm_d_bench.cluster.sessions import require_active_session
+
+        session = (
+            require_active_session(request.cluster_session_id)
+            if request.storage_type == "model-cache" or request.placement_node_label
+            else None
+        )
+        await _validate_cluster_placement(
+            {
+                "replicas": request.placement_replicas,
+                **({"nodeLabel": request.placement_node_label} if request.placement_node_label else {}),
+            },
+            session.server_id if session else None,
+            http_request,
+        )
         if request.storage_type == "model-cache":
-            from llm_d_bench.cluster.sessions import require_active_session
             from llm_d_bench.model_cache.service import default_service as model_cache_service
             from llm_d_bench.storage.contracts import StorageVolumeKind, StorageVolumePurpose
             from llm_d_bench.storage.service import get_ready_volume
 
-            session = require_active_session(request.cluster_session_id)
             volume = await get_ready_volume(request.storage_volume_id, cluster_id=session.server_id)
             if StorageVolumePurpose.MODEL_CACHE not in volume.purposes:
                 raise ValueError("selected storage volume is not designated for model cache use")
@@ -223,6 +273,7 @@ async def create_standard_kubernetes_service_run(
                 configurations=[configuration],
                 provenance={
                     "deployment_source": {"kind": "standard-kubernetes-service"},
+                    **({"cluster_server_id": session.server_id} if session else {}),
                     "cluster_session_id": request.cluster_session_id,
                     "deployment_name": request.deployment_name,
                     "description": request.description.strip(),
@@ -230,6 +281,12 @@ async def create_standard_kubernetes_service_run(
                         "deployment_name": request.deployment_name,
                         "description": request.description.strip(),
                     },
+                },
+                runtime_binding={
+                    "placement": {
+                        "replicas": request.placement_replicas,
+                        **({"nodeLabel": request.placement_node_label} if request.placement_node_label else {}),
+                    }
                 },
             ),
             owner_user_id=owner_for_create(current_principal(http_request)),

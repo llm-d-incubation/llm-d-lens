@@ -124,6 +124,7 @@ class RuntimeBinding(BaseModel):
     schema_version: str = Field(default="runtime-binding.v1", min_length=1)
     environment: dict[str, str] = Field(default_factory=dict)
     cluster_session_id: str | None = None
+    placement: dict[str, Any] | None = None
 
 
 class DeploymentRunCreateRequest(BaseModel):

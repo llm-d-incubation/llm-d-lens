@@ -212,6 +212,7 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/v1/deployments/runs/{run_id}/cases/{case_id}/stop", "deployment:case:execute"),
     RoutePermission("POST", "/api/v1/deployments/runs/{run_id}/cluster-session", "deployment:session:rebind"),
     RoutePermission("POST", "/api/v1/deployments/standard-vllm-runs", "deployment:run:create"),
+    RoutePermission("GET", "/api/v1/deployments/node-labels", "deployment:run:create"),
     RoutePermission("GET", "/api/v1/deployments/orphans", "deployment:run:read"),
     RoutePermission("POST", "/api/v1/deployments/orphans/clean", "deployment:execution:delete"),
     # --- deployment resource sharing ---

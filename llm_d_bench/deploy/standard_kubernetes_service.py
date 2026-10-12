@@ -22,6 +22,8 @@ class StandardKubernetesServiceRequest(BaseModel):
     cluster_session_id: str = Field(min_length=36, max_length=36)
     replicas: int = Field(ge=1, le=32)
     tensor_parallel_size: int = Field(ge=1, le=16)
+    placement_replicas: Literal["prefer-same-node", "same-node", "balanced", "spread"] = "prefer-same-node"
+    placement_node_label: dict[str, str] | None = None
     storage_type: Literal["local-cache", "pvc", "model-cache"] = "local-cache"
     storage_volume_id: str = Field(default="", max_length=120)
     model_cache_path: str = Field(default_factory=lambda: str(Path.home() / ".cache"), min_length=1, max_length=1024)

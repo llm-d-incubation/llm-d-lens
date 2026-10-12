@@ -74,6 +74,7 @@ class GuideHelmConfigurationAdapter:
                             "deployment_name": configuration.provenance.get("deployment_name")
                             or configuration.content["model"]["name"],
                             "namespace_policy": configuration.provenance.get("namespace_policy"),
+                            "placement": run_provenance.get("placement"),
                             "model_secret": (
                                 (configuration.content.get("officialGuide") or {}).get("modelSecret")
                                 or configuration.content.get("modelSecret")

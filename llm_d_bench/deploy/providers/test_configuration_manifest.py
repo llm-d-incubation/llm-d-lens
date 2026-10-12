@@ -5,10 +5,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
 import llm_d_bench.deploy.providers.configuration_manifest as configuration_manifest
 from llm_d_bench.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
+from llm_d_bench.deploy.providers.target_node import apply_placement
 
 
 class _Runner:
@@ -45,6 +47,159 @@ def _asset(name: str, content: str) -> dict[str, str]:
         "content": content,
         "checksum": f"sha256:{hashlib.sha256(content.encode('utf-8')).hexdigest()}",
     }
+
+
+def test_same_node_placement_adds_required_pod_affinity():
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "model"},
+            "spec": {
+                "template": {
+                    "metadata": {"labels": {"app": "model"}},
+                    "spec": {"containers": [{"name": "modelserver"}]},
+                }
+            },
+        }
+    )
+    rendered, count = apply_placement(manifest, {"replicas": "same-node"})
+
+    pod = yaml.safe_load(rendered)["spec"]["template"]
+    assert count == 1
+    term = pod["spec"]["affinity"]["podAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]
+    assert term["labelSelector"]["matchLabels"] == {
+        "lens.llm-d.ai/placement-group": pod["metadata"]["labels"]["lens.llm-d.ai/placement-group"]
+    }
+    assert term["topologyKey"] == "kubernetes.io/hostname"
+
+
+@pytest.mark.parametrize("replicas,affinity_type", [("spread", "podAntiAffinity"), ("none", "podAffinity")])
+def test_placement_spread_and_default_prefer_same_node(replicas, affinity_type):
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "model"},
+            "spec": {
+                "template": {
+                    "metadata": {"labels": {"app": "model"}},
+                    "spec": {"containers": [{"name": "modelserver"}]},
+                }
+            },
+        }
+    )
+    rendered, count = apply_placement(manifest, {"replicas": replicas})
+    affinity = yaml.safe_load(rendered)["spec"]["template"]["spec"]["affinity"]
+    assert count == 1
+    if replicas == "spread":
+        assert (
+            affinity[affinity_type]["requiredDuringSchedulingIgnoredDuringExecution"][0]["topologyKey"]
+            == "kubernetes.io/hostname"
+        )
+    else:
+        assert affinity["podAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"][0]["weight"] == 100
+
+
+def test_balanced_placement_spreads_replicas_across_eligible_nodes():
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "model"},
+            "spec": {
+                "template": {
+                    "metadata": {"labels": {"app": "model"}},
+                    "spec": {"containers": [{"name": "modelserver"}]},
+                }
+            },
+        }
+    )
+    rendered, count = apply_placement(manifest, {"replicas": "balanced"})
+    template = yaml.safe_load(rendered)["spec"]["template"]
+    assert count == 1
+    assert template["spec"]["topologySpreadConstraints"] == [
+        {
+            "maxSkew": 1,
+            "topologyKey": "kubernetes.io/hostname",
+            "whenUnsatisfiable": "DoNotSchedule",
+            "labelSelector": {
+                "matchLabels": {
+                    "lens.llm-d.ai/placement-group": template["metadata"]["labels"]["lens.llm-d.ai/placement-group"]
+                }
+            },
+        }
+    ]
+    assert "affinity" not in template["spec"]
+
+
+@pytest.mark.parametrize("replicas", ["prefer-same-node", "same-node", "balanced", "spread"])
+def test_placement_groups_modelserver_deployments_in_one_manifest(replicas):
+    documents = [
+        {
+            "kind": "Deployment",
+            "metadata": {"name": name},
+            "spec": {"template": {"spec": {"containers": [{"name": container}]}}},
+        }
+        for name, container in [("pd-prefill", "modelserver"), ("pd-router", "router"), ("pd-decode", "modelserver")]
+    ]
+    rendered, count = apply_placement(yaml.safe_dump_all(documents), {"replicas": replicas})
+    prefill, router, decode = list(yaml.safe_load_all(rendered))
+    assert count == 2
+    assert "lens.llm-d.ai/placement-group" not in router["spec"]["template"].get("metadata", {}).get("labels", {})
+    prefill_template = prefill["spec"]["template"]
+    decode_template = decode["spec"]["template"]
+    group = prefill_template["metadata"]["labels"]["lens.llm-d.ai/placement-group"]
+    assert decode_template["metadata"]["labels"]["lens.llm-d.ai/placement-group"] == group
+    for template in [prefill_template, decode_template]:
+        pod_spec = template["spec"]
+        if replicas == "balanced":
+            selector = pod_spec["topologySpreadConstraints"][0]["labelSelector"]
+        else:
+            affinity_type = "podAntiAffinity" if replicas == "spread" else "podAffinity"
+            strength = (
+                "requiredDuringSchedulingIgnoredDuringExecution"
+                if replicas in {"spread", "same-node"}
+                else "preferredDuringSchedulingIgnoredDuringExecution"
+            )
+            term = pod_spec["affinity"][affinity_type][strength][0]
+            selector = (term.get("podAffinityTerm") or term)["labelSelector"]
+        assert selector == {"matchLabels": {"lens.llm-d.ai/placement-group": group}}
+
+
+def test_placement_node_label_only_with_same_node():
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "model"},
+            "spec": {"template": {"spec": {"containers": [{"name": "modelserver"}]}}},
+        }
+    )
+    rendered, _ = apply_placement(manifest, {"replicas": "same-node", "nodeLabel": {"key": "pool", "value": "gpu"}})
+    assert yaml.safe_load(rendered)["spec"]["template"]["spec"]["nodeSelector"] == {"pool": "gpu"}
+    with pytest.raises(ValueError, match="node label requires same-node"):
+        apply_placement(manifest, {"replicas": "spread", "nodeLabel": {"key": "pool", "value": "gpu"}})
+
+
+def test_leader_worker_templates_prefer_same_node_without_forcing_it():
+    template = {"metadata": {"labels": {"app": "model"}}, "spec": {"containers": [{"name": "worker"}]}}
+    manifest = yaml.safe_dump(
+        {
+            "kind": "LeaderWorkerSet",
+            "metadata": {"name": "model"},
+            "spec": {"leaderWorkerTemplate": {"leaderTemplate": template, "workerTemplate": template.copy()}},
+        }
+    )
+    rendered, count = apply_placement(manifest, {"replicas": "prefer-same-node"})
+    templates = yaml.safe_load(rendered)["spec"]["leaderWorkerTemplate"]
+    assert count == 2
+    for key in ("leaderTemplate", "workerTemplate"):
+        assert (
+            templates[key]["spec"]["affinity"]["podAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"][0][
+                "weight"
+            ]
+            == 100
+        )
+    for replicas in ("spread", "balanced"):
+        with pytest.raises(ValueError, match="not supported for LeaderWorkerSet"):
+            apply_placement(manifest, {"replicas": replicas})
 
 
 @pytest.mark.asyncio
@@ -110,6 +265,40 @@ async def test_target_node_does_not_read_kustomize_directory_as_manifest(monkeyp
     artifact = await adapter.render(definition, {})
 
     assert artifact.manifest_ref == str(overlay)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replicas", ["spread", "balanced"])
+async def test_render_applies_advanced_placement_to_modelserver_manifest(monkeypatch, tmp_path: Path, replicas: str):
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Deployment",
+            "metadata": {"name": "model"},
+            "spec": {"template": {"spec": {"containers": [{"name": "modelserver"}]}}},
+        }
+    )
+    source = tmp_path / "source.yaml"
+    source.write_text(manifest, encoding="utf-8")
+    delegate = AsyncMock()
+    delegate.render.return_value = GuideDeploymentArtifact(
+        guide_id="optimized-baseline",
+        artifact_hash="source",
+        manifest_ref=str(source),
+        manifest_checksum="sha256:source",
+    )
+    monkeypatch.setattr(configuration_manifest, "instrument_manifest", lambda artifact, _: artifact)
+    monkeypatch.setattr(configuration_manifest, "configured_target_node", lambda: None)
+    adapter = ConfigurationManifestAdapter(delegate, _Runner(), "llm-d-bench-", 30, tmp_path)
+    artifact = await adapter.render(
+        GuideDefinition("optimized-baseline", "source", "hash", "supported"),
+        {"_placement": {"replicas": replicas}},
+    )
+    pod_spec = yaml.safe_load(Path(artifact.manifest_ref).read_text(encoding="utf-8"))["spec"]["template"]["spec"]
+    if replicas == "spread":
+        assert pod_spec["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+    else:
+        assert pod_spec["topologySpreadConstraints"][0]["whenUnsatisfiable"] == "DoNotSchedule"
+    assert artifact.manifest_checksum != "sha256:source"
 
 
 @pytest.mark.asyncio
