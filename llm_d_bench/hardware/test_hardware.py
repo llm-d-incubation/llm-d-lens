@@ -58,7 +58,7 @@ def test_bundled_intel_profile_matches_legacy_constants():
     assert profile.resource_prefixes == ("gpu.intel.com/",)
     assert profile.monitor_resource_suffixes == ("monitoring",)
     assert profile.node_label_selector == {"intel.feature.node.kubernetes.io/gpu": "true"}
-    assert profile.accelerator_keys == ("xpu", "intel_gpu")
+    assert profile.accelerator_keys == ("xpu", "intel_gpu", "intel")
     assert profile.benchmark_profile == "intel-xpu"
     assert profile.evaluation_profile == "intel-xpu"
     assert profile.upstream_variant == "xpu"

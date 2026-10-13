@@ -8,6 +8,10 @@ import yaml
 from llm_d_bench.aic import service
 
 
+def estimate_request(**kwargs):
+    return service.AICEstimateRequest(aic_system_name="test-system", **kwargs)
+
+
 def test_estimate_rejects_a_different_aggregated_topology(monkeypatch):
     monkeypatch.setattr(
         service,
@@ -27,7 +31,7 @@ def test_estimate_rejects_a_different_aggregated_topology(monkeypatch):
 
     with pytest.raises(service.AICError, match="topology"):
         service.estimate_sync(
-            service.AICEstimateRequest(
+            estimate_request(
                 scenario="inference_scheduling",
                 model_name="Qwen/Qwen3-8B",
                 gpu_count=4,
@@ -57,7 +61,7 @@ def test_estimate_passes_exact_aggregated_topology_and_workload(monkeypatch):
 
     monkeypatch.setattr(service, "experiments_sync", experiments)
     result = service.estimate_sync(
-        service.AICEstimateRequest(
+        estimate_request(
             scenario="inference_scheduling",
             model_name="Qwen/Qwen3-8B",
             gpu_count=4,
@@ -81,7 +85,7 @@ def test_estimate_rejects_inconsistent_gpu_count(monkeypatch):
 
     with pytest.raises(service.AICError, match="requires 4 GPUs"):
         service.estimate_sync(
-            service.AICEstimateRequest(
+            estimate_request(
                 scenario="inference_scheduling",
                 model_name="Qwen/Qwen3-8B",
                 gpu_count=8,
@@ -95,7 +99,7 @@ def test_estimate_rejects_unverifiable_pipeline_parallelism(monkeypatch):
     monkeypatch.setattr(service, "experiments_sync", lambda request: pytest.fail("SDK must not be called"))
     with pytest.raises(service.AICError, match="PP greater than 1"):
         service.estimate_sync(
-            service.AICEstimateRequest(
+            estimate_request(
                 scenario="inference_scheduling",
                 model_name="Qwen/Qwen3-8B",
                 gpu_count=4,
@@ -126,7 +130,7 @@ def test_estimate_rejects_a_different_disaggregated_worker_allocation(monkeypatc
 
     with pytest.raises(service.AICError, match="topology"):
         service.estimate_sync(
-            service.AICEstimateRequest(
+            estimate_request(
                 scenario="pd_disaggregation",
                 model_name="Qwen/Qwen3-8B",
                 gpu_count=3,
@@ -161,7 +165,7 @@ def test_estimate_accepts_matching_disaggregated_topology(monkeypatch):
 
     monkeypatch.setattr(service, "experiments_sync", experiments)
     result = service.estimate_sync(
-        service.AICEstimateRequest(
+        estimate_request(
             scenario="pd_disaggregation",
             model_name="Qwen/Qwen3-8B",
             gpu_count=4,
@@ -199,7 +203,7 @@ def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch)
 
     monkeypatch.setattr(api, "cli_estimate", direct)
     result = service.estimate_sync(
-        service.AICEstimateRequest(
+        estimate_request(
             scenario="inference_scheduling",
             model_name="Qwen/Qwen3-0.6B",
             gpu_count=1,
@@ -232,7 +236,7 @@ def test_estimate_without_targets_rejects_mismatched_direct_topology(monkeypatch
     )
     with pytest.raises(service.AICError, match="topology"):
         service.estimate_sync(
-            service.AICEstimateRequest(
+            estimate_request(
                 scenario="pd_disaggregation",
                 model_name="Qwen/Qwen3-0.6B",
                 gpu_count=2,
@@ -266,7 +270,7 @@ def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeyp
 
     monkeypatch.setattr(api, "cli_estimate", direct)
     result = service.estimate_sync(
-        service.AICEstimateRequest(
+        estimate_request(
             scenario="pd_disaggregation",
             model_name="Qwen/Qwen3-0.6B",
             gpu_count=5,
@@ -301,7 +305,7 @@ def test_estimate_without_targets_does_not_infer_multi_replica_throughput(monkey
         ),
     )
     result = service.estimate_sync(
-        service.AICEstimateRequest(
+        estimate_request(
             scenario="inference_scheduling",
             model_name="Qwen/Qwen3-0.6B",
             gpu_count=2,

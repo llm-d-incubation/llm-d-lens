@@ -401,6 +401,29 @@
       "approvedBy": "User",
       "approvalRef": "User reply in current conversation, 2026-10-12",
       "resolvedAt": "2026-10-12T03:46:50.083Z"
+      "id": "43a2fda4-efe2-494b-86e4-bae2de0921cf",
+      "status": "resolved",
+      "kind": "semantic",
+      "summary": "CodeQL exception exposure spans expected client-facing 4xx domain messages and potentially unsafe raw exceptions. Decide whether to preserve informative 4xx details via explicit safe domain errors or return generic details for all exception-derived 4xx errors.",
+      "options": [
+        "Preserve approved domain error details through explicitly marked safe exceptions; replace other exception details with generic text",
+        "Return generic details for all exception-derived client errors and revise API documentation and clients"
+      ],
+      "createdAt": "2026-10-12T15:47:47.930Z",
+      "evidence": [
+        {
+          "path": "llm_d_bench/utils/problems.py",
+          "hash": "d30ec35e4721c6730ef7ba7143412d613f7407527f16c78b3cde8b36f87b13b8"
+        },
+        {
+          "path": "llm_d_bench/deploy/router.py",
+          "hash": "6282dc9e577ea47f463d03ddff0bd48ce450fd5abf2a4ea16fa0f0f458832c06"
+        }
+      ],
+      "decision": "Keep all current concrete exception-derived response details unchanged; do not fix or suppress CodeQL py/stack-trace-exposure alert 8 in this task.",
+      "approvedBy": "User",
+      "approvalRef": "Current conversation, 2026-10-12: user explicitly requested no change to the last alert and retention of concrete exception response details",
+      "resolvedAt": "2026-10-12T15:54:57.781Z"
     }
   ]
 }

@@ -93,7 +93,14 @@
         "metric": { "type": "string" },
         "unit": { "type": "string" },
         "scale": { "type": "number" },
-        "match": { "$ref": "#/$defs/string_map" }
+        "match": { "$ref": "#/$defs/string_map" },
+        "output_unit": { "type": "string" },
+        "aggregation": {
+          "enum": ["avg", "sum", "max"]
+        },
+        "tile_aggregation": {
+          "enum": ["avg", "sum", "max"]
+        }
       }
     },
     "telemetry": {
@@ -107,9 +114,34 @@
           "additionalProperties": { "$ref": "#/$defs/device_metric_source" }
         },
         "label_schema": { "$ref": "#/$defs/string_map" },
-        "allocation_join": { "enum": ["dra", "extended-resource", "none", null] },
+        "allocation_join": { "enum": ["dra", "extended-resource", "none", null, "pod-status"] },
         "pod_metrics": { "$ref": "#/$defs/string_map" },
-        "scrape_path": { "type": ["string", "null"] }
+        "scrape_path": { "type": ["string", "null"] },
+        "source_label": { "type": "string" },
+        "allocation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "drivers": { "$ref": "#/$defs/string_list" },
+            "pci_attributes": { "$ref": "#/$defs/string_list" },
+            "node_labels": { "$ref": "#/$defs/string_list" },
+            "device_id_pattern": { "type": "string" },
+            "resource_id_pattern": { "type": "string" }
+          }
+        },
+        "modes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["allocation_join"],
+            "properties": {
+              "allocation_join": {
+                "enum": ["dra", "extended-resource", "pod-status", "none"]
+              }
+            }
+          }
+        }
       }
     },
     "deployment": {
@@ -125,6 +157,30 @@
         "resource_name": { "type": ["string", "null"] },
         "supports_pci_allowlist": { "type": "boolean" },
         "runtime_image": { "type": ["string", "null"] },
+        "managed_image_repositories": { "$ref": "#/$defs/string_list" },
+        "runtime_class_matchers": { "$ref": "#/$defs/string_list" },
+        "pci_attribute": {
+          "type": ["string", "null"]
+        },
+        "pci_attribute_domain": {
+          "type": ["string", "null"]
+        },
+        "modes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["request_model"],
+            "properties": {
+              "request_model": {
+                "enum": ["dra", "extended-resource"]
+              },
+              "device_class": { "type": "string" },
+              "claim_request_name": { "type": "string" },
+              "resource_names": { "$ref": "#/$defs/string_list" }
+            }
+          }
+        },
         "router_topology": { "enum": ["single-host", "multi-host", null] }
       }
     },
@@ -133,8 +189,26 @@
       "additionalProperties": false,
       "properties": {
         "aic_system_patterns": { "$ref": "#/$defs/string_list" },
+        "aic_system_models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pattern", "system"],
+            "properties": {
+              "pattern": { "type": "string" },
+              "system": { "type": "string" }
+            }
+          }
+        },
+        "model_label_keys": { "$ref": "#/$defs/string_list" },
         "default_backend": { "type": "string" },
-        "device_class_allow_pattern": { "type": "string" }
+        "device_class_allow_pattern": { "type": "string" },
+        "discovery": { "type": "object" },
+        "memory_models": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
       }
     },
     "ui": {

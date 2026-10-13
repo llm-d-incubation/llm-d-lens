@@ -20,3 +20,15 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "deps(docker)"
+
+  # Propose reviewed AIC upgrades while keeping the runtime version pinned.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-name: "aiconfigurator"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(aic)"

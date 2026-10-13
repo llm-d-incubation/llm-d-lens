@@ -20,3 +20,11 @@ test('missing history is not reconstructed from current deployment snapshots',()
  assert.equal(historicalFlow({caseObservability:{},resources:{pods:[{role:'decode'}]}}),null);
  assert.deepEqual(historicalFlows(null),[]);
 });
+
+test('resource-only history explains missing traffic while real zero traffic stays available', () => {
+ const resourceOnly = {window: observation.window, per_pod: [{pod: 'decode-0', role: 'decode', cpu_usage_cores: {mean: 1}}]};
+ const result = historicalFlow({caseObservability: resourceOnly});
+ assert.equal(result.hasTraffic, false);
+ assert.match(result.reason, /No inference request or token samples/);
+ assert.equal(historicalFlow({caseObservability: observation}).hasTraffic, true);
+});

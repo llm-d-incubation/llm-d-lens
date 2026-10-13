@@ -92,7 +92,7 @@ app.use(express.static(path.join(__dirname, '../dist'), { index: false }));
 app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found' }));
 
 // SPA Fallback: Serve index.html for any unknown routes
-app.get('*', async (req, res) => {
+app.get('*', limiter, async (req, res) => {
     try {
         const fs = await import('fs/promises');
         const indexPath = path.join(__dirname, '../dist', 'index.html');

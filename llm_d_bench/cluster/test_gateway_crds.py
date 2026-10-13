@@ -15,8 +15,8 @@ def test_manifest_urls_follow_the_pinned_versions():
         urlsplit(urls["gateway_api_inference_extension"]).path.split("/")[-2]
         == current.k8s_gateway_api_inference_extension
     )
-    assert urls["gateway_api"].endswith("standard-install.yaml")
-    assert urls["gateway_api_inference_extension"].endswith("v1-manifests.yaml")
+    assert urlsplit(urls["gateway_api"]).path.split("/")[-1] == "standard-install.yaml"
+    assert urlsplit(urls["gateway_api_inference_extension"]).path.split("/")[-1] == "v1-manifests.yaml"
 
 
 def test_required_crds_cover_both_bundles():

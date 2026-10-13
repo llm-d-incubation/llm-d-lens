@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from llm_d_bench.monitoring.profiling import service
+from llm_d_bench.monitoring.profiling.service import _prometheus_clock_offset
 
 
 @pytest.fixture(autouse=True)
@@ -12,6 +13,10 @@ def no_intel_allocations(monkeypatch):
     async def resources(*_args, **_kwargs):
         return []
 
+    async def clock(_client):
+        return 0.0
+
+    monkeypatch.setattr(service, "_prometheus_clock_offset", clock)
     monkeypatch.setattr(service, "list_resources", resources)
 
 
@@ -101,6 +106,7 @@ async def test_collect_benchmark_observability_builds_aligned_series(monkeypatch
     )
 
     assert result["status"] == "available"
+    assert result["flow_status"] == "available"
     assert result["namespace"] == "benchmark-ns"
     assert len(result["series"]) == 2
     assert result["series"][0]["kv_cache_usage_percent"] == 75.0
@@ -192,3 +198,55 @@ async def test_engine_token_sources_are_collected_separately_from_router_estimat
         'vllm:prompt_tokens_by_source_total{namespace="benchmark-ns", source="local_compute"}' in q
         for q in observed_queries
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [384.0, -384.0])
+async def test_benchmark_window_uses_prometheus_clock_and_restores_local_timeline(monkeypatch, offset):
+    monkeypatch.setattr(service, "_deployment_target", lambda *_: (object(), "bench", "cluster"))
+
+    async def port(*_):
+        return 19090
+
+    async def clock(_client):
+        return offset
+
+    async def components(*_):
+        return {"prefill": [], "decode": ["decode-0"]}
+
+    async def query(_client, promql, start, end, step):
+        assert service._iso_timestamp(start).timestamp() == 1000 + offset
+        assert service._iso_timestamp(end).timestamp() == 1060 + offset
+        if "request_success_total" in promql:
+            return [{"metric": {"pod": "decode-0"}, "values": [[1000 + offset, "2"], [1005 + offset, "0"]]}]
+        return []
+
+    monkeypatch.setattr(service, "_prometheus_local_port", port)
+    monkeypatch.setattr(service, "_prometheus_clock_offset", clock)
+    monkeypatch.setattr(service, "_discover_components", components)
+    monkeypatch.setattr(service, "_query_range", query)
+    result = await service.collect_benchmark_observability("execution", "1970-01-01T00:16:40Z", "1970-01-01T00:17:40Z")
+    assert result["clock_alignment"]["offset_seconds"] == offset
+    assert result["flow_status"] == "available"
+    assert result["summary"]["request_rate_rps"]["mean"] == 1
+    assert result["series"][0]["timestamp"] == "1970-01-01T00:16:40Z"
+    assert result["role_series"][0]["timestamp"] == "1970-01-01T00:16:40Z"
+
+
+@pytest.mark.asyncio
+async def test_prometheus_clock_offset_uses_round_trip_midpoint(monkeypatch):
+    import httpx
+
+    readings = iter([1000.0, 1002.0])
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(service, "time", SimpleNamespace(time=lambda: next(readings)))
+
+    def respond(request):
+        assert request.url.params["query"] == "time()"
+        return httpx.Response(
+            200, json={"status": "success", "data": {"resultType": "scalar", "result": [1385, "1385"]}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), base_url="http://prometheus") as client:
+        assert await _prometheus_clock_offset(client) == 384

@@ -8,6 +8,7 @@ import { historicalFlows } from "./benchmark-results/historicalFlow.js";
 import { liveDeployments } from "./benchmark-results/deploymentEvidence.js";
 import { benchmarkDetails } from "./benchmark-results/benchmarkDetails.js";
 import BenchmarkLiveFlow from "./benchmark-results/BenchmarkLiveFlow.jsx";
+import BenchmarkTiming from "./evaluation/BenchmarkTiming.jsx";
 import GuideResultExplorer from "./benchmark-results/GuideResultExplorer.jsx";
 import { buildResultReport } from "./benchmark-results/resultReport.js";
 import { resolveExplorerGuide } from "./benchmark-results/resultExplorer.js";
@@ -354,6 +355,7 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
             <div title="Heartbeat shows runner liveness; it does not represent request progress"><span className="block uppercase tracking-wider text-slate-600">Runner heartbeat</span><b className="mt-1 block truncate text-slate-300">{details.workflow.heartbeat_at || "—"}</b></div>
             <div title={details.workflow.last_log_at || ""}><span className="block uppercase tracking-wider text-slate-600">Last output</span><b className="mt-1 block truncate text-slate-300">{details.workflow.last_log_at || "—"}</b></div>
         </div>}
+        {details && <div className="flex flex-wrap items-center gap-2">{(details.cases ? details.cases.map(entry => entry.evaluation).filter(Boolean) : [details.evaluation || details.workflow]).map(run => <BenchmarkTiming key={run.id} run={run} compact />)}</div>}
         <nav aria-label="Benchmark detail sections" className="sticky top-0 z-30 flex gap-0 overflow-x-auto rounded-xl border border-slate-800/70 bg-[#080d17]/95 p-1 shadow-xl backdrop-blur-xl">{[
             ["overview", "Benchmark results", <Gauge key="overview-icon" className="h-3.5 w-3.5" />],
             ["compare", "Compare", <Gauge key="compare-icon" className="h-3.5 w-3.5" />],
@@ -406,7 +408,7 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
                 {visibleCases.length > casePageSize && <div className="flex items-center justify-between border-t border-slate-800/60 pt-3"><span className="text-[10px] text-slate-500">Showing {(casePage - 1) * casePageSize + 1}–{Math.min(casePage * casePageSize, visibleCases.length)} of {visibleCases.length}</span><div className="flex items-center gap-1"><button disabled={casePage === 1} onClick={() => setCasePage((page) => page - 1)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-800 px-2.5 text-[10px] text-slate-300 disabled:opacity-30"><ChevronLeft className="h-3.5 w-3.5" />Previous</button><span className="min-w-16 text-center text-[10px] text-slate-400">{casePage} / {casePageCount}</span><button disabled={casePage === casePageCount} onClick={() => setCasePage((page) => page + 1)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-800 px-2.5 text-[10px] text-slate-300 disabled:opacity-30">Next<ChevronRight className="h-3.5 w-3.5" /></button></div></div>}
 
             </section>}
-            {activeSection === "live" && <BenchmarkLiveFlow cases={cases} details={details} />}
+            {activeSection === "live" && <BenchmarkLiveFlow cases={cases} details={details} onShowResources={() => setActiveSection("resources")} />}
         </>}
     </section>;
 }

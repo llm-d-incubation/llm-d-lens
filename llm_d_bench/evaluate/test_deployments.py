@@ -13,6 +13,8 @@ router = importlib.import_module("llm_d_bench.evaluate.router")
 
 
 def test_xpumd_metrics_use_compute_engine_utilization():
+    from llm_d_bench.hardware.registry import get_profile
+
     metrics = router._parse_xpumd_metrics(
         "\n".join(
             [
@@ -20,7 +22,8 @@ def test_xpumd_metrics_use_compute_engine_utilization():
                 'hw_gpu_utilization_ratio{pci_bdf="0000:01:00.0",hw_gpu_task="compute-all"} 1',
                 'hw_gpu_utilization_ratio{pci_bdf="0000:01:00.0",hw_gpu_task="copy-all"} 0',
             ]
-        )
+        ),
+        get_profile("intel-xpu"),
     )
 
     assert metrics["average_utilization_ratio"] == 1
@@ -475,6 +478,133 @@ async def test_workflow_persists_deployment_failure_stage_before_clearing_active
     assert final["cases"][0]["error"] == "deployment configuration rejected"
     assert "failed_stage" not in saved[0]
     assert "failed_stage" not in saved[0]["cases"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case_count", [1, 2])
+@pytest.mark.parametrize("cleanup_error", [None, RuntimeError("cleanup unavailable")])
+@pytest.mark.parametrize("shared_pods", [False, True])
+async def test_workflow_completes_before_final_deployment_cleanup(monkeypatch, case_count, cleanup_error, shared_pods):
+    import asyncio
+    import copy
+
+    workflow = {
+        "kind": "workflow",
+        "id": "completion-test",
+        "status": "queued",
+        "cases": [
+            {"id": f"case-{index}", "kind": "guide", "status": "queued", "deployment_run_id": f"deployment-{index}"}
+            for index in range(case_count)
+        ],
+    }
+    saved = []
+    if shared_pods:
+        workflow["cases"].append(
+            {
+                "id": "shared-baseline",
+                "kind": "baseline",
+                "status": "queued",
+                "baseline_type": "kubernetes-service",
+                "dependent_guide_case_id": f"case-{case_count - 1}",
+            }
+        )
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleaned = []
+    ready_case = SimpleNamespace(
+        id="ready-case",
+        status=SimpleNamespace(value="ready"),
+        execution_id="execution",
+        attempt=1,
+        provider_ref="optimized-baseline",
+    )
+    execution = SimpleNamespace(
+        status=router.DeploymentStatus.READY,
+        namespace="test",
+        endpoint=SimpleNamespace(url="http://routed", baseline_url="http://direct"),
+    )
+    monkeypatch.setattr(router, "_get", lambda *_: workflow)
+    monkeypatch.setattr(router, "_save", lambda value: saved.append(copy.deepcopy(value)))
+    monkeypatch.setattr(router, "_ordered_evaluation_cases", lambda cases: cases)
+    monkeypatch.setattr(router, "_benchmark_specification", lambda *_: None)
+    monkeypatch.setattr(router, "case_benchmark_request", lambda *_, **__: None)
+    monkeypatch.setattr(router, "_comparison_report", lambda *_: {"ready": True})
+    monkeypatch.setattr(router, "_has_pending_suite_scenario", lambda *_: False)
+    monkeypatch.setattr(
+        router,
+        "_store",
+        SimpleNamespace(
+            get_run=lambda run_id: SimpleNamespace(id=run_id, cases=[ready_case]),
+            get_execution=lambda *_: execution,
+        ),
+    )
+
+    async def benchmark(_workflow, case, *_args, **_kwargs):
+        case.update(status="succeeded", finished_at=router._now())
+
+    class Worker:
+        async def clean_case(self, run_id, _case_id):
+            cleaned.append(run_id)
+            if len(cleaned) < case_count:
+                assert saved[-1]["status"] == "running"
+                return
+            cleanup_started.set()
+            await release_cleanup.wait()
+            if cleanup_error:
+                raise cleanup_error
+
+    monkeypatch.setattr(router, "execute_case_benchmark", benchmark)
+    monkeypatch.setattr(router, "deployment_run_manager", SimpleNamespace(worker_for_run=lambda *_: Worker()))
+    task = asyncio.create_task(router._execute_evaluation(workflow["id"]))
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+        assert not task.done()
+        completed = saved[-1]
+        assert completed["status"] == "succeeded"
+        assert completed["active_case_id"] is None
+        assert completed["report"] == {"ready": True}
+        assert completed["finished_at"]
+    finally:
+        release_cleanup.set()
+        await asyncio.wait_for(task, timeout=2)
+    assert saved[-1]["status"] == "succeeded"
+    assert saved[-1]["finished_at"] == completed["finished_at"]
+    assert saved[-1]["cases"][case_count - 1].get("cleanup_error") == (str(cleanup_error) if cleanup_error else None)
+
+
+@pytest.mark.asyncio
+async def test_delete_completed_workflow_waits_for_background_cleanup(monkeypatch):
+    import asyncio
+
+    workflow_id = "00000000-0000-4000-8000-000000000023"
+    workflow = {"kind": "workflow", "id": workflow_id, "status": "succeeded", "cases": []}
+    release_cleanup = asyncio.Event()
+    delete_checked = asyncio.Event()
+
+    async def cleanup():
+        await release_cleanup.wait()
+        router._save(workflow)
+
+    original_get = router._get
+
+    def get_record(kind, record_id):
+        record = original_get(kind, record_id)
+        delete_checked.set()
+        return record
+
+    router._save(workflow)
+    monkeypatch.setattr(router, "_get", get_record)
+    cleanup_task = asyncio.create_task(cleanup())
+    monkeypatch.setitem(router._workflow_tasks, workflow_id, cleanup_task)
+    deletion = asyncio.create_task(router.delete_workflow_run(workflow_id))
+    try:
+        await asyncio.wait_for(delete_checked.wait(), timeout=2)
+        assert not deletion.done()
+        assert original_get("workflow", workflow_id) is not None
+    finally:
+        release_cleanup.set()
+        await asyncio.wait_for(asyncio.gather(cleanup_task, deletion), timeout=2)
+    assert original_get("workflow", workflow_id) is None
 
 
 def test_each_configuration_can_select_only_ablations_and_keeps_its_own_comparisons():

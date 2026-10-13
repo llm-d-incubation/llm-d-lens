@@ -67,6 +67,7 @@ def pod_failure(pod):
 
 async def _poll_harness(run, namespace, environment, save, now, live=None):
     next_poll = 0
+    label = run.get("harness_pod_label", "llmdbench-harness-launcher")
     while True:
         refresh = asyncio.get_running_loop().time() >= next_poll
         if live is not None:
@@ -83,7 +84,7 @@ async def _poll_harness(run, namespace, environment, save, now, live=None):
                         "get",
                         "pods",
                         "-l",
-                        "app=llmdbench-harness-launcher",
+                        f"app={label}",
                         "-o",
                         "json",
                     )
@@ -99,7 +100,17 @@ async def _poll_harness(run, namespace, environment, save, now, live=None):
         warning = live.get("warning") if live is not None else None
         failure = None
         for pod in payload.get("items", []):
+            if run.get("harness_pod_label") and pod.get("metadata", {}).get("labels", {}).get("app") != label:
+                continue
             name = pod["metadata"]["name"]
+            run.setdefault("harness_pods", {})[name] = {
+                "uid": pod.get("metadata", {}).get("uid"),
+                "phase": pod.get("status", {}).get("phase"),
+                "containers": [
+                    {"name": container.get("name"), "state": container.get("state", {})}
+                    for container in pod.get("status", {}).get("containerStatuses", [])
+                ],
+            }
             failure = failure or pod_failure(pod)
             # Even off a cached watch event, fetch logs for a failing pod so the
             # load-generation marker below is seen before deciding to fail.
@@ -143,7 +154,7 @@ async def _wait_for_pods(live, delay):
         await asyncio.wait_for(live["changed"].wait(), delay)
 
 
-async def _watch_pods(namespace, environment, live):
+async def _watch_pods(namespace, environment, live, label="llmdbench-harness-launcher"):
     from llm_d_bench.utils.kubernetes_auth import CliAuthenticationRequiredError
     from llm_d_bench.utils.kubernetes_watch import watch_resource_events
 
@@ -153,7 +164,7 @@ async def _watch_pods(namespace, environment, live):
                 "pods",
                 kubeconfig=environment.get("KUBECONFIG") or os.environ.get("KUBECONFIG"),
                 namespace=namespace,
-                selector="app=llmdbench-harness-launcher",
+                selector=f"app={label}",
             )
         ) as events:
             async for event in events:
@@ -184,7 +195,9 @@ async def watch_harness(run, namespace, environment, save, now):
     if not sdk_enabled():
         return await _poll_harness(run, namespace, environment, save, now)
     live = {"pods": {}, "changed": asyncio.Event(), "warning": None}
-    worker = asyncio.create_task(_watch_pods(namespace, environment, live))
+    worker = asyncio.create_task(
+        _watch_pods(namespace, environment, live, run.get("harness_pod_label", "llmdbench-harness-launcher"))
+    )
     try:
         await _poll_harness(run, namespace, environment, save, now, live)
     finally:

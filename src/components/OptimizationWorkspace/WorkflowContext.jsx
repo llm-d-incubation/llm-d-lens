@@ -253,7 +253,7 @@ export function WorkflowProvider({ children }) {
     });
     const [candidateSourceIds, setCandidateSourceIds] = useState(() => persistedArray(persisted.candidateSourceIds));
     const [candidateSearchConfig, setCandidateSearchConfig] = useState({
-        totalGpus: 8, aicSystemName: 'b60', aicBackendName: 'vllm', aicDatabaseMode: 'SILICON',
+        totalGpus: 8, aicSystemName: '', aicBackendName: 'vllm', aicDatabaseMode: 'SILICON',
         maxCandidatesPerMode: 3, ...(persisted.candidateSearchConfig || {}),
     });
     const [guideCatalog, setGuideCatalog] = useState(null);

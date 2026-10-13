@@ -20,7 +20,7 @@ class AICRequest(BaseModel):
     mean_output_tokens: int = Field(default=256, ge=1)
     ttft_target_ms: float | None = None
     tpot_target_ms: float | None = None
-    aic_system_name: str = Field(default="b60", min_length=1)
+    aic_system_name: str = Field(min_length=1)
     aic_backend_name: str = Field(default="vllm", min_length=1)
     aic_database_mode: str = Field(default="SILICON", min_length=1)
     max_candidates: int = Field(default=10, ge=1, le=50)
@@ -39,7 +39,7 @@ class AICEstimateRequest(BaseModel):
     mean_output_tokens: int = Field(default=256, ge=1)
     ttft_target_ms: float | None = Field(default=None, gt=0)
     tpot_target_ms: float | None = Field(default=None, gt=0)
-    aic_system_name: str = Field(default="b60", min_length=1)
+    aic_system_name: str = Field(min_length=1)
     aic_backend_name: str = Field(default="vllm", min_length=1)
     aic_database_mode: str = Field(default="SILICON", min_length=1)
     tp: int = Field(default=1, ge=1)

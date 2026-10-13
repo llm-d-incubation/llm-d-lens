@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 
-def shared_prefix_routing_workload() -> dict:
+def shared_prefix_routing_workload(*, full: bool = False) -> dict:
     """Fresh routing-comparison workload; provider goals and baselines stay local."""
     return {
-        "num_groups": 150,
+        "num_groups": 150 if full else 4,
         "num_prompts_per_group": 5,
-        "system_prompt_len": 6000,
-        "question_len": 1200,
-        "output_len": 1000,
+        "system_prompt_len": 6000 if full else 512,
+        "question_len": 1200 if full else 128,
+        "output_len": 1000 if full else 64,
         "enable_multi_turn_chat": False,
-        "interval": 60,
-        "stages": [{"rate": rate, "duration": 60} for rate in (3, 10, 20, 30, 40, 49, 55, 60)],
+        "interval": 0,
+        "stages": [{"rate": rate, "duration": 60 if full else 20} for rate in ((3, 10) if full else (0.4, 0.8))],
     }
 
 
@@ -24,19 +24,30 @@ _PROVIDER_CAPABILITIES = {
     "optimized-baseline": {
         "label": "Optimized baseline",
         "variants": [],
-        "model_servers": ["vllm"],
         "supports_pd": False,
         "supports_kubernetes_service_baseline": True,
         "evaluation": {
-            "default_variant": "",
             "required_baselines": ["kubernetes-service", "load-only", "affinity-only"],
             "experiment_variable": "routing policy",
-            "default_goal": "full-evaluation",
+            "default_goal": "quick-check",
             "goals": [
+                {
+                    "id": "quick-check",
+                    "label": "Lightweight routing check",
+                    "recommended": True,
+                    "description": "Small shared-prefix workload for initial validation, not a capacity measurement.",
+                    "scenarios": [
+                        {
+                            "id": "quick-prefix",
+                            "name": "Lightweight shared-prefix check",
+                            "benchmark": {"shared_prefix": shared_prefix_routing_workload()},
+                        }
+                    ],
+                },
                 {
                     "id": "full-evaluation",
                     "label": "Full routing evaluation",
-                    "recommended": True,
+                    "recommended": False,
                     "description": (
                         "Kubernetes RR, load-only, affinity-only, and full routing arms under a shared-prefix "
                         "saturation sweep."
@@ -49,7 +60,7 @@ _PROVIDER_CAPABILITIES = {
                                 "Increase request rate for repeated long prompts and measure throughput, TTFT, and "
                                 "prefix locality against the selected references."
                             ),
-                            "benchmark": {"shared_prefix": shared_prefix_routing_workload()},
+                            "benchmark": {"shared_prefix": shared_prefix_routing_workload(full=True)},
                         },
                     ],
                 },
@@ -72,16 +83,15 @@ _PROVIDER_CAPABILITIES = {
                 "Router and model metrics",
             ],
             "recommended_workload": {"kind": "shared-prefix", "shared_prefix": shared_prefix_routing_workload()},
+            "full_workload": {"kind": "shared-prefix", "shared_prefix": shared_prefix_routing_workload(full=True)},
         },
     },
     "pd-disaggregation": {
         "label": "Prefill/decode disaggregation",
-        "variants": ["vllm", "vllm-rdma"],
-        "model_servers": ["vllm", "vllm-rdma"],
+        "variants": [],
         "supports_pd": True,
         "supports_kubernetes_service_baseline": False,
         "evaluation": {
-            "default_variant": "vllm",
             "required_baselines": ["direct-vllm"],
             "experiment_variable": "serving topology",
             "default_goal": "full-evaluation",
@@ -104,9 +114,8 @@ _PROVIDER_CAPABILITIES = {
                             "benchmark": {
                                 "matrix": [{"isl": 5000, "osl": 250}],
                                 "concurrency_stages": [
-                                    {"concurrency": 1, "num_requests": 32},
-                                    {"concurrency": 16, "num_requests": 96},
-                                    {"concurrency": 45, "num_requests": 180},
+                                    {"concurrency": 1, "num_requests": 16},
+                                    {"concurrency": 8, "num_requests": 32},
                                 ],
                             },
                         },
@@ -141,31 +150,22 @@ _PROVIDER_CAPABILITIES = {
                     {"isl": 16384, "osl": 128},
                 ],
                 "concurrency_stages": [
-                    {"concurrency": 1, "num_requests": 32},
+                    {"concurrency": 1, "num_requests": 16},
                     {"concurrency": 8, "num_requests": 32},
-                    {"concurrency": 32, "num_requests": 96},
-                    {"concurrency": 64, "num_requests": 192},
                 ],
             },
         },
     },
     "tiered-prefix-cache": {
         "label": "Tiered prefix cache",
-        "variants": ["base", "native/cpu/base", "lmcache-connector/cpu/base"],
-        "variant_labels": {
-            "base": "HBM-only",
-            "native/cpu/base": "Native CPU offload",
-            "lmcache-connector/cpu/base": "LMCache CPU offload",
-        },
+        "variants": [],
         "variant_description": (
             "Each selected deployment overlay becomes an independent configuration and is "
             "evaluated with the same workload."
         ),
-        "model_servers": ["vllm"],
         "supports_pd": False,
         "supports_kubernetes_service_baseline": False,
         "evaluation": {
-            "default_variant": "native/cpu/base",
             "required_baselines": ["direct-vllm"],
             "experiment_variable": "cache-tier",
             "default_goal": "full-evaluation",
@@ -193,42 +193,38 @@ _PROVIDER_CAPABILITIES = {
                     "stages": [
                         {"rate": 1.0, "duration": 60},
                         {"rate": 1.5, "duration": 60},
-                        {"rate": 2.0, "duration": 60},
-                        {"rate": 2.5, "duration": 60},
-                        {"rate": 3.0, "duration": 60},
                     ],
                 },
             },
-            "unavailable_variants": [
-                {
-                    "id": "native/fs/base",
-                    "label": "Native CPU + filesystem",
-                    "reason": "The selected llm-d source does not contain this XPU overlay.",
-                },
-                {
-                    "id": "lmcache-connector/fs/base",
-                    "label": "LMCache CPU + filesystem",
-                    "reason": "Requires RWX PVC provisioning and validation, which Prism does not orchestrate yet.",
-                },
-            ],
         },
     },
     "precise-prefix-cache-routing": {
         "label": "Precise prefix-cache routing",
         "variants": [],
-        "model_servers": ["vllm"],
         "supports_pd": False,
         "supports_kubernetes_service_baseline": True,
         "evaluation": {
-            "default_variant": "",
             "required_baselines": ["kubernetes-service", "optimized-baseline"],
             "experiment_variable": "routing-policy",
-            "default_goal": "full-evaluation",
+            "default_goal": "quick-check",
             "goals": [
+                {
+                    "id": "quick-check",
+                    "label": "Lightweight routing check",
+                    "recommended": True,
+                    "description": "Small shared-prefix workload for initial validation, not a capacity measurement.",
+                    "scenarios": [
+                        {
+                            "id": "quick-prefix",
+                            "name": "Lightweight shared-prefix check",
+                            "benchmark": {"shared_prefix": shared_prefix_routing_workload()},
+                        }
+                    ],
+                },
                 {
                     "id": "full-evaluation",
                     "label": "Full precise-routing evaluation",
-                    "recommended": True,
+                    "recommended": False,
                     "description": ("RR, approximate, and precise routing under reuse, load, and a low-reuse control."),
                     "scenarios": [
                         {
@@ -238,7 +234,7 @@ _PROVIDER_CAPABILITIES = {
                                 "Increase request rate for repeated long prompts and compare precise KV-aware routing "
                                 "with Kubernetes round-robin."
                             ),
-                            "benchmark": {"shared_prefix": shared_prefix_routing_workload()},
+                            "benchmark": {"shared_prefix": shared_prefix_routing_workload(full=True)},
                         },
                     ],
                 },
@@ -269,6 +265,7 @@ _PROVIDER_CAPABILITIES = {
                 "Index lookup activity",
             ],
             "recommended_workload": {"kind": "shared-prefix", "shared_prefix": shared_prefix_routing_workload()},
+            "full_workload": {"kind": "shared-prefix", "shared_prefix": shared_prefix_routing_workload(full=True)},
         },
     },
 }
@@ -278,8 +275,7 @@ def _supported_accelerators() -> list[str]:
     """Upstream guide variants the deploy providers can render.
 
     Derived from the registered hardware profiles (``upstream_variant``: xpu,
-    gpu, ...) so a new vendor does not need this list edited; an Intel-only
-    fallback keeps the history when hardware discovery is unavailable.
+    gpu, ...) so a new vendor does not need this list edited.
     """
     try:
         from llm_d_bench.hardware.registry import all_profiles
@@ -287,52 +283,19 @@ def _supported_accelerators() -> list[str]:
         variants = {profile.upstream_variant for profile in all_profiles() if profile.upstream_variant}
     except Exception:  # pragma: no cover - capabilities must not fail on discovery errors
         variants = set()
-    return sorted(variants or {"xpu"})
+    return sorted(variants)
 
 
-#: PD-disaggregation variants per accelerator (the accelerator comes from the
-#: selected cluster's hardware, never the Lens host's own profile). Variant ids
-#: follow the guide tree under ``modelserver/<accelerator>/``:
-#: - NVIDIA GPU: vLLM infra-provider overlays (``gpu/vllm/<INFRA_PROVIDER>``).
-#:   Only the generic ``base`` overlay is supported today.
-#: - Intel XPU: the two model-server overlays ``xpu/vllm`` and ``xpu/vllm-rdma``.
-_PD_VARIANTS_BY_ACCELERATOR = {
-    "xpu": ["vllm", "vllm-rdma"],
-    "gpu": ["base"],
-}
-_PD_UNAVAILABLE_VARIANTS_BY_ACCELERATOR = {
-    "gpu": [
-        {"id": "coreweave", "label": "CoreWeave", "reason": "Cloud-provider overlay is not supported yet."},
-        {"id": "gke/base", "label": "GKE", "reason": "Cloud-provider overlay is not supported yet."},
-        {"id": "gke/a4x", "label": "GKE A4X", "reason": "Cloud-provider overlay is not supported yet."},
-        {"id": "gke/a4xmax", "label": "GKE A4X Max", "reason": "Cloud-provider overlay is not supported yet."},
-        {"id": "aws", "label": "AWS EFA", "reason": "Cloud-provider overlay is not supported yet."},
-        {
-            "id": "cks-mooncake",
-            "label": "CKS / Mooncake",
-            "reason": "Requires an InfiniBand/RDMA cluster that Prism does not orchestrate yet.",
-        },
-    ],
-}
+def _hardware_variants(metadata: dict) -> dict:
+    """Guide entry points are discovered from the selected source checkout."""
+    from copy import deepcopy
 
-
-def _hardware_variants(provider: str, metadata: dict) -> dict:
-    """Expose a provider's per-accelerator variants to the UI.
-
-    The PD disaggregation variant set depends on the **selected cluster's**
-    accelerator (``gpu`` for NVIDIA, ``xpu`` for Intel), not on the Lens host, so
-    the capabilities carry a per-accelerator map and the UI picks by the cluster
-    hardware. Variants declared unavailable are surfaced but not selectable.
-    """
-    if provider != "pd-disaggregation":
-        return metadata
-    variants = sorted({variant for items in _PD_VARIANTS_BY_ACCELERATOR.values() for variant in items})
-    return {
-        **metadata,
-        "variants": variants,
-        "variants_by_accelerator": _PD_VARIANTS_BY_ACCELERATOR,
-        "unavailable_variants_by_accelerator": _PD_UNAVAILABLE_VARIANTS_BY_ACCELERATOR,
-    }
+    result = deepcopy(metadata)
+    result["variants"] = []
+    result.pop("variant_labels", None)
+    result.get("evaluation", {}).pop("unavailable_variants", None)
+    result.get("evaluation", {}).pop("default_variant", None)
+    return result
 
 
 def deployment_capabilities() -> list[dict]:
@@ -341,7 +304,7 @@ def deployment_capabilities() -> list[dict]:
             "id": provider,
             "supported": True,
             "accelerators": _supported_accelerators(),
-            **_hardware_variants(provider, metadata),
+            **_hardware_variants(metadata),
         }
         for provider, metadata in _PROVIDER_CAPABILITIES.items()
     ]
@@ -356,7 +319,7 @@ def provider_capability(provider: str) -> dict | None:
             "id": provider,
             "supported": True,
             "accelerators": _supported_accelerators(),
-            **_hardware_variants(provider, capability),
+            **_hardware_variants(capability),
         }
     )
 

@@ -20,8 +20,9 @@ from llm_d_bench.deploy.providers.deployment_bundle import (
     subprocess_bundle_runner,
 )
 from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
-from llm_d_bench.deploy.providers.hardware_profile import requires_dra_claim, set_accelerator_request
+from llm_d_bench.deploy.providers.hardware_profile import active_profile, default_guide_variant, set_accelerator_request
 from llm_d_bench.deploy.providers.model_cache_environment import model_cache_environment
+from llm_d_bench.deploy.providers.storage_mount import resolve_mount
 from llm_d_bench.utils.paths import prism_temp_root
 from llm_d_bench.utils.shell import spawn
 
@@ -119,6 +120,11 @@ class HelmKustomizeGuideAdapter:
 
     async def render(self, definition, overrides: dict[str, Any]) -> GuideDeploymentArtifact:
         parameters = self._parameters(overrides)
+        parameters["resolved_mount"] = await resolve_mount(
+            overrides.get("runtime") or {},
+            cluster_id=overrides.get("_cluster_id"),
+            namespace=overrides.get("_deployment_namespace"),
+        )
         overlay = self._descriptor.variants[parameters["variant"]]
         process = await spawn(
             [str(self._kubectl_path), "kustomize", str(overlay)],
@@ -170,6 +176,9 @@ class HelmKustomizeGuideAdapter:
         status, stdout, stderr = await self._runner(["kubectl", "create", "namespace", namespace])
         if status != 0 and "AlreadyExists" not in stderr:
             raise RuntimeError((stderr or stdout).strip())
+        model_secret = (execution_context.get("deployment_policy") or {}).get("model_secret") or {}
+        if "endpoint" not in artifact.deployment_contract and model_secret.get("mode") == "existing-secret":
+            await self._runner.copy_model_secret(namespace, model_secret["sourceNamespace"], model_secret["sourceName"])
         bundle = artifact.deployment_contract.get("deploymentBundle")
         reproducibility = {}
         if bundle is not None:
@@ -327,7 +336,7 @@ class HelmKustomizeGuideAdapter:
         model = overrides.get("model") or {}
         decode = overrides.get("decode") or {}
         runtime = overrides.get("runtime") or {}
-        variant = str(overrides.get("guideVariant") or self._descriptor.default_variant)
+        variant = str(overrides.get("guideVariant") or default_guide_variant(self._descriptor.variants))
         if variant not in self._descriptor.variants:
             raise ValueError(f"unsupported {self._descriptor.guide_id} variant: {variant}")
         if not isinstance(model.get("name"), str) or not model["name"]:
@@ -352,11 +361,24 @@ class HelmKustomizeGuideAdapter:
 
     def _patch_documents(self, documents: list[dict[str, Any]], parameters: dict[str, Any]) -> None:
         deployment = next((item for item in documents if item.get("kind") == "Deployment"), None)
-        claim = next((item for item in documents if item.get("kind") == "ResourceClaimTemplate"), None)
-        if deployment is None or (requires_dra_claim(accelerator=self._accelerator) and claim is None):
+        profile = active_profile(self._accelerator)
+        claim = next(
+            (
+                item
+                for item in documents
+                if item.get("kind") == "ResourceClaimTemplate"
+                and profile
+                and any(
+                    request.get("exactly", {}).get("deviceClassName") in profile.device_classes
+                    for request in item.get("spec", {}).get("spec", {}).get("devices", {}).get("requests", [])
+                )
+            ),
+            None,
+        )
+        if deployment is None:
             raise ValueError("rendered Guide is missing Deployment or ResourceClaimTemplate")
         deployment["spec"]["replicas"] = parameters["replicas"]
-        # XPU model initialization can legitimately take longer than Kubernetes'
+        # Accelerator model initialization can legitimately take longer than Kubernetes'
         # default ten-minute Deployment progress deadline, especially while a DRA
         # claim is being prepared.
         deployment["spec"]["progressDeadlineSeconds"] = 1800
@@ -365,7 +387,10 @@ class HelmKustomizeGuideAdapter:
         )
         container["image"] = parameters["image"]
         command = container.get("args", [""])[0]
-        model = "/model-cache" if parameters["mount_path"] else parameters["model"]
+        resolved_mount = parameters.get("resolved_mount")
+        model_source = resolved_mount["model_source"] if resolved_mount else "shared-path"
+        cache_mounted = bool(resolved_mount or parameters["mount_path"])
+        model = "/model-cache" if cache_mounted and model_source == "shared-path" else parameters["model"]
         command = re.sub(r"(?m)(exec vllm serve\s+\\?\n?\s*)(\S+)", rf"\g<1>{model}", command, count=1)
         command = HelmKustomizeGuideAdapter._set_shell_argument(
             command, "tensor-parallel-size", parameters["tensor_parallel_size"]
@@ -396,7 +421,7 @@ class HelmKustomizeGuideAdapter:
                     existing.update({"name": name, "value": value})
                 else:
                     environment.append({"name": name, "value": value})
-        for name, value in model_cache_environment("shared-path", cache_mounted=bool(parameters["mount_path"])).items():
+        for name, value in model_cache_environment(model_source, cache_mounted=cache_mounted).items():
             environment = container.setdefault("env", [])
             existing = next((item for item in environment if item.get("name") == name), None)
             if existing:
@@ -406,13 +431,20 @@ class HelmKustomizeGuideAdapter:
                 environment.append({"name": name, "value": value})
         container["args"] = [command]
         set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
-        if parameters["mount_path"]:
+        if cache_mounted:
             pod_spec = deployment["spec"]["template"]["spec"]
-            pod_spec.setdefault("volumes", []).append(
-                {"name": "model-cache", "hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}}
+            volume_source = (
+                resolved_mount["volume_source"]
+                if resolved_mount
+                else {"hostPath": {"path": parameters["mount_path"], "type": "DirectoryOrCreate"}}
             )
+            pod_spec.setdefault("volumes", []).append({"name": "model-cache", **volume_source})
             container.setdefault("volumeMounts", []).append(
-                {"name": "model-cache", "mountPath": "/model-cache", "readOnly": True}
+                {
+                    "name": "model-cache",
+                    "mountPath": "/model-cache",
+                    "readOnly": resolved_mount["read_only"] if resolved_mount else True,
+                }
             )
 
     @staticmethod

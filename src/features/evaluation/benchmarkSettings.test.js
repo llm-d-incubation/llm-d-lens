@@ -32,6 +32,14 @@ test('rate duration summary counts every target, without counting dataset size a
  const b = {workload:'sanity_random.yaml',harness:'inference-perf',parallelism:1,wait_timeout_seconds:7200,shared_prefix:{num_groups:2,num_prompts_per_group:4,system_prompt_len:128,question_len:32,output_len:32,stages:[{rate:1,duration:30},{rate:2,duration:60}]}};
  assert.deepEqual(benchmarkIssues(b,{},1024),[]);
  assert.equal(benchmarkSummary(b,2).durationSeconds,180);
+ assert.equal(benchmarkSummary({...b,parallelism:2},2).requests,600);
+});
+
+test('automatic timeout is the default while explicit invalid timeouts are rejected', () => {
+ const benchmark = applyBenchmarkPreset('quick');
+ assert.equal(benchmark.wait_timeout_seconds, null);
+ assert.deepEqual(benchmarkIssues(benchmark), []);
+ assert.ok(benchmarkIssues({...benchmark, wait_timeout_seconds:0}).some(issue=>issue.includes('Timeout')));
 });
 
 test('validates serialized fields even when their editor mode is inactive', () => {

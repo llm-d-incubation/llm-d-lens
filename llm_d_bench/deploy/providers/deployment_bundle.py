@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 
+from llm_d_bench.configuration.router_compatibility import compatible_router_values
 from llm_d_bench.utils.paths import prism_temp_root
 from llm_d_bench.utils.shell import spawn
 
@@ -178,6 +179,15 @@ async def install_deployment_bundle(
     """Render and install only saved bundle inputs through an injectable command boundary."""
     materialized = materialize_deployment_bundle(bundle, guide, source_commit, output_root)
     effective_values = materialized.effective_values
+    original_content = (
+        effective_values_content
+        if effective_values_content is not None
+        else effective_values.read_text(encoding="utf-8")
+    )
+    original_values = _yaml_mapping(original_content, "Derived Router values")
+    compatible_values = compatible_router_values(original_values, materialized.version)
+    if compatible_values != original_values:
+        effective_values_content = yaml.safe_dump(compatible_values, sort_keys=False)
     if effective_values_content is not None:
         if not _SAFE_ASSET_NAME.fullmatch(effective_values_name):
             raise ValueError("Derived Router values require a safe file name")

@@ -149,7 +149,7 @@ report:
                 harness: "inference-perf",
                 workload: `${scenario.id}.yaml`,
                 parallelism: Number(defaults.parallelism),
-                wait_timeout_seconds: Number(defaults.wait_timeout_seconds),
+                wait_timeout_seconds: defaults.wait_timeout_seconds == null ? null : Number(defaults.wait_timeout_seconds),
                 matrix: [{ isl: Number(scenario.isl || defaults.isl), osl: Number(scenario.osl || defaults.osl) }],
                 concurrency_stages: stages.map((stage) => ({ concurrency: Number(stage.concurrency), num_requests: Number(stage.num_requests) })),
                 warmup_requests: Number(defaults.warmup_requests),
@@ -252,7 +252,7 @@ export default function EvaluationDashboard({ onNavigate }) {
     const wizardNextRef = useRef(null);
     const [mode, setMode] = useState("deploy");
     const [name, setName] = useState("Evaluation");
-    const [benchmark, setBenchmark] = useState({ harness: "inference-perf", workload: "sanity_random.yaml", parallelism: 1, wait_timeout_seconds: 1800 });
+    const [benchmark, setBenchmark] = useState({ harness: "inference-perf", workload: "sanity_random.yaml", parallelism: 1, wait_timeout_seconds: null });
     const [suiteProfileId, setSuiteProfileId] = useState("custom");
     const [suiteScenarioIds, setSuiteScenarioIds] = useState([]);
     const [suiteDefaults, setSuiteDefaults] = useState({ isl: 256, osl: 128, concurrency: 1, requests: 16 });

@@ -29,13 +29,11 @@ def test_deployment_capabilities_expose_provider_ids() -> None:
 def test_evaluation_defaults_are_declarative_and_copy_safe() -> None:
     capability = provider_capability("tiered-prefix-cache")
     assert capability is not None
-    assert capability["evaluation"]["default_variant"] == "native/cpu/base"
-    assert capability["evaluation"]["required_baselines"] == ["direct-vllm"]
-    unavailable = capability["evaluation"]["unavailable_variants"]
-    assert {item["id"] for item in unavailable} == {
-        "native/fs/base",
-        "lmcache-connector/fs/base",
-    }
+    assert "default_variant" not in capability["evaluation"]
+    assert capability["variants"] == []
+    assert "unavailable_variants" not in capability["evaluation"]
+    capability["evaluation"]["required_baselines"].append("mutated")
+    assert provider_capability("tiered-prefix-cache")["evaluation"]["required_baselines"] == ["direct-vllm"]
 
 
 def test_three_additional_guides_expose_complete_evaluation_plans() -> None:
@@ -48,7 +46,7 @@ def test_three_additional_guides_expose_complete_evaluation_plans() -> None:
         evaluation = provider_capability(provider)["evaluation"]
         assert evaluation["required_baselines"] == baselines
         assert evaluation["recommended_workload"]["kind"] == workload_kind
-        assert evaluation["default_goal"] == "full-evaluation"
+        assert evaluation["default_goal"] == ("full-evaluation" if provider == "pd-disaggregation" else "quick-check")
         assert evaluation["goals"]
         assert evaluation["comparison_arms"]
         assert evaluation["evidence"]
@@ -60,7 +58,7 @@ def test_routing_workload_instances_do_not_share_nested_mutable_state():
 
     first, second = shared_prefix_routing_workload(), shared_prefix_routing_workload()
     first["stages"][0]["rate"] = -1
-    assert second["stages"][0]["rate"] == 3
+    assert second["stages"][0]["rate"] == 0.4
     optimized = provider_capability("optimized-baseline")["evaluation"]
     precise = provider_capability("precise-prefix-cache-routing")["evaluation"]
     assert optimized["recommended_workload"]["shared_prefix"] is not precise["recommended_workload"]["shared_prefix"]
@@ -68,3 +66,15 @@ def test_routing_workload_instances_do_not_share_nested_mutable_state():
         optimized["recommended_workload"]["shared_prefix"]
         is not optimized["goals"][0]["scenarios"][0]["benchmark"]["shared_prefix"]
     )
+
+
+def test_routing_workload_defaults_are_lightweight_with_explicit_full_profile():
+    from llm_d_bench.deploy.capabilities import shared_prefix_routing_workload
+
+    quick = shared_prefix_routing_workload()
+    full = shared_prefix_routing_workload(full=True)
+    assert sum(int(stage["rate"] * stage["duration"]) for stage in quick["stages"]) == 24
+    assert quick["system_prompt_len"] + quick["question_len"] == 640
+    assert quick["output_len"] == 64
+    assert sum(int(stage["rate"] * stage["duration"]) for stage in full["stages"]) == 780
+    assert full["output_len"] == 1000

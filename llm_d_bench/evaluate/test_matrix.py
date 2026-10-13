@@ -623,6 +623,8 @@ async def test_execute_isolates_cluster_process_from_harness_proxies(monkeypatch
     assert not any(name.lower() in {"http_proxy", "https_proxy", "all_proxy"} for name in environment)
     assert environment["KUBECONFIG"] == "/selected/cluster.yaml"
     assert "--envvarspod" not in command
+    label_override = next(arg for arg in command if arg.startswith("harness.podLabel="))
+    assert label_override.startswith("harness.podLabel=lens-harness-")
     override = next(arg for arg in command if arg.startswith("harness.extraEnvVars="))
     pod_env = {entry["name"]: entry["value"] for entry in json.loads(override.split("=", 1)[1])}
     assert pod_env["HTTPS_PROXY"] == "http://harness-proxy.invalid:911"

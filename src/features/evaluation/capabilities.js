@@ -48,7 +48,26 @@ export function configurationSummary(artifact, provider) {
         topology: prefill.replicaCount != null
             ? `${prefill.replicaCount}P×TP${prefill.tensorParallelSize ?? "—"} / ${serving.replicaCount ?? "—"}D×TP${serving.tensorParallelSize ?? "—"}`
             : `${serving.replicaCount ?? "—"} replica · TP${serving.tensorParallelSize ?? "—"}`,
-        candidate: provider?.variant_labels?.[variant] || variant || "Default Guide topology",
+        candidate: provider?.variant_labels?.[variant] || (variant === "." ? "Default Guide topology" : variant) || "Default Guide topology",
         experimentVariable: evaluationCapability(provider).experiment_variable || "deployment configuration",
     };
+}
+
+// Preserve complete source paths, including variants under sibling runtimes.
+export function guideVariantOptions(modelServers = [], modelServer = '') {
+    const options = [];
+    for (const server of modelServers) {
+        if (server.id !== modelServer && !server.id.startsWith(`${modelServer}-`)) continue;
+        for (const variant of server.variants || []) {
+            const value = server.id === modelServer ? variant : variant === '.' ? server.id : `${server.id}/${variant}`;
+            options.push({ value, label: variant === '.' ? `Default (${server.id})` : server.id === modelServer ? variant : `${server.id} / ${variant}` });
+        }
+    }
+    return options;
+}
+
+export function selectedGuideVariant(options, current = '') {
+    if (options.some(option => option.value === current)) return current;
+    return options.find(option => option.value === '.')?.value
+        || options.find(option => option.value === 'base')?.value || options[0]?.value || '';
 }

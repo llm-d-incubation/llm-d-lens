@@ -2,12 +2,14 @@
 
 import asyncio
 import hashlib
+import json
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import yaml
 
-from llm_d_bench.deploy.providers.guide_adapter import GuideDeploymentArtifact
+from llm_d_bench.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
 from llm_d_bench.deploy.providers.precise_prefix_cache_routing import (
     _EPP_ENDPOINT_SETTLE_SECONDS,
     UPSTREAM_SAMPLE_PEAK_PREFILL_THROUGHPUT,
@@ -23,6 +25,32 @@ def _valid_overrides(**extra):
     }
     overrides.update(extra)
     return overrides
+
+
+@pytest.mark.asyncio
+async def test_render_resolves_selected_storage_volume(monkeypatch, tmp_path: Path):
+    import llm_d_bench.deploy.providers.precise_prefix_cache_routing as precise
+
+    mount = {"volume_source": {"persistentVolumeClaim": {"claimName": "cache-pvc"}}, "read_only": False}
+    resolve = AsyncMock(return_value=mount)
+    monkeypatch.setattr(precise, "resolve_mount", resolve)
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._definition = GuideDefinition("precise-prefix-cache-routing", "source", "content", "supported-extension")
+    adapter._root = tmp_path
+    adapter._modelserver_source = tmp_path
+    adapter._kustomize_build = AsyncMock(return_value=[{"kind": "ConfigMap"}])
+    adapter._patch_modelserver = Mock()
+    adapter._patched_router_values = Mock(return_value="router: {}\n")
+    overrides = _valid_overrides(
+        runtime={"image": "img:tag", "storageVolumeId": "volume-id"},
+        _cluster_id="cluster-id",
+        _deployment_namespace="llmd-run",
+    )
+
+    await adapter.render(adapter._definition, overrides)
+
+    resolve.assert_awaited_once_with(overrides["runtime"], cluster_id="cluster-id", namespace="llmd-run")
+    assert adapter._patch_modelserver.call_args.args[1]["resolved_mount"] == mount
 
 
 def test_parameters_requires_model_image_and_decode_topology():
@@ -88,14 +116,12 @@ def test_parse_peak_prefill_throughput_reads_either_format():
 
 def test_modelserver_overlay_follows_the_active_accelerator(tmp_path: Path):
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
-    adapter._overlay_variant_value = "gpu"
-    assert adapter._modelserver_overlay(tmp_path) == (
-        tmp_path / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm/base"
-    )
-    adapter._overlay_variant_value = "xpu"
-    assert adapter._modelserver_overlay(tmp_path) == (
-        tmp_path / "guides/precise-prefix-cache-routing/modelserver/xpu/vllm"
-    )
+    for key, variant in (("gpu", "base"), ("xpu", ".")):
+        overlay = tmp_path / f"guides/precise-prefix-cache-routing/modelserver/{key}/vllm" / variant
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+        adapter._accelerator = key
+        assert adapter._modelserver_overlay(tmp_path) == overlay
 
 
 def _upstream_deployment_documents():
@@ -117,7 +143,7 @@ def _upstream_deployment_documents():
                                     "--port=$(POD_PORT)",
                                     "--dtype=float16",
                                     "--block-size=64",
-                                    '--kv-events-config={"topic":"kv@$(POD_IP):$(POD_PORT)@Qwen/Qwen3-0.6B"}',
+                                    '--kv-events-config={"enable_kv_cache_events":true,"topic":"kv@$(POD_IP):$(POD_PORT)@Qwen/Qwen3-0.6B"}',
                                 ],
                                 "env": [{"name": "DO_NOT_TRACK", "value": "1"}],
                             }
@@ -150,7 +176,7 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
     )
 
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
-    adapter._accelerator = None
+    adapter._accelerator = "intel-xpu"
     adapter._patch_modelserver(documents, parameters)
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")
@@ -161,7 +187,8 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
     assert "--max-model-len=6000" in container["args"]
     assert "--gpu-memory-utilization=0.9" in container["args"]
     kv_events_argument = next(item for item in container["args"] if item.startswith("--kv-events-config="))
-    kv_events = yaml.safe_load(kv_events_argument.removeprefix("--kv-events-config="))
+    kv_events = json.loads(kv_events_argument.removeprefix("--kv-events-config="))
+    assert kv_events["enable_kv_cache_events"] is True
     assert kv_events["topic"] == "kv@$(POD_IP):$(POD_PORT)@Qwen/Qwen3-30B-A3B"
     assert container["image"] == "ghcr.io/llm-d/llm-d-xpu:v0.9.0"
     claim = next(item for item in documents if item["kind"] == "ResourceClaimTemplate")
@@ -182,7 +209,7 @@ def test_patch_modelserver_applies_custom_parameters_and_mount_path():
     )
 
     adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
-    adapter._accelerator = None
+    adapter._accelerator = "intel-xpu"
     adapter._patch_modelserver(documents, parameters)
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")
@@ -199,6 +226,34 @@ def test_patch_modelserver_applies_custom_parameters_and_mount_path():
         "hostPath": {"path": "/mnt/data/huggingface-cache", "type": "DirectoryOrCreate"},
     } in pod_spec["volumes"]
     assert {"name": "model-cache", "mountPath": "/model-cache", "readOnly": True} in container["volumeMounts"]
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+def test_patch_modelserver_uses_selected_storage_volume_cache(read_only):
+    documents = _upstream_deployment_documents()
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._accelerator = None
+    parameters = adapter._parameters(_valid_overrides())
+    parameters["resolved_mount"] = {
+        "volume_source": {"persistentVolumeClaim": {"claimName": "cache-in-deployment-namespace"}},
+        "mount_path": "/model-cache",
+        "read_only": read_only,
+        "model_source": "shared-path" if read_only else "auto-cache",
+    }
+
+    adapter._patch_modelserver(documents, parameters)
+
+    pod_spec = documents[0]["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    assert pod_spec["volumes"] == [
+        {"name": "model-cache", "persistentVolumeClaim": {"claimName": "cache-in-deployment-namespace"}}
+    ]
+    assert container["volumeMounts"] == [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
+    assert container["args"][0] == ("/model-cache" if read_only else "Qwen/Qwen3-30B-A3B")
+    environment = {item["name"]: item["value"] for item in container["env"]}
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
+    assert environment.get("HF_HOME") == (None if read_only else "/model-cache")
 
 
 def _write_router_values(path: Path, model_name: str = "Qwen/Qwen3-0.6B") -> None:
@@ -241,6 +296,12 @@ def _asset(name: str, content: str) -> dict[str, str]:
 @pytest.mark.asyncio
 async def test_deploy_uses_saved_precise_resources_values_and_calibration_when_sources_are_missing(tmp_path: Path):
     runner = _ReadinessRunner()
+    operations = []
+
+    async def copy_model_secret(namespace, source_namespace, source_name):
+        operations.append("copy_secret")
+
+    runner.copy_model_secret = AsyncMock(side_effect=copy_model_secret)
     adapter = PrecisePrefixCacheRoutingAdapter(
         runner,
         tmp_path / "removed-guide",
@@ -252,6 +313,7 @@ async def test_deploy_uses_saved_precise_resources_values_and_calibration_when_s
     bundle_commands = []
 
     async def bundle_runner(command):
+        operations.append("bundle")
         bundle_commands.append(command)
         if command[1:3] == ["get", "manifest"]:
             return 0, "kind: Deployment\nmetadata:\n  name: installed-router\n", ""
@@ -291,13 +353,54 @@ async def test_deploy_uses_saved_precise_resources_values_and_calibration_when_s
         deployment_contract={"deploymentBundle": bundle},
     )
 
-    execution = await adapter.deploy(artifact, {"namespace": "llmd-run"})
+    execution = await adapter.deploy(
+        artifact,
+        {
+            "namespace": "llmd-run",
+            "deployment_policy": {
+                "model_secret": {
+                    "mode": "existing-secret",
+                    "sourceNamespace": "model-secrets",
+                    "sourceName": "huggingface",
+                }
+            },
+        },
+    )
 
+    runner.copy_model_secret.assert_awaited_once_with("llmd-run", "model-secrets", "huggingface")
+    assert operations[0] == "copy_secret"
     applied = [command for command in bundle_commands if command[:2] == ["kubectl", "apply"]]
     assert [Path(command[-1]).name for command in applied] == ["render.yaml", "baseline.yaml"]
     assert not any("removed-guide" in " ".join(command) for command in bundle_commands + runner.commands)
     assert Path(execution["calibration_script_path"]).read_text(encoding="utf-8") == calibration
     assert execution["router_rendered_manifest"].endswith("name: installed-router\n")
+
+
+@pytest.mark.asyncio
+async def test_deploy_stops_before_router_if_model_secret_copy_fails():
+    runner = _ReadinessRunner()
+    runner.copy_model_secret = AsyncMock(side_effect=RuntimeError("source Secret is not accessible"))
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._runner = runner
+    adapter._namespace_prefix = "llmd-"
+    artifact = GuideDeploymentArtifact("precise-prefix-cache-routing", "hash")
+
+    with pytest.raises(RuntimeError, match="source Secret is not accessible"):
+        await adapter.deploy(
+            artifact,
+            {
+                "namespace": "llmd-run",
+                "deployment_policy": {
+                    "model_secret": {
+                        "mode": "existing-secret",
+                        "sourceNamespace": "model-secrets",
+                        "sourceName": "huggingface",
+                    }
+                },
+            },
+        )
+
+    assert runner.commands == [["kubectl", "create", "namespace", "llmd-run"]]
 
 
 @pytest.mark.asyncio

@@ -57,7 +57,7 @@ def test_cpu_capacity_must_match_native_connector():
 
 
 def test_explicit_nic_capacity_must_match_device_requests():
-    content = {"guideVariant": "vllm-rdma", "guideSettings": {"rdmaNicCount": 2}}
+    content = {"hardware_profile": "intel-xpu", "guideVariant": "vllm-rdma", "guideSettings": {"rdmaNicCount": 2}}
     validate_guide_settings(content, manifest(), "pd-disaggregation")
     with pytest.raises(ValueError, match="NIC"):
         validate_guide_settings(content, manifest(nic_count=1), "pd-disaggregation")

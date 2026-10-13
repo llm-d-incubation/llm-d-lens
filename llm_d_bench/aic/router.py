@@ -6,7 +6,7 @@
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
 
-"""Local HTTP API backed by the pip-installed AIConfigurator nightly SDK."""
+"""Local HTTP API backed by the pip-installed AIConfigurator SDK."""
 
 from fastapi import APIRouter, HTTPException
 

@@ -1,4 +1,4 @@
-"""Join XPUM device history to Intel DRA allocations before aggregating it.
+"""Join profile-configured device history to exclusive DRA allocations.
 
 XPUM's namespace/pod labels describe the exporter, not the consumer. Never
 attribute every GPU on a model server's node to that model server.
@@ -9,54 +9,18 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
-XPUM_SOURCE = "Intel XPUM device telemetry (DRA allocation)"
-
-# Queries and metric labels come from the Intel hardware profile
-# (telemetry.device_metrics / label_schema). The literals below are the
-# compatibility fallback for when hardware discovery is unavailable; for the
-# built-in Intel profile they are identical, so behavior is unchanged.
-_FALLBACK_QUERIES = {
-    "gpu_utilization_percent": 'hw_gpu_utilization_ratio{hw_gpu_task="compute-all"}',
-    "gpu_framebuffer_used_bytes": 'hw_memory_usage_bytes{hw_memory_location="device"}',
-}
-_FALLBACK_LABELS = {"node": "node", "pci": "pci_bdf", "device": "com_intel_subdevice_id"}
-_QUERY_METRIC_KEYS = {
-    "gpu_utilization_percent": "utilization",
-    "gpu_framebuffer_used_bytes": "framebuffer_used",
-}
+from llm_d_bench.hardware.telemetry import DEVICE_RESULT_KEYS, _selector
 
 
-def _intel_profile():
-    """Intel XPU hardware profile, or None when discovery is unavailable."""
-    try:
-        from llm_d_bench.hardware.resolver import resolve_by_accelerator_key
-
-        return resolve_by_accelerator_key("intel_gpu")
-    except Exception:  # pragma: no cover - profiling must not fail on discovery errors
-        return None
-
-
-def _telemetry():
-    profile = _intel_profile()
-    return profile.telemetry if profile is not None else None
-
-
-def _label_schema() -> dict[str, str]:
-    telemetry = _telemetry()
-    if telemetry is not None and telemetry.label_schema:
-        return {**_FALLBACK_LABELS, **dict(telemetry.label_schema)}
-    return dict(_FALLBACK_LABELS)
-
-
-def xpum_queries() -> dict[str, str]:
-    """PromQL for each XPUM metric, from the profile with a literal fallback."""
-    telemetry = _telemetry()
-    metrics = dict(telemetry.device_metrics) if telemetry is not None else {}
-    return {key: metrics.get(metric_key) or _FALLBACK_QUERIES[key] for key, metric_key in _QUERY_METRIC_KEYS.items()}
-
-
-XPUM_QUERIES = xpum_queries()
-XPUM_LABELS = _label_schema()
+def xpum_queries(profile=None) -> dict[str, str]:
+    """Compatibility name for unaggregated, profile-selected device queries."""
+    if not profile or not profile.telemetry:
+        return {}
+    return {
+        DEVICE_RESULT_KEYS.get(key, key): source.metric + _selector(source.match)
+        for key, source in profile.telemetry.device_metric_sources.items()
+        if source.metric
+    }
 
 
 def _timestamp(value):
@@ -66,18 +30,24 @@ def _timestamp(value):
         return 0
 
 
-def device_allocations(pods, claims, slices, namespace):
+def device_allocations(pods, claims, slices, namespace, profile=None):
     """Return exclusive (node, PCI) -> consumer and allocation start mappings."""
+    if not profile or not profile.telemetry:
+        return {}
+    settings = profile.telemetry.allocation
+    if profile.telemetry.allocation_join == "pod-status":
+        return plugin_device_allocations(pods, namespace, profile)
+    drivers = settings.get("drivers", profile.device_classes)
     devices = {}
     for item in slices:
         spec = item.get("spec") or {}
-        if spec.get("driver") != "gpu.intel.com":
+        if spec.get("driver") not in drivers:
             continue
         node = spec.get("nodeName")
         pool = (spec.get("pool") or {}).get("name")
         for device in spec.get("devices") or []:
             attrs = device.get("attributes") or {}
-            pci = (attrs.get("pciAddress") or attrs.get("resource.kubernetes.io/pciBusID") or {}).get("string")
+            pci = next((attrs[key].get("string") for key in settings.get("pci_attributes", []) if attrs.get(key)), None)
             if node and pool and pci:
                 devices[(pool, device.get("name"))] = (node, pci.lower())
     by_uid = {
@@ -104,14 +74,18 @@ def device_allocations(pods, claims, slices, namespace):
             _timestamp(pod.get("metadata", {}).get("creationTimestamp")),
         )
         for result in allocation.get("devices", {}).get("results") or []:
-            if result.get("driver") != "gpu.intel.com" or result.get("adminAccess") or result.get("shareID"):
+            if result.get("driver") not in drivers or result.get("adminAccess") or result.get("shareID"):
                 continue
             identity = devices.get((result.get("pool"), result.get("device")))
             # Intel DRA encodes PCI BDF in its device ID. A driver refresh can
             # temporarily remove ResourceSlices while allocated claims survive.
-            if identity is None and result.get("pool") == pod.get("spec", {}).get("nodeName"):
+            if (
+                identity is None
+                and settings.get("device_id_pattern")
+                and result.get("pool") == pod.get("spec", {}).get("nodeName")
+            ):
                 pci_id = re.fullmatch(
-                    r"([0-9a-f]{4})-([0-9a-f]{2})-([0-9a-f]{2})-([0-7])-0x[0-9a-f]{4}",
+                    settings["device_id_pattern"],
                     str(result.get("device") or "").lower(),
                 )
                 if pci_id:
@@ -124,31 +98,42 @@ def device_allocations(pods, claims, slices, namespace):
     }
 
 
-def aggregate_xpum(samples, allocations, metric):
+def aggregate_xpum(samples, allocations, metric, profile=None):
     """Produce normal Prometheus matrices for the deployment and each Pod.
 
     Require node+PCI identity. Prefer whole-device samples to tiles; deduplicate
     exporter replicas before summing bytes or averaging device utilization.
     """
+    if not profile or not profile.telemetry:
+        return [], []
+    telemetry = profile.telemetry
+    source = next(
+        (
+            source
+            for key, source in telemetry.device_metric_sources.items()
+            if DEVICE_RESULT_KEYS.get(key, key) == metric
+        ),
+        None,
+    )
+    if source is None:
+        return [], []
+    labels_schema = telemetry.label_schema
     cells = defaultdict(dict)
-    utilization = metric == "gpu_utilization_percent"
     for sample in samples:
         labels = sample.get("metric") or {}
-        node = (
-            labels.get(XPUM_LABELS["node"])
-            or labels.get("nodename")
-            or labels.get("hostname")
-            or labels.get("k8s_node_name")
+        node = next(
+            (
+                labels.get(key)
+                for key in telemetry.allocation.get("node_labels", [labels_schema.get("node", "")])
+                if labels.get(key)
+            ),
+            None,
         )
-        identity = (node, str(labels.get(XPUM_LABELS["pci"]) or "").lower())
+        identity = (node, str(labels.get(labels_schema.get("pci", "")) or "").lower())
         allocation = allocations.get(identity)
-        if not allocation:
+        if not allocation or any(labels.get(key) != value for key, value in source.match.items()):
             continue
-        if utilization and labels.get("hw_gpu_task", "compute-all") != "compute-all":
-            continue
-        if not utilization and labels.get("hw_memory_location", "device") != "device":
-            continue
-        tile = labels.get(XPUM_LABELS["device"]) or ""
+        tile = labels.get(labels_schema.get("device", "")) or ""
         for timestamp, raw in sample.get("values") or []:
             try:
                 timestamp, value = float(timestamp), float(raw)
@@ -156,16 +141,22 @@ def aggregate_xpum(samples, allocations, metric):
                 continue
             if not math.isfinite(value) or value < 0 or timestamp < allocation["since"]:
                 continue
-            if utilization and value > 1:
-                continue
             key = (identity, timestamp)
             # Duplicate scrapes are one device sample, never extra devices.
             cells[key][tile] = max(cells[key].get(tile, value), value)
     deployment = defaultdict(list)
     pods = defaultdict(lambda: defaultdict(list))
     for (identity, timestamp), tiles in cells.items():
-        value = tiles[""] if "" in tiles else sum(tiles.values()) / len(tiles) if utilization else sum(tiles.values())
-        value *= 100 if utilization else 1
+        value = (
+            tiles[""]
+            if "" in tiles
+            else sum(tiles.values())
+            if source.tile_aggregation == "sum"
+            else max(tiles.values())
+            if source.tile_aggregation == "max"
+            else sum(tiles.values()) / len(tiles)
+        )
+        value *= source.scale
         deployment[timestamp].append(value)
         pods[allocations[identity]["pod"]][timestamp].append(value)
 
@@ -173,7 +164,14 @@ def aggregate_xpum(samples, allocations, metric):
         return {
             "metric": labels,
             "values": [
-                [timestamp, sum(values) / len(values) if utilization else sum(values)]
+                [
+                    timestamp,
+                    sum(values)
+                    if source.aggregation == "sum"
+                    else max(values)
+                    if source.aggregation == "max"
+                    else sum(values) / len(values),
+                ]
                 for timestamp, values in sorted(points.items())
             ],
         }
@@ -182,3 +180,33 @@ def aggregate_xpum(samples, allocations, metric):
         [matrix(deployment, {})] if deployment else [],
         [matrix(points, {"pod": pod}) for pod, points in sorted(pods.items())],
     )
+
+
+def plugin_device_allocations(pods, namespace, profile):
+    """Use kubelet-reported resource identities; never infer ownership from a node."""
+    pattern = profile.telemetry.allocation.get("resource_id_pattern")
+    if not pattern:
+        return {}
+    resources = {name for mode in profile.deployment.modes.values() for name in mode.get("resource_names", [])}
+    owners = defaultdict(list)
+    for pod in pods:
+        metadata, spec, status = pod.get("metadata", {}), pod.get("spec", {}), pod.get("status", {})
+        if metadata.get("namespace") != namespace or not spec.get("nodeName"):
+            continue
+        for container in status.get("containerStatuses", []):
+            for resource in container.get("allocatedResourcesStatus", []):
+                if resource.get("name") not in resources:
+                    continue
+                for device in resource.get("resources", []):
+                    match = re.fullmatch(pattern, str(device.get("resourceID", "")).lower())
+                    if not match or not match.groupdict().get("pci"):
+                        continue
+                    owners[(spec["nodeName"], match.group("pci"))].append(
+                        {
+                            "pod": metadata["name"],
+                            "since": max(
+                                _timestamp(status.get("startTime")), _timestamp(metadata.get("creationTimestamp"))
+                            ),
+                        }
+                    )
+    return {identity: values[0] for identity, values in owners.items() if len({value["pod"] for value in values}) == 1}

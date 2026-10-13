@@ -3,6 +3,8 @@ import { Activity, RefreshCw } from 'lucide-react';
 import { DeploymentProfilingPanel, FlowMap } from '../ClusterMonitoringStack/DeploymentProfilingPanel.jsx';
 import { getDeploymentMonitoring, manageDeploymentMonitoring } from '../ClusterMonitoringStack/clusterMonitoringStackBackend.js';
 import { historicalFlows } from './historicalFlow.js';
+import { Button } from '../ui';
+import ResourceExplorer from './ResourceExplorer.jsx';
 import { shortCase } from './linkedExperiment.js';
 import { liveDeployments } from './deploymentEvidence.js';
 
@@ -49,7 +51,7 @@ function DeploymentFlow({ deployment }) {
     </div>;
 }
 
-export default function BenchmarkLiveFlow({ cases = [], initialExecutionId, details }) {
+export default function BenchmarkLiveFlow({ cases = [], initialExecutionId, details, onShowResources }) {
     const choices = liveDeployments(cases).filter(item => item.liveAvailable);
     const history = historicalFlows(details);
     const [mode, setMode] = useState('live');
@@ -68,7 +70,10 @@ export default function BenchmarkLiveFlow({ cases = [], initialExecutionId, deta
             <label className="text-xs text-slate-400">Configuration<select aria-label="Recorded flow configuration" value={recorded.run.caseId} onChange={event => setHistoryId(event.target.value)} className="ml-2 rounded border border-slate-700 bg-slate-950 p-2">{history.map(item => <option key={item.run.caseId} value={item.run.caseId}>{shortCase(item.run)}</option>)}</select></label>
             <label className="text-xs text-slate-400">Flow<select aria-label="Recorded flow metric" value={metric} onChange={event => setMetric(event.target.value)} className="ml-2 rounded border border-slate-700 bg-slate-950 p-2"><option value="request">Requests</option><option value="token">Tokens</option></select></label>
         </header>
-        <FlowMap key={recorded.run.caseId} data={recorded.data} metric={metric} historical/>
+        {!recorded.data.hasTraffic && <p role="status" className="text-xs text-theme-muted">Request/token samples are missing from this saved window. Recorded topology and resource measurements remain available.</p>}
+        {recorded.data.components.length > 0 && <FlowMap key={recorded.run.caseId} data={recorded.data} metric={metric} historical/>}
+        <ResourceExplorer key={`resources-${recorded.run.caseId}`} run={{...recorded.run, stage: false, observability: recorded.run.caseObservability, window: recorded.data.window, scopeLabel: 'Case · full recorded window'}} />
+        {onShowResources && <Button variant="secondary" onClick={onShowResources}>View recorded resources</Button>}
     </section>;
     return <section className="space-y-4">
         {modeControl}

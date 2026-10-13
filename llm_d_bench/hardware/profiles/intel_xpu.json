@@ -2,7 +2,7 @@
   "id": "intel-xpu",
   "display_name": "Intel GPU",
   "vendor": "intel",
-  "accelerator_keys": ["xpu", "intel_gpu"],
+  "accelerator_keys": ["xpu", "intel_gpu", "intel"],
   "benchmark_profile": "intel-xpu",
   "upstream_variant": "xpu",
   "upstream_vendor": "intel",
@@ -59,40 +59,84 @@
       "memory_bandwidth_utilization": "hw_memory_bandwidth_utilization_ratio"
     },
     "device_metric_sources": {
-      "utilization": { "metric": "hw_gpu_utilization_ratio", "unit": "ratio", "scale": 100, "match": { "hw_gpu_task": "compute-all" } },
-      "framebuffer_used": { "metric": "hw_memory_usage_bytes", "unit": "bytes", "match": { "hw_memory_location": "device" } },
-      "vram": { "metric": "hw_memory_size_bytes", "unit": "bytes" },
-      "memory_read_throughput": { "metric": "hw_memory_read_throughput_bytes", "unit": "bytes" },
-      "memory_write_throughput": { "metric": "hw_memory_write_throughput_bytes", "unit": "bytes" },
-      "memory_bandwidth_utilization": { "metric": "hw_memory_bandwidth_utilization_ratio", "unit": "ratio", "scale": 100 },
-      "memory_utilization": { "metric": "hw_memory_utilization_ratio", "unit": "ratio" },
-      "power": { "metric": "hw_power_watts", "unit": "watt" },
-      "temperature": { "metric": "hw_temperature_celsius", "unit": "celsius" }
+      "utilization": { "metric": "hw_gpu_utilization_ratio", "unit": "ratio", "scale": 100, "match": { "hw_gpu_task": "compute-all" }, "output_unit": "percent", "aggregation": "avg", "tile_aggregation": "avg" },
+      "framebuffer_used": { "metric": "hw_memory_usage_bytes", "unit": "bytes", "match": { "hw_memory_location": "device" }, "output_unit": "bytes", "aggregation": "sum", "tile_aggregation": "sum" },
+      "vram": { "metric": "hw_memory_size_bytes", "unit": "bytes", "output_unit": "bytes", "aggregation": "sum", "tile_aggregation": "sum" },
+      "memory_read_throughput": { "metric": "hw_memory_read_throughput_bytes", "unit": "bytes", "output_unit": "bytes", "aggregation": "sum", "tile_aggregation": "sum" },
+      "memory_write_throughput": { "metric": "hw_memory_write_throughput_bytes", "unit": "bytes", "output_unit": "bytes", "aggregation": "sum", "tile_aggregation": "sum" },
+      "memory_bandwidth_utilization": { "metric": "hw_memory_bandwidth_utilization_ratio", "unit": "ratio", "scale": 100, "output_unit": "percent", "aggregation": "avg", "tile_aggregation": "avg" },
+      "memory_utilization": { "metric": "hw_memory_utilization_ratio", "unit": "ratio", "output_unit": "ratio", "aggregation": "avg", "tile_aggregation": "avg" },
+      "power": { "metric": "hw_power_watts", "unit": "watt", "output_unit": "watt", "aggregation": "sum", "tile_aggregation": "sum" },
+      "temperature": { "metric": "hw_temperature_celsius", "unit": "celsius", "output_unit": "celsius", "aggregation": "avg", "tile_aggregation": "avg" }
     },
     "label_schema": {
       "node": "node",
       "pci": "pci_bdf",
-      "device": "com_intel_subdevice_id"
+      "device": "com_intel_subdevice_id",
+      "namespace": "namespace",
+      "pod": "pod",
+      "name": "hw_name",
+      "fallback_device": "hw_id"
     },
     "allocation_join": "dra",
     "pod_metrics": {},
-    "scrape_path": "/api/v1/namespaces/intel-xpumd/services/http:xpumd:8080/proxy/metrics"
+    "scrape_path": "/api/v1/namespaces/intel-xpumd/services/http:xpumd:8080/proxy/metrics",
+    "source_label": "Intel XPUM device telemetry",
+    "allocation": {
+      "drivers": ["gpu.intel.com"],
+      "pci_attributes": ["pciAddress", "resource.kubernetes.io/pciBusID"],
+      "node_labels": ["node", "nodename", "hostname", "k8s_node_name"],
+      "device_id_pattern": "([0-9a-f]{4})-([0-9a-f]{2})-([0-9a-f]{2})-([0-7])-0x[0-9a-f]{4}",
+      "resource_id_pattern": "(?P<pci>[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7])"
+    },
+    "modes": {
+      "dra": { "allocation_join": "dra" },
+      "plugin": { "allocation_join": "pod-status" }
+    }
   },
   "deployment": {
-    "overlay_root": "guides/{guide}/modelserver/{variant}/vllm",
+    "overlay_root": "guides/{guide}/modelserver/{variant}/{model_server}",
     "arch": "xpu",
     "device_class": "gpu.intel.com",
     "claim_request_name": "intel",
     "node_selector": { "intel.feature.node.kubernetes.io/gpu": "true" },
     "resource_name": null,
     "supports_pci_allowlist": true,
-    "runtime_image": "ghcr.io/llm-d/llm-d-xpu:v0.10.0"
+    "runtime_image": "ghcr.io/llm-d/llm-d-xpu:v0.10.0",
+    "managed_image_repositories": ["ghcr.io/llm-d/llm-d-xpu", "docker.io/vllm/vllm-openai-xpu"],
+    "runtime_class_matchers": ["intel"],
+    "pci_attribute": "pciAddress",
+    "pci_attribute_domain": "gpu.intel.com",
+    "modes": {
+      "dra": { "request_model": "dra", "device_class": "gpu.intel.com", "claim_request_name": "intel" },
+      "plugin": {
+        "request_model": "extended-resource",
+        "resource_names": ["gpu.intel.com/i915", "gpu.intel.com/xe"]
+      }
+    }
   },
   "evaluation_profile": "intel-xpu",
   "planning": {
     "aic_system_patterns": ["bmg|max_|xpu|b60|pvc"],
+    "aic_system_models": [
+      { "pattern": "\\bb60\\b", "system": "b60" }
+    ],
+    "model_label_keys": [
+      "intel.feature.node.kubernetes.io/gpu.product",
+      "intel.feature.node.kubernetes.io/gpu.family"
+    ],
     "default_backend": "vllm",
-    "device_class_allow_pattern": "^gpu\\.intel\\.com$"
+    "device_class_allow_pattern": "^gpu\\.intel\\.com$",
+    "discovery": {
+      "command": ["xpu-smi", "discovery", "-d"],
+      "format": "text",
+      "model_pattern": "Device Name\\s*:\\s*(.+)",
+      "device_pattern": "Device ID\\s*:"
+    },
+    "memory_models": [
+      { "pattern": "\\bb60\\b", "gib": 24 },
+      { "pattern": "max[\\s_]*(1550|1100)", "gib": 48 }
+    ]
   },
   "ui": {
     "icon": "Cpu",

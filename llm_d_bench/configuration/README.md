@@ -22,7 +22,7 @@ The backend follows the same module boundary as Prism's Simulation workflow:
 
 Prism's Express server proxies `/api/configurations/{resolve,render,save}` to this service. Override the upstream with `CONFIGURATION_API_URL`; set the data root with `LENS_DATA_DIR` (configurations use its `artifacts/configurations` subdirectory) (the default is `~/.local/share/lens/artifacts/configurations`). The logical file path returned to Deploy is `/configs/<artifact-id>/<file>`.
 
-The resolve operation calls the in-process AIConfigurator adapter in `llm_d_bench.aic` before normalization and validation. The adapter uses the pinned `aiconfigurator` nightly wheel and does not require a separate prediction service.
+The resolve operation calls the in-process AIConfigurator adapter in `llm_d_bench.aic` before normalization and validation. The adapter uses the pinned `aiconfigurator` release and does not require a separate prediction service.
 
 ## Evaluation configuration integrity
 
@@ -63,3 +63,48 @@ captured. Missing auxiliary sources fail generation instead of falling back to
 an unrelated mutable local checkout. Filesystem offload remains unsupported.
 
 LMCache option reference: [CPU RAM configuration](https://docs.lmcache.ai/kv_cache/storage_backends/cpu_ram.html).
+
+## Maintaining AIConfigurator
+
+The runtime SDK is pinned in `pyproject.toml` (currently `aiconfigurator==0.12.0`).
+Its matching core package contains the support matrix and performance data.
+Dependabot checks for AIC updates weekly and proposes a reviewable PR; it does
+not automatically upgrade a running environment or merge the PR.
+
+For an upgrade:
+
+1. Review the [official releases](https://github.com/ai-dynamo/aiconfigurator/releases)
+   and the target release's support matrix. Keep an exact released version in
+   `pyproject.toml`; a passing matrix on `main` may not exist in a published wheel.
+2. Install from the repository root with
+   `.venv/bin/python -m pip install -e '.[embedded-db,ldap]'`.
+3. Run `.venv/bin/python -m pip check` and
+   `.venv/bin/python -m pytest llm_d_bench/aic llm_d_bench/configuration -q`.
+4. Check both support flags and an actual candidate search for the target model,
+   system, backend, GPU budget and workload. A support flag is not a deployment
+   test and does not guarantee candidates for every budget or latency target.
+5. Restart with `scripts/dev.sh restart` and verify the running service. Record
+   the installed SDK/core versions and search outcome in the upgrade PR.
+
+Example smoke check (requires access to the model configuration, or a cached copy):
+
+```python
+from importlib.metadata import version
+from llm_d_bench.aic.models import AICRequest
+from llm_d_bench.aic.service import check_support_sync, search_sync
+
+print({name: version(name) for name in ("aiconfigurator", "aiconfigurator-core")})
+request = AICRequest(
+    model_name="Qwen/Qwen3-0.6B",
+    aic_system_name="b60",
+    aic_backend_name="vllm",
+    gpu_count=4,
+    mean_input_tokens=1024,
+    mean_output_tokens=256,
+)
+assert check_support_sync(request).disagg_supported
+assert any(item["mode"] == "disagg" for item in search_sync(request).configs)
+```
+
+If validation fails, restore the prior dependency pin, reinstall with the same
+command and restart. Do not edit the installed support CSV to force acceptance.

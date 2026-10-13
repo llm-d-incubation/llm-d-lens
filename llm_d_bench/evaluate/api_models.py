@@ -22,6 +22,25 @@ class BenchmarkDefaultsResponse(BaseModel):
     localRuntimeConfigured: bool  # noqa: N815 - preserves the established JSON wire key
 
 
+class BenchmarkPhaseTiming(BaseModel):
+    lower_seconds: int
+    upper_seconds: int
+
+
+class BenchmarkTimingResponse(BaseModel):
+    basis: Literal["configuration", "unknown"]
+    confidence: Literal["low"]
+    measured_requests: int | None
+    lower_seconds: int | None
+    upper_seconds: int | None
+    phases: dict[str, BenchmarkPhaseTiming]
+    timeout_mode: Literal["auto", "manual"]
+    timeout_seconds: int
+    recommended_timeout_seconds: int
+    timeout_warning: str | None
+    assumptions: str
+
+
 class BenchmarkRunResponse(EvaluationResponse):
     id: str
     status: BenchmarkStatus
@@ -38,6 +57,7 @@ class BenchmarkRunResponse(EvaluationResponse):
     model: str | None = None
     namespace: str | None = None
     benchmark: dict[str, Any] | None = None
+    timing: BenchmarkTimingResponse | None = None
     metrics: dict[str, Any] | None = None
     matrix_results: list[dict[str, Any]] | None = None
     rate_stage_results: list[dict[str, Any]] | None = None

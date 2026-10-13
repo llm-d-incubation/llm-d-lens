@@ -1,10 +1,41 @@
 import YAML from 'js-yaml';
+import { TERMINAL_EVALUATION_STATUSES } from './domain.js';
+
+export function formatBenchmarkMinutes(seconds) {
+    return `${Math.max(1, Math.ceil(seconds / 60))} min`;
+}
+
+export function benchmarkTimeDisplay(run, now = Date.now()) {
+    const timing = run?.timing;
+    const start = Date.parse(run?.benchmark_started_at || '');
+    const end = Date.parse(run?.finished_at || '');
+    const terminal = TERMINAL_EVALUATION_STATUSES.has(run?.status);
+    const elapsed = Number.isFinite(start) ? Math.max(0, ((terminal && Number.isFinite(end) ? end : now) - start) / 1000) : null;
+    const estimated = timing?.upper_seconds > 0;
+    let remaining = 'Waiting for benchmark execution';
+    if (terminal) remaining = `Benchmark ${run.status}`;
+    else if (!estimated) remaining = 'Remaining time unavailable';
+    else if (elapsed !== null) remaining = elapsed >= timing.upper_seconds
+        ? 'Taking longer than estimated'
+        : `About ${formatBenchmarkMinutes(Math.max(0, timing.lower_seconds - elapsed))} to ${formatBenchmarkMinutes(timing.upper_seconds - elapsed)} remaining`;
+    const phaseStart = Date.parse(run?.phase_started_at || '');
+    const phaseIsExecuting = run?.phase === 'benchmark' || run?.phase === 'warmup' || /^matrix-\d+$/.test(run?.phase || '');
+    const timeout = timing?.timeout_seconds ?? run?.wait_timeout_seconds;
+    const deadline = !terminal && phaseIsExecuting && Number.isFinite(phaseStart) && timeout > 0
+        ? Math.max(0, timeout - (now - phaseStart) / 1000) : null;
+    return {
+        estimate: estimated ? `${formatBenchmarkMinutes(timing.lower_seconds)} to ${formatBenchmarkMinutes(timing.upper_seconds)}` : 'Not available for this workload',
+        elapsed: elapsed === null ? null : formatBenchmarkMinutes(elapsed),
+        remaining,
+        deadline: deadline === null ? null : deadline === 0 ? 'Execution deadline reached' : `Current phase timeout in ${formatBenchmarkMinutes(deadline)}`,
+    };
+}
 
 export function applyBenchmarkPreset(preset, current = {}) {
     const matrix = preset === 'long' ? [4096, 8192, 16384].map(isl => ({ isl, osl: 256 })) : [{ isl: preset === 'quick' ? 128 : 1024, osl: preset === 'quick' ? 64 : 128 }];
     const concurrency_stages = (preset === 'throughput' ? [1, 4, 8] : [1]).map(concurrency => ({ concurrency, num_requests: preset === 'quick' ? 10 : (preset === 'throughput' ? Math.max(20, concurrency * 5) : 20) }));
     // Keep the first run short and lightweight; users can opt into larger sweeps explicitly.
-    return { parallelism: 1, wait_timeout_seconds: 1800, harness_memory_gib: 8, warmup_requests: 1, ...current,
+    return { parallelism: 1, wait_timeout_seconds: null, harness_memory_gib: 8, warmup_requests: 1, ...current,
         harness: 'inference-perf', workload: 'sanity_random.yaml', workload_yaml: null, shared_prefix: null, matrix, concurrency_stages };
 }
 
@@ -28,9 +59,12 @@ export function benchmarkScenario(benchmark, targets) {
 export function benchmarkSummary(benchmark, targets) {
     const stages = benchmark.shared_prefix?.stages || benchmark.concurrency_stages || [];
     const points = benchmark.matrix?.length || 1;
+    const instances = Number(benchmark.parallelism || 1);
     return { points, stages: stages.length, measurements: targets * points * stages.length,
         durationSeconds: benchmark.shared_prefix ? targets * stages.reduce((sum,s) => sum + Number(s.duration || 0),0) : null,
-        requests: benchmark.matrix?.length ? targets * points * stages.reduce((sum,s) => sum + Number(s.num_requests || 0),0) : null };
+        requests: benchmark.shared_prefix
+            ? targets * instances * stages.reduce((sum, stage) => sum + Math.floor(Number(stage.rate || 0) * Number(stage.duration || 0)), 0)
+            : benchmark.matrix?.length ? targets * instances * points * stages.reduce((sum,s) => sum + Number(s.num_requests || 0),0) : null };
 }
 
 export function configurationContextLimit(artifacts) {
@@ -54,7 +88,8 @@ export function benchmarkIssues(b, slo = {}, context = 0) {
     const number = (value, min, max, label, integer = true) => {
         if (value === '' || value == null || !Number.isFinite(Number(value)) || Number(value) < min || Number(value) > max || (integer && !Number.isInteger(Number(value)))) issues.push(`${label} must be ${integer ? 'an integer' : 'a number'} between ${min} and ${max}.`);
     };
-    number(b.parallelism,1,32,'Parallel benchmark instances'); number(b.wait_timeout_seconds,1,14400,'Timeout');
+    number(b.parallelism,1,32,'Parallel benchmark instances');
+    if (b.wait_timeout_seconds !== null && b.wait_timeout_seconds !== undefined) number(b.wait_timeout_seconds,1,14400,'Timeout');
     if (!/^[A-Za-z0-9._-]+$/.test(b.workload || '')) issues.push('Enter a repository workload filename.');
     number(b.harness_memory_gib ?? 32,1,512,'Load generator memory (GiB)');
     number(b.warmup_requests ?? 2,0,50,'Warm-up requests');
