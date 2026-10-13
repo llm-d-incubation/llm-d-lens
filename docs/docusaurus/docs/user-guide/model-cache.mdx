@@ -55,6 +55,10 @@ Hugging Face environment variables (`HF_*`, `HUGGING*`, `TRANSFORMERS_*`) are ma
 2. Click the action with the tooltip **Retry download**.
 3. Watch for the page notice **Retry started** and monitor the card again from **Progress** or **View logs**.
 
+If Job creation fails with a webhook `x509` error, check the webhook certificate/CA
+and, if a proxy is configured, the [control-plane proxy exclusions](./clusters.mdx#before-you-begin-proxy-exclusions)
+before retrying.
+
 ## Sync cached models to new nodes
 
 1. If the page shows the header action **Sync new nodes (...)**, click it to start syncing every cached model that still needs to be copied to new nodes. Watch for the notice **Sync started for N models** (count of models queued), or **Nothing to sync — all models are up to date** if none needed it.

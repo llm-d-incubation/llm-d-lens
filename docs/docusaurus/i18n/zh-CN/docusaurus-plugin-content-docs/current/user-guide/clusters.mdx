@@ -5,6 +5,23 @@ description: 发现、引导并管理 Kubernetes 集群。
 
 使用集群工作流来注册基于 kubeconfig 的集群、引导新集群、查看集群健康状态，并访问每个集群上运行的部署。
 
+## 开始前：代理排除配置
+
+如果 Kubernetes 组件使用 HTTP(S) 代理，集群内部流量必须绕过代理。
+将 `NO_PROXY` 和 `no_proxy` 设为相同值，保留已有排除项，并包含本机回环地址、
+节点主机名/IP、API Server 地址、Service/Pod CIDR 和集群 DNS 后缀。
+示例（替换占位符；使用自定义集群域名时，相应替换 `cluster.local`）：
+
+```text
+localhost,127.0.0.1,::1,<node-hostnames-and-IPs>,<api-server-host>,<service-CIDR>,<pod-CIDR>,.svc,.svc.cluster.local,cluster.local
+```
+
+**确认配置在运行中的 `kube-apiserver` 进程上生效**，仅修改 shell 或 Lens 设置不够。
+kubeadm 集群在 `/etc/kubernetes/manifests/kube-apiserver.yaml` 中配置环境变量；
+kubelet 会重建静态 Pod，期间 API 访问会短暂中断。清单备份应放在该目录之外。
+仅配置 CIDR 不能排除以 Service DNS 名发起的请求；缺少域名排除项可能让 webhook
+请求经过代理，导致 TLS 错误或超时。
+
 ## 从 kubeconfig 注册集群
 
 1. 打开**集群**并点击**新增**。

@@ -5,6 +5,25 @@ description: Discover, bootstrap and manage Kubernetes clusters.
 
 Use the Clusters workflow to register kubeconfig-backed clusters, bootstrap new clusters, review cluster health, and reach the deployments running on each cluster.
 
+## Before you begin: proxy exclusions
+
+If Kubernetes components use an HTTP(S) proxy, keep cluster-internal traffic off it.
+Set `NO_PROXY` and `no_proxy` to the same value, preserving existing exclusions and
+including localhost, node hostnames/IPs, the API server address, Service/Pod CIDRs,
+and cluster DNS suffixes. Example (replace the placeholders and adapt `cluster.local`
+if your cluster uses a different DNS domain):
+
+```text
+localhost,127.0.0.1,::1,<node-hostnames-and-IPs>,<api-server-host>,<service-CIDR>,<pod-CIDR>,.svc,.svc.cluster.local,cluster.local
+```
+
+**Verify these settings on the running `kube-apiserver` process**, not just in a shell
+or Lens. For kubeadm, configure its environment in
+`/etc/kubernetes/manifests/kube-apiserver.yaml`; kubelet recreates the static Pod,
+briefly interrupting API access. Keep manifest backups outside that directory.
+CIDR exclusions alone do not cover Service DNS names: missing DNS exclusions can
+route webhook calls through the proxy and cause TLS errors or timeouts.
+
 ## Register a cluster from a kubeconfig
 
 1. Open **Clusters** and click **Add**.
