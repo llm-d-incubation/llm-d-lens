@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Download a pinned Lens source tree and install it on Ubuntu.
+# Parse the complete body before execution, including when streamed into Bash.
+{
 set -euo pipefail
 
 # Maintained by the "release stamp" command before tagging a release.
 LENS_SOURCE_VERSION="main"
 REPOSITORY="llm-d-incubation/llm-d-lens"
+PIPE_ENTRY=0
+[[ -n "${BASH_SOURCE[0]:-}" ]] || PIPE_ENTRY=1
 
 online_fail() { printf '[lens-online] %s\n' "$*" >&2; exit 1; }
 
@@ -37,6 +41,9 @@ Usage: bash LensInstaller-Ubuntu-x86_64-online.sh [options]
 The downloaded script selects the version; there is no version override.
 Fresh installs only. Use the installed lensctl.sh for management/uninstall.
 Run as the intended service user; sudo is used only for missing apt packages.
+Piped installs read prompts from /dev/tty and, after source validation, save a
+uniquely named installer copy in the current directory.
+For automation, pipe to: bash -s -- --silent [options]
 
 Maintainers only (edit/check this script, without installing):
   release stamp VERSION   Embed main or a vMAJOR.MINOR.PATCH release tag.
@@ -81,11 +88,18 @@ online_main() {
     [[ "${ID:-}" == ubuntu && "$(printf '%s\n' 22.04 "${VERSION_ID:-0}" | sort -V | head -n1)" == 22.04 ]] ||
         online_fail "Ubuntu 22.04+ is required."
     [[ "$(uname -m)" == x86_64 ]] || online_fail "Only x86_64 is supported."
-    local tool
-    for tool in curl python3; do
-        command -v "$tool" >/dev/null || online_fail "Missing $tool. Install prerequisites with: sudo apt-get install curl ca-certificates python3"
-    done
+    command -v python3 >/dev/null ||
+        online_fail "Missing python3. Install prerequisites with: sudo apt-get install curl ca-certificates python3"
+    command -v curl >/dev/null || command -v wget >/dev/null ||
+        online_fail "Install curl or wget before running the online installer."
     if [[ "$silent" == 0 ]]; then
+        if [[ ! -t 0 && "$PIPE_ENTRY" == 1 ]]; then
+            if { exec 3</dev/tty; } 2>/dev/null; then
+                exec 0<&3 3<&-
+            else
+                online_fail "No controlling terminal. For automation, pipe to bash -s -- --silent."
+            fi
+        fi
         [[ -t 0 ]] || online_fail "Interactive installation requires a terminal; use --silent."
         if [[ "$explicit_dir" == 0 ]]; then
             read -r -p "Install directory [$install_dir]: " value
@@ -154,6 +168,15 @@ with tarfile.open(archive, "r:gz") as source:
         target = pathlib.Path(destination, member.name)
         target.chmod(member.mode)
 PY
+    if [[ "$PIPE_ENTRY" == 1 ]]; then
+        local saved_script
+        saved_script="$(mktemp "$PWD/LensInstaller-Ubuntu-x86_64-online.XXXXXXXX.sh")"
+        if ! cp -- "$archive_root/scripts/LensInstaller-Ubuntu-x86_64-online.sh" "$saved_script"; then
+            rm -f -- "$saved_script"
+            online_fail "Could not save the installer in $PWD."
+        fi
+        printf '[lens-online] Installer saved: %s\n' "$saved_script" | tee -a "$LOG_FILE"
+    fi
     # This internal mode fixes the chosen path and rechecks it before any writes.
     if bash "$archive_root/scripts/LensInstaller-Ubuntu-x86_64-online.sh" \
         --install-source --fresh-install --install-dir "$install_dir" "${args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
@@ -175,10 +198,16 @@ PY
 }
 
 download() {
-    curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
-        --retry 3 --connect-timeout 15 --max-time 600 \
-        --output "$2" "$1" 2>>"$LOG_FILE" ||
-        online_fail "Download failed: $1. Check network/proxy or GitHub API rate limits. Log: $LOG_FILE"
+    if command -v curl >/dev/null; then
+        curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
+            --retry 3 --connect-timeout 15 --max-time 600 \
+            --output "$2" "$1" 2>>"$LOG_FILE" ||
+            online_fail "Download failed: $1. Check network/proxy or GitHub API rate limits. Log: $LOG_FILE"
+    else
+        timeout 600 wget --tries=3 --timeout=30 --max-redirect=0 \
+            --output-document="$2" "$1" 2>>"$LOG_FILE" ||
+            online_fail "Download failed: $1. Check network/proxy or GitHub API rate limits. Log: $LOG_FILE"
+    fi
 }
 
 cleanup() {
@@ -190,8 +219,12 @@ cleanup() {
 
 # ---- Installation from the downloaded source tree -----------------------------
 # ---- Paths -------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR=""
+SOURCE_DIR=""
+if [[ "$PIPE_ENTRY" == 0 ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 
 # ---- Colors & styling (Copilot-CLI-esque) -------------------------------------
 if [[ -t 1 ]]; then
@@ -1406,6 +1439,7 @@ install_from_source() {
 
 release_version() {
     [[ $# == 2 ]] || online_fail "Usage: release stamp|check main|vMAJOR.MINOR.PATCH"
+    [[ "$PIPE_ENTRY" == 0 ]] || online_fail "Release maintenance requires a local script file."
     local action="$1" version="$2" script="${BASH_SOURCE[0]}" embedded
     [[ "$action" == stamp || "$action" == check ]] || online_fail "Expected release stamp or release check."
     [[ "$version" == main || "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] ||
@@ -1423,7 +1457,7 @@ release_version() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "$PIPE_ENTRY" == 1 || "${BASH_SOURCE[0]}" == "$0" ]]; then
     case "${1:-}" in
         release)
             shift
@@ -1431,7 +1465,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
             ;;
         --install-source)
             shift
-            [[ -f "$SOURCE_DIR/package.json" && -f "$SOURCE_DIR/pyproject.toml" &&
+            [[ "$PIPE_ENTRY" == 0 && -f "$SOURCE_DIR/package.json" && -f "$SOURCE_DIR/pyproject.toml" &&
                 -f "$SOURCE_DIR/scripts/storage-env.sh" ]] ||
                 online_fail "Internal source installation requires a complete downloaded Lens tree."
             parse_args "$@"
@@ -1440,7 +1474,9 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
             install_from_source
             ;;
         *)
-            online_main "$@"
+            # Keep terminal redirection out of the Bash reader consuming the pipe.
+            (online_main "$@")
             ;;
     esac
 fi
+}

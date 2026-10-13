@@ -9,8 +9,16 @@ or manually setting up Node/Python/Postgres.
 Set `VERSION` to `main` or an actual release tag containing the online installer
 (replace `main` with your chosen tag, for example `vX.Y.Z`):
 
+With **curl**:
+
 ```bash
-VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
+VERSION=main && curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
+```
+
+Or with **wget**:
+
+```bash
+VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
 Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app
@@ -20,7 +28,8 @@ embedded PostgreSQL database, builds the app, sets up TLS and starts it.
 Once it finishes, open the printed URL (`https://localhost:3000` by default)
 and sign in with the admin credentials it printed.
 
-The script is saved locally and executed only after a successful download.
+Prompts are read from your terminal. After source validation, a uniquely named
+installer copy is saved in the current directory.
 Installation requires a new or empty directory. See
 [Installation](/installation) for release URLs, prerequisites and proxy settings.
 

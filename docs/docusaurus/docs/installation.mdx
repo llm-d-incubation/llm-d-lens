@@ -8,18 +8,30 @@ description: Install Lens online without cloning the repository, or develop from
 On Ubuntu 22.04 LTS or newer (x86_64), download and run the online installer.
 No repository checkout is needed. Run it as the intended service user, not with
 `sudo bash`; it requests sudo only for missing system packages.
-The download entry requires Bash, `curl`, CA certificates and `python3`
+The download entry requires Bash, `curl` or `wget`, CA certificates and `python3`
 (`sudo apt-get install curl ca-certificates python3` if missing).
 
 Set `VERSION` to `main` for the development version, or replace it with an actual
 release tag such as `vX.Y.Z`. Only tags containing the online installer are supported.
 
+With **curl**:
+
 ```bash
-VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
+VERSION=main && curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
-`-O` saves the script under its original filename in the current directory;
-`&&` runs it only after the download succeeds.
+Or with **wget**:
+
+```bash
+VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
+```
+
+The installer reads interactive input from `/dev/tty`. After validating the source
+archive, it saves `LensInstaller-Ubuntu-x86_64-online.<unique-id>.sh` in the current
+directory and prints the path; existing files are not overwritten. Use a writable
+working directory. The complete script body must arrive before it can execute.
+In automated Bash shells, enable `set -o pipefail` so downloader failures also
+produce a nonzero pipeline status.
 
 Interactive mode asks for the install directory (default `$HOME/llm-d-lens`) and
 ports (app `3000`, internal backend `8081`); press Enter to accept each default.
@@ -53,11 +65,11 @@ leave a partial installation, which is retained for diagnosis. There is no autom
 upgrade, rollback or deletion of that directory. GitHub API rate-limit/network failures
 are reported without falling back to another version.
 
-For scripted or CI installs, use silent mode:
+For scripted or CI installs without a terminal, replace the final `| bash` with
+`| bash -s -- --silent`.
 
-```bash
-bash LensInstaller-Ubuntu-x86_64-online.sh --silent
-```
+Other installer options can follow `--silent`. A saved script can still be run
+directly with `bash <saved-script-path> [options]`.
 
 Common options:
 

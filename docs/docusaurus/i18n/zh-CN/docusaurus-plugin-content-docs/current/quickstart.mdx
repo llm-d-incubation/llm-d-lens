@@ -9,8 +9,16 @@ description: 最快运行起 Lens 的方式。
 将 `VERSION` 设为 `main`，或替换为包含在线安装脚本的实际发布 tag
 （例如将 `main` 改为 `vX.Y.Z`）：
 
+使用 **curl**：
+
 ```bash
-VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
+VERSION=main && curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
+```
+
+或使用 **wget**：
+
+```bash
+VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
 按回车接受默认值（安装目录 `$HOME/llm-d-lens`，应用端口
@@ -20,7 +28,8 @@ VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/ll
 安装完成后，打开脚本打印出的 URL（默认是 `https://localhost:3000`），
 并使用脚本打印出的管理员凭据登录。
 
-脚本会保存到本地，下载成功后才执行，并要求安装目录为新目录或空目录。
+交互输入从终端读取。源码验证成功后，会将带唯一文件名的安装脚本保存到当前目录，
+并要求安装目录为新目录或空目录。
 版本选择、前置条件和代理配置见
 [安装指南](/installation)。
 

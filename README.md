@@ -48,14 +48,23 @@ It provisions Node, compatible Python, an embedded PostgreSQL database, TLS and 
 Set `VERSION` to `main` for the development version, or an actual release tag
 (for example, replace `main` with `vX.Y.Z`):
 
+With **curl**:
+
 ```bash
-VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
+VERSION=main && curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
+```
+
+Or with **wget**:
+
+```bash
+VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
 Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app port `3000`, backend port `8081`). When it finishes, open the printed URL (`https://localhost:3000` by default) and sign in with the admin credentials it printed.
 
-The command saves the script in the current directory and executes it only after
-a successful download. The downloaded script selects its version automatically.
+The installer reads prompts from your terminal and, after validating the source
+archive, saves a uniquely named installer copy in the current directory.
+The downloaded script selects its version automatically.
 Only releases containing the online installer are supported. Existing nonempty
 install directories are rejected. See [Installation](https://llm-d-incubation.github.io/llm-d-lens/installation)
 for prerequisites, proxy settings and options.

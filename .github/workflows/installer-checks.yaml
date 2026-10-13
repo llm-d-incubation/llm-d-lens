@@ -32,6 +32,11 @@ jobs:
       - name: Check standalone help and rejected version override
         run: |
           bash scripts/LensInstaller-Ubuntu-x86_64-online.sh --help
+          cat scripts/LensInstaller-Ubuntu-x86_64-online.sh | bash -s -- --help
+          if head -n -1 scripts/LensInstaller-Ubuntu-x86_64-online.sh | bash -s -- --help; then
+            echo "An incomplete streamed script must not execute." >&2
+            exit 1
+          fi
           if bash scripts/LensInstaller-Ubuntu-x86_64-online.sh --ref main; then
             echo "The installer must reject version overrides." >&2
             exit 1
