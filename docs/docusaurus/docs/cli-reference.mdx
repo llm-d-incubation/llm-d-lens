@@ -27,8 +27,13 @@ Written into the install directory by the Ubuntu installer:
 | `lensctl.sh start` | Start the installed deployment's services. |
 | `lensctl.sh status` | Show whether services are running. |
 | `lensctl.sh stop` | Stop the installed deployment's services. |
+| `lensctl.sh uninstall` | Uninstall; `--keep-data` / `--purge` control data, `--keep-db` / `--purge-db` control the embedded database. |
 
-## `LensInstaller-Ubuntu-x86_64.sh`
+## `LensInstaller-Ubuntu-x86_64-online.sh`
+
+Download from main or a release tag; the script selects its embedded version.
+Only new or empty install directories are accepted. There is no version override
+or upgrade mode.
 
 | Flag | Purpose |
 | --- | --- |
@@ -39,9 +44,7 @@ Written into the install directory by the Ubuntu installer:
 | `--no-https` | Serve plain HTTP instead of auto-HTTPS. |
 | `--no-start` | Install without starting services. |
 | `--db-mode embedded\|external` | Use the built-in database or an external one. |
-| `--uninstall` | Remove an installation (data kept by default). |
-| `--keep-data` / `--purge` | With `--uninstall`: keep or remove data non-interactively. |
-| `--keep-db` / `--purge-db` | With `--uninstall`: keep or remove the embedded database non-interactively. |
+| `--no-apt` | Fail instead of installing missing system packages with apt. |
 | `-h`, `--help` | Show every option. |
 
 See [Installation](/installation) and [Upgrade](/upgrade) for full usage.

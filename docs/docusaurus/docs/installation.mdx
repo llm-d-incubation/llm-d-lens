@@ -1,28 +1,62 @@
 ---
 title: Installation
-description: Install Lens with the Ubuntu installer, or run the services from source.
+description: Install Lens online without cloning the repository, or develop from source.
 ---
 
-## Install with the Ubuntu installer
+## Install online
 
-On Ubuntu 22.04 LTS or newer (x86_64), install Lens as a standalone,
-production-ready deployment with the bundled installer. From a checkout of the
-repository:
+On Ubuntu 22.04 LTS or newer (x86_64), download and run the online installer.
+No repository checkout is needed. Run it as the intended service user, not with
+`sudo bash`; it requests sudo only for missing system packages.
+The download entry requires Bash, `curl`, CA certificates and `python3`
+(`sudo apt-get install curl ca-certificates python3` if missing).
+
+Set `VERSION` to `main` for the development version, or replace it with an actual
+release tag such as `vX.Y.Z`. Only tags containing the online installer are supported.
 
 ```bash
-./scripts/LensInstaller-Ubuntu-x86_64.sh
+VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
 ```
+
+`-O` saves the script under its original filename in the current directory;
+`&&` runs it only after the download succeeds.
 
 Interactive mode asks for the install directory (default `$HOME/llm-d-lens`) and
 ports (app `3000`, internal backend `8081`); press Enter to accept each default.
-The installer fetches missing system packages, provisions a local Node and Python
-virtualenv, configures the embedded PostgreSQL database, builds the app, sets up
-TLS, and writes a control script.
+The installer downloads a commit-pinned source archive, then provisions Node,
+Python 3.11+ and a virtualenv, configures PostgreSQL, builds the app and sets up TLS.
+If a compatible Python is missing, it uses pinned uv to install private Python 3.12
+under the installation's `.tools/`; system Python is unchanged.
+It accepts only a new or empty install directory, not an existing installation.
+
+### Version selection
+
+The script embeds its source version; no version argument is needed or accepted.
+`main` installs the development branch as it exists when the script runs. Release
+scripts install their tagged source. Both resolve to a commit SHA before downloading;
+the installed `.lens-version.json` records the version, SHA and installation time.
+Source pinning does not lock every transitive npm/Python dependency.
+
+### Network and failures
+
+Allow HTTPS access to `raw.githubusercontent.com`, `api.github.com`, `codeload.github.com`,
+Node.js and package registries, and Ubuntu package mirrors. Private Python provisioning
+also downloads from GitHub release assets. Existing `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` settings are inherited; certificate verification remains enabled.
+If sudo filters proxy variables, configure apt's proxy separately.
+
+Logs are private files under `$LENS_LOG_DIR` (default `~/.local/state/lens/logs/`).
+They can contain installer-generated database credentials; do not publish them.
+Temporary downloads use `$LENS_SCRATCH_DIR` and are removed on exit. Downloads and
+archive checks finish before the install directory is changed; later failures may
+leave a partial installation, which is retained for diagnosis. There is no automatic
+upgrade, rollback or deletion of that directory. GitHub API rate-limit/network failures
+are reported without falling back to another version.
 
 For scripted or CI installs, use silent mode:
 
 ```bash
-./scripts/LensInstaller-Ubuntu-x86_64.sh --silent
+bash LensInstaller-Ubuntu-x86_64-online.sh --silent
 ```
 
 Common options:
@@ -47,9 +81,10 @@ The installer writes `lensctl.sh` into the install directory:
 "$HOME/llm-d-lens/lensctl.sh" stop
 ```
 
-To remove an installation, run the installer with `--uninstall`; data is kept by
-default. Use `--purge` to remove data as well, or `--keep-data` to skip the
-prompt non-interactively.
+To remove an installation, run `"$HOME/llm-d-lens/lensctl.sh" uninstall`;
+data is kept by default. Use `--purge` to remove data as well, or `--keep-data`
+to skip the data prompt. Embedded database retention is controlled separately by
+`--keep-db` / `--purge-db`. The online installer itself does not accept uninstall flags.
 
 To upgrade an existing installation instead of a fresh install, see
 [Upgrade](/upgrade).

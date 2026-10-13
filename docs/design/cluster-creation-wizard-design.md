@@ -486,7 +486,7 @@ no `clusterId`; see §4.0):
 > **Update (subsequent change):** This section originally designed Step 0 as a
 > prerequisite page inside the "Create cluster" wizard. It has now been changed to
 > be completed once in the installer script
-> `scripts/LensInstaller-Ubuntu-x86_64.sh` (new
+> `scripts/LensInstaller-Ubuntu-x86_64-online.sh` (new
 > `configure_database` / `db_interactive_configure` steps; silent install
 > `--silent` defaults directly to embedded PostgreSQL, while interactive install
 > prompts for the same fields described here), and no longer appears in the

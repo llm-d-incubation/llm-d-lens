@@ -1,7 +1,7 @@
 """Tests for ``python -m llm_d_bench.db.bootstrap_cli`` -- the installer's
 non-interactive replacement for the old in-wizard database setup gate. See
 ``llm_d_bench/db/bootstrap_cli.py`` and
-``scripts/LensInstaller-Ubuntu-x86_64.sh``.
+``scripts/LensInstaller-Ubuntu-x86_64-online.sh``.
 """
 
 from __future__ import annotations

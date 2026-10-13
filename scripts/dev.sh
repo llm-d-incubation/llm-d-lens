@@ -457,7 +457,7 @@ ensure_venv() {
 # password, local dev only) the first time dev.sh runs with no database
 # already configured (via env vars or a previous "Step 0" -- see
 # llm_d_bench/db/system_router.py's get_database_status()). Unlike the
-# installer (scripts/LensInstaller-Ubuntu-x86_64.sh), which always requires
+# online installer (scripts/LensInstaller-Ubuntu-x86_64-online.sh), which always requires
 # a password on its embedded database, dev.sh intentionally stays
 # password-less for local-dev convenience.
 ensure_database() {

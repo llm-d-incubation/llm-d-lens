@@ -52,6 +52,32 @@ For every Pull Request submitted, ensure the following steps have been done:
 1. [Sign your commits](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)
 2. Make sure that the [pre-commit](https://pre-commit.com/) hooks have been run and pass **before you push** the contents of your PR. See [Local Development Checks](#local-development-checks-pre-commit) below.
 
+## Publishing the online installer
+
+Keep `LENS_SOURCE_VERSION="main"` in the main branch. For a release, create a
+release branch from the intended commit and stamp the online installer before
+creating the tag:
+
+```bash
+bash scripts/LensInstaller-Ubuntu-x86_64-online.sh release stamp vX.Y.Z
+bash scripts/LensInstaller-Ubuntu-x86_64-online.sh release check vX.Y.Z
+```
+
+Replace `vX.Y.Z` with the actual tag. Commit the stamped script, tag that commit,
+and wait for **Installer checks** on the tag to pass before announcing the raw
+download URL. Keep release tags immutable. Do not merge the stamped version back
+into main; main/PR checks require `main`. Tag checks require the exact tag name.
+This workflow validates tags but does not create releases or enforce tag protection.
+Older tags without the online entry point are not retroactively supported.
+
+The only public installation entry is
+`scripts/LensInstaller-Ubuntu-x86_64-online.sh`. The same script contains the
+download stage, installation engine and Shell release-version commands.
+After downloading the source archive, it invokes the archive's copy in internal
+source-install mode instead of downloading recursively.
+CI checks Shell syntax/lint, version consistency, standalone help and private
+Python provisioning on Ubuntu 22.04.
+
 ## Repository language
 
 Write all repository content and PR titles/descriptions in English. Run

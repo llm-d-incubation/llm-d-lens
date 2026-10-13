@@ -206,7 +206,7 @@ def _harden_embedded_postgres_password(server: object, password: str) -> None:
     Unix domain socket, reachable solely by the local OS user. That's a
     reasonable default for e.g. ``scripts/dev.sh``'s local-dev database
     (``password`` is None there, so this function is never called), but the
-    installer (``LensInstaller-Ubuntu-x86_64.sh``) asks the operator to set a
+    online installer asks the operator to set a
     password as defense in depth. Since PostgreSQL's ``trust`` auth method
     ignores whatever password is offered, connecting with our
     password-embedded URI works as long as ``pg_hba.conf`` hasn't been

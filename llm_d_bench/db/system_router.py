@@ -193,7 +193,7 @@ def apply_database_setup(request: DatabaseSetupRequest) -> DatabaseStatus:
 
     Also used directly (without going through HTTP/FastAPI) by
     ``llm_d_bench.db.bootstrap_cli``, the non-interactive entry point the
-    installer (``scripts/LensInstaller-Ubuntu-x86_64.sh``) uses to configure
+    online installer uses to configure
     the database before the backend is ever started -- see that module's
     docstring. Raises plain exceptions (``_ExternalConnectionError``,
     ``DatabaseSettingsError``, or any other) rather than ``HTTPException`` so

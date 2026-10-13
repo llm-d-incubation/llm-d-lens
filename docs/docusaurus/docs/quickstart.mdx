@@ -3,13 +3,14 @@ title: Quickstart
 description: The fastest way to see Lens running.
 ---
 
-The fastest path to a running Lens instance is the bundled installer — no
-manual Node/Python/Postgres setup required.
+On Ubuntu 22.04+ (x86_64), use the online installer without cloning the repository
+or manually setting up Node/Python/Postgres.
+
+Set `VERSION` to `main` or an actual release tag containing the online installer
+(replace `main` with your chosen tag, for example `vX.Y.Z`):
 
 ```bash
-git clone https://github.com/llm-d-incubation/llm-d-lens.git
-cd llm-d-lens
-./scripts/LensInstaller-Ubuntu-x86_64.sh
+VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
 ```
 
 Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app
@@ -18,6 +19,10 @@ embedded PostgreSQL database, builds the app, sets up TLS and starts it.
 
 Once it finishes, open the printed URL (`https://localhost:3000` by default)
 and sign in with the admin credentials it printed.
+
+The script is saved locally and executed only after a successful download.
+Installation requires a new or empty directory. See
+[Installation](/installation) for release URLs, prerequisites and proxy settings.
 
 ## Run the full path: cluster → deployment → model service → token call
 

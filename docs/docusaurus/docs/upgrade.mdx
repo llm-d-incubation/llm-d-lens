@@ -5,21 +5,15 @@ description: Upgrade an existing Lens installation to a newer version.
 
 ## Upgrading an installer-based deployment
 
-Lens doesn't ship a separate "upgrade" installer mode — re-running the same
-installer against an existing `--install-dir` picks up the new code, rebuilds
-the app, and reuses the existing configuration and database:
+The online installer supports fresh installations only and refuses nonempty
+directories. Re-running it is not an upgrade or rollback procedure.
+Do not delete an existing installation to bypass this check.
 
-```bash
-git -C /path/to/llm-d-lens pull
-./scripts/LensInstaller-Ubuntu-x86_64.sh --install-dir "$HOME/llm-d-lens" --silent
-```
-
-The installer detects the existing install directory, stops the running
-services, rebuilds, and restarts them with `lensctl.sh`. Your data (embedded
-database, model cache, storage volumes) is untouched.
-
-If the new version added a database migration, run it before starting
-traffic again — see [Migration](/migration).
+Before a manual upgrade, back up the database, Lens data and installation
+configuration, and review the target release's migration requirements.
+Automated configuration preservation, migration and rollback are not provided.
+Use the installed `lensctl.sh` to manage services; see [Migration](/migration)
+for database migration procedures.
 
 ## Upgrading a from-source development checkout
 
@@ -36,8 +30,8 @@ regenerates the MCP tool catalog, before restarting services.
 
 ## Rolling back
 
-Because the installer's rebuild is in place, rolling back is `git checkout`
-to the previous tag/commit and re-running the installer/`scripts/dev.sh
-restart` the same way. If a database migration ran as part of the upgrade,
-roll it back first with `alembic downgrade -1` (see [Migration](/migration))
-before switching the code back.
+The online installer does not implement rollback. For source-based development,
+switch to the previous tag/commit and rebuild its dependencies before restarting.
+Code rollback alone does not undo database migrations; follow the release's
+migration guidance or restore a compatible backup rather than assuming a
+single downgrade step is sufficient.

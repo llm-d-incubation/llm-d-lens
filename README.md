@@ -42,19 +42,29 @@ Lens manages these areas from one console:
 
 ## Getting Started
 
-The fastest path to a running Lens instance is the bundled Ubuntu installer. It provisions Node, Python, an embedded PostgreSQL database, TLS and the application, so no manual setup is required:
+On Ubuntu 22.04+ (x86_64), use the online installer without cloning the repository.
+It provisions Node, compatible Python, an embedded PostgreSQL database, TLS and the application:
+
+Set `VERSION` to `main` for the development version, or an actual release tag
+(for example, replace `main` with `vX.Y.Z`):
 
 ```bash
-git clone https://github.com/llm-d-incubation/llm-d-lens.git
-cd llm-d-lens
-./scripts/LensInstaller-Ubuntu-x86_64.sh
+VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
 ```
 
 Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app port `3000`, backend port `8081`). When it finishes, open the printed URL (`https://localhost:3000` by default) and sign in with the admin credentials it printed.
 
+The command saves the script in the current directory and executes it only after
+a successful download. The downloaded script selects its version automatically.
+Only releases containing the online installer are supported. Existing nonempty
+install directories are rejected. See [Installation](https://llm-d-incubation.github.io/llm-d-lens/installation)
+for prerequisites, proxy settings and options.
+
 To work on the code instead of an installed deployment:
 
 ```bash
+git clone https://github.com/llm-d-incubation/llm-d-lens.git
+cd llm-d-lens
 npm install
 python3 -m venv .venv
 source .venv/bin/activate

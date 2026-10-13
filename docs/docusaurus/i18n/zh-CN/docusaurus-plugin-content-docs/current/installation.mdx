@@ -1,27 +1,56 @@
 ---
 title: 安装
-description: 使用 Ubuntu 安装脚本安装 Lens，或从源码运行各项服务。
+description: 无需克隆仓库，在线安装 Lens，或从源码开发。
 ---
 
-## 使用 Ubuntu 安装脚本安装
+## 在线安装
 
-在 Ubuntu 22.04 LTS 或更新版本（x86_64）上，使用内置安装脚本将 Lens
-安装为一个独立的、可用于生产环境的部署。在代码仓库的检出目录中执行：
+在 Ubuntu 22.04 LTS 或更新版本（x86_64）上，下载并执行在线安装脚本，
+无需克隆仓库。以运行服务的用户执行，不要使用 `sudo bash`；
+只有安装缺失的系统软件包时才会请求 sudo。
+下载入口需要 Bash、`curl`、CA 证书和 `python3`，缺失时可运行
+`sudo apt-get install curl ca-certificates python3`。
+
+将 `VERSION` 设为 `main` 安装开发版，或替换为实际发布 tag（如 `vX.Y.Z`）。
+仅支持包含在线安装脚本的 tag。
 
 ```bash
-./scripts/LensInstaller-Ubuntu-x86_64.sh
+VERSION=main && curl -fLO "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" && bash LensInstaller-Ubuntu-x86_64-online.sh
 ```
+
+`-O` 将脚本按原文件名保存到当前目录；`&&` 保证下载成功后才执行。
 
 交互模式会询问安装目录（默认 `$HOME/llm-d-lens`）和
 端口（应用端口 `3000`，内部后端端口 `8081`）；按回车即可接受每个默认值。
-安装脚本会获取缺失的系统软件包，配置本地的 Node 和 Python
-虚拟环境，设置内置的 PostgreSQL 数据库，构建应用，配置
-TLS，并写入一个控制脚本。
+安装脚本下载固定到 commit 的源码包，然后配置 Node、Python 3.11+、
+虚拟环境、PostgreSQL、应用构建和 TLS。缺少兼容 Python 时，使用固定版本的
+uv 将独立的 Python 3.12 安装到安装目录的 `.tools/`，不替换系统 Python。
+仅接受新目录或空目录，不覆盖已有安装。
+
+### 版本选择
+
+脚本内置源码版本，不需要也不接受版本参数。`main` 安装执行时的开发分支，
+发布版本的脚本安装对应 tag。下载前会将版本解析成确定的 commit SHA；
+安装目录内的 `.lens-version.json` 记录版本、SHA 和安装时间。
+固定源码不代表所有间接 npm/Python 依赖都已锁定。
+
+### 网络与失败处理
+
+需允许访问 `raw.githubusercontent.com`、`api.github.com`、`codeload.github.com`、
+Node.js 和软件包仓库，以及 Ubuntu 软件源；安装独立 Python 还需下载 GitHub release
+资源。脚本继承 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`，不会关闭证书校验。
+如果 sudo 过滤了代理变量，请单独配置 apt 代理。
+
+日志以私有权限保存在 `$LENS_LOG_DIR`（默认 `~/.local/state/lens/logs/`）。
+日志可能包含安装器生成的数据库凭据，请勿公开。临时下载放在
+`$LENS_SCRATCH_DIR`，退出时清理。下载及源码包检查完成前不会修改安装目录；
+后续安装失败可能留下部分文件，这些文件会保留用于诊断，不会自动升级、
+回滚或删除安装目录。网络失败或 GitHub API 限流会明确报错，不会切换版本。
 
 如需脚本化或 CI 安装，使用静默模式：
 
 ```bash
-./scripts/LensInstaller-Ubuntu-x86_64.sh --silent
+bash LensInstaller-Ubuntu-x86_64-online.sh --silent
 ```
 
 常用选项：
@@ -46,8 +75,10 @@ TLS，并写入一个控制脚本。
 "$HOME/llm-d-lens/lensctl.sh" stop
 ```
 
-要移除一个安装，运行带 `--uninstall` 的安装脚本；默认会保留数据。
-使用 `--purge` 可同时移除数据，或使用 `--keep-data` 以非交互方式跳过提示。
+卸载请运行 `"$HOME/llm-d-lens/lensctl.sh" uninstall`，默认保留数据。
+使用 `--purge` 可删除数据，或使用 `--keep-data` 跳过数据保留提示。
+内嵌数据库通过 `--keep-db` / `--purge-db` 单独控制。
+在线安装入口本身不接受卸载参数。
 
 如果你要升级现有安装而不是全新安装，请参阅
 [升级指南](/upgrade)。

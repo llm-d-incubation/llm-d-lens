@@ -1,60 +1,194 @@
 #!/usr/bin/env bash
-# LensInstaller-Ubuntu-x86_64.sh — llm-d Lens installer for Ubuntu (x86_64).
-#
-# Installs llm-d Lens (frontend + API server + FastAPI backend) as a
-# standalone, production-ready deployment on Ubuntu 22.04 LTS or newer.
-#
-# Modes:
-#   Silent mode        : ./LensInstaller-Ubuntu-x86_64.sh --silent [flags]
-#                         No prompts. Uses flags/env vars or sane defaults.
-#                         Suitable for scripted/CI installs (mirrors dev.sh).
-#   Interactive mode    : ./LensInstaller-Ubuntu-x86_64.sh   (default)
-#                         Asks for the install path and ports, each with a
-#                         sensible default the user can just press Enter to
-#                         accept.
-#   Uninstall           : ./LensInstaller-Ubuntu-x86_64.sh --uninstall [--install-dir DIR]
-#                         Stops services and removes the installation. Prompts
-#                         whether to keep data (private/run_store and the port
-#                         config); data is KEPT by default. Use --purge to wipe
-#                         everything non-interactively, or --keep-data to keep
-#                         it non-interactively.
-#
-# Usage:
-#   scripts/LensInstaller-Ubuntu-x86_64.sh [--silent|-y] [options]
-#
-# Options:
-#   --silent, -y            Non-interactive install using defaults/flags.
-#   --install-dir DIR       Where to install (default: $HOME/llm-d-lens).
-#   --app-port PORT         Port for the web app/API (default: 3000).
-#   --backend-port PORT     Port for the internal FastAPI backend (default: 8081).
-#   --no-https              Serve plain HTTP instead of auto-HTTPS (self-signed cert).
-#   --tls-host HOST         Host/IP the auto-generated HTTPS cert is issued for
-#                           (default: this machine's detected LAN IP).
-#   --no-start              Do not start services after installing.
-#   --no-apt                Never use apt/sudo to install missing system packages.
-#   --db-mode MODE          Database mode: embedded (default) or external. Silent
-#                           installs always use embedded unless this is set.
-#   --db-engine ENGINE      External database engine: postgresql (default), mysql,
-#                           oracle, or mssql. Only used with --db-mode external.
-#   --db-host HOST          External database host (required for --db-mode external).
-#   --db-port PORT          External database port (default: the engine's standard port).
-#   --db-name NAME          External database name (required for --db-mode external).
-#   --db-user USER          External database username.
-#   --db-password PASSWORD  External database password.
-#   --db-embedded-password PASSWORD  Password to enforce on the built-in embedded
-#                           PostgreSQL. Auto-generated if omitted (silent installs)
-#                           or prompted for (interactive installs). Only used with
-#                           --db-mode embedded.
-#   --uninstall             Uninstall llm-d Lens from --install-dir.
-#   --keep-data             With --uninstall: keep data, skip the prompt.
-#   --purge                 With --uninstall: remove data too, skip the prompt.
-#   --keep-db               With --uninstall: keep the embedded database, skip the prompt.
-#   --purge-db              With --uninstall: delete the embedded database, skip the prompt.
-#                           Only applies when the install used --db-mode embedded; the
-#                           embedded database's own process is always stopped either way.
-#   -h, --help              Show this help and exit.
+# Download a pinned Lens source tree and install it on Ubuntu.
 set -euo pipefail
 
+# Maintained by the "release stamp" command before tagging a release.
+LENS_SOURCE_VERSION="main"
+REPOSITORY="llm-d-incubation/llm-d-lens"
+
+online_fail() { printf '[lens-online] %s\n' "$*" >&2; exit 1; }
+
+online_help() {
+    cat <<EOF
+Lens online installer for Ubuntu 22.04+ (x86_64)
+Source: $LENS_SOURCE_VERSION
+
+Usage: bash LensInstaller-Ubuntu-x86_64-online.sh [options]
+  --silent, -y          Install without prompts.
+  --install-dir DIR     New install directory (default: \$HOME/llm-d-lens).
+  --app-port PORT       Web app/API port (default: 3000).
+  --backend-port PORT   Internal backend port (default: 8081).
+  --no-https            Use HTTP instead of self-signed HTTPS.
+  --tls-host HOST       Host/IP for the HTTPS certificate.
+  --no-start            Install without starting services.
+  --no-apt              Do not install system packages with apt.
+  --db-mode MODE        embedded (default) or external.
+  --db-engine ENGINE    postgresql, mysql, oracle, or mssql.
+  --db-host HOST        External database host.
+  --db-port PORT        External database port.
+  --db-name NAME        External database name.
+  --db-user USER        External database username.
+  --db-password VALUE   External database password (prefer DB_PASSWORD env).
+  --db-embedded-password VALUE
+                        Embedded database password (prefer
+                        DB_EMBEDDED_PASSWORD env).
+  -h, --help            Show help without downloading anything.
+
+The downloaded script selects the version; there is no version override.
+Fresh installs only. Use the installed lensctl.sh for management/uninstall.
+Run as the intended service user; sudo is used only for missing apt packages.
+
+Maintainers only (edit/check this script, without installing):
+  release stamp VERSION   Embed main or a vMAJOR.MINOR.PATCH release tag.
+  release check VERSION   Verify the embedded version matches the branch/tag.
+EOF
+}
+
+online_main() {
+    local install_dir="${INSTALL_DIR:-$HOME/llm-d-lens}" silent=0 explicit_dir=0
+    local args=() option value
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help) online_help; return ;;
+            --silent|-y) silent=1; args+=("$1"); shift ;;
+            --no-start|--no-apt|--no-https) args+=("$1"); shift ;;
+            --install-dir|--install-dir=*|--app-port|--app-port=*|--backend-port|--backend-port=*|\
+            --tls-host|--tls-host=*|--db-mode|--db-mode=*|--db-engine|--db-engine=*|\
+            --db-host|--db-host=*|--db-port|--db-port=*|--db-name|--db-name=*|\
+            --db-user|--db-user=*|--db-password|--db-password=*|\
+            --db-embedded-password|--db-embedded-password=*)
+                option="${1%%=*}"
+                if [[ "$1" == *=* ]]; then
+                    value="${1#*=}"; shift
+                else
+                    [[ $# -ge 2 && "$2" != --* ]] || online_fail "Missing value for $option."
+                    value="$2"; shift 2
+                fi
+                [[ -n "$value" ]] || online_fail "Empty value for $option."
+                if [[ "$option" == --install-dir ]]; then
+                    install_dir="$value"; explicit_dir=1
+                else
+                    args+=("$option" "$value")
+                fi ;;
+            *) online_fail "Unsupported option: $1. See --help; upgrades and version overrides are not supported." ;;
+        esac
+    done
+    [[ "$LENS_SOURCE_VERSION" == main || "$LENS_SOURCE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] ||
+        online_fail "Invalid embedded source version."
+    [[ -f /etc/os-release ]] || online_fail "Ubuntu 22.04+ is required."
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    [[ "${ID:-}" == ubuntu && "$(printf '%s\n' 22.04 "${VERSION_ID:-0}" | sort -V | head -n1)" == 22.04 ]] ||
+        online_fail "Ubuntu 22.04+ is required."
+    [[ "$(uname -m)" == x86_64 ]] || online_fail "Only x86_64 is supported."
+    local tool
+    for tool in curl python3; do
+        command -v "$tool" >/dev/null || online_fail "Missing $tool. Install prerequisites with: sudo apt-get install curl ca-certificates python3"
+    done
+    if [[ "$silent" == 0 ]]; then
+        [[ -t 0 ]] || online_fail "Interactive installation requires a terminal; use --silent."
+        if [[ "$explicit_dir" == 0 ]]; then
+            read -r -p "Install directory [$install_dir]: " value
+            install_dir="${value:-$install_dir}"
+        fi
+    fi
+    install_dir="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$install_dir")"
+    [[ ! -L "$install_dir" ]] || online_fail "The install directory must not be a symbolic link."
+    if [[ -e "$install_dir" ]]; then
+        [[ -d "$install_dir" && -z "$(find "$install_dir" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+            online_fail "Install directory is not empty: $install_dir. Online upgrades are not supported."
+    fi
+
+    umask 077
+    local log_dir="${LENS_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/lens/logs}"
+    local scratch="${LENS_SCRATCH_DIR:-${LENS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/lens}/tmp}"
+    mkdir -p "$log_dir" "$scratch"
+    LOG_FILE="$(mktemp "$log_dir/online-install-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX.log")"
+    WORK_DIR="$(mktemp -d "$scratch/online-install-XXXXXXXX")"
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    printf '[lens-online] Source: %s; log: %s\n' "$LENS_SOURCE_VERSION" "$LOG_FILE"
+    local source_ref="heads/main" sha archive_root
+    [[ "$LENS_SOURCE_VERSION" == main ]] || source_ref="tags/$LENS_SOURCE_VERSION"
+    download "https://api.github.com/repos/$REPOSITORY/commits/refs/$source_ref" "$WORK_DIR/commit.json"
+    sha="$(python3 - "$WORK_DIR/commit.json" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1]) as source:
+    sha = json.load(source).get("sha", "")
+if not re.fullmatch(r"[0-9a-f]{40}", sha):
+    sys.exit("GitHub did not return a valid commit SHA.")
+print(sha)
+PY
+    )"
+    printf '[lens-online] Resolved %s to %s\n' "$LENS_SOURCE_VERSION" "$sha" | tee -a "$LOG_FILE"
+    download "https://codeload.github.com/$REPOSITORY/tar.gz/$sha" "$WORK_DIR/source.tar.gz"
+    archive_root="$WORK_DIR/llm-d-lens-$sha"
+    python3 - "$WORK_DIR/source.tar.gz" "$WORK_DIR" "llm-d-lens-$sha" <<'PY'
+import pathlib
+import sys
+import tarfile
+
+archive, destination, root = sys.argv[1:]
+with tarfile.open(archive, "r:gz") as source:
+    members = source.getmembers()
+    seen = set()
+    for member in members:
+        path = pathlib.PurePosixPath(member.name)
+        if (path.is_absolute() or ".." in path.parts or not path.parts
+                or path.parts[0] != root or str(path) in seen
+                or not (member.isdir() or member.isfile())):
+            sys.exit(f"Unsafe or unsupported source archive entry: {member.name}")
+        seen.add(str(path))
+    required = ("package.json", "pyproject.toml", "scripts/storage-env.sh",
+                "scripts/LensInstaller-Ubuntu-x86_64-online.sh")
+    for name in required:
+        if not any(m.name == f"{root}/{name}" and m.isfile() for m in members):
+            sys.exit(f"Source archive is missing {name}.")
+    for member in members:
+        member.mode &= 0o777
+        source.extract(member, destination, set_attrs=False)
+        target = pathlib.Path(destination, member.name)
+        target.chmod(member.mode)
+PY
+    # This internal mode fixes the chosen path and rechecks it before any writes.
+    if bash "$archive_root/scripts/LensInstaller-Ubuntu-x86_64-online.sh" \
+        --install-source --fresh-install --install-dir "$install_dir" "${args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+        python3 - "$install_dir" "$LENS_SOURCE_VERSION" "$sha" <<'PY'
+import datetime
+import json
+import pathlib
+import sys
+
+directory, version, sha = sys.argv[1:]
+record = {"sourceVersion": version, "commit": sha,
+          "installedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+pathlib.Path(directory, ".lens-version.json").write_text(json.dumps(record, indent=2) + "\n")
+PY
+        printf '[lens-online] Installed %s (%s). Log: %s\n' "$LENS_SOURCE_VERSION" "$sha" "$LOG_FILE"
+    else
+        return 1
+    fi
+}
+
+download() {
+    curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
+        --retry 3 --connect-timeout 15 --max-time 600 \
+        --output "$2" "$1" 2>>"$LOG_FILE" ||
+        online_fail "Download failed: $1. Check network/proxy or GitHub API rate limits. Log: $LOG_FILE"
+}
+
+cleanup() {
+    local result=$?
+    [[ "$result" == 0 ]] || printf '[lens-online] Installation failed. Log: %s\n' "$LOG_FILE" >&2
+    rm -rf -- "$WORK_DIR"
+    exit "$result"
+}
+
+# ---- Installation from the downloaded source tree -----------------------------
 # ---- Paths -------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -63,11 +197,11 @@ SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [[ -t 1 ]]; then
     BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
     RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
-    BLUE=$'\033[34m'; MAGENTA=$'\033[35m'; CYAN=$'\033[36m'; WHITE=$'\033[37m'
+    MAGENTA=$'\033[35m'; CYAN=$'\033[36m'; WHITE=$'\033[37m'
     # "llm-" is a muted grey, "d" is a deep plum/purple — the brand mark.
     LOGO_GRAY=$'\033[38;5;245m'; LOGO_PLUM=$'\033[38;5;97m'
 else
-    BOLD=""; DIM=""; RESET=""; RED=""; GREEN=""; YELLOW=""; BLUE=""; MAGENTA=""; CYAN=""; WHITE=""
+    BOLD=""; DIM=""; RESET=""; RED=""; GREEN=""; YELLOW=""; MAGENTA=""; CYAN=""; WHITE=""
     LOGO_GRAY=""; LOGO_PLUM=""
 fi
 
@@ -158,6 +292,7 @@ APP_PORT="${APP_PORT:-${SERVER_PORT:-3000}}"
 BACKEND_PORT="${BACKEND_PORT:-8081}"
 START_AFTER_INSTALL=1
 ALLOW_APT=1
+FRESH_INSTALL=0
 UNINSTALL=0
 UNINSTALL_ARGS=()
 # HTTPS on by default: browsers only expose mic access etc. in a "secure
@@ -194,13 +329,15 @@ NODE_MIN_MAJOR="${NODE_MIN_MAJOR:-22}"
 NODE_FALLBACK_VERSION="${NODE_FALLBACK_VERSION:-v22.23.2}"
 NODE_DIST_URL="${NODE_DIST_URL:-https://nodejs.org/dist}"
 UBUNTU_MIN_VERSION="22.04"
+PYTHON_BIN="${PYTHON_BIN:-}"
+UV_VERSION="0.13.0"
 
 print_help() {
-    print_logo
-    sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    online_help
 }
 
 # ---- Argument parsing ----------------------------------------------------------
+parse_args() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --silent|-y)       SILENT=1; shift ;;
@@ -215,6 +352,7 @@ while [[ $# -gt 0 ]]; do
         --tls-host=*)      TLS_HOST="${1#*=}"; shift ;;
         --no-start)         START_AFTER_INSTALL=0; shift ;;
         --no-apt)           ALLOW_APT=0; shift ;;
+        --fresh-install)    FRESH_INSTALL=1; shift ;;
         --db-mode)          DB_MODE="$2"; shift 2 ;;
         --db-mode=*)        DB_MODE="${1#*=}"; shift ;;
         --db-engine)        DB_ENGINE="$2"; shift 2 ;;
@@ -240,6 +378,7 @@ while [[ $# -gt 0 ]]; do
         *) fail "unknown option: $1"; print_help; exit 1 ;;
     esac
 done
+}
 
 # ---- Environment gates ---------------------------------------------------------
 require_ubuntu() {
@@ -433,6 +572,9 @@ db_interactive_configure() {
 # main()'s normal flow). Returns 0 iff the connection succeeds; on failure it
 # prints the error and returns 1 so the caller can offer a retry.
 test_external_db_connection() {
+    ensure_system_packages
+    TOOLS_DIR="$INSTALL_DIR/.tools"
+    ensure_python
     sync_source
     ensure_venv
     info "testing connection to $DB_ENGINE at $DB_HOST:$DB_PORT/$DB_NAME ..."
@@ -449,7 +591,9 @@ test_external_db_connection() {
 interactive_configure() {
     step "Configuration"
     info "Press Enter to accept the default shown in brackets."
-    INSTALL_DIR="$(ask "Install directory" "$INSTALL_DIR")"
+    if [[ "$FRESH_INSTALL" != 1 ]]; then
+        INSTALL_DIR="$(ask "Install directory" "$INSTALL_DIR")"
+    fi
     APP_PORT="$(ask_port "Web app / API port" "$APP_PORT")"
     BACKEND_PORT="$(ask_port "Internal backend port" "$BACKEND_PORT")"
     while [[ "$BACKEND_PORT" == "$APP_PORT" ]]; do
@@ -492,7 +636,7 @@ ensure_system_packages() {
         command -v "$bin" >/dev/null 2>&1 || need+=("$pkg")
     done
     # python3-venv is a separate Debian/Ubuntu package from python3 itself.
-    if ! python3 -c 'import venv' >/dev/null 2>&1; then
+    if ! dpkg-query -W -f='${Status}' python3-venv 2>/dev/null | grep -q 'install ok installed'; then
         need+=("python3-venv" "python3-pip")
     fi
     command -v pip3 >/dev/null 2>&1 || need+=("python3-pip")
@@ -641,6 +785,34 @@ ensure_node() {
 }
 
 # ---- Copy source & build ---------------------------------------------------------
+ensure_python() {
+    step "Checking Python (3.11 or newer)"
+    local candidate
+    if [[ -n "$PYTHON_BIN" ]]; then
+        "$PYTHON_BIN" -c 'import sys, venv; sys.exit(sys.version_info < (3, 11))' ||
+            { fail "PYTHON_BIN must be a working Python 3.11+ interpreter with venv."; exit 1; }
+        return
+    fi
+    for candidate in python3 python3.12 python3.11; do
+        if command -v "$candidate" >/dev/null && "$candidate" -c 'import sys, ensurepip, venv; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+            PYTHON_BIN="$(command -v "$candidate")"
+            return
+        fi
+    done
+    info "Provisioning private Python 3.12 with uv $UV_VERSION (system Python is unchanged)."
+    local bootstrap="$TOOLS_DIR/python-bootstrap"
+    mkdir -p "$TOOLS_DIR"
+    if [[ ! -x "$bootstrap/bin/python" ]]; then
+        python3 -m venv "$bootstrap"
+    fi
+    "$bootstrap/bin/python" -m pip install --disable-pip-version-check "uv==$UV_VERSION"
+    export UV_PYTHON_INSTALL_DIR="$TOOLS_DIR/python"
+    export UV_PYTHON_BIN_DIR="$TOOLS_DIR/python-bin"
+    "$bootstrap/bin/uv" python install 3.12
+    PYTHON_BIN="$("$bootstrap/bin/uv" python find --managed-python 3.12)"
+    "$PYTHON_BIN" -c 'import sys, ensurepip, venv; sys.exit(sys.version_info < (3, 11))'
+}
+
 sync_source() {
     step "Installing files to $INSTALL_DIR"
     mkdir -p "$INSTALL_DIR"
@@ -667,7 +839,8 @@ ensure_venv() {
     local extras=()
     [[ "$DB_MODE" == "embedded" ]] && extras+=("embedded-db")
     extras+=("ldap")
-    local extra="[$(IFS=,; printf '%s' "${extras[*]}")]"
+    local extra
+    extra="[$(IFS=,; printf '%s' "${extras[*]}")]"
 
     # A stamp of pyproject.toml (plus the selected extra) forces a reinstall
     # when a dependency is added/bumped by a source update, e.g. casbin. Without
@@ -689,7 +862,7 @@ ensure_venv() {
     fi
     if [[ ! -x .venv/bin/python ]]; then
         info "creating virtualenv (.venv)..."
-        python3 -m venv .venv || { fail "python3 -m venv failed"; exit 1; }
+        "$PYTHON_BIN" -m venv .venv || { fail "Python virtualenv creation failed"; exit 1; }
     elif [[ -f "$stamp" && "$(cat "$stamp" 2>/dev/null)" != "$current_hash" ]]; then
         info "pyproject.toml changed since the last install — refreshing Python dependencies..."
     fi
@@ -775,7 +948,7 @@ write_config() {
     local in_place=0
     [[ "$(cd "$INSTALL_DIR" && pwd)" == "$SOURCE_DIR" ]] && in_place=1
     cat > "$INSTALL_DIR/.lens-install.env" <<EOF
-# Generated by LensInstaller-Ubuntu-x86_64.sh — safe to edit and re-run lensctl.sh.
+# Generated by the Lens online installer — safe to edit and re-run lensctl.sh.
 APP_PORT=$APP_PORT
 BACKEND_PORT=$BACKEND_PORT
 APP_HOST=0.0.0.0
@@ -1175,7 +1348,7 @@ run_uninstall() {
     "$INSTALL_DIR/lensctl.sh" uninstall "${UNINSTALL_ARGS[@]}"
 }
 
-main() {
+install_from_source() {
     if [[ "$UNINSTALL" == "1" ]]; then
         run_uninstall
         return 0
@@ -1184,6 +1357,13 @@ main() {
     print_logo
     require_ubuntu
     require_arch
+    if [[ "$FRESH_INSTALL" == 1 ]]; then
+        if [[ -L "$INSTALL_DIR" ]] || { [[ -e "$INSTALL_DIR" ]] &&
+            { [[ ! -d "$INSTALL_DIR" ]] || [[ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; }; }; then
+            fail "Fresh installation requires a new or empty directory: $INSTALL_DIR"
+            exit 1
+        fi
+    fi
 
     if [[ "$SILENT" != "1" ]]; then
         interactive_configure
@@ -1196,6 +1376,7 @@ main() {
     TOOLS_DIR="$INSTALL_DIR/.tools"
     LOCAL_NODE_DIR="$TOOLS_DIR/node"
     ensure_node
+    ensure_python
     sync_source
     ensure_venv
     configure_database
@@ -1223,4 +1404,43 @@ main() {
     fi
 }
 
-main "$@"
+release_version() {
+    [[ $# == 2 ]] || online_fail "Usage: release stamp|check main|vMAJOR.MINOR.PATCH"
+    local action="$1" version="$2" script="${BASH_SOURCE[0]}" embedded
+    [[ "$action" == stamp || "$action" == check ]] || online_fail "Expected release stamp or release check."
+    [[ "$version" == main || "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] ||
+        online_fail "Expected main or a vMAJOR.MINOR.PATCH tag (optional prerelease)."
+    [[ ! -L "$script" && "$(grep -c '^LENS_SOURCE_VERSION="[^"]*"$' "$script")" == 1 ]] ||
+        online_fail "Expected a regular script with exactly one source-version assignment."
+    embedded="$(sed -n 's/^LENS_SOURCE_VERSION="\([^"]*\)"$/\1/p' "$script")"
+    if [[ "$action" == stamp ]]; then
+        sed -i "s/^LENS_SOURCE_VERSION=\"[^\"]*\"$/LENS_SOURCE_VERSION=\"$version\"/" "$script"
+        printf '[lens-online] Stamped source version: %s\n' "$version"
+    else
+        [[ "$embedded" == "$version" ]] ||
+            online_fail "Embedded version $embedded does not match $version."
+        printf '[lens-online] Source version verified: %s\n' "$version"
+    fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    case "${1:-}" in
+        release)
+            shift
+            release_version "$@"
+            ;;
+        --install-source)
+            shift
+            [[ -f "$SOURCE_DIR/package.json" && -f "$SOURCE_DIR/pyproject.toml" &&
+                -f "$SOURCE_DIR/scripts/storage-env.sh" ]] ||
+                online_fail "Internal source installation requires a complete downloaded Lens tree."
+            parse_args "$@"
+            FRESH_INSTALL=1
+            [[ "$UNINSTALL" == 0 ]] || online_fail "Use the installed lensctl.sh to uninstall."
+            install_from_source
+            ;;
+        *)
+            online_main "$@"
+            ;;
+    esac
+fi

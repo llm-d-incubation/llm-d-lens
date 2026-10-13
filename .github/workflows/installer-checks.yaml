@@ -1,0 +1,49 @@
+name: Installer checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/*Installer*'
+      - '.github/workflows/installer-checks.yaml'
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check embedded source version
+        run: |
+          expected=main
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            expected="$GITHUB_REF_NAME"
+          fi
+          bash scripts/LensInstaller-Ubuntu-x86_64-online.sh release check "$expected"
+      - name: Check shell syntax and lint
+        run: |
+          bash -n scripts/LensInstaller-Ubuntu-x86_64-online.sh
+          shellcheck -x --severity=warning scripts/LensInstaller-Ubuntu-x86_64-online.sh
+      - name: Check standalone help and rejected version override
+        run: |
+          bash scripts/LensInstaller-Ubuntu-x86_64-online.sh --help
+          if bash scripts/LensInstaller-Ubuntu-x86_64-online.sh --ref main; then
+            echo "The installer must reject version overrides." >&2
+            exit 1
+          fi
+      - name: Verify private Python provisioning on Ubuntu 22.04
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-venv
+          bash -c '
+            source scripts/LensInstaller-Ubuntu-x86_64-online.sh
+            TOOLS_DIR="$RUNNER_TEMP/lens-installer-tools"
+            ensure_python
+            "$PYTHON_BIN" -m venv "$RUNNER_TEMP/lens-installer-venv"
+            "$RUNNER_TEMP/lens-installer-venv/bin/python" -c "import sys; assert sys.version_info >= (3, 11)"
+          '
