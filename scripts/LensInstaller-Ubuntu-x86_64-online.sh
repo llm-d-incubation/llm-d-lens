@@ -932,9 +932,18 @@ configure_database() {
         fi
         args+=(--embedded-password "$DB_EMBEDDED_PASSWORD")
     fi
-    if ! .venv/bin/python -m llm_d_bench.db.bootstrap_cli "${args[@]}"; then
+    local bootstrap_output
+    if ! bootstrap_output="$(.venv/bin/python -m llm_d_bench.db.bootstrap_cli "${args[@]}" 2>&1)"; then
+        printf '%s\n' "$bootstrap_output" >&2
         fail "database configuration failed — re-run with --db-mode embedded to use the built-in PostgreSQL, or fix the external database settings."
         exit 1
+    fi
+    if [[ "$bootstrap_output" == *"already configured -- skipping"* ]]; then
+        # A database from a prior install/run was reused as-is; the
+        # freshly generated password above was never applied, so don't
+        # advertise it as this install's credential.
+        DB_EMBEDDED_PASSWORD_AUTOGEN=0
+        info "database already configured — reusing existing settings (use --force to reconfigure)"
     fi
     ok "database configured (mode: $DB_MODE)"
 }
@@ -1154,6 +1163,15 @@ wait_for_http() {
     return 1
 }
 
+# Points operators to the protected first-run credential file without
+# printing its contents (mirrors scripts/dev.sh's print_initial_admin_credentials).
+# The file is removed once the password is changed.
+print_initial_admin_credentials() {
+    local cred_file="$LENS_DATA_DIR/credentials/initial_admin.txt"
+    [[ -f "$cred_file" ]] || return 0
+    log "administrator credentials are stored in the mode-600 file $cred_file; removed after the password is changed"
+}
+
 # Regenerates server/mcp/tools.ts from the FastAPI backend's live OpenAPI
 # schema before every start, so the MCP tool catalog can never drift from the
 # routes actually exposed by this installed backend. Non-fatal: if it fails
@@ -1196,6 +1214,7 @@ cmd_start() {
     if [[ "$ENABLE_HTTPS" == "1" ]]; then
         log "  HTTPS uses a self-signed cert — your browser will warn once; accept it to proceed. Needed for mic access etc. off localhost."
     fi
+    print_initial_admin_credentials
 }
 
 # embedded_db_dir -> the on-disk location of the built-in PostgreSQL cluster

@@ -10,12 +10,17 @@ export default function ChangePasswordPage() {
     const { refresh, logout } = useAuth();
     const [oldPassword, setOldPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
     const handleSubmit = async (event) => {
         event.preventDefault();
         setError('');
+        if (newPassword !== confirmPassword) {
+            setError('The two new passwords do not match.');
+            return;
+        }
         setSubmitting(true);
         try {
             await changePassword(oldPassword, newPassword);
@@ -77,6 +82,16 @@ export default function ChangePasswordPage() {
                             At least 12 characters, mixing 3 of: lowercase, uppercase, digit, symbol.
                         </p>
                     </div>
+                    <Input
+                        icon={KeyRound}
+                        type="password"
+                        autoComplete="new-password"
+                        placeholder="Confirm new password"
+                        className="h-11"
+                        value={confirmPassword}
+                        onChange={(event) => setConfirmPassword(event.target.value)}
+                        required
+                    />
                     <FormError message={error} />
                     <div className="mt-2 flex gap-2">
                         <Button type="submit" variant="primary" size="md" isLoading={submitting} className="h-11 flex-1">

@@ -60,7 +60,7 @@ Or with **wget**:
 VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
-Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app port `3000`, backend port `8081`). When it finishes, open the printed URL (`https://localhost:3000` by default) and sign in with the admin credentials it printed.
+Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app port `3000`, backend port `8081`). When it finishes, open the printed URL (`https://localhost:3000` by default) and sign in with the auto-generated admin credentials — the installer prints the path to the mode-600 file that holds them (`cat` that file to read the username and password; it's removed once you change the password).
 
 The installer reads prompts from your terminal and, after validating the source
 archive, saves a uniquely named installer copy in the current directory.
