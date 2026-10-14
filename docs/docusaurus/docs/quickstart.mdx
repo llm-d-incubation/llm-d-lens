@@ -26,7 +26,9 @@ port `3000`, backend port `8081`). The installer provisions Node, Python, an
 embedded PostgreSQL database, builds the app, sets up TLS and starts it.
 
 Once it finishes, open the printed URL (`https://localhost:3000` by default)
-and sign in with the admin credentials it printed.
+and sign in with the auto-generated admin credentials. The installer prints the
+path to the mode-600 file holding them (`cat` it to read the username and
+password); the file is removed once you change the password.
 
 Prompts are read from your terminal. After source validation, a uniquely named
 installer copy is saved in the current directory.
