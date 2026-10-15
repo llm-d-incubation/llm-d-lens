@@ -17,6 +17,18 @@ Model Cache owns deployment-model downloads. Shared creation preflight requires 
 
 Hugging Face environment variables (`HF_*`, `HUGGING*`, `TRANSFORMERS_*`) are administrator-managed. The deployment planning API and configuration validation reject user-supplied `customParameters` entries that set them (see `llm_d_lens/configuration/managed_environment.py`), and the deployment editor blocks them with an "administrator-managed" message. The platform injects these values from the cluster's saved proxy, model cache and token configuration.
 
+Deployment callers use `require_cached_model(overrides, cluster_id=..., provider_id=...)`
+before rendering. `provider_id` defaults to `baseline-vllm`; the shared deployment
+service supplies the actual provider. The check resolves `revision`, `tokenizer`,
+and `tokenizer-revision` separately for each active role, matches repository IDs
+and revisions exactly, and checks node synchronization for both model and tokenizer.
+Inactive-role arguments are ignored and conflicting dependency values are rejected.
+The manifest adapter then uses `validate_cached_model_arguments` to compare the
+rendered loading arguments against the checked dependencies, including published
+manifests. This argument check does not enforce published-manifest offline settings
+or storage binding. Unsupported dependency overrides are described in the
+[deployment guide](/user-guide/deployments#open-the-deployment-creation-flow).
+
 ### List Model Cache entries
 
 List Model Cache entries, optionally filtered by cluster or storage volume. Use this to discover cached model ids, download state, and node sync drift.

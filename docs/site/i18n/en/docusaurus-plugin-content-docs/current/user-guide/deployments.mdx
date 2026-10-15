@@ -41,6 +41,18 @@ For local-disk storage, synchronize new nodes before deployment. Ordinary provid
 rendering configures offline serving with a read-only cache mount. Download
 or repair the cache in Model Cache first, then create or retry the deployment.
 
+Cache checks follow the active serving roles: P/D checks Prefill and Decode
+independently; other providers use Decode. Each role defaults to revision `main`.
+An explicit tokenizer must also be ready in the same cache volume; its revision
+defaults to the role's model revision unless `tokenizer-revision` is supplied.
+Conflicting dependency arguments are rejected. The rendered model and tokenizer
+arguments must match the checked dependencies before deployment proceeds.
+
+Ordinary optimized-baseline rendering does not apply custom `revision`, `tokenizer`,
+or `tokenizer-revision` arguments, so those inputs are rejected. Configuration-source
+overrides and custom `model`, `model-path`, `code-revision`, `hf-config-path`,
+`config`, and `download-dir` arguments are not supported by cache preflight.
+
 ### Model Cache enforcement limitations
 
 Exact published YAML configurations (`officialGuide`) bypass ordinary provider

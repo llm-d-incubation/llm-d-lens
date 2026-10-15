@@ -1,11 +1,16 @@
 """Tests for the shared storage-volume mount resolver used by Deploy providers."""
 
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from llm_d_lens.deploy.providers.storage_mount import require_cached_model, resolve_mount
+from llm_d_lens.deploy.providers.storage_mount import (
+    require_cached_model,
+    resolve_mount,
+    validate_cached_model_arguments,
+)
 from llm_d_lens.storage import service as storage_service
 from llm_d_lens.storage.contracts import (
     LocalDiskSpec,
@@ -88,6 +93,42 @@ async def test_require_cached_model_rejects_unsynced_nodes(cached_model):
 
 
 @pytest.mark.asyncio
+async def test_preflight_ignores_revision_for_inactive_role(cached_model):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [{"kind": "argument", "name": "revision", "value": "v2", "target": "prefill"}],
+    }
+    await require_cached_model(overrides, cluster_id="cluster", provider_id="baseline-vllm")
+    cached_model[0].list.return_value[0].source.huggingface.revision = "v2"
+    with pytest.raises(ValueError, match="not ready"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id="baseline-vllm")
+
+
+@pytest.mark.asyncio
+async def test_preflight_requires_default_revision_for_other_pd_role(cached_model):
+    cached_model[0].list.return_value[0].source.huggingface.revision = "v2"
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [{"kind": "argument", "name": "revision", "value": "v2", "target": "prefill"}],
+    }
+    with pytest.raises(ValueError, match="not ready"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id="pd-disaggregation")
+
+
+@pytest.mark.asyncio
+async def test_preflight_requires_independent_tokenizer_cache(cached_model):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [{"kind": "argument", "name": "tokenizer", "value": "other/tokenizer", "target": "decode"}],
+    }
+    with pytest.raises(ValueError, match="not ready"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id="baseline-vllm")
+
+
+@pytest.mark.asyncio
 async def test_require_cached_model_rejects_custom_hf_environment(cached_model):
     overrides = {
         "model": {"name": "org/model"},
@@ -96,6 +137,125 @@ async def test_require_cached_model_rejects_custom_hf_environment(cached_model):
     }
     with pytest.raises(ValueError, match="managed Hugging Face"):
         await require_cached_model(overrides, cluster_id="cluster")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tokenizer_revision", [None, "tokenizer-v3"])
+async def test_preflight_checks_tokenizer_revision_and_node_sync(cached_model, tokenizer_revision):
+    cache = cached_model[0]
+    cache.list.return_value[0].source.huggingface.revision = "v2"
+    tokenizer_entry = deepcopy(cache.list.return_value[0])
+    tokenizer_entry.source.huggingface.repo_id = "other/tokenizer"
+    tokenizer_entry.source.huggingface.revision = tokenizer_revision or "v2"
+    cache.list.return_value.append(tokenizer_entry)
+    custom = [
+        {"kind": "argument", "name": "revision", "value": "v2", "target": "decode"},
+        {"kind": "argument", "name": "tokenizer", "value": "other/tokenizer", "target": "both"},
+    ]
+    if tokenizer_revision:
+        custom.append(
+            {"kind": "argument", "name": "tokenizer-revision", "value": tokenizer_revision, "target": "decode"}
+        )
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": custom,
+    }
+    await require_cached_model(overrides, cluster_id="cluster")
+    cache.compute_pending_sync.assert_awaited_once_with(cache.list.return_value)
+    cache.compute_pending_sync.return_value = {"tokenizer": ["new-node"]}
+    with pytest.raises(ValueError, match="sync it in Model Cache"):
+        await require_cached_model(overrides, cluster_id="cluster")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_id", ["baseline-vllm", "pd-disaggregation", "tiered-prefix-cache", "precise-prefix-cache-routing"]
+)
+async def test_preflight_rejects_conflicting_dependency_arguments(cached_model, provider_id):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [
+            {"kind": "argument", "name": "revision", "value": "v2", "target": "both"},
+            {"kind": "argument", "name": "revision", "value": "main", "target": "decode"},
+        ],
+    }
+    with pytest.raises(ValueError, match="conflicting --revision"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id=provider_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["revision", "tokenizer", "tokenizer-revision"])
+async def test_preflight_rejects_ignored_optimized_dependencies(cached_model, name):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [{"kind": "argument", "name": name, "value": "main", "target": "decode"}],
+    }
+    with pytest.raises(ValueError, match="does not apply custom"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id="optimized-baseline")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["model", "model-path", "code-revision", "hf-config-path", "config", "download-dir"])
+async def test_preflight_rejects_unsupported_dependency_overrides(cached_model, name):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [{"kind": "argument", "name": name, "value": "other/model", "target": "decode"}],
+    }
+    with pytest.raises(ValueError, match="does not support"):
+        await require_cached_model(overrides, cluster_id="cluster")
+
+
+@pytest.mark.asyncio
+async def test_preflight_rejects_configuration_source_model_override(cached_model):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume", "configurationSource": {"mode": "suggested-yaml"}},
+    }
+    with pytest.raises(ValueError, match="configurationSource"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id="optimized-baseline")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shell", [False, True])
+async def test_rendered_argument_validation_checks_role_and_tokenizer(cached_model, shell):
+    import yaml
+
+    overrides = {"model": {"name": "org/model"}, "runtime": {"storageVolumeId": "volume"}}
+    await require_cached_model(overrides, cluster_id="cluster", provider_id="pd-disaggregation")
+    documents = [
+        {
+            "kind": "Deployment",
+            "metadata": {"name": f"model-{role}"},
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "modelserver",
+                                "command": ["sh", "-c"] if shell else ["vllm", "serve"],
+                                "args": ["exec vllm serve org/model"] if shell else ["org/model"],
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+        for role in ("prefill", "decode")
+    ]
+    validate_cached_model_arguments(overrides, yaml.safe_dump_all(documents))
+    with pytest.raises(ValueError, match="missing model-server roles"):
+        validate_cached_model_arguments(overrides, yaml.safe_dump_all(documents[:1]))
+    args = documents[1]["spec"]["template"]["spec"]["containers"][0]["args"]
+    if shell:
+        args[0] += " --tokenizer=other/tokenizer"
+    else:
+        args.append("--tokenizer=other/tokenizer")
+    with pytest.raises(ValueError, match="does not match Model Cache preflight"):
+        validate_cached_model_arguments(overrides, yaml.safe_dump_all(documents))
 
 
 @pytest.mark.asyncio

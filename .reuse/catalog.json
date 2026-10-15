@@ -2817,9 +2817,9 @@
     {
       "id": "deployment-model-cache-preflight",
       "path": "apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py",
-      "symbols": ["require_cached_model"],
+      "symbols": ["require_cached_model", "validate_cached_model_arguments"],
       "purpose": "Require ready registered Model Cache models before any deployment provider renders resources.",
-      "boundaries": "Deployment creation only. Requires an explicit cluster, a model-cache-purpose non-dynamic volume, matching ready model revisions and synchronized local-disk nodes. Reuses Storage readiness, Model Cache listing and node checks, and managed environment validation. Normalizes legacy fallback paths to the selected cache; ordinary provider rendering uses read-only serving mounts. Does not validate the final published manifest or download, delete or repair models.",
+      "boundaries": "Deployment creation only. Resolves model and tokenizer dependencies per active provider role, requires exact ready repository/revision pairs and synchronized nodes, and rejects conflicting or unsupported overrides. Reuses Storage readiness, Model Cache listing, managed environment checks and manifest argument parsing. Compares final ordinary and published manifest loading arguments with checked dependencies. Requires an explicit cluster and a model-cache-purpose non-dynamic volume. Ordinary provider rendering uses read-only serving mounts; published-manifest offline flags and storage binding remain outside this check. Does not download, delete or repair models.",
       "examples": ["apps/backend/src/llm_d_lens/deploy/service.py"],
       "tests": ["apps/backend/tests/unit/deploy/providers/test_storage_mount.py", "apps/backend/tests/unit/deploy/test_creation_refresh.py"]
     },

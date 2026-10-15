@@ -14,8 +14,86 @@ from __future__ import annotations
 
 from typing import Any
 
+_UNSUPPORTED_MODEL_ARGUMENTS = {"model", "model-path", "code-revision", "hf-config-path", "config", "download-dir"}
 
-async def require_cached_model(overrides: dict[str, Any], *, cluster_id: str | None) -> None:
+
+def _model_dependencies(model: str, arguments: dict[str, str]) -> tuple[tuple[str, str], tuple[str, str]]:
+    from llm_d_lens.model_cache.contracts import HuggingFaceSource
+
+    revision = arguments.get("revision", "main")
+    tokenizer = arguments.get("tokenizer", model)
+    tokenizer_revision = arguments.get("tokenizer-revision", revision)
+    dependencies = ((model, revision), (tokenizer, tokenizer_revision))
+    for repository, required_revision in dependencies:
+        HuggingFaceSource(repoId=repository, revision=required_revision)
+    return dependencies
+
+
+def _required_model_dependencies(
+    overrides: dict[str, Any], provider_id: str
+) -> dict[str, tuple[tuple[str, str], tuple[str, str]]]:
+    model = str((overrides.get("model") or {}).get("name") or "").strip()
+    if not model:
+        raise ValueError("selected model revision is not ready in Model Cache; model.name is required")
+    if (overrides.get("runtime") or {}).get("configurationSource"):
+        raise ValueError("Model Cache preflight does not support runtime.configurationSource overrides")
+    roles = ("prefill", "decode") if provider_id == "pd-disaggregation" else ("decode",)
+    result = {}
+    for role in roles:
+        arguments: dict[str, str] = {}
+        for item in overrides.get("customParameters") or []:
+            if item.get("kind") != "argument" or item.get("target") not in {role, "both"}:
+                continue
+            name = str(item.get("name") or "").replace("_", "-")
+            if name in _UNSUPPORTED_MODEL_ARGUMENTS:
+                raise ValueError(f"Model Cache preflight does not support --{name}; use the selected cached model")
+            if name not in {"revision", "tokenizer", "tokenizer-revision"}:
+                continue
+            if provider_id == "optimized-baseline" and not isinstance(overrides.get("officialGuide"), dict):
+                raise ValueError(f"optimized-baseline does not apply custom --{name} during provider rendering")
+            value = str(item.get("value") or "")
+            if name in arguments and arguments[name] != value:
+                raise ValueError(f"conflicting --{name} values for {role}")
+            arguments[name] = value
+        result[role] = _model_dependencies(model, arguments)
+    return result
+
+
+def validate_cached_model_arguments(overrides: dict[str, Any], manifest: str) -> None:
+    from llm_d_lens.configuration.manifest_facts import (
+        _documents,
+        _invocation_tokens,
+        _model_argument,
+        _modelserver_containers,
+        _option,
+        _role,
+    )
+
+    expected = overrides["_model_cache_dependencies"]
+    seen = set()
+    for deployment, container in _modelserver_containers(_documents(manifest)):
+        name = str((deployment.get("metadata") or {}).get("name") or "<unnamed>")
+        role = _role(deployment) if "prefill" in expected else "decode"
+        tokens = _invocation_tokens(container, name)
+        for argument in _UNSUPPORTED_MODEL_ARGUMENTS:
+            if _option(tokens, {f"--{argument}", f"--{argument.replace('-', '_')}"}, name) is not None:
+                raise ValueError(f"Model Cache cannot verify rendered --{argument} in {name}")
+        arguments = {}
+        for argument in ("revision", "tokenizer", "tokenizer-revision"):
+            value = _option(tokens, {f"--{argument}", f"--{argument.replace('-', '_')}"}, name)
+            if value is not None:
+                arguments[argument] = value
+        actual = _model_dependencies(_model_argument(tokens, name), arguments)
+        if role not in expected or actual != expected[role]:
+            raise ValueError(f"rendered model/tokenizer for {name} does not match Model Cache preflight")
+        seen.add(role)
+    if seen != set(expected):
+        raise ValueError("rendered manifest is missing model-server roles required by Model Cache preflight")
+
+
+async def require_cached_model(
+    overrides: dict[str, Any], *, cluster_id: str | None, provider_id: str = "baseline-vllm"
+) -> None:
     """Require a ready, fully synchronized Model Cache entry before rendering."""
     from llm_d_lens.configuration.managed_environment import admin_managed_environment_names
     from llm_d_lens.model_cache.service import default_service
@@ -38,15 +116,8 @@ async def require_cached_model(overrides: dict[str, Any], *, cluster_id: str | N
         raise ValueError("selected storage volume is not designated for model cache use")
     if volume.kind == StorageVolumeKind.DYNAMIC_PVC:
         raise ValueError("model-cache storage for deployments cannot use dynamic-pvc volumes")
-    model = str((overrides.get("model") or {}).get("name") or "").strip()
-    revisions = {
-        str(item.get("value")) for item in custom if item.get("kind") == "argument" and item.get("name") == "revision"
-    } or {"main"}
-    revisions.update(
-        str(item.get("value"))
-        for item in custom
-        if item.get("kind") == "argument" and item.get("name") == "tokenizer-revision"
-    )
+    dependencies_by_role = _required_model_dependencies(overrides, provider_id)
+    dependencies = set().union(*dependencies_by_role.values())
     cache = default_service()
     entries = await cache.list(cluster_id=cluster_id, storage_volume_id=volume_id)
     selected = [
@@ -54,11 +125,12 @@ async def require_cached_model(overrides: dict[str, Any], *, cluster_id: str | N
         for entry in entries
         if entry.status == "ready"
         and entry.source.huggingface
-        and entry.source.huggingface.repo_id.casefold() == model.casefold()
-        and entry.source.huggingface.revision in revisions
+        and (entry.source.huggingface.repo_id, entry.source.huggingface.revision) in dependencies
     ]
-    if {entry.source.huggingface.revision for entry in selected} != revisions:
-        raise ValueError("selected model revision is not ready in Model Cache; download it there before deployment")
+    available = {(entry.source.huggingface.repo_id, entry.source.huggingface.revision) for entry in selected}
+    if available != dependencies:
+        missing = ", ".join(f"{repository}@{revision}" for repository, revision in sorted(dependencies - available))
+        raise ValueError(f"selected model/tokenizer revision is not ready in Model Cache: {missing}")
     if await cache.compute_pending_sync(selected):
         raise ValueError("selected model cache is missing on cluster nodes; sync it in Model Cache before deployment")
     runtime["modelSource"] = "auto-cache"
@@ -66,6 +138,7 @@ async def require_cached_model(overrides: dict[str, Any], *, cluster_id: str | N
     runtime.pop("mountPath", None)
     runtime.pop("pvcName", None)
     overrides["runtime"] = runtime
+    overrides["_model_cache_dependencies"] = dependencies_by_role
 
 
 async def resolve_mount(

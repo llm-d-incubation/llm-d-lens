@@ -2,14 +2,18 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 import yaml
 
+from llm_d_lens.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
 from llm_d_lens.deploy.providers.pd_disaggregation import PdDisaggregationAdapter
+from llm_d_lens.deploy.providers.storage_mount import require_cached_model
+from tests.unit.deploy.providers.test_storage_mount import cached_model as cached_model
 
 
 class _ReadinessRunner:
@@ -122,7 +126,9 @@ def _asset(name: str, content: str) -> dict[str, str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("read_only", [False, True])
-async def test_render_mounts_selected_cache_volume_for_both_roles(monkeypatch, tmp_path: Path, read_only: bool):
+async def test_render_mounts_selected_cache_volume_for_both_roles(
+    monkeypatch, tmp_path: Path, read_only: bool, cached_model
+):
     import llm_d_lens.deploy.providers.pd_disaggregation as pd
 
     documents = [
@@ -162,7 +168,18 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(monkeypatch, t
         "_deployment_namespace": "deployment-namespace",
     }
 
-    artifact = await adapter.render(adapter._definition, overrides)
+    if read_only:
+        artifact = await adapter.render(adapter._definition, overrides)
+    else:
+        cache = cached_model[0]
+        cache.list.return_value[0].source.huggingface.repo_id = "Qwen/Qwen3-8B"
+        prefill_entry = deepcopy(cache.list.return_value[0])
+        prefill_entry.source.huggingface.revision = "v2"
+        cache.list.return_value.append(prefill_entry)
+        overrides["customParameters"] = [{"kind": "argument", "name": "revision", "value": "v2", "target": "prefill"}]
+        await require_cached_model(overrides, cluster_id="cluster-id", provider_id="pd-disaggregation")
+        wrapper = ConfigurationManifestAdapter(adapter, None, "llmd-", 30, output_root=tmp_path)
+        artifact = await wrapper.render(adapter._definition, overrides)
 
     resolve.assert_awaited_once_with(overrides["runtime"], cluster_id="cluster-id", namespace="deployment-namespace")
     rendered = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text(encoding="utf-8")))
@@ -178,6 +195,8 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(monkeypatch, t
         assert environment["HF_HUB_OFFLINE"] == "1"
         assert environment["TRANSFORMERS_OFFLINE"] == "1"
         assert environment.get("HF_HOME") == (None if read_only else "/model-cache")
+        if not read_only:
+            assert ("--revision=v2" in container["args"]) == deployment["metadata"]["name"].endswith("prefill")
 
 
 @pytest.mark.asyncio

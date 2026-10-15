@@ -384,7 +384,9 @@ class GuideAdapterDeploymentService:
             overrides["_deployment_namespace"] = namespace
             overrides["_cluster_id"] = request.provenance.get("cluster_server_id")
             overrides["_placement"] = request.deployment_policy.value.get("placement")
-            await require_cached_model(overrides, cluster_id=overrides["_cluster_id"])
+            await require_cached_model(
+                overrides, cluster_id=overrides["_cluster_id"], provider_id=artifact_input.provider_ref
+            )
             provider_artifact = await adapter.render(definition, overrides)
             # The framework resolves the data plane (shared Gateway vs the
             # deployment's own proxy) so providers do not inspect cluster state.

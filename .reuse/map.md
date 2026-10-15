@@ -812,7 +812,7 @@ Entry: [apps/backend/src/llm_d_lens/deploy/providers/model_cache_environment.py]
 ## deployment-model-cache-preflight
 
 Require ready registered Model Cache models before any deployment provider renders resources.
-Entry: [apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py](../apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py) — `require_cached_model`
+Entry: [apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py](../apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py) — `require_cached_model`, `validate_cached_model_arguments`
 
 ## admin-managed-hugging-face-environment
 
