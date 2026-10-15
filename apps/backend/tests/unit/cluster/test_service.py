@@ -896,3 +896,29 @@ def test_node_summary_counts_renamed_only_nvidia_shared_resource_as_fallback():
     summary = service._node_summary(node)
     assert summary["gpuCount"] == 70
     assert summary["gpuByProfile"] == {"nvidia": 70}
+
+
+def test_node_summary_uses_dra_model_when_node_has_no_product_label():
+    node = {"metadata": {"name": "node-a", "labels": {}}, "spec": {}, "status": {"conditions": []}}
+    slices = [
+        {
+            "spec": {
+                "nodeName": "node-a",
+                "driver": "gpu.intel.com",
+                "devices": [
+                    {"attributes": {"model": {"string": "B60"}}},
+                    {"attributes": {"model": {"string": "B60"}}},
+                ],
+            }
+        }
+    ]
+    summary = service._node_summary(
+        node,
+        service._resource_slice_gpu_counts(slices),
+        service._resource_slice_gpu_counts_by_profile(slices),
+        service._resource_slice_gpu_models_by_profile(slices),
+    )
+    assert summary["gpuModelsByProfile"] == {"intel-xpu": ["B60"]}
+    assert service._hardware_summary([summary], gpu_by_profile={"intel-xpu": 2})["accelerators"] == [
+        {"id": "intel-xpu", "gpuCount": 2, "models": ["B60"]}
+    ]

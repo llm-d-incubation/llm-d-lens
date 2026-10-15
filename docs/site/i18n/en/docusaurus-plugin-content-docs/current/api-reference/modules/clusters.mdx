@@ -639,7 +639,7 @@ Get or create the active Lens session metadata for a cluster id. Use this when a
 
 ### Get a cluster overview
 
-Return a live Kubernetes overview for one cluster, including node, GPU, namespace, cached-image, and component-health summaries. The route also reports the current cluster record alongside the live snapshot.
+Return a live Kubernetes overview for one cluster, including node, GPU, namespace, cached-image, and component-health summaries. Accelerator models come from node product labels and DRA ResourceSlice device attributes when present. The route also reports the current cluster record alongside the live snapshot.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -696,6 +696,9 @@ Return a live Kubernetes overview for one cluster, including node, GPU, namespac
             "gpuByProfile": {
               "intel-xpu": 4
             },
+            "gpuModelsByProfile": {
+              "intel-xpu": ["B60"]
+            },
             "vramBytes": 274877906944,
             "role": "worker",
             "cachedImages": [
@@ -727,7 +730,8 @@ Return a live Kubernetes overview for one cluster, including node, GPU, namespac
           "accelerators": [
             {
               "id": "intel-xpu",
-              "gpuCount": 8
+              "gpuCount": 8,
+              "models": ["B60"]
             }
           ],
           "vramBytes": 549755813888,

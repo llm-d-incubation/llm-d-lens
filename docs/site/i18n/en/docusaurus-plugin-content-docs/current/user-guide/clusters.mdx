@@ -91,6 +91,10 @@ repairing other providers belong to troubleshooting, not the normal registration
 
 For log filters and namespace deletion, follow [Manage deployments](/user-guide/deployments).
 
+When accelerators use DRA, Lens reads their model from ResourceSlice device attributes
+even if nodes do not have GPU product labels. The reported model is used to select
+the matching AIConfigurator system for hardware-aware recommendations.
+
 ## Put worker nodes into maintenance mode
 
 1. In the cluster's **Workers** list, select the nodes.

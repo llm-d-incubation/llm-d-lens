@@ -1099,6 +1099,24 @@ def _resource_slice_gpu_counts_by_profile(slices: list[dict[str, Any]]) -> dict[
     return by_node
 
 
+def _resource_slice_gpu_models_by_profile(slices: list[dict[str, Any]]) -> dict[str, dict[str, set[str]]]:
+    device_classes = {
+        device_class: profile.id for profile in _hardware_profiles() for device_class in profile.device_classes
+    }
+    by_node: dict[str, dict[str, set[str]]] = {}
+    for item in slices:
+        spec = item.get("spec") or {}
+        profile_id = device_classes.get(spec.get("driver"))
+        node_name = str(spec.get("nodeName") or "").strip()
+        if not profile_id or not node_name:
+            continue
+        for device in spec.get("devices") or []:
+            model = ((device.get("attributes") or {}).get("model") or {}).get("string")
+            if model and str(model).strip():
+                by_node.setdefault(node_name, {}).setdefault(profile_id, set()).add(str(model).strip())
+    return by_node
+
+
 def _node_has_gpu_label(labels: dict[str, Any]) -> bool:
     """True when a node matches any registered hardware's presence label."""
     selectors = [profile.node_label_selector for profile in _hardware_profiles() if profile.node_label_selector]
@@ -1489,6 +1507,7 @@ def _node_summary(
     node: dict[str, Any],
     resource_slice_counts: dict[str, int] | None = None,
     resource_slice_profile_counts: dict[str, dict[str, int]] | None = None,
+    resource_slice_profile_models: dict[str, dict[str, set[str]]] | None = None,
 ) -> dict[str, Any]:
     metadata = node.get("metadata") or {}
     name = str(metadata.get("name") or "unknown")
@@ -1519,6 +1538,7 @@ def _node_summary(
     gpu_models_by_profile = {
         profile_id: sorted(
             {str(labels[key]).strip() for key in get_profile(profile_id).planning.model_label_keys if labels.get(key)}
+            | (resource_slice_profile_models or {}).get(name, {}).get(profile_id, set())
         )
         for profile_id in gpu_by_profile
     }
@@ -1737,6 +1757,7 @@ async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
     # ResourceSlice CRD is optional; treat "not found" as no DRA slices.
     resource_slice_counts: dict[str, int] = {}
     resource_slice_profile_counts: dict[str, dict[str, int]] = {}
+    resource_slice_profile_models: dict[str, dict[str, set[str]]] = {}
     gpu_devices: dict[tuple[str, str], dict[str, str]] = {}
     resource_slices: list[dict[str, Any]] = []
     if slices_result.returncode == 0:
@@ -1744,9 +1765,13 @@ async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
         gpu_devices = _resource_slice_gpu_devices(resource_slices)
         resource_slice_counts = _resource_slice_gpu_counts(resource_slices)
         resource_slice_profile_counts = _resource_slice_gpu_counts_by_profile(resource_slices)
+        resource_slice_profile_models = _resource_slice_gpu_models_by_profile(resource_slices)
     node_summaries = [
         summary
-        for summary in (_node_summary(node, resource_slice_counts, resource_slice_profile_counts) for node in nodes)
+        for summary in (
+            _node_summary(node, resource_slice_counts, resource_slice_profile_counts, resource_slice_profile_models)
+            for node in nodes
+        )
         if summary.get("role") == "worker"
     ]
     worker_node_names = {node["name"] for node in node_summaries}
