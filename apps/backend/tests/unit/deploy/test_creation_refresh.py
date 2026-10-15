@@ -1,19 +1,21 @@
 """Polling must not finalize executions while their creator still owns them."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
 from llm_d_lens.deploy.contracts import ConfigurationArtifact, DeploymentCreateRequest, DeploymentStatus
-from llm_d_lens.deploy.providers.guide_adapter import ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, ValidationResult
 from llm_d_lens.deploy.providers.guide_catalog import GuideCatalog
 from llm_d_lens.deploy.service import ExecutionLogArchive, GuideAdapterDeploymentService
+from tests.unit.deploy.providers.test_storage_mount import cached_model as cached_model
 from tests.unit.deploy.test_bundle_evidence import EvidenceAdapter
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deploy_fails", [False, True])
-async def test_refresh_during_creation_does_not_fail_missing_resources(tmp_path, deploy_fails):
+async def test_refresh_during_creation_does_not_fail_missing_resources(tmp_path, deploy_fails, cached_model):
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -34,6 +36,7 @@ async def test_refresh_during_creation_does_not_fail_missing_resources(tmp_path,
     creator = GuideAdapterDeploymentService(catalog, lambda _: "ns", ExecutionLogArchive(tmp_path))
     poller = GuideAdapterDeploymentService(catalog, lambda _: "ns", ExecutionLogArchive(tmp_path))
     request = DeploymentCreateRequest(
+        provenance={"cluster_server_id": "cluster"},
         configuration_artifacts=[
             ConfigurationArtifact(
                 schema_version="v1",
@@ -41,9 +44,9 @@ async def test_refresh_during_creation_does_not_fail_missing_resources(tmp_path,
                 provider_ref="optimized-baseline",
                 media_type="application/json",
                 checksum="hash",
-                content="{}",
+                content='{"model":{"name":"org/model"},"runtime":{"storageVolumeId":"volume"}}',
             )
-        ]
+        ],
     )
     initial = []
     task = asyncio.create_task(creator.create(request, on_initial_execution=initial.append))
@@ -58,6 +61,41 @@ async def test_refresh_during_creation_does_not_fail_missing_resources(tmp_path,
     # Once creation settles, normal reconciliation must resume, including after errors.
     refreshed = await poller.refresh_diagnostics(final)
     assert refreshed.status == final.status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider",
+    ["baseline-vllm", "optimized-baseline", "pd-disaggregation", "precise-prefix-cache-routing", "tiered-prefix-cache"],
+)
+@pytest.mark.parametrize("content", ["{}", '{"model":{"name":"missing/model"},"runtime":{"storageVolumeId":"volume"}}'])
+async def test_all_providers_reject_uncached_models_before_rendering(tmp_path, cached_model, provider, content):
+    class CacheRequiredAdapter(EvidenceAdapter):
+        def discover(self):
+            return GuideDefinition(provider, "saved", "hash", "stable")
+
+    adapter = CacheRequiredAdapter()
+    adapter.render = AsyncMock()
+    adapter.deploy = AsyncMock()
+    creator = GuideAdapterDeploymentService(GuideCatalog([adapter]), lambda _: "ns", ExecutionLogArchive(tmp_path))
+    request = DeploymentCreateRequest(
+        provenance={"cluster_server_id": "cluster"},
+        configuration_artifacts=[
+            ConfigurationArtifact(
+                schema_version="v1",
+                kind="helm-values",
+                provider_ref=provider,
+                media_type="application/json",
+                checksum="hash",
+                content=content,
+            )
+        ],
+    )
+    execution = await creator.create(request)
+    assert execution.status == DeploymentStatus.FAILED
+    assert "Model Cache" in execution.diagnostics.value["reason"]
+    adapter.render.assert_not_awaited()
+    adapter.deploy.assert_not_awaited()
 
 
 @pytest.mark.asyncio

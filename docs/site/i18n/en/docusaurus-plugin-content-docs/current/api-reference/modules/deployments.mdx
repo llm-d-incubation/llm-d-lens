@@ -323,7 +323,7 @@ effective_values = compatible_router_values(values, chart_version="v0.11.0")
     - `failure_policy` (`"stop" | "continue"`, default `"continue"`): whether later cases should continue after a failure.
     - `provenance` (`object`, optional): caller-owned origin metadata.
     - `runtime_binding` (`RuntimeBinding`, optional): environment overrides, cluster session binding, and `placement` (`{"replicas":"prefer-same-node"|"same-node"|"balanced"|"spread"|"none","nodeLabel"?:{"key":string,"value":string}}`). Model-server Deployments in the same rendered manifest share a placement group, including PD Prefill and Decode; router Pods are excluded. `nodeLabel` is accepted only with `same-node` and must exist on a node in the cluster identified by `provenance.cluster_server_id`. LeaderWorkerSet cannot use `balanced` or `spread` because its leader/worker Pods are not separate replicas.
-      For optimized-baseline, placement is applied to the generated Kustomize overlay before deployment. Optimized-baseline, P/D disaggregation, tiered-prefix-cache, and precise-prefix-cache-routing can fetch missing snapshots on first start when using a writable auto-cache volume; read-only mounted models remain offline.
+      For optimized-baseline, placement is applied to the generated Kustomize overlay before deployment. Shared creation preflight requires a ready model and revision in registered Model Cache storage. Ordinary provider rendering sets Hugging Face offline flags; exact published manifests bypass that rendering and are not covered by the same final-manifest enforcement. Missing snapshots must be downloaded through Model Cache before deployment.
 
     ```json
     {
@@ -477,7 +477,7 @@ asyncio.run(main())
 Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM contract.
 The generated namespace uses the backend's configured deployment prefix (for example, `llmd-baseline-vllm-...`).
 Standard vLLM deployments use the baseline adapter for rollout readiness and cleanup; they do not require a published Guide manifest's `readinessDeployments` contract.
-Local-cache and direct PVC storage can download missing Hugging Face snapshots into their writable mounted cache on first start. Registered Model Cache storage requires a ready entry for the selected model and serves it offline using the entry's downloaded revision; a conflicting custom vLLM `revision` is rejected.
+Only registered Model Cache storage is accepted. It requires a ready entry for the selected model and serves it offline using the entry's downloaded revision; a conflicting custom vLLM `revision` is rejected. Requests using `local-cache` or direct `pvc` storage fail validation. Shared creation preflight also revalidates model/revision readiness and local-disk node synchronization through `llm_d_lens.deploy.providers.storage_mount.require_cached_model`. Ordinary provider rendering mounts the registered cache read-only for serving; `cacheOffline=false` cannot disable its offline flags. Exact published manifests are not covered by those rendering guarantees. Missing or incomplete models must be downloaded or synchronized through Model Cache.
 The generated run defaults to preferring replicas on one node without making it mandatory. `placement_replicas` also supports required co-location, balanced distribution, or required separation across model-server Pods in the same rendered manifest. For required co-location, `placement_node_label` can restrict the Pods to a selected cluster node by its `kubernetes.io/hostname` label; the label is checked against that cluster before deployment. Tensor-parallel accelerator claims are requested by each model-server Pod, keeping its TP devices in that Pod. Agentic planning inherits the same fields and applies the selected preset on approval.
 
 <Tabs>
@@ -493,8 +493,9 @@ The generated run defaults to preferring replicas on one node without making it 
     - `tensor_parallel_size` (`integer`, required)
     - `placement_replicas` (`"prefer-same-node" | "same-node" | "balanced" | "spread"`, default `"prefer-same-node"`)
     - `placement_node_label` (`{"key":"kubernetes.io/hostname","value":"node-name"}` or `null`, optional; requires `placement_replicas: "same-node"`)
-    - `storage_type` (`"local-cache" | "pvc" | "model-cache"`, default `"local-cache"`)
-    - `storage_volume_id`, `model_cache_path`, `pvc_name` (storage-specific settings)
+    - `storage_type` (`"model-cache"`, default `"model-cache"`)
+    - `storage_volume_id` (`string`, required, nonempty registered Model Cache volume ID)
+    - `model_cache_path`, `pvc_name` (legacy fields, no longer used for deployment storage)
     - `max_model_len`, `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`
     - `enable_prefix_caching`, `enforce_eager`, `vllm_arguments`, `use_cluster_proxy`, `http_proxy`, `https_proxy`, `no_proxy`
 
@@ -506,10 +507,8 @@ The generated run defaults to preferring replicas on one node without making it 
       "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
       "replicas": 1,
       "tensor_parallel_size": 1,
-      "storage_type": "local-cache",
-      "storage_volume_id": "",
-      "model_cache_path": "/home/prism/.cache",
-      "pvc_name": "",
+      "storage_type": "model-cache",
+      "storage_volume_id": "storage-model-cache",
       "max_model_len": 8192,
       "gpu_memory_utilization": 0.9,
       "max_num_seqs": 256,
@@ -558,8 +557,8 @@ The generated run defaults to preferring replicas on one node without making it 
               "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
               "imageMode": "pull-existing",
               "modelSource": "auto-cache",
-              "mountPath": "/home/prism/.cache",
-              "cacheOffline": false
+              "storageVolumeId": "storage-model-cache",
+              "cacheOffline": true
             },
             "customParameters": [
               {"target": "decode", "kind": "argument", "name": "gpu-memory-utilization", "value": "0.9"},
@@ -570,7 +569,7 @@ The generated run defaults to preferring replicas on one node without making it 
             "source": "standard-kubernetes-service.v1",
             "deployment_name": "qwen3-standard",
             "description": "Standard baseline for smoke tests",
-            "storage_type": "local-cache"
+            "storage_type": "model-cache"
           }
         }
       ],
@@ -597,6 +596,7 @@ async def main() -> None:
         deployment_name="qwen3-standard",
         description="Standard baseline for smoke tests",
         cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
+        storage_volume_id="storage-model-cache",
         replicas=1,
         tensor_parallel_size=1,
     )
@@ -607,6 +607,7 @@ async def main() -> None:
             provenance={
                 "deployment_source": {"kind": "standard-kubernetes-service"},
                 "cluster_session_id": request.cluster_session_id,
+                "cluster_server_id": "cluster-123",
                 "deployment_name": request.deployment_name,
                 "description": request.description.strip(),
             },

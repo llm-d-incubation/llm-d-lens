@@ -172,8 +172,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     // Shared model context.
     const [localModel, setModel] = useState('Qwen/Qwen3-0.6B');
     const model = sharedContext?.model ?? localModel;
-    const [localModelSource, setModelSource] = useState('auto-cache');
-    const modelSource = sharedContext?.modelSource ?? localModelSource;
+    const modelSource = 'auto-cache';
     const [localModelPath, setModelPath] = useState('/mnt/data/huggingface-cache');
     const modelPath = sharedContext?.modelPath ?? localModelPath;
     const [localDeploymentName, setDeploymentName] = useState('');
@@ -362,7 +361,6 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         const parsedTp = Number(modelMarketDraft.tp);
         setModel(modelMarketDraft.model || 'Qwen/Qwen3-0.6B');
         setDeploymentName(modelMarketDraft.deployName || '');
-        setModelSource('auto-cache');
         setModelPath('/mnt/data/huggingface-cache');
         setSelectedClusterId(modelMarketDraft.cluster || '');
         // Carry over the storage volume chosen on Model Market's one-click
@@ -535,7 +533,6 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setBuildSourceUrl(pendingIntent?.runtime?.build_source_url || '');
         const requestedPath = pendingIntent?.runtime?.mount_path || requested.mount_path || '';
         setModelPath(requestedPath);
-        setModelSource(pendingIntent?.runtime?.model_source || (requestedPath ? 'shared-path' : 'auto-cache'));
         setModelCacheVolumeId(pendingIntent?.runtime?.storage_volume_id || '');
         setDeploymentName(pendingIntent?.deployment_name || '');
     }, [pendingIntent, embedded]);
@@ -1276,11 +1273,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             {!singleConfiguration && <div id="configuration-model" className="grid gap-3 border border-slate-800 bg-slate-950/40 p-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                     <span className={labelClass}>Model source</span>
-                    <select className={inputClass} value={modelSource} onChange={(event) => setModelSource(event.target.value)}>
-                        <option value="auto-cache">Shared Hugging Face cache first; download if missing</option>
-                        <option value="shared-path">Exact model folder on Kubernetes worker nodes</option>
-                        <option value="huggingface">Always resolve from Hugging Face</option>
-                    </select>
+                    <input className={inputClass} value="Model Cache" readOnly />
                 </div>
                 <ConfigurationField field="model" className="sm:col-span-2">
                     <span className={labelClass}>{modelSource === 'shared-path' ? 'Served model name' : 'Model ID'}</span>
@@ -1292,11 +1285,6 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     <input className={inputClass} value={deploymentName} placeholder="Optional display name"
                         onChange={(event) => setDeploymentName(event.target.value)} />
                 </div>
-                {modelSource === 'shared-path' && <ConfigurationField field="modelPath" className="sm:col-span-2">
-                    <span className={labelClass}>Exact shared model folder</span>
-                    <input className={inputClass} value={modelPath} placeholder="/shared/models/Qwen3-32B" onChange={(event) => setModelPath(event.target.value)} />
-                    <p className="mt-1 text-[10px] text-amber-300">This absolute path must contain a complete model on every eligible worker node. It is mounted read-only at /model-cache; no download is performed.</p>
-                </ConfigurationField>}
                 {modelSource === 'auto-cache' && <div className="sm:col-span-2">
                     <span data-configuration-field="modelCacheVolumeId" tabIndex={-1} className={labelClass}>Model cache storage</span>
                     <StorageVolumeSelect
@@ -1339,7 +1327,6 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     <span className={labelClass}>Build source URL</span>
                     <input className={inputClass} value={buildSourceUrl} onChange={(event) => setBuildSourceUrl(event.target.value)} />
                 </div>}
-                {modelSource !== 'shared-path' && <p className="sm:col-span-2 text-[10px] text-slate-500">Public models need no credential. If a private or gated model cannot be downloaded, enter its Hugging Face token on the failed deployment and retry.</p>}
             </div>}
 
             <div className="space-y-4">

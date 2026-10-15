@@ -76,7 +76,10 @@ If you do not see a usable cache volume, register one on [Storage](/user-guide/s
 2. Select the same **Cluster** and **Model cache storage** used for the download.
 3. Confirm the model is ready in that cache, then create the deployment.
 
-For cache-backed deployments, download the exact model revision in full first:
-the model server loads it offline and cannot download missing files at startup.
+Deployment creation requires Model Cache. Download the exact model revision
+in full first, and synchronize new local-disk nodes before deploying. The model
+server in ordinary provider-rendered deployments loads the read-only cache offline.
+Exact published manifests are not covered by the same enforcement; see
+[deployment limitations](/user-guide/deployments#model-cache-enforcement-limitations).
 Change Hugging Face credentials and proxy settings through the cluster settings,
 not custom deployment environment variables.

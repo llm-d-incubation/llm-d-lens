@@ -381,7 +381,7 @@ async def test_render_applies_placement_inside_kustomize_overlay(monkeypatch, tm
     ]
 
 
-def test_auto_cache_serving_pod_can_download_missing_snapshot(tmp_path):
+def test_auto_cache_serving_pod_cannot_download_missing_snapshot(tmp_path):
     adapter, overlay = _adapter(tmp_path)
     _, environment = _rendered_container(
         adapter,
@@ -397,15 +397,15 @@ def test_auto_cache_serving_pod_can_download_missing_snapshot(tmp_path):
         ),
     )
     assert environment["HF_HOME"] == "/model-cache"
-    assert "HF_HUB_OFFLINE" not in environment
-    assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_huggingface_source_serving_pod_stays_online(tmp_path):
+def test_huggingface_source_serving_pod_stays_offline(tmp_path):
     adapter, overlay = _adapter(tmp_path)
     _, environment = _rendered_container(adapter, overlay, _runtime())
-    assert "HF_HUB_OFFLINE" not in environment
-    assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
 
 
 def test_read_only_volume_resolves_shared_path_and_drops_stale_hf_home(tmp_path):

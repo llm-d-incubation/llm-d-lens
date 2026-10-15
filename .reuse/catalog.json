@@ -2796,8 +2796,8 @@
       "symbols": [
         "model_cache_environment"
       ],
-      "purpose": "Return the Hugging Face environment for model servers with a mounted cache, including optional online first-use downloads into writable caches.",
-      "boundaries": "Deploy providers only. auto-cache gets HF_HOME=/model-cache plus offline flags by default; Standard baseline vLLM and the optimized-baseline, P/D disaggregation, precise-prefix-cache-routing and tiered-prefix-cache providers pass offline=false for writable caches to resolve and download missing snapshots. Other sources go offline only when cache_mounted is true (shared-path or ad-hoc mountPath). A source with no cache mount stays online. Offline startup requires a complete snapshot for the served revision.",
+      "purpose": "Set offline Hugging Face resolution for provider-rendered deployment model servers.",
+      "boundaries": "Ordinary provider rendering only; exact published manifests bypass this helper. Always sets HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1, even for legacy offline=false inputs. auto-cache also sets HF_HOME=/model-cache. Shared creation preflight requires ready cached model revisions before rendering. Offline flags are not network isolation.",
       "examples": [
         "apps/backend/src/llm_d_lens/deploy/providers/optimized_baseline.py",
         "apps/backend/src/llm_d_lens/deploy/providers/baseline_vllm.py",
@@ -2813,6 +2813,15 @@
         "apps/backend/tests/unit/deploy/providers/test_precise_prefix_cache_routing.py",
         "apps/backend/tests/unit/deploy/providers/test_helm_kustomize.py"
       ]
+    },
+    {
+      "id": "deployment-model-cache-preflight",
+      "path": "apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py",
+      "symbols": ["require_cached_model"],
+      "purpose": "Require ready registered Model Cache models before any deployment provider renders resources.",
+      "boundaries": "Deployment creation only. Requires an explicit cluster, a model-cache-purpose non-dynamic volume, matching ready model revisions and synchronized local-disk nodes. Reuses Storage readiness, Model Cache listing and node checks, and managed environment validation. Normalizes legacy fallback paths to the selected cache; ordinary provider rendering uses read-only serving mounts. Does not validate the final published manifest or download, delete or repair models.",
+      "examples": ["apps/backend/src/llm_d_lens/deploy/service.py"],
+      "tests": ["apps/backend/tests/unit/deploy/providers/test_storage_mount.py", "apps/backend/tests/unit/deploy/test_creation_refresh.py"]
     },
     {
       "id": "admin-managed-hugging-face-environment",

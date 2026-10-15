@@ -806,8 +806,13 @@ Entry: [apps/frontend/src/pages/administration/ui/SecretKeyPage.jsx](../apps/fro
 
 ## model-cache-offline-serving-environment
 
-Return the Hugging Face environment for model servers with a mounted cache, including optional online first-use downloads into writable caches.
+Set offline Hugging Face resolution for provider-rendered deployment model servers.
 Entry: [apps/backend/src/llm_d_lens/deploy/providers/model_cache_environment.py](../apps/backend/src/llm_d_lens/deploy/providers/model_cache_environment.py) — `model_cache_environment`
+
+## deployment-model-cache-preflight
+
+Require ready registered Model Cache models before any deployment provider renders resources.
+Entry: [apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py](../apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py) — `require_cached_model`
 
 ## admin-managed-hugging-face-environment
 

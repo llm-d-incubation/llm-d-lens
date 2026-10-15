@@ -71,19 +71,31 @@ def test_auto_cache_serving_pod_runs_huggingface_offline():
     assert environment["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_writable_unverified_cache_can_download_missing_snapshot():
+def test_writable_unverified_cache_cannot_download_missing_snapshot():
     overrides = _base_overrides()
     overrides["runtime"].update({"modelSource": "auto-cache", "mountPath": "/shared/hf", "cacheOffline": False})
     environment = _environment(_container(overrides))
     assert environment["HF_HOME"] == "/model-cache"
-    assert "HF_HUB_OFFLINE" not in environment
-    assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_huggingface_source_serving_pod_stays_online():
+def test_huggingface_source_serving_pod_stays_offline():
     environment = _environment(_container(_base_overrides()))
-    assert "HF_HUB_OFFLINE" not in environment
-    assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_offline_environment_cannot_be_overridden():
+    overrides = _base_overrides()
+    overrides["runtime"]["environment"] = {"HF_HUB_OFFLINE": "0"}
+    overrides["customParameters"] = [
+        {"kind": "environment", "name": "TRANSFORMERS_OFFLINE", "value": "0", "target": "both"}
+    ]
+    container = _container(overrides)
+    assert _environment(container)["HF_HUB_OFFLINE"] == "1"
+    assert _environment(container)["TRANSFORMERS_OFFLINE"] == "1"
+    assert len([item for item in container["env"] if item["name"] == "HF_HUB_OFFLINE"]) == 1
 
 
 def test_shared_path_mount_serves_the_local_directory_offline():

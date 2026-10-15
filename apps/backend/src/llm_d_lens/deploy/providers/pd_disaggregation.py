@@ -167,9 +167,7 @@ class PdDisaggregationAdapter:
                     args = self._set_argument(args, custom["name"], custom["value"])
                 else:
                     environment = self._set_environment(environment, custom["name"], custom["value"])
-            for name, value in model_cache_environment(
-                model_source, cache_mounted=cache_mounted, offline=model_source != "auto-cache"
-            ).items():
+            for name, value in model_cache_environment(model_source, cache_mounted=cache_mounted).items():
                 environment = self._set_environment(environment, name, value)
             container["args"] = args
             container["env"] = environment

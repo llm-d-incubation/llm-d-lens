@@ -9,6 +9,7 @@ from llm_d_lens.deploy.contracts import (
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_lens.deploy.providers.guide_catalog import GuideCatalog
 from llm_d_lens.deploy.service import ExecutionLogArchive, GuideAdapterDeploymentService
+from tests.unit.deploy.providers.test_storage_mount import cached_model as cached_model
 
 
 class EvidenceAdapter:
@@ -39,10 +40,11 @@ class EvidenceAdapter:
 
 
 @pytest.mark.asyncio
-async def test_installed_router_evidence_survives_ready_execution_serialization_and_restore(tmp_path):
+async def test_installed_router_evidence_survives_ready_execution_serialization_and_restore(tmp_path, cached_model):
     catalog = GuideCatalog([EvidenceAdapter()])
     service = GuideAdapterDeploymentService(catalog, lambda _: "ns", ExecutionLogArchive(tmp_path))
     request = DeploymentCreateRequest(
+        provenance={"cluster_server_id": "cluster"},
         configuration_artifacts=[
             ConfigurationArtifact(
                 schema_version="v1",
@@ -50,9 +52,9 @@ async def test_installed_router_evidence_survives_ready_execution_serialization_
                 provider_ref="optimized-baseline",
                 media_type="application/json",
                 checksum="hash",
-                content="{}",
+                content='{"model":{"name":"org/model"},"runtime":{"storageVolumeId":"volume"}}',
             )
-        ]
+        ],
     )
     execution = await service.create(request)
     assert execution.status == DeploymentStatus.READY
@@ -66,7 +68,7 @@ async def test_installed_router_evidence_survives_ready_execution_serialization_
 
 
 @pytest.mark.asyncio
-async def test_refresh_captures_calibration_changes_and_restores_them(tmp_path):
+async def test_refresh_captures_calibration_changes_and_restores_them(tmp_path, cached_model):
     class CalibratingAdapter(EvidenceAdapter):
         async def readiness(self, execution):
             execution.setdefault("calibrated_peak_prefill_throughput", 2500)
@@ -81,6 +83,7 @@ async def test_refresh_captures_calibration_changes_and_restores_them(tmp_path):
     catalog = GuideCatalog([CalibratingAdapter()])
     service = GuideAdapterDeploymentService(catalog, lambda _: "ns", ExecutionLogArchive(tmp_path))
     request = DeploymentCreateRequest(
+        provenance={"cluster_server_id": "cluster"},
         configuration_artifacts=[
             ConfigurationArtifact(
                 schema_version="v1",
@@ -88,9 +91,9 @@ async def test_refresh_captures_calibration_changes_and_restores_them(tmp_path):
                 provider_ref="optimized-baseline",
                 media_type="application/json",
                 checksum="hash",
-                content="{}",
+                content='{"model":{"name":"org/model"},"runtime":{"storageVolumeId":"volume"}}',
             )
-        ]
+        ],
     )
     execution = await service.create(request)
     provider_execution = service._provider_executions[execution.execution_id][2]

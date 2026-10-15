@@ -175,12 +175,8 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(monkeypatch, t
         ]
         assert container["args"][0] == ("/model-cache" if read_only else "Qwen/Qwen3-8B")
         environment = {item["name"]: item["value"] for item in container["env"]}
-        if read_only:
-            assert environment["HF_HUB_OFFLINE"] == "1"
-            assert environment["TRANSFORMERS_OFFLINE"] == "1"
-        else:
-            assert "HF_HUB_OFFLINE" not in environment
-            assert "TRANSFORMERS_OFFLINE" not in environment
+        assert environment["HF_HUB_OFFLINE"] == "1"
+        assert environment["TRANSFORMERS_OFFLINE"] == "1"
         assert environment.get("HF_HOME") == (None if read_only else "/model-cache")
 
 

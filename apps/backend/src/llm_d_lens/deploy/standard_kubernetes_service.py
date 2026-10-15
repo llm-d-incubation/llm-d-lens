@@ -24,8 +24,8 @@ class StandardKubernetesServiceRequest(BaseModel):
     tensor_parallel_size: int = Field(ge=1, le=16)
     placement_replicas: Literal["prefer-same-node", "same-node", "balanced", "spread"] = "prefer-same-node"
     placement_node_label: dict[str, str] | None = None
-    storage_type: Literal["local-cache", "pvc", "model-cache"] = "local-cache"
-    storage_volume_id: str = Field(default="", max_length=120)
+    storage_type: Literal["model-cache"] = "model-cache"
+    storage_volume_id: str = Field(min_length=1, max_length=120)
     model_cache_path: str = Field(default_factory=lambda: str(Path.home() / ".cache"), min_length=1, max_length=1024)
     pvc_name: str = Field(default="", max_length=253, pattern=r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$")
     max_model_len: int = Field(default=4096, ge=256, le=131072)
@@ -54,19 +54,11 @@ def build_standard_kubernetes_service_configuration(
         "image": runtime_image(accelerator=accelerator),
         "imageMode": "pull-existing",
         "modelSource": "auto-cache",
+        "storageVolumeId": request.storage_volume_id,
+        "cacheOffline": True,
     }
-    if request.storage_type == "model-cache":
-        if not request.storage_volume_id:
-            raise ValueError("storage_volume_id is required when storage_type is model-cache")
-        runtime["storageVolumeId"] = request.storage_volume_id
-    elif request.storage_type == "local-cache":
-        runtime["mountPath"] = request.model_cache_path
-        runtime["cacheOffline"] = False
-    else:
-        if not request.pvc_name:
-            raise ValueError("pvc_name is required when storage_type is pvc")
-        runtime["pvcName"] = request.pvc_name
-        runtime["cacheOffline"] = False
+    if request.storage_type != "model-cache" or not request.storage_volume_id.strip():
+        raise ValueError("Standard deployment requires Model Cache storage")
     if request.use_cluster_proxy:
         # The cluster's own saved proxy config is authoritative; explicit
         # request values override it, and resolve_proxy_env already falls back

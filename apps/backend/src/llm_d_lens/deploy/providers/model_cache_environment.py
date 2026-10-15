@@ -1,27 +1,4 @@
-"""Environment for model-serving Pods that read a model from the mounted cache.
-
-The Model Cache download Job writes the standard Hugging Face layout under
-``HF_HOME=/model-cache`` (see ``llm_d_lens/model_cache/jobs.py``) and
-cache-backed serving Pods mount the same volume at ``/model-cache``
-(``storage_mount.resolve_mount``). In the ``auto-cache`` source the Pod is handed
-the model repository id, so vLLM resolves it through ``HF_HOME``; left alone it
-still contacts ``huggingface.co`` to list repository files at startup, which
-fails on restricted or flaky networks (for example ``repo_utils.py`` SSL
-``unexpected_eof_while_reading`` errors) even though every file is already
-cached.
-
-Cache-backed sources with verified files run Hugging Face offline so startup
-never depends on outbound Hub access:
-
-- ``auto-cache`` mounts an HF cache root and serves a repository id. It gets
-  ``HF_HOME`` and normally both offline flags; unverified writable caches can
-  opt into online resolution so missing snapshots are downloaded.
-- ``shared-path`` and the ad-hoc ``mountPath`` sources mount the model directory
-  itself and are handed a local path, so the offline flags are added without
-  ``HF_HOME``.
-- a deployment with no cache mount (``huggingface``) deliberately downloads at
-  startup and stays online.
-"""
+"""Offline Hugging Face environment for serving models downloaded by Model Cache."""
 
 from __future__ import annotations
 
@@ -33,17 +10,12 @@ _HF_OFFLINE_ENVIRONMENT = {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
 def model_cache_environment(
     model_source: str, *, mount_path: str = MODEL_CACHE_MOUNT_PATH, cache_mounted: bool = False, offline: bool = True
 ) -> dict[str, str]:
-    """Return the Hugging Face environment for a model-serving Pod.
+    """Never allow serving Pods to download models, including legacy online inputs.
 
-    ``auto-cache`` always points ``HF_HOME`` at the mounted cache; ``offline``
-    can be disabled for writable caches that may need a first download.
-    Any other source goes offline only when ``cache_mounted`` is true
-    (a read-only ``shared-path`` volume or an ad-hoc ``mountPath``), because the
-    Pod then serves the mounted directory locally. A source with no cache mount
-    returns an empty mapping so it keeps resolving online.
+    ``offline`` and ``cache_mounted`` remain accepted for existing callers but
+    cannot disable offline resolution. Model Cache owns all model downloads.
     """
+    del offline, cache_mounted
     if model_source == "auto-cache":
-        return {"HF_HOME": mount_path, **(_HF_OFFLINE_ENVIRONMENT if offline else {})}
-    if cache_mounted:
-        return dict(_HF_OFFLINE_ENVIRONMENT)
-    return {}
+        return {"HF_HOME": mount_path, **_HF_OFFLINE_ENVIRONMENT}
+    return dict(_HF_OFFLINE_ENVIRONMENT)

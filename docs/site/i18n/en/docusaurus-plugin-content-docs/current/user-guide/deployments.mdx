@@ -34,6 +34,21 @@ are no longer supported.
 
 ## Open the deployment creation flow
 
+Deployment creation requires models registered in [Model Cache](/user-guide/model-cache).
+Select a registered cache volume containing the ready model and its revision on the
+same cluster. The Advanced configuration editor has only the **Model Cache** source.
+For local-disk storage, synchronize new nodes before deployment. Ordinary provider
+rendering configures offline serving with a read-only cache mount. Download
+or repair the cache in Model Cache first, then create or retry the deployment.
+
+### Model Cache enforcement limitations
+
+Exact published YAML configurations (`officialGuide`) bypass ordinary provider
+rendering. Their final manifests do not yet enforce the same offline flags,
+read-only cache mounts, or backing-volume binding. Cache-only deployment is
+therefore not guaranteed for this path. Offline environment variables are also
+not a network isolation boundary.
+
 1. In the left navigation, open **Deployments**.
 2. In the page header, click **Create**.
 3. Follow [Create a deployment](/user-guide/model-market). The new deployment appears in this list after submission.

@@ -15,6 +15,59 @@ from __future__ import annotations
 from typing import Any
 
 
+async def require_cached_model(overrides: dict[str, Any], *, cluster_id: str | None) -> None:
+    """Require a ready, fully synchronized Model Cache entry before rendering."""
+    from llm_d_lens.configuration.managed_environment import admin_managed_environment_names
+    from llm_d_lens.model_cache.service import default_service
+    from llm_d_lens.storage.contracts import StorageVolumeKind, StorageVolumePurpose
+    from llm_d_lens.storage.service import get_ready_volume
+
+    runtime = overrides.get("runtime") or {}
+    volume_id = runtime.get("storageVolumeId")
+    if not cluster_id or not isinstance(volume_id, str) or not volume_id.strip():
+        raise ValueError(
+            "Deployment requires a cluster and a Model Cache storage volume; download the model in Model Cache first"
+        )
+    if runtime.get("modelSource") not in (None, "auto-cache"):
+        raise ValueError("Deployment modelSource must be auto-cache; download the model in Model Cache first")
+    custom = overrides.get("customParameters") or []
+    if admin_managed_environment_names(custom):
+        raise ValueError("Deployment cannot override the managed Hugging Face environment")
+    volume = await get_ready_volume(volume_id, cluster_id=cluster_id)
+    if StorageVolumePurpose.MODEL_CACHE not in volume.purposes:
+        raise ValueError("selected storage volume is not designated for model cache use")
+    if volume.kind == StorageVolumeKind.DYNAMIC_PVC:
+        raise ValueError("model-cache storage for deployments cannot use dynamic-pvc volumes")
+    model = str((overrides.get("model") or {}).get("name") or "").strip()
+    revisions = {
+        str(item.get("value")) for item in custom if item.get("kind") == "argument" and item.get("name") == "revision"
+    } or {"main"}
+    revisions.update(
+        str(item.get("value"))
+        for item in custom
+        if item.get("kind") == "argument" and item.get("name") == "tokenizer-revision"
+    )
+    cache = default_service()
+    entries = await cache.list(cluster_id=cluster_id, storage_volume_id=volume_id)
+    selected = [
+        entry
+        for entry in entries
+        if entry.status == "ready"
+        and entry.source.huggingface
+        and entry.source.huggingface.repo_id.casefold() == model.casefold()
+        and entry.source.huggingface.revision in revisions
+    ]
+    if {entry.source.huggingface.revision for entry in selected} != revisions:
+        raise ValueError("selected model revision is not ready in Model Cache; download it there before deployment")
+    if await cache.compute_pending_sync(selected):
+        raise ValueError("selected model cache is missing on cluster nodes; sync it in Model Cache before deployment")
+    runtime["modelSource"] = "auto-cache"
+    runtime["cacheOffline"] = True
+    runtime.pop("mountPath", None)
+    runtime.pop("pvcName", None)
+    overrides["runtime"] = runtime
+
+
 async def resolve_mount(
     runtime: dict[str, Any], *, cluster_id: str | None, namespace: str | None = None
 ) -> dict[str, Any] | None:
@@ -25,9 +78,8 @@ async def resolve_mount(
         ``name`` key by the caller), e.g. ``{"persistentVolumeClaim": {...}}``.
       - ``mount_path``: container mount path (always ``/model-cache`` today).
       - ``read_only``: whether the mount should be read-only.
-      - ``model_source``: ``"shared-path"`` (serve directly from the mount) or
-        ``"auto-cache"`` (download to the mount so it persists across runs),
-        derived from the registered volume's ``read_only`` flag.
+            - ``model_source``: ``"auto-cache"`` for a validated HF cache root, or
+                ``"shared-path"`` for a legacy read-only model directory.
 
     Unlike an earlier revision, ``local-disk`` volumes are no longer pinned to
     a single node: the registered ``hostPath`` is expected to resolve to an
@@ -52,7 +104,7 @@ async def resolve_mount(
     from llm_d_lens.storage.service import ensure_mount_in_namespace, get_ready_volume
 
     volume = await get_ready_volume(volume_id, cluster_id=cluster_id)
-    read_only = volume.read_only
+    read_only = volume.read_only or runtime.get("modelSource") == "auto-cache"
     pvc_name = volume.pvc_name
     if namespace:
         pvc_name = await ensure_mount_in_namespace(volume, namespace=namespace, cluster_id=cluster_id or "")
@@ -60,5 +112,7 @@ async def resolve_mount(
         "volume_source": {"persistentVolumeClaim": {"claimName": pvc_name}},
         "mount_path": "/model-cache",
         "read_only": read_only,
-        "model_source": "shared-path" if read_only else "auto-cache",
+        "model_source": "auto-cache"
+        if runtime.get("modelSource") == "auto-cache"
+        else ("shared-path" if read_only else "auto-cache"),
     }

@@ -1,8 +1,11 @@
 """Tests for the shared storage-volume mount resolver used by Deploy providers."""
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
-from llm_d_lens.deploy.providers.storage_mount import resolve_mount
+from llm_d_lens.deploy.providers.storage_mount import require_cached_model, resolve_mount
 from llm_d_lens.storage import service as storage_service
 from llm_d_lens.storage.contracts import (
     LocalDiskSpec,
@@ -11,6 +14,88 @@ from llm_d_lens.storage.contracts import (
     StorageVolumeKind,
     StorageVolumeStatus,
 )
+
+
+@pytest.fixture
+def cached_model(monkeypatch):
+    from llm_d_lens.model_cache import service
+
+    entry = SimpleNamespace(
+        status="ready",
+        source=SimpleNamespace(huggingface=SimpleNamespace(repo_id="org/model", revision="main")),
+    )
+    cache = SimpleNamespace(list=AsyncMock(return_value=[entry]), compute_pending_sync=AsyncMock(return_value={}))
+    volume = SimpleNamespace(purposes=["model-cache"], kind=StorageVolumeKind.NFS)
+    monkeypatch.setattr(service, "default_service", lambda: cache)
+    monkeypatch.setattr(storage_service, "get_ready_volume", AsyncMock(return_value=volume))
+    return cache, volume
+
+
+@pytest.mark.asyncio
+async def test_require_cached_model_normalizes_offline_source(cached_model):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume", "cacheOffline": False, "mountPath": "/old/path", "pvcName": "old-pvc"},
+    }
+    await require_cached_model(overrides, cluster_id="cluster")
+    assert overrides["runtime"]["modelSource"] == "auto-cache"
+    assert overrides["runtime"]["cacheOffline"] is True
+    assert "mountPath" not in overrides["runtime"]
+    assert "pvcName" not in overrides["runtime"]
+    cached_model[0].list.assert_awaited_once_with(cluster_id="cluster", storage_volume_id="volume")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "runtime",
+    [{}, {"mountPath": "/cache"}, {"pvcName": "cache"}, {"storageVolumeId": "volume", "modelSource": "huggingface"}],
+)
+async def test_require_cached_model_rejects_non_cache_sources(runtime):
+    with pytest.raises(ValueError, match="Model Cache|auto-cache"):
+        await require_cached_model({"model": {"name": "org/model"}, "runtime": runtime}, cluster_id="cluster")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "downloading", "failed", "deleting"])
+async def test_require_cached_model_rejects_unready_entries(cached_model, status):
+    cached_model[0].list.return_value[0].status = status
+    with pytest.raises(ValueError, match="not ready"):
+        await require_cached_model(
+            {"model": {"name": "org/model"}, "runtime": {"storageVolumeId": "volume"}}, cluster_id="cluster"
+        )
+
+
+@pytest.mark.asyncio
+async def test_require_cached_model_rejects_wrong_model_and_revision(cached_model):
+    overrides = {"model": {"name": "other/model"}, "runtime": {"storageVolumeId": "volume"}}
+    with pytest.raises(ValueError, match="not ready"):
+        await require_cached_model(overrides, cluster_id="cluster")
+    overrides["model"]["name"] = "org/model"
+    overrides["customParameters"] = [{"kind": "argument", "name": "revision", "value": "v2", "target": "both"}]
+    with pytest.raises(ValueError, match="not ready"):
+        await require_cached_model(overrides, cluster_id="cluster")
+    cached_model[0].list.return_value[0].source.huggingface.revision = "v2"
+    await require_cached_model(overrides, cluster_id="cluster")
+
+
+@pytest.mark.asyncio
+async def test_require_cached_model_rejects_unsynced_nodes(cached_model):
+    cached_model[0].compute_pending_sync.return_value = {"entry": ["new-node"]}
+    with pytest.raises(ValueError, match="sync it in Model Cache"):
+        await require_cached_model(
+            {"model": {"name": "org/model"}, "runtime": {"storageVolumeId": "volume"}}, cluster_id="cluster"
+        )
+
+
+@pytest.mark.asyncio
+async def test_require_cached_model_rejects_custom_hf_environment(cached_model):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume"},
+        "customParameters": [{"kind": "environment", "name": "HF_HUB_OFFLINE", "value": "0", "target": "both"}],
+    }
+    with pytest.raises(ValueError, match="managed Hugging Face"):
+        await require_cached_model(overrides, cluster_id="cluster")
 
 
 @pytest.mark.asyncio
@@ -69,6 +154,10 @@ async def test_resolve_mount_nfs_writable(monkeypatch):
     result = await resolve_mount({"storageVolumeId": volume.id}, cluster_id="cluster-1")
     assert result["model_source"] == "auto-cache"
     assert result["read_only"] is False
+
+    result = await resolve_mount({"storageVolumeId": volume.id, "modelSource": "auto-cache"}, cluster_id="cluster-1")
+    assert result["model_source"] == "auto-cache"
+    assert result["read_only"] is True
 
 
 @pytest.mark.asyncio

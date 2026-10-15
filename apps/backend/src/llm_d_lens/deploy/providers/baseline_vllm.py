@@ -274,7 +274,6 @@ class BaselineVllmAdapter:
             "pvc_name": pvc_name,
             "model_source": runtime.get("modelSource")
             or ("shared-path" if runtime.get("mountPath") else "huggingface"),
-            "cache_offline": runtime.get("cacheOffline", True),
             "environment": runtime.get("environment") or {},
             "custom_parameters": overrides.get("customParameters") or [],
             "max_model_len": decode.get("maxModelLen"),
@@ -342,12 +341,6 @@ class BaselineVllmAdapter:
                     },
                 }
             )
-        environment.extend(
-            {"name": name, "value": value}
-            for name, value in model_cache_environment(
-                active_model_source, cache_mounted=mount_active, offline=parameters.get("cache_offline", True)
-            ).items()
-        )
         for item in parameters["custom_parameters"]:
             if item.get("target") not in {"decode", "both"}:
                 continue
@@ -363,6 +356,9 @@ class BaselineVllmAdapter:
                     args.append(f"--{name}={item['value']}")
             elif item.get("kind") == "environment":
                 environment.append({"name": item["name"], "value": item["value"]})
+        managed_environment = model_cache_environment(active_model_source, cache_mounted=mount_active)
+        environment = [item for item in environment if item.get("name") not in managed_environment]
+        environment.extend({"name": name, "value": value} for name, value in managed_environment.items())
         from llm_d_lens.hardware.resolver import configuration_resource_request
 
         binding = configuration_resource_request(

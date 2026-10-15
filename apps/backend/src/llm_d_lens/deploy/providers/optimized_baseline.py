@@ -669,9 +669,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 pod["nodeSelector"]["kubernetes.io/hostname"] = configured_target_node()
             environment = {
                 **(runtime.get("environment") or {}),
-                **model_cache_environment(
-                    active_model_source, cache_mounted=cache_mounted, offline=active_model_source != "auto-cache"
-                ),
+                **model_cache_environment(active_model_source, cache_mounted=cache_mounted),
             }
             for name, value in environment.items():
                 entries = container.setdefault("env", [])
