@@ -6,7 +6,7 @@
 > `llm_d_lens/db/migrations/README.md` (see §15 and §18).
 >
 > Related documents: [`AGENTS.md`](../../AGENTS.md),
-> [`.agents/skills/workflow/SKILL.md`](../../.agents/skills/workflow/SKILL.md),
+> [`AGENTS.md`](../../AGENTS.md),
 > [`.agents/skills/backend/SKILL.md`](../../.agents/skills/backend/SKILL.md),
 > [`.agents/skills/database/SKILL.md`](../../.agents/skills/database/SKILL.md),
 > [`.agents/skills/ui/SKILL.md`](../../.agents/skills/ui/SKILL.md),
@@ -1765,7 +1765,7 @@ human-review requirement from the [database skill](../../.agents/skills/database
 
 ## 19. AI Development Rules Compliance Checklist (verify at delivery)
 
-- [x] Reuse search plus candidate/difference/decision tables were produced based on [`.agents/skills/workflow/SKILL.md`](../../.agents/skills/workflow/SKILL.md)
+- [x] Reuse search plus candidate/difference/decision tables were produced under the former workflow; current development follows [`AGENTS.md`](../../AGENTS.md)
       (§17).
 - [x] Covered the four domain skills involved in the task (UI/Backend/Database/Deployment), and gave file paths following their naming and
       placement conventions.

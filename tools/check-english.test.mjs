@@ -9,6 +9,20 @@ import { checkEnglish } from './check-english.mjs';
 // Construct Unicode test data at runtime so the test source stays English.
 const sample = String.fromCodePoint(0x4e2d, 0x6587);
 
+test('staged checks inspect the index rather than unstaged edits', t => {
+  const root = mkdtempSync(join(tmpdir(), 'english-staged-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', root]);
+  writeFileSync(join(root, 'a.txt'), sample);
+  execFileSync('git', ['add', '.'], { cwd: root });
+  writeFileSync(join(root, 'a.txt'), 'English');
+  assert.equal(checkEnglish(root, [], true).length, 1);
+  execFileSync('git', ['add', '.'], { cwd: root });
+  writeFileSync(join(root, 'a.txt'), sample);
+  assert.deepEqual(checkEnglish(root, [], true), []);
+  assert.equal(checkEnglish(root).length, 1);
+});
+
 test('scans tracked and new text, dotfiles, filenames, supplementary Han and PR metadata', () => {
   const root = mkdtempSync(join(tmpdir(), 'english-check-'));
   try {

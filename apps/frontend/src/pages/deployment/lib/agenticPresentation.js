@@ -34,3 +34,45 @@ export function historicalBenchmarkLabel(sample) {
     ].filter(Boolean).join(', ');
     return `${sample.benchmark_id} | ${observedAt} | ${sample.outcome} | ${relevance}${metrics ? ` | ${metrics}` : ''}`;
 }
+
+export function candidateAnalysis(candidate, index, aicConfigs, relaxedConfigs, clusterDetails) {
+    const aicApplicable = ['baseline-vllm', 'optimized-baseline', 'pd-disaggregation'].includes(candidate.provider_ref);
+    const matchingPrediction = (config) => {
+        const mode = config.topologyMode ?? config.mode;
+        const decodeTp = config.decodeTp ?? config.decode_tp ?? config.tp;
+        const decodeReplicas = config.decodeReplicas ?? config.decode_replicas ?? config.replicas;
+        const prefillTp = config.prefillTp ?? config.prefill_tp;
+        const prefillReplicas = config.prefillReplicas ?? config.prefill_replicas;
+        return (mode === 'agg' && ['baseline-vllm', 'optimized-baseline'].includes(candidate.provider_ref)
+            && Number(decodeTp) === candidate.tensor_parallel_size && Number(decodeReplicas) === candidate.replicas)
+            || (mode === 'disagg' && candidate.provider_ref === 'pd-disaggregation'
+                && Number(decodeTp) === candidate.tensor_parallel_size && Number(decodeReplicas) === candidate.replicas
+                && Number(prefillTp) === candidate.prefill_tensor_parallel_size && Number(prefillReplicas) === candidate.prefill_replicas);
+    };
+    const prediction = aicConfigs.find(matchingPrediction);
+    const relaxedPrediction = prediction ? null : relaxedConfigs.find(matchingPrediction);
+    const metrics = prediction?.predicted || prediction;
+    const relaxedMetrics = relaxedPrediction?.predicted;
+    const estimate = candidate.performance_estimate;
+    const availability = clusterDetails?.available_gpu_count;
+    const performance = candidate.performance_estimate_source === 'aic_estimate' && estimate
+        ? `AIC estimate (exact topology${candidate.slo_status === 'not_satisfied' ? '; original SLO not met' : ''}): TTFT ${estimate.ttft_ms?.toFixed(1) ?? 'n/a'} ms, TPOT ${estimate.tpot_ms?.toFixed(1) ?? 'n/a'} ms, throughput ${estimate.throughput_tokens_per_sec?.toFixed(1) ?? 'n/a'} tokens/s.`
+        : prediction
+        ? `AIC estimate: TTFT ${metrics.ttftMs?.toFixed(1) || metrics.ttft_ms?.toFixed(1) || 'n/a'} ms, TPOT ${metrics.tpotMs?.toFixed(1) || metrics.tpot_ms?.toFixed(1) || 'n/a'} ms, throughput ${metrics.throughputTps?.toFixed(1) || metrics.throughput_tokens_per_sec?.toFixed(1) || 'n/a'} tokens/s.`
+        : relaxedPrediction
+            ? `Relaxed AIC estimate (does not meet the original SLO): TTFT ${relaxedMetrics?.ttftMs?.toFixed(1) ?? 'n/a'} ms, TPOT ${relaxedMetrics?.tpotMs?.toFixed(1) ?? 'n/a'} ms, throughput ${relaxedMetrics?.throughputTps?.toFixed(1) ?? 'n/a'} tokens/s.`
+        : aicApplicable
+            ? 'No exact AIC topology prediction is available for this baseline or PD shape.'
+            : 'AIC performance predictions do not apply to this guide; it is ranked using operator preference, guide suitability, and resource cost.';
+    const resources = Number.isFinite(availability)
+        ? `Hardware: requires ${candidate.required_gpus} GPU; ${availability} GPU are currently free. Capacity is rechecked immediately before deployment.`
+        : `Hardware: requires ${candidate.required_gpus} GPU. Capacity is rechecked immediately before deployment.`;
+    const ranking = candidate.performance_estimate_source === 'aic_estimate' && estimate
+        ? `Rank ${index + 1}. This fixed-topology estimate informs the SLO assessment; ranking also considers operator preference, guide suitability, and GPU cost.`
+        : prediction
+        ? `Rank ${index + 1}. Exact AIC predictions are ordered by TTFT, then TPOT, then throughput before guide heuristics.`
+        : aicApplicable
+            ? `Rank ${index + 1}. No AIC prediction meets the original SLO, so this candidate is ordered by operator preference, guide suitability, and GPU cost.`
+            : `Rank ${index + 1}. This guide has no comparable AIC prediction, so it is ordered by operator preference, guide suitability, and GPU cost.`;
+    return { performance, resources, ranking };
+}

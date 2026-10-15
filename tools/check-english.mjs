@@ -30,14 +30,19 @@ const localeLabelException = {
 };
 
 // Git owns the inventory, including dotfiles and untracked, non-ignored additions.
-export function checkEnglish(root, textFiles = []) {
-  const paths = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+export function checkEnglish(root, textFiles = [], staged = false) {
+  const paths = execFileSync('git', staged ? ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'] : ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   }).split('\0').filter(Boolean);
   const findings = [];
   for (const path of new Set(paths)) {
     if (han.test(path)) findings.push(`${path}: Chinese characters in filename`);
     if (i18nContentDir.test(path)) continue;
+    if (staged) {
+      const entry = execFileSync('git', ['ls-files', '--stage', '-z', '--', path], { cwd: root, encoding: 'utf8' });
+      if (entry.startsWith('100')) scanBytes(execFileSync('git', ['show', `:${path}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 }), path, findings);
+      continue;
+    }
     const full = resolve(root, path);
     let stat;
     try { stat = lstatSync(full); }
@@ -49,7 +54,10 @@ export function checkEnglish(root, textFiles = []) {
 }
 
 function scan(full, label, findings) {
-  const bytes = readFileSync(full);
+  scanBytes(readFileSync(full), label, findings);
+}
+
+function scanBytes(bytes, label, findings) {
   let content;
   if (bytes[0] === 0xff && bytes[1] === 0xfe) content = new TextDecoder('utf-16le', { fatal: true }).decode(bytes);
   else if (bytes[0] === 0xfe && bytes[1] === 0xff) content = new TextDecoder('utf-16be', { fatal: true }).decode(bytes);
@@ -67,14 +75,15 @@ function scan(full, label, findings) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const args = process.argv.slice(2);
+    const staged = process.argv.includes('--staged');
+    const args = process.argv.slice(2).filter(arg => arg !== '--staged');
     const textFiles = [];
     for (let i = 0; i < args.length; i += 2) {
-      if (args[i] !== '--text-file' || !args[i + 1]) throw new Error('Usage: npm run check:english -- [--text-file PATH ...]');
+      if (args[i] !== '--text-file' || !args[i + 1]) throw new Error('Usage: npm run check:english -- [--staged] [--text-file PATH ...]');
       textFiles.push(args[i + 1]);
     }
     const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-    const findings = checkEnglish(root, textFiles);
+    const findings = checkEnglish(root, textFiles, staged);
     if (findings.length) {
       console.error(findings.join('\n'));
       console.error(`English check failed: ${findings.length} finding(s). Translate the text into English and rerun; do not delete content or encode it to bypass this check.`);

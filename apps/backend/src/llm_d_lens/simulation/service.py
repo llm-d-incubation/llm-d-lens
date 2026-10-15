@@ -257,10 +257,11 @@ async def load_task(task_id: str) -> SimulationTask | None:
     if task.id != task_id or Path(task.task_dir).resolve() != task_root() / task_id:
         logger.error("Unable to load simulation task %s: invalid task data", task_id)
         return None
+    published_uri = task.artifact_uri
     _set_artifact_references(task)
     try:
         manifest = json.loads((Path(task.task_dir) / "manifest.json").read_text(encoding="utf-8"))
-        if (manifest["owner_type"], manifest["owner_id"]) == ("simulation", task.id):
+        if published_uri and (manifest["owner_type"], manifest["owner_id"]) == ("simulation", task.id):
             _set_artifact_references(task, manifest)
     except (OSError, ValueError, KeyError, TypeError):
         # Legacy or interrupted registration: task remains readable without advertised artifacts.

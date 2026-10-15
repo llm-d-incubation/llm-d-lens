@@ -27,14 +27,16 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "update-model-metadata": "node tools/update-model-catalog-metadata.mjs",
-    "reuse:review": "node tools/reuse/cli.mjs review",
     "docs:dev": "npm run start --workspace @repo/docs",
-    "docs:check": "npm run build --workspace @repo/docs",
+    "docs:check": "node tools/check-docs.mjs",
     "docs:api": "python scripts/export-openapi.py",
     "check:english": "node tools/check-english.mjs",
     "test:english": "node --test tools/check-english.test.mjs",
     "check:stack": "node tools/check-llm-d-stack.mjs",
-    "test:stack": "node --test tools/check-llm-d-stack.test.mjs"
+    "test:stack": "node --test tools/check-llm-d-stack.test.mjs",
+    "docs:build": "npm run build --workspace @repo/docs",
+    "test:docs": "node --test tools/check-docs.test.mjs",
+    "verify:full": "make verify-full"
   },
   "dependencies": {
     "@repo/shared": "*",

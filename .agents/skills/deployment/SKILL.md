@@ -5,8 +5,8 @@ description: Use when changing local startup scripts, Docker images or Compose, 
 
 # Deployment
 
-Follow [workflow](../workflow/SKILL.md) for discovery,
-registration and unresolved decisions. Paths below are repo-relative.
+Follow [AGENTS.md](../../../AGENTS.md) for discovery,
+verification and unresolved decisions. Paths below are repo-relative.
 
 ## Choose the relevant entry point
 
@@ -57,13 +57,15 @@ The normal user entry is `./lens-local.sh restart` from `scripts/`, equivalent t
 and `$LENS_LOG_DIR/dev/` (default `~/.local/state/lens/logs/dev/`)
 for service state and failures.
 
-Preserve the startup preflight: `start` / `restart` generate and check the reuse
-map before service changes. Pending refactor decisions warn without blocking local
-start/restart; invalid registrations still block before stopping services. Keep
-pending records intact. Audit/startup checks return 2 for any pending; task checks
-return 2 for related or unknown scope. Local startup
-uses `--purpose startup --base HEAD`, covers uncommitted source differences and
-does not replace task-baseline verification or approve dependent refactor edits. Agents still register capabilities while coding.
+Use frontend hot reload for source/style edits. For running services that need a
+restart, use `scripts/lens-local.sh restart frontend|server|backend`; use `restart all`
+for shared environment, port or API/MCP changes. Do not start the application
+for tooling, tests or documentation-only work.
+
+Startup validates the catalog/map and preserves pending decision warnings before
+stopping services. It does not read historical source or run duplicate detection.
+Invalid registrations still block restart. Run affected tests directly; startup
+does not certify test results or produce an audit report.
 
 For Docker-specific work, inspect actual service commands, mounts, ports and
 runtime versions before choosing a launch command. The current Compose app uses

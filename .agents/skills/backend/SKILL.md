@@ -5,8 +5,8 @@ description: Use when changing Node or Express services in apps/server/src/, Pyt
 
 # Backend
 
-Follow [workflow](../workflow/SKILL.md) for discovery,
-registration and unresolved decisions. All source paths below are repo-relative.
+Follow [AGENTS.md](../../../AGENTS.md) for discovery,
+verification and unresolved decisions. All source paths below are repo-relative.
 
 ## Locate the implementation
 

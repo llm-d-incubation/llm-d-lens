@@ -157,7 +157,14 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
     )
 
     async def overview(_cluster):
-        return {"hardware": {"gpuCount": 4, "availableGpuCount": 4, "vramBytes": 4 * 32 * 1024**3}}
+        return {
+            "hardware": {
+                "gpuCount": 4,
+                "availableGpuCount": 4,
+                "vramBytes": 4 * 32 * 1024**3,
+                "accelerators": [{"id": "nvidia", "models": ["NVIDIA A100"]}],
+            }
+        }
 
     captured = {}
 
@@ -198,6 +205,7 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
         )
     )
 
+    assert captured["request"].aic_system_name == "a100_sxm"
     assert captured["request"].mean_input_tokens == 4096
     assert captured["request"].mean_output_tokens == 512
     assert resolved.trace[-1]["request"]["mean_input_tokens"] == 4096

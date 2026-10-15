@@ -155,6 +155,9 @@ The UI is only the input and review surface for the workflow above. The entry po
    model;
 5. Freezes the cluster snapshot and evidence IDs, then passes them to the planner.
 
+AIC support/search resolves the system from registered hardware profile model patterns.
+Unknown, ambiguous, or mixed systems leave AIC evidence unavailable; they do not select a default GPU.
+
 Before freezing facts, a future step will generate versioned, uncertainty-aware
 `UseCasePerformanceEstimate` values (TTFT, TPOT, workload capacity) from the user's use case,
 resolved workload, target model, and accelerator. When workload is absent, a versioned use-case

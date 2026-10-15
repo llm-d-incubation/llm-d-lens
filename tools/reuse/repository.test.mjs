@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { registrationCandidates } from './registration.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { discover, chunks, validateCatalog, renderMap, duplicates, digest } from './repository.mjs';
+import { discover, chunks, validateCatalog, renderMap, duplicates, sources, revisionFiles } from './repository.mjs';
 
 export function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'reuse-test-'));
@@ -73,7 +74,62 @@ test('map rendering is deterministic and tracks changes to capability boundaries
   const first = renderMap({ version: 1, entries: [entry] });
   assert.ok(first.includes('[reuse development guide](../docs/design/reuse-workflow.md)'));
   assert.ok(first.includes('[src/a.js](../src/a.js)'));
-  assert.ok(first.includes('[src/b.js](../src/b.js)'));
+  assert.ok(first.includes('[catalog.json](catalog.json)'));
+  assert.ok(!first.includes('[src/b.js](../src/b.js)'));
   assert.equal(first, renderMap({ version: 1, entries: [entry] }));
-  assert.notEqual(digest(first), digest(renderMap({ version: 1, entries: [{ ...entry, boundaries: 'Streams too' }] })));
+  assert.equal(first, renderMap({ version: 1, entries: [{ ...entry, boundaries: 'Streams too' }] }));
+});
+
+test('batch history preserves binary data, odd filenames, and symlink modes', t => {
+  const { root, put } = fixture(t);
+  put('src/a\todd.js', 'export const a = 1;');
+  put('binary.dat', Buffer.from([0, 255, 10, 128]));
+  put('script.sh', '#!/bin/sh\n');
+  symlinkSync('script.sh', join(root, 'link'));
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base'], { cwd: root });
+  assert.deepEqual(revisionFiles(root, 'HEAD').find(row => row.path === 'binary.dat').contents, Buffer.from([0, 255, 10, 128]));
+  assert.deepEqual(sources(root, 'HEAD').map(row => row.path), ['src/a\todd.js']);
+  assert.deepEqual(sources(root, 'HEAD', new Set()), []);
+  assert.equal(revisionFiles(root, 'HEAD').find(row => row.path === 'link').mode, '120000');
+});
+
+test('no changed sources bypasses tokenization entirely', () => {
+  const file = { path: 'src/a.js', get text() { throw new Error('Should not read source'); } };
+  assert.deepEqual(duplicates([file], new Set()), []);
+});
+
+test('duplicate cache preserves cold results and invalidates modified/deleted source', () => {
+  const body = 'export function load(input) { const result = []; for (const item of input) { if (item.active) { result.push(item.value); } } return result; }';
+  const files = [{ path: 'src/a.js', text: body }, { path: 'src/b.js', text: body.replace('load', 'collect') }];
+  const changed = new Set(['src/b.js']);
+  const cache = {};
+  const first = duplicates(files, changed, { minTokens: 30, cache });
+  assert.equal(first.length, 1);
+  assert.deepEqual(duplicates(files, changed, { minTokens: 30, cache }), first);
+  const modified = [files[0], { path: 'src/b.js', text: 'export const value = 1;' }];
+  assert.deepEqual(duplicates(modified, changed, { minTokens: 30, cache }), []);
+  duplicates([files[0]], new Set(['src/a.js']), { minTokens: 30, cache });
+  assert.deepEqual(Object.keys(cache.files), ['src/a.js']);
+  assert.deepEqual(duplicates(files, changed, { minTokens: 10, cache }), duplicates(files, changed, { minTokens: 10 }));
+});
+
+test('registration discovery covers aliases, defaults, reexports and public Python classes', () => {
+  const files = [
+    { path: 'src/a.ts', text: 'const impl = () => 1; export { impl as shared }; export default function() { return 2; } export { x } from "./b"; export * from "./c";' },
+    { path: 'llm_d_lens/a.py', text: 'def _private(): pass\ndef public(): pass\nclass Shared: pass\n' },
+  ];
+  const found = registrationCandidates(files, [], { entries: [] });
+  assert.deepEqual(found.map(x => x.symbol), ['shared', 'default', 'x', '*', 'public', 'Shared']);
+  assert.equal(registrationCandidates(files, files, { entries: [] }).length, 0);
+
+});
+
+test('default identifier implementation and reexport module changes require review', () => {
+  for (const [before, after] of [
+    ['const impl = () => 1; export default impl;', 'const impl = () => 2; export default impl;'],
+    ['const impl = () => 1; export { impl } from "./old.js";', 'const impl = () => 1; export { impl } from "./new.js";'],
+  ]) {
+    assert.equal(registrationCandidates([{ path: 'src/a.js', text: after }], [{ path: 'src/a.js', text: before }], { entries: [] }).length, 1);
+  }
 });

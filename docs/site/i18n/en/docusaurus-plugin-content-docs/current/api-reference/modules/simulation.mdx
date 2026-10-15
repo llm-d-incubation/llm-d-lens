@@ -633,6 +633,11 @@ asyncio.run(main())
 
 Get one Simulation task by id, including progress, logs, and result artifacts when they exist.
 
+Artifact publication status and errors, log truncation, artifact completeness, backend version
+provenance, and configuration IDs persist with the task in the database. An artifact URI is
+returned only after publication has been recorded; an older on-disk manifest alone does not
+make an unpublished result available.
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`GET /api/simulation/tasks/{task_id}`**

@@ -843,7 +843,7 @@
         "resolve_planning_facts"
       ],
       "purpose": "Freeze cluster, model, workload, and AIC planning facts for Agentic candidate generation, validation, and scoring.",
-      "boundaries": "Resolves live facts and controlled evidence references without reading benchmark aggregates or calling external AI. The Agentic planner still determines candidate validity and ranking. Structured trace records effective workload, SLOs, direct AIC inputs and evidence status without storing credentials.",
+      "boundaries": "Resolves live facts and controlled evidence references without reading benchmark aggregates or calling external AI. AIC system selection requires a unique match from registered hardware profile model patterns. Unknown or mixed systems remain unavailable. The Agentic planner still determines candidate validity and ranking. Structured trace records effective workload, SLOs, direct AIC inputs and evidence status without storing credentials.",
       "examples": [
         "apps/backend/src/llm_d_lens/agentic/service.py"
       ],
@@ -1390,39 +1390,18 @@
       ]
     },
     {
-      "id": "reuse-task-evidence",
-      "path": "tools/reuse/evidence.mjs",
-      "symbols": [
-        "taskPath",
-        "readTask",
-        "repositoryState",
-        "changedPaths",
-        "taskErrors",
-        "reportFreshness"
-      ],
-      "purpose": "Task evidence, Git-visible input fingerprints, and verification-report freshness.",
-      "boundaries": "Local tooling only; ignored runtime/cache excluded, task digest bound separately. Evidence is not authenticated and does not prove agent understanding. Task command logs are hash-bound.",
-      "examples": [
-        "tools/reuse/cli.mjs",
-        "tools/reuse/summary.mjs"
-      ],
-      "tests": [
-        "tools/reuse/cli.test.mjs"
-      ]
-    },
-    {
       "id": "reuse-registration-review",
       "path": "tools/reuse/registration.mjs",
       "symbols": [
         "registrationCandidates"
       ],
       "purpose": "Discover changed public declarations for catalog registration review.",
-      "boundaries": "Advisory JS/TS export and Python top-level function/class discovery, not exhaustive API analysis; exclusions expire on enclosing file changes. Catalog remains a curated capability map.",
+      "boundaries": "Advisory JS/TS export and Python top-level function/class discovery, not exhaustive API analysis. No task records or exclusion ledger; catalog remains curated.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
       "tests": [
-        "tools/reuse/evidence.test.mjs",
+        "tools/reuse/repository.test.mjs",
         "tools/reuse/cli.test.mjs"
       ]
     },
@@ -1431,14 +1410,10 @@
       "path": "tools/reuse/decisions.mjs",
       "symbols": [
         "readDecisions",
-        "createRequest",
-        "resolveRequest",
-        "validateScope",
-        "evidenceDetails",
-        "assessPending"
+        "evidenceChanged"
       ],
-      "purpose": "Record human decisions, distinguish task-related pending decisions from global pending decisions, and track changes to historical evidence.",
-      "boundaries": "Unknown scope, unknown capability or changed evidence stays blocking. Review provenance records supplied statements, not authenticated approval. Never auto-resolve historical pending.",
+      "purpose": "Read existing decisions without creating or resolving audit records.",
+      "boundaries": "Existing pending decisions still return exit 2; malformed records fail checks. Historical decisions with changed evidence are reported, never treated as new approval.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
@@ -1457,34 +1432,13 @@
         "localEmbedder"
       ],
       "purpose": "Local multilingual capability retrieval with configurable distinct-file recall.",
-      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1\u2013100. Lexical mode is separate; offline mode requires cached model.",
+      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1\u2013100. Lexical mode is separate; offline mode requires cached model. Lexical search is the default. Semantic detail caches retain unchanged files across queries and remove changed/deleted source entries.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
       "tests": [
         "tools/reuse/search.test.mjs",
-        "tools/reuse/evidence.test.mjs",
         "tools/reuse/semantic.smoke.mjs"
-      ]
-    },
-    {
-      "id": "reuse-module-review",
-      "path": "tools/reuse/review.mjs",
-      "symbols": [
-        "reviewInventory",
-        "createCoverage",
-        "coverageAssessment",
-        "reviewInstructions",
-        "renderReview"
-      ],
-      "purpose": "Per-capability module coverage and repository review evidence.",
-      "boundaries": "Inventories Git-visible text and explicit exclusions. Agent host owns semantic review and compatible refactors; CLI prepares/checks evidence and renders incomplete reports honestly. Unknown pending remains blocking; no automatic commits or business approval. Interim review-status reuses coverage assessment without a duplicate scan; coverage recorded is not final completion. Whole-repository review rejects module narrowing.",
-      "examples": [
-        "tools/reuse/cli.mjs",
-        ".agents/skills/repo-review/SKILL.md"
-      ],
-      "tests": [
-        "tools/reuse/cli.test.mjs"
       ]
     },
     {
@@ -1841,9 +1795,10 @@
       "symbols": [
         "historicalEvidenceSummary",
         "historicalBenchmarkLabel",
-        "generatorLabel"
+        "generatorLabel",
+        "candidateAnalysis"
       ],
-      "purpose": "Presentation helpers for historical benchmark records and candidate-generator provenance.",
+      "purpose": "Presentation helpers for historical benchmarks, candidate estimates and generator provenance.",
       "boundaries": "Presentation only. It formats server-provided measurements, relevance and outcomes without aggregating metrics, calculating confidence, or changing candidate eligibility.",
       "examples": [
         "apps/frontend/src/pages/deployment/ui/AgenticDeploymentWorkspace.jsx"
@@ -2738,7 +2693,7 @@
         "checkEnglish"
       ],
       "purpose": "Check all Git-visible repository text and optional PR metadata for Chinese characters.",
-      "boundaries": "Read-only Git inventory including dotfiles and untracked non-ignored files; reports Han characters in filenames and UTF-8/UTF-16 text. Skips binary assets, symlinks, and deleted files; fails on undecodable text. Agent performs reviewed translation; scanner never rewrites content.",
+      "boundaries": "Read-only Git inventory including dotfiles and untracked non-ignored files; reports Han characters in filenames and UTF-8/UTF-16 text. Skips binary assets, symlinks, and deleted files; fails on undecodable text. Agent performs reviewed translation; scanner never rewrites content. Staged mode reads index blobs, including partially staged files, using the same locale exception.",
       "examples": [
         ".github/workflows/ci-pr-checks.yaml"
       ],
@@ -3158,6 +3113,39 @@
         "apps/backend/tests/unit/evaluation/test_ownership.py",
         "apps/backend/tests/unit/evaluation/test_cancellation.py",
         "apps/backend/tests/unit/evaluation/test_artifact_storage.py"
+      ]
+    },
+    {
+      "id": "reuse-git-history",
+      "path": "tools/reuse/repository.mjs",
+      "symbols": [
+        "SOURCE_ROOTS",
+        "revisionFiles",
+        "sources",
+        "duplicates"
+      ],
+      "purpose": "Read binary-safe historical Git blobs in a batch and compare source duplication.",
+      "boundaries": "Local Git-visible tooling; source roots include monorepo workspaces and historical aliases. History preserves filenames and modes. Empty changed-source sets skip tokenization. Similarity remains advisory.",
+      "examples": [
+        "tools/reuse/cli.mjs"
+      ],
+      "tests": [
+        "tools/reuse/repository.test.mjs"
+      ]
+    },
+    {
+      "id": "documentation-file-links",
+      "path": "tools/check-docs.mjs",
+      "symbols": [
+        "checkDocs"
+      ],
+      "purpose": "Check local Markdown and MDX file targets for selected documentation files.",
+      "boundaries": "No network access; extensionless routes, anchors and MDX compilation require the full Docusaurus build.",
+      "examples": [
+        "tools/check-docs.test.mjs"
+      ],
+      "tests": [
+        "tools/check-docs.test.mjs"
       ]
     }
   ]

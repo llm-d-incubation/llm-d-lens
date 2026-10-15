@@ -313,6 +313,8 @@ Patch a cluster's editable settings, including name, description, proxy settings
 
 Start downloading the `llm-d` and `llm-d-benchmark` revisions pinned by the Lens stack profile for a cluster. The handler schedules background downloads and immediately returns the current status snapshot; the request body is ignored.
 
+Source checkouts are isolated by repository URL and resolved commit. Branch downloads refresh the remote ref; previously cached full commit SHAs can be reused offline. A per-source lock and atomic publication prevent concurrent requests from exposing incomplete checkouts or replacing an earlier snapshot.
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`POST /api/cluster/clusters/{cluster_id}/software-downloads`**

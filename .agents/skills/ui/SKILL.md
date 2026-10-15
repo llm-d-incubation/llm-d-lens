@@ -12,15 +12,17 @@ file, a new dashboard needs zero visual review round-trips on basics.
 
 ## Scope and shared behavior
 
-Follow [workflow](../workflow/SKILL.md) for discovery,
-registration and verification. Paths below are relative to the repository root.
+Follow [AGENTS.md](../../../AGENTS.md) for discovery,
+discovery and verification. Paths below are relative to the repository root.
 Before adding request, polling, form, pagination, clipboard or download behavior,
 inspect `apps/frontend/src/shared/lib/`, `apps/frontend/src/shared/api/httpClient.js`
 and the [capability map](../../../.reuse/map.md).
 Keep browser transport separate from page-specific presentation and domain rules.
 When an API contract changes, also apply [backend](../backend/SKILL.md).
 Validate affected callers, loading/error/empty states and effect cleanup. Use the
-relevant existing JS tests and `npm run build`; follow `CONTRIBUTING.md` for checks.
+relevant existing JS tests for bounded fixes. Run `npm run build` for changes to
+module wiring, assets, build configuration or dependencies, or when bundling
+behavior needs validation; CI retains the full build. Follow `CONTRIBUTING.md`.
 
 ## File references and browser data
 

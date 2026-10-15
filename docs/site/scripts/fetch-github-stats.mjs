@@ -11,8 +11,8 @@
 // component still attempts a live client-side fetch to override this value
 // when the visitor's network does allow it; this file is just the fallback.
 //
-// Run via `npm run fetch-github-stats`, or automatically as part of
-// `start`/`build` (see package.json). Never fails the build: on any error
+// Run via `npm run fetch-github-stats`, or automatically as a `pre`-step of
+// release automation when desired. Never fails on network errors: on any error
 // (offline, rate-limited, etc.) it leaves the existing file untouched, or
 // writes nulls if no file exists yet.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -38,9 +38,7 @@ async function main() {
   let stats = { stars: null, fetchedAt: null };
 
   try {
-    const res = await fetch(`https://api.github.com/repos/${REPO}`, {
-      signal: AbortSignal.timeout(10_000),
-    });
+    const res = await fetch(`https://api.github.com/repos/${REPO}`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       const data = await res.json();
       stats = { stars: data.stargazers_count, fetchedAt: new Date().toISOString() };

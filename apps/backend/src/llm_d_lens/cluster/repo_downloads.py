@@ -7,19 +7,21 @@ remembered against the cluster record, so any other module (evaluate,
 monitoring, ...) that later needs "the llm-d ref this cluster was configured
 with" can resolve it from the cluster record instead of re-downloading.
 
-Downloads are cached on disk under ``~/.cache/lens/repos/<repo>/<ref>``
-(sanitized), keyed by ref, so re-selecting a previously downloaded ref is a
-cheap no-op instead of a re-clone.
+Downloads are keyed by source URL and resolved commit. Branches are refreshed;
+immutable commits can be reused offline. A per-repository file lock serializes
+publication across concurrent requests and processes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import hashlib
 import logging
 import re
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Lock
 from typing import Literal
 
@@ -38,8 +40,7 @@ REPO_URLS: dict[RepoName, str] = {
 
 
 _CLONE_TIMEOUT_SECONDS = 300.0
-_CHECKOUT_TIMEOUT_SECONDS = 120.0
-_UNSAFE_REF_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+_COMMIT = re.compile(r"[0-9a-fA-F]{40}")
 
 
 def cache_root() -> Path:
@@ -47,48 +48,47 @@ def cache_root() -> Path:
     return storage_path("cache", "repos")
 
 
-def _slugify_ref(ref: str) -> str:
-    return _UNSAFE_REF_CHARS.sub("-", ref).strip("-") or "default"
-
-
 def repo_dir(repo: RepoName, ref: str) -> Path:
-    """Directory a given ``repo``/``ref`` checkout is cached at (may not exist yet)."""
-    return cache_root() / repo / _slugify_ref(ref)
+    """URL-isolated location for a commit (or an unambiguous ref placeholder)."""
+    source = hashlib.sha256(REPO_URLS[repo].encode()).hexdigest()
+    name = ref.lower() if _COMMIT.fullmatch(ref) else "ref-" + hashlib.sha256(ref.encode()).hexdigest()
+    return cache_root() / repo / source / name
 
 
-def _is_checked_out(dest: Path) -> bool:
-    return (dest / ".git").exists()
+def _git(*args: str) -> str:
+    result = run_sync(["git", *args], timeout=_CLONE_TIMEOUT_SECONDS)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "Git source download failed")
+    return result.stdout.strip()
 
 
-def _clone_at_ref(repo: RepoName, ref: str, dest: Path) -> None:
-    """Blocking clone of ``repo`` at ``ref`` into ``dest``.
-
-    Tries a fast shallow clone of ``ref`` as a branch/tag first; if that
-    fails (most commonly because ``ref`` is a bare commit SHA, which
-    ``git clone --branch`` cannot resolve), falls back to a full clone
-    followed by an explicit checkout. Raises ``RuntimeError`` on failure.
-    """
-    url = REPO_URLS[repo]
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.rmtree(dest, ignore_errors=True)
-    shallow = run_sync(
-        ["git", "clone", "--quiet", "--depth", "1", "--branch", ref, url, str(dest)],
-        timeout=_CLONE_TIMEOUT_SECONDS,
-    )
-    if shallow.returncode == 0 and _is_checked_out(dest):
-        return
-    shutil.rmtree(dest, ignore_errors=True)
-    clone = run_sync(["git", "clone", "--quiet", url, str(dest)], timeout=_CLONE_TIMEOUT_SECONDS)
-    if clone.returncode != 0:
-        shutil.rmtree(dest, ignore_errors=True)
-        raise RuntimeError(clone.stderr.strip() or f"git clone of {url} failed")
-    checkout = run_sync(
-        ["git", "-C", str(dest), "checkout", "--quiet", "--detach", ref],
-        timeout=_CHECKOUT_TIMEOUT_SECONDS,
-    )
-    if checkout.returncode != 0 or not _is_checked_out(dest):
-        shutil.rmtree(dest, ignore_errors=True)
-        raise RuntimeError(checkout.stderr.strip() or f"git checkout of {ref} failed")
+def _download_snapshot(repo: RepoName, ref: str) -> Path:
+    destination = repo_dir(repo, ref)
+    root = destination.parent
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "download.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if _COMMIT.fullmatch(ref) and (destination / ".git").is_dir():
+            return destination
+        mirror = root / "mirror.git"
+        if not mirror.is_dir():
+            with TemporaryDirectory(prefix="clone-", dir=root) as temporary:
+                staging = Path(temporary) / "mirror.git"
+                _git("clone", "--quiet", "--mirror", "--", REPO_URLS[repo], str(staging))
+                staging.rename(mirror)
+        else:
+            _git("--git-dir", str(mirror), "fetch", "--quiet", "--force", "--prune", "origin")
+        commit = _git("--git-dir", str(mirror), "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+        if not _COMMIT.fullmatch(commit):
+            raise RuntimeError("Git did not resolve a commit")
+        destination = repo_dir(repo, commit)
+        if not (destination / ".git").is_dir():
+            with TemporaryDirectory(prefix="checkout-", dir=root) as temporary:
+                staging = Path(temporary) / "checkout"
+                _git("clone", "--quiet", "--shared", "--no-checkout", "--", str(mirror), str(staging))
+                _git("-C", str(staging), "checkout", "--quiet", "--detach", commit)
+                staging.rename(destination)
+        return destination
 
 
 @dataclass
@@ -122,19 +122,13 @@ def _set_status(cluster_id: str, repo: RepoName, **updates: object) -> None:
 
 
 async def ensure_downloaded(cluster_id: str, repo: RepoName, ref: str) -> Path:
-    """Download ``repo`` at ``ref`` for ``cluster_id``, reusing an existing cache hit.
-
-    Safe to call repeatedly/concurrently (e.g. the wizard step re-mounting):
-    a ref that is already cached on disk is never re-cloned.
-    """
+    """Resolve a ref and publish an immutable checkout under a shared cache lock."""
     ref = ref.strip()
-    dest = repo_dir(repo, ref)
-    if _is_checked_out(dest):
-        _set_status(cluster_id, repo, ref=ref, state="ready", path=str(dest), error=None)
-        return dest
     _set_status(cluster_id, repo, ref=ref, state="downloading", path=None, error=None)
     try:
-        await asyncio.to_thread(_clone_at_ref, repo, ref, dest)
+        if not ref or ref.startswith("-"):
+            raise ValueError("A nonempty Git ref is required")
+        dest = await asyncio.to_thread(_download_snapshot, repo, ref)
     except Exception as error:
         logger.exception("event=repo_download_failed repo=%s ref=%s cluster_id=%s", repo, ref, cluster_id)
         _set_status(cluster_id, repo, ref=ref, state="failed", path=None, error=str(error))

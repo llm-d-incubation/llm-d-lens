@@ -50,7 +50,7 @@ We welcome contributions to any aspect of `llm-d-lens`! If you have a bug fix, f
 For every Pull Request submitted, ensure the following steps have been done:
 
 1. [Sign your commits](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)
-2. Make sure that the [pre-commit](https://pre-commit.com/) hooks have been run and pass **before you push** the contents of your PR. See [Local Development Checks](#local-development-checks-pre-commit) below.
+2. Make sure that the [pre-commit](https://pre-commit.com/) hooks have been run and pass **before you push** the contents of your PR. See [Local Development Checks](#development-and-validation) below.
 
 ## Publishing the online installer
 
@@ -99,14 +99,46 @@ compare contracts and callers, and record reuse/new-code rationale in the PR.
 Pause dependent work for unresolved business, compatibility, CI exception or
 catalog decisions; obtain and record the user's actual answer before proceeding.
 
-Run `npm run reuse:test` for reuse-tool changes and
-`npm run reuse:check -- --task <id> --base <task-start-commit> --report .cache/reuse/report.json`
-for behavior changes. Follow the workflow's `begin`, `search --task` and `verify`
-evidence steps; run `verify-report --report .cache/reuse/report.json` before delivery.
-Export the ignored task evidence and command logs for review. Reports are bound to
-Git-visible inputs; ignored runtime data is outside their validity guarantee.
-Update `.reuse/catalog.json` and run `npm run reuse:map` when capability entries
-change. Similarity candidates require analysis, not automatic refactoring.
+Use targeted tests for bounded fixes. Run `npm run reuse:test` for reuse-tool
+changes. Run existing test commands directly; no task JSON or automatic audit
+reports are required. Report actual results and limitations; rerun affected tests
+when their inputs or environment change.
+Update `.reuse/catalog.json` and run `npm run reuse:map` when entries change.
+Similarity candidates require analysis, not automatic refactoring.
+
+`npm run docs:check` checks local file links in changed Markdown/MDX; pass
+`--base REF` for a branch comparison or file paths explicitly. It does not compile
+MDX or validate route/anchor links. `npm run docs:build` builds the bilingual site
+for rendering, site configuration and dependency changes; documentation CI runs
+that full build. GitHub statistics refresh is explicit and optional.
+
+### Periodic full local validation
+
+Run `npm run verify:full` manually at a milestone or before review. It runs the
+existing English/catalog/stack checks, linters, MCP generation, types, JS/Python
+and tooling tests, frontend build and bilingual docs build without cached passes.
+Install workspace and Python development/embedded-db dependencies first; set
+`PRISM_PYTHON_BIN` if Python is not at `.venv/bin/python` (fallback: `python3`).
+Each check prints PASS/FAIL and saves its full log in the printed unique directory
+under `.cache/reuse/full-validation/`. Failures do not prevent later checks, and
+any failure or missing tool makes the command exit nonzero. Test data is isolated.
+This is a simple Makefile entry, not an evidence/report framework. Do not edit
+source during the run; rerun after relevant source or environment changes.
+Daily fixes use targeted tests; agents read failed logs only. Live cluster/provider
+acceptance, containers, online stack checks, model smoke tests and the security
+requirements below remain separate; test skips and build warnings remain in logs.
+
+The optional repository hook (`git config core.hooksPath scripts/hooks`) checks staged
+whitespace and English text, without running regression suites. The pre-commit
+framework configuration remains available for staged file hygiene and linters.
+Full regression checks belong in CI; do not run both full and subset suites
+before every commit.
+
+Use Vite hot reload for frontend source changes. `scripts/lens-local.sh restart backend`
+or `restart server` restarts only the requested service. Use `restart all` for
+port/environment changes and API changes that alter the server MCP catalog.
+Actual service ports are recorded for targeted restarts. For a session started
+with an older launcher, run `restart all` once to initialize that state.
 
 Follow [README.md](README.md) for setup. Choose checks appropriate to the change:
 

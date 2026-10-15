@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from llm_d_lens.db.base import ArrayVariant, Base, DeclarativeDtoMixin, JSONVariant, UTCDateTime
@@ -76,6 +76,13 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
         "prompt_trace_start_seconds": "prompt.trace.start_seconds",
         "prompt_trace_end_seconds": "prompt.trace.end_seconds",
         "task_dir": "task_dir",
+        "artifact_uri": "artifact_uri",
+        "artifact_error": "artifact_error",
+        "logs_truncated": "logs_truncated",
+        "artifacts_incomplete": "artifacts_incomplete",
+        "backend_version_inferred": "backend_version_inferred",
+        "backend_version": "backend_version",
+        "configuration_ids": "configuration_ids",
         "progress_percent": "progress_percent",
         "progress_message": "progress_message",
         "logs": "logs",
@@ -122,6 +129,15 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
     prompt_trace_start_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     prompt_trace_end_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     task_dir: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logs_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    artifacts_incomplete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    backend_version_inferred: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    backend_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    configuration_ids: Mapped[list[str] | None] = mapped_column(ArrayVariant, nullable=True, default=list)
     progress_percent: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     progress_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     logs: Mapped[list[str]] = mapped_column(ArrayVariant, nullable=False, default=list)
@@ -240,6 +256,13 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
                 },
             },
             "task_dir": self.task_dir,
+            "artifact_uri": self.artifact_uri,
+            "artifact_error": self.artifact_error,
+            "logs_truncated": self.logs_truncated,
+            "artifacts_incomplete": self.artifacts_incomplete,
+            "backend_version_inferred": self.backend_version_inferred,
+            "backend_version": self.backend_version,
+            "configuration_ids": list(self.configuration_ids or []),
             "progress_percent": self.progress_percent,
             "progress_message": self.progress_message,
             "logs": list(self.logs),

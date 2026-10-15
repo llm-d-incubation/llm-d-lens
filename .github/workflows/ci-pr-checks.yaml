@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && 'metadata' || 'code' }}
+  cancel-in-progress: true
+
 jobs:
   english-content:
     runs-on: ubuntu-latest
@@ -34,7 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    if: github.event.action != 'edited'
     outputs:
+      has_docs_changes: ${{ steps.filter.outputs.docs }}
+      has_python_changes: ${{ steps.filter.outputs.python }}
       has_code_changes: ${{ steps.filter.outputs.code }}
     steps:
       - name: Checkout source
@@ -45,11 +52,27 @@ jobs:
         id: filter
         with:
           filters: |
-            code:
+            docs:
               - 'docs/site/**'
-              - '!docs/**'
-              - '!**/*.md'
-              - '!LICENSE'
+              - 'docs/design/agentic-deployment-design.md'
+              - 'package*.json'
+              - 'CONTRIBUTING.md'
+              - '.github/workflows/ci-pr-checks.yaml'
+              - 'tools/check-docs*'
+            python:
+              - 'apps/backend/**'
+              - '.github/workflows/ci-pr-checks.yaml'
+            code:
+              - 'apps/**'
+              - 'packages/**'
+              - 'tools/**'
+              - 'scripts/**'
+              - 'package*.json'
+              - '*config*'
+              - 'Makefile'
+              - 'Dockerfile*'
+              - 'docker/**'
+              - '.github/workflows/**'
 
   # Release-time gate: the pinned llm-d stack must be internally consistent and
   # every referenced version must exist (llm_d_lens/versions/llm_d_stack.yaml).
@@ -119,6 +142,8 @@ jobs:
 
       - name: Test
         run: make test-js
+      - name: Test documentation checker
+        run: npm run test:docs
 
   # Python: lint (only if Python files exist)
   python-lint:
@@ -178,3 +203,45 @@ jobs:
             --platform linux/amd64 \
             --tag test-build:pr-${{ github.event.pull_request.number }} \
             .
+
+  docs-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: check-code-changes
+    if: needs.check-code-changes.outputs.has_docs_changes == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install documentation dependencies
+        run: npm ci
+      - name: Build bilingual documentation and validate links
+        run: npm run docs:build
+
+  python-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: check-code-changes
+    if: needs.check-code-changes.outputs.has_python_changes == 'true'
+    env:
+      LENS_DATA_DIR: ${{ runner.temp }}/lens-tests/data
+      LENS_CACHE_DIR: ${{ runner.temp }}/lens-tests/cache
+      LENS_LOG_DIR: ${{ runner.temp }}/lens-tests/logs
+      LENS_SCRATCH_DIR: ${{ runner.temp }}/lens-tests/scratch
+      LLM_D_BENCH_DB_ALLOW_SQLITE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/backend/pyproject.toml
+      - name: Install test dependencies
+        run: pip install -e 'apps/backend[dev,embedded-db]'
+      - name: Run backend regression tests
+        run: python -m pytest apps/backend/tests apps/backend/src/llm_d_lens -q

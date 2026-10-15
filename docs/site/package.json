@@ -5,8 +5,8 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "sync-external-docs": "node scripts/sync-external-docs.mjs",
-    "start": "npm run sync-external-docs && npm run fetch-github-stats && docusaurus start",
-    "build": "npm run sync-external-docs && npm run fetch-github-stats && docusaurus build",
+    "start": "npm run sync-external-docs && docusaurus start",
+    "build": "npm run sync-external-docs && docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",

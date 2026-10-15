@@ -13,21 +13,10 @@
 - [ ] Integration/e2e tests added/updated
 - [ ] Manual testing performed
 
-## Reuse review
+## Reuse and compatibility
 
-<!-- For behavior changes: cite paths/symbols and actual analysis, not just "searched".
-     Documentation-only changes may say N/A with a reason. Never invent approval. -->
-
-- Search scope and nearest existing candidates:
-- Reused, extended or extracted capabilities:
-- Why any new/separate implementation is necessary:
-- Shared callers affected and regression validation:
-- Capability catalog/map updates (or why unnecessary):
-- Duplicate findings analyzed (`npm run reuse:check -- --base <base-ref>`):
-- Human decisions, scope and conversation/review references (if required):
-
-- [ ] No dependent operation was performed while its human decision was pending
-- [ ] No unresolved requests remain in `.reuse/decisions.json`
+<!-- When relevant, name the reused capability, affected callers, and any unresolved
+     decision. No task ledger or generated audit report is required. -->
 
 ## Checklist
 

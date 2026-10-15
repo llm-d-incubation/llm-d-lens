@@ -21,11 +21,15 @@ help: ## Show this help message
 build: ## Build the frontend
 	npm run build
 
-.PHONY: test test-js test-python
+.PHONY: test test-js test-app-js test-reuse test-python
 test: test-js test-python ## Run Node and Python tests
 
-test-js: ## Run frontend and Node API unit tests
+test-js: test-app-js test-reuse ## Run frontend, Node API and reuse unit tests
+
+test-app-js: ## Run frontend and Node API unit tests
 	TSX_TSCONFIG_PATH=tsconfig.base.json node --import tsx --test $$(find apps/frontend/src apps/server/testing packages/shared/src -type f \( -name '*.test.js' -o -name '*.test.jsx' -o -name '*.test.ts' \))
+
+test-reuse: ## Run reuse tooling tests
 	npm run reuse:test
 
 PYTHON ?= .venv/bin/python
@@ -49,6 +53,34 @@ fmt: ## Format Python code
 .PHONY: pre-commit
 pre-commit: ## Run pre-commit hooks on all files
 	pre-commit run --all-files
+
+# Manual local checkpoint; keep detailed test output out of the agent context.
+.PHONY: verify-full
+verify-full: ## Run all local checks with compact output and per-check logs
+	@bash -eu -c '\
+	mkdir -p .cache/reuse/full-validation; \
+	logs=$$(mktemp -d "$$PWD/.cache/reuse/full-validation/run-XXXXXX"); \
+	export PRISM_PYTHON_BIN="$${PRISM_PYTHON_BIN:-$$(if test -x .venv/bin/python; then echo "$$PWD/.venv/bin/python"; else echo python3; fi)}"; \
+	export LENS_DATA_DIR="$$logs/data" LENS_CACHE_DIR="$$logs/cache" LENS_LOG_DIR="$$logs/logs" LENS_SCRATCH_DIR="$$logs/scratch" LLM_D_BENCH_DB_ALLOW_SQLITE=1; \
+	failed=0; \
+	run() { name=$$1; shift; echo "RUN $$name"; if "$$@" >"$$logs/$$name.log" 2>&1; then echo "PASS $$name"; else echo "FAIL $$name: $$logs/$$name.log"; failed=1; fi; }; \
+	echo "Full local validation; logs: $$logs"; \
+	run english npm run check:english; \
+	run catalog npm run reuse:check; \
+	run stack npm run check:stack -- --offline; \
+	run lint npm run lint; \
+	run python-lint "$$PRISM_PYTHON_BIN" -m ruff check .; \
+	run python-format "$$PRISM_PYTHON_BIN" -m ruff format --check .; \
+	run mcp node scripts/generate-mcp-tools.mjs; \
+	run types npm run type-check; \
+	run javascript-tests $(MAKE) test-app-js; \
+	run reuse-tests $(MAKE) test-reuse; \
+	run tool-tests node --test tools/check-docs.test.mjs tools/check-english.test.mjs tools/check-llm-d-stack.test.mjs; \
+	run python-tests "$$PRISM_PYTHON_BIN" -m pytest apps/backend/tests apps/backend/src/llm_d_lens -q; \
+	run frontend-build npm run build; \
+	run docs-build npm run docs:build; \
+	if test $$failed = 0; then echo "PASS: all local checks"; else echo "FAIL: see logs above"; fi; \
+	exit $$failed'
 
 ##@ Container
 

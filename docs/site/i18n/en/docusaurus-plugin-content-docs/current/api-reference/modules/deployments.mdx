@@ -213,6 +213,9 @@ When an external planner scores multiple candidates, its selection rationale exp
 lower-scored returned candidate ranks below the top choice using the supplied planning facts. Only
 the returned top three are scored; no reason is inferred for candidates outside that set.
 
+Planning-fact collection matches discovered accelerator models against registered hardware profiles
+to select one AIC system. Unknown, ambiguous, or mixed systems leave AIC evidence unavailable.
+
 AIC support checks and estimates use the SDK release pinned in `pyproject.toml`
 (currently 0.12.0), including its bundled support matrix and performance data.
 An unsupported P/D result describes that installed matrix, not a hardware-level
@@ -2176,7 +2179,7 @@ print(result.model_dump(mode="json"))
 
 **`POST /api/v1/configurations/save`**
 
-Request: `SaveRequest`. Success: HTTP `200`, `SaveResponse`. Requires `deployable_configuration`; `file.name` is optional. Returns `configuration_file` (URI, type, file name, format, path, size, SHA-256) and `artifact` (ID, revision, status, deployable configuration, file metadata, creation time). Configuration, filesystem or value errors return 400; unexpected failures return 500 with `Unable to save configuration`.
+Request: `SaveRequest`. Success: HTTP `200`, `SaveResponse`. Requires `deployable_configuration`; `file.name` is optional. The configuration file URI is derived from the artifact ID and file name and is preserved when reading the saved artifact. Returns `configuration_file` (URI, type, file name, format, path, size, SHA-256) and `artifact` (ID, revision, status, deployable configuration, file metadata, creation time). Configuration, filesystem or value errors return 400; unexpected failures return 500 with `Unable to save configuration`.
 
 ```json
 {

@@ -545,7 +545,7 @@ async def test_backend_installs_its_executable(
             str(simulation_root / "runtime" / "bin" / "python"),
         )
     monkeypatch.setattr(
-        importlib.import_module(backend_type.__module__).shutil,
+        importlib.import_module(backend_type.__module__),
         "which",
         lambda executable: None,
     )
@@ -2102,7 +2102,10 @@ async def test_simulation_failure_retains_log_truncation_and_configuration_ids(s
     assert manifest["configuration_ids"] == ["configuration-123"]
     assert manifest["source_version"]["backend_version"] == "test-version"
     assert manifest["truncated"] is True
-    assert next(item for item in manifest["files"] if item["path"] == "task.json")["truncated"] is True
+    stored = SimulationTaskDao().get(task.id)
+    assert stored.logs_truncated is True
+    assert stored.configuration_ids == ["configuration-123"]
+    assert stored.logs == task.logs
     assert len(task.logs) == 1
 
 
@@ -2161,7 +2164,7 @@ async def test_terminal_manifest_failure_does_not_publish_artifact_refs(simulati
     monkeypatch.setattr(simulation_service, "register_artifacts", fail_registration)
     with pytest.raises(OSError, match="manifest disk failure"):
         await save_task(task)
-    payload = json.loads((Path(task.task_dir) / "task.json").read_text())
+    payload = SimulationTaskDao().get(task.id).model_dump(mode="json")
     assert not payload.get("artifact_uri")
     assert task.artifact_uri is None
     assert "manifest disk failure" in payload["artifact_error"]
@@ -2229,10 +2232,11 @@ async def test_loading_changed_task_does_not_advertise_stale_manifest(simulation
     await save_task(task)
     loaded = await load_task(task.id)
     assert loaded.artifact_uri == task.artifact_uri
-    path = Path(task.task_dir) / "task.json"
-    payload = json.loads(path.read_text())
-    payload["description"] = "new record before manifest publication"
-    path.write_text(json.dumps(payload))
+    # Reproduce interruption after the new DB record is saved but before
+    # the old on-disk manifest is replaced.
+    task.description = "new record before manifest publication"
+    task.artifact_uri = None
+    SimulationTaskDao().save(task)
     loaded = await load_task(task.id)
     assert loaded.artifact_uri is None
 
