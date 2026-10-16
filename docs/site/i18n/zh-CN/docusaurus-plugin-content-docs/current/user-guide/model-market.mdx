@@ -1,30 +1,33 @@
 ---
 title: 模型市场
-description: 选择模型，创建手动或 AI 辅助部署。
+description: 选择模型，创建高级或 AI 辅助部署。
 ---
 
 打开 **Model Market（模型市场）**，选择模型并部署到集群。
-首次使用建议选择 **Manual（手动）**模式。
+选择 **Advanced（高级）**配置部署，或选择 **Agentic（智能体）**获取 AI 辅助推荐。
 
 ## 选择部署模式
 
 | 模式 | 适用目标 |
 | --- | --- |
-| **Manual（手动）** | 选择 llm-d Guide 模板、配置资源或检查生成的 YAML |
+| **Advanced（高级）** | 选择 llm-d Guide 模板并配置部署 |
 | **Agentic（智能体，实验性）** | 让 Lens 根据负载和性能目标推荐配置 |
 
-## 创建手动部署
+## 创建高级部署
 
 1. 打开 **Model Market**，用 **Model categories（模型分类）**筛选，点击模型卡片。
 2. 在 **One-click deployment（一键部署）**中填写 **Deployment name（部署名称）**，选择就绪的 **Cluster（集群）**。
-3. 选择包含该模型的 **Model cache storage（模型缓存存储）**，等待显示 **This model is ready in the selected cache.（模型已在所选缓存中就绪）**。**Manual** 模式下模型缓存存储是可选的。
-4. **Mode（模式）**保持 **Manual**，点击 **Configure deployment（配置部署）**。
-5. 在 **Basic settings（基本设置）**中检查 **Runtime image（运行镜像）**、**Replicas（副本数）**和 **TP（每副本使用的加速器数量）**。
+3. 可选：选择包含该模型的 **Model cache storage（模型缓存存储）**，等待显示 **This model is ready in the selected cache.（模型已在所选缓存中就绪）**。
+4. 点击 **Mode（模式）**下的 **Advanced（高级）**，进入 **Configurations（配置）**。检查预填的模型和部署设置；需要修改时点击 **Edit setup（编辑设置）**。
+5. 检查 **Runtime image（运行镜像）**、**Replicas（副本数）**和 **TP（每副本使用的加速器数量）**。
 6. 在 **Guide template（方案模板）**中选择 **Guide** 和 **Accelerator（加速器）**。不确定如何选择时，参阅[选择评测方案](/evaluation/guides)。
 7. 使用 P/D 或分层缓存方案时，从列表中选择变体。首次运行先保留提供的默认配置。
 8. 点击 **Generate YAML（生成 YAML）**，选择资源预算，再点击 **Confirm & generate（确认并生成）**。
-9. 检查 **Generated deployable configuration（生成的部署配置）**，修正标出的错误后点击 **Next（下一步）**。
-10. 在**部署**页等待 **Ready**；通过 **View Pods & Logs（查看 Pod 与日志）**检查启动过程。
+9. 检查 **Generated deployable configuration（生成的部署配置）**，修正标出的错误后点击 **Deploy（部署）**。
+10. 在 **Deployments（部署）**页等待 **Ready（就绪）**。部署会保留，不会运行基准测试；不再使用时请手动停止或清理。
+
+点击 **Back to model card（返回模型卡片）**可返回所选模型。
+如需测量性能，参阅[运行评估](/user-guide/evaluation)。
 
 没有集群或缓存时，先[添加集群](/user-guide/clusters)、[创建缓存存储](/user-guide/storage)，
 再[下载模型](/user-guide/model-cache)。所选缓存中没有该模型时，先下载到该卷，再回来部署。
@@ -47,6 +50,8 @@ description: 选择模型，创建手动或 AI 辅助部署。
 7. 在 **Validated alternatives（已验证的备选方案）**中展开 **Why this option（选择理由）**，比较资源用量和性能估算。
 8. 点击所选方案的 **Deploy recommendation（部署推荐方案）**，到**部署**页查看启动状态。
 
+可选：生成推荐前展开 **Pod placement（Pod 放置）**，选择部署运行的位置。
+
 要调整推荐，在备选方案下方输入新的偏好，点击 **Recalculate selection（重新计算）**。
 不配置外部 AI 提供方也可以使用此操作。
 
@@ -58,7 +63,7 @@ description: 选择模型，创建手动或 AI 辅助部署。
 
 | 目标 | 操作位置 |
 | --- | --- |
-| 修改上下文长度或批处理参数 | Manual 配置编辑器中的 **Advanced settings** |
+| 修改上下文长度或批处理参数 | 配置编辑器中的 **Advanced settings（高级设置）** |
 | 启用工具调用 | 开启 **Enable automatic tool choice**，再选择 **Tool call parser** |
 | 使用单独的代理 | **Deployment environment（部署环境）** |
 | 修改副本或加速器数量 | **Replicas** 和 **Tensor parallelism** / **TP** |

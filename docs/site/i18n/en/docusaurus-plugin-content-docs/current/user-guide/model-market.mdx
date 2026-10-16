@@ -18,23 +18,16 @@ Use **Advanced** to configure a deployment, or **Agentic** for an AI-assisted de
 1. Open **Model Market**, use **Model categories** to narrow the list, and click a model card.
 2. In **One-click deployment**, enter **Deployment name** and choose a ready **Cluster**.
 3. Optionally choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.**
-4. Click **Advanced** under **Mode**. Lens opens **New Benchmark Task** directly at **Configurations** (`view=optimization-evaluate-new`), with the configuration editor open. The selected model, task and deployment names, description, cluster, storage, replicas, TP, and context length are carried over. Use **Edit setup** to review or complete the environment; the runtime image follows the selected cluster's hardware.
-5. Review the model, cluster, runtime image, replicas, and tensor parallel size in the shared configuration editor.
+4. Click **Advanced** under **Mode** to open **Configurations**. Review the prefilled model and deployment settings; use **Edit setup** if needed.
+5. Check the runtime image, replicas, and tensor parallel size.
 6. Under **Guide template**, choose **Guide** and **Accelerator**. Use [Choose an evaluation Guide](/evaluation/guides) to compare the options.
 7. For a P/D or tiered-cache Guide, choose a variant from the displayed list. Keep the supplied defaults for the first run.
 8. Click **Generate YAML**, choose the resource budget, then click **Confirm & generate**.
 9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Deploy**.
 10. On **Deployments**, wait for **Ready**. The deployment is retained without running a benchmark; stop or clean it up explicitly when no longer needed.
 
-Both Model Market and Evaluation Setup use the same configuration layout and
-topology controls. Only **Optimization comparisons** is hidden for Model Market;
-deployment uses the full Guide scenario. If topology inputs generate multiple
-configurations, **Deploy** submits them together and retains their deployments. The
-entry source stays with the task, including after **Edit setup**. From Model Market,
-use **Back to model card** to return to the selected model with your deployment
-settings. From Evaluation Setup, **Next** continues to **Benchmark** and
-**Execution plan**; the evaluation deploys, benchmarks, collects metrics, and
-cleans up the deployments it creates. See [Run an evaluation](/user-guide/evaluation).
+Use **Back to model card** to return to the selected model.
+To measure performance, see [Run an evaluation](/user-guide/evaluation).
 
 No cluster or cache available? [Add a cluster](/user-guide/clusters),
 [create cache storage](/user-guide/storage), and [download the model](/user-guide/model-cache).
@@ -63,12 +56,8 @@ again. A resource or network error during generation must be resolved before dep
 7. Under **Validated alternatives**, expand **Why this option** to compare resource use and estimated performance.
 8. Click **Deploy recommendation** on the option you choose. Track startup on **Deployments**.
 
-Before generating a recommendation, expand **Pod placement** below **Workload
-estimate** to choose a placement preset. **Require one node** also allows a
-hostname selection. The chosen preset and node are applied when you approve a
-candidate. Prefill and Decode model-server Pods in a P/D deployment share one
-placement group; routing Pods do not. LeaderWorkerSet candidates do not support
-the balanced or separate-node presets.
+Optionally, expand **Pod placement** before generating a recommendation to choose
+where the deployment runs.
 
 To change the recommendation, enter your revised preference below the alternatives
 and click **Recalculate selection**. This also works without an external AI provider.
