@@ -13,7 +13,7 @@
 # dependency. Pinned to 3.12 (matching the "frontend-and-server" CI job's
 # Python version) because pgserver -- the embedded-db extra's PostgreSQL
 # backend -- does not yet publish a 3.14 build.
-FROM python:3.12-slim AS mcp-tools
+FROM python:3.14-slim AS mcp-tools
 
 WORKDIR /app
 
