@@ -5,6 +5,16 @@ import { validateConfigurationInputs } from './configurationValidation.js';
 const base = { guide: 'optimized-baseline', modelServer: 'vllm', guideVariant: '', guideVariants: [], guideSettings: {}, customRows: [], replicaVariants: '1', tensorParallelVariants: '1', prefillReplicaVariants: '1', prefillTensorParallelVariants: '1', pdTopologyVariants: '', runtime: {} };
 const validate = (patch) => validateConfigurationInputs({ ...base, ...patch });
 
+test('empty runtime images are rejected before configuration generation', () => {
+    for (const image of ['', '   ']) {
+        assert.deepEqual(validate({ runtime: { image } }), [{
+            field: 'image',
+            message: 'Select a runtime image before generating a configuration.',
+        }]);
+    }
+    assert.deepEqual(validate({ runtime: { image: 'registry.example/model-server:custom' } }), []);
+});
+
 test('empty custom name produces one field error; an empty argument value is legal', () => {
     const errors = validate({ customRows: [{ target: 'both', kind: 'argument', name: '', value: '' }] });
     assert.equal(errors.length, 1);

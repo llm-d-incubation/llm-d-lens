@@ -11,6 +11,7 @@ export function validateConfigurationInputs(input) {
         if (!errors.some(error => error.field === field && error.message === message)) errors.push({ field, message });
     };
     const isPd = guide === 'pd-disaggregation';
+    if (runtime.image !== undefined && !runtime.image.trim()) add('image', 'Select a runtime image before generating a configuration.');
     for (const field of ['cacheCpuGiB', 'rdmaNicCount', 'routerValues']) {
         try { normalizeGuideSettings(guide, guideVariant, { [field]: guideSettings[field] }); }
         catch (error) { add(field, error.message); }

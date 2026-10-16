@@ -297,6 +297,26 @@ export default function ModelMarketPage({ onNavigate }) {
         setAgenticDraft(null);
     };
 
+    const openAdvanced = () => {
+        storeEvaluationIntent({
+            operation: 'create-evaluation',
+            initial_step: 'configurations',
+            return_target: 'optimization-evaluate-new',
+            name: deployName || formatDefaultName(selected),
+            deployment_name: deployName || formatDefaultName(selected),
+            deployment_description: deploymentDescription,
+            cluster_id: cluster,
+            workloads: [{ model: selected.repository, replicas, tensor_parallel_size: tensorParallelism }],
+            runtime: {
+                model_server: 'vllm',
+                model_source: storageVolumeId ? 'auto-cache' : 'huggingface',
+                storage_volume_id: storageVolumeId,
+                max_model_len: vllm.maxModelLen ?? plan.maxModelLen,
+            },
+        });
+        onNavigate('optimization-evaluate-new');
+    };
+
     const submit = async (requestedResourceBasis = resourceBasis) => {
         setError('');
         if (parsedVllmArguments.error) {
@@ -317,22 +337,7 @@ export default function ModelMarketPage({ onNavigate }) {
             return;
         }
         if (mode === 'advanced') {
-            storeEvaluationIntent({
-                operation: 'deploy-only',
-                return_target: 'model-market',
-                name: deployName,
-                deployment_name: deployName,
-                deployment_description: deploymentDescription,
-                cluster_id: cluster,
-                workloads: [{ model: selected.repository, replicas, tensor_parallel_size: tensorParallelism }],
-                runtime: {
-                    model_server: 'vllm',
-                    model_source: storageVolumeId ? 'auto-cache' : 'huggingface',
-                    storage_volume_id: storageVolumeId,
-                    max_model_len: vllm.maxModelLen ?? plan.maxModelLen,
-                },
-            });
-            onNavigate('optimization-evaluate-new');
+            openAdvanced();
             return;
         }
         if (mode === 'agentic') {
@@ -433,7 +438,11 @@ export default function ModelMarketPage({ onNavigate }) {
                     </div>
                     {!selected.vllmSupported && <p role="alert" className="mt-5 text-sm text-amber-300">{selected.type} requires the {selected.runtime} runtime. Raw vLLM Standard deployment is unavailable until this provider is added.</p>}
                     {mode === 'standard' && topologyError && <p role="alert" className="mt-5 text-sm text-amber-300">{topologyError} The recommended TP remains TP {plan.tensorParallelism}; modify replicas or TP before creating this deployment.</p>}
-                    <fieldset className="mt-6"><legend className="text-sm text-slate-300">Mode</legend><div className="mt-2 grid gap-2 md:grid-cols-2">{[['advanced', 'Manual', 'Template-based deployment', false], ['agentic', 'Agentic', 'Recommended guide and topology', true]].map(([value, label, description, experimental]) => <button key={value} type="button" onClick={() => {
+                    <fieldset className="mt-6"><legend className="text-sm text-slate-300">Mode</legend><div className="mt-2 grid gap-2 md:grid-cols-2">{[['advanced', 'Advanced', 'Template-based benchmark configuration', false], ['agentic', 'Agentic', 'Recommended guide and topology', true]].map(([value, label, description, experimental]) => <button key={value} type="button" onClick={() => {
+                        if (value === 'advanced') {
+                            openAdvanced();
+                            return;
+                        }
                         if (value === 'agentic') {
                             setMode(value);
                             setAgenticDraft({ model: selected.repository, deploymentName: deployName, description: deploymentDescription, clusterId: cluster, modelWeightGiB: selected.sizeGiB, contextLength: vllm.maxModelLen || plan.maxModelLen, storageVolumeId, maxNumSeqs: vllm.maxNumSeqs, maxNumBatchedTokens: vllm.maxNumBatchedTokens, gpuMemoryUtilization: vllm.gpuMemoryUtilization, vllmArguments: selected.vllmArguments || [] });

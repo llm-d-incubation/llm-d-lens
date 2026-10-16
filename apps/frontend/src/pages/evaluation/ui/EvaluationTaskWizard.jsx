@@ -117,7 +117,8 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     // an existing (own/shared) deployment, but cannot design configurations
     // because that path deploys a new one.
     const benchmarkOnly = !deployOnly && !(can("evaluate:workflow:create") || can("deployment:run:create")) && can("evaluate:run:create");
-    const [step, setStep] = useState(deployOnly ? 1 : 0);
+    const startWithConfiguration = deployOnly || (!benchmarkOnly && returningIntent?.initial_step === "configurations");
+    const [step, setStep] = useState(startWithConfiguration ? 1 : 0);
     const [name, setName] = useState(returningIntent?.name || "");
     const [template, setTemplate] = useState(returningIntent?.workloads?.[0]?.guide || "");
     const [catalog, setCatalog] = useState([]);
@@ -267,7 +268,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 setModelServices(services || []);
                 setTargetId(services?.[0]?.id || "");
                 setTemplate((current) => guides.some((guide) => guide.id === current) ? current : guides[0]?.id || "");
-                if (deployOnly) {
+                if (startWithConfiguration) {
                     const guideId = returningIntent?.workloads?.[0]?.guide || guides[0]?.id || "";
                     setConfigurationEditor({ guideId, mode: "defaults", artifact: null, key: `model-market-${Date.now()}` });
                 }
@@ -276,7 +277,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             .catch((nextError) => active && setError(nextError.message || "Unable to load evaluation inputs"))
             .finally(() => active && setLoading(false));
         return () => { active = false; };
-    }, [deployOnly, returningIntent, selectedClusterId]);
+    }, [startWithConfiguration, returningIntent, selectedClusterId]);
 
     useEffect(() => {
         let active = true;
@@ -394,7 +395,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         : cachedModelsLoading ? { state: 'loading' }
         : modelCacheMismatch ? { state: 'model-mismatch', message: `${trimmedSharedModel} was not found in this Model Cache storage.` }
         : { state: 'ready' };
-    const sharedContext = { cluster: clusterLoading ? {} : cluster, clusterHardware, refreshClusterHardware, cachedRuntimeImages, model: sharedModel, modelSource, modelPath: modelSource === 'auto-cache' ? storageVolumes.find((item) => item.id === storageVolumeId)?.localDisk?.hostPath || '' : modelPath, storageVolumeId, modelServer: sharedRuntime, deploymentName, imageMode, image: runtimeImage, buildSourceUrl, storageVolume: storageVolumes.find((item) => item.id === storageVolumeId), cacheValidation, replicas: returningIntent?.workloads?.[0]?.replicas, tensorParallelSize: returningIntent?.workloads?.[0]?.tensor_parallel_size, maxModelLen: deployOnly ? returningIntent?.runtime?.max_model_len : undefined };
+    const sharedContext = { cluster: clusterLoading ? {} : cluster, clusterHardware, refreshClusterHardware, cachedRuntimeImages, model: sharedModel, modelSource, modelPath: modelSource === 'auto-cache' ? storageVolumes.find((item) => item.id === storageVolumeId)?.localDisk?.hostPath || '' : modelPath, storageVolumeId, modelServer: sharedRuntime, deploymentName, imageMode, image: runtimeImage, buildSourceUrl, storageVolume: storageVolumes.find((item) => item.id === storageVolumeId), cacheValidation, replicas: returningIntent?.workloads?.[0]?.replicas, tensorParallelSize: returningIntent?.workloads?.[0]?.tensor_parallel_size, maxModelLen: returningIntent?.runtime?.max_model_len };
     const compatibleSavedArtifacts = artifacts.filter((item) => matchesEvaluationSetup(item, sharedContext));
     const modelOptions = [...new Set([...MODELS.map((item) => item.repository), ...cachedModelIds])].filter(Boolean).sort();
     const recommendedBenchmark = benchmarkFor(provider);

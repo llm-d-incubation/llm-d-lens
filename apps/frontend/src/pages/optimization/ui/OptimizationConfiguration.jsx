@@ -240,7 +240,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [localImageMode, setImageMode] = useState(() => sharedContext?.imageMode || 'use-upstream-image');
     const imageMode = localImageMode;
     const [localImage, setImage] = useState(() => sharedContext?.image || DEFAULT_RUNTIME_IMAGE);
-    const image = localImage;
+    const image = localImage || sharedContext?.image || DEFAULT_RUNTIME_IMAGES[selection.accelerator] || DEFAULT_RUNTIME_IMAGE;
     const [localBuildSourceUrl, setBuildSourceUrl] = useState('');
     const buildSourceUrl = sharedContext?.buildSourceUrl ?? localBuildSourceUrl;
     const [planning, setPlanning] = useState(false);
@@ -697,7 +697,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
 
     const configurationInputErrors = validateConfigurationInputs({
         ...topologyInputs, modelServer: selection.modelServer, guideVariant, guideVariants, guideSettings, customRows,
-        runtime: { maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens },
+        runtime: { image, maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens },
         availableAccelerators: clusterHardware?.usableGpuCount ?? clusterHardware?.availableGpuCount,
     });
     if (embedded && onPublished && !singleConfiguration) {

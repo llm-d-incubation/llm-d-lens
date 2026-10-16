@@ -23,11 +23,16 @@ test('configuration editor renders after environment setup with auto-cache selec
             image: 'runtime:v1',
             storageVolumeId: 'test-volume',
             cacheValidation: { state: 'ready' },
+            replicas: 3,
+            tensorParallelSize: 2,
+            maxModelLen: 8192,
         },
     }));
 
     assert.match(html, /Qwen\/Qwen3-0.6B/);
     assert.match(html, /Test cluster/);
     assert.match(html, /Generate YAML/);
+    assert.match(html, /value="3"/);
+    assert.match(html, /value="2"/);
     assert.doesNotMatch(html, /Use AIC for PD|AIC P\/D recommendation|Apply P:D ratios/);
 });
