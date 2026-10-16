@@ -40,6 +40,14 @@ No cluster or cache available? [Add a cluster](/user-guide/clusters),
 [create cache storage](/user-guide/storage), and [download the model](/user-guide/model-cache).
 If the model is missing from the selected cache, download it there before returning.
 
+Open **Manage model cache** from a selected model to open **Download a model**
+directly in **Model cache**. The selected cluster, Hugging Face repository ID, and
+storage volume are prefilled and remain editable. After closing the dialog,
+use **Back to model** to return
+to the selected model with your deployment settings intact. Browser Back also
+preserves the selection. Storage choices and model download status refresh when
+you return.
+
 Change the runtime image only when you have an image compatible with the selected
 hardware. After changing the cluster or Guide source, check the variant selection
 again. A resource or network error during generation must be resolved before deployment.
