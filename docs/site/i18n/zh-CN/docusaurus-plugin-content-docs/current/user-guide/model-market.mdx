@@ -6,6 +6,10 @@ description: 选择模型，创建手动或 AI 辅助部署。
 打开 **Model Market（模型市场）**，选择模型并部署到集群。
 首次使用建议选择 **Manual（手动）**模式。
 
+使用分类上方的 **Search models（搜索模型）**，按模型名称、发布者、仓库、模型类型、分类或精度筛选。
+搜索不区分大小写，并与所选分类共同生效；输入多个词时，每个词都必须匹配。
+模型数量会随输入更新。点击 **Clear filters（清空筛选）**可同时重置搜索和分类。
+
 ## 选择部署模式
 
 | 模式 | 适用目标 |
@@ -22,7 +26,7 @@ description: 选择模型，创建手动或 AI 辅助部署。
 5. 在 **Basic settings（基本设置）**中检查 **Runtime image（运行镜像）**、**Replicas（副本数）**和 **TP（每副本使用的加速器数量）**。
 6. 在 **Guide template（方案模板）**中选择 **Guide** 和 **Accelerator（加速器）**。不确定如何选择时，参阅[选择评测方案](/evaluation/guides)。
 7. 使用 P/D 或分层缓存方案时，从列表中选择变体。首次运行先保留提供的默认配置。
-8. 点击 **Generate YAML（生成 YAML）**，选择资源预算，再点击 **Confirm & generate（确认并生成）**。
+8. 点击 **Generate YAML（生成 YAML）**。如果当前可用卡不足但物理卡总量足够，查看 Pending 提示后点击 **Continue & generate（继续并生成）**；如果物理卡总量也不足，请减少副本数 / TP。
 9. 检查 **Generated deployable configuration（生成的部署配置）**，修正标出的错误后点击 **Next（下一步）**。
 10. 在**部署**页等待 **Ready**；通过 **View Pods & Logs（查看 Pod 与日志）**检查启动过程。
 

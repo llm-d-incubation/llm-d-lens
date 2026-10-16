@@ -25,6 +25,16 @@ description: 向模型重放请求流量，检查延迟、吞吐量和错误。
 没有服务或令牌时，先[发布模型服务](/tutorials/publish-a-model-service)。
 首次运行保留 **Advanced backend settings（高级后端设置）**。
 
+选择 **Endpoint URL** 时，Lens 会通过端点的 `/v1/models` API 进行校验，并使用可选的模型访问令牌。
+校验未完成或失败时，无法继续或创建任务，即使手动输入模型名称也不能绕过校验。
+请修正 URL 或令牌，或在连接恢复后点击 **Retry endpoint validation（重试端点校验）**。
+后端会在保存或调度新任务、重跑任务之前再次校验。DNS、连接、超时、认证错误或无效的模型列表都会阻止创建。
+校验成功不保证端点在运行期间始终可用。
+
+以 `.svc.cluster.local` 结尾的地址使用 Kubernetes 集群 DNS，Lens 后端主机可能无法解析。
+对于已发布的集群服务，请选择 **Model Service**，使用集群内的压测执行路径。
+其他情况应提供 Lens 后端和压测运行环境均可访问的端点。
+
 ## 查看结果
 
 1. 打开任务卡片。

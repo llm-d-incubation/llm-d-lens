@@ -60,6 +60,14 @@ published translations under `docs/site/i18n/zh-CN/`.
 
 ## Keep the docs site in sync
 
+When updating published documentation, update every supported language version
+in the same change (currently English and Simplified Chinese, as configured in
+`docs/site/docusaurus.config.ts`). Keep corresponding pages, API examples and
+UI instructions consistent; do not leave translations for a later task. This
+applies to changes initiated in any language. Check the matching locale pages
+for omissions before finishing; internal English-only design documents do not
+require new translations.
+
 Update docs for changed public behavior: user guides for page behavior, and the
 matching module's REST/Python API tabs for changed endpoints or underlying public
 callables. Pages live under `docs/site/i18n/en/docusaurus-plugin-content-docs/current/`.

@@ -23,7 +23,7 @@ displayed_sidebar: docsSidebar
 2. 选择集群、模型和缓存存储。
 3. 在 **Guide template** 中选择 **Guide**、**Accelerator（加速器）**及可用变体。
 4. 设置副本数和张量并行度。第一次先保留高级参数。
-5. 点击 **Generate YAML**，选择资源预算，再点击 **Confirm & generate**。
+5. 点击 **Generate YAML**。如果当前可用卡不足，查看红色警告及物理卡总量。物理卡总量足够时，点击 **Continue & generate（继续并生成）**；部署可能保持 **Pending**，直到有足够的可用卡。否则，请减少副本数 / TP。
 6. 修正标出的错误，检查并保存配置。
 7. 回到评估任务，选中该配置并设置测试负载。
 

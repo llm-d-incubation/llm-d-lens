@@ -90,7 +90,7 @@ for backend in list_backends():
 
 ### 发现端点模型
 
-探测某个模型端点，发现它报告了哪些模型。
+探测某个模型端点，发现它报告了哪些模型。可选的 `api_key` 以 Bearer 令牌发送，不包含在响应中。连接失败、认证失败或无效模型列表返回 HTTP 400。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -98,6 +98,7 @@ for backend in list_backends():
 
     请求体：`ModelDiscoveryRequest`
     - `endpoint_url` (`string`，必填)
+    - `api_key`（`string`，可选，最多 4096 个字符；仅用于本次请求）
 
     ```json
     {
@@ -126,7 +127,7 @@ from llm_d_lens.simulation.endpoints import discover_models
 
 
 async def main() -> None:
-    models = await discover_models("http://127.0.0.1:38000/v1")
+    models = await discover_models("http://127.0.0.1:38000/v1", api_key="your-model-access-token")
     print(models["endpoint"], models["models"])
 
 
@@ -447,6 +448,11 @@ asyncio.run(main())
 </Tabs>
 
 ### 创建模拟任务
+
+对于 Endpoint URL 目标（`endpoint_mode != "deployment"`），服务在保存或调度任务之前，
+会使用提供的 `api_key` 检查 `/v1/models`。校验失败返回 HTTP 400；直接调用 Python
+接口时抛出 `SimulationConfigurationError`。手动填写模型名称不能绕过此检查。
+绑定部署的 Model Service 任务仍使用集群执行路径。
 
 创建一个模拟（Simulation）任务，对目标模型端点回放某个跟踪数据集。
 
@@ -880,6 +886,11 @@ asyncio.run(main())
 </Tabs>
 
 ### 重新运行模拟任务
+
+对于 Endpoint URL 目标（`endpoint_mode != "deployment"`），服务在保存或调度任务之前，
+会使用提供的 `api_key` 检查 `/v1/models`。校验失败返回 HTTP 400；直接调用 Python
+接口时抛出 `SimulationConfigurationError`。手动填写模型名称不能绕过此检查。
+绑定部署的 Model Service 任务仍使用集群执行路径。
 
 将之前的模拟任务重新排队运行，可选择将其重新绑定到新的端点或部署执行实例。
 
