@@ -23,6 +23,7 @@ from llm_d_lens.infrastructure.ssh import HostKeyInfo, RemoteResult, host_key_fi
 
 client = TestClient(app)
 _TEST_FINGERPRINT = "SHA256:" + "A" * 43
+_write_known_hosts = service._write_known_hosts
 
 
 def _pins_for(payloads):
@@ -144,7 +145,7 @@ def test_ansible_known_hosts_writer_rechecks_fingerprint(monkeypatch, tmp_path):
     )
     path = tmp_path / "known_hosts"
 
-    service._write_known_hosts([node], path)
+    _write_known_hosts([node], path)
 
     assert path.read_text() == "[node.example]:2222 ssh-ed25519 cHVibGljLWtleQ==\n"
     assert path.stat().st_mode & 0o777 == 0o600
@@ -154,7 +155,7 @@ def test_ansible_known_hosts_writer_rechecks_fingerprint(monkeypatch, tmp_path):
         lambda *_args: HostKeyInfo("ssh-ed25519", "SHA256:" + "B" * 43, "other-key"),
     )
     with pytest.raises(ValueError, match="host key changed"):
-        service._write_known_hosts([node], path)
+        _write_known_hosts([node], path)
 
 
 def test_preflight_endpoint_reports_per_check_breakdown(monkeypatch):

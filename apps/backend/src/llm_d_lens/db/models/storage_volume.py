@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, String, Text, func
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from llm_d_lens.db.base import ArrayVariant, Base, DeclarativeDtoMixin, UTCDateTime
@@ -88,7 +88,17 @@ class StorageVolumeRow(Base, DeclarativeDtoMixin):
     version_id: Mapped[int] = mapped_column(nullable=False, default=1)
 
     __mapper_args__ = {"version_id_col": version_id}
-    __table_args__ = (Index("uq_storage_volumes_name", "name", unique=True),)
+    # Storage names are a display label, not an identity: the volume's id is
+    # the primary key and every Kubernetes object it owns is named after that
+    # id (``prism-storage-<volume id>``, see storage/service.py), never after
+    # this column. Uniqueness is therefore scoped to the cluster the volume
+    # belongs to -- two clusters may each have an "a100-model-cache" -- and is
+    # case-insensitive so it matches the conflict check the API reports (see
+    # storage/router.py::create_volume) instead of letting "Cache" and "cache"
+    # coexist in one cluster.
+    __table_args__ = (
+        Index("uq_storage_volumes_cluster_id_name", "cluster_id", text("lower(name)"), unique=True),
+    )
 
     @classmethod
     def from_dto(cls, dto: StorageVolume, **extra_columns: object) -> StorageVolumeRow:

@@ -129,7 +129,7 @@ The UI is only the input and review surface for the workflow above. The entry po
 `src/components/ModelMarketPage.jsx` and
 `src/components/AgenticDeploymentWorkspace.jsx`:
 
-- Model Cache storage sits directly below Cluster in Model Market and is shared by Standard and
+- Model Cache storage sits directly below Cluster in Model Market and is shared by Manual and
   Agentic; users can enter Agentic mode first, and required-field validation runs only when
   generating a recommendation.
 - The Agentic workspace provides Use case, optional SLO/workload/preference inputs, plus
@@ -154,6 +154,9 @@ The UI is only the input and review surface for the workflow above. The entry po
    measurements plus persisted deployment topologies from completed Simulation runs of the same
    model;
 5. Freezes the cluster snapshot and evidence IDs, then passes them to the planner.
+
+AIC support/search resolves the system from registered hardware profile model patterns.
+Unknown, ambiguous, or mixed systems leave AIC evidence unavailable; they do not select a default GPU.
 
 Before freezing facts, a future step will generate versioned, uncertainty-aware
 `UseCasePerformanceEstimate` values (TTFT, TPOT, workload capacity) from the user's use case,

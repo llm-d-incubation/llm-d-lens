@@ -113,7 +113,7 @@ flowchart TD
 UI 只是上述工作流的输入与审阅界面。其入口分别是 `src/components/ModelMarketPage.jsx`
 和 `src/components/AgenticDeploymentWorkspace.jsx`：
 
-- 模型缓存存储紧跟在模型市场中的“集群”选项之下，Standard（标准）模式与 Agentic
+- 模型缓存存储紧跟在模型市场中的“集群”选项之下，Manual（手动）模式与 Agentic
   （智能体）模式共用该选项；用户可以先进入 Agentic 模式，必填字段的校验仅在
   生成推荐结果时才会执行。
 - Agentic 工作区提供使用场景（Use case）、可选的 SLO/工作负载/偏好输入，

@@ -150,6 +150,10 @@ class GatewayStatusCluster(StrictModel):
     gateway_namespace: str | None = Field(default=None, alias="gatewayNamespace")
     gateway_name: str | None = Field(default=None, alias="gatewayName")
     gateway_ready: bool | None = Field(default=None, alias="gatewayReady")
+    #: Whether the Gateway's data-plane Deployment has a ready replica. ``False``
+    #: while it is installed but scaled to zero (the "Stop" action), which the
+    #: Gateway resource's ``Programmed`` condition does not report.
+    gateway_running: bool | None = Field(default=None, alias="gatewayRunning")
     #: The Gateway's published address (node IP / LoadBalancer hostname), when assigned.
     gateway_address: str | None = Field(default=None, alias="gatewayAddress")
     #: Operator-set externally reachable URL (overrides the in-cluster address).
@@ -161,6 +165,11 @@ class GatewayStatusCluster(StrictModel):
     #: Inference Payload Processor (per Gateway) runtime state; ``missing`` when
     #: no IPP is deployed for the cluster's Gateway.
     ipp_state: GatewayRuntimeState = Field(default="unknown", alias="ippState")
+    #: Whether the IPP Deployment has a ready replica. ``False`` while it is
+    #: installed but scaled to zero (the "Stop IPP" action), so the UI can tell
+    #: a stopped processor apart from a running one -- ``ippState`` alone only
+    #: reports that the Deployment object exists.
+    ipp_ready: bool | None = Field(default=None, alias="ippReady")
     ipp_name: str | None = Field(default=None, alias="ippName")
     ipp_namespace: str | None = Field(default=None, alias="ippNamespace")
     last_operation: GatewayOperation | None = Field(default=None, alias="lastOperation")

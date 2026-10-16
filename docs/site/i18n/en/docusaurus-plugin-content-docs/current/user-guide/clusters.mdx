@@ -64,10 +64,26 @@ Bootstrap changes the target machines. Check their addresses and roles before st
 ## Edit a cluster
 
 1. Select the cluster, then click **Edit cluster**.
-2. Change its name, description, proxy or model-gateway settings.
+2. Change its name, description, proxy, **HF_TOKEN secret** or model-gateway settings.
 3. Click **Save changes** and check that the updated values appear.
 
 Component versions are supplied by the Lens release and are not editable here.
+
+### Rotate the HF_TOKEN secret
+
+**HF_TOKEN secret** holds the Hugging Face token this cluster uses to pull gated
+models. Lens stores only the Secret's namespace and name; the token value lives
+on the cluster and is never shown again.
+
+1. Leave **New token** empty to keep the current token. Type a token only when
+   you want to replace it.
+2. Change **Namespace** or **Secret name** only to point the cluster at a
+   different Secret; Lens creates that Secret when it does not exist yet.
+3. Click **Save changes**. The confirmation names the Secret that was written.
+
+Deployments and Model Cache downloads copy the token into their own namespace
+when they run, so workloads that are already running keep the previous token
+until you recreate them.
 
 <span id="model-gateway-prerequisites" />
 
@@ -86,8 +102,13 @@ repairing other providers belong to troubleshooting, not the normal registration
 
 1. Select a cluster in **Clusters**.
 2. Check **Workers**, **CPU**, **Memory**, **Deployable GPU**, **VRAM**, **Disk**, and **Monitoring**.
+   **Memory** and **Disk** lead with the capacity still free out of the cluster
+   total, and show the percentage already in use on the **Usage** line below.
+   A dash means the cluster cannot report that reading right now, not that
+   nothing is free.
 3. In **Deployments**, use **Copy endpoint** to copy an address, or **View Pods & Logs** to inspect a deployment.
 4. In a deployment's **Monitoring** menu, choose **Open Grafana**, **Open Prometheus**, or **Profiling**.
+   **Install** and **Enable** in that menu stay unavailable until the deployment is ready.
 
 For log filters and namespace deletion, follow [Manage deployments](/user-guide/deployments).
 
@@ -109,6 +130,8 @@ Plan any required workload shutdown or migration separately.
 1. Open the cluster's **Actions → Delete cluster**.
 2. Check the cluster name and the deletion warning.
 3. Click **Delete** and confirm the registration disappears from the list.
+
+Lens also cleans up what it created on the cluster. The cluster's `HF_TOKEN` secret is deleted, and its namespace goes with it when keeping the namespace would serve no purpose: Lens created the namespace, or the secret was the only thing in it. If the namespace still holds anything else, it is kept, and the cluster's built-in namespaces are never touched. For a cluster you are still registering, any storage volume created during the wizard is removed together with its PVC and PV, while model files on NFS or hostPath are kept. A fully registered cluster that still has storage volumes cannot be deleted until you delete those volumes first.
 
 ## Cannot see a cluster?
 

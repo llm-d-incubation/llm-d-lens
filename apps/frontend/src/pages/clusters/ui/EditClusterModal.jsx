@@ -33,6 +33,12 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
     const [gatewayPublicUrl, setGatewayPublicUrl] = useState('');
     const [gatewayAuthzHost, setGatewayAuthzHost] = useState('');
     const [inotifyMaxUserInstances, setInotifyMaxUserInstances] = useState('8192');
+    // Write-only HF_TOKEN rotation: the current token is never read back from
+    // the cluster, so an empty field means "leave the existing secret alone".
+    const [hfTokenNamespace, setHfTokenNamespace] = useState('');
+    const [hfTokenName, setHfTokenName] = useState('');
+    const [hfToken, setHfToken] = useState('');
+    const [hfTokenSaved, setHfTokenSaved] = useState(false);
     const [portError, setPortError] = useState('');
     const [lensHosts, setLensHosts] = useState([]);
     const [busy, setBusy] = useState(false);
@@ -57,6 +63,13 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
         setPortError('');
         setError('');
         setDownloadStatus(null);
+        // Prefill the coordinates the cluster already points at; fall back to
+        // the wizard's step-5 defaults so a cluster created before this field
+        // existed (or one whose secret was never created) can get one here.
+        setHfTokenNamespace(cluster.hfTokenSecret?.namespace || `llm-d-bench-storage-${cluster.id}`);
+        setHfTokenName(cluster.hfTokenSecret?.name || `hf-token-${crypto.randomUUID().slice(0, 8)}`);
+        setHfToken('');
+        setHfTokenSaved(false);
     }, [cluster]);
 
     useEffect(() => {
@@ -86,7 +99,10 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
     const trimmedName = name.trim();
     const proxyValid = proxyMode === 'auto' || Boolean(httpProxy.trim() || httpsProxy.trim() || noProxy.trim());
     const nameValid = Boolean(trimmedName);
-    const canSave = nameValid && proxyValid && !busy && !portError && (gatewayProvider === 'gke' || Boolean(gatewayAuthzHost));
+    // An empty token means "keep the current secret"; once one is typed the
+    // target coordinates have to be complete.
+    const hfTokenValid = !hfToken.trim() || Boolean(hfTokenNamespace.trim() && hfTokenName.trim());
+    const canSave = nameValid && proxyValid && hfTokenValid && !busy && !portError && (gatewayProvider === 'gke' || Boolean(gatewayAuthzHost));
 
     const submit = async () => {
         if (!canSave) return;
@@ -114,6 +130,22 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                 }),
             });
             let nextCluster = payload.cluster;
+            // Rotate the HF_TOKEN secret only when a new token was typed: the
+            // current value is write-only and is never read back, so an empty
+            // field must leave the existing secret untouched.
+            if (hfToken.trim()) {
+                const ref = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}/hf-token-secret`, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        namespace: hfTokenNamespace.trim(),
+                        name: hfTokenName.trim(),
+                        token: hfToken.trim(),
+                    }),
+                });
+                nextCluster = { ...nextCluster, hfTokenSecret: ref };
+                setHfToken('');
+                setHfTokenSaved(true);
+            }
             // Versions are profile-fixed; only fetch the sources when this
             // cluster has not downloaded them yet.
             if (!nextCluster.llmDRepoPath || !nextCluster.llmDBenchmarkRepoPath) {
@@ -177,8 +209,33 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                     )}
                 </div>
                 <div className="space-y-2">
-                    <Label htmlFor="edit-gateway-provider">Model gateway provider</Label>
-                    <Select id="edit-gateway-provider" value={gatewayProvider} onChange={(event) => setGatewayProvider(event.target.value)} disabled={busy}>
+                    <Label>HF_TOKEN secret</Label>
+                    <p className="text-xs text-slate-500">
+                        Hugging Face token this cluster uses to pull gated models. The stored value is never shown;
+                        leave the token empty to keep the current one. Deployments and Model Cache downloads copy it
+                        into their own namespace when they run, so workloads that are already running keep the
+                        previous token until they are recreated.
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1.5">
+                            <Label htmlFor="edit-hf-secret-namespace">Namespace</Label>
+                            <Input id="edit-hf-secret-namespace" value={hfTokenNamespace} onChange={(event) => setHfTokenNamespace(event.target.value)} placeholder="llm-d-bench-storage-<cluster id>" disabled={busy} />
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="edit-hf-secret-name">Secret name</Label>
+                            <Input id="edit-hf-secret-name" value={hfTokenName} onChange={(event) => setHfTokenName(event.target.value)} placeholder="hf-token-xxxxxxxx" disabled={busy} />
+                        </div>
+                        <div className="space-y-1.5 sm:col-span-2">
+                            <Label htmlFor="edit-hf-token">New token</Label>
+                            <Input id="edit-hf-token" type="password" autoComplete="new-password" value={hfToken} onChange={(event) => { setHfToken(event.target.value); setHfTokenSaved(false); }} placeholder={cluster.hfTokenSecret ? 'Leave empty to keep the current token' : 'hf_...'} disabled={busy} />
+                        </div>
+                    </div>
+                    {!hfTokenValid && <p role="alert" className="text-xs text-rose-300">A namespace and secret name are required to save a new token.</p>}
+                    {hfTokenSaved && <p className="text-xs text-emerald-300">Token updated in {hfTokenNamespace}/{hfTokenName}</p>}
+                    {!cluster.hfTokenSecret && !hfTokenSaved && <p className="text-xs text-amber-300">This cluster has no HF_TOKEN secret yet. Enter a token to create one.</p>}
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="edit-gateway-provider">Model gateway provider</Label>                    <Select id="edit-gateway-provider" value={gatewayProvider} onChange={(event) => setGatewayProvider(event.target.value)} disabled={busy}>
                         <option value="">Not set</option>
                         <option value="istio">Istio</option>
                         <option value="envoy-ai-gateway" disabled>Envoy AI Gateway (not supported yet)</option>

@@ -24,6 +24,7 @@ from llm_d_lens.cluster.models import (
     CreateClusterResponse,
     HfTokenSecretCreateRequest,
     HfTokenSecretRef,
+    HfTokenSecretUpdateRequest,
     ImagePrepullRequest,
     KubernetesSummary,
     NodeMaintenanceRequest,
@@ -147,6 +148,11 @@ def _record(cluster: registry.Cluster, *, ready: bool = False) -> ClusterRecord:
         routerVersion=cluster.router_version,
         gieVersion=cluster.gie_version,
         ippVersion=cluster.ipp_version,
+        hfTokenSecret=(
+            HfTokenSecretRef(namespace=cluster.hf_token_secret_namespace, name=cluster.hf_token_secret_name)
+            if cluster.hf_token_secret_namespace and cluster.hf_token_secret_name
+            else None
+        ),
         draft=cluster.draft,
         deploymentSource=source,
         benchmarkSource=benchmark_source,
@@ -508,6 +514,35 @@ async def create_hf_token_secret(cluster_id: str, payload: HfTokenSecretCreateRe
     cluster = registry.require_cluster(cluster_id)
     try:
         ref = await service.create_hf_token_secret(cluster, payload.namespace, payload.name, payload.token)
+    except ClusterOverviewError:
+        raise
+    except FileNotFoundError as error:
+        raise ClusterOverviewError(str(error), status_code=503, code="kubectl_unavailable") from error
+    except TimeoutError as error:
+        raise ClusterOverviewError(str(error), status_code=504, code="kubectl_timeout") from error
+    return HfTokenSecretRef(**ref)
+
+
+@router.put(
+    "/clusters/{cluster_id}/hf-token-secret",
+    response_model=HfTokenSecretRef,
+    summary="Rotate the HF_TOKEN Kubernetes Secret of a Lens-managed cluster.",
+    description=(
+        "Rotate the HF_TOKEN Kubernetes Secret of a Lens-managed cluster. Use this from the Edit cluster drawer "
+        "when the Hugging Face token changed. Omit namespace and name to rewrite the Secret the cluster already "
+        "references; supply them to point the cluster at a different Secret, which is created when absent. "
+        "Namespace-local copies that Deploy and Model Cache derive are refreshed on the next deployment or "
+        "download, so already-running workloads keep the previous token until they are recreated."
+    ),
+    operation_id="update_cluster_hf_token_secret",
+)
+async def update_hf_token_secret(cluster_id: str, payload: HfTokenSecretUpdateRequest) -> HfTokenSecretRef:
+    """Rotate the cluster-level HF_TOKEN Secret (Edit cluster drawer)."""
+    cluster = registry.require_cluster(cluster_id)
+    try:
+        ref = await service.update_hf_token_secret(
+            cluster, payload.token, namespace=payload.namespace, name=payload.name
+        )
     except ClusterOverviewError:
         raise
     except FileNotFoundError as error:

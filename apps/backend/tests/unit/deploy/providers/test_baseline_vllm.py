@@ -5,7 +5,10 @@ import asyncio
 import pytest
 
 from llm_d_lens.deploy.providers.baseline_vllm import BaselineVllmAdapter
+from llm_d_lens.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
 from llm_d_lens.deploy.providers.hardware_profile import cluster_accelerator
+from llm_d_lens.deploy.providers.storage_mount import require_cached_model
+from tests.unit.deploy.providers.test_storage_mount import cached_model as cached_model
 
 
 def _base_overrides():
@@ -71,19 +74,31 @@ def test_auto_cache_serving_pod_runs_huggingface_offline():
     assert environment["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_writable_unverified_cache_can_download_missing_snapshot():
+def test_writable_unverified_cache_cannot_download_missing_snapshot():
     overrides = _base_overrides()
     overrides["runtime"].update({"modelSource": "auto-cache", "mountPath": "/shared/hf", "cacheOffline": False})
     environment = _environment(_container(overrides))
     assert environment["HF_HOME"] == "/model-cache"
-    assert "HF_HUB_OFFLINE" not in environment
-    assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_huggingface_source_serving_pod_stays_online():
+def test_huggingface_source_serving_pod_stays_offline():
     environment = _environment(_container(_base_overrides()))
-    assert "HF_HUB_OFFLINE" not in environment
-    assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
+
+
+def test_offline_environment_cannot_be_overridden():
+    overrides = _base_overrides()
+    overrides["runtime"]["environment"] = {"HF_HUB_OFFLINE": "0"}
+    overrides["customParameters"] = [
+        {"kind": "environment", "name": "TRANSFORMERS_OFFLINE", "value": "0", "target": "both"}
+    ]
+    container = _container(overrides)
+    assert _environment(container)["HF_HUB_OFFLINE"] == "1"
+    assert _environment(container)["TRANSFORMERS_OFFLINE"] == "1"
+    assert len([item for item in container["env"] if item["name"] == "HF_HUB_OFFLINE"]) == 1
 
 
 def test_shared_path_mount_serves_the_local_directory_offline():
@@ -94,3 +109,28 @@ def test_shared_path_mount_serves_the_local_directory_offline():
     assert environment["TRANSFORMERS_OFFLINE"] == "1"
     # The model is served from the mounted directory, not resolved through HF_HOME.
     assert "HF_HOME" not in environment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["main", "v2"])
+async def test_preflight_matches_real_baseline_render(monkeypatch, tmp_path, cached_model, revision):
+    from unittest.mock import AsyncMock
+
+    cached_model[0].list.return_value[0].source.huggingface.revision = revision
+    overrides = _base_overrides()
+    overrides["model"]["name"] = "org/model"
+    overrides["runtime"]["storageVolumeId"] = "volume"
+    overrides["customParameters"] = [
+        {"kind": "argument", "name": "revision", "value": "ignored", "target": "prefill"},
+        {"kind": "argument", "name": "revision", "value": revision, "target": "decode"},
+    ]
+    await require_cached_model(overrides, cluster_id="cluster", provider_id="baseline-vllm")
+    monkeypatch.setattr("llm_d_lens.deploy.providers.baseline_vllm.resolve_mount", AsyncMock(return_value=None))
+    delegate = BaselineVllmAdapter(None, "llmd-", 900, None, accelerator="intel-xpu")
+    delegate._root = tmp_path
+    adapter = ConfigurationManifestAdapter(delegate, None, "llmd-", 900, output_root=tmp_path)
+    artifact = await adapter.render(delegate.discover(), overrides)
+    assert artifact.manifest_ref
+    overrides["customParameters"][1]["value"] = "unexpected"
+    with pytest.raises(ValueError, match="does not match Model Cache preflight"):
+        await adapter.render(delegate.discover(), overrides)

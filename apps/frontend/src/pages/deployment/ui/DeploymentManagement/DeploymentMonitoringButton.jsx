@@ -6,6 +6,7 @@ import {
     getDeploymentMonitoring,
     manageDeploymentMonitoring,
 } from '../../../clusters';
+import { isDeploymentReady } from './deploymentPresentation';
 
 const CENTRAL_NAMESPACE = 'llm-d-monitoring';
 const GRAFANA_PERFORMANCE_DASHBOARD = '/d/llm-d-performance/llm-d-performance-dashboard';
@@ -112,7 +113,12 @@ export function DeploymentMonitoringButton({ deployment, onNavigate }) {
     };
 
     const busy = actionBusy || Boolean(openingLink);
-    const installEnabled = status !== 'enabled';
+    // Installing or enabling monitoring points a ServiceMonitor at this
+    // deployment's Pods; before the rollout is Ready there is nothing to
+    // scrape, so both actions are held back instead of activating a scrape
+    // target that cannot report.
+    const deploymentReady = isDeploymentReady(deployment.status);
+    const installEnabled = status !== 'enabled' && deploymentReady;
 
     const openProfiling = () => {
         setOpen(false);
@@ -193,10 +199,15 @@ export function DeploymentMonitoringButton({ deployment, onNavigate }) {
                             <>
                                 <MenuItem
                                     onClick={() => { setOpen(false); runAction('enable'); }}
-                                    disabled={busy}
+                                    disabled={!deploymentReady || busy}
                                     icon={<Play size={14} className="shrink-0 text-emerald-400" />}
                                     label="Enable"
                                 />
+                                {!deploymentReady && (
+                                    <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
+                                        Available once the deployment is ready.
+                                    </p>
+                                )}
                                 <div className="h-px bg-slate-700/70" />
                                 <MenuItem
                                     onClick={() => { setOpen(false); runAction('uninstall'); }}
@@ -208,12 +219,19 @@ export function DeploymentMonitoringButton({ deployment, onNavigate }) {
                             </>
                         )}
                         {!loadingStatus && !error && status !== 'enabled' && status !== 'disabled' && (
-                            <MenuItem
-                                onClick={() => { setOpen(false); runAction('install'); }}
-                                disabled={!installEnabled || busy}
-                                icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
-                                label="Install"
-                            />
+                            <>
+                                <MenuItem
+                                    onClick={() => { setOpen(false); runAction('install'); }}
+                                    disabled={!installEnabled || busy}
+                                    icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
+                                    label="Install"
+                                />
+                                {!deploymentReady && (
+                                    <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
+                                        Available once the deployment is ready.
+                                    </p>
+                                )}
+                            </>
                         )}
                     </div>
                 </>,

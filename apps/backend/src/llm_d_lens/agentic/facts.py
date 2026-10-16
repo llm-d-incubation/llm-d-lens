@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +16,7 @@ from llm_d_lens.capacity import load_model_config
 from llm_d_lens.cluster import registry
 from llm_d_lens.cluster.service import build_overview
 from llm_d_lens.deploy.application import deployment_run_manager
+from llm_d_lens.hardware.registry import all_profiles
 from llm_d_lens.simulation.service import list_tasks
 
 from .benchmark_evidence import (
@@ -90,7 +92,7 @@ async def resolve_planning_facts(
     )
     evidence = [cluster_evidence]
     if include_supplementary_evidence:
-        evidence.extend(await _supplementary_evidence(model_name, requested, selected_gpu_count))
+        evidence.extend(await _supplementary_evidence(model_name, requested, selected_gpu_count, hardware))
 
     model_config_dict = requested.model_config_dict
     if model_config_dict is None and model_name:
@@ -215,10 +217,25 @@ async def _supplementary_evidence(
     model_name: str,
     facts: PlanningFacts,
     gpu_count: int,
+    hardware: dict[str, Any],
 ) -> list[PlanningEvidence]:
     evidence: list[PlanningEvidence] = []
     try:
+        profiles = {profile.id: profile for profile in all_profiles()}
+        systems = []
+        for accelerator in hardware.get("accelerators", []):
+            profile = profiles.get(accelerator.get("id"))
+            for model in accelerator.get("models") or [""]:
+                matches = {
+                    row["system"]
+                    for row in (profile.planning.aic_system_models if profile else ())
+                    if row.get("pattern") and re.search(row["pattern"], model, re.IGNORECASE)
+                }
+                systems.append(next(iter(matches)) if len(matches) == 1 else None)
+        if not systems or None in systems or len(set(systems)) != 1:
+            raise ValueError("Cluster hardware does not identify a single supported AIC system")
         request = AICRequest(
+            aic_system_name=systems[0],
             model_name=model_name,
             gpu_count=max(gpu_count, 1),
             mean_input_tokens=int(facts.workload_profile.mean_input_tokens)

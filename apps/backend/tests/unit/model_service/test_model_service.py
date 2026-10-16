@@ -563,3 +563,61 @@ def test_authorize_is_scoped_to_the_request_cluster(monkeypatch):
 
     with pytest.raises(ModelServiceNotFoundError):
         service.authorize_request(AuthorizeRequest(token=raw, model="scoped"), cluster_id="cluster-b")
+
+
+def test_gateway_status_reports_components_stopped_when_scaled_to_zero(monkeypatch):
+    """A stopped IPP must not look like a running one.
+
+    "Stop IPP" scales the `lens-ipp` Deployment to zero replicas, so the
+    Deployment object still exists and `ippState` stays `installed`. Only
+    `ippReady` distinguishes the two, so the topology can show a stopped
+    processor instead of a green "running" dot.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.model_service import gateway_ops as ops_module
+
+    ops = ops_module.GatewayOpsService()
+    cluster = SimpleNamespace(
+        id="cluster-1",
+        name="cluster one",
+        gateway_provider="istio",
+        gateway_namespace="lens-gateway",
+        gateway_name="lens-gateway",
+        gateway_public_url=None,
+        gateway_port=None,
+    )
+    monkeypatch.setattr(cluster_registry, "list_clusters", lambda: [cluster])
+    monkeypatch.setattr(ops_module, "get_cluster", lambda _id: cluster)
+    monkeypatch.setattr(ops.members, "list_all", lambda: [])
+    monkeypatch.setattr(ops.groups, "list", lambda: [])
+    monkeypatch.setattr(ops.operations, "latest_for_kind", lambda *args, **kwargs: None)
+
+    async def gateway_state(*_args, **_kwargs):
+        return "installed", True
+
+    async def gateway_address(*_args, **_kwargs):
+        return "http://gateway"
+
+    async def deployment_state(_cluster_id, _namespace, _name):
+        return "installed", False
+
+    async def gateway_deployment(_cluster_id, namespace, name, _provider):
+        return namespace, f"{name}-istio"
+
+    monkeypatch.setattr(ops, "_gateway_state", gateway_state)
+    monkeypatch.setattr(ops, "_gateway_address", gateway_address)
+    monkeypatch.setattr(ops, "_deployment_state", deployment_state)
+    monkeypatch.setattr(ops, "_gateway_deployment", gateway_deployment)
+
+    payload = asyncio.run(ops.status()).api_payload()
+    entry = payload["clusters"][0]
+    assert entry["ippState"] == "installed"
+    assert entry["ippReady"] is False
+    # The Gateway resource is still Programmed, but its data-plane Deployment
+    # has no ready replica, so the topology must show it as stopped.
+    assert entry["gatewayState"] == "installed"
+    assert entry["gatewayReady"] is True
+    assert entry["gatewayRunning"] is False

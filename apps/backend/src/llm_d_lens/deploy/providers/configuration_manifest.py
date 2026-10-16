@@ -131,6 +131,15 @@ class ConfigurationManifestAdapter:
                 deployment_contract=deployment_contract,
             )
 
+        if "_model_cache_dependencies" in overrides:
+            from llm_d_lens.deploy.providers.storage_mount import validate_cached_model_arguments
+
+            manifest_path = Path(artifact.manifest_ref or "")
+            if manifest_path.is_dir():
+                manifest_path = manifest_path / "manifest.yaml"
+            if not manifest_path.is_file():
+                raise ValueError("Model Cache preflight requires a rendered manifest file")
+            validate_cached_model_arguments(overrides, manifest_path.read_text(encoding="utf-8"))
         artifact = instrument_manifest(artifact, self._output_root)
         placement = overrides.get("_placement")
         if placement is not None and not artifact.deployment_contract.get("placementApplied"):

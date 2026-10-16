@@ -109,6 +109,58 @@ async def test_create_entry_returns_501_for_model_catalog(service, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_entry_returns_409_when_the_volume_already_holds_the_model(service, monkeypatch):
+    import json
+
+    from llm_d_lens.model_cache.service import ModelCacheEntryExistsError
+
+    existing = _entry(storageVolumeId="vol-1")
+
+    async def fake_request_download(request):
+        raise ModelCacheEntryExistsError(existing)
+
+    monkeypatch.setattr(service, "request_download", fake_request_download)
+
+    request = ModelCacheCreateRequest(
+        clusterId="cluster-1",
+        storageVolumeId="vol-1",
+        source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId="org/model")),
+    )
+    response = await model_cache_router.create_entry(request)
+    assert response.status_code == 409
+    body = json.loads(response.body)
+    assert body["code"] == "model_cache_entry_exists"
+    assert body["entryId"] == existing.id
+    assert body["entryStatus"] == "pending"
+    assert body["model"] == "org/model@main"
+    assert body["storageVolumeId"] == "vol-1"
+
+
+@pytest.mark.asyncio
+async def test_create_entry_forwards_the_force_flag(service, monkeypatch):
+    seen = {}
+
+    async def fake_request_download(request):
+        seen["force"] = request.force
+        return _entry(storageVolumeId=request.storage_volume_id)
+
+    async def fake_provision(entry_id):
+        return None
+
+    monkeypatch.setattr(service, "provision", fake_provision)
+    monkeypatch.setattr(service, "request_download", fake_request_download)
+
+    request = ModelCacheCreateRequest(
+        clusterId="cluster-1",
+        storageVolumeId="vol-1",
+        source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId="org/model")),
+        force=True,
+    )
+    await model_cache_router.create_entry(request)
+    assert seen["force"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_entry_returns_409_for_not_ready_volume(service, monkeypatch):
     async def fake_request_download(request):
         raise ValueError("storage volume vol-1 is not ready (status=pending)")

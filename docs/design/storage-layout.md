@@ -149,7 +149,7 @@ Root directories prefer `LENS_*`; when unset, XDG rules and the defaults above a
 | Resource | Path | Usage |
 | --- | --- | --- |
 | llm-d source used for development startup | `CACHE/llm-d/` | Default location for `scripts/lens-local.sh`; `LLM_D_ROOT` can specify an existing directory, and if absent a prompt is shown to prepare the source |
-| Repository download feature | `CACHE/repos/<repo>/<processed-version-name>/` | Cache llm-d and llm-d-benchmark by repository and version |
+| Repository download feature | `CACHE/repos/<repo>/<url-hash>/<commit>/` | Cache llm-d and llm-d-benchmark by source URL and resolved commit |
 | Guide planning cache | `CACHE/guide-planning/` | Save manifests and rendered results used for planning |
 | Remote deployment source | Remote host `CACHE/deploy-repos/<org>/<repo>/` | A GitHub URL triggers cloning; if an existing path is specified, use that path |
 | Kubespray | `CACHE/kubespray/` | Cluster-installation tool cache |

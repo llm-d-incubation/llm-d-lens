@@ -78,3 +78,19 @@ def test_delete_is_idempotent(tmp_path):
     store.delete(volume.id)
     assert store.get(volume.id) is None
     store.delete(volume.id)
+
+
+def test_same_name_is_allowed_on_a_different_cluster(tmp_path):
+    """uq_storage_volumes_cluster_id_name scopes the name to its cluster."""
+    store = StorageVolumeStore(tmp_path)
+    first = store.create(_volume(clusterId="cluster-1", name="qwen-cache"))
+    second = store.create(_volume(clusterId="cluster-2", name="qwen-cache"))
+    assert {volume.id for volume in store.list()} == {first.id, second.id}
+
+
+def test_same_name_is_rejected_within_one_cluster_regardless_of_case(tmp_path):
+    """The index is on lower(name), matching the 409 the API reports."""
+    store = StorageVolumeStore(tmp_path)
+    store.create(_volume(clusterId="cluster-1", name="qwen-cache"))
+    with pytest.raises(StorageVolumeStoreError):
+        store.create(_volume(clusterId="cluster-1", name="Qwen-Cache"))

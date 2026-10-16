@@ -30,6 +30,17 @@ class ProxyConfigDTO(StrictModel):
     no_proxy: str | None = Field(default=None, alias="noProxy")
 
 
+class HfTokenSecretRef(StrictModel):
+    """Coordinates of a cluster's HF_TOKEN Secret.
+
+    Only the location is exposed; the token value stays on the target cluster
+    and is never returned by the API.
+    """
+
+    namespace: str
+    name: str
+
+
 class ClusterRecord(StrictModel):
     id: str
     name: str
@@ -53,6 +64,7 @@ class ClusterRecord(StrictModel):
     router_version: str | None = Field(default=None, alias="routerVersion")
     gie_version: str | None = Field(default=None, alias="gieVersion")
     ipp_version: str | None = Field(default=None, alias="ippVersion")
+    hf_token_secret: HfTokenSecretRef | None = Field(default=None, alias="hfTokenSecret")
     draft: bool = False
 
 
@@ -99,9 +111,17 @@ class HfTokenSecretCreateRequest(StrictModel):
     token: str = Field(min_length=1)
 
 
-class HfTokenSecretRef(StrictModel):
-    namespace: str
-    name: str
+class HfTokenSecretUpdateRequest(StrictModel):
+    """``PUT /api/cluster/clusters/{id}/hf-token-secret`` payload (Edit cluster).
+
+    Rotates the token stored in the cluster's existing HF_TOKEN Secret. Omit
+    ``namespace``/``name`` to rewrite the Secret the cluster already points at
+    (``hfTokenSecret``); supply them to point the cluster at a different Secret,
+    which is created when it does not exist yet."""
+
+    namespace: str | None = Field(default=None, max_length=253)
+    name: str | None = Field(default=None, max_length=253)
+    token: str = Field(min_length=1)
 
 
 class SoftwareDownloadRequest(StrictModel):
@@ -230,6 +250,10 @@ class ClusterHardwareSummary(StrictModel):
     cpu_usage_percent: float | None = Field(default=None, alias="cpuUsagePercent")
     memory_bytes: int = Field(default=0, alias="memoryBytes")
     memory_usage_percent: float | None = Field(default=None, alias="memoryUsagePercent")
+    # Free capacity, so the UI can lead with what is left rather than what is
+    # taken. ``None`` means the usage reading the figure derives from is
+    # unavailable, not that nothing is free.
+    memory_available_bytes: int | None = Field(default=None, alias="memoryAvailableBytes")
     gpu_nodes: int = Field(default=0, alias="gpuNodes")
     gpu_count: int = Field(default=0, alias="gpuCount")
     total_gpu_count: int = Field(default=0, alias="totalGpuCount")
@@ -241,6 +265,8 @@ class ClusterHardwareSummary(StrictModel):
     vram_bytes: int = Field(default=0, alias="vramBytes")
     vram_usage_percent: float | None = Field(default=None, alias="vramUsagePercent")
     disk_bytes: int = Field(default=0, alias="diskBytes")
+    disk_used_bytes: int | None = Field(default=None, alias="diskUsedBytes")
+    disk_available_bytes: int | None = Field(default=None, alias="diskAvailableBytes")
     disk_usage_percent: float | None = Field(default=None, alias="diskUsagePercent")
     allocated_gpu_count: int = Field(default=0, alias="allocatedGpuCount")
     available_gpu_count: int = Field(default=0, alias="availableGpuCount")

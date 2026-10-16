@@ -5,7 +5,7 @@ description: Use when adding, changing or deleting authenticated routes, permiss
 
 # Auth (authentication & authorization)
 
-Follow [workflow](../workflow/SKILL.md) for discovery, registration and
+Follow [AGENTS.md](../../../AGENTS.md) for discovery, verification and
 unresolved decisions. The authoritative design is
 [`docs/design/auth-rbac-design.md`](../../../docs/design/auth-rbac-design.md);
 decisions are numbered there (D1–D26) and the implementation status is in §21/§22.
@@ -90,7 +90,6 @@ A new shareable/owned resource needs, in the same task:
 7. **Purge shares on delete**: call `AuthService.revoke_resource_shares(...)` for
    the removed ids (executions/runs) so a stale share cannot outlive the resource
    or hit a reused id. Cluster deletion already cascades via `scope_cluster_id`.
-8. Register reusable capability in `.reuse/catalog.json` and run `reuse:check`.
 
 ## Self-scoped and creator-only rules (do not regress)
 
@@ -165,8 +164,8 @@ Pause and get explicit approval (and record it as a new `D<n>` in the design doc
 
 ## Verify
 
-- `make test-python` (auth + owning domain) and `make test-js`; `npm run type-check`.
-- `npm run reuse:check -- --base <task-start-commit>`; update `.reuse/catalog.json`
-  and regenerate `.reuse/map.md` when you add/extract a capability.
+- Run auth and affected owning-domain tests directly. Run affected JavaScript
+  tests and type checks when their contracts change. Shared permission or session
+  changes require broader caller coverage; catalog scans do not replace tests.
 - Restart the backend (`scripts/lens-local.sh restart`) before manual verification:
   middleware, route registry and Node env changes are not hot-reloaded.

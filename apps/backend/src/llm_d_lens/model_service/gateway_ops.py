@@ -1770,7 +1770,17 @@ class GatewayOpsService:
                 if cluster is not None and getattr(cluster, "gateway_port", None)
                 else None
             )
-            ipp_state, _ = await self._deployment_state(cluster_id, namespace, DEFAULT_IPP_NAME)
+            ipp_state, ipp_ready = await self._deployment_state(cluster_id, namespace, DEFAULT_IPP_NAME)
+            # "Stop" scales the Gateway's data-plane Deployment to zero without
+            # removing the Gateway, so neither `state` nor the `Programmed`
+            # condition changes. Read the Deployment to tell stopped from running.
+            gateway_running: bool | None = None
+            if state == "installed":
+                target = await self._gateway_deployment(
+                    cluster_id, namespace, name, provider or DEFAULT_PROVIDER
+                )
+                if target is not None:
+                    _, gateway_running = await self._deployment_state(cluster_id, target[0], target[1])
             last = self.operations.latest_for_kind("reconcile-gateway", cluster_id=cluster_id)
             clusters.append(
                 GatewayStatusCluster(
@@ -1782,11 +1792,13 @@ class GatewayOpsService:
                     gateway_namespace=namespace,
                     gateway_name=name,
                     gateway_ready=ready,
+                    gateway_running=gateway_running,
                     gateway_address=address,
                     gateway_public_url=(getattr(cluster, "gateway_public_url", None) if cluster else None),
                     gateway_port=(getattr(cluster, "gateway_port", None) if cluster else None),
                     gateway_node_address=node_address,
                     ipp_state=ipp_state,
+                    ipp_ready=ipp_ready,
                     ipp_name=DEFAULT_IPP_NAME,
                     ipp_namespace=namespace,
                     last_operation=last,

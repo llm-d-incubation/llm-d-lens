@@ -226,7 +226,7 @@ import TabItem from '@theme/TabItem';
     请求体（`StorageVolumeCreateRequest`）：
 
     - `clusterId`（`string`）：所属集群 id。
-    - `name`（`string`）：卷名称；留空则由路由自动生成。如果（自动生成的或指定的）名称与现有卷冲突，对于显式指定的名称路由会返回 `409` `storage_volume_name_conflict` 问题，对于自动生成的名称则会通过添加数字后缀来消除歧义。
+    - `name`（`string`）：卷名称；留空则由路由自动生成。名称只需在**同一集群内**唯一，且比较时不区分大小写：两个集群可以各有一个 `a100-model-cache`，而在同一集群内 `Cache` 和 `cache` 视为冲突。发生冲突时，对于显式指定的名称路由会返回 `409` `storage_volume_name_conflict` 问题，对于自动生成的名称则会通过添加数字后缀来消除歧义。名称仅用于展示：卷的身份是其 `id`，其 PVC/PV 名称为 `prism-storage-{id}`。
     - `kind`（`"local-disk" | "nfs" | "dynamic-pvc"`）
     - `capacity`（`string`）：Kubernetes 数量格式，例如 `500Gi`。
     - `readOnly`（`boolean`，默认 `true`）

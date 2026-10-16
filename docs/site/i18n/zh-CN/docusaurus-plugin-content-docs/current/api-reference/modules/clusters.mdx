@@ -24,6 +24,8 @@ import TabItem from '@theme/TabItem';
 
     响应：`ClustersResponse`，每个可见集群对应一个 `ClusterRecord`。
 
+`hfTokenSecret` 返回该集群 HF_TOKEN Secret 的命名空间和名称；集群没有该 Secret 时为 `null`。接口只返回位置信息，令牌值保存在目标集群上，不会由 API 返回。
+
     ```json
     {
       "items": [
@@ -43,6 +45,10 @@ import TabItem from '@theme/TabItem';
           "llmDBenchmarkRef": "main",
           "llmDRepoPath": "/cache/llm-d/v0.3.0",
           "llmDBenchmarkRepoPath": "/cache/llm-d-benchmark/main",
+          "hfTokenSecret": {
+            "namespace": "llm-d-bench-storage-44395349",
+            "name": "hf-token-c758ced0"
+          },
           "draft": false
         }
       ]
@@ -309,6 +315,112 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
   </TabItem>
 </Tabs>
 
+### 创建集群 HF_TOKEN secret
+
+在目标集群上创建保存 Hugging Face 令牌的独立 Kubernetes Secret，并把它的坐标记录到 Lens 集群记录上，供部署和模型缓存下载默认使用。这是创建集群向导的模型缓存步骤。令牌值只写入集群；Lens 只保存命名空间和名称。Secret 已存在时返回 `409 secret_already_exists`，此时请使用下面的轮换接口替换令牌。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/cluster/clusters/{cluster_id}/hf-token-secrets`**
+
+    请求体（`HfTokenSecretCreateRequest`）：
+
+    - `namespace`（`string`，必填）：创建 Secret 的命名空间；不存在时自动创建。
+    - `name`（`string`，必填）：Secret 名称。
+    - `token`（`string`，必填）：保存在 `HF_TOKEN` 键下的 Hugging Face 令牌。
+
+    ```json
+    {
+      "namespace": "llm-d-bench-storage-44395349",
+      "name": "hf-token-c758ced0",
+      "token": "hf_exampleTokenValue"
+    }
+    ```
+
+    响应：`HfTokenSecretRef`。
+
+    ```json
+    {
+      "namespace": "llm-d-bench-storage-44395349",
+      "name": "hf-token-c758ced0"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_lens.cluster import registry, service
+
+    cluster = registry.get_cluster("cluster-a")
+    ref = asyncio.run(
+        service.create_hf_token_secret(
+            cluster,
+            "llm-d-bench-storage-44395349",
+            "hf-token-c758ced0",
+            "hf_exampleTokenValue",
+        )
+    )
+    print(ref["namespace"], ref["name"])
+    ```
+  </TabItem>
+</Tabs>
+
+### 轮换集群 HF_TOKEN secret
+
+在编辑集群面板中替换集群 `HF_TOKEN` Secret 中保存的 Hugging Face 令牌。与创建接口不同，这里使用 apply，因此已存在的 Secret 会被覆盖而不是报错。`namespace` 和 `name` 默认使用集群上已记录的坐标（`hfTokenSecret`），所以轮换令牌只需提供令牌；提供不同坐标会把集群指向该 Secret，并在其不存在时创建它。
+
+轮换只重写这个集群级 Secret。部署和模型缓存下载在运行时派生的命名空间内 `llm-d-hf-token` 副本会在下一次部署或下载时重新派生，因此已在运行的工作负载在重建之前仍使用旧令牌。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PUT /api/cluster/clusters/{cluster_id}/hf-token-secret`**
+
+    请求体（`HfTokenSecretUpdateRequest`）：
+
+    - `namespace`（`string`，可选）：默认使用集群已记录的 Secret 命名空间。
+    - `name`（`string`，可选）：默认使用集群已记录的 Secret 名称。
+    - `token`（`string`，必填）：新的 Hugging Face 令牌；空值返回 `422 invalid_secret_token`。
+
+    ```json
+    {
+      "token": "hf_rotatedTokenValue"
+    }
+    ```
+
+    响应：`HfTokenSecretRef`，返回实际写入的坐标。
+
+    ```json
+    {
+      "namespace": "llm-d-bench-storage-44395349",
+      "name": "hf-token-c758ced0"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_lens.cluster import registry, service
+
+    cluster = registry.get_cluster("cluster-a")
+    # 使用集群上已记录的坐标原地轮换。
+    ref = asyncio.run(service.update_hf_token_secret(cluster, "hf_rotatedTokenValue"))
+    print(ref["namespace"], ref["name"])
+
+    # 也可以把集群指向另一个 Secret。
+    ref = asyncio.run(
+        service.update_hf_token_secret(
+            cluster,
+            "hf_rotatedTokenValue",
+            namespace="llm-d-bench-storage-44395349",
+            name="hf-token-rotated",
+        )
+    )
+    ```
+  </TabItem>
+</Tabs>
+
 ### 启动集群软件下载
 
 为集群下载由 Lens 技术栈配置文件固定的 `llm-d` 和 `llm-d-benchmark` 版本。处理函数会调度后台下载任务并立即返回当前状态快照；请求体会被忽略。
@@ -569,6 +681,13 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
 
 删除由 Lens 管理的集群记录，并清理相关状态。仅当需要将集群从 Lens 中彻底移除时才应使用此操作。
 
+该接口会执行以下远端清理：
+
+- 删除 `hfTokenSecret` 中记录的集群 `HF_TOKEN` Secret；当其所在命名空间没有理由在集群之后继续存在时，该命名空间也会一并删除。以下情况属于此类：Lens 自有的 `llm-d-bench-storage-{cluster_id}` 命名空间、Lens 为该 Secret 创建的任何命名空间（带有 `app.kubernetes.io/managed-by: llm-d-lens` 标签），以及删除该 Secret 后仅剩 Kubernetes 和集群插件注入到每个命名空间中的对象（`default` 服务账号及其令牌 Secret、`kube-root-ca.crt` 等 CA 证书包 ConfigMap）的命名空间。仍包含任何其他对象（包括自定义资源）的命名空间会被保留；`default`、`kube-system`、`kube-public` 和 `kube-node-lease` 永远不会被删除。如果无法列出命名空间内容，则保留该命名空间。
+- 对于草稿集群，仍挂在其上的每个存储卷都会连同其 `PersistentVolumeClaim` 和 `PersistentVolume` 对象一起删除。底层 NFS 或主机路径存储上的模型文件会保留，因为 `PersistentVolume` 使用 `Retain` 回收策略。
+
+所有远端清理均为尽力而为：失败只会记录日志，Lens 记录仍会被删除，因此无法访问的集群永远不会变得无法删除。如果非草稿集群仍存在存储卷，则请求会被拒绝；请先删除这些卷。
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`DELETE /api/cluster/clusters/{cluster_id}`**
@@ -721,6 +840,12 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
           "nodes": 3,
           "cpuCores": 192.0,
           "memoryBytes": 824633720832,
+          "memoryUsagePercent": 25.0,
+          "memoryAvailableBytes": 618475290624,
+          "diskBytes": 7619773423616,
+          "diskUsedBytes": 4178392940544,
+          "diskAvailableBytes": 3441380483072,
+          "diskUsagePercent": 54.8,
           "gpuNodes": 2,
           "gpuCount": 8,
           "totalGpuCount": 8,
@@ -738,6 +863,13 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
       }
     }
     ```
+
+    `hardware` 在给出使用率的同时也给出剩余容量，调用方无需自己换算。
+    `diskUsedBytes`/`diskAvailableBytes` 直接来自各节点 kubelet 的 Summary API，
+    因此数值是精确的，并且在本集群自身的 Prometheus 不可用时依然可以上报。
+    `memoryAvailableBytes` 则由 `memoryUsagePercent`（Prometheus 上报的各节点
+    使用率的平均值）换算而来，因为内存没有字节级的数据源。这三个字段在其所依赖的
+    读数不可用时均为 `null`——`null` 表示未知，而不是剩余为零。
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

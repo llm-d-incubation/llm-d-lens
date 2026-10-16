@@ -8,7 +8,7 @@
 
 import { checkTone, checkLabel } from './preflightPresentation';
 import { useMonitoringInstall } from './useMonitoringInstall';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle2, CircleX } from 'lucide-react';
 import { Badge, Button, Input, Label, Modal, ToggleGroup } from '../../../../shared/ui';
 import { installAccelerator, preflightAcceleratorInstall } from './acceleratorObservabilityBackend';
@@ -20,29 +20,20 @@ function initialAccessModeFor(status, supportedAccessModes = []) {
     return preferred?.mode || supportedAccessModes[0] || 'dra';
 }
 
-export function InstallAcceleratorModal({ isOpen, accelerator, defaultNamespace, status, supportedAccessModes = [], initialAccessMode, clusterId, onClose, onOperationStarted }) {
+export function InstallAcceleratorModal(props) {
+    return props.isOpen ? <InstallAcceleratorModalForm {...props} /> : null;
+}
+
+function InstallAcceleratorModalForm({ isOpen, accelerator, defaultNamespace, status, supportedAccessModes = [], initialAccessMode, clusterId, onClose, onOperationStarted }) {
     const [request, setRequest] = useState({
         accelerator,
-        access_mode: initialAccessModeFor(status, supportedAccessModes),
+        access_mode: initialAccessMode || initialAccessModeFor(status, supportedAccessModes),
         namespace: defaultNamespace || '',
     });
-    const { preflight, error, checking, installing, updateRequest, runPreflight, startInstall, reset } = useMonitoringInstall({
+    const { preflight, error, checking, installing, updateRequest, runPreflight, startInstall } = useMonitoringInstall({
         request, setRequest, preflightRequest: preflightAcceleratorInstall, installRequest: installAccelerator,
         clusterId, onOperationStarted, onClose,
     });
-    const prevOpenRef = useRef(false);
-    useEffect(() => {
-        const wasOpen = prevOpenRef.current;
-        prevOpenRef.current = isOpen;
-        if (!isOpen || wasOpen) return;
-        setRequest({
-            accelerator,
-            access_mode: initialAccessMode || initialAccessModeFor(status, supportedAccessModes),
-            namespace: defaultNamespace || '',
-        });
-        reset();
-    }, [isOpen, accelerator, defaultNamespace, status, supportedAccessModes, initialAccessMode, reset]);
-
     // Modes come from the selected accelerator: the status payload reports
     // availability per detected mode, and the capability lists the supported
     // set before any cluster probe has run.

@@ -30,6 +30,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from llm_d_lens.configuration.models import ConfigurationArtifactRecord, ConfigurationFile
 from llm_d_lens.db.base import Base, DeclarativeDtoMixin, JSONVariant, UTCDateTime
 from llm_d_lens.deploy.contracts import DeployableConfiguration
+from llm_d_lens.infrastructure.artifacts.store import artifact_uri
 
 
 class ConfigurationArtifactRow(Base, DeclarativeDtoMixin):
@@ -121,6 +122,7 @@ class ConfigurationArtifactRow(Base, DeclarativeDtoMixin):
                 provenance=self.dc_provenance,
             ),
             configuration_file=ConfigurationFile(
+                uri=artifact_uri("configuration", self.artifact_id, self.cf_file_name),
                 type=self.cf_type,
                 file_name=self.cf_file_name,
                 format=self.cf_format,

@@ -421,9 +421,7 @@ class HelmKustomizeGuideAdapter:
                     existing.update({"name": name, "value": value})
                 else:
                     environment.append({"name": name, "value": value})
-        for name, value in model_cache_environment(
-            model_source, cache_mounted=cache_mounted, offline=model_source != "auto-cache"
-        ).items():
+        for name, value in model_cache_environment(model_source, cache_mounted=cache_mounted).items():
             environment = container.setdefault("env", [])
             existing = next((item for item in environment if item.get("name") == name), None)
             if existing:

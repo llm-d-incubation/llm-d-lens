@@ -6,7 +6,7 @@
 > `llm_d_lens/db/migrations/README.md` (see §15 and §18).
 >
 > Related documents: [`AGENTS.md`](../../AGENTS.md),
-> [`.agents/skills/workflow/SKILL.md`](../../.agents/skills/workflow/SKILL.md),
+> [`AGENTS.md`](../../AGENTS.md),
 > [`.agents/skills/backend/SKILL.md`](../../.agents/skills/backend/SKILL.md),
 > [`.agents/skills/database/SKILL.md`](../../.agents/skills/database/SKILL.md),
 > [`.agents/skills/ui/SKILL.md`](../../.agents/skills/ui/SKILL.md),
@@ -765,6 +765,7 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 | `cluster:cluster:update` | Edit cluster / trigger source downloads | `PATCH /clusters/{id}`, `POST /clusters/{id}/software-downloads` |
 | `cluster:cluster:delete` | Delete cluster | `DELETE /clusters/{id}` |
 | `cluster:hf-token:create` | Create HF_TOKEN Secret | `POST /clusters/{id}/hf-token-secrets` |
+| `cluster:hf-token:update` | Rotate HF_TOKEN Secret | `PUT /clusters/{id}/hf-token-secret` |
 | `cluster:node:operate` | cordon/uncordon nodes | `POST /clusters/{id}/nodes/cordon|uncordon` |
 | `cluster:session:connect` | Open cluster session | `GET /session` (write semantics), `POST /cluster-overview/sessions/{id}/disconnect` |
 | `cluster:port-forward:connect` | Create/close port forwarding | `POST /port-forward`, `DELETE /port-forwards/{id}`, `DELETE /sessions/{id}/port-forwards` |
@@ -1096,6 +1097,7 @@ authorize(user, required, resource):
 | `cluster:cluster:update` / `:delete` / `:node:operate` / `:bootstrap:execute` | ✅ | ✅ | ❌ |
 | `cluster:cluster:grant-access` | ✅ | ✅ | ❌ |
 | `cluster:hf-token:create` | ✅ | ✅ | ❌ |
+| `cluster:hf-token:update` | ✅ | ✅ | ❌ |
 | `storage:volume:create` / `:delete` / `:acknowledge` / `:scan` | ✅ | ✅ | ❌ |
 | `model-cache:entry:create` / `:retry` | ✅ | ✅ | ✅ |
 | `model-cache:entry:sync` / `:delete` | ✅ | ✅ | ❌ |
@@ -1765,7 +1767,7 @@ human-review requirement from the [database skill](../../.agents/skills/database
 
 ## 19. AI Development Rules Compliance Checklist (verify at delivery)
 
-- [x] Reuse search plus candidate/difference/decision tables were produced based on [`.agents/skills/workflow/SKILL.md`](../../.agents/skills/workflow/SKILL.md)
+- [x] Reuse search plus candidate/difference/decision tables were produced under the former workflow; current development follows [`AGENTS.md`](../../AGENTS.md)
       (§17).
 - [x] Covered the four domain skills involved in the task (UI/Backend/Database/Deployment), and gave file paths following their naming and
       placement conventions.

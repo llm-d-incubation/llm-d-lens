@@ -156,15 +156,24 @@ async def test_fast_reconciliation_only_refreshes_pending_deployments(monkeypatc
     pending = SimpleNamespace(
         id="pending", status=DeploymentRunStatus.RUNNING, cases=[SimpleNamespace(status=DeploymentCaseStatus.DEPLOYING)]
     )
+    failed = SimpleNamespace(
+        id="failed", status=DeploymentRunStatus.FAILED, cases=[SimpleNamespace(status=DeploymentCaseStatus.FAILED)]
+    )
+    cleaned = SimpleNamespace(
+        id="cleaned", status=DeploymentRunStatus.CLEANED, cases=[SimpleNamespace(status=DeploymentCaseStatus.CLEANED)]
+    )
     refreshed = []
 
     async def refresh(run, *, pending_only=False):
         refreshed.append(run.id)
 
-    monkeypatch.setattr(router, "_store", SimpleNamespace(list_runs=lambda: [ready, pending]))
+    monkeypatch.setattr(router, "_store", SimpleNamespace(list_runs=lambda: [ready, pending, failed, cleaned]))
     monkeypatch.setattr(router, "_refresh_deployment_record", refresh)
     await router._refresh_all_deployment_records(pending_only=True)
     assert refreshed == ["pending"]
     refreshed.clear()
+    # A failed run stays refreshable so a workload that recovered after its
+    # rollout deadline (a CrashLoopBackOff that later clears, for example) is
+    # observed and promoted back to ready; a cleaned run is terminal.
     await router._refresh_all_deployment_records()
-    assert refreshed == ["ready", "pending"]
+    assert refreshed == ["ready", "pending", "failed"]

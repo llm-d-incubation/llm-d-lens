@@ -24,6 +24,8 @@ List Lens-managed clusters and optionally include draft records that have not be
 
     Response: `ClustersResponse` with one `ClusterRecord` per visible cluster.
 
+`hfTokenSecret` reports the namespace and name of the cluster's HF_TOKEN Secret, or `null` when the cluster has none. Only the location is returned; the token value stays on the target cluster and is never served by the API.
+
     ```json
     {
       "items": [
@@ -43,6 +45,10 @@ List Lens-managed clusters and optionally include draft records that have not be
           "llmDBenchmarkRef": "main",
           "llmDRepoPath": "/cache/llm-d/v0.3.0",
           "llmDBenchmarkRepoPath": "/cache/llm-d-benchmark/main",
+          "hfTokenSecret": {
+            "namespace": "llm-d-bench-storage-44395349",
+            "name": "hf-token-c758ced0"
+          },
           "draft": false
         }
       ]
@@ -309,9 +315,117 @@ Patch a cluster's editable settings, including name, description, proxy settings
   </TabItem>
 </Tabs>
 
+### Create the cluster HF_TOKEN secret
+
+Create a standalone Kubernetes Secret holding a Hugging Face token on the target cluster, and record its coordinates on the Lens cluster record so Deployments and Model Cache downloads default to it. This is the Create cluster wizard's Model cache step. The token value is written to the cluster only; Lens stores just the namespace and name. The request fails with `409 secret_already_exists` when the Secret is already present — use the rotation endpoint below to replace an existing token.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/cluster/clusters/{cluster_id}/hf-token-secrets`**
+
+    Request body (`HfTokenSecretCreateRequest`):
+
+    - `namespace` (`string`, required): namespace to create the Secret in; created when missing.
+    - `name` (`string`, required): Secret name.
+    - `token` (`string`, required): Hugging Face token stored under the `HF_TOKEN` key.
+
+    ```json
+    {
+      "namespace": "llm-d-bench-storage-44395349",
+      "name": "hf-token-c758ced0",
+      "token": "hf_exampleTokenValue"
+    }
+    ```
+
+    Response: `HfTokenSecretRef`.
+
+    ```json
+    {
+      "namespace": "llm-d-bench-storage-44395349",
+      "name": "hf-token-c758ced0"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_lens.cluster import registry, service
+
+    cluster = registry.get_cluster("cluster-a")
+    ref = asyncio.run(
+        service.create_hf_token_secret(
+            cluster,
+            "llm-d-bench-storage-44395349",
+            "hf-token-c758ced0",
+            "hf_exampleTokenValue",
+        )
+    )
+    print(ref["namespace"], ref["name"])
+    ```
+  </TabItem>
+</Tabs>
+
+### Rotate the cluster HF_TOKEN secret
+
+Replace the Hugging Face token stored in the cluster's `HF_TOKEN` Secret, from the Edit cluster drawer. Unlike creation this applies the Secret, so an existing one is overwritten rather than rejected. `namespace` and `name` default to the coordinates already recorded on the cluster (`hfTokenSecret`), so rotating a token needs only the token; supplying different coordinates repoints the cluster at that Secret and creates it when absent.
+
+Rotation rewrites only this cluster-level Secret. The namespace-local `llm-d-hf-token` copies that Deployments and Model Cache downloads derive at run time are re-derived on the next deployment or download, so workloads that are already running keep the previous token until they are recreated.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PUT /api/cluster/clusters/{cluster_id}/hf-token-secret`**
+
+    Request body (`HfTokenSecretUpdateRequest`):
+
+    - `namespace` (`string`, optional): defaults to the cluster's recorded secret namespace.
+    - `name` (`string`, optional): defaults to the cluster's recorded secret name.
+    - `token` (`string`, required): new Hugging Face token; a blank value is rejected with `422 invalid_secret_token`.
+
+    ```json
+    {
+      "token": "hf_rotatedTokenValue"
+    }
+    ```
+
+    Response: `HfTokenSecretRef` with the coordinates that were written.
+
+    ```json
+    {
+      "namespace": "llm-d-bench-storage-44395349",
+      "name": "hf-token-c758ced0"
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    import asyncio
+
+    from llm_d_lens.cluster import registry, service
+
+    cluster = registry.get_cluster("cluster-a")
+    # Rotate in place, reusing the coordinates recorded on the cluster.
+    ref = asyncio.run(service.update_hf_token_secret(cluster, "hf_rotatedTokenValue"))
+    print(ref["namespace"], ref["name"])
+
+    # Or repoint the cluster at a different Secret.
+    ref = asyncio.run(
+        service.update_hf_token_secret(
+            cluster,
+            "hf_rotatedTokenValue",
+            namespace="llm-d-bench-storage-44395349",
+            name="hf-token-rotated",
+        )
+    )
+    ```
+  </TabItem>
+</Tabs>
+
 ### Start cluster software downloads
 
 Start downloading the `llm-d` and `llm-d-benchmark` revisions pinned by the Lens stack profile for a cluster. The handler schedules background downloads and immediately returns the current status snapshot; the request body is ignored.
+
+Source checkouts are isolated by repository URL and resolved commit. Branch downloads refresh the remote ref; previously cached full commit SHAs can be reused offline. A per-source lock and atomic publication prevent concurrent requests from exposing incomplete checkouts or replacing an earlier snapshot.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -569,6 +683,13 @@ Probe the cluster's Kubernetes API for reachability and its server version, and 
 
 Delete a Lens-managed cluster record and clean up related state. This should only be used when the cluster should be removed from Lens entirely.
 
+Remote cleanup performed by this endpoint:
+
+- The cluster's `HF_TOKEN` secret recorded in `hfTokenSecret` is deleted, and its namespace is deleted with it when the namespace has no reason to outlive the cluster. That is the case for the Lens-owned `llm-d-bench-storage-{cluster_id}` namespace, for any namespace Lens created for the secret (labelled `app.kubernetes.io/managed-by: llm-d-lens`), and for a namespace that, once the secret is gone, holds nothing but the objects Kubernetes and cluster add-ons inject into every namespace (the `default` service account, its token secret, and CA-bundle config maps such as `kube-root-ca.crt`). A namespace that still holds any other object -- including a custom resource -- is kept, and `default`, `kube-system`, `kube-public` and `kube-node-lease` are never deleted. If the namespace contents cannot be listed, the namespace is kept.
+- For a draft cluster, every Storage volume still attached to it is removed together with its `PersistentVolumeClaim` and `PersistentVolume` objects. Model files on the underlying NFS or host-path storage are kept, because the `PersistentVolume` uses the `Retain` reclaim policy.
+
+All remote cleanup is best-effort: a failure is logged and the Lens record is still deleted, so an unreachable cluster never becomes permanently undeletable. A non-draft cluster that still has Storage volumes is rejected instead; delete its volumes first.
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`DELETE /api/cluster/clusters/{cluster_id}`**
@@ -724,6 +845,12 @@ Return a live Kubernetes overview for one cluster, including node, GPU, namespac
           "nodes": 3,
           "cpuCores": 192.0,
           "memoryBytes": 824633720832,
+          "memoryUsagePercent": 25.0,
+          "memoryAvailableBytes": 618475290624,
+          "diskBytes": 7619773423616,
+          "diskUsedBytes": 4178392940544,
+          "diskAvailableBytes": 3441380483072,
+          "diskUsagePercent": 54.8,
           "gpuNodes": 2,
           "gpuCount": 8,
           "totalGpuCount": 8,
@@ -742,6 +869,14 @@ Return a live Kubernetes overview for one cluster, including node, GPU, namespac
       }
     }
     ```
+
+    `hardware` reports free capacity alongside usage so callers do not have to
+    recompute it. `diskUsedBytes`/`diskAvailableBytes` come straight from each
+    node's kubelet Summary API, so they stay exact and remain reportable when this
+    cluster's own Prometheus is down. `memoryAvailableBytes` is derived from
+    `memoryUsagePercent` (the mean of the per-node percentages Prometheus reports),
+    because no byte-level source exists for it. All three are `null` when the
+    reading they rest on is unavailable -- `null` means unknown, not zero free.
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

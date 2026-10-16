@@ -76,7 +76,7 @@ test('restart from scripts regenerates the map and validates it before restartin
   assert.match(readFileSync(join(root, '.reuse/map.md'), 'utf8'), /src\/a.js/);
   assert.equal(existsSync(join(root, 'docs')), false);
   assert.equal(readFileSync(join(root, 'events'), 'utf8'), 'stop\nstart\n');
-  assert.equal(JSON.parse(readFileSync(join(root, '.cache/reuse/startup-report.json'), 'utf8')).status, 'CHECKED');
+  assert.equal(existsSync(join(root, '.cache/reuse/startup-report.json')), false);
 });
 
 test('target flags override environment and export constraints without injecting deployment defaults', t => {
@@ -179,8 +179,7 @@ test('invalid registration stops restart before touching running services', t =>
 
 for (const command of ['start', 'restart']) test(`pending refactor decision warns without blocking ${command} or resolving the decision`, t => {
   const { root, run } = setup(t);
-  const paused = spawnSync(process.execPath, [resolve('tools/reuse/cli.mjs'), 'pause', '--kind', 'index', '--summary', 'Unclear contract', '--file', 'src/a.js', '--option', 'Keep', '--option', 'Change'], { cwd: root, encoding: 'utf8' });
-  assert.equal(paused.status, 2);
+  writeFileSync(join(root, '.reuse/decisions.json'), JSON.stringify({ version: 1, requests: [{ id: 'existing', status: 'pending', kind: 'index', summary: 'Unclear contract', options: ['Keep', 'Change'], evidence: [{ path: 'src/a.js', hash: '0'.repeat(64) }] }] }));
   const ledger = readFileSync(join(root, '.reuse/decisions.json'), 'utf8');
   const result = run(command);
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -188,7 +187,136 @@ for (const command of ['start', 'restart']) test(`pending refactor decision warn
   assert.match(result.stdout, /WAITING_FOR_USER/);
   assert.match(result.stdout, /continuing local startup/);
   assert.equal(readFileSync(join(root, '.reuse/decisions.json'), 'utf8'), ledger);
-  assert.equal(JSON.parse(readFileSync(join(root, '.cache/reuse/startup-report.json'), 'utf8')).status, 'WAITING_FOR_USER');
+  assert.equal(existsSync(join(root, '.cache/reuse/startup-report.json')), false);
   const check = spawnSync(process.execPath, [resolve('tools/reuse/cli.mjs'), 'check'], { cwd: root, encoding: 'utf8' });
   assert.equal(check.status, 2, check.stdout + check.stderr);
+});
+
+for (const target of ['frontend', 'server', 'backend', 'all']) test(`targeted restart limits process and readiness work to ${target}`, t => {
+  const { root } = setup(t);
+  const result = spawnSync('bash', ['-c', `
+    source scripts/lens-local.sh
+    prepare_start() { echo "prepare $1"; }
+    cmd_stop() { echo "stop \${1:-all}"; }
+    ensure_database() { echo database; }
+    ensure_tls() { :; }
+    regenerate_mcp_tools() { echo catalog; }
+    resolve_free_port() { echo "$2"; }
+    cmd_check() { :; }
+    start_one() { echo "start $1"; }
+    wait_for_http() { echo "wait $1"; }
+    print_initial_admin_credentials() { :; }
+    lens_local_main restart "$1"
+  `, 'test', target], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const lines = result.stdout.split('\n');
+  assert.ok(lines.includes(`stop ${target}`));
+  for (const service of ['frontend', 'server', 'backend']) {
+    assert.equal(lines.includes(`start ${service}`), target === 'all' || target === service);
+    assert.equal(lines.includes(`wait ${service}`), target === 'all' || target === service);
+  }
+  assert.equal(lines.includes('database'), target === 'all' || target === 'backend');
+  assert.equal(lines.includes('catalog'), target === 'all' || target === 'server');
+});
+
+test('unknown restart target fails before touching the environment', t => {
+  const { root } = setup(t);
+  const result = spawnSync('bash', ['-c', 'source scripts/lens-local.sh; prepare_start() { echo unexpected; }; lens_local_main restart invalid'], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.ok(!result.stdout.includes('unexpected'));
+});
+
+test('startup does not parse unrelated unregistered implementations', t => {
+  const { put, run } = setup(t);
+  put('apps/backend/src/llm_d_lens/unrelated.py', 'invalid Python source !');
+  const result = run('restart');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test('frontend environment checks do not require a Python venv or Rust', t => {
+  const { root } = setup(t);
+  mkdirSync(join(root, 'node_modules'));
+  const result = spawnSync('bash', ['-c', 'source scripts/lens-local.sh; cmd_check frontend'], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(!result.stdout.includes('venv:'));
+  assert.ok(!result.stdout.includes('rust:'));
+});
+
+test('targeted restart restores the actual ports of running peer services', t => {
+  const { root, put } = setup(t);
+  put('.dev-pids/backend.port', '8099\n');
+  const result = spawnSync('bash', ['-c', `
+    source scripts/lens-local.sh
+    is_running() { [[ "$1" == backend ]]; }
+    prepare_start() { :; }
+    cmd_stop() { :; }
+    start_services() { echo "backend=$BACKEND_PORT"; }
+    cmd_restart server
+  `], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /backend=8099/);
+});
+
+test('legacy running services without port state fail before stopping anything', t => {
+  const { root } = setup(t);
+  const result = spawnSync('bash', ['-c', `
+    source scripts/lens-local.sh
+    is_running() { [[ "$1" == backend ]]; }
+    prepare_start() { echo unexpected; }
+    cmd_stop() { echo unexpected; }
+    cmd_restart server
+  `], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /restart all once/);
+  assert.ok(!result.stdout.includes('unexpected'));
+});
+
+test('targeted restart refuses to move ports without updating peer proxies', t => {
+  const { root } = setup(t);
+  const result = spawnSync('bash', ['-c', `
+    source scripts/lens-local.sh
+    ensure_tls() { :; }
+    resolve_free_port() { echo 19001; }
+    cmd_check() { echo unexpected; }
+    start_one() { echo unexpected; }
+    start_services frontend
+  `], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout + result.stderr, /update dependent proxies/);
+  assert.ok(!result.stdout.includes('unexpected'));
+});
+
+test('targeted restart composes with upstream target-node and kubeconfig options', t => {
+  const { root, run } = setup(t);
+  const result = run('restart', {
+    args: ['server', '--target-node', 'node-a', '--kubeconfig', 'cluster.yaml'],
+    overrides: 'cmd_stop() { echo "stop:$1" >> "$ROOT_DIR/events"; }; start_services() { echo "start:$1" >> "$ROOT_DIR/events"; }',
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(readFileSync(join(root, 'events'), 'utf8'), 'stop:server\nstart:server\n');
+  assert.match(readFileSync(join(root, 'kubectl-calls'), 'utf8'), /get node node-a/);
+  assert.equal(run('restart', { args: ['frontend', 'backend'] }).status, 2);
+  assert.equal(run('start', { args: ['frontend'] }).status, 2);
+});
+
+test('manual full validation runs every check and propagates failures without audit records', t => {
+  const root = mkdtempSync(join(tmpdir(), 'reuse-full-check-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'bin'));
+  const stub = join(root, 'bin/stub');
+  writeFileSync(stub, '#!/bin/sh\necho "$*" >> "$CHECK_CALLS"\nif [ "$FAIL_CHECK" = 1 ] && [ "$1 $2" = "run lint" ]; then exit 3; fi\n');
+  chmodSync(stub, 0o755);
+  for (const name of ['npm', 'node', 'python3', 'mock-make']) symlinkSync(stub, join(root, 'bin', name));
+  for (const failure of ['0', '1']) {
+    const calls = join(root, `calls-${failure}`);
+    const result = spawnSync('make', ['-f', resolve('Makefile'), 'verify-full', `MAKE=${join(root, 'bin/mock-make')}`], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`,
+        PRISM_PYTHON_BIN: join(root, 'bin/python3'), CHECK_CALLS: calls, FAIL_CHECK: failure },
+    });
+    assert.equal(result.status === 0, failure === '0', result.stdout + result.stderr);
+    assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 14);
+    assert.match(result.stdout, /PASS docs-build/);
+    if (failure === '1') assert.match(result.stdout, /FAIL lint/);
+    assert.equal(existsSync(join(root, '.cache/reuse/tasks')), false);
+  }
 });

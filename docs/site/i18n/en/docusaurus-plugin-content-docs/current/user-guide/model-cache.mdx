@@ -19,6 +19,17 @@ If **Storage volume** is empty, first [create a model-cache volume](/user-guide/
 The model card shows download progress. Wait for the cache to be ready before deploying.
 Downloads use the token saved with the cluster; public models can download without one.
 
+## Download a model the volume already has
+
+If the storage volume you picked already holds that model and revision, Lens does not
+start the download. The dialog explains what is already there -- downloaded, queued,
+still downloading, or failed -- and waits for you:
+
+- **Download anyway** downloads it again. A finished or failed cache is refreshed from
+  the source in place; a download that is still running simply continues. Either way the
+  volume keeps one entry for the model, never a duplicate.
+- **Cancel** keeps what is already on the volume.
+
 ## Download a model from Model Market
 
 1. Click **Download model**.
@@ -77,7 +88,10 @@ If you do not see a usable cache volume, register one on [Storage](/user-guide/s
 2. Select the same **Cluster** and **Model cache storage** used for the download.
 3. Confirm the model is ready in that cache, then create the deployment.
 
-For cache-backed deployments, download the exact model revision in full first:
-the model server loads it offline and cannot download missing files at startup.
+Deployment creation requires Model Cache. Download the exact model revision
+in full first, and synchronize new local-disk nodes before deploying. The model
+server in ordinary provider-rendered deployments loads the read-only cache offline.
+Exact published manifests are not covered by the same enforcement; see
+[deployment limitations](/user-guide/deployments#model-cache-enforcement-limitations).
 Change Hugging Face credentials and proxy settings through the cluster settings,
 not custom deployment environment variables.

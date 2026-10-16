@@ -122,6 +122,7 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("DELETE", "/api/cluster/clusters/{cluster_id}", "cluster:cluster:delete"),
     RoutePermission("PATCH", "/api/cluster/clusters/{cluster_id}", "cluster:cluster:update"),
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/hf-token-secrets", "cluster:hf-token:create"),
+    RoutePermission("PUT", "/api/cluster/clusters/{cluster_id}/hf-token-secret", "cluster:hf-token:update"),
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/nodes/cordon", "cluster:node:operate"),
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/nodes/uncordon", "cluster:node:operate"),
     RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/software-downloads", "cluster:cluster:read"),

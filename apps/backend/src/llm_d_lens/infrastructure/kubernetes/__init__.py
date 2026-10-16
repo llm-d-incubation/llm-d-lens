@@ -325,6 +325,20 @@ async def delete_namespace(
     )
 
 
+async def delete_secret(
+    name: str, *, namespace: str, cluster_id: str | None = None, timeout: float | None = 30
+) -> CommandResult:
+    """Delete a single Kubernetes Secret, leaving its namespace in place.
+
+    Used when the namespace may be shared with unrelated workloads, so deleting
+    the whole namespace would be destructive. Passes ``--ignore-not-found`` so a
+    Secret that was never created (or is already gone) is a no-op.
+    """
+    return await scoped_runner(cluster_id).run(
+        ["kubectl", "delete", "secret", name, "--namespace", namespace, "--ignore-not-found"], timeout=timeout
+    )
+
+
 async def label_namespace(
     namespace: str,
     labels: Mapping[str, str],

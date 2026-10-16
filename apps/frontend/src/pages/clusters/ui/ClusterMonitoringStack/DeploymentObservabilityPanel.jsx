@@ -13,6 +13,10 @@ import { Badge, Button, EmptyState, LoadingState, SectionLabel } from '../../../
 import {
     getDeploymentExecutions,
 } from '../../../optimization';
+// Imported from the leaf presentation module rather than the deployment page's
+// index so this page does not create a module cycle with it (that module
+// already imports the Clusters page's monitoring client).
+import { isDeploymentReady } from '../../../deployment/ui/DeploymentManagement/deploymentPresentation';
 import {
     getClusterDeploymentMonitoring,
     getClusterStackLinks,
@@ -262,7 +266,11 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
                                     const mon = monitoringByDeployment[deployment.execution_id] || {};
                                     const chip = monitoringChip(mon.status);
                                     const key = `${deployment.execution_id}:`;
-                                    const installEnabled = actionsAllowed && mon.status !== 'enabled';
+                                    // Monitoring scrapes this deployment's Pods, so it can only be
+                                    // installed or enabled once the rollout is ready (same rule as
+                                    // the Deployments table's monitoring menu).
+                                    const deploymentReady = isDeploymentReady(deployment.status);
+                                    const installEnabled = actionsAllowed && mon.status !== 'enabled' && deploymentReady;
                                     return (
                                         <tr key={deployment.execution_id} className="transition-colors hover:bg-slate-800/40">
                                             <td className="px-5 py-3 font-mono text-xs text-slate-200">{deployment.display_name || deployment.name || deployment.guide || '—'}</td>
@@ -335,6 +343,11 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
                                                                                 icon={<Play size={14} className="shrink-0 text-emerald-400" />}
                                                                                 label="Enable"
                                                                             />
+                                                                            {!deploymentReady && (
+                                                                                <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
+                                                                                    Available once the deployment is ready.
+                                                                                </p>
+                                                                            )}
                                                                             <div className="h-px bg-slate-700/70" />
                                                                             <MonitoringMenuItem
                                                                                 onClick={() => { setOpenMenu(null); runAction(deployment, 'uninstall'); }}
@@ -346,12 +359,19 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
                                                                         </>
                                                                     )}
                                                                     {mon.status !== 'enabled' && mon.status !== 'disabled' && (
-                                                                        <MonitoringMenuItem
-                                                                            onClick={() => { setOpenMenu(null); runAction(deployment, 'install'); }}
-                                                                            disabled={!installEnabled || !!actionKey}
-                                                                            icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
-                                                                            label="Install"
-                                                                        />
+                                                                        <>
+                                                                            <MonitoringMenuItem
+                                                                                onClick={() => { setOpenMenu(null); runAction(deployment, 'install'); }}
+                                                                                disabled={!installEnabled || !!actionKey}
+                                                                                icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
+                                                                                label="Install"
+                                                                            />
+                                                                            {!deploymentReady && (
+                                                                                <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
+                                                                                    Available once the deployment is ready.
+                                                                                </p>
+                                                                            )}
+                                                                        </>
                                                                     )}
                                                                 </div>
                                                             </>,

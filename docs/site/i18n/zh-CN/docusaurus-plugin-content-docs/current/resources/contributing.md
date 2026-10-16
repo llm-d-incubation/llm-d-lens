@@ -37,13 +37,11 @@ slug: /resources/contributing
 对于未解决的业务、兼容性、CI 例外或目录决策，应暂停相关依赖工作；在继续
 推进前，务必获取并记录用户的实际答复。
 
-对复用工具的改动请运行 `npm run reuse:test`；对行为的改动请运行
-`npm run reuse:check -- --task <id> --base <task-start-commit> --report .cache/reuse/report.json`。
-请遵循该工作流中的 `begin`、`search --task` 和 `verify` 证据步骤；交付前运行
-`verify-report --report .cache/reuse/report.json`。请导出已忽略的任务证据
-和命令日志以供审阅。报告的有效性仅限于 Git 可见的输入；被忽略的运行时数据
-不在其有效性保证范围内。当能力条目发生变化时，请更新 `.reuse/catalog.json`
-并运行 `npm run reuse:map`。相似性候选项需要人工分析，而不能自动重构。
+对复用工具的改动请运行 `npm run reuse:test`，其他改动直接运行受影响的测试。
+不再要求任务台账、自动审计报告或测试结果指纹。说明实际检查结果和未验证范围；
+相关代码或环境变化后重新验证。阶段性完整本地验证使用 `npm run verify:full`。
+当能力条目发生变化时，更新 `.reuse/catalog.json` 并运行 `npm run reuse:map`。
+相似性候选需要分析，不能据此自动重构。已有未决事项仍需处理，不能视为已批准。
 
 请参考 [README.md](https://github.com/llm-d-incubation/llm-d-lens/blob/main/README.md)
 完成环境搭建。根据改动内容选择合适的检查命令：

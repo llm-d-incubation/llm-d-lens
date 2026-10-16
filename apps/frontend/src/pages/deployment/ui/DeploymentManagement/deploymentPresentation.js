@@ -52,6 +52,13 @@ export function statusGroup(status) {
     return STATUS_GROUPS[status] || 'Unknown';
 }
 
+// A deployment is only serviceable -- scrapeable by monitoring, port-forwardable,
+// profileable -- once its rollout reached the Ready group. Exported so the
+// Clusters monitoring menus apply the same rule as the Deployments table.
+export function isDeploymentReady(status) {
+    return statusGroup(status) === 'Ready';
+}
+
 export function statusTone(status) {
     return STATUS_TONES[statusGroup(status)] || STATUS_TONES.Unknown;
 }

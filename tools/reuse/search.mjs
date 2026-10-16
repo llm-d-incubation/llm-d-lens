@@ -33,7 +33,7 @@ export function rank(rows, query, limit = 10) {
   }).sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
-export async function updateVectors(documents, cache, modelKey, embed, progress = () => {}) {
+export async function updateVectors(documents, cache, modelKey, embed, progress = () => {}, retainedPaths = null) {
   const old = new Map(cache?.version === 1 && cache.modelKey === modelKey
     ? cache.rows.map(row => [row.id, row]) : []);
   const rows = documents.map(doc => {
@@ -48,6 +48,11 @@ export async function updateVectors(documents, cache, modelKey, embed, progress 
     if (!Array.isArray(vectors) || vectors.length !== batch.length || vectors.some(vector => !validVector(vector))) throw new Error('Invalid embedding output');
     batch.forEach((row, index) => { row.vector = vectors[index]; });
     progress(Math.min(i + 8, missing.length), missing.length);
+  }
+  if (retainedPaths) {
+    const ids = new Set(rows.map(row => row.id));
+    const refreshed = new Set(documents.map(row => row.path));
+    for (const row of old.values()) if (!ids.has(row.id) && !refreshed.has(row.path) && retainedPaths.get(row.path) === row.sourceHash) rows.push(row);
   }
   return { version: 1, modelKey, rows };
 }

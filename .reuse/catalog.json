@@ -38,11 +38,22 @@
     {
       "id": "router-pd-plugin-compatibility",
       "path": "apps/backend/src/llm_d_lens/configuration/router_compatibility.py",
-      "symbols": ["compatible_router_values"],
+      "symbols": [
+        "compatible_router_values"
+      ],
       "purpose": "Adapt legacy P/D plugin configurations to Router 0.11 while preserving source snapshots and disaggregation decisions.",
       "boundaries": "Only known Router 0.11 endpoint-picker runtimes are adapted. The profile handler owns former header handling; deciderPluginName maps to deciders.prefill. Conflicting decisions and custom legacy header parameters are rejected. Node planning mirrors this contract; Python validation and bundle installation share this implementation. Original asset checksums are retained and installed derived values are recorded separately.",
-      "examples": ["apps/server/src/services/guideDeploymentBundle.ts", "apps/backend/src/llm_d_lens/configuration/guide_settings.py", "apps/backend/src/llm_d_lens/deploy/providers/deployment_bundle.py", "apps/backend/src/llm_d_lens/deploy/providers/pd_disaggregation.py"],
-      "tests": ["apps/backend/tests/unit/configuration/test_router_compatibility.py", "apps/server/testing/services/guideDeploymentBundle.test.ts", "apps/backend/tests/unit/deploy/providers/test_pd_disaggregation.py"]
+      "examples": [
+        "apps/server/src/services/guideDeploymentBundle.ts",
+        "apps/backend/src/llm_d_lens/configuration/guide_settings.py",
+        "apps/backend/src/llm_d_lens/deploy/providers/deployment_bundle.py",
+        "apps/backend/src/llm_d_lens/deploy/providers/pd_disaggregation.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/configuration/test_router_compatibility.py",
+        "apps/server/testing/services/guideDeploymentBundle.test.ts",
+        "apps/backend/tests/unit/deploy/providers/test_pd_disaggregation.py"
+      ]
     },
     {
       "id": "public-ai-provider-transport",
@@ -66,11 +77,21 @@
     {
       "id": "deployment-placement-presets",
       "path": "apps/backend/src/llm_d_lens/deploy/providers/target_node.py",
-      "symbols": ["validate_placement", "apply_placement"],
+      "symbols": [
+        "validate_placement",
+        "apply_placement"
+      ],
       "purpose": "Apply replica placement presets across rendered Kubernetes modelserver Pod templates in one manifest.",
       "boundaries": "Modelserver Deployments in one rendered manifest share a placement group; non-modelserver workloads do not join it. Required Pod affinity keeps their Pods on one node, required anti-affinity separates them, hostname topology spread balances them with maxSkew 1, and preferred affinity favors co-location without blocking cross-node scheduling. LeaderWorkerSet does not support the balanced or separate-node preset. An optional selected node label further limits the same-node preset. Existing accelerator claims keep TP devices in each modelserver Pod; LeaderWorkerSet leader/worker Pods receive a soft same-node preference.",
-      "examples": ["apps/backend/src/llm_d_lens/deploy/providers/configuration_manifest.py", "apps/backend/src/llm_d_lens/deploy/providers/optimized_baseline.py", "apps/backend/src/llm_d_lens/deploy/router.py"],
-      "tests": ["apps/backend/tests/unit/deploy/providers/test_configuration_manifest.py", "apps/backend/tests/unit/deploy/providers/test_optimized_baseline_profiles.py"]
+      "examples": [
+        "apps/backend/src/llm_d_lens/deploy/providers/configuration_manifest.py",
+        "apps/backend/src/llm_d_lens/deploy/providers/optimized_baseline.py",
+        "apps/backend/src/llm_d_lens/deploy/router.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/deploy/providers/test_configuration_manifest.py",
+        "apps/backend/tests/unit/deploy/providers/test_optimized_baseline_profiles.py"
+      ]
     },
     {
       "id": "deploy-hardware-profile",
@@ -91,8 +112,8 @@
         "default_guide_variant",
         "router_topology"
       ],
-  "purpose": "Resolve deployment hardware identity, model-server runtime images, source Kustomization variants and profile-owned router topology, defaulting to single-host when unset.",
-  "boundaries": "Deploy rendering only. Profile semantics live in llm_d_lens.hardware; unknown hardware stays neutral. Profiles own managed images and resource identities; selected upstream source owns guide variants. Never mutate NIC requests as accelerator requests.",
+      "purpose": "Resolve deployment hardware identity, model-server runtime images, source Kustomization variants and profile-owned router topology, defaulting to single-host when unset.",
+      "boundaries": "Deploy rendering only. Profile semantics live in llm_d_lens.hardware; unknown hardware stays neutral. Profiles own managed images and resource identities; selected upstream source owns guide variants. Never mutate NIC requests as accelerator requests.",
       "examples": [
         "apps/backend/src/llm_d_lens/deploy/providers/baseline_vllm.py",
         "apps/backend/src/llm_d_lens/deploy/providers/pd_disaggregation.py",
@@ -100,8 +121,8 @@
         "apps/backend/src/llm_d_lens/deploy/runtime/composition.py"
       ],
       "tests": [
-  "apps/backend/tests/unit/deploy/providers/test_hardware_profile.py",
-  "apps/backend/tests/unit/hardware/test_deployment_telemetry_contract.py"
+        "apps/backend/tests/unit/deploy/providers/test_hardware_profile.py",
+        "apps/backend/tests/unit/hardware/test_deployment_telemetry_contract.py"
       ]
     },
     {
@@ -228,8 +249,8 @@
         "apps/backend/src/llm_d_lens/evaluation/router.py"
       ],
       "tests": [
-  "apps/backend/tests/unit/monitoring/profiling/test_benchmark_xpu.py",
-  "apps/backend/tests/unit/hardware/test_deployment_telemetry_contract.py"
+        "apps/backend/tests/unit/monitoring/profiling/test_benchmark_xpu.py",
+        "apps/backend/tests/unit/hardware/test_deployment_telemetry_contract.py"
       ]
     },
     {
@@ -353,11 +374,18 @@
     {
       "id": "pod-placement-control",
       "path": "apps/frontend/src/shared/ui/PodPlacementControl.jsx",
-      "symbols": ["PodPlacementControl"],
+      "symbols": [
+        "PodPlacementControl"
+      ],
       "purpose": "Show a collapsed replica placement selector with scheduling guidance for Standard and Agentic model deployments.",
       "boundaries": "Presentation only. The parent owns selection state and sends placement_replicas and optional placement_node_label; the control lists hostname labels from the selected cluster and the deployment backend validates the chosen label before scheduling.",
-      "examples": ["apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx", "apps/frontend/src/pages/deployment/ui/AgenticDeploymentWorkspace.jsx"],
-      "tests": ["apps/frontend/src/shared/ui/PodPlacementControl.test.jsx"]
+      "examples": [
+        "apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx",
+        "apps/frontend/src/pages/deployment/ui/AgenticDeploymentWorkspace.jsx"
+      ],
+      "tests": [
+        "apps/frontend/src/shared/ui/PodPlacementControl.test.jsx"
+      ]
     },
     {
       "id": "modal",
@@ -770,6 +798,23 @@
       ]
     },
     {
+      "id": "kubernetes-resource-deletion",
+      "path": "apps/backend/src/llm_d_lens/infrastructure/kubernetes/__init__.py",
+      "symbols": [
+        "delete_namespace",
+        "delete_secret"
+      ],
+      "purpose": "Idempotent cluster-scoped deletion of a Kubernetes namespace or Secret.",
+      "boundaries": "Best-effort cleanup helpers: both pass --ignore-not-found so a missing object is success, and both return the raw CommandResult without interpreting failures. Callers decide whether a non-zero result blocks their flow. Deleting workload objects such as PVC/PV by label selector stays in the owning domain (storage.service.delete_volume_objects), which needs selector and cross-namespace semantics these helpers do not model.",
+      "examples": [
+        "apps/backend/src/llm_d_lens/cluster/service.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/cluster/test_service.py"
+      ],
+      "testNote": "Covered indirectly through the delete_cluster tests, which assert the deleted namespace and secret coordinates via a fake kubectl runner; there is no dedicated unit test for the two one-line wrappers."
+    },
+    {
       "id": "upstream-json-transport",
       "path": "apps/server/src/infrastructure/http.ts",
       "symbols": [
@@ -877,7 +922,7 @@
         "resolve_planning_facts"
       ],
       "purpose": "Freeze cluster, model, workload, and AIC planning facts for Agentic candidate generation, validation, and scoring.",
-      "boundaries": "Resolves live facts and controlled evidence references without reading benchmark aggregates or calling external AI. The Agentic planner still determines candidate validity and ranking. Structured trace records effective workload, SLOs, direct AIC inputs and evidence status without storing credentials.",
+      "boundaries": "Resolves live facts and controlled evidence references without reading benchmark aggregates or calling external AI. AIC system selection requires a unique match from registered hardware profile model patterns. Unknown or mixed systems remain unavailable. The Agentic planner still determines candidate validity and ranking. Structured trace records effective workload, SLOs, direct AIC inputs and evidence status without storing credentials.",
       "examples": [
         "apps/backend/src/llm_d_lens/agentic/service.py"
       ],
@@ -1057,56 +1102,104 @@
     {
       "id": "evaluation-benchmark-timing",
       "path": "apps/backend/src/llm_d_lens/evaluation/timing.py",
-      "symbols": ["benchmark_timing"],
+      "symbols": [
+        "benchmark_timing"
+      ],
       "purpose": "Estimate generated benchmark workload duration and resolve bounded automatic or explicit manual execution budgets.",
       "boundaries": "Pure Evaluation-domain configuration heuristic, not measured hardware prediction. Includes request drain, parallel traffic and warmup; excludes deployment and final analysis. Unsupported workloads have unknown estimates. Explicit manual limits survive unchanged; automatic budgets are capped.",
-      "examples": ["apps/backend/src/llm_d_lens/evaluation/router.py"],
-      "tests": ["apps/backend/tests/unit/evaluation/test_timing.py", "apps/backend/tests/contract/evaluation/test_api_contract.py"]
+      "examples": [
+        "apps/backend/src/llm_d_lens/evaluation/router.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/evaluation/test_timing.py",
+        "apps/backend/tests/contract/evaluation/test_api_contract.py"
+      ]
     },
     {
       "id": "evaluation-benchmark-budget-api",
       "path": "apps/backend/src/llm_d_lens/evaluation/router.py",
-      "symbols": ["create_run", "estimate_benchmark_timing"],
+      "symbols": [
+        "create_run",
+        "estimate_benchmark_timing"
+      ],
       "purpose": "Expose benchmark timing previews and resolve the same execution budget at run creation.",
       "boundaries": "Evaluation API adaptation over benchmark_timing. Preview is pure configuration analysis; run creation retains existing target validation, authorization and tracked execution. Explicit manual limits are preserved.",
-      "examples": ["apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.jsx", "apps/backend/src/llm_d_lens/evaluation/execution.py"],
-      "tests": ["apps/backend/tests/unit/evaluation/test_timing.py", "apps/backend/tests/contract/evaluation/test_api_contract.py"]
+      "examples": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.jsx",
+        "apps/backend/src/llm_d_lens/evaluation/execution.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/evaluation/test_timing.py",
+        "apps/backend/tests/contract/evaluation/test_api_contract.py"
+      ]
     },
     {
       "id": "evaluation-benchmark-settings",
       "path": "apps/frontend/src/pages/evaluation/model/benchmarkSettings.js",
-      "symbols": ["applyBenchmarkPreset", "benchmarkSummary", "benchmarkIssues"],
+      "symbols": [
+        "applyBenchmarkPreset",
+        "benchmarkSummary",
+        "benchmarkIssues"
+      ],
       "purpose": "Apply benchmark presets, count planned traffic and validate benchmark form values.",
       "boundaries": "Pure Evaluation form logic. Counts include targets and parallel instances, exclude warm-up, and leave unsupported workloads unknown. Null or omitted execution timeout means automatic; backend validation remains authoritative.",
-      "examples": ["apps/frontend/src/pages/evaluation/ui/EvaluationDashboard.jsx", "apps/frontend/src/pages/evaluation/ui/EvaluationTaskWizard.jsx", "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.jsx"],
-      "tests": ["apps/frontend/src/pages/evaluation/model/benchmarkSettings.test.js"]
+      "examples": [
+        "apps/frontend/src/pages/evaluation/ui/EvaluationDashboard.jsx",
+        "apps/frontend/src/pages/evaluation/ui/EvaluationTaskWizard.jsx",
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.jsx"
+      ],
+      "tests": [
+        "apps/frontend/src/pages/evaluation/model/benchmarkSettings.test.js"
+      ]
     },
     {
       "id": "evaluation-benchmark-inputs",
       "path": "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.jsx",
-      "symbols": ["BenchmarkInputs"],
+      "symbols": [
+        "BenchmarkInputs"
+      ],
       "purpose": "Compose workload, traffic, SLO, timeout and timing-preview controls for Evaluation creation surfaces.",
       "boundaries": "Controlled Evaluation form. Uses shared benchmark settings and timing components; workload selection and submission stay with callers. Full routing traffic is explicit and preset objects are cloned before editing.",
-      "examples": ["apps/frontend/src/pages/evaluation/ui/EvaluationDashboard.jsx", "apps/frontend/src/pages/evaluation/ui/EvaluationTaskWizard.jsx"],
-      "tests": ["apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.test.jsx"]
+      "examples": [
+        "apps/frontend/src/pages/evaluation/ui/EvaluationDashboard.jsx",
+        "apps/frontend/src/pages/evaluation/ui/EvaluationTaskWizard.jsx"
+      ],
+      "tests": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.test.jsx"
+      ]
     },
     {
       "id": "evaluation-benchmark-timing-display",
       "path": "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.jsx",
-      "symbols": ["BenchmarkTiming"],
+      "symbols": [
+        "BenchmarkTiming"
+      ],
       "purpose": "Display shared backend timing estimates before submission and an optional compact remaining-time badge during execution.",
       "boundaries": "Uses authenticated Evaluation transport for debounced previews and visibility-aware polling for runtime display. Compact mode shows only remaining time and hides terminal runs; configuration previews retain detailed budgets. Does not infer hardware throughput, whole-workflow ETA or request progress. Handles unavailable estimates and overruns without false countdowns.",
-      "examples": ["apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.jsx", "apps/frontend/src/pages/evaluation/ui/OptimizationEvaluationDetails.jsx"],
-      "tests": ["apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.test.jsx", "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.test.jsx"]
+      "examples": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.jsx",
+        "apps/frontend/src/pages/evaluation/ui/OptimizationEvaluationDetails.jsx"
+      ],
+      "tests": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.test.jsx",
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkInputs.test.jsx"
+      ]
     },
     {
       "id": "evaluation-benchmark-time-values",
       "path": "apps/frontend/src/pages/evaluation/model/benchmarkSettings.js",
-      "symbols": ["benchmarkTimeDisplay", "formatBenchmarkMinutes"],
+      "symbols": [
+        "benchmarkTimeDisplay",
+        "formatBenchmarkMinutes"
+      ],
       "purpose": "Format backend timing estimates, elapsed time and active phase deadlines for Evaluation views.",
       "boundaries": "Pure presentation of persisted timing and timestamps. Terminal runs stop counting, unknown workloads stay unknown and overdue estimates do not claim zero remaining. No request-progress inference.",
-      "examples": ["apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.jsx"],
-      "tests": ["apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.test.jsx"]
+      "examples": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.jsx"
+      ],
+      "tests": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/BenchmarkTiming.test.jsx"
+      ]
     },
     {
       "id": "remote-repository-preparation",
@@ -1424,39 +1517,18 @@
       ]
     },
     {
-      "id": "reuse-task-evidence",
-      "path": "tools/reuse/evidence.mjs",
-      "symbols": [
-        "taskPath",
-        "readTask",
-        "repositoryState",
-        "changedPaths",
-        "taskErrors",
-        "reportFreshness"
-      ],
-      "purpose": "Task evidence, Git-visible input fingerprints, and verification-report freshness.",
-      "boundaries": "Local tooling only; ignored runtime/cache excluded, task digest bound separately. Evidence is not authenticated and does not prove agent understanding. Task command logs are hash-bound.",
-      "examples": [
-        "tools/reuse/cli.mjs",
-        "tools/reuse/summary.mjs"
-      ],
-      "tests": [
-        "tools/reuse/cli.test.mjs"
-      ]
-    },
-    {
       "id": "reuse-registration-review",
       "path": "tools/reuse/registration.mjs",
       "symbols": [
         "registrationCandidates"
       ],
       "purpose": "Discover changed public declarations for catalog registration review.",
-      "boundaries": "Advisory JS/TS export and Python top-level function/class discovery, not exhaustive API analysis; exclusions expire on enclosing file changes. Catalog remains a curated capability map.",
+      "boundaries": "Advisory JS/TS export and Python top-level function/class discovery, not exhaustive API analysis. No task records or exclusion ledger; catalog remains curated.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
       "tests": [
-        "tools/reuse/evidence.test.mjs",
+        "tools/reuse/repository.test.mjs",
         "tools/reuse/cli.test.mjs"
       ]
     },
@@ -1465,14 +1537,10 @@
       "path": "tools/reuse/decisions.mjs",
       "symbols": [
         "readDecisions",
-        "createRequest",
-        "resolveRequest",
-        "validateScope",
-        "evidenceDetails",
-        "assessPending"
+        "evidenceChanged"
       ],
-      "purpose": "Record human decisions, distinguish task-related pending decisions from global pending decisions, and track changes to historical evidence.",
-      "boundaries": "Unknown scope, unknown capability or changed evidence stays blocking. Review provenance records supplied statements, not authenticated approval. Never auto-resolve historical pending.",
+      "purpose": "Read existing decisions without creating or resolving audit records.",
+      "boundaries": "Existing pending decisions still return exit 2; malformed records fail checks. Historical decisions with changed evidence are reported, never treated as new approval.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
@@ -1491,34 +1559,13 @@
         "localEmbedder"
       ],
       "purpose": "Local multilingual capability retrieval with configurable distinct-file recall.",
-      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1\u2013100. Lexical mode is separate; offline mode requires cached model.",
+      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1\u2013100. Lexical mode is separate; offline mode requires cached model. Lexical search is the default. Semantic detail caches retain unchanged files across queries and remove changed/deleted source entries.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
       "tests": [
         "tools/reuse/search.test.mjs",
-        "tools/reuse/evidence.test.mjs",
         "tools/reuse/semantic.smoke.mjs"
-      ]
-    },
-    {
-      "id": "reuse-module-review",
-      "path": "tools/reuse/review.mjs",
-      "symbols": [
-        "reviewInventory",
-        "createCoverage",
-        "coverageAssessment",
-        "reviewInstructions",
-        "renderReview"
-      ],
-      "purpose": "Per-capability module coverage and repository review evidence.",
-      "boundaries": "Inventories Git-visible text and explicit exclusions. Agent host owns semantic review and compatible refactors; CLI prepares/checks evidence and renders incomplete reports honestly. Unknown pending remains blocking; no automatic commits or business approval. Interim review-status reuses coverage assessment without a duplicate scan; coverage recorded is not final completion. Whole-repository review rejects module narrowing.",
-      "examples": [
-        "tools/reuse/cli.mjs",
-        ".agents/skills/repo-review/SKILL.md"
-      ],
-      "tests": [
-        "tools/reuse/cli.test.mjs"
       ]
     },
     {
@@ -1875,9 +1922,10 @@
       "symbols": [
         "historicalEvidenceSummary",
         "historicalBenchmarkLabel",
-        "generatorLabel"
+        "generatorLabel",
+        "candidateAnalysis"
       ],
-      "purpose": "Presentation helpers for historical benchmark records and candidate-generator provenance.",
+      "purpose": "Presentation helpers for historical benchmarks, candidate estimates and generator provenance.",
       "boundaries": "Presentation only. It formats server-provided measurements, relevance and outcomes without aggregating metrics, calculating confidence, or changing candidate eligibility.",
       "examples": [
         "apps/frontend/src/pages/deployment/ui/AgenticDeploymentWorkspace.jsx"
@@ -2782,7 +2830,7 @@
         "checkEnglish"
       ],
       "purpose": "Check all Git-visible repository text and optional PR metadata for Chinese characters.",
-      "boundaries": "Read-only Git inventory including dotfiles and untracked non-ignored files; reports Han characters in filenames and UTF-8/UTF-16 text. Skips binary assets, symlinks, and deleted files; fails on undecodable text. Agent performs reviewed translation; scanner never rewrites content.",
+      "boundaries": "Read-only Git inventory including dotfiles and untracked non-ignored files; reports Han characters in filenames and UTF-8/UTF-16 text. Skips binary assets, symlinks, and deleted files; fails on undecodable text. Agent performs reviewed translation; scanner never rewrites content. Staged mode reads index blobs, including partially staged files, using the same locale exception.",
       "examples": [
         ".github/workflows/ci-pr-checks.yaml"
       ],
@@ -2885,8 +2933,8 @@
       "symbols": [
         "model_cache_environment"
       ],
-      "purpose": "Return the Hugging Face environment for model servers with a mounted cache, including optional online first-use downloads into writable caches.",
-      "boundaries": "Deploy providers only. auto-cache gets HF_HOME=/model-cache plus offline flags by default; Standard baseline vLLM and the optimized-baseline, P/D disaggregation, precise-prefix-cache-routing and tiered-prefix-cache providers pass offline=false for writable caches to resolve and download missing snapshots. Other sources go offline only when cache_mounted is true (shared-path or ad-hoc mountPath). A source with no cache mount stays online. Offline startup requires a complete snapshot for the served revision.",
+      "purpose": "Set offline Hugging Face resolution for provider-rendered deployment model servers.",
+      "boundaries": "Ordinary provider rendering only; exact published manifests bypass this helper. Always sets HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1, even for legacy offline=false inputs. auto-cache also sets HF_HOME=/model-cache. Shared creation preflight requires ready cached model revisions before rendering. Offline flags are not network isolation.",
       "examples": [
         "apps/backend/src/llm_d_lens/deploy/providers/optimized_baseline.py",
         "apps/backend/src/llm_d_lens/deploy/providers/baseline_vllm.py",
@@ -2902,6 +2950,15 @@
         "apps/backend/tests/unit/deploy/providers/test_precise_prefix_cache_routing.py",
         "apps/backend/tests/unit/deploy/providers/test_helm_kustomize.py"
       ]
+    },
+    {
+      "id": "deployment-model-cache-preflight",
+      "path": "apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py",
+      "symbols": ["require_cached_model", "validate_cached_model_arguments"],
+      "purpose": "Require ready registered Model Cache models before any deployment provider renders resources.",
+      "boundaries": "Deployment creation only. Resolves model and tokenizer dependencies per active provider role, requires exact ready repository/revision pairs and synchronized nodes, and rejects conflicting or unsupported overrides. Reuses Storage readiness, Model Cache listing, managed environment checks and manifest argument parsing. Compares final ordinary and published manifest loading arguments with checked dependencies. Requires an explicit cluster and a model-cache-purpose non-dynamic volume. Ordinary provider rendering uses read-only serving mounts; published-manifest offline flags and storage binding remain outside this check. Does not download, delete or repair models.",
+      "examples": ["apps/backend/src/llm_d_lens/deploy/service.py"],
+      "tests": ["apps/backend/tests/unit/deploy/providers/test_storage_mount.py", "apps/backend/tests/unit/deploy/test_creation_refresh.py"]
     },
     {
       "id": "admin-managed-hugging-face-environment",
@@ -3202,6 +3259,57 @@
         "apps/backend/tests/unit/evaluation/test_ownership.py",
         "apps/backend/tests/unit/evaluation/test_cancellation.py",
         "apps/backend/tests/unit/evaluation/test_artifact_storage.py"
+      ]
+    },
+    {
+      "id": "reuse-git-history",
+      "path": "tools/reuse/repository.mjs",
+      "symbols": [
+        "SOURCE_ROOTS",
+        "revisionFiles",
+        "sources",
+        "duplicates"
+      ],
+      "purpose": "Read binary-safe historical Git blobs in a batch and compare source duplication.",
+      "boundaries": "Local Git-visible tooling; source roots include monorepo workspaces and historical aliases. History preserves filenames and modes. Empty changed-source sets skip tokenization. Similarity remains advisory.",
+      "examples": [
+        "tools/reuse/cli.mjs"
+      ],
+      "tests": [
+        "tools/reuse/repository.test.mjs"
+      ]
+    },
+    {
+      "id": "documentation-file-links",
+      "path": "tools/check-docs.mjs",
+      "symbols": [
+        "checkDocs"
+      ],
+      "purpose": "Check local Markdown and MDX file targets for selected documentation files.",
+      "boundaries": "No network access; extensionless routes, anchors and MDX compilation require the full Docusaurus build.",
+      "examples": [
+        "tools/check-docs.test.mjs"
+      ],
+      "tests": [
+        "tools/check-docs.test.mjs"
+      ]
+    },
+    {
+      "id": "cluster-hf-token-secret",
+      "path": "apps/backend/src/llm_d_lens/cluster/service.py",
+      "symbols": [
+        "create_hf_token_secret",
+        "update_hf_token_secret"
+      ],
+      "purpose": "Write the cluster-level HF_TOKEN Secret on the target cluster and record its namespace/name on the Lens cluster record so Deploy and Model Cache default to it.",
+      "boundaries": "The token value lives only on the target cluster; Lens persists coordinates, never the secret. Creation uses kubectl create so a name collision fails explicitly; rotation uses kubectl apply and defaults the coordinates to the ones already recorded. Namespace-local llm-d-hf-token copies derived by deploy/runtime/composition.py and model_cache/jobs.py are re-derived per run and are not rewritten here.",
+      "examples": [
+        "apps/backend/src/llm_d_lens/cluster/router.py",
+        "apps/frontend/src/pages/clusters/ui/EditClusterModal.jsx",
+        "apps/frontend/src/pages/clusters/ui/CreateClusterWizard.jsx"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/cluster/test_service.py"
       ]
     }
   ]

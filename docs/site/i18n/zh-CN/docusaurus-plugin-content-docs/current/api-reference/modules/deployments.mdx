@@ -686,6 +686,12 @@ deployment_run_manager.rebind_cluster_session(
 
 列出部署执行，不会创建新的端口转发。
 
+该接口读取的是已存储的记录，不会直接查询集群。后台对账任务会持续更新这些记录，重新核对
+所有处于运行中、成功、部分成功或**失败**状态的 run（失败的发布若其 Pod 之后恢复，会被改回
+`ready`；若命名空间已不存在，则改为 `cleaned`）。只有已清理和已取消的 run 才是终态。
+如需立即重新核对而不等待该周期，请调用
+`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh`。
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`GET /api/v1/deployments/executions`**

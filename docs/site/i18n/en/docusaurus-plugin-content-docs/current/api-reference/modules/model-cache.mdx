@@ -13,9 +13,21 @@ Download, deletion and incremental node synchronization share `launch_cache_jobs
 
 Routes live in `llm_d_lens/model_cache/router.py`. Each endpoint below documents the REST contract and the matching `ModelCacheService` or Hugging Face helper call it uses.
 
-Deployments consume the cache directly. `llm_d_lens.deploy.providers.model_cache_environment.model_cache_environment` runs every cache-backed model server with Hugging Face offline (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`), and adds `HF_HOME=/model-cache` for the `auto-cache` source so vLLM resolves the model from the mounted snapshot instead of contacting `huggingface.co` at startup. Providers that mount the model directory directly (`shared-path`, `mountPath`, including P/D disaggregation, precise-prefix-cache-routing and tiered-prefix-cache) get the offline flags without `HF_HOME`. This keeps cache-backed startup working on restricted or flaky networks (for example `repo_utils.py` SSL `unexpected_eof_while_reading` failures). The `huggingface` source still downloads at startup and stays online.
+Model Cache owns deployment-model downloads. Shared creation preflight requires a ready model/revision in a registered cache on the selected cluster; local-disk entries must also be synchronized to the eligible nodes. `llm_d_lens.deploy.providers.storage_mount.require_cached_model` enforces this before rendering. During ordinary provider rendering, `llm_d_lens.deploy.providers.model_cache_environment.model_cache_environment` sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, including for legacy online inputs, and adds `HF_HOME=/model-cache` for the `auto-cache` source. Those serving mounts are read-only, and missing files fail offline resolution instead of being downloaded at startup. Exact published manifests bypass ordinary provider rendering and are not covered by the same final-manifest guarantees; see [deployment limitations](/user-guide/deployments#model-cache-enforcement-limitations).
 
 Hugging Face environment variables (`HF_*`, `HUGGING*`, `TRANSFORMERS_*`) are administrator-managed. The deployment planning API and configuration validation reject user-supplied `customParameters` entries that set them (see `llm_d_lens/configuration/managed_environment.py`), and the deployment editor blocks them with an "administrator-managed" message. The platform injects these values from the cluster's saved proxy, model cache and token configuration.
+
+Deployment callers use `require_cached_model(overrides, cluster_id=..., provider_id=...)`
+before rendering. `provider_id` defaults to `baseline-vllm`; the shared deployment
+service supplies the actual provider. The check resolves `revision`, `tokenizer`,
+and `tokenizer-revision` separately for each active role, matches repository IDs
+and revisions exactly, and checks node synchronization for both model and tokenizer.
+Inactive-role arguments are ignored and conflicting dependency values are rejected.
+The manifest adapter then uses `validate_cached_model_arguments` to compare the
+rendered loading arguments against the checked dependencies, including published
+manifests. This argument check does not enforce published-manifest offline settings
+or storage binding. Unsupported dependency overrides are described in the
+[deployment guide](/user-guide/deployments#open-the-deployment-creation-flow).
 
 ### List Model Cache entries
 
@@ -169,7 +181,9 @@ Request a model download into Lens Model Cache. Use this to seed a ready shared 
   <TabItem value="rest-api" label="REST API">
     **`POST /api/v1/model-cache/entries`**
 
-    Request: body fields are `clusterId` (`str`), `storageVolumeId` (`str`), and `source` (`ModelSource`). `tokenSource` is accepted for backward compatibility but ignored: downloads always use the HuggingFace token saved with the cluster (the wizard's `hf_token_secret`), or run unauthenticated when the cluster has none. The frontend's **Download model** dialog no longer sends `tokenSource` at all.
+    Request: body fields are `clusterId` (`str`), `storageVolumeId` (`str`), `source` (`ModelSource`), and the optional `force` (`bool`, default `false`). `tokenSource` is accepted for backward compatibility but ignored: downloads always use the HuggingFace token saved with the cluster (the wizard's `hf_token_secret`), or run unauthenticated when the cluster has none. The frontend's **Download model** dialog no longer sends `tokenSource` at all.
+
+    If the storage volume already holds an entry for the same model and revision -- in any status -- the route answers `409` with code `model_cache_entry_exists` instead of downloading, so the caller can ask the user to confirm. The problem body carries `entryId`, `entryStatus`, `model` and `storageVolumeId`. Resend the same request with `force: true` to go ahead: a `ready` or `failed` entry is reset to `pending` and downloaded again in place, and a `pending` or `downloading` entry is returned unchanged so the confirmation joins the running download rather than starting a second one. No duplicate entry is ever created.
 
     ```json
     {
@@ -186,6 +200,20 @@ Request a model download into Lens Model Cache. Use this to seed a ready shared 
     ```
 
     Response: returns the queued `ModelCacheEntry` payload that was created for the download request.
+
+    ```json
+    {
+      "type": "about:blank",
+      "status": 409,
+      "title": "Model already on this storage volume",
+      "detail": "'Qwen/Qwen2.5-7B-Instruct@main' is already on this storage volume (status: ready)",
+      "code": "model_cache_entry_exists",
+      "entryId": "model-cache-7f3a2c1d",
+      "entryStatus": "ready",
+      "model": "Qwen/Qwen2.5-7B-Instruct@main",
+      "storageVolumeId": "storage-abc12345"
+    }
+    ```
 
     ```json
     {
@@ -220,23 +248,27 @@ Request a model download into Lens Model Cache. Use this to seed a ready shared 
     import asyncio
 
     from llm_d_lens.model_cache.contracts import HuggingFaceSource, ModelCacheCreateRequest, ModelSource, ModelSourceKind
-    from llm_d_lens.model_cache.service import default_service
+    from llm_d_lens.model_cache.service import ModelCacheEntryExistsError, default_service
 
 
     async def main() -> None:
         service = default_service()
         # tokenSource is intentionally omitted: request_download() always resolves the
         # HuggingFace token from the cluster's saved hf_token_secret instead.
-        entry = await service.request_download(
-            ModelCacheCreateRequest(
-                clusterId="cluster-123",
-                storageVolumeId="storage-abc12345",
-                source=ModelSource(
-                    kind=ModelSourceKind.HUGGINGFACE,
-                    huggingface=HuggingFaceSource(repoId="Qwen/Qwen2.5-7B-Instruct", revision="main"),
-                ),
-            )
+        request = ModelCacheCreateRequest(
+            clusterId="cluster-123",
+            storageVolumeId="storage-abc12345",
+            source=ModelSource(
+                kind=ModelSourceKind.HUGGINGFACE,
+                huggingface=HuggingFaceSource(repoId="Qwen/Qwen2.5-7B-Instruct", revision="main"),
+            ),
         )
+        try:
+            entry = await service.request_download(request)
+        except ModelCacheEntryExistsError as already_there:
+            # Ask the operator whether to download it again, then retry with force.
+            print(already_there.entry.id, already_there.entry.status)
+            entry = await service.request_download(request.model_copy(update={"force": True}))
         await service.provision(entry.id)
         print(entry.id, entry.status)
 

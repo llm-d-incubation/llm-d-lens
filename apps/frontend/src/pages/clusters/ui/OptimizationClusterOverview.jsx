@@ -11,6 +11,10 @@ import { getClusterDeploymentMonitoring, manageDeploymentMonitoring } from './Cl
 import { getClusterStackLinks } from './ClusterMonitoringStack/clusterMonitoringStackBackend';
 import { connectDeploymentExecution } from '../../optimization';
 import { storePendingModelMarketCluster } from '../../model-market';
+// Imported from the leaf presentation module rather than the deployment page's
+// index so this page does not create a module cycle with it (that module
+// already imports the Clusters page's monitoring client).
+import { isDeploymentReady } from '../../deployment/ui/DeploymentManagement/deploymentPresentation';
 
 const CENTRAL_NAMESPACE = 'llm-d-monitoring';
 const GRAFANA_PERFORMANCE_DASHBOARD = '/d/llm-d-performance/llm-d-performance-dashboard';
@@ -635,7 +639,14 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                 : { status: 'ready', label: 'Healthy' };
     const monitoringMetric = componentMetricStatus(components.monitoring?.status);
     const cpuDisplay = { value: `${formatCores(actualCpuCores)} cores`, unit: `/ ${formatCores(hardware.cpuCores)} cores` };
-    const memoryDisplay = { value: formatBytes(actualMemoryBytes), unit: `/ ${formatBytes(hardware.memoryBytes)}` };
+    // Memory and Disk lead with the capacity still free, not the share already
+    // taken -- the usage percentage stays on the card's usage line below. When
+    // the backend cannot report free capacity (no usage reading), fall back to
+    // the capacity that is online so the card never reads as fully free.
+    const memoryAvailableBytes = hardware.memoryAvailableBytes;
+    const memoryDisplay = typeof memoryAvailableBytes === 'number'
+        ? { value: formatBytes(memoryAvailableBytes), unit: `free / ${formatBytes(hardware.memoryBytes)}` }
+        : { value: formatBytes(actualMemoryBytes), unit: `/ ${formatBytes(hardware.memoryBytes)}` };
     const gpuDisplay = { value: hardware.availableGpuCount ?? 0, unit: `available / ${hardware.gpuCount ?? actualGpuCount} total` };
     const formattedVram = formatBytes(actualVramBytes).split(' ');
     const vramDisplay = { value: formattedVram[0] || '0', unit: formattedVram[1] || 'B' };
@@ -645,8 +656,9 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     const deviceMetrics = new Set(hardware.deviceMetrics || []);
     const hasDeviceMetric = (key) => deviceMetrics.size === 0 || deviceMetrics.has(key);
     const showVramColumn = hasDeviceMetric('vramTotalBytes');
-    const diskDisplay = typeof diskUsagePercent === 'number'
-        ? { value: `${diskUsagePercent.toFixed(1)}%`, unit: `/ ${formatBytes(hardware.diskBytes)}` }
+    const diskAvailableBytes = hardware.diskAvailableBytes;
+    const diskDisplay = typeof diskAvailableBytes === 'number'
+        ? { value: formatBytes(diskAvailableBytes), unit: `free / ${formatBytes(hardware.diskBytes)}` }
         : { value: '—', unit: 'unavailable' };
     const readyClusters = clusters.filter((cluster) => cluster.ready);
     const selectedCluster = readyClusters.find((cluster) => cluster.id === selectedId) || overview?.cluster || null;
@@ -1178,7 +1190,11 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                                             const mon = monitoringByDeployment[deployment.execution_id] || {};
                                                             const monChip = monitoringChip(mon.status);
                                                             const actionKey = `${deployment.execution_id}:`;
-                                                            const installingEnabled = monitoringStackReady && mon.status !== 'enabled';
+                                                            // Monitoring scrapes this deployment's Pods, so it can only be
+                                                            // installed or enabled once the rollout is ready (same rule as
+                                                            // the Deployments table's monitoring menu).
+                                                            const deploymentReady = isDeploymentReady(deployment.status);
+                                                            const installingEnabled = monitoringStackReady && mon.status !== 'enabled' && deploymentReady;
                                                             return (
                                                                 <tr key={deployment.execution_id || `${deployment.run_id}-${deployment.case_id}`} className="transition-colors hover:bg-slate-800/40">
                                                                     <td className="px-5 py-3 font-mono text-xs text-slate-200">
@@ -1325,6 +1341,11 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                                                                                         icon={<Play size={14} className="shrink-0 text-emerald-400" />}
                                                                                                         label="Enable"
                                                                                                     />
+                                                                                                    {!deploymentReady && (
+                                                                                                        <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
+                                                                                                            Available once the deployment is ready.
+                                                                                                        </p>
+                                                                                                    )}
                                                                                                     <div className="h-px bg-slate-700/70" />
                                                                                                     <MonitoringMenuItem
                                                                                                         onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'uninstall'); }}
@@ -1336,12 +1357,19 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                                                                                 </>
                                                                                             )}
                                                                                             {mon.status !== 'enabled' && mon.status !== 'disabled' && (
-                                                                                                <MonitoringMenuItem
-                                                                                                    onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'install'); }}
-                                                                                                    disabled={!installingEnabled || !!monitoringAction}
-                                                                                                    icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
-                                                                                                    label="Install"
-                                                                                                />
+                                                                                                <>
+                                                                                                    <MonitoringMenuItem
+                                                                                                        onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'install'); }}
+                                                                                                        disabled={!installingEnabled || !!monitoringAction}
+                                                                                                        icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
+                                                                                                        label="Install"
+                                                                                                    />
+                                                                                                    {!deploymentReady && (
+                                                                                                        <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
+                                                                                                            Available once the deployment is ready.
+                                                                                                        </p>
+                                                                                                    )}
+                                                                                                </>
                                                                                             )}
                                                                                         </div>
                                                                                     </>,

@@ -120,10 +120,19 @@ async def _refresh_deployment_record(run, *, pending_only: bool = False) -> None
 
 
 async def _refresh_all_deployment_records(*, pending_only: bool = False) -> None:
+    # FAILED belongs here for the same reason FAILED is a refreshable case
+    # above: a rollout that exceeded its progress deadline is recorded as
+    # failed, but the workload often recovers afterwards (a CrashLoopBackOff
+    # that clears once its model cache is complete, for example). Without the
+    # run itself being refreshable, that recovery is never observed and the
+    # deployment stays red forever even though its Pods are serving.
+    # ``refresh_diagnostics`` promotes such an execution back to READY, and a
+    # namespace that really is gone is corrected to CLEANED instead.
     refreshable_statuses = {
         DeploymentRunStatus.RUNNING,
         DeploymentRunStatus.SUCCEEDED,
         DeploymentRunStatus.PARTIALLY_SUCCEEDED,
+        DeploymentRunStatus.FAILED,
     }
     await asyncio.gather(
         *(

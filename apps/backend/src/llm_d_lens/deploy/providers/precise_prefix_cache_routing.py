@@ -828,9 +828,7 @@ class PrecisePrefixCacheRoutingAdapter:
         for name, value in parameters["environment"].items():
             if value:
                 environment = _set_environment(environment, name, value)
-        for name, value in model_cache_environment(
-            model_source, cache_mounted=cache_mounted, offline=model_source != "auto-cache"
-        ).items():
+        for name, value in model_cache_environment(model_source, cache_mounted=cache_mounted).items():
             environment = _set_environment(environment, name, value)
         container["args"] = args
         container["env"] = environment

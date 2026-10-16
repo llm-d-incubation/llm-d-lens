@@ -82,6 +82,11 @@ description: 发布部署、创建 API 密钥并调用模型。
 **Stop** 和 **Uninstall** 可能中断模型请求，请在计划维护时执行。
 **HTTPRoute** 和 **InferencePool** 只显示状态，没有启动或停止按钮。
 
+**Stop** 只是把组件缩到 0 副本，并不移除它，因此其方框会变成灰色（`installed, stopped`）
+而不是绿色，菜单中也会改为 **Start**。Gateway 同理：Gateway 资源仍然处于 programmed 状态，
+但没有运行中的副本时方框显示为灰色而非绿色。绿灯表示该组件确实有正在运行的副本。
+**Uninstall** 则彻底移除组件，方框变为琥珀色（`not installed`）。
+
 ## 看不到操作按钮
 
 请管理员检查你的模型服务权限和集群访问范围。不要使用他人的 API 密钥。

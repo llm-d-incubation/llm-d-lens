@@ -10,6 +10,14 @@ import { ModelMarketPickerModal } from './ModelMarketPickerModal';
 import { MODELS } from '@repo/shared/catalog';
 
 const REPO_ID_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+const ENTRY_EXISTS_CODE = 'model_cache_entry_exists';
+const CONFLICT_HINT = {
+    ready: 'It has already finished downloading. Downloading again refreshes the files from the source.',
+    pending: 'A download for it is already queued. Continuing joins that download instead of starting a second one.',
+    downloading: 'A download for it is already running. Continuing joins that download instead of starting a second one.',
+    failed: 'Its last download failed. Continuing starts the download over.',
+    deleting: 'It is currently being removed from this volume. Continuing downloads it again afterwards.',
+};
 const MODEL_SOURCES = [
     { value: 'huggingface', label: 'Hugging Face' },
     { value: 'model-market', label: 'Model Market' },
@@ -26,6 +34,7 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
     const [pickerOpen, setPickerOpen] = useState(false);
     const [marketPickerOpen, setMarketPickerOpen] = useState(false);
     const [selectedModelTags, setSelectedModelTags] = useState(null);
+    const [conflict, setConflict] = useState(null);
     const { pending: creating, error, run } = useSubmission('Failed to start model download', { keepPendingOnSuccess: true });
 
     useEffect(() => {
@@ -82,9 +91,11 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
         }
     };
 
-    const submit = async (event) => {
-        event.preventDefault();
+    // The API refuses a model the volume already holds; show what is there and
+    // only resend with `force` once the user confirms.
+    const startDownload = async (force) => {
         if (invalid || creating) return;
+        setConflict(null);
         await run(async () => {
             const payload = {
                 clusterId,
@@ -93,9 +104,25 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
                     kind: 'huggingface',
                     huggingface: { repoId: repoId.trim(), revision: revision.trim() || 'main' },
                 },
+                ...(force ? { force: true } : {}),
             };
-            await onCreate(payload);
+            try {
+                await onCreate(payload);
+            } catch (failure) {
+                if (failure?.code === ENTRY_EXISTS_CODE) {
+                    setConflict({
+                        model: failure.body?.model || repoId.trim(),
+                        status: failure.body?.entryStatus || '',
+                    });
+                }
+                throw failure;
+            }
         });
+    };
+
+    const submit = async (event) => {
+        event.preventDefault();
+        await startDownload(false);
     };
 
     return (
@@ -110,9 +137,15 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
             footer={
                 <>
                     <Button variant="secondary" onClick={onCancel} disabled={creating}>Cancel</Button>
-                    <Button variant="sky" type="submit" form="download-model-form" isLoading={creating} disabled={invalid}>
-                        {creating ? 'Starting' : 'Start download'}
-                    </Button>
+                    {conflict ? (
+                        <Button variant="danger" onClick={() => startDownload(true)} isLoading={creating} disabled={invalid}>
+                            {creating ? 'Starting' : 'Download anyway'}
+                        </Button>
+                    ) : (
+                        <Button variant="sky" type="submit" form="download-model-form" isLoading={creating} disabled={invalid}>
+                            {creating ? 'Starting' : 'Start download'}
+                        </Button>
+                    )}
                 </>
             }
         >
@@ -262,7 +295,19 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
                     no token selection is needed.
                 </p>
 
-                <FormError message={error} />
+                {conflict ? (
+                    <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-100">
+                        <p className="font-semibold">
+                            <code className="font-mono">{conflict.model}</code> is already on this storage volume.
+                        </p>
+                        <p className="mt-1 text-amber-200/90">
+                            {CONFLICT_HINT[conflict.status] || 'Continuing downloads it again.'} Choose
+                            {' '}<strong>Download anyway</strong> to continue, or <strong>Cancel</strong> to keep what is there.
+                        </p>
+                    </div>
+                ) : (
+                    <FormError message={error} />
+                )}
             </form>
 
             {pickerOpen && (

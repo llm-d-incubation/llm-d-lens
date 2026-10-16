@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 function idempotencyKey() {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -57,10 +57,5 @@ export function useMonitoringInstall({ request, setRequest, preflightRequest, in
         }
     };
 
-    const reset = useCallback(() => {
-        setPreflight(null);
-        setError(null);
-        keyRef.current = null;
-    }, []);
-    return { preflight, error, checking, installing, updateRequest, runPreflight, startInstall, reset };
+    return { preflight, error, checking, installing, updateRequest, runPreflight, startInstall };
 }

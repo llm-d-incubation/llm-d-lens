@@ -79,6 +79,21 @@ class ModelCacheInvalidStateError(Exception):
     """Raised when an operation is attempted against an entry in the wrong status."""
 
 
+class ModelCacheEntryExistsError(Exception):
+    """Raised when the chosen storage volume already holds the requested model.
+
+    Carries the existing entry so the API can tell the caller what is already
+    there (downloaded, in flight, or failed) and let a human decide whether to
+    download it again with ``force``.
+    """
+
+    def __init__(self, entry: ModelCacheEntry) -> None:
+        self.entry = entry
+        super().__init__(
+            f"'{entry.source.display_name()}' is already on this storage volume (status: {entry.status})"
+        )
+
+
 def _overall_status(entry: ModelCacheEntry) -> ModelCacheEntryStatus:
     statuses = {progress.status for progress in entry.node_progress}
     if not statuses:
@@ -171,7 +186,11 @@ class ModelCacheService:
         volume = await get_ready_volume(request.storage_volume_id, cluster_id=request.cluster_id)
         source_display = request.source.display_name()
         existing = self._store.find_by_volume_and_source(volume.id, source_display)
+        if existing and not request.force:
+            raise ModelCacheEntryExistsError(existing)
         if existing and existing.status in (ModelCacheEntryStatus.PENDING, ModelCacheEntryStatus.DOWNLOADING):
+            # A Job is already fetching exactly this model here; confirming the
+            # prompt joins that download rather than starting a second one.
             return existing
         assert request.source.huggingface is not None  # enforced by ModelSourceKind check above
         # Downloads always use the cluster's saved HF token (never a user choice).

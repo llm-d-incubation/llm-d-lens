@@ -51,7 +51,7 @@ async def test_delete_cluster_succeeds_when_no_storage_volumes(monkeypatch):
 
     async def fake_delete_namespace(namespace, *, cluster_id=None, timeout=None):
         deleted_namespaces.append(namespace)
-        return CommandResult(returncode=0, stdout="", stderr="")
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", fake_delete_namespace)
     deleted: list[str] = []
@@ -60,6 +60,311 @@ async def test_delete_cluster_succeeds_when_no_storage_volumes(monkeypatch):
     await service.delete_cluster("cluster-1")
     assert deleted == ["cluster-1"]
     assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_cluster_deletes_secret_without_dropping_a_shared_namespace(monkeypatch):
+    """A cluster may point at an HF_TOKEN Secret in a namespace Lens does not
+    own (chosen in the wizard or by a later rotation). Deleting that whole
+    namespace would destroy unrelated workloads, so only the Secret goes."""
+    cluster = registry.Cluster(
+        id="cluster-1",
+        name="c1",
+        description="",
+        created_at="2026-01-01T00:00:00Z",
+        hf_token_secret_namespace="inference-scheduling",
+        hf_token_secret_name="llm-d-hf-token",
+    )
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+    monkeypatch.setattr(service, "_has_available_deployments", lambda cluster_id: False)
+    monkeypatch.setattr(
+        "llm_d_lens.storage.store.default_store",
+        lambda: SimpleNamespace(list=lambda: []),
+    )
+    monkeypatch.setattr(service.sessions, "close_session_for_server", lambda cluster_id: None)
+    monkeypatch.setattr(registry, "delete_cluster", lambda cluster_id: None)
+    deleted_namespaces: list[str] = []
+    deleted_secrets: list[tuple[str, str]] = []
+
+    async def fake_delete_namespace(namespace, *, cluster_id=None, timeout=None):
+        deleted_namespaces.append(namespace)
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    async def fake_delete_secret(name, *, namespace, cluster_id=None, timeout=None):
+        deleted_secrets.append((namespace, name))
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", fake_delete_namespace)
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_secret", fake_delete_secret)
+    monkeypatch.setattr(
+        service,
+        "scoped_runner",
+        _namespace_inspection_runner(labels={"kubernetes.io/metadata.name": "inference-scheduling"}, items=_BUSY_ITEMS),
+    )
+
+    await service.delete_cluster("cluster-1")
+
+    assert deleted_secrets == [("inference-scheduling", "llm-d-hf-token")]
+    # The Lens-owned namespace is still removed; the busy shared one is never deleted.
+    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+
+
+_BUSY_ITEMS = [
+    {"kind": "ConfigMap", "metadata": {"name": "kube-root-ca.crt"}},
+    {"kind": "Deployment", "metadata": {"name": "epp"}},
+]
+
+_INJECTED_ONLY_ITEMS = [
+    {"kind": "ConfigMap", "metadata": {"name": "kube-root-ca.crt"}},
+    {"kind": "ConfigMap", "metadata": {"name": "istio-ca-root-cert"}},
+    {"kind": "ServiceAccount", "metadata": {"name": "default"}},
+    {"kind": "Secret", "metadata": {"name": "default-token-x"}, "type": "kubernetes.io/service-account-token"},
+]
+
+
+def _namespace_inspection_runner(*, labels, items, api_resources_rc=0):
+    """Fake ``scoped_runner`` answering the namespace-emptiness probes."""
+
+    async def run(command, *, input=None, timeout=None):  # noqa: A002 - mirrors the real signature
+        if command[:3] == ["kubectl", "get", "namespace"]:
+            return CommandResult(argv=(), returncode=0, stdout=json.dumps({"metadata": {"labels": labels}}), stderr="")
+        if command[1] == "api-resources":
+            return CommandResult(argv=(), returncode=api_resources_rc, stdout="configmaps\nsecrets\npods\n", stderr="")
+        if command[1] == "get":
+            return CommandResult(argv=(), returncode=0, stdout=json.dumps({"items": items}), stderr="")
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    return lambda cluster_id: SimpleNamespace(run=run)
+
+
+def _cluster_with_external_secret():
+    return registry.Cluster(
+        id="cluster-1",
+        name="c1",
+        description="",
+        created_at="2026-01-01T00:00:00Z",
+        hf_token_secret_namespace="team-tokens",
+        hf_token_secret_name="hf-token-1",
+    )
+
+
+def _stub_delete_cluster_dependencies(monkeypatch, cluster, deleted_namespaces, deleted_secrets):
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+    monkeypatch.setattr(service, "_has_available_deployments", lambda cluster_id: False)
+    monkeypatch.setattr("llm_d_lens.storage.store.default_store", lambda: SimpleNamespace(list=lambda: []))
+    monkeypatch.setattr(service.sessions, "close_session_for_server", lambda cluster_id: None)
+    monkeypatch.setattr(registry, "delete_cluster", lambda cluster_id: None)
+
+    async def fake_delete_namespace(namespace, *, cluster_id=None, timeout=None):
+        deleted_namespaces.append(namespace)
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    async def fake_delete_secret(name, *, namespace, cluster_id=None, timeout=None):
+        deleted_secrets.append((namespace, name))
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", fake_delete_namespace)
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_secret", fake_delete_secret)
+
+
+@pytest.mark.asyncio
+async def test_delete_cluster_drops_a_namespace_left_holding_only_the_hf_token_secret(monkeypatch):
+    """Once the Secret is gone the namespace holds nothing but objects every
+    namespace gets for free, so keeping it serves no purpose."""
+    deleted_namespaces: list[str] = []
+    deleted_secrets: list[tuple[str, str]] = []
+    _stub_delete_cluster_dependencies(
+        monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets
+    )
+    monkeypatch.setattr(
+        service, "scoped_runner", _namespace_inspection_runner(labels={}, items=_INJECTED_ONLY_ITEMS)
+    )
+
+    await service.delete_cluster("cluster-1")
+
+    assert deleted_secrets == [("team-tokens", "hf-token-1")]
+    assert deleted_namespaces == ["team-tokens", "llm-d-bench-storage-cluster-1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_cluster_drops_a_namespace_lens_created_for_the_secret(monkeypatch):
+    """A namespace Lens created is removed on its label alone, without needing
+    the content probe to agree."""
+    deleted_namespaces: list[str] = []
+    deleted_secrets: list[tuple[str, str]] = []
+    _stub_delete_cluster_dependencies(
+        monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets
+    )
+    monkeypatch.setattr(
+        service,
+        "scoped_runner",
+        _namespace_inspection_runner(
+            labels={"app.kubernetes.io/managed-by": "llm-d-lens", "prism.ai/cluster-id": "cluster-1"},
+            items=_BUSY_ITEMS,
+        ),
+    )
+
+    await service.delete_cluster("cluster-1")
+
+    assert deleted_namespaces == ["team-tokens", "llm-d-bench-storage-cluster-1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_cluster_keeps_a_namespace_whose_contents_cannot_be_listed(monkeypatch):
+    """An uncertain answer must never authorise deleting a namespace."""
+    deleted_namespaces: list[str] = []
+    deleted_secrets: list[tuple[str, str]] = []
+    _stub_delete_cluster_dependencies(
+        monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets
+    )
+    monkeypatch.setattr(
+        service,
+        "scoped_runner",
+        _namespace_inspection_runner(labels={}, items=_INJECTED_ONLY_ITEMS, api_resources_rc=1),
+    )
+
+    await service.delete_cluster("cluster-1")
+
+    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_cluster_never_deletes_a_protected_namespace(monkeypatch):
+    """``default`` looks empty under the injected-object rule on some clusters;
+    it is still never a candidate for deletion."""
+    cluster = registry.Cluster(
+        id="cluster-1",
+        name="c1",
+        description="",
+        created_at="2026-01-01T00:00:00Z",
+        hf_token_secret_namespace="default",
+        hf_token_secret_name="hf-token-1",
+    )
+    deleted_namespaces: list[str] = []
+    deleted_secrets: list[tuple[str, str]] = []
+    _stub_delete_cluster_dependencies(monkeypatch, cluster, deleted_namespaces, deleted_secrets)
+    monkeypatch.setattr(
+        service,
+        "scoped_runner",
+        _namespace_inspection_runner(
+            labels={"app.kubernetes.io/managed-by": "llm-d-lens"}, items=_INJECTED_ONLY_ITEMS
+        ),
+    )
+
+    await service.delete_cluster("cluster-1")
+
+    assert deleted_secrets == [("default", "hf-token-1")]
+    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+
+
+@pytest.mark.asyncio
+async def test_delete_cluster_does_not_delete_the_secret_twice_in_its_own_namespace(monkeypatch):
+    """When the Secret lives in the Lens-owned namespace, deleting the
+    namespace already removes it; no separate Secret delete is issued."""
+    cluster = registry.Cluster(
+        id="cluster-1",
+        name="c1",
+        description="",
+        created_at="2026-01-01T00:00:00Z",
+        hf_token_secret_namespace="llm-d-bench-storage-cluster-1",
+        hf_token_secret_name="hf-token-abc",
+    )
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+    monkeypatch.setattr(service, "_has_available_deployments", lambda cluster_id: False)
+    monkeypatch.setattr("llm_d_lens.storage.store.default_store", lambda: SimpleNamespace(list=lambda: []))
+    monkeypatch.setattr(service.sessions, "close_session_for_server", lambda cluster_id: None)
+    monkeypatch.setattr(registry, "delete_cluster", lambda cluster_id: None)
+    deleted_secrets: list[tuple[str, str]] = []
+
+    async def fake_delete_namespace(namespace, *, cluster_id=None, timeout=None):
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    async def fake_delete_secret(name, *, namespace, cluster_id=None, timeout=None):
+        deleted_secrets.append((namespace, name))
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", fake_delete_namespace)
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_secret", fake_delete_secret)
+
+    await service.delete_cluster("cluster-1")
+
+    assert deleted_secrets == []
+
+
+@pytest.mark.asyncio
+async def test_delete_draft_cluster_deletes_storage_pvc_and_pv_not_only_the_record(monkeypatch):
+    """Cancelling the creation wizard must not leave the volume's PVC/PV bound
+    on the cluster with no Lens record left to reach them from."""
+    cluster = registry.Cluster(
+        id="cluster-draft", name="c", description="", created_at="2026-01-01T00:00:00Z", draft=True
+    )
+    volume = SimpleNamespace(id="storage-abc", cluster_id="cluster-draft")
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+    monkeypatch.setattr(service.sessions, "close_session_for_server", lambda cluster_id: None)
+    monkeypatch.setattr(registry, "delete_cluster", lambda cluster_id: None)
+    removed_records: list[str] = []
+    monkeypatch.setattr(
+        "llm_d_lens.storage.store.default_store",
+        lambda: SimpleNamespace(
+            list=lambda: [volume, SimpleNamespace(id="storage-other", cluster_id="cluster-other")],
+            delete=removed_records.append,
+        ),
+    )
+    objects_deleted: list[tuple[str, str]] = []
+    cache_cascades: list[tuple[str, bool]] = []
+
+    async def fake_delete_volume_objects(vol, *, cluster_id):
+        objects_deleted.append((vol.id, cluster_id))
+
+    async def fake_delete_entries(volume_id, *, keep_model_files):
+        cache_cascades.append((volume_id, keep_model_files))
+
+    async def fake_delete_namespace(namespace, *, cluster_id=None, timeout=None):
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("llm_d_lens.storage.service.delete_volume_objects", fake_delete_volume_objects)
+    monkeypatch.setattr("llm_d_lens.storage.service.delete_model_cache_entries_for_volume", fake_delete_entries)
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", fake_delete_namespace)
+
+    await service.delete_cluster("cluster-draft")
+
+    assert objects_deleted == [("storage-abc", "cluster-draft")]
+    # Records are dropped but downloaded weights are preserved.
+    assert cache_cascades == [("storage-abc", True)]
+    assert removed_records == ["storage-abc"]
+
+
+@pytest.mark.asyncio
+async def test_delete_draft_cluster_still_removes_record_when_cluster_is_unreachable(monkeypatch):
+    """An unreachable cluster must not leave the volume permanently undeletable."""
+    cluster = registry.Cluster(
+        id="cluster-draft", name="c", description="", created_at="2026-01-01T00:00:00Z", draft=True
+    )
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+    monkeypatch.setattr(service.sessions, "close_session_for_server", lambda cluster_id: None)
+    monkeypatch.setattr(registry, "delete_cluster", lambda cluster_id: None)
+    removed_records: list[str] = []
+    monkeypatch.setattr(
+        "llm_d_lens.storage.store.default_store",
+        lambda: SimpleNamespace(
+            list=lambda: [SimpleNamespace(id="storage-abc", cluster_id="cluster-draft")],
+            delete=removed_records.append,
+        ),
+    )
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("cluster unreachable")
+
+    async def fake_delete_namespace(namespace, *, cluster_id=None, timeout=None):
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("llm_d_lens.storage.service.delete_volume_objects", boom)
+    monkeypatch.setattr("llm_d_lens.storage.service.delete_model_cache_entries_for_volume", boom)
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", fake_delete_namespace)
+
+    await service.delete_cluster("cluster-draft")
+
+    assert removed_records == ["storage-abc"]
 
 
 def test_node_summary_reports_scheduling_disabled_from_spec_unschedulable():
@@ -477,6 +782,10 @@ def test_hardware_summary_aggregates_disk_usage_across_nodes():
 
     assert hardware["diskBytes"] == 200
     assert hardware["diskUsagePercent"] == 50.0
+    # Free disk is the exact remainder of the kubelet's own used-bytes figures,
+    # so the Clusters card can lead with capacity left instead of usage.
+    assert hardware["diskUsedBytes"] == 100
+    assert hardware["diskAvailableBytes"] == 100
 
 
 def test_hardware_summary_disk_usage_percent_none_when_no_node_reports_disk():
@@ -486,6 +795,30 @@ def test_hardware_summary_disk_usage_percent_none_when_no_node_reports_disk():
 
     assert hardware["diskBytes"] == 0
     assert hardware["diskUsagePercent"] is None
+    assert hardware["diskUsedBytes"] is None
+    assert hardware["diskAvailableBytes"] is None
+
+
+def test_hardware_summary_reports_free_memory_from_the_usage_reading():
+    nodes = [
+        {"name": "worker-a", "cpu": 8, "memoryBytes": 600, "gpuCount": 0, "gpu": False},
+        {"name": "worker-b", "cpu": 8, "memoryBytes": 400, "gpuCount": 0, "gpu": False},
+    ]
+
+    hardware = service._hardware_summary(nodes, prometheus_metrics={"memoryUsagePercent": 25.0})
+
+    assert hardware["memoryBytes"] == 1000
+    assert hardware["memoryUsagePercent"] == 25.0
+    assert hardware["memoryAvailableBytes"] == 750
+
+
+def test_hardware_summary_free_memory_is_unknown_without_a_usage_reading():
+    nodes = [{"name": "worker-a", "cpu": 8, "memoryBytes": 600, "gpuCount": 0, "gpu": False}]
+
+    hardware = service._hardware_summary(nodes)
+
+    assert hardware["memoryBytes"] == 600
+    assert hardware["memoryAvailableBytes"] is None
 
 
 @pytest.mark.asyncio
@@ -751,10 +1084,11 @@ async def test_create_hf_token_secret_creates_when_absent(monkeypatch):
 
     class FakeRunner:
         async def run(self, argv, *, input=None, timeout=None):  # noqa: A002 - mirrors CommandRunner's public keyword
-            if argv[1:3] == ["create", "namespace"]:
-                return CommandResult(("kubectl",), 0, "apiVersion: v1\nkind: Namespace\n", "")
+            if argv[1:3] == ["get", "namespace"]:
+                return CommandResult(("kubectl",), 1, "", 'namespaces "default" not found')
             if argv[1] == "apply":
-                return CommandResult(("kubectl",), 0, "", "")
+                created["namespace_manifest"] = json.loads(input)
+                return CommandResult(("kubectl",), 0, "namespace/default created", "")
             if argv[1] == "create" and argv[2] == "-f":
                 created["manifest"] = json.loads(input)
                 return CommandResult(("kubectl",), 0, "secret/hf-token-new created", "")
@@ -768,10 +1102,109 @@ async def test_create_hf_token_secret_creates_when_absent(monkeypatch):
     assert ref == {"namespace": "default", "name": "hf-token-new"}
     assert created["manifest"]["metadata"] == {"name": "hf-token-new", "namespace": "default"}
     assert created["manifest"]["stringData"] == {"HF_TOKEN": "hf_secret_value"}
+    # A namespace Lens creates is labelled, so deleting the cluster can remove it.
+    assert created["namespace_manifest"]["metadata"]["labels"] == {
+        "app.kubernetes.io/managed-by": "llm-d-lens",
+        "prism.ai/cluster-id": cluster.id,
+    }
     # Recorded on the cluster so Deploy/Evaluate can default to reusing it later.
     reloaded = registry.get_cluster(cluster.id)
     assert reloaded.hf_token_secret_namespace == "default"  # noqa: S105
     assert reloaded.hf_token_secret_name == "hf-token-new"  # noqa: S105 -- k8s Secret name, not a credential
+
+
+def _apply_only_runner(captured: dict[str, object]):
+    class FakeRunner:
+        async def run(self, argv, *, input=None, timeout=None):  # noqa: A002 - mirrors CommandRunner's public keyword
+            if argv[1:3] == ["get", "namespace"]:
+                # The namespace already exists, so it is left exactly as is.
+                return CommandResult(("kubectl",), 0, "namespace/llm-d-bench-storage-cluster-1", "")
+            if argv[1] == "apply" and argv[2] == "-f":
+                captured.setdefault("applied", []).append(json.loads(input or ""))
+                return CommandResult(("kubectl",), 0, "secret/hf-token configured", "")
+            raise AssertionError(f"unexpected kubectl invocation: {argv}")
+
+    return FakeRunner()
+
+
+@pytest.mark.asyncio
+async def test_update_hf_token_secret_rewrites_recorded_secret_in_place(monkeypatch):
+    """Rotating a token needs only the token: coordinates default to the ones
+    already recorded on the cluster, and the write must use ``apply`` so an
+    existing Secret is replaced instead of failing with a name collision."""
+    cluster = registry.create_cluster("cluster-rotate", "", "kubeconfig: {}")
+    registry.update_cluster(
+        cluster.id, hf_token_secret_namespace="llm-d-bench-storage-x", hf_token_secret_name="hf-token-old"
+    )
+    cluster = registry.get_cluster(cluster.id)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "scoped_runner", lambda cluster_id: _apply_only_runner(captured))
+
+    ref = await service.update_hf_token_secret(cluster, "hf_rotated")
+
+    assert ref == {"namespace": "llm-d-bench-storage-x", "name": "hf-token-old"}
+    secret = [item for item in captured["applied"] if item and item.get("kind") == "Secret"][0]
+    assert secret["metadata"] == {"name": "hf-token-old", "namespace": "llm-d-bench-storage-x"}
+    assert secret["stringData"] == {"HF_TOKEN": "hf_rotated"}
+
+
+@pytest.mark.asyncio
+async def test_update_hf_token_secret_repoints_cluster_to_new_coordinates(monkeypatch):
+    """Supplying namespace/name moves the cluster's pointer, so later deploys
+    default to the new Secret rather than the one created by the wizard."""
+    cluster = registry.create_cluster("cluster-repoint", "", "kubeconfig: {}")
+    registry.update_cluster(
+        cluster.id, hf_token_secret_namespace="old-ns", hf_token_secret_name="hf-token-old"
+    )
+    cluster = registry.get_cluster(cluster.id)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "scoped_runner", lambda cluster_id: _apply_only_runner(captured))
+
+    ref = await service.update_hf_token_secret(cluster, "hf_new", namespace="new-ns", name="hf-token-new")
+
+    assert ref == {"namespace": "new-ns", "name": "hf-token-new"}
+    reloaded = registry.get_cluster(cluster.id)
+    assert reloaded.hf_token_secret_namespace == "new-ns"  # noqa: S105
+    assert reloaded.hf_token_secret_name == "hf-token-new"  # noqa: S105 -- k8s Secret name, not a credential
+
+
+@pytest.mark.asyncio
+async def test_update_hf_token_secret_requires_coordinates_when_cluster_has_none(monkeypatch):
+    """A cluster created before the wizard's secret step has no recorded
+    coordinates, so the caller must supply them instead of writing a Secret
+    into an arbitrary namespace."""
+    cluster = registry.create_cluster("cluster-no-secret", "", "kubeconfig: {}")
+    monkeypatch.setattr(service, "scoped_runner", lambda cluster_id: _apply_only_runner({}))
+
+    with pytest.raises(ClusterOverviewError) as excinfo:
+        await service.update_hf_token_secret(cluster, "hf_new")
+    assert excinfo.value.code == "invalid_secret_namespace"
+
+
+@pytest.mark.asyncio
+async def test_update_hf_token_secret_rejects_blank_token():
+    cluster = registry.create_cluster("cluster-blank-token", "", "kubeconfig: {}")
+
+    with pytest.raises(ClusterOverviewError) as excinfo:
+        await service.update_hf_token_secret(cluster, "   ")
+    assert excinfo.value.code == "invalid_secret_token"  # noqa: S105 -- error code, not a credential
+
+
+def test_cluster_record_exposes_hf_token_secret_coordinates():
+    """The Edit cluster drawer needs the recorded coordinates to prefill its
+    rotation fields, so the API record must expose them (never the token)."""
+    from llm_d_lens.cluster.router import _record
+
+    cluster = registry.create_cluster("cluster-record-secret", "", "kubeconfig: {}")
+    assert _record(cluster).hf_token_secret is None
+
+    registry.update_cluster(cluster.id, hf_token_secret_namespace="ns-a", hf_token_secret_name="hf-token-a")
+    record = _record(registry.get_cluster(cluster.id))
+
+    assert record.hf_token_secret is not None
+    payload = record.model_dump(by_alias=True)
+    assert payload["hfTokenSecret"] == {"namespace": "ns-a", "name": "hf-token-a"}
+    assert "token" not in payload["hfTokenSecret"]
 
 
 def test_component_status_exposes_per_profile_device_plugins():

@@ -192,11 +192,11 @@ async def test_create_volume_rejects_duplicate_name(service, monkeypatch):
         return None
 
     monkeypatch.setattr(service, "provision", fake_provision)
-    service._store.create(_volume(name="qwen-cache"))
+    service._store.create(_volume(clusterId="cluster-1", name="qwen-cache"))
 
     request = StorageVolumeCreateRequest(
-        clusterId="cluster-2",
-        name="Qwen-Cache",  # different case, still a duplicate
+        clusterId="cluster-1",
+        name="Qwen-Cache",  # different case, still a duplicate within the cluster
         kind=StorageVolumeKind.LOCAL_DISK,
         capacity="50Gi",
         readOnly=True,
@@ -208,6 +208,56 @@ async def test_create_volume_rejects_duplicate_name(service, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_volume_allows_the_same_name_on_another_cluster(service, monkeypatch):
+    """A volume name is a display label, and a cluster's storage is its own: the
+    same name on a different cluster is not a conflict."""
+
+    async def fake_provision(volume_id):
+        return None
+
+    monkeypatch.setattr(service, "provision", fake_provision)
+    existing = service._store.create(_volume(clusterId="cluster-1", name="qwen-cache"))
+
+    request = StorageVolumeCreateRequest(
+        clusterId="cluster-2",
+        name="qwen-cache",
+        kind=StorageVolumeKind.LOCAL_DISK,
+        capacity="50Gi",
+        readOnly=True,
+        localDisk=LocalDiskSpec(hostPath="/data/new"),
+    )
+    payload = await storage_router.create_volume(request)
+
+    assert payload["name"] == "qwen-cache"
+    assert payload["clusterId"] == "cluster-2"
+    assert payload["id"] != existing.id
+
+
+@pytest.mark.asyncio
+async def test_create_volume_default_name_collision_only_counts_the_same_cluster(service, monkeypatch):
+    """The auto-generated name is only disambiguated against the target
+    cluster, so an unnamed volume does not inherit a suffix from elsewhere."""
+
+    async def fake_provision(volume_id):
+        return None
+
+    monkeypatch.setattr(service, "provision", fake_provision)
+    service._store.create(_volume(clusterId="cluster-1", name="storage-local-disk"))
+
+    request = StorageVolumeCreateRequest(
+        clusterId="cluster-2",
+        name="",
+        kind=StorageVolumeKind.LOCAL_DISK,
+        capacity="50Gi",
+        readOnly=True,
+        localDisk=LocalDiskSpec(hostPath="/data/new"),
+    )
+    payload = await storage_router.create_volume(request)
+
+    assert payload["name"] == "storage-local-disk"
+
+
+@pytest.mark.asyncio
 async def test_create_volume_disambiguates_colliding_default_name(service, monkeypatch):
     provisioned = []
 
@@ -215,11 +265,11 @@ async def test_create_volume_disambiguates_colliding_default_name(service, monke
         provisioned.append(volume_id)
 
     monkeypatch.setattr(service, "provision", fake_provision)
-    service._store.create(_volume(name="storage-local-disk"))
+    service._store.create(_volume(clusterId="cluster-1", name="storage-local-disk"))
 
     request = StorageVolumeCreateRequest(
         clusterId="cluster-1",
-        name="",  # blank -> auto-generated default collides with the existing volume
+        name="",  # blank -> auto-generated default collides within the same cluster
         kind=StorageVolumeKind.LOCAL_DISK,
         capacity="50Gi",
         readOnly=True,

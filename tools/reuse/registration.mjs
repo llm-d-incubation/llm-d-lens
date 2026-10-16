@@ -33,7 +33,7 @@ print(json.dumps([{'symbol':n.name,'body':ast.get_source_segment(s,n)} for n in 
   return rows;
 }
 
-export function registrationCandidates(files, oldFiles, catalog, reviews = []) {
+export function registrationCandidates(files, oldFiles, catalog) {
   const old = new Map(oldFiles.map(file => [file.path, file.text]));
   return files.flatMap(file => {
     if (old.get(file.path) === file.text) return [];
@@ -45,11 +45,10 @@ export function registrationCandidates(files, oldFiles, catalog, reviews = []) {
     }
     return rows.filter(row => previous.get(row.symbol) !== digest(row.body)).map(row => {
       const key = `${file.path}#${row.symbol}`;
-      const hash = digest(file.text); // an exclusion expires on any enclosing contract change
+      const hash = digest(file.text);
       const ids = catalog.entries.filter(entry => entry.path === file.path && entry.symbols.includes(row.symbol)).map(entry => entry.id);
-      const review = reviews.find(item => item.key === key && item.hash === hash && typeof item.reason === 'string' && item.reason.trim());
       return { key, path: file.path, symbol: row.symbol, hash, capabilityIds: ids,
-        disposition: ids.length ? 'registered' : review ? 'excluded' : 'unreviewed', reason: review?.reason || null };
+        disposition: ids.length ? 'registered' : 'unreviewed' };
     });
   });
 }

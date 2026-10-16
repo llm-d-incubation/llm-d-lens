@@ -226,7 +226,7 @@ Create and provision a new Lens storage volume. The route registers the pending 
     Request body (`StorageVolumeCreateRequest`):
 
     - `clusterId` (`string`): owning cluster id.
-    - `name` (`string`): volume name; blank allows the route to auto-generate one. If the (auto-generated or given) name collides with an existing volume, the route returns a `409` `storage_volume_name_conflict` problem for an explicit name, or disambiguates an auto-generated name with a numeric suffix.
+    - `name` (`string`): volume name; blank allows the route to auto-generate one. Names must be unique **within a cluster** and are compared case-insensitively, so two clusters may each hold an `a100-model-cache` while `Cache` and `cache` collide on one cluster. A collision returns a `409` `storage_volume_name_conflict` problem for an explicit name, or disambiguates an auto-generated name with a numeric suffix. The name is a display label only: the volume's `id` is its identity, and its PVC/PV are named `prism-storage-{id}`.
     - `kind` (`"local-disk" | "nfs" | "dynamic-pvc"`)
     - `capacity` (`string`): Kubernetes quantity like `500Gi`.
     - `readOnly` (`boolean`, default `true`)

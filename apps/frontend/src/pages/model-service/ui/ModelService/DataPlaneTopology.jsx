@@ -86,9 +86,30 @@ function Flow({ d, dashed = false, dotted = false, tone = 'blue', width = 1.5 })
 }
 
 
+// "Stop" scales the Gateway's data-plane Deployment to zero but leaves the
+// Gateway resource in place, so `gatewayState` stays `installed` and the
+// `Programmed` condition behind `gatewayReady` can stay true. `gatewayRunning`
+// reports the Deployment's ready replicas, which is what separates a stopped
+// Gateway (grey) from a running one (green) or a broken one (amber).
 function clusterDot(cluster) {
     if (cluster.gatewayState !== 'installed') return 'unhealthy';
+    if (cluster.gatewayRunning === false) return 'stopped';
     return cluster.gatewayReady ? 'active' : 'degraded';
+}
+
+function gatewayDetail(cluster) {
+    if (cluster.gatewayState !== 'installed') return 'not installed';
+    if (cluster.gatewayRunning === false) return 'installed, stopped';
+    return cluster.gatewayReady ? 'ready' : 'installed, not ready';
+}
+
+// `ippState` only says the Deployment object exists, so "Stop IPP" (which
+// scales it to zero replicas) leaves it `installed`. Pair it with `ippReady`
+// the same way the Gateway box pairs `gatewayState` with `gatewayReady`, so a
+// stopped processor is not reported as running.
+function ippDot(cluster) {
+    if (cluster.ippState !== 'installed') return 'missing';
+    return cluster.ippReady ? 'active' : 'stopped';
 }
 
 const STATUS_LABEL = {
@@ -198,14 +219,17 @@ export function DataPlaneTopology({
             const cluster = clusters.find((item) => item.clusterId === menu.key.slice(3));
             if (!cluster) return null;
             const installed = cluster.gatewayState === 'installed';
+            const running = installed && cluster.gatewayRunning !== false;
             return (
                 <>
                     <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{cluster.clusterName || cluster.clusterId} · {cluster.gatewayProvider || 'gateway'}</div>
                     <MenuAction icon={installed ? <Trash2 size={12} /> : <Plus size={12} />} label={installed ? 'Uninstall' : 'Install'}
                         onClick={() => choose(() => onComponentAction(cluster, 'gateway', installed ? 'uninstall' : 'install'))} />
                     <MenuAction icon={<RotateCw size={12} />} label="Reconcile" onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'reconcile'))} />
-                    <MenuAction icon={cluster.gatewayReady ? <Square size={12} /> : <Play size={12} />} label={cluster.gatewayReady ? 'Stop' : 'Start'}
-                        onClick={() => choose(() => onComponentAction(cluster, 'gateway', cluster.gatewayReady ? 'stop' : 'start'))} />
+                    {installed && (
+                        <MenuAction icon={running ? <Square size={12} /> : <Play size={12} />} label={running ? 'Stop' : 'Start'}
+                            onClick={() => choose(() => onComponentAction(cluster, 'gateway', running ? 'stop' : 'start'))} />
+                    )}
                     <MenuAction icon={<Terminal size={12} />} label="View logs" onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'logs'))} />
                 </>
             );
@@ -214,13 +238,16 @@ export function DataPlaneTopology({
             const cluster = clusters.find((item) => item.clusterId === menu.key.slice(4));
             if (!cluster) return null;
             const installed = cluster.ippState === 'installed';
+            const running = installed && Boolean(cluster.ippReady);
             return (
                 <>
                     <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{cluster.clusterName || cluster.clusterId} · IPP</div>
                     <MenuAction icon={installed ? <Trash2 size={12} /> : <Plus size={12} />} label={installed ? 'Uninstall IPP' : 'Install IPP'}
                         onClick={() => choose(() => onComponentAction(cluster, 'ipp', installed ? 'uninstall' : 'install'))} />
-                    <MenuAction icon={installed ? <Square size={12} /> : <Play size={12} />} label={installed ? 'Stop' : 'Start'}
-                        onClick={() => choose(() => onComponentAction(cluster, 'ipp', installed ? 'stop' : 'start'))} />
+                    {installed && (
+                        <MenuAction icon={running ? <Square size={12} /> : <Play size={12} />} label={running ? 'Stop' : 'Start'}
+                            onClick={() => choose(() => onComponentAction(cluster, 'ipp', running ? 'stop' : 'start'))} />
+                    )}
                     <MenuAction icon={<Terminal size={12} />} label="View logs" onClick={() => choose(() => onComponentAction(cluster, 'ipp', 'logs'))} />
                     <MenuAction icon={<Settings size={12} />} label="Configure" onClick={() => choose(() => onComponentAction(cluster, 'ipp', 'configure'))} />
                 </>
@@ -333,8 +360,13 @@ export function DataPlaneTopology({
 
                     {layout.map((section) => {
                         const cluster = section.cluster;
-                        const ippRunning = cluster.ippState === 'installed';
+                        const ippState = ippDot(cluster);
+                        const ippRunning = ippState === 'active';
+                        const ippDetail = cluster.ippState !== 'installed'
+                            ? statusLabel(cluster.ippState)
+                            : ippRunning ? 'running' : 'installed, stopped';
                         const gwState = clusterDot(cluster);
+                        const gwDetail = gatewayDetail(cluster);
                         return (
                             <div key={cluster.clusterId}>
                                 <div className="absolute text-[10px] font-semibold uppercase tracking-wide text-slate-500" style={{ left: GW.x, top: section.headerY }}>
@@ -342,13 +374,13 @@ export function DataPlaneTopology({
                                 </div>
                                 <Box x={GW.x} y={section.gwY} w={GW.w} label="Gateway" icon={<Network size={13} className="shrink-0 text-slate-400" />}
                                     status={statusDot[gwState] || statusDot.unknown}
-                                    statusText={`Gateway: ${cluster.gatewayState !== 'installed' ? 'not installed' : cluster.gatewayReady ? 'ready' : 'installed, not ready'} (${statusLabel(gwState)})`}
-                                    sub={`${cluster.clusterName || cluster.clusterId} · ${cluster.gatewayProvider || 'gateway'} · ${cluster.gatewayReady ? 'ready' : cluster.gatewayState}`}
+                                    statusText={`Gateway: ${gwDetail} (${statusLabel(gwState)})`}
+                                    sub={`${cluster.clusterName || cluster.clusterId} · ${cluster.gatewayProvider || 'gateway'} · ${gwDetail}`}
                                     menuOpen={menu?.key === `gw:${cluster.clusterId}`} onToggleMenu={(event) => toggleMenu(`gw:${cluster.clusterId}`, event)} />
                                 <Box x={IPP.x} y={section.ippY} w={IPP.w} label="IPP" icon={<Waypoints size={13} className="shrink-0 text-slate-400" />}
-                                    status={statusDot[ippRunning ? 'active' : 'missing'] || statusDot.unknown}
-                                    statusText={`IPP: ${ippRunning ? 'running' : statusLabel(cluster.ippState)}`}
-                                    sub={`${cluster.clusterName || cluster.clusterId} · ext_proc ${ippRunning ? 'running' : cluster.ippState}`}
+                                    status={statusDot[ippState] || statusDot.unknown}
+                                    statusText={`IPP: ${ippDetail} (${statusLabel(ippState)})`}
+                                    sub={`${cluster.clusterName || cluster.clusterId} · ext_proc ${ippDetail}`}
                                     menuOpen={menu?.key === `ipp:${cluster.clusterId}`} onToggleMenu={(event) => toggleMenu(`ipp:${cluster.clusterId}`, event)} />
                                 {section.rows.map((row) => {
                                     const name = (key) => componentName(row.member, key);

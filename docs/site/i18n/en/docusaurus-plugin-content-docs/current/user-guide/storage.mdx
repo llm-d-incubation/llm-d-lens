@@ -12,7 +12,7 @@ to manage the downloaded models, not the volume itself.
 2. In **New storage volume**, choose the target **Cluster**.
 3. Choose **Type** using the table below, then fill in its connection fields.
 4. To store model downloads, set **Purpose (optional)** to **Model cache** and use **hostPath** or **NFS**.
-5. Fill in **Name (optional)** and **Capacity**.
+5. Fill in **Name (optional)** and **Capacity**. A name only has to be unique on the cluster you picked, so each cluster can have its own `a100-model-cache`; reusing a name on the same cluster is rejected, ignoring letter case. Leave the name blank and Lens generates one.
 6. If needed, turn **Read-only when mounted** on or off.
 7. Click **Create storage volume** and find the new volume in the list.
 

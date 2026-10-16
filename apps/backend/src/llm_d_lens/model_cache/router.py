@@ -18,6 +18,7 @@ from llm_d_lens.model_cache.contracts import (
     ModelCacheEntryStatus,
 )
 from llm_d_lens.model_cache.service import (
+    ModelCacheEntryExistsError,
     ModelCacheInvalidStateError,
     ModelCacheNotFoundError,
     ModelCatalogNotSupportedError,
@@ -79,13 +80,28 @@ async def get_entry(entry_id: str, request: Request = None) -> dict:
     summary="Request a model download into Lens Model Cache.",
     description=(
         "Request a model download into Lens Model Cache. Use this to seed a ready shared model cache before "
-        "deployments or benchmarks."
+        "deployments or benchmarks. Returns a 409 `model_cache_entry_exists` problem when the chosen storage "
+        "volume already holds the model, so the caller can ask the user to confirm; resend with `force: true` "
+        "to download it again."
     ),
     operation_id="create_model_cache_entry",
 )
 async def create_entry(request: ModelCacheCreateRequest) -> dict:
     try:
         entry = await _service.request_download(request)
+    except ModelCacheEntryExistsError as error:
+        return problem(
+            409,
+            "Model already on this storage volume",
+            str(error),
+            "model_cache_entry_exists",
+            extra={
+                "entryId": error.entry.id,
+                "entryStatus": str(error.entry.status),
+                "model": error.entry.source.display_name(),
+                "storageVolumeId": error.entry.storage_volume_id,
+            },
+        )
     except ModelCatalogNotSupportedError as error:
         return problem(501, "Model Catalog not supported", str(error), "model_catalog_not_supported")
     except ValueError as error:

@@ -61,10 +61,22 @@ kubelet 会重建静态 Pod，期间 API 访问会短暂中断。清单备份应
 ## 修改集群设置
 
 1. 选择集群，点击 **Edit cluster（编辑集群）**。
-2. 修改名称、描述、代理或模型网关设置。
+2. 修改名称、描述、代理、**HF_TOKEN secret** 或模型网关设置。
 3. 点击 **Save changes（保存更改）**，确认新值已显示。
 
 组件版本由 Lens 发布版本提供，不能在此处修改。
+
+### 轮换 HF_TOKEN secret
+
+**HF_TOKEN secret** 保存该集群拉取受限模型所用的 Hugging Face 令牌。
+Lens 只记录该 Secret 的命名空间和名称；令牌值保存在集群上，不会再次显示。
+
+1. **New token（新令牌）**留空表示保留当前令牌。只有需要替换时才填写。
+2. 只有在需要让集群指向另一个 Secret 时，才修改 **Namespace（命名空间）**或 **Secret name（Secret 名称）**；该 Secret 不存在时 Lens 会创建它。
+3. 点击 **Save changes（保存更改）**，确认提示中显示的是写入的 Secret。
+
+部署和模型缓存下载在运行时会把令牌复制到各自的命名空间，
+因此已在运行的工作负载在重建之前仍使用旧令牌。
 
 <span id="model-gateway-prerequisites" />
 
@@ -82,8 +94,12 @@ kubelet 会重建静态 Pod，期间 API 访问会短暂中断。清单备份应
 
 1. 在 **Clusters** 中选择集群。
 2. 检查 **Workers**、**CPU**、**Memory**、**Deployable GPU**、**VRAM**、**Disk** 和 **Monitoring**。
+   **Memory** 和 **Disk** 主数值显示的是集群总容量中仍然空闲的部分，已使用的百分比
+   显示在下方的 **Usage** 一行。显示为短横线表示该集群当前无法上报该读数，而不是
+   剩余为零。
 3. 在 **Deployments** 中通过 **Copy endpoint（复制端点）**获取地址，或点击 **View Pods & Logs（查看 Pod 与日志）**检查部署。
 4. 打开部署的 **Monitoring（监控）**菜单，选择 **Open Grafana**、**Open Prometheus** 或 **Profiling（性能分析）**。
+   在部署就绪之前，该菜单中的**安装**和**启用**均不可用。
 
 日志筛选和命名空间删除操作见[管理部署](/user-guide/deployments)。
 
@@ -101,6 +117,8 @@ kubelet 会重建静态 Pod，期间 API 访问会短暂中断。清单备份应
 1. 打开集群的 **Actions → Delete cluster（操作 → 删除集群）**。
 2. 核对集群名称和删除警告。
 3. 点击 **Delete（删除）**，确认注册记录从列表中消失。
+
+Lens 还会清理它在集群上创建的资源。集群的 `HF_TOKEN` Secret 会被删除；当保留其所在命名空间已无意义时，该命名空间也会一并删除：即该命名空间是 Lens 创建的，或者该 Secret 是其中唯一的内容。如果命名空间中仍有其他内容，则会保留它；集群的内置命名空间永远不会被改动。对于仍在注册过程中的集群，向导期间创建的存储卷会连同其 PVC 和 PV 一起删除，而 NFS 或 hostPath 上的模型文件会保留。已完成注册且仍存在存储卷的集群必须先删除这些卷才能删除。
 
 ## 看不到集群
 

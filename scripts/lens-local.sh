@@ -11,12 +11,12 @@
 #
 # Usage:
 #   scripts/lens-local.sh check     # validate the environment without starting anything
-#   scripts/lens-local.sh start     # start all services (logs under $LENS_LOG_DIR/dev/)
+#   scripts/lens-local.sh start     # start all services (background, logs in .dev-logs/)
 #   scripts/lens-local.sh stop      # stop all services started by this script
-#   scripts/lens-local.sh restart   # validate reuse map, then stop and start
+#   scripts/lens-local.sh restart [all|frontend|server|backend] # validate, then restart selected services
 #   scripts/lens-local.sh status    # show which services are running
 #   scripts/lens-local.sh clean [-y|--yes]  # stop services, delete embedded DB + all
-#                                         # local app data under ~/.llm-d-lens
+#                                    # local app data under ~/.llm-d-lens
 #   scripts/lens-local.sh install-node  # install a supported Node.js into .dev-tools/
 #
 # When the system Node.js is missing or older than NODE_MIN_MAJOR, 'start'
@@ -506,7 +506,7 @@ ensure_database() {
 
 # ---- check -------------------------------------------------------------------
 cmd_check() {
-    local ok=1
+    local ok=1 target="${1:-all}"
     log "Checking environment..."
 
     # Pick up a toolchain a previous run installed, without downloading here.
@@ -528,6 +528,7 @@ cmd_check() {
         ok=0
     fi
     command -v npm  >/dev/null 2>&1 && log "  npm:      $(npm --version)"  || { fail "  npm:      MISSING"; ok=0; }
+    if [[ "$target" != frontend ]]; then
     if command -v rustc >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
         local rust_ver
         rust_ver="$(rustc --version | awk '{print $2}')"
@@ -552,10 +553,12 @@ cmd_check() {
         echo '    rustup default stable'
         echo '    rustc --version'
     fi
+    fi
     command -v ss   >/dev/null 2>&1 || warn "  ss:       missing (port checks skipped)"
 
     [[ -d node_modules ]] && log "  node_modules: present" || { fail "  node_modules: missing — run 'npm install'"; ok=0; }
 
+    if [[ "$target" != frontend ]]; then
     if [[ -x .venv/bin/python ]]; then
         log "  venv:     $(.venv/bin/python --version 2>&1)"
         .venv/bin/python -c "import llm_d_lens, uvicorn" 2>/dev/null \
@@ -566,6 +569,7 @@ cmd_check() {
         ok=0
     fi
 
+    fi
     if [[ -d "$EVALUATE_STORE" ]]; then
         log "  evaluate store: $EVALUATE_STORE"
     else
@@ -640,6 +644,11 @@ start_one() {
     ln -sfn "$run_log" "$LOG_DIR/$name.log"
     nohup "$@" > "$LOG_DIR/$run_log" 2>&1 &
     echo "$!" > "$(pid_file "$name")"
+    case "$name" in
+        frontend) printf '%s\n' "$FRONTEND_PORT" > "$PID_DIR/$name.port" ;;
+        server) printf '%s\n' "$SERVER_PORT" > "$PID_DIR/$name.port" ;;
+        backend) printf '%s\n' "$BACKEND_PORT" > "$PID_DIR/$name.port" ;;
+    esac
 }
 
 wait_for_http() {
@@ -679,7 +688,7 @@ prepare_start() {
     prepare_target_node || return $?
     ensure_node || exit 1
     ensure_node_modules || exit 1
-    ensure_venv || exit 1
+    if [[ "${1:-all}" != frontend ]]; then ensure_venv || return 1; fi
     log "updating reusable capability map..."
     local reuse_status=0
     node tools/reuse/cli.mjs map || reuse_status=$?
@@ -688,9 +697,9 @@ prepare_start() {
         return "$reuse_status"
     fi
     log "validating reuse registrations and pending decisions..."
-    node tools/reuse/cli.mjs check --purpose startup --base HEAD --report .cache/reuse/startup-report.json || reuse_status=$?
+    node tools/reuse/cli.mjs check --purpose startup || reuse_status=$?
     if [[ "$reuse_status" -eq 2 ]]; then
-        warn "Pending refactor decisions require review; continuing local startup. Details: .cache/reuse/startup-report.json"
+        warn "Pending refactor decisions require review; continuing local startup. See the pending decisions above."
         return 0
     fi
     if [[ "$reuse_status" -ne 0 ]]; then
@@ -713,29 +722,53 @@ cmd_start() {
 }
 
 cmd_restart() {
-    prepare_start || return $?
-    cmd_stop
-    start_services
+    local target="${1:-all}"
+    case "$target" in all|frontend|server|backend) ;; *) fail "Unknown service: $target"; return 1 ;; esac
+    if [[ "$target" != all ]]; then
+        local svc saved_port
+        for svc in "${SERVICES[@]}"; do
+            if is_running "$svc"; then
+                saved_port="$(cat "$PID_DIR/$svc.port" 2>/dev/null || true)"
+                if [[ ! "$saved_port" =~ ^[0-9]+$ ]] || (( 10#$saved_port < 1 || 10#$saved_port > 65535 )); then
+                    fail "Missing port state for $svc; run restart all once before targeted restarts."
+                    return 1
+                fi
+                case "$svc" in
+                    frontend) FRONTEND_PORT="$saved_port" ;;
+                    server) SERVER_PORT="$saved_port" ;;
+                    backend) BACKEND_PORT="$saved_port" ;;
+                esac
+            fi
+        done
+    fi
+    prepare_start "$target" || return $?
+    if [[ "$target" == all ]]; then cmd_stop; else cmd_stop "$target"; fi
+    start_services "$target"
 }
 
 start_services() {
-    ensure_database || exit 1
+    local target="${1:-all}"
+    if [[ "$target" == all || "$target" == backend ]]; then ensure_database || return 1; fi
     ensure_tls
-    regenerate_mcp_tools
+    if [[ "$target" == all || "$target" == server ]]; then regenerate_mcp_tools; fi
 
     # Remember what was requested so we can report any port that got shifted.
     local requested_frontend="$FRONTEND_PORT" requested_server="$SERVER_PORT" requested_backend="$BACKEND_PORT"
 
     # Shift off any port already occupied by another process.
-    BACKEND_PORT="$(resolve_free_port backend "$BACKEND_PORT")"
-    SERVER_PORT="$(resolve_free_port server "$SERVER_PORT")"
-    FRONTEND_PORT="$(resolve_free_port frontend "$FRONTEND_PORT")"
+    if [[ "$target" == all || "$target" == backend ]]; then BACKEND_PORT="$(resolve_free_port backend "$BACKEND_PORT")"; fi
+    if [[ "$target" == backend && "$BACKEND_PORT" != "$requested_backend" ]]; then fail "Port changed for backend; use restart all to update dependent proxies."; return 1; fi
+    if [[ "$target" == all || "$target" == server ]]; then SERVER_PORT="$(resolve_free_port server "$SERVER_PORT")"; fi
+    if [[ "$target" == server && "$SERVER_PORT" != "$requested_server" ]]; then fail "Port changed for server; use restart all to update dependent proxies."; return 1; fi
+    if [[ "$target" == all || "$target" == frontend ]]; then FRONTEND_PORT="$(resolve_free_port frontend "$FRONTEND_PORT")"; fi
+    if [[ "$target" == frontend && "$FRONTEND_PORT" != "$requested_frontend" ]]; then fail "Port changed for frontend; use restart all to update dependent proxies."; return 1; fi
 
-    cmd_check
+    cmd_check "$target"
 
     local scheme="http"
     [[ "$ENABLE_HTTPS" == "1" ]] && scheme="https"
 
+    if [[ "$target" == all || "$target" == backend ]]; then
     start_one backend env \
         PRISM_MODEL_API_PUBLIC_HOST="$PRISM_MODEL_API_PUBLIC_HOST" \
         PRISM_GPU_PCI_ALLOWLIST="$PRISM_GPU_PCI_ALLOWLIST" \
@@ -744,26 +777,37 @@ start_services() {
         LENS_INTERNAL_AUTH_SECRET="$LENS_INTERNAL_AUTH_SECRET" \
         .venv/bin/python -m uvicorn llm_d_lens.api:app \
         --host "${BACKEND_HOST:-0.0.0.0}" --port "$BACKEND_PORT"
+    fi
 
+    if [[ "$target" == all || "$target" == server ]]; then
     start_one server env SERVER_PORT="$SERVER_PORT" PORT="$SERVER_PORT" \
         PRISM_GPU_PCI_ALLOWLIST="$PRISM_GPU_PCI_ALLOWLIST" \
         LENS_INTERNAL_AUTH_SECRET="$LENS_INTERNAL_AUTH_SECRET" \
         SIMULATION_API_URL="http://127.0.0.1:$BACKEND_PORT" \
         TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" \
         ./node_modules/.bin/tsx apps/server/src/server.js
+    fi
 
+    if [[ "$target" == all || "$target" == frontend ]]; then
     start_one frontend env VITE_HOST="$VITE_HOST" VITE_PORT="$FRONTEND_PORT" \
         VITE_AUTH_PROXY_TARGET="$scheme://127.0.0.1:$SERVER_PORT" \
         VITE_API_PROXY_TARGET="$scheme://127.0.0.1:$SERVER_PORT" \
         TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" \
         ./node_modules/.bin/vite apps/frontend
+    fi
 
     log "waiting for services to become ready..."
-    wait_for_http backend "http://127.0.0.1:$BACKEND_PORT/api/health"
-    wait_for_http server     "$scheme://127.0.0.1:$SERVER_PORT/api/config"
-    wait_for_http frontend   "$scheme://127.0.0.1:$FRONTEND_PORT/"
+    if [[ "$target" == all || "$target" == backend ]]; then
+    wait_for_http backend "http://127.0.0.1:$BACKEND_PORT/api/health" || return 1
+    fi
+    if [[ "$target" == all || "$target" == server ]]; then
+    wait_for_http server     "$scheme://127.0.0.1:$SERVER_PORT/api/config" || return 1
+    fi
+    if [[ "$target" == all || "$target" == frontend ]]; then
+    wait_for_http frontend   "$scheme://127.0.0.1:$FRONTEND_PORT/" || return 1
+    fi
 
-    log "services started:"
+    log "started service selection: $target; configured endpoints:"
     log "  frontend   $scheme://localhost:$FRONTEND_PORT (bound to $VITE_HOST)"
     log "  server     $scheme://127.0.0.1:$SERVER_PORT"
     log "  backend    http://127.0.0.1:$BACKEND_PORT"
@@ -784,7 +828,9 @@ start_services() {
 # ---- stop --------------------------------------------------------------------
 cmd_stop() {
     local stopped=0
-    for svc in "${SERVICES[@]}"; do
+    local selected=("${SERVICES[@]}")
+    if [[ $# -gt 0 ]]; then selected=("$@"); fi
+    for svc in "${selected[@]}"; do
         local pf
         pf="$(pid_file "$svc")"
         if [[ -f "$pf" ]]; then
@@ -799,7 +845,8 @@ cmd_stop() {
         fi
     done
     [[ "$stopped" -eq 1 ]] && sleep 1
-    log "all services stopped."
+    log "selected services stopped: ${selected[*]}"
+    return 0
 }
 
 # ---- clean -------------------------------------------------------------------
@@ -882,7 +929,8 @@ Usage: scripts/lens-local.sh COMMAND [OPTIONS]
 Local source installation and service management:
   check          Validate the environment without starting services.
   start          Prepare dependencies and start the local services.
-  restart        Complete preflight checks before stopping and starting services.
+  restart [all|frontend|server|backend]
+                 Complete preflight checks, then restart the selected services.
   stop           Stop services started by this launcher.
   status         Show running service PIDs.
   install-node   Install a supported Node.js into .dev-tools/.
@@ -915,7 +963,7 @@ EOF
 }
 
 lens_local_main() {
-    local action="${1:-}" clean_option="" option cluster_options=0
+    local action="${1:-}" clean_option="" option cluster_options=0 service_target=all service_selected=0
     if [[ -z "$action" ]]; then
         print_usage
         return 1
@@ -931,6 +979,12 @@ lens_local_main() {
     while [[ $# -gt 0 ]]; do
         option="$1"
         case "$option" in
+            all|frontend|server|backend)
+                [[ "$action" == restart && "$service_selected" -eq 0 ]] || { fail "A service target is only valid once for restart."; return 2; }
+                service_target="$option"
+                service_selected=1
+                shift
+                ;;
             --target-node|--kubeconfig)
                 if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
                     fail "$option requires a nonempty value."
@@ -968,7 +1022,7 @@ lens_local_main() {
     case "$action" in
         check) prepare_target_node && cmd_check ;;
         start) cmd_start ;;
-        restart) cmd_restart ;;
+        restart) cmd_restart "$service_target" ;;
         stop) cmd_stop ;;
         status) cmd_status ;;
         clean) cmd_clean "$clean_option" ;;

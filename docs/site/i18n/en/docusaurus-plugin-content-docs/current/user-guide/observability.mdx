@@ -25,6 +25,9 @@ or **Deployments** for one model deployment.
 6. When preflight succeeds, click **Install stack**.
 7. Follow progress in **Installation operation** until the page reports **Cluster observability stack installed successfully**.
 
+Closing an installation dialog cancels its pending preflight. Reopening starts
+a fresh form and requires a new preflight; reinstall consent is not retained.
+
 ## Reinstall the cluster observability stack
 
 1. In the **Cluster** tab, click **Reinstall** when that action is available.
@@ -63,6 +66,8 @@ or **Deployments** for one model deployment.
 2. Choose the cluster in **Target cluster**.
 3. In **Deployment monitoring**, open the **Monitoring** menu for the deployment you want to manage.
 4. Choose **Install** when monitoring is not present, **Enable** when it is disabled, **Disable** when it is enabled, or **Uninstall** to remove it.
+   **Install** and **Enable** stay unavailable until the deployment itself is
+   ready, because monitoring scrapes that deployment's Pods.
 5. Wait for the **Monitoring** status to update before opening a dashboard.
 
 ## Open deployment dashboards

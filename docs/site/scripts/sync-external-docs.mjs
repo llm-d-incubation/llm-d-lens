@@ -94,6 +94,10 @@ function extractDesignPart(body, part) {
 }
 
 async function main() {
+  const stats = join(REPO_ROOT, 'docs/site/src/data/github-stats.json');
+  await mkdir(dirname(stats), { recursive: true });
+  try { await writeFile(stats, JSON.stringify({ stars: null, fetchedAt: null }) + '\n', { flag: 'wx' }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
   for (const entry of SOURCES) {
     const srcPath = join(REPO_ROOT, entry.src);
     const destPath = join(WEBSITE_DOCS, entry.dest);

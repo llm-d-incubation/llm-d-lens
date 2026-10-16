@@ -124,6 +124,9 @@ class ModelCacheCreateRequest(StrictModel):
     storage_volume_id: str = Field(alias="storageVolumeId", min_length=1)
     source: ModelSource
     token_source: TokenSource = Field(default_factory=TokenSource, alias="tokenSource")
+    # The API refuses a model the volume already holds so the caller can ask the
+    # user whether to re-download it; set this once that answer is "yes".
+    force: bool = False
 
 
 class HuggingFaceModelSummary(StrictModel):

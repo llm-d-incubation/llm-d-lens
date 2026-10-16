@@ -25,6 +25,7 @@ def test_registered_guide_candidate_maps_to_deployable_configuration(provider_re
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
     )
     candidate = PlannedCandidate(
         id=f"{provider_ref}-tp1-r1",
@@ -62,6 +63,7 @@ def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval(
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
         max_model_len=32768,
         gpu_memory_utilization=0.72,
         max_num_seqs=64,
@@ -107,6 +109,7 @@ def test_agentic_configuration_propagates_model_cache_host_token_policy():
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
     )
     candidate = PlannedCandidate(
         id="optimized-baseline-tp1-r1",
@@ -154,6 +157,7 @@ def test_agentic_baseline_vllm_propagates_model_secret_policy(model_secret):
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
     )
     candidate = PlannedCandidate(
         id="baseline-vllm-tp1-r1",

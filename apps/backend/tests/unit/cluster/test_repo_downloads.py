@@ -29,7 +29,8 @@ def _reset_status():
 
 
 def _fake_git_success(argv, timeout=None):
-    # Simulate `git clone --branch ref ...` succeeding by creating a `.git` dir
+    # Simulate Git clone and commit resolution without network access.
+    # Create a `.git` directory
     # at the destination (the real clone/checkout subprocess calls are never
     # invoked in tests).
     if argv[:2] == ["git", "clone"]:
@@ -38,7 +39,7 @@ def _fake_git_success(argv, timeout=None):
 
         Path(dest, ".git").mkdir(parents=True, exist_ok=True)
         return CommandResult(tuple(argv), 0, "", "")
-    return CommandResult(tuple(argv), 0, "", "")
+    return CommandResult(tuple(argv), 0, "a" * 40 if "rev-parse" in argv else "", "")
 
 
 def test_repo_dir_is_stable_and_sanitizes_ref():
@@ -52,7 +53,7 @@ def test_repo_dir_is_stable_and_sanitizes_ref():
 async def test_ensure_downloaded_clones_when_not_cached(monkeypatch):
     monkeypatch.setattr(repo_downloads, "run_sync", _fake_git_success)
     path = await repo_downloads.ensure_downloaded("cluster-1", "llm-d", "v0.2.0")
-    assert path.name == "v0.2.0"
+    assert path.name == "a" * 40
     assert (path / ".git").exists()
     status = repo_downloads.get_status("cluster-1", "llm-d")
     assert status.state == "ready"
@@ -69,9 +70,9 @@ async def test_ensure_downloaded_reuses_existing_cache(monkeypatch):
 
     monkeypatch.setattr(repo_downloads, "run_sync", _tracking)
     await repo_downloads.ensure_downloaded("cluster-1", "llm-d", "v0.2.0")
-    assert len(calls) == 1
-    await repo_downloads.ensure_downloaded("cluster-1", "llm-d", "v0.2.0")
-    assert len(calls) == 1  # second call is a cache hit, no further git invocations
+    previous_calls = len(calls)
+    await repo_downloads.ensure_downloaded("cluster-1", "llm-d", "a" * 40)
+    assert len(calls) == previous_calls  # immutable commits work without fetching
 
 
 @pytest.mark.asyncio

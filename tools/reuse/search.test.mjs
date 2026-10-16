@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { updateVectors, rank, searchDocuments } from './search.mjs';
+import { updateVectors, rank, rankFiles, searchDocuments } from './search.mjs';
 
 test('vector ranking uses cosine similarity rather than magnitude', () => {
   const rows = [{ path: 'src/right.js', vector: [1, 1] }, { path: 'src/wrong.js', vector: [100, 0] }];
@@ -45,4 +45,30 @@ test('curated capability meaning has its own retrieval document without unrelate
 test('invalid embedding output fails rather than caching unusable vectors', async () => {
   await assert.rejects(updateVectors([{ id: 'a', text: 'hello' }], null, 'v1', async () => [[NaN]]), /embedding/);
   await assert.rejects(updateVectors([{ id: 'a', text: 'hello' }], null, 'v1', async () => []), /embedding/);
+});
+
+test('detail cache survives A/B/A searches but drops deleted and modified files', async () => {
+  const calls = [];
+  const embed = async texts => { calls.push(...texts); return texts.map(() => [1, 0]); };
+  const a = { id: 'a:1', path: 'a', sourceHash: 'a-v1', text: 'alpha' };
+  const b = { id: 'b:1', path: 'b', sourceHash: 'b-v1', text: 'beta' };
+  const hashes = new Map([['a', 'a-v1'], ['b', 'b-v1']]);
+  let cache = await updateVectors([a], null, 'v1', embed, undefined, hashes);
+  cache = await updateVectors([b], cache, 'v1', embed, undefined, hashes);
+  cache = await updateVectors([a], cache, 'v1', embed, undefined, hashes);
+  assert.deepEqual(calls, ['alpha', 'beta']);
+  assert.equal(cache.rows.length, 2);
+  cache = await updateVectors([a], cache, 'v1', embed, undefined, new Map([['a', 'a-v1'], ['b', 'b-v2']]));
+  assert.deepEqual(cache.rows.map(row => row.path), ['a']);
+  cache = await updateVectors([b], cache, 'v1', embed, undefined, new Map([['b', 'b-v1']]));
+  assert.deepEqual(cache.rows.map(row => row.path), ['b']);
+});
+
+test('file retrieval expands beyond six while deduplicating capability and file rows', () => {
+  const rows = Array.from({ length: 8 }, (_, i) => ({ path: `src/${i}.js`, vector: [8-i, i] }));
+  rows.splice(1, 0, { path: 'src/0.js', vector: [1, 0] });
+  assert.equal(rankFiles(rows, [1, 0], 6).length, 6);
+  assert.ok(!rankFiles(rows, [1, 0], 6).some(row => row.path === 'src/6.js'));
+  assert.ok(rankFiles(rows, [1, 0], 8).some(row => row.path === 'src/6.js'));
+  assert.throws(() => rankFiles(rows, [1, 0], 0), /file-limit/);
 });

@@ -1,55 +1,39 @@
 ---
 title: Model Market
-description: Choose a model and create a standard, advanced or AI-assisted deployment.
+description: Choose a model and create a manual or AI-assisted deployment.
 ---
 
 Open **Model Market** to choose a model and deploy it to a cluster.
-For your first deployment, use **Standard** mode.
+For your first deployment, use **Manual** mode.
 
 Use **Search models** above the categories to filter by model name, publisher,
 repository, model type, category, or precision. Search ignores case and combines
 with the selected category; multiple words must all match. The model count updates
 as you type. Use **Clear filters** to reset both search and category.
 
-## Create a standard deployment
+## Choose a deployment mode
+
+| Mode | Choose it when |
+| --- | --- |
+| **Manual** | You want to choose an llm-d Guide template, configure resources or review generated YAML |
+| **Agentic** (Experimental) | You want Lens to recommend a configuration for a workload and performance target |
+
+## Create a manual deployment
 
 1. Open **Model Market**, use **Model categories** to narrow the list, and click a model card.
 2. In **One-click deployment**, enter **Deployment name** and choose a ready **Cluster**.
-3. Choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.**
-4. Keep **Mode** on **Standard** and start with the suggested **Replicas** and **Tensor parallelism**.
-5. Review **Standard vLLM plan**, then click **Create deployment**.
-6. If available cards are insufficient, review the warning and click **Confirm & deploy** when the physical total is sufficient; otherwise, reduce replicas / TP.
-7. Lens opens **Deployments**. Wait for the new deployment to show **Ready**.
+3. Choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.** Model cache storage is optional in **Manual** mode.
+4. Keep **Mode** on **Manual** and click **Configure deployment**.
+5. In **Basic settings**, review **Runtime image**, **Replicas**, and **TP** (accelerators per replica).
+6. Under **Guide template**, choose **Guide** and **Accelerator**. Use [Choose an evaluation Guide](/evaluation/guides) to compare the options.
+7. For a P/D or tiered-cache Guide, choose a variant from the displayed list. Keep the supplied defaults for the first run.
+8. Click **Generate YAML**. If available cards are insufficient but the physical total is sufficient, review the Pending warning and click **Continue & generate**. If the physical total is insufficient, reduce replicas / TP.
+9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Next**.
+10. On **Deployments**, wait for **Ready**; use **View Pods & Logs** to inspect startup.
 
 No cluster or cache available? [Add a cluster](/user-guide/clusters),
 [create cache storage](/user-guide/storage), and [download the model](/user-guide/model-cache).
 If the model is missing from the selected cache, download it there before returning.
-
-Before creating the deployment, expand **Pod placement** below **vLLM parameters**
-to choose **Replica placement**. **Prefer one node** favors co-location without
-requiring it. **Require one node** reveals an optional **Node** selector populated
-from the selected cluster; selecting a node constrains replicas to its hostname.
-**Distribute evenly across nodes** and **Require separate nodes** can leave Pods
-Pending if there are too few eligible nodes or insufficient capacity.
-
-## Choose a different deployment mode
-
-| Mode | Choose it when |
-| --- | --- |
-| **Standard** | You want to start a model with a basic vLLM deployment |
-| **Advanced** | You want to choose an llm-d Guide, configure resources or review generated YAML |
-| **Agentic** (Experimental) | You want Lens to recommend a configuration for a workload and performance target |
-
-## Configure an advanced deployment
-
-1. Open a model, enter **Deployment name**, and choose **Cluster** and **Model cache storage**.
-2. Set **Mode** to **Advanced** and click **Configure deployment**.
-3. In **Basic settings**, review **Runtime image**, **Replicas**, and **TP** (accelerators per replica).
-4. Under **Guide template**, choose **Guide** and **Accelerator**. Use [Choose an evaluation Guide](/evaluation/guides) to compare the options.
-5. For a P/D or tiered-cache Guide, choose a variant from the displayed list. Keep the supplied defaults for the first run.
-6. Click **Generate YAML**. If available cards are insufficient but the physical total is sufficient, review the Pending warning and click **Continue & generate**.
-7. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Next**.
-8. On **Deployments**, wait for **Ready**; use **View Pods & Logs** to inspect startup.
 
 Change the runtime image only when you have an image compatible with the selected
 hardware. After changing the cluster or Guide source, check the variant selection
@@ -84,7 +68,7 @@ or resources. [Run an evaluation](/user-guide/evaluation) to measure the deploye
 
 | Goal | Where to change it |
 | --- | --- |
-| Change context length or batching | **vLLM parameters** in Standard; **Advanced settings** in the advanced editor |
+| Change context length or batching | **Advanced settings** in the Manual configuration editor |
 | Enable tool calling | **Enable automatic tool choice**, then choose **Tool call parser** |
 | Use a deployment-specific proxy | **Deployment environment** |
 | Change replicas or accelerator count | **Replicas** and **Tensor parallelism** / **TP** |
@@ -95,9 +79,3 @@ length or allocate more resources in a new configuration.
 If **Your role cannot create deployments.** appears, ask an administrator for
 deployment access to the target cluster. **Open Deployments** still lets you view
 deployments you can access.
-
-When creating a standard deployment, sufficient available cards let you proceed
-directly. Otherwise, a red warning shows required, available, and total physical
-cards. You can confirm when the physical total is sufficient, but the deployment
-may remain **Pending** until cards become available. Reduce replicas / TP if the
-physical total is insufficient.

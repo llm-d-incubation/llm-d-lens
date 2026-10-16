@@ -87,6 +87,13 @@ combine their capacity: the service publishes the first active provider's pool.
 **Stop** and **Uninstall** can interrupt model requests. Use them only during planned
 maintenance. **HTTPRoute** and **InferencePool** show state but have no start/stop buttons.
 
+**Stop** scales a component to zero replicas without removing it, so its box turns
+grey (`installed, stopped`) rather than green, and its menu offers **Start**. This
+applies to the Gateway as well: its Gateway resource stays programmed, but with no
+running replica the box is grey, not green. A green dot means the component
+actually has a running replica. **Uninstall** removes the component entirely, and
+the box turns amber (`not installed`).
+
 ## Permissions
 
 If an action is missing, ask an administrator to check your model-service

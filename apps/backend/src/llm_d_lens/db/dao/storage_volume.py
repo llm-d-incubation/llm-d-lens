@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from llm_d_lens.db.dao.base import BaseDao
 from llm_d_lens.db.models.storage_volume import StorageVolumeRow
@@ -20,7 +21,16 @@ class StorageVolumeDao(BaseDao):
                 raise StorageVolumeDaoError(f"storage volume already exists: {volume.id}")
             row = StorageVolumeRow.from_dto(volume)
             session.add(row)
-            session.flush()
+            try:
+                session.flush()
+            except IntegrityError as error:
+                # uq_storage_volumes_cluster_id_name: the name is already taken
+                # on this cluster. Surface it as a repository error so callers
+                # report a conflict instead of a 500; the Storage API checks
+                # for this up front, so reaching here means a concurrent create.
+                raise StorageVolumeDaoError(
+                    f"a storage volume named '{volume.name}' already exists on cluster {volume.cluster_id}"
+                ) from error
             return row.to_dto()
 
     def get(self, volume_id: str) -> StorageVolume | None:

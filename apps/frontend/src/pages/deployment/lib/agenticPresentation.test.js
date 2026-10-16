@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { candidateAnalysis } from '../ui/AgenticDeploymentWorkspace.jsx';
-import { generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, relaxedAicCandidates } from './agenticPresentation.js';
+import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, relaxedAicCandidates } from './agenticPresentation.js';
 
 test('historical evidence presentation distinguishes empty, successful, and failed records', () => {
     assert.equal(historicalEvidenceSummary([]), null);

@@ -8,25 +8,22 @@
 
 import { checkPassed } from './preflightPresentation';
 import { useMonitoringInstall } from './useMonitoringInstall';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle2, CircleX } from 'lucide-react';
 import { Badge, Button, Checkbox, Input, Label, Modal, ToggleGroup } from '../../../../shared/ui';
 import { installClusterStack, preflightClusterStackInstall } from './clusterMonitoringStackBackend';
 
-export function InstallClusterStackModal({ isOpen, namespace, clusterId, reinstall = false, onClose, onOperationStarted }) {
+export function InstallClusterStackModal(props) {
+    return props.isOpen ? <InstallClusterStackModalForm key={JSON.stringify([props.clusterId, props.namespace, props.reinstall])} {...props} /> : null;
+}
+
+function InstallClusterStackModalForm({ isOpen, namespace, clusterId, reinstall = false, onClose, onOperationStarted }) {
     const [request, setRequest] = useState({ namespace, mode: 'central', enable_tls: false, reinstall });
-    const { preflight, error, checking, installing, updateRequest, runPreflight, startInstall, reset } = useMonitoringInstall({
+    const { preflight, error, checking, installing, updateRequest, runPreflight, startInstall } = useMonitoringInstall({
         request, setRequest, preflightRequest: preflightClusterStackInstall, installRequest: installClusterStack,
         clusterId, onOperationStarted, onClose,
     });
     const [confirmed, setConfirmed] = useState(false);
-    useEffect(() => {
-        if (!isOpen) return;
-        setRequest({ namespace, mode: 'central', enable_tls: false, reinstall });
-        reset();
-        setConfirmed(false);
-    }, [isOpen, namespace, reinstall, reset]);
-
     const footer = (
         <>
             <Button variant="ghost" onClick={onClose} disabled={installing}>Cancel</Button>

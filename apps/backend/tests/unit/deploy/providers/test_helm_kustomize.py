@@ -245,10 +245,6 @@ def test_patch_documents_uses_selected_storage_volume_cache(read_only):
     ]
     assert container["volumeMounts"] == [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
     environment = {item["name"]: item.get("value") for item in container["env"]}
-    if read_only:
-        assert environment["HF_HUB_OFFLINE"] == "1"
-        assert environment["TRANSFORMERS_OFFLINE"] == "1"
-    else:
-        assert "HF_HUB_OFFLINE" not in environment
-        assert "TRANSFORMERS_OFFLINE" not in environment
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["TRANSFORMERS_OFFLINE"] == "1"
     assert environment.get("HF_HOME") == (None if read_only else "/model-cache")

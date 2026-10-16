@@ -58,10 +58,6 @@ const ACCELERATOR_VENDORS = [
 const CAPACITY_PATTERN = /^\d+(Gi|Mi|Ti)$/;
 const REPO_ID_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
-function shortId() {
-    return Array.from(crypto.getRandomValues(new Uint8Array(4)), byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function request(path, options = {}) {
     return requestJson(path, { headers: { 'Content-Type': 'application/json' }, ...options });
 }
@@ -289,7 +285,8 @@ export function CreateClusterWizard({ onClose, onCreated }) {
     const [prewarmEnabled, setPrewarmEnabled] = useState(false);
     const [secretNamespace, setSecretNamespace] = useState('llm-d-bench-storage');
     const [secretNamespaceTouched, setSecretNamespaceTouched] = useState(false);
-    const [secretName, setSecretName] = useState(() => `hf-token-${shortId()}`);
+    // Suffix the Secret name so two clusters sharing an API server never collide.
+    const [secretName, setSecretName] = useState(() => `hf-token-${crypto.randomUUID().slice(0, 8)}`);
     const [hfToken, setHfToken] = useState('');
     // Set once the Step-5 HF_TOKEN secret has actually been created on the
     // cluster (see goNext's stepIndex === 4 branch below); recorded on the
@@ -617,6 +614,10 @@ export function CreateClusterWizard({ onClose, onCreated }) {
                     storageVolumeId: volumeId,
                     source: { kind: 'huggingface', huggingface: { repoId: repoId.trim(), revision: revision.trim() } },
                     tokenSource: { mode: 'existing-secret', namespace: secretRef.namespace, name: secretRef.name },
+                    // Prewarm picks one model for this wizard run; if an existing
+                    // volume already holds it, join/refresh it instead of failing
+                    // the whole cluster setup on a confirmation the wizard cannot ask.
+                    force: true,
                 });
                 setStepState('model-cache', 'done');
             }

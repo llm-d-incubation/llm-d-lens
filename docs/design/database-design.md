@@ -281,7 +281,7 @@ Corresponds to `llm_d_lens.storage.contracts.StorageVolume`. The three mutually 
 | `updated_at` | DateTime(timezone=True) | NOT NULL |  |  | `func.now()` |  |
 | `version_id` | Integer | NOT NULL |  |  | `1` | Optimistic-lock version number; see §6.7 |
 
-Unique constraint: `uq_storage_volumes_name(name)`. Indexes: `(cluster_id)`, `(kind)`, `(status)`.
+Unique constraint: `uq_storage_volumes_cluster_id_name(cluster_id, lower(name))` — a volume name is a display label scoped to its cluster, not an identity (the identity is `id`, and the PVC/PV it owns are named `prism-storage-{id}`), so two clusters may each hold an `a100-model-cache`. The `lower(name)` expression keeps the index consistent with the case-insensitive conflict the Storage API reports. Indexes: `(cluster_id)`, `(kind)`, `(status)`.
 
 ##### 5.4.3 `model_cache_entries`
 

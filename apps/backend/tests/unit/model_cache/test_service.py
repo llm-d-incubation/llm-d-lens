@@ -16,6 +16,7 @@ from llm_d_lens.model_cache.contracts import (
     TokenSourceMode,
 )
 from llm_d_lens.model_cache.service import (
+    ModelCacheEntryExistsError,
     ModelCacheInvalidStateError,
     ModelCacheNotFoundError,
     ModelCacheService,
@@ -87,7 +88,7 @@ async def test_request_download_creates_pending_entry(monkeypatch, service):
 
 
 @pytest.mark.asyncio
-async def test_request_download_is_idempotent_for_in_progress_entries(monkeypatch, service):
+async def test_request_download_reports_a_model_the_volume_already_holds(monkeypatch, service):
     volume = _volume()
 
     async def fake_get_ready_volume(volume_id, *, cluster_id=None):
@@ -95,8 +96,62 @@ async def test_request_download_is_idempotent_for_in_progress_entries(monkeypatc
 
     monkeypatch.setattr(service_module, "get_ready_volume", fake_get_ready_volume)
     first = await service.request_download(_request(storageVolumeId=volume.id))
-    second = await service.request_download(_request(storageVolumeId=volume.id))
+    with pytest.raises(ModelCacheEntryExistsError) as caught:
+        await service.request_download(_request(storageVolumeId=volume.id))
+    assert caught.value.entry.id == first.id
+    assert "org/model@main" in str(caught.value)
+    assert len(service._store.list()) == 1
+
+
+@pytest.mark.asyncio
+async def test_request_download_reports_a_model_already_downloaded(monkeypatch, service):
+    volume = _volume()
+
+    async def fake_get_ready_volume(volume_id, *, cluster_id=None):
+        return volume
+
+    monkeypatch.setattr(service_module, "get_ready_volume", fake_get_ready_volume)
+    entry = await service.request_download(_request(storageVolumeId=volume.id))
+    entry.status = ModelCacheEntryStatus.READY
+    service._store.save(entry)
+    with pytest.raises(ModelCacheEntryExistsError) as caught:
+        await service.request_download(_request(storageVolumeId=volume.id))
+    assert caught.value.entry.status == ModelCacheEntryStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_forced_request_joins_an_in_progress_download(monkeypatch, service):
+    volume = _volume()
+
+    async def fake_get_ready_volume(volume_id, *, cluster_id=None):
+        return volume
+
+    monkeypatch.setattr(service_module, "get_ready_volume", fake_get_ready_volume)
+    first = await service.request_download(_request(storageVolumeId=volume.id))
+    second = await service.request_download(_request(storageVolumeId=volume.id, force=True))
     assert first.id == second.id
+    assert second.status == ModelCacheEntryStatus.PENDING
+    assert len(service._store.list()) == 1
+
+
+@pytest.mark.asyncio
+async def test_forced_request_redownloads_a_ready_entry_in_place(monkeypatch, service):
+    volume = _volume()
+
+    async def fake_get_ready_volume(volume_id, *, cluster_id=None):
+        return volume
+
+    monkeypatch.setattr(service_module, "get_ready_volume", fake_get_ready_volume)
+    entry = await service.request_download(_request(storageVolumeId=volume.id))
+    entry.status = ModelCacheEntryStatus.READY
+    entry.failure_detail = "stale"
+    entry.node_progress = [NodeDownloadStatus(node="node-a", status="ready")]
+    service._store.save(entry)
+    again = await service.request_download(_request(storageVolumeId=volume.id, force=True))
+    assert again.id == entry.id
+    assert again.status == ModelCacheEntryStatus.PENDING
+    assert again.failure_detail is None
+    assert again.node_progress == []
     assert len(service._store.list()) == 1
 
 

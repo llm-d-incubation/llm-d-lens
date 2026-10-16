@@ -120,18 +120,23 @@ async def get_volume_resource_status(
 async def create_volume(request: StorageVolumeCreateRequest) -> dict:
     requested_name = request.name.strip()
     name = requested_name or f"storage-{request.kind.value}"
-    existing_names = {existing.name.strip().lower() for existing in _service.list()}
+    # Scoped to the cluster: a volume name is a display label, and two clusters
+    # may legitimately each have an "a100-model-cache". Within one cluster the
+    # name must stay unambiguous (matching uq_storage_volumes_cluster_id_name).
+    existing_names = {
+        existing.name.strip().lower() for existing in _service.list() if existing.cluster_id == request.cluster_id
+    }
     if name.lower() in existing_names:
         if requested_name:
             return problem(
                 409,
                 "Storage name already in use",
-                f"A storage volume named '{name}' already exists. Choose a different name.",
+                f"A storage volume named '{name}' already exists on this cluster. Choose a different name.",
                 "storage_volume_name_conflict",
             )
         # The auto-generated default name (e.g. a second unnamed
         # local-disk volume) collided -- disambiguate instead of silently
-        # colliding, since names are otherwise unique across all volumes.
+        # colliding, since names are otherwise unique within the cluster.
         suffix = 2
         while f"{name}-{suffix}".lower() in existing_names:
             suffix += 1

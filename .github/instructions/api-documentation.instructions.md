@@ -1,9 +1,11 @@
 ---
 description: "Require accurate API descriptions and contract documentation for every new or modified API endpoint."
-applyTo: "**/*.{py,js,jsx,ts,tsx}"
+applyTo: "apps/backend/src/llm_d_lens/**/*.py,apps/server/src/**/*.ts"
 ---
 
 # API Description Requirements
+
+Internal refactors and unchanged public contracts require no API documentation work.
 
 Apply these requirements whenever a change adds, modifies, deprecates, or removes an externally callable API, including FastAPI routes, HTTP handlers, RPC/MCP tools, and their request or response contracts.
 

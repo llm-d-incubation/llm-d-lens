@@ -560,33 +560,159 @@ async def delete_cluster(cluster_id: str) -> None:
                 code="cluster_has_storage_volumes",
             )
     else:
-        _delete_storage_volumes(cluster_id)
-    # Best-effort: delete the per-cluster HF_TOKEN/model-cache namespace
-    # (see the Create Cluster wizard's Model Cache step) before the
+        await _delete_storage_volumes(cluster_id)
+    # Best-effort: delete the HF_TOKEN Secret and the per-cluster model-cache
+    # namespace (see the Create Cluster wizard's Model Cache step) before the
     # cluster's kubeconfig is removed below -- once it's gone there is no
     # way left to reach the cluster to clean this up.
-    await _delete_storage_namespace(cluster_id)
+    await _delete_hf_token_resources(cluster)
     sessions.close_session_for_server(cluster_id)
     registry.delete_cluster(cluster_id)
 
 
-async def _delete_storage_namespace(cluster_id: str) -> None:
-    """Best-effort delete of ``llm-d-bench-storage-<cluster_id>``, the
-    default namespace the wizard creates the HF_TOKEN secret in. Never
-    raises -- an unreachable cluster or a namespace that was never created
-    must not block deleting the cluster record itself."""
-    from llm_d_lens.infrastructure.kubernetes import delete_namespace
+_LENS_NAMESPACE_LABELS = {"app.kubernetes.io/managed-by": "llm-d-lens"}
+_CLUSTER_ID_LABEL = "prism.ai/cluster-id"
 
+# Namespaces that must never be deleted, whatever they happen to contain.
+_PROTECTED_NAMESPACES = frozenset({"default", "kube-system", "kube-public", "kube-node-lease"})
+
+# Objects Kubernetes and common cluster add-ons inject into *every* namespace.
+# Their presence does not make a namespace "in use" -- a namespace holding only
+# these is indistinguishable from a freshly created empty one.
+_INJECTED_CONFIG_MAPS = frozenset(
+    {
+        "kube-root-ca.crt",  # kube-controller-manager (RootCAConfigMap)
+        "openshift-service-ca.crt",  # OpenShift service CA operator
+        "istio-ca-root-cert",  # Istio / service-mesh CA distribution
+        "istio-ca-crl",
+    }
+)
+
+
+def _is_injected_object(item: dict[str, Any]) -> bool:
+    kind = item.get("kind")
+    name = ((item.get("metadata") or {}).get("name")) or ""
+    if kind == "ServiceAccount":
+        return name == "default"
+    if kind == "Secret":
+        return item.get("type") == "kubernetes.io/service-account-token"
+    if kind == "ConfigMap":
+        return name in _INJECTED_CONFIG_MAPS
+    return False
+
+
+async def _namespace_is_unused(namespace: str, *, cluster_id: str) -> bool:
+    """Report whether ``namespace`` holds nothing but auto-injected objects.
+
+    Used to decide whether a namespace is worth keeping once the cluster's
+    ``HF_TOKEN`` Secret has been removed from it: a namespace whose only real
+    content was that Secret serves no purpose after the cluster is gone.
+
+    Every namespaced resource type the cluster exposes is listed, so a custom
+    resource keeps the namespace alive just like a Pod does. Any failure --
+    an unreachable cluster, a partially failing aggregated API -- returns
+    ``False``: an uncertain answer must never authorise a deletion.
+    """
+    if namespace in _PROTECTED_NAMESPACES:
+        return False
+    runner = scoped_runner(cluster_id)
+    discovered = await runner.run(
+        ["kubectl", "api-resources", "--namespaced=true", "--verbs=list", "-o", "name"], timeout=30
+    )
+    if discovered.returncode != 0:
+        return False
+    kinds = sorted({line.strip() for line in (discovered.stdout or "").splitlines() if line.strip()})
+    if not kinds:
+        return False
+    listed = await runner.run(
+        ["kubectl", "get", ",".join(kinds), "-n", namespace, "--ignore-not-found", "-o", "json"], timeout=120
+    )
+    if listed.returncode != 0:
+        return False
+    try:
+        items = json.loads(listed.stdout or "{}").get("items") or []
+    except json.JSONDecodeError:
+        return False
+    return all(_is_injected_object(item) for item in items)
+
+
+async def _delete_hf_token_resources(cluster: registry.Cluster) -> None:
+    """Best-effort cleanup of the cluster's HF_TOKEN Secret and of the namespace
+    holding it, when that namespace has no reason to outlive the cluster.
+
+    ``llm-d-bench-storage-<cluster_id>`` is created by Lens for this cluster
+    alone, so it is removed wholesale. The cluster may instead point at a
+    Secret the operator chose (wizard Step 5, or a later rotation through
+    ``update_hf_token_secret``). That namespace is removed too when Lens
+    created it (see the label applied in ``_write_hf_token_secret``) or when
+    the Secret turns out to have been its only content -- keeping an empty
+    namespace around after its single Secret is deleted helps nobody. A
+    namespace that still holds unrelated workloads is left alone.
+
+    Never raises -- an unreachable cluster or resources that were never created
+    must not block deleting the cluster record itself.
+    """
+    from llm_d_lens.infrastructure.kubernetes import delete_namespace, delete_secret
+
+    owned_namespace = f"llm-d-bench-storage-{cluster.id}"
+    namespace = cluster.hf_token_secret_namespace
+    name = cluster.hf_token_secret_name
+    if namespace and name and namespace != owned_namespace:
+        deleted = False
+        with contextlib.suppress(Exception):
+            result = await delete_secret(name, namespace=namespace, cluster_id=cluster.id)
+            deleted = result.returncode == 0
+        if deleted and await _namespace_is_lens_owned_or_unused(namespace, cluster_id=cluster.id):
+            with contextlib.suppress(Exception):
+                await delete_namespace(namespace, cluster_id=cluster.id)
     with contextlib.suppress(Exception):
-        await delete_namespace(f"llm-d-bench-storage-{cluster_id}", cluster_id=cluster_id)
+        await delete_namespace(owned_namespace, cluster_id=cluster.id)
 
 
-def _delete_storage_volumes(cluster_id: str) -> None:
-    """Best-effort cascade delete of any Storage volumes left on a draft cluster."""
+async def _namespace_is_lens_owned_or_unused(namespace: str, *, cluster_id: str) -> bool:
+    """Whether deleting ``namespace`` along with the cluster is safe."""
+    if namespace in _PROTECTED_NAMESPACES:
+        return False
+    with contextlib.suppress(Exception):
+        runner = scoped_runner(cluster_id)
+        described = await runner.run(["kubectl", "get", "namespace", namespace, "-o", "json"], timeout=15)
+        if described.returncode == 0:
+            labels = (json.loads(described.stdout or "{}").get("metadata") or {}).get("labels") or {}
+            if all(labels.get(key) == value for key, value in _LENS_NAMESPACE_LABELS.items()):
+                return labels.get(_CLUSTER_ID_LABEL) in (None, cluster_id)
+    with contextlib.suppress(Exception):
+        return await _namespace_is_unused(namespace, cluster_id=cluster_id)
+    return False
+
+
+async def _delete_storage_volumes(cluster_id: str) -> None:
+    """Best-effort cascade delete of any Storage volumes left on a draft cluster.
+
+    The volume's PVC/PV must go with it: dropping only the Lens record leaves
+    the Kubernetes objects bound on the cluster with no record left to reach
+    them from (observed live as hundreds of orphaned ``prism-storage-*``
+    PVC/PVs accumulated from cancelled wizard runs).
+
+    ``keep_model_files=True`` preserves the previous data semantics -- Model
+    Cache records are dropped but downloaded weights on the underlying
+    NFS/hostPath storage are left untouched, and ``delete_volume_objects``
+    only removes the Kubernetes objects (the PV uses ``Retain``).
+    """
+    from llm_d_lens.storage.service import delete_model_cache_entries_for_volume, delete_volume_objects
     from llm_d_lens.storage.store import default_store
 
     store = default_store()
     for volume in [v for v in store.list() if v.cluster_id == cluster_id]:
+        try:
+            await delete_model_cache_entries_for_volume(volume.id, keep_model_files=True)
+            await delete_volume_objects(volume, cluster_id=cluster_id)
+        except Exception as error:  # noqa: BLE001 - best-effort cleanup, never block draft deletion
+            logger.warning(
+                "Failed to clean up Kubernetes objects for storage volume %s during draft "
+                "cluster deletion; its record is still removed: %s",
+                volume.id,
+                error,
+            )
         try:
             store.delete(volume.id)
         except Exception as error:  # noqa: BLE001 - best-effort cleanup, never block draft deletion
@@ -832,6 +958,65 @@ def resolve_proxy_env(cluster_id: str | None) -> dict[str, str]:
     return values
 
 
+def _validated_secret_coordinates(namespace: str | None, name: str | None) -> tuple[str, str]:
+    namespace = (namespace or "").strip()
+    name = (name or "").strip()
+    if not namespace:
+        raise ClusterOverviewError("Namespace is required", status_code=422, code="invalid_secret_namespace")
+    if not name:
+        raise ClusterOverviewError("Secret name is required", status_code=422, code="invalid_secret_name")
+    return namespace, name
+
+
+async def _write_hf_token_secret(
+    cluster: registry.Cluster,
+    namespace: str,
+    name: str,
+    token: str,
+    *,
+    verb: str,
+    failure_code: str,
+) -> None:
+    """Ensure ``namespace`` exists, then run ``kubectl <verb>`` for the Secret.
+
+    ``verb`` is ``create`` for the wizard (a name collision must surface as an
+    explicit error) and ``apply`` for an edit (the Secret is expected to exist
+    and its token is being replaced in place).
+    """
+    runner = scoped_runner(cluster.id)
+    existing_ns = await runner.run(["kubectl", "get", "namespace", namespace, "-o", "name"], timeout=15)
+    if existing_ns.returncode != 0:
+        # Created here, so mark it as ours: deleting the cluster may then remove
+        # the namespace as well instead of leaving an empty one behind. An
+        # operator-supplied namespace that already exists is left untouched --
+        # it belongs to whoever created it, labels included.
+        ns_manifest = {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {"name": namespace, "labels": dict(_LENS_NAMESPACE_LABELS, **{_CLUSTER_ID_LABEL: cluster.id})},
+        }
+        await runner.run(["kubectl", "apply", "-f", "-"], input=json.dumps(ns_manifest), timeout=15)
+    manifest = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": name, "namespace": namespace},
+        "type": "Opaque",
+        "stringData": {"HF_TOKEN": token},
+    }
+    result = await runner.run(["kubectl", verb, "-f", "-"], input=json.dumps(manifest), timeout=15)
+    if result.returncode != 0:
+        raise ClusterOverviewError(
+            f"Failed to {verb} secret: {(result.stderr or result.stdout or '').strip()}",
+            status_code=502,
+            code=failure_code,
+        )
+    # Record this secret's coordinates on the cluster itself so later
+    # Deploy/Evaluate flows can default to reusing it (see
+    # llm_d_lens/deploy/service.py's ``_default_model_secret``) instead of
+    # requiring the user to re-select a secret for every deployment.
+    registry.update_cluster(cluster.id, hf_token_secret_namespace=namespace, hf_token_secret_name=name)
+
+
 async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name: str, token: str) -> dict[str, str]:
     """Create a standalone ``HF_TOKEN`` Secret for the wizard's Model Cache step.
 
@@ -842,12 +1027,7 @@ async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name
     ``kubectl create`` (not ``apply``) so a name collision surfaces as an
     explicit error instead of silently overwriting an existing Secret.
     """
-    namespace = namespace.strip()
-    name = name.strip()
-    if not namespace:
-        raise ClusterOverviewError("Namespace is required", status_code=422, code="invalid_secret_namespace")
-    if not name:
-        raise ClusterOverviewError("Secret name is required", status_code=422, code="invalid_secret_name")
+    namespace, name = _validated_secret_coordinates(namespace, name)
     existing = await run_kubectl(
         ["get", "secret", name, "--namespace", namespace, "--ignore-not-found", "-o", "name"],
         cluster_id=cluster.id,
@@ -859,31 +1039,44 @@ async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name
             status_code=409,
             code="secret_already_exists",
         )
-    runner = scoped_runner(cluster.id)
-    ensure_ns = await runner.run(
-        ["kubectl", "create", "namespace", namespace, "--dry-run=client", "-o", "yaml"], timeout=15
+    await _write_hf_token_secret(
+        cluster, namespace, name, token, verb="create", failure_code="secret_create_failed"
     )
-    if ensure_ns.returncode == 0:
-        await runner.run(["kubectl", "apply", "-f", "-"], input=ensure_ns.stdout, timeout=15)
-    manifest = {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {"name": name, "namespace": namespace},
-        "type": "Opaque",
-        "stringData": {"HF_TOKEN": token},
-    }
-    result = await runner.run(["kubectl", "create", "-f", "-"], input=json.dumps(manifest), timeout=15)
-    if result.returncode != 0:
-        raise ClusterOverviewError(
-            f"Failed to create secret: {(result.stderr or result.stdout or '').strip()}",
-            status_code=502,
-            code="secret_create_failed",
-        )
-    # Record this secret's coordinates on the cluster itself so later
-    # Deploy/Evaluate flows can default to reusing it (see
-    # llm_d_lens/deploy/service.py's ``_default_model_secret``) instead of
-    # requiring the user to re-select a secret for every deployment.
-    registry.update_cluster(cluster.id, hf_token_secret_namespace=namespace, hf_token_secret_name=name)
+    return {"namespace": namespace, "name": name}
+
+
+async def update_hf_token_secret(
+    cluster: registry.Cluster,
+    token: str,
+    *,
+    namespace: str | None = None,
+    name: str | None = None,
+) -> dict[str, str]:
+    """Rotate the cluster's ``HF_TOKEN`` Secret from the Edit cluster drawer.
+
+    Unlike :func:`create_hf_token_secret` this uses ``kubectl apply``, because
+    the Secret normally already exists and the operator is replacing its token.
+    ``namespace``/``name`` default to the coordinates recorded on the cluster
+    (``hfTokenSecret``), so the common "just change the token" case needs only a
+    token; supplying different coordinates moves the cluster's pointer to that
+    Secret instead, creating it when absent.
+
+    Rotation only rewrites this cluster-level Secret. Namespace-local copies
+    that Deploy and Model Cache derive at run time (the fixed
+    ``llm-d-hf-token`` Secret created by
+    ``deploy/runtime/composition.py::copy_model_secret`` and
+    ``model_cache/jobs.py::_ensure_token_secret``) are re-derived on the next
+    deployment or download, so already-running workloads keep the old token
+    until they are recreated.
+    """
+    if not token.strip():
+        raise ClusterOverviewError("Token is required", status_code=422, code="invalid_secret_token")
+    namespace, name = _validated_secret_coordinates(
+        namespace or cluster.hf_token_secret_namespace, name or cluster.hf_token_secret_name
+    )
+    await _write_hf_token_secret(
+        cluster, namespace, name, token.strip(), verb="apply", failure_code="secret_update_failed"
+    )
     return {"namespace": namespace, "name": name}
 
 
@@ -1666,12 +1859,24 @@ def _hardware_summary(
         if disk_bytes and nodes_reporting_disk
         else None
     )
+    # Free disk is exact: the kubelet reports used bytes per node, so this is a
+    # subtraction rather than a percentage reapplied to the total.
+    disk_available_bytes = max(0, disk_bytes - disk_used_bytes) if disk_bytes and nodes_reporting_disk else None
+    # Free memory has no byte-level source -- `memoryUsagePercent` is the mean
+    # of the per-node percentages Prometheus reports -- so it is derived from
+    # that same reading and is `None` whenever the reading is missing.
+    memory_available_bytes = (
+        int(round(memory_bytes * (1 - memory_usage_percent / 100)))
+        if memory_bytes and memory_usage_percent is not None
+        else None
+    )
     return {
         "nodes": len(node_summaries),
         "cpuCores": cpu_cores,
         "cpuUsagePercent": cpu_usage_percent,
         "memoryBytes": memory_bytes,
         "memoryUsagePercent": memory_usage_percent,
+        "memoryAvailableBytes": memory_available_bytes,
         "gpuNodes": sum(1 for node in node_summaries if node.get("gpu")),
         "gpuCount": gpu_count,
         "totalGpuCount": gpu_count,
@@ -1696,6 +1901,8 @@ def _hardware_summary(
         if vram_usage_percent is not None
         else None,
         "diskBytes": disk_bytes,
+        "diskUsedBytes": disk_used_bytes if nodes_reporting_disk else None,
+        "diskAvailableBytes": disk_available_bytes,
         "diskUsagePercent": disk_usage_percent,
         "allocatedGpuCount": allocated_gpu_count,
         "availableGpuCount": available_gpu_count,

@@ -4,11 +4,11 @@ import asyncio
 import importlib
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from llm_d_lens.deploy.contracts import DeploymentCaseStatus, DeploymentStatus
 from llm_d_lens.deploy.providers.hardware_profile import runtime_image
@@ -36,8 +36,8 @@ def test_standard_kubernetes_service_configuration_is_an_immutable_baseline_arti
         cluster_session_id="a" * 36,
         replicas=2,
         tensor_parallel_size=4,
-        storage_type="local-cache",
-        model_cache_path="/home/user/.cache",
+        storage_type="model-cache",
+        storage_volume_id="storage-model-cache",
         max_model_len=8192,
         gpu_memory_utilization=0.85,
         max_num_seqs=128,
@@ -64,8 +64,8 @@ def test_standard_kubernetes_service_configuration_is_an_immutable_baseline_arti
         "image": runtime_image(),
         "imageMode": "pull-existing",
         "modelSource": "auto-cache",
-        "mountPath": "/home/user/.cache",
-        "cacheOffline": False,
+        "storageVolumeId": "storage-model-cache",
+        "cacheOffline": True,
         "environment": {
             "HTTP_PROXY": "http://proxy.example:911",
             "HTTPS_PROXY": "http://proxy.example:911",
@@ -97,6 +97,7 @@ def test_standard_configuration_uses_selected_accelerator_image(monkeypatch):
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
     )
 
     configuration = build_standard_kubernetes_service_configuration(request, accelerator="nvidia")
@@ -121,6 +122,20 @@ def standard_cluster_hardware(monkeypatch):
 
     monkeypatch.setattr("llm_d_lens.cluster.service.build_overview", overview)
 
+    async def ready_volume(*_args, **_kwargs):
+        return SimpleNamespace(kind=StorageVolumeKind.NFS, purposes=[StorageVolumePurpose.MODEL_CACHE])
+
+    async def ready_entries(**_kwargs):
+        return [
+            SimpleNamespace(
+                status="ready",
+                source=SimpleNamespace(huggingface=SimpleNamespace(repo_id="Qwen/Qwen3-0.6B", revision="main")),
+            )
+        ]
+
+    monkeypatch.setattr("llm_d_lens.storage.service.get_ready_volume", ready_volume)
+    monkeypatch.setattr("llm_d_lens.model_cache.service.default_service", lambda: SimpleNamespace(list=ready_entries))
+
 
 def test_standard_kubernetes_service_run_keeps_the_requested_name_in_run_provenance(
     monkeypatch, standard_cluster_hardware
@@ -138,6 +153,7 @@ def test_standard_kubernetes_service_run_keeps_the_requested_name_in_run_provena
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
     )
 
     asyncio.run(router.create_standard_kubernetes_service_run(request))
@@ -218,6 +234,7 @@ def test_standard_run_restricts_required_colocation_to_selected_node(monkeypatch
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
         placement_replicas="same-node",
         placement_node_label={"key": "kubernetes.io/hostname", "value": "smc-22"},
     )
@@ -274,22 +291,18 @@ def test_baseline_vllm_accepts_the_standard_model_market_namespace():
     assert adapter._namespace({"namespace": "standard-4-1-20260904081451502388"}) == "standard-4-1-20260904081451502388"
 
 
-def test_standard_kubernetes_service_configuration_uses_named_pvc_for_model_cache():
-    request = StandardKubernetesServiceRequest(
-        model="Qwen/Qwen3-0.6B",
-        deployment_name="qwen3-pvc",
-        cluster_session_id="a" * 36,
-        replicas=1,
-        tensor_parallel_size=1,
-        storage_type="pvc",
-        pvc_name="shared-model-cache",
-    )
-
-    configuration = build_standard_kubernetes_service_configuration(request)
-
-    assert configuration.content["runtime"]["pvcName"] == "shared-model-cache"
-    assert configuration.content["runtime"]["cacheOffline"] is False
-    assert "mountPath" not in configuration.content["runtime"]
+@pytest.mark.parametrize("storage_type", ["local-cache", "pvc"])
+def test_standard_kubernetes_service_rejects_non_model_cache_storage(storage_type):
+    with pytest.raises(ValidationError, match="storage_type"):
+        StandardKubernetesServiceRequest(
+            model="Qwen/Qwen3-0.6B",
+            deployment_name="qwen3-pvc",
+            cluster_session_id="a" * 36,
+            replicas=1,
+            tensor_parallel_size=1,
+            storage_type=storage_type,
+            storage_volume_id="storage-model-cache",
+        )
 
 
 def test_standard_kubernetes_service_configuration_uses_registered_model_cache_storage():
@@ -306,7 +319,7 @@ def test_standard_kubernetes_service_configuration_uses_registered_model_cache_s
     configuration = build_standard_kubernetes_service_configuration(request)
 
     assert configuration.content["runtime"]["storageVolumeId"] == "storage-model-cache"
-    assert "cacheOffline" not in configuration.content["runtime"]
+    assert configuration.content["runtime"]["cacheOffline"] is True
     assert "mountPath" not in configuration.content["runtime"]
     assert "pvcName" not in configuration.content["runtime"]
 
@@ -485,20 +498,15 @@ def test_get_execution_pod_logs_returns_logs(monkeypatch):
     assert res["success"] is True
 
 
-def test_standard_kubernetes_service_configuration_accepts_empty_pvc_name_for_local_cache():
-    request = StandardKubernetesServiceRequest(
-        model="Qwen/Qwen3-0.6B",
-        deployment_name="qwen3-local-cache",
-        cluster_session_id="a" * 36,
-        replicas=1,
-        tensor_parallel_size=1,
-        storage_type="local-cache",
-        pvc_name="",
-    )
-
-    configuration = build_standard_kubernetes_service_configuration(request)
-
-    assert configuration.content["runtime"]["mountPath"] == str(Path.home() / ".cache")
+def test_standard_kubernetes_service_requires_model_cache_volume():
+    with pytest.raises(ValidationError, match="storage_volume_id"):
+        StandardKubernetesServiceRequest(
+            model="Qwen/Qwen3-0.6B",
+            deployment_name="qwen3-cache",
+            cluster_session_id="a" * 36,
+            replicas=1,
+            tensor_parallel_size=1,
+        )
 
 
 def test_baseline_vllm_renders_model_cache_pvc():
@@ -536,6 +544,7 @@ def test_standard_kubernetes_service_configuration_inherits_backend_proxy(monkey
         cluster_session_id="a" * 36,
         replicas=1,
         tensor_parallel_size=1,
+        storage_volume_id="storage-model-cache",
     )
 
     configuration = build_standard_kubernetes_service_configuration(request)

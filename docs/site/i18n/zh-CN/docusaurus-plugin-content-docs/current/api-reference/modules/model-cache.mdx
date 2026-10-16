@@ -169,7 +169,9 @@ Hugging Face 环境变量（`HF_*`、`HUGGING*`、`TRANSFORMERS_*`）由管理�
   <TabItem value="rest-api" label="REST API">
     **`POST /api/v1/model-cache/entries`**
 
-    请求：请求体字段包括 `clusterId`（`str`）、`storageVolumeId`（`str`）和 `source`（`ModelSource`）。为了向后兼容仍接受 `tokenSource`，但会被忽略：下载始终使用与集群一起保存的 HuggingFace 令牌（向导中的 `hf_token_secret`），如果该集群没有令牌，则以未认证方式运行。前端的**下载模型**对话框现在已经完全不再发送 `tokenSource`。
+    请求：请求体字段包括 `clusterId`（`str`）、`storageVolumeId`（`str`）、`source`（`ModelSource`）以及可选的 `force`（`bool`，默认 `false`）。为了向后兼容仍接受 `tokenSource`，但会被忽略：下载始终使用与集群一起保存的 HuggingFace 令牌（向导中的 `hf_token_secret`），如果该集群没有令牌，则以未认证方式运行。前端的**下载模型**对话框现在已经完全不再发送 `tokenSource`。
+
+    如果该存储卷上已经存在同一模型、同一版本的条目（无论处于什么状态），路由不会开始下载，而是返回 `409`、错误码为 `model_cache_entry_exists` 的问题响应，以便调用方请用户确认。响应体中会带上 `entryId`、`entryStatus`、`model` 和 `storageVolumeId`。用 `force: true` 重新发送同一请求即可继续：处于 `ready` 或 `failed` 的条目会被重置为 `pending` 并就地重新下载，处于 `pending` 或 `downloading` 的条目则原样返回，因此确认操作是加入正在进行的下载，而不是再起一个。任何情况下都不会创建重复条目。
 
     ```json
     {
@@ -186,6 +188,20 @@ Hugging Face 环境变量（`HF_*`、`HUGGING*`、`TRANSFORMERS_*`）由管理�
     ```
 
     响应：返回为该下载请求创建的、处于排队状态的 `ModelCacheEntry` 数据。
+
+    ```json
+    {
+      "type": "about:blank",
+      "status": 409,
+      "title": "Model already on this storage volume",
+      "detail": "'Qwen/Qwen2.5-7B-Instruct@main' is already on this storage volume (status: ready)",
+      "code": "model_cache_entry_exists",
+      "entryId": "model-cache-7f3a2c1d",
+      "entryStatus": "ready",
+      "model": "Qwen/Qwen2.5-7B-Instruct@main",
+      "storageVolumeId": "storage-abc12345"
+    }
+    ```
 
     ```json
     {
@@ -220,23 +236,27 @@ Hugging Face 环境变量（`HF_*`、`HUGGING*`、`TRANSFORMERS_*`）由管理�
     import asyncio
 
     from llm_d_lens.model_cache.contracts import HuggingFaceSource, ModelCacheCreateRequest, ModelSource, ModelSourceKind
-    from llm_d_lens.model_cache.service import default_service
+    from llm_d_lens.model_cache.service import ModelCacheEntryExistsError, default_service
 
 
     async def main() -> None:
         service = default_service()
         # tokenSource is intentionally omitted: request_download() always resolves the
         # HuggingFace token from the cluster's saved hf_token_secret instead.
-        entry = await service.request_download(
-            ModelCacheCreateRequest(
-                clusterId="cluster-123",
-                storageVolumeId="storage-abc12345",
-                source=ModelSource(
-                    kind=ModelSourceKind.HUGGINGFACE,
-                    huggingface=HuggingFaceSource(repoId="Qwen/Qwen2.5-7B-Instruct", revision="main"),
-                ),
-            )
+        request = ModelCacheCreateRequest(
+            clusterId="cluster-123",
+            storageVolumeId="storage-abc12345",
+            source=ModelSource(
+                kind=ModelSourceKind.HUGGINGFACE,
+                huggingface=HuggingFaceSource(repoId="Qwen/Qwen2.5-7B-Instruct", revision="main"),
+            ),
         )
+        try:
+            entry = await service.request_download(request)
+        except ModelCacheEntryExistsError as already_there:
+            # Ask the operator whether to download it again, then retry with force.
+            print(already_there.entry.id, already_there.entry.status)
+            entry = await service.request_download(request.model_copy(update={"force": True}))
         await service.provision(entry.id)
         print(entry.id, entry.status)
 
