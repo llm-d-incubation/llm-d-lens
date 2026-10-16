@@ -54,6 +54,21 @@ test('ordinary benchmark creation still starts at Evaluation Setup', (t) => {
     assert.match(configurationStep(html), /disabled=/);
 });
 
+test('evaluation configuration links open the shared editor and retain benchmark steps', (testContext) => {
+    const html = renderWizard(testContext, {
+        entrySource: 'evaluation-setup',
+        operation: 'create-evaluation',
+        initial_step: 'configurations',
+        return_target: 'optimization-evaluate-new',
+        name: 'existing-evaluation',
+        selected_artifact_ids: ['existing-configuration'],
+    });
+    assert.match(configurationStep(html), /ring-cyan-400\/25/);
+    assert.match(html, /Continue to Benchmark/);
+    assert.match(html, /Execution plan/);
+    assert.doesNotMatch(html, /Back to model card/);
+});
+
 test('explicit Model Market source uses the shared configuration wizard, not the legacy screen', (testContext) => {
     const html = renderWizard(testContext, { entrySource: 'model-market', operation: 'deploy-only' });
     assert.match(html, /New Benchmark Task/);

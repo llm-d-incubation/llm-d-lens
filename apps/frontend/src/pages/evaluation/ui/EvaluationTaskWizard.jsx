@@ -130,7 +130,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const [configurationNotice, setConfigurationNotice] = useState("");
     const [providers, setProviders] = useState(new Map());
     const [artifacts, setArtifacts] = useState([]);
-    const [artifactIds, setArtifactIds] = useState([]);
+    const [artifactIds, setArtifactIds] = useState(returningIntent?.selected_artifact_ids || []);
     const [configurationSources, setConfigurationSources] = useState({});
     const [openMenuId, setOpenMenuId] = useState("");
     const [cloningArtifactId, setCloningArtifactId] = useState("");

@@ -446,11 +446,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
                     </div>
                     {!selected.vllmSupported && <p role="alert" className="mt-5 text-sm text-amber-300">{selected.type} requires the {selected.runtime} runtime. Raw vLLM Standard deployment is unavailable until this provider is added.</p>}
                     {mode === 'standard' && topologyError && <p role="alert" className="mt-5 text-sm text-amber-300">{topologyError} The recommended TP remains TP {plan.tensorParallelism}; modify replicas or TP before creating this deployment.</p>}
-                    <fieldset className="mt-6"><legend className="text-sm text-slate-300">Mode</legend><div className="mt-2 grid gap-2 md:grid-cols-2">{[['advanced', 'Advanced', 'Template-based benchmark configuration', false], ['agentic', 'Agentic', 'Recommended guide and topology', true]].map(([value, label, description, experimental]) => <button key={value} type="button" onClick={() => {
-                        if (value === 'advanced') {
-                            openAdvanced();
-                            return;
-                        }
+                    <fieldset className="mt-6"><legend className="text-sm text-slate-300">Mode</legend><div className="mt-2 grid gap-2 md:grid-cols-2">{[['advanced', 'Manual', 'Template-based deployment', false], ['agentic', 'Agentic', 'Recommended guide and topology', true]].map(([value, label, description, experimental]) => <button key={value} type="button" onClick={() => {
                         if (value === 'agentic') {
                             setMode(value);
                             setAgenticDraft({ model: selected.repository, deploymentName: deployName, description: deploymentDescription, clusterId: cluster, modelWeightGiB: selected.sizeGiB, contextLength: vllm.maxModelLen || plan.maxModelLen, storageVolumeId, maxNumSeqs: vllm.maxNumSeqs, maxNumBatchedTokens: vllm.maxNumBatchedTokens, gpuMemoryUtilization: vllm.gpuMemoryUtilization, vllmArguments: selected.vllmArguments || [] });

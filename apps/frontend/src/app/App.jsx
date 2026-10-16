@@ -24,7 +24,6 @@ import { AIProvidersPage } from '../pages/ai-providers';
 import { ApiKeysPage, ModelServiceAdminPage, ModelServicePage, ModelUsagePage } from '../pages/model-service';
 import { PlaygroundPage } from '../pages/playground';
 import {
-  OptimizationConfigurationEntry,
   OptimizationEvaluateWorkspace,
   OptimizationOverview,
   OptimizationStage,
@@ -218,7 +217,6 @@ function AuthenticatedApp() {
             {currentView === 'optimization-evaluate' && <EvaluationDashboardEntry onNavigate={handleNavigate} />}
             {currentView === 'optimization-evaluate-new' && <EvaluationTaskWizard onNavigate={handleNavigate} />}
             {currentView === 'optimization-evaluation-details' && <OptimizationEvaluationDetails onNavigate={handleNavigate} />}
-            {currentView === 'optimization-explore' && <OptimizationConfigurationEntry onNavigate={handleNavigate} />}
             {currentView === 'optimization-deploy' && <OptimizationEvaluateWorkspace onNavigate={handleNavigate} />}
             {currentView === 'optimization-workspace' && <OptimizationOverview onNavigateBack={() => handleNavigate('home')} onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-simulate' && <SimulationDashboard onNavigate={handleNavigate} onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}

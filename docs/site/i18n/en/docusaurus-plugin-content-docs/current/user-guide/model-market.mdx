@@ -1,24 +1,24 @@
 ---
 title: Model Market
-description: Choose a model and configure an advanced or AI-assisted deployment.
+description: Choose a model and create a manual or AI-assisted deployment.
 ---
 
-Open **Model Market** to choose a model for deployment.
-Use **Advanced** to configure a deployment, or **Agentic** for an AI-assisted deployment.
+Open **Model Market** to choose a model and deploy it to a cluster.
+For your first deployment, use **Manual** mode.
 
 ## Choose a deployment mode
 
 | Mode | Choose it when |
 | --- | --- |
-| **Advanced** | You want to configure and deploy an llm-d Guide template |
+| **Manual** | You want to choose an llm-d Guide template, configure resources or review generated YAML |
 | **Agentic** (Experimental) | You want Lens to recommend a configuration for a workload and performance target |
 
-## Create an advanced deployment
+## Create a manual deployment
 
 1. Open **Model Market**, use **Model categories** to narrow the list, and click a model card.
 2. In **One-click deployment**, enter **Deployment name** and choose a ready **Cluster**.
-3. Optionally choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.**
-4. Click **Advanced** under **Mode** to open **Configurations**. Review the prefilled model and deployment settings; use **Edit setup** if needed.
+3. Choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.** Model cache storage is optional in **Manual** mode.
+4. Keep **Mode** on **Manual** and click **Configure deployment**. Review the prefilled model and deployment settings; use **Edit setup** if needed.
 5. Check the runtime image, replicas, and tensor parallel size.
 6. Under **Guide template**, choose **Guide** and **Accelerator**. Use [Choose an evaluation Guide](/evaluation/guides) to compare the options.
 7. For a P/D or tiered-cache Guide, choose a variant from the displayed list. Keep the supplied defaults for the first run.
@@ -70,7 +70,7 @@ or resources. [Run an evaluation](/user-guide/evaluation) to measure the deploye
 
 | Goal | Where to change it |
 | --- | --- |
-| Change context length or batching | **Advanced settings** in the configuration editor |
+| Change context length or batching | **Advanced settings** in the Manual configuration editor |
 | Enable tool calling | **Enable automatic tool choice**, then choose **Tool call parser** |
 | Use a deployment-specific proxy | **Deployment environment** |
 | Change replicas or accelerator count | **Replicas** and **Tensor parallelism** / **TP** |
