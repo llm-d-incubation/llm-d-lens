@@ -519,14 +519,16 @@ export default function OptimizationEvaluateWorkspaceV2({ onNavigate }) {
             if (!session) throw new Error("Connect a cluster before starting.");
             if (workloads.some((workload) => !workload.configuration_artifact_id) && !configurationArtifact) {
                 storeEvaluationIntent({
+                    entrySource: "evaluation-setup",
                     operation: "create-evaluation",
-                    return_target: "optimization-evaluate",
+                    initial_step: "configurations",
+                    return_target: "optimization-evaluate-new",
                     name,
                     runtime,
                     workloads,
                     created_at: new Date().toISOString(),
                 });
-                onNavigate("optimization-explore");
+                onNavigate("optimization-evaluate-new");
                 return;
             }
             await api("/api/v1/evaluate/evaluations", {
@@ -549,11 +551,15 @@ export default function OptimizationEvaluateWorkspaceV2({ onNavigate }) {
         } catch (nextError) {
             if (nextError.details?.code === "CONFIGURATION_REQUIRED") {
                 storeEvaluationIntent({
+                    entrySource: "evaluation-setup",
+                    operation: "create-evaluation",
+                    initial_step: "configurations",
+                    return_target: "optimization-evaluate-new",
                     name,
                     runtime,
                     workloads,
                 });
-                onNavigate(nextError.details.action?.target || "optimization-explore");
+                onNavigate(nextError.details.action?.target || "optimization-evaluate-new");
                 return;
             }
             setError(nextError.message);
@@ -605,11 +611,15 @@ export default function OptimizationEvaluateWorkspaceV2({ onNavigate }) {
                 </span>
                 <button type="button" onClick={() => {
                     storeEvaluationIntent({
+                        entrySource: "evaluation-setup",
+                        operation: "create-evaluation",
+                        initial_step: "configurations",
+                        return_target: "optimization-evaluate-new",
                         name,
                         runtime,
                         workloads,
                     });
-                    onNavigate("optimization-explore");
+                    onNavigate("optimization-evaluate-new");
                 }} className="underline">
                     {configurationArtifact || workloads.some((item) => item.configuration_artifact_id) ? "Change configuration" : "Create configuration"}
                 </button>

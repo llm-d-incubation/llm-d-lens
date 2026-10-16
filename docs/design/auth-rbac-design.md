@@ -920,7 +920,7 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 | `model-cache` | `model-cache:entry:read` | create/retry/sync/delete |
 | `ai-providers` | `ai-provider:provider:read` | create/update/delete/test/chat |
 | `cluster-monitoring-stack` | `monitoring:cluster-stack:read` or `monitoring:accelerator:read` | install/action |
-| `optimization-explore` `OptimizationConfiguration.jsx` | `configuration:artifact:read` | resolve/render/save/delete |
+| `optimization-explore` (legacy URL) | Redirects to `optimization-evaluate-new` with its visibility permissions | shared configuration wizard |
 | `optimization-deploy` `OptimizationEvaluateWorkspaceV2.jsx` | `deployment:run:read` | create workflow |
 | `optimization-workspace` / `opt-*` | `configuration:artifact:read` | candidate/guide/deploy |
 | **new** `admin/users` | `user:user:read` | create/update/delete/reset-password |

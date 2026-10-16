@@ -36,7 +36,7 @@ import { useAuth } from "../../auth";
 import { MODELS } from '@repo/shared/catalog';
 import { acceleratorVariantForHardware, DEFAULT_RUNTIME_IMAGES, isDefaultRuntimeImage } from "./benchmark-results/acceleratorDisplay";
 
-const STEPS = ["Evaluation Setup", "Configurations", "Benchmark", "Execution plan"];
+const EVALUATION_STEPS = ["Evaluation Setup", "Configurations", "Benchmark", "Execution plan"];
 const inputClass = "mt-1 h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-xs text-slate-100 outline-none focus:border-cyan-400";
 
 function artifactCluster(artifact) {
@@ -111,13 +111,17 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     // into the normal benchmark wizard.
     const hardwareProfiles = useHardwareProfiles(getHardwareProfiles);
     const [returningIntent] = useState(() => readEvaluationIntent());
-    const deployOnly = returningIntent?.operation === "deploy-only";
+    const entrySource = returningIntent?.entrySource ?? (returningIntent?.operation === "deploy-only" ? "model-market" : "evaluation-setup");
+    const deployOnly = !returningIntent?.entrySource && returningIntent?.operation === "deploy-only";
+    const deployOnPublish = entrySource === "model-market";
+    const STEPS = deployOnPublish ? EVALUATION_STEPS.slice(0, 2) : EVALUATION_STEPS;
     const { can } = useAuth();
     // A user without the deploy-capable evaluation permission may still benchmark
     // an existing (own/shared) deployment, but cannot design configurations
     // because that path deploys a new one.
     const benchmarkOnly = !deployOnly && !(can("evaluate:workflow:create") || can("deployment:run:create")) && can("evaluate:run:create");
-    const [step, setStep] = useState(deployOnly ? 1 : 0);
+    const startWithConfiguration = deployOnly || (!benchmarkOnly && (deployOnPublish || returningIntent?.initial_step === "configurations"));
+    const [step, setStep] = useState(startWithConfiguration ? 1 : 0);
     const [name, setName] = useState(returningIntent?.name || "");
     const [template, setTemplate] = useState(returningIntent?.workloads?.[0]?.guide || "");
     const [catalog, setCatalog] = useState([]);
@@ -126,7 +130,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const [configurationNotice, setConfigurationNotice] = useState("");
     const [providers, setProviders] = useState(new Map());
     const [artifacts, setArtifacts] = useState([]);
-    const [artifactIds, setArtifactIds] = useState([]);
+    const [artifactIds, setArtifactIds] = useState(returningIntent?.selected_artifact_ids || []);
     const [configurationSources, setConfigurationSources] = useState({});
     const [openMenuId, setOpenMenuId] = useState("");
     const [cloningArtifactId, setCloningArtifactId] = useState("");
@@ -267,7 +271,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 setModelServices(services || []);
                 setTargetId(services?.[0]?.id || "");
                 setTemplate((current) => guides.some((guide) => guide.id === current) ? current : guides[0]?.id || "");
-                if (deployOnly) {
+                if (startWithConfiguration) {
                     const guideId = returningIntent?.workloads?.[0]?.guide || guides[0]?.id || "";
                     setConfigurationEditor({ guideId, mode: "defaults", artifact: null, key: `model-market-${Date.now()}` });
                 }
@@ -276,7 +280,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             .catch((nextError) => active && setError(nextError.message || "Unable to load evaluation inputs"))
             .finally(() => active && setLoading(false));
         return () => { active = false; };
-    }, [deployOnly, returningIntent, selectedClusterId]);
+    }, [startWithConfiguration, returningIntent, selectedClusterId]);
 
     useEffect(() => {
         let active = true;
@@ -394,7 +398,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         : cachedModelsLoading ? { state: 'loading' }
         : modelCacheMismatch ? { state: 'model-mismatch', message: `${trimmedSharedModel} was not found in this Model Cache storage.` }
         : { state: 'ready' };
-    const sharedContext = { cluster: clusterLoading ? {} : cluster, clusterHardware, refreshClusterHardware, cachedRuntimeImages, model: sharedModel, modelSource, modelPath: modelSource === 'auto-cache' ? storageVolumes.find((item) => item.id === storageVolumeId)?.localDisk?.hostPath || '' : modelPath, storageVolumeId, modelServer: sharedRuntime, deploymentName, imageMode, image: runtimeImage, buildSourceUrl, storageVolume: storageVolumes.find((item) => item.id === storageVolumeId), cacheValidation, replicas: returningIntent?.workloads?.[0]?.replicas, tensorParallelSize: returningIntent?.workloads?.[0]?.tensor_parallel_size, maxModelLen: deployOnly ? returningIntent?.runtime?.max_model_len : undefined };
+    const sharedContext = { entrySource, cluster: clusterLoading ? {} : cluster, clusterHardware, refreshClusterHardware, cachedRuntimeImages, model: sharedModel, modelSource, modelPath: modelSource === 'auto-cache' ? storageVolumes.find((item) => item.id === storageVolumeId)?.localDisk?.hostPath || '' : modelPath, storageVolumeId, modelServer: sharedRuntime, deploymentName, imageMode, image: runtimeImage, buildSourceUrl, storageVolume: storageVolumes.find((item) => item.id === storageVolumeId), cacheValidation, replicas: returningIntent?.workloads?.[0]?.replicas, tensorParallelSize: returningIntent?.workloads?.[0]?.tensor_parallel_size, maxModelLen: returningIntent?.runtime?.max_model_len };
     const compatibleSavedArtifacts = artifacts.filter((item) => matchesEvaluationSetup(item, sharedContext));
     const modelOptions = [...new Set([...MODELS.map((item) => item.repository), ...cachedModelIds])].filter(Boolean).sort();
     const recommendedBenchmark = benchmarkFor(provider);
@@ -431,7 +435,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         modelCacheMismatch && "Model ID not found in Model Cache storage",
         !deploymentName.trim() && "Deployment Name",
     ].filter(Boolean);
-    const canContinue = step === 0
+    const canContinue = deployOnPublish && benchmarkOnly ? false : step === 0
         ? targetMode === "existing"
             ? Boolean(name.trim() && targetId && apiToken.trim())
             : Boolean(name.trim() && deploymentName.trim() && sharedModel.trim() && cluster.session_id && !clusterLoading && !clusterHardwareLoading && cluster.id === selectedClusterId && !modelCacheMismatch)
@@ -442,7 +446,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             : step === 2 ? tests.length > 0 && !benchmarkErrors.length : true;
 
     const openConfiguration = (guideId = template, mode = "defaults") => {
-        storeEvaluationIntent({ operation: deployOnly ? "deploy-only" : "create-evaluation", return_target: deployOnly ? "model-market" : "optimization-evaluate-new", name, deployment_name: deploymentName, deployment_description: deploymentDescription, cluster_id: selectedClusterId, workloads: [{ guide: guideId, model: sharedModel, mount_path: modelPath }], runtime: { model_server: sharedRuntime, model_source: modelSource, mount_path: modelPath, storage_volume_id: storageVolumeId, image_mode: imageMode, image: runtimeImage, build_image_name: runtimeImage, build_source_url: buildSourceUrl }, clone_from_artifact_id: mode === "clone" ? artifactIds.at(-1) : null });
+        storeEvaluationIntent({ entrySource, operation: "create-evaluation", return_target: "optimization-evaluate-new", name, deployment_name: deploymentName, deployment_description: deploymentDescription, cluster_id: selectedClusterId, workloads: [{ guide: guideId, model: sharedModel, mount_path: modelPath, replicas: sharedContext.replicas, tensor_parallel_size: sharedContext.tensorParallelSize }], runtime: { model_server: sharedRuntime, model_source: modelSource, mount_path: modelPath, storage_volume_id: storageVolumeId, image_mode: imageMode, image: runtimeImage, build_image_name: runtimeImage, build_source_url: buildSourceUrl, max_model_len: sharedContext.maxModelLen }, clone_from_artifact_id: mode === "clone" ? artifactIds.at(-1) : null });
         setConfigurationEditor({ guideId, mode, artifact: mode === "clone" ? selectedArtifacts.at(-1) : null, key: `${guideId}-${Date.now()}` });
     };
 
@@ -453,7 +457,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             const configurations = (publishedArtifacts || [])
                 .map((artifact) => artifact.deployable_configuration)
                 .filter(Boolean);
-            if (configurations.length !== 1) throw new Error("Advanced deployment requires exactly one configuration.");
+            if (!configurations.length) throw new Error("Generate at least one configuration before deploying.");
             const clusterId = selectedClusterId || cluster.id;
             if (!clusterId) throw new Error("Select a cluster before deploying.");
             if (clusterLoading || clusterHardwareLoading || cluster.id !== clusterId || !cluster.session_id) {
@@ -488,7 +492,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
 
     const acceptPublishedConfiguration = ({ artifacts: publishedArtifacts, advance = false, optimizationSelection }) => {
         const nextArtifacts = publishedArtifacts || [];
-        if (deployOnly) {
+        if (deployOnPublish) {
             return deployPublishedConfiguration(nextArtifacts);
         }
         if (optimizationSelection) setOptimizationSelections(current => ({...current, ...Object.fromEntries(nextArtifacts.map(item => [item.artifact_id, optimizationSelection]))}));
@@ -529,11 +533,12 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     };
 
     const leaveSetupFor = (view) => {
-        storeEvaluationIntent({ operation: "create-evaluation", return_target: "optimization-evaluate-new", name, deployment_name: deploymentName, deployment_description: deploymentDescription, workloads: [{ guide: template, model: sharedModel, mount_path: modelPath }], runtime: { model_server: sharedRuntime, model_source: modelSource, mount_path: modelPath, storage_volume_id: storageVolumeId, image_mode: imageMode, image: runtimeImage, build_image_name: runtimeImage, build_source_url: buildSourceUrl }, cluster_id: selectedClusterId });
+        storeEvaluationIntent({ entrySource, operation: "create-evaluation", return_target: "optimization-evaluate-new", name, deployment_name: deploymentName, deployment_description: deploymentDescription, workloads: [{ guide: template, model: sharedModel, mount_path: modelPath, replicas: sharedContext.replicas, tensor_parallel_size: sharedContext.tensorParallelSize }], runtime: { model_server: sharedRuntime, model_source: modelSource, mount_path: modelPath, storage_volume_id: storageVolumeId, image_mode: imageMode, image: runtimeImage, build_image_name: runtimeImage, build_source_url: buildSourceUrl, max_model_len: sharedContext.maxModelLen }, cluster_id: selectedClusterId });
         onNavigate(view);
     };
 
     const continueWizard = () => {
+        if (deployOnPublish && step !== 0) return;
         if (step === 0) {
             if (targetMode === "existing") {
                 setStep(2);
@@ -645,7 +650,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     };
 
     const editConfiguration = (artifact) => {
-        storeEvaluationIntent({ operation: "create-evaluation", return_target: "optimization-evaluate-new", name, deployment_name: deploymentName, deployment_description: deploymentDescription, workloads: [{ guide: artifact.deployable_configuration?.provider_ref || template, model: sharedModel, mount_path: modelPath }], runtime: { model_server: sharedRuntime, model_source: modelSource, mount_path: modelPath, storage_volume_id: storageVolumeId, image_mode: imageMode, image: runtimeImage, build_image_name: runtimeImage, build_source_url: buildSourceUrl } });
+        storeEvaluationIntent({ entrySource, operation: "create-evaluation", return_target: "optimization-evaluate-new", name, deployment_name: deploymentName, deployment_description: deploymentDescription, workloads: [{ guide: artifact.deployable_configuration?.provider_ref || template, model: sharedModel, mount_path: modelPath }], runtime: { model_server: sharedRuntime, model_source: modelSource, mount_path: modelPath, storage_volume_id: storageVolumeId, image_mode: imageMode, image: runtimeImage, build_image_name: runtimeImage, build_source_url: buildSourceUrl } });
         setConfigurationEditor({ guideId: artifact.deployable_configuration?.provider_ref || template, mode: "edit", artifact, key: `${artifact.artifact_id}-${Date.now()}` });
         setOpenMenuId("");
     };
@@ -763,7 +768,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         <div aria-hidden="true" className="pointer-events-none absolute -left-40 top-96 -z-10 h-96 w-96 rounded-full bg-blue-600/[0.05] blur-3xl" />
         <header className="flex items-center justify-between rounded-2xl border border-slate-800/70 bg-slate-950/35 px-5 py-4 shadow-lg shadow-black/10 backdrop-blur-sm">
             <div>
-                <button disabled={editorBusy || busy} onClick={() => deployOnly ? leaveDeployOnly() : onNavigate("optimization-evaluate")} className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 transition hover:text-cyan-300"><ArrowLeft className="h-3.5 w-3.5" />{deployOnly ? "Back to model card" : "Evaluation tasks"}</button>
+                <button disabled={editorBusy || busy} onClick={() => deployOnPublish ? leaveDeployOnly() : onNavigate("optimization-evaluate")} className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 transition hover:text-cyan-300"><ArrowLeft className="h-3.5 w-3.5" />{deployOnPublish ? "Back to model card" : "Evaluation tasks"}</button>
                 <h1 className="text-2xl font-bold tracking-tight">{deployOnly ? "Configure deployment" : "New Benchmark Task"}</h1>
                 <p className="mt-1 text-xs leading-5 text-slate-400">{deployOnly ? `Advanced-edit the deployment configuration for ${sharedModel}, then deploy it directly.` : "Design the complete experiment before deployment starts."}</p>
             </div>
@@ -781,7 +786,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 {!deployOnly && step === 0 && <div className="space-y-4">
                     {benchmarkOnly && <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-200">Your role can only benchmark an existing deployment. Designing and deploying a new one from configurations needs the deployment-create permission.</p>}
                     <div className="grid items-end gap-3 lg:grid-cols-[1fr_320px]"><div><h2 className="text-lg font-bold">Evaluation Setup</h2><p className="mt-1 text-[11px] text-slate-500">Choose a target and provide only the shared context it needs.</p></div><label className="text-[11px] text-slate-400">Task name<input className={`${inputClass} h-9`} value={name} onChange={(event) => setName(event.target.value)} /></label></div>
-                    <section className="relative overflow-hidden rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-slate-900/80 via-slate-950/70 to-cyan-950/15 p-4 shadow-lg shadow-black/10"><div aria-hidden="true" className="absolute -right-16 -top-20 h-40 w-40 rounded-full bg-cyan-400/[0.06] blur-3xl" /><div className="relative mb-3 flex items-center justify-between"><div><p className="text-[9px] font-bold uppercase tracking-[0.18em] text-cyan-400">Target</p><h3 className="mt-1 text-sm font-semibold text-slate-100">How should this evaluation run?</h3></div><span className="rounded-full border border-slate-700/80 bg-slate-950/60 px-2.5 py-1 text-[9px] text-slate-500">Step 1</span></div><div className="relative grid gap-3 md:grid-cols-2"><button type="button" onClick={() => setTargetMode("existing")} className={`group rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 ${targetMode === "existing" ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className="text-xs font-semibold">Use existing endpoint</span><span className="mt-0.5 block text-[9px] text-slate-500">Skip deployment design and continue to Benchmark.</span></button>{!benchmarkOnly && <button type="button" onClick={() => setTargetMode("configurations")} className={`group rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40 ${targetMode === "configurations" ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className="text-xs font-semibold">Design configurations</span><span className="mt-0.5 block text-[9px] text-slate-500">Set shared deployment context, then choose configurations.</span></button>}</div></section>
+                    {!deployOnPublish && <section className="relative overflow-hidden rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-slate-900/80 via-slate-950/70 to-cyan-950/15 p-4 shadow-lg shadow-black/10"><div aria-hidden="true" className="absolute -right-16 -top-20 h-40 w-40 rounded-full bg-cyan-400/[0.06] blur-3xl" /><div className="relative mb-3 flex items-center justify-between"><div><p className="text-[9px] font-bold uppercase tracking-[0.18em] text-cyan-400">Target</p><h3 className="mt-1 text-sm font-semibold text-slate-100">How should this evaluation run?</h3></div><span className="rounded-full border border-slate-700/80 bg-slate-950/60 px-2.5 py-1 text-[9px] text-slate-500">Step 1</span></div><div className="relative grid gap-3 md:grid-cols-2"><button type="button" onClick={() => setTargetMode("existing")} className={`group rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 ${targetMode === "existing" ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className="text-xs font-semibold">Use existing endpoint</span><span className="mt-0.5 block text-[9px] text-slate-500">Skip deployment design and continue to Benchmark.</span></button>{!benchmarkOnly && <button type="button" onClick={() => setTargetMode("configurations")} className={`group rounded-xl border px-4 py-3 text-left transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40 ${targetMode === "configurations" ? "border-cyan-400/70 bg-cyan-500/10" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className="text-xs font-semibold">Design configurations</span><span className="mt-0.5 block text-[9px] text-slate-500">Set shared deployment context, then choose configurations.</span></button>}</div></section>}
                     {targetMode === "existing" ? <section className="rounded-xl border border-slate-800 bg-slate-950/35 p-3"><label className="block text-[11px] text-slate-400">Model service<select className={`${inputClass} h-9`} value={targetId} onChange={(event) => setTargetId(event.target.value)}><option value="">Select a published model service</option>{modelServices.map((item) => <option key={item.id} value={item.id}>{item.name}{item.baseModel && item.baseModel !== item.name ? ` · ${item.baseModel}` : ""}{item.clusterName ? ` (${item.clusterName})` : ""}</option>)}</select>{!modelServices.length && <span className="mt-1 block text-[9px] text-amber-300">No model service is published and healthy yet. Publish one from the Model Service page first.</span>}</label><label className="mt-2 block text-[11px] text-slate-400">Model access token<input type="password" autoComplete="off" className={`${inputClass} h-9`} placeholder="lens-mk-…" value={apiToken} onChange={(event) => setApiToken(event.target.value)} /><span className="mt-1 block text-[9px] text-slate-500">Required: the harness authenticates through the cluster&apos;s shared Gateway. Used for this run only; never stored.</span></label></section> : <>
                     <div className="grid grid-cols-2 gap-3">
                         <section className="rounded-xl border border-slate-800 bg-gradient-to-br from-slate-950/70 to-cyan-950/10 p-3">
@@ -808,9 +813,9 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 </div>}
 
                 {configurationEditor && <div hidden={step !== 1 || targetMode !== 'configurations'}>
-                    <EvaluationConfigurationEditor key={configurationEditor.key} sharedContext={sharedContext} editorResources={editorResources} onBusyChange={setEditorBusy} initialGuide={configurationEditor.guideId} initialArtifact={configurationEditor.artifact} initialOptimizationSelection={configurationEditor.artifact ? optimizationSelections[configurationEditor.artifact.artifact_id] : undefined} busy={editorBusy || busy} onEditSetup={deployOnly ? undefined : () => setStep(0)} onNavigate={onNavigate} onCancel={deployOnly ? undefined : () => setConfigurationEditor(null)} onUseSavedConfigurations={!deployOnly && !selectedArtifacts.length && compatibleSavedArtifacts.length ? () => { setConfigurationEditor(null); setExistingConfigurationsOpen(true); } : undefined} onPublished={acceptPublishedConfiguration} singleConfiguration={deployOnly} deployOnPublish={deployOnly} />
+                    <EvaluationConfigurationEditor key={configurationEditor.key} sharedContext={sharedContext} editorResources={editorResources} onBusyChange={setEditorBusy} initialGuide={configurationEditor.guideId} initialArtifact={configurationEditor.artifact} initialOptimizationSelection={configurationEditor.artifact ? optimizationSelections[configurationEditor.artifact.artifact_id] : undefined} busy={editorBusy || busy} onEditSetup={deployOnly ? undefined : () => setStep(0)} onNavigate={onNavigate} onCancel={deployOnPublish ? undefined : () => setConfigurationEditor(null)} onUseSavedConfigurations={!deployOnPublish && !selectedArtifacts.length && compatibleSavedArtifacts.length ? () => { setConfigurationEditor(null); setExistingConfigurationsOpen(true); } : undefined} onPublished={acceptPublishedConfiguration} singleConfiguration={deployOnly} deployOnPublish={deployOnPublish} />
                 </div>}
-                {!deployOnly && step === 1 && !configurationEditor && <div className="min-w-0 space-y-5">
+                {!deployOnPublish && step === 1 && !configurationEditor && <div className="min-w-0 space-y-5">
                     <div className="flex flex-wrap items-end justify-between gap-4 border-b border-slate-800/70 pb-5">
                         <div className="flex items-start gap-3">
                             <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-400/25 bg-cyan-400/10 text-cyan-300 shadow-[0_0_24px_rgba(34,211,238,.08)]"><Layers3 className="h-5 w-5" /></span>
@@ -861,7 +866,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                         {selectedArtifacts.length > 1 && <section className="rounded-xl border border-slate-800 p-4"><div className="flex items-center gap-2"><GitCompareArrows className="h-4 w-4 text-violet-300" /><h3 className="text-xs font-bold">Configuration Differences</h3></div><div className="mt-3 overflow-x-auto"><table className="w-full text-left text-[10px]"><thead className="text-slate-500"><tr><th className="py-2">Parameter</th>{artifactSummaries.map((_, index) => <th key={index}>Configuration {String.fromCharCode(65 + index)}</th>)}</tr></thead><tbody className="divide-y divide-slate-800"><tr><td className="py-2 text-slate-500">Guide</td>{artifactSummaries.map((item, index) => <td key={index}>{item.guide}</td>)}</tr><tr><td className="py-2 text-slate-500">Model</td>{artifactSummaries.map((item, index) => <td key={index}>{item.model}</td>)}</tr><tr><td className="py-2 text-slate-500">Topology</td>{artifactSummaries.map((item, index) => <td key={index}>{item.topology}</td>)}</tr><tr><td className="py-2 text-slate-500">Accelerators</td>{selectedArtifacts.map((item, index) => <td key={index}>{configurationFacts(item, providers.get(item.deployable_configuration?.provider_ref)).gpu || '—'}</td>)}</tr></tbody></table></div></section>}
                 </div>}
 
-                {!deployOnly && step === 2 && <BenchmarkInputs
+                {!deployOnPublish && step === 2 && <BenchmarkInputs
                     selectedArtifacts={selectedArtifacts}
                     targetMode={targetMode}
                     benchmark={effectiveBenchmark} setBenchmark={setCustomBenchmark}
@@ -872,7 +877,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     fullBenchmark={provider?.evaluation?.full_workload?.shared_prefix}
                 />}
 
-                {!deployOnly && step === 3 && <EvaluationPlan
+                {!deployOnPublish && step === 3 && <EvaluationPlan
                     configurations={selectedArtifacts.map((artifact) => ({
                         ...configurationFacts(artifact, providers.get(artifact.deployable_configuration?.provider_ref)),
                         id: artifact.artifact_id,
@@ -896,7 +901,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         <Modal isOpen={Boolean(yamlArtifact)} onClose={() => setYamlArtifact(null)} title="Deployment Configuration YAML" subtitle="YAML editing supports annotations and formatting. Use Edit configuration for model, topology, runtime or storage changes." size="xl" footer={<>{yamlArtifact?.deployable_configuration?.content?.officialGuide?.deploymentBundle && <a className="mr-auto text-xs text-cyan-300 hover:underline" href={`/api/v1/configurations/artifacts/${encodeURIComponent(yamlArtifact.artifact_id)}/bundle`}>Download deployment bundle</a>}<Button variant="secondary" onClick={() => setYamlArtifact(null)}>Cancel</Button><Button disabled={yamlLoading || yamlSaving || !yamlText.trim()} onClick={saveEditedYaml}>{yamlSaving ? "Saving…" : "Save YAML"}</Button></>}>
             {yamlLoading ? <div className="flex h-72 items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-cyan-300" /></div> : <textarea aria-label="Editable deployment YAML" value={yamlText} onChange={(event) => setYamlText(event.target.value)} spellCheck={false} className="h-[60vh] w-full resize-none rounded-xl border border-slate-700 bg-black/35 p-4 font-mono text-[10px] leading-5 text-slate-300 outline-none focus:border-cyan-500" />}
         </Modal>
-        {!deployOnly && !(step === 1 && configurationEditor) && <footer className="grid grid-cols-1 items-center gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
+        {!deployOnly && !(step === 1 && (configurationEditor || deployOnPublish)) && <footer className="grid grid-cols-1 items-center gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
             <p className={`min-w-0 break-words text-xs leading-5 ${error ? "text-rose-300" : busy ? "text-cyan-300" : "text-amber-300"}`}>{error ? "Review the issue above, then retry." : (busy ? "Creating evaluation and scheduling deployment…" : step === 0 ? (!canContinue && (targetMode === "existing" ? "Select an endpoint" : `Required: ${setupIssues.join(" · ")}`)) : step === 1 ? ((!canContinue || combinationErrors.length > 0) && (combinationErrors[0] || "Add or select a valid configuration")) : step === 2 ? (canContinue ? `${tests.length ? runCount / tests.length : 0} targets × ${tests.length} tests = ${runCount} runs · Sequential` : benchmarkErrors[0] || "Benchmark Plan has no selected tests") : null)}</p>
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 sm:max-w-lg">
             {step > 0 && <button onClick={() => setStep((current) => targetMode === "existing" && current === 2 ? 0 : current - 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-700 px-4 text-xs"><ChevronLeft className="h-4 w-4" />Back</button>}

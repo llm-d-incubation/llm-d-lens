@@ -1,5 +1,4 @@
 export { default as OptimizationEvaluateWorkspace } from './ui/OptimizationEvaluateWorkspaceV2';
-export { default as OptimizationConfigurationEntry } from './ui/OptimizationConfigurationEntry';
 export { default as OptimizationConfiguration } from './ui/OptimizationConfiguration';
 export { default as OptimizationStage, OptimizationOverview } from './ui/OptimizationWorkspace/OptimizationWorkspace';
 export { WorkflowProvider } from './ui/OptimizationWorkspace/WorkflowContext';

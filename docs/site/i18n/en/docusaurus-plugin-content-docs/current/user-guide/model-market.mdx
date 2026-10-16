@@ -23,17 +23,28 @@ as you type. Use **Clear filters** to reset both search and category.
 1. Open **Model Market**, use **Model categories** to narrow the list, and click a model card.
 2. In **One-click deployment**, enter **Deployment name** and choose a ready **Cluster**.
 3. Choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.** Model cache storage is optional in **Manual** mode.
-4. Keep **Mode** on **Manual** and click **Configure deployment**.
-5. In **Basic settings**, review **Runtime image**, **Replicas**, and **TP** (accelerators per replica).
+4. Keep **Mode** on **Manual** and click **Configure deployment**. Review the prefilled model and deployment settings; use **Edit setup** if needed.
+5. Check the runtime image, replicas, and tensor parallel size.
 6. Under **Guide template**, choose **Guide** and **Accelerator**. Use [Choose an evaluation Guide](/evaluation/guides) to compare the options.
 7. For a P/D or tiered-cache Guide, choose a variant from the displayed list. Keep the supplied defaults for the first run.
 8. Click **Generate YAML**. If available cards are insufficient but the physical total is sufficient, review the Pending warning and click **Continue & generate**. If the physical total is insufficient, reduce replicas / TP.
-9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Next**.
-10. On **Deployments**, wait for **Ready**; use **View Pods & Logs** to inspect startup.
+9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Deploy**.
+10. On **Deployments**, wait for **Ready**. The deployment is retained without running a benchmark; stop or clean it up explicitly when no longer needed.
+
+Use **Back to model card** to return to the selected model.
+To measure performance, see [Run an evaluation](/user-guide/evaluation).
 
 No cluster or cache available? [Add a cluster](/user-guide/clusters),
 [create cache storage](/user-guide/storage), and [download the model](/user-guide/model-cache).
 If the model is missing from the selected cache, download it there before returning.
+
+Open **Manage model cache** from a selected model to open **Download a model**
+directly in **Model cache**. The selected cluster, Hugging Face repository ID, and
+storage volume are prefilled and remain editable. After closing the dialog,
+use **Back to model** to return
+to the selected model with your deployment settings intact. Browser Back also
+preserves the selection. Storage choices and model download status refresh when
+you return.
 
 Change the runtime image only when you have an image compatible with the selected
 hardware. After changing the cluster or Guide source, check the variant selection
@@ -50,12 +61,8 @@ again. A resource or network error during generation must be resolved before dep
 7. Under **Validated alternatives**, expand **Why this option** to compare resource use and estimated performance.
 8. Click **Deploy recommendation** on the option you choose. Track startup on **Deployments**.
 
-Before generating a recommendation, expand **Pod placement** below **Workload
-estimate** to choose a placement preset. **Require one node** also allows a
-hostname selection. The chosen preset and node are applied when you approve a
-candidate. Prefill and Decode model-server Pods in a P/D deployment share one
-placement group; routing Pods do not. LeaderWorkerSet candidates do not support
-the balanced or separate-node presets.
+Optionally, expand **Pod placement** before generating a recommendation to choose
+where the deployment runs.
 
 To change the recommendation, enter your revised preference below the alternatives
 and click **Recalculate selection**. This also works without an external AI provider.

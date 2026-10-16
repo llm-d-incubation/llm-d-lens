@@ -507,8 +507,10 @@ export default function EvaluationDashboard({ onNavigate }) {
 
     const goToConfiguration = () => {
         sessionStorage.setItem(INTENT_KEY, JSON.stringify({
+            entrySource: "evaluation-setup",
             operation: "create-evaluation",
-            return_target: "optimization-evaluate",
+            initial_step: "configurations",
+            return_target: "optimization-evaluate-new",
             name,
             runtime: defaultRuntime,
             workloads: [],
@@ -517,7 +519,7 @@ export default function EvaluationDashboard({ onNavigate }) {
             created_at: new Date().toISOString(),
         }));
         setIsNewTaskOpen(false);
-        onNavigate("optimization-explore");
+        onNavigate("optimization-evaluate-new");
     };
 
     const createComparisonArtifacts = async () => {

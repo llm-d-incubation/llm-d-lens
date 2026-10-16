@@ -7,7 +7,7 @@ import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { AsyncState } from '../../../../shared/ui/AsyncState';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePolling } from '../../../../shared/lib/usePolling';
-import { CheckCircle2, ChevronLeft, ChevronRight, Download, Plus, RefreshCw, Search, Server, ServerCog } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Download, Plus, RefreshCw, Search, Server, ServerCog } from 'lucide-react';
 import { createModelCacheEntry, deleteModelCacheEntry, listModelCacheEntries, retryModelCacheEntry, syncAllModelCacheEntryNodes, syncModelCacheEntryNodes } from './modelCacheBackend';
 import { listStorageVolumes } from '../../../storage';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
@@ -40,13 +40,13 @@ function StatCard({ label, value, tone = 'text-white' }) {
     );
 }
 
-export function ModelCachePage() {
+export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHandled } = {}) {
     const [searchInput, setSearchInput] = useState('');
     const query = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
     const [typeFilter, setTypeFilter] = useState('');
     const [clusterId, setClusterId] = useState('');
     const [storageVolumeId, setStorageVolumeId] = useState('');
-    const [dialog, setDialog] = useState(null);
+    const [dialog, setDialog] = useState(initialDownload ? 'download' : null);
     const [selected, setSelected] = useState(null);
     const [mutatingId, setMutatingId] = useState(null);
     const [syncingAll, setSyncingAll] = useState(false);
@@ -178,6 +178,7 @@ export function ModelCachePage() {
     const closeDialog = () => {
         setDialog(null);
         setSelected(null);
+        if (dialog === 'download') onDownloadHandled?.();
     };
 
     const openDelete = (item) => {
@@ -277,6 +278,11 @@ export function ModelCachePage() {
                 description="Download, monitor, and reuse cached model files on registered storage volumes before deployment."
                 actions={(
                     <>
+                        {onNavigateBack && (
+                            <Button variant="secondary" size="sm" onClick={onNavigateBack} title="Back to model" aria-label="Back to model">
+                                <ArrowLeft size={14} aria-hidden="true" /><span className="hidden sm:inline">Back to model</span>
+                            </Button>
+                        )}
                         {notice && (
                             <span role="status" className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1.5 text-[11px] text-emerald-200">
                                 <CheckCircle2 size={13} aria-hidden="true" />
@@ -483,12 +489,16 @@ export function ModelCachePage() {
             </div>
 
             {dialog === 'download' && (
+                <PermissionGate permission="model-cache:entry:create">
                 <DownloadModelModal
                     clusters={clusters}
-                    defaultClusterId={clusterId}
+                    defaultClusterId={initialDownload?.clusterId ?? clusterId}
+                    defaultRepoId={initialDownload?.repoId}
+                    defaultStorageVolumeId={initialDownload?.storageVolumeId}
                     onCancel={closeDialog}
                     onCreate={handleCreate}
                 />
+                </PermissionGate>
             )}
             {dialog === 'delete' && <DeleteModelCacheModal entry={selected} onCancel={closeDialog} onDelete={handleDelete} onDeleted={handleDeleted} />}
             {dialog === 'logs' && <ModelCacheLogsModal entry={selected} onClose={closeDialog} />}

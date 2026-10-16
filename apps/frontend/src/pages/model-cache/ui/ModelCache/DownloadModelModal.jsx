@@ -23,11 +23,11 @@ const MODEL_SOURCES = [
     { value: 'model-market', label: 'Model Market' },
 ];
 
-export function DownloadModelModal({ clusters = [], defaultClusterId = '', defaultStorageVolumeId = '', onCancel, onCreate }) {
+export function DownloadModelModal({ clusters = [], defaultClusterId = '', defaultStorageVolumeId = '', defaultRepoId = '', onCancel, onCreate }) {
     const [clusterId, setClusterId] = useState(defaultClusterId);
     const [storageVolumeId, setStorageVolumeId] = useState(defaultStorageVolumeId);
     const [volumes, setVolumes] = useState([]);
-    const [repoId, setRepoId] = useState('');
+    const [repoId, setRepoId] = useState(defaultRepoId);
     const [revision, setRevision] = useState('main');
     const [modelSource, setModelSource] = useState('huggingface');
     const [selectedMarketModelId, setSelectedMarketModelId] = useState('');

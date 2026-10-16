@@ -134,7 +134,7 @@ async function resolveClusterSession(clusterId) {
 
 
 
-export default function OptimizationConfiguration({ onNavigate, onCancel, onPublished, sharedContext, initialGuide, initialArtifact, initialOptimizationSelection, editorResources, onBusyChange, singleConfiguration = false, embedded = false }) {
+export default function OptimizationConfiguration({ onNavigate, onCancel, onPublished, sharedContext, initialGuide, initialArtifact, initialOptimizationSelection, editorResources, onBusyChange, singleConfiguration = false, deployOnPublish = false, embedded = false }) {
     const hardwareProfiles = useHardwareProfiles(getHardwareProfiles);
     const [sourceCapabilities, setSourceCapabilities] = useState(null);
     const [modelMarketDraft] = useState(() => {
@@ -166,7 +166,8 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const clusterHardware = sharedContext?.clusterHardware ?? localClusterHardware;
     const [resourceBasis, setResourceBasis] = useState(initialArtifact?.deployable_configuration?.content?.runtime?.resourceBasis || 'available');
     const budget = recommendationBudget(clusterHardware, resourceBasis);
-    const [optimizationSelection, setOptimizationSelection] = useState(initialOptimizationSelection || ['full']);
+    const [selectedOptimizations, setOptimizationSelection] = useState(initialOptimizationSelection || ['full']);
+    const optimizationSelection = deployOnPublish ? ['full'] : selectedOptimizations;
     const [clusterHardwareLoading, setClusterHardwareLoading] = useState(false);
 
     // Shared model context.
@@ -240,7 +241,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [localImageMode, setImageMode] = useState(() => sharedContext?.imageMode || 'use-upstream-image');
     const imageMode = localImageMode;
     const [localImage, setImage] = useState(() => sharedContext?.image || DEFAULT_RUNTIME_IMAGE);
-    const image = localImage;
+    const image = localImage || sharedContext?.image || DEFAULT_RUNTIME_IMAGES[selection.accelerator] || DEFAULT_RUNTIME_IMAGE;
     const [localBuildSourceUrl, setBuildSourceUrl] = useState('');
     const buildSourceUrl = sharedContext?.buildSourceUrl ?? localBuildSourceUrl;
     const [planning, setPlanning] = useState(false);
@@ -697,10 +698,10 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
 
     const configurationInputErrors = validateConfigurationInputs({
         ...topologyInputs, modelServer: selection.modelServer, guideVariant, guideVariants, guideSettings, customRows,
-        runtime: { maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens },
+        runtime: { image, maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens },
         availableAccelerators: clusterHardware?.usableGpuCount ?? clusterHardware?.availableGpuCount,
     });
-    if (embedded && onPublished && !singleConfiguration) {
+    if (embedded && onPublished && !singleConfiguration && !deployOnPublish) {
         try { selectedOptimizationPlan(selection.guide, optimizationSelection); }
         catch (error) { configurationInputErrors.push({ field: 'optimizationSelection', message: error.message }); }
     }
@@ -1571,7 +1572,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     )}
                 </div>
 
-            {embedded && onPublished && !singleConfiguration && <div id="optimizationSelection"><OptimizationComparisonTree guide={selection.guide} selected={optimizationSelection} onChange={setOptimizationSelection} disabled={operationBusy} /></div>}
+            {embedded && onPublished && !singleConfiguration && !deployOnPublish && <div id="optimizationSelection"><OptimizationComparisonTree guide={selection.guide} selected={optimizationSelection} onChange={setOptimizationSelection} disabled={operationBusy} /></div>}
 
             {embedded && <footer className="flex flex-wrap items-center justify-between gap-3 py-2">
                 <div className="min-w-0 flex-1" role="status" aria-live="polite">
@@ -1589,7 +1590,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     <h3 className="text-sm font-medium text-slate-200">YAML preview · {optimizationSelection.includes('full') || singleConfiguration ? 'Full Guide scenario' : 'Source template'}</h3>
                     <span className="text-sm text-cyan-200">{planResult.summary?.plannedReplicasByRole?.prefill ? `Prefill ${planResult.summary.plannedReplicasByRole.prefill}R × TP${planResult.summary.tensorParallelSizeByRole?.prefill} · Decode ${planResult.summary.plannedReplicasByRole.decode}R × TP${planResult.summary.tensorParallelSizeByRole?.decode}` : `${planResult.summary?.plannedReplicas ?? '—'} replicas × TP${planResult.summary?.tensorParallelSize ?? '—'}`}</span>
                 </div>
-                {onPublished && !singleConfiguration && <p className="mt-3 text-xs text-slate-400">Source template{topologyPreviewVariants.length > 1 ? ' · one topology from this sweep' : ''}. Your {optimizationSelection.length} selected scenario{optimizationSelection.length === 1 ? '' : 's'} use separate deployment variants at execution.</p>}
+                {onPublished && !singleConfiguration && !deployOnPublish && <p className="mt-3 text-xs text-slate-400">Source template{topologyPreviewVariants.length > 1 ? ' · one topology from this sweep' : ''}. Your {optimizationSelection.length} selected scenario{optimizationSelection.length === 1 ? '' : 's'} use separate deployment variants at execution.</p>}
                 {(validation.errors || []).filter(error => !serverFieldErrors.some(item => item.message === error) && !String(planError || '').includes(error)).map((error) => <p key={error} className="mt-2 text-xs text-rose-300">{error}</p>)}
                 {(validation.warnings || []).map((warning) => <p key={warning} className="mt-2 text-xs text-amber-300">{warning}</p>)}
                 {planResult.deploymentBundle && <div className="mt-3">
@@ -1600,9 +1601,9 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                 <YamlPreview content={planResult.plannedDeployment?.content || ''} prominent />
             </section>}
             {embedded && planResult?.plannedDeployment?.content && <div className="flex justify-end gap-2">
-                <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate('another')} className="inline-flex h-9 items-center rounded-lg border border-slate-700 px-4 text-xs text-slate-200 hover:border-cyan-500/50 disabled:opacity-40">Save &amp; add another</button>
+                {!deployOnPublish && <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate('another')} className="inline-flex h-9 items-center rounded-lg border border-slate-700 px-4 text-xs text-slate-200 hover:border-cyan-500/50 disabled:opacity-40">Save &amp; add another</button>}
                 <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate(true)} className="inline-flex h-9 items-center gap-1 rounded-lg bg-cyan-400 px-4 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:opacity-40">
-                    {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Next<ChevronRight className="h-3.5 w-3.5" />
+                    {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{deployOnPublish ? 'Deploy' : 'Next'}<ChevronRight className="h-3.5 w-3.5" />
                 </button>
             </div>}
 

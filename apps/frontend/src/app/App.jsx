@@ -24,7 +24,6 @@ import { AIProvidersPage } from '../pages/ai-providers';
 import { ApiKeysPage, ModelServiceAdminPage, ModelServicePage, ModelUsagePage } from '../pages/model-service';
 import { PlaygroundPage } from '../pages/playground';
 import {
-  OptimizationConfigurationEntry,
   OptimizationEvaluateWorkspace,
   OptimizationOverview,
   OptimizationStage,
@@ -74,6 +73,7 @@ function AuthenticatedApp() {
   });
 
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [cacheFromModelMarket, setCacheFromModelMarket] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('prism_sidebar_expanded');
     return saved !== null ? saved === 'true' : true;
@@ -98,7 +98,11 @@ function AuthenticatedApp() {
     const onPopState = () => {
       const params = new URLSearchParams(window.location.search);
       const view = params.get('view') || 'model-market';
-      setCurrentView(resolveView(view));
+      const resolvedView = resolveView(view);
+      setCurrentView(resolvedView);
+      if (!['model-market', 'model-cache'].includes(resolvedView)) {
+        setCacheFromModelMarket(false);
+      }
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -107,6 +111,10 @@ function AuthenticatedApp() {
 
   const handleNavigate = (requestedView, extraParams = {}) => {
     const view = resolveView(requestedView);
+    setCacheFromModelMarket((current) => (
+      (currentView === 'model-market' && view === 'model-cache')
+      || (current && ['model-market', 'model-cache'].includes(view))
+    ));
     setCurrentView(view);
     setIsMobileNavOpen(false); // Close mobile nav on navigation
     
@@ -115,7 +123,9 @@ function AuthenticatedApp() {
     params.set('view', view);
     params.delete('workload');
     params.delete('intent');
-    const resolvedParams = {};
+    const resolvedParams = {
+      downloadModel: view === 'model-cache' ? extraParams.downloadModel || null : null,
+    };
     if (view === 'optimization-evaluation-details' && extraParams?.evaluationId) {
       params.set('evaluationId', extraParams.evaluationId);
       resolvedParams.evaluationId = extraParams.evaluationId;
@@ -192,18 +202,21 @@ function AuthenticatedApp() {
             {currentView === 'cluster-monitoring-stack' && <ClusterMonitoringStackDashboard onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} initialClusterId={navigationParams.clusterId} initialProfileDeployment={navigationParams.profileDeployment} />}
             {currentView === 'clusters' && <OptimizationClusterOverview onNavigate={handleNavigate} onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'storage-management' && <StorageManagementPage onNavigate={handleNavigate} />}
-            {currentView === 'model-cache' && <ModelCachePage onNavigate={handleNavigate} />}
+            {currentView === 'model-cache' && <ModelCachePage onNavigate={handleNavigate} initialDownload={navigationParams.downloadModel} onDownloadHandled={() => setNavigationParams((current) => ({ ...current, downloadModel: null }))} onNavigateBack={cacheFromModelMarket ? () => handleNavigate('model-market') : undefined} />}
             {currentView === 'ai-providers' && <AIProvidersPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'model-service' && <ModelServicePage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'api-keys' && <ApiKeysPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'usage' && <ModelUsagePage mode="self" onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'playground' && <PlaygroundPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-deployments' && <DeploymentManagementPage onNavigate={handleNavigate} />}
-            {currentView === 'model-market' && <ModelMarketPage onNavigate={handleNavigate} />}
+            {(currentView === 'model-market' || (currentView === 'model-cache' && cacheFromModelMarket)) && (
+              <div hidden={currentView !== 'model-market'}>
+                <ModelMarketPage onNavigate={handleNavigate} isActive={currentView === 'model-market'} />
+              </div>
+            )}
             {currentView === 'optimization-evaluate' && <EvaluationDashboardEntry onNavigate={handleNavigate} />}
             {currentView === 'optimization-evaluate-new' && <EvaluationTaskWizard onNavigate={handleNavigate} />}
             {currentView === 'optimization-evaluation-details' && <OptimizationEvaluationDetails onNavigate={handleNavigate} />}
-            {currentView === 'optimization-explore' && <OptimizationConfigurationEntry onNavigate={handleNavigate} />}
             {currentView === 'optimization-deploy' && <OptimizationEvaluateWorkspace onNavigate={handleNavigate} />}
             {currentView === 'optimization-workspace' && <OptimizationOverview onNavigateBack={() => handleNavigate('home')} onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-simulate' && <SimulationDashboard onNavigate={handleNavigate} onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}

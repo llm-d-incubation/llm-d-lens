@@ -39,7 +39,6 @@ export const VIEW_PERMISSIONS = {
     'api-keys': ['model-service:token:manage'],
     usage: ['model-service:usage:read'],
     'cluster-monitoring-stack': ['monitoring:cluster-stack:read', 'monitoring:accelerator:read'],
-    'optimization-explore': ['configuration:artifact:read'],
     'optimization-deploy': ['deployment:run:read'],
     'optimization-workspace': ['configuration:artifact:read'],
     'opt-define': ['configuration:artifact:read'],
