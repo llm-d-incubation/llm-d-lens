@@ -38,6 +38,12 @@ test('retention stays in the execution sequence without an extra explanatory sec
     assert.match(html, /clean up independent references/);
 });
 
+test('evaluation cleans up deployments after collecting benchmark metrics', () => {
+    const html = render({ preserveDeployment: false });
+    assert.match(html, /collect metrics .* clean up deployment/);
+    assert.doesNotMatch(html, /keep successful configuration deployments/);
+});
+
 test('same-pod reference runs immediately after its owning configuration and before independent references', () => {
     const html = render({ baselines: ['direct-vllm', 'kubernetes-service'] });
     assert.match(html, /4 benchmark tasks/);

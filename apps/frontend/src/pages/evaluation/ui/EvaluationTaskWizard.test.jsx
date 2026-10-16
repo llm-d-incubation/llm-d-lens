@@ -30,8 +30,9 @@ function configurationStep(html) {
         .find((match) => match[2].includes('Configurations'))[1];
 }
 
-test('Model Market handoff starts New Benchmark Task at Configurations', (t) => {
+test('Model Market handoff starts the shared configuration step with a model-card return', (t) => {
     const html = renderWizard(t, {
+        entrySource: 'model-market',
         operation: 'create-evaluation',
         initial_step: 'configurations',
         name: 'market-benchmark',
@@ -43,7 +44,8 @@ test('Model Market handoff starts New Benchmark Task at Configurations', (t) => 
     assert.match(html, /New Benchmark Task/);
     assert.doesNotMatch(configurationStep(html), /disabled=/);
     assert.match(configurationStep(html), /ring-cyan-400\/25/);
-    assert.doesNotMatch(html, /Back to model card/);
+    assert.match(html, /Back to model card/);
+    assert.doesNotMatch(html, /Continue to Benchmark|Execution plan/);
 });
 
 test('ordinary benchmark creation still starts at Evaluation Setup', (t) => {
@@ -52,9 +54,27 @@ test('ordinary benchmark creation still starts at Evaluation Setup', (t) => {
     assert.match(configurationStep(html), /disabled=/);
 });
 
+test('explicit Model Market source uses the shared configuration wizard, not the legacy screen', (testContext) => {
+    const html = renderWizard(testContext, { entrySource: 'model-market', operation: 'deploy-only' });
+    assert.match(html, /New Benchmark Task/);
+    assert.match(configurationStep(html), /ring-cyan-400\/25/);
+    assert.doesNotMatch(html, /Configure deployment/);
+    assert.match(html, /Back to model card/);
+    assert.doesNotMatch(html, /Execution plan/);
+});
+
+test('explicit Evaluation source overrides legacy operation and starts at Setup', (testContext) => {
+    const html = renderWizard(testContext, { entrySource: 'evaluation-setup', operation: 'deploy-only' });
+    assert.match(html, /New Benchmark Task/);
+    assert.match(configurationStep(html), /disabled=/);
+    assert.doesNotMatch(html, /Configure deployment/);
+    assert.doesNotMatch(html, /Back to model card/);
+    assert.match(html, /Execution plan/);
+});
+
 test('configuration handoff does not bypass benchmark-only permissions', (t) => {
     const html = renderWizard(t, {
-        operation: 'create-evaluation', initial_step: 'configurations',
+        entrySource: 'model-market', operation: 'create-evaluation', initial_step: 'configurations',
     }, (permission) => permission === 'evaluate:run:create');
     assert.match(configurationStep(html), /disabled=/);
 });

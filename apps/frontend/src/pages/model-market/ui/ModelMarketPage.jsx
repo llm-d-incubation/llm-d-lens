@@ -299,6 +299,7 @@ export default function ModelMarketPage({ onNavigate }) {
 
     const openAdvanced = () => {
         storeEvaluationIntent({
+            entrySource: 'model-market',
             operation: 'create-evaluation',
             initial_step: 'configurations',
             return_target: 'optimization-evaluate-new',

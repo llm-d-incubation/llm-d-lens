@@ -17,7 +17,13 @@ test('Advanced deployment binds placement and loads labels for the selected clus
     assert.deepEqual(JSON.parse(calls[1][1].body).runtime_binding.placement, {
         replicas: 'same-node', nodeLabel: { key: 'pool', value: 'gpu' },
     });
-    await startLocalDeployment([{ provider_ref: 'baseline-vllm' }], { cluster_server_id: 'cluster/a' }, { replicas: 'balanced' });
+    const configurations = [
+        { provider_ref: 'baseline-vllm', content: { serving: { replicas: 1 } } },
+        { provider_ref: 'baseline-vllm', content: { serving: { replicas: 2 } } },
+    ];
+    await startLocalDeployment(configurations, { cluster_server_id: 'cluster/a' }, { replicas: 'balanced' });
+    assert.equal(calls[2][0], '/api/v1/deployments/runs');
+    assert.deepEqual(JSON.parse(calls[2][1].body).configurations, configurations);
     assert.deepEqual(JSON.parse(calls[2][1].body).runtime_binding.placement, { replicas: 'balanced' });
 });
 
