@@ -750,7 +750,7 @@ class DeclarativeDtoMixin:
 
     @classmethod
     def from_dto(cls, dto: BaseModel, **extra_columns: Any) -> Self:
-        """FastAPI receives request → Pydantic validation passes → convert to Row to be INSERTed.
+        """FastAPI receives request → Pydantic validation passes → convert to Row to be inserted.
         `extra_columns` is used to fill derived columns that cannot be obtained directly from the DTO by dot path
         (for example, `configuration_artifacts.cluster_id` is parsed from provenance; see §5.3)."""
         values = {col: _dget(dto, path) for col, path in cls.column_map.items()}
