@@ -6,6 +6,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -46,6 +47,7 @@ from llm_d_lens.simulation.models import (
     SimulationResult,
     SimulationTask,
     SimulationTaskCreateRequest,
+    SimulationTaskRerunRequest,
     SimulationTaskListPage,
     SimulationTrace,
 )
@@ -80,6 +82,7 @@ def simulation_root(tmp_path, monkeypatch):
     monkeypatch.setenv("AIPERF_EXECUTABLE", sys.executable)
     monkeypatch.setenv("TRACE_REPLAYER_EXECUTABLE", sys.executable)
     reset_service_state()
+    monkeypatch.setattr(simulation_service, "discover_models", AsyncMock(return_value={"models": ["model"]}))
     yield tmp_path
     reset_service_state()
     shutil.rmtree(tmp_path, ignore_errors=True)
@@ -448,6 +451,7 @@ async def test_service_passes_typed_task_to_backend(simulation_root, monkeypatch
 
     assert isinstance(task, SimulationTask)
     assert received == [task]
+    simulation_service.discover_models.assert_awaited_once_with(request.endpoint_url, api_key=None)
     assert simulation_service.tasks[task.id] is task
 
 
@@ -2318,3 +2322,81 @@ def test_model_service_group_id_requires_an_api_key():
             trace_dataset="mooncake-arxiv",
             trace_path="trace.jsonl",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["Temporary failure in name resolution", "Connection refused", "Model discovery returned HTTP 401"])
+async def test_unreachable_endpoint_blocks_creation_without_persistence(simulation_root, monkeypatch, failure):
+    trace = simulation_root / "datasets" / "mooncake_trace.jsonl"
+    trace.write_text('{"timestamp":0,"input_length":1,"output_length":1,"hash_ids":[]}\n')
+    probe = AsyncMock(side_effect=SimulationConfigurationError(failure))
+    save = AsyncMock()
+    schedule = Mock()
+    monkeypatch.setattr(simulation_service, "discover_models", probe)
+    monkeypatch.setattr(simulation_service, "save_task", save)
+    monkeypatch.setattr(simulation_service, "_schedule_task", schedule)
+    request = SimulationTaskCreateRequest(
+        scenario="chat", backend="aiperf", endpoint_url="http://unreachable.svc.cluster.local",
+        api_key="test-token", model_name="manually-entered-model",
+        trace_dataset="mooncake-arxiv", trace_path=trace.name,
+    )
+    with pytest.raises(SimulationConfigurationError, match=failure):
+        await create_task(request)
+    probe.assert_awaited_once_with(request.endpoint_url, api_key="test-token")
+    save.assert_not_awaited()
+    schedule.assert_not_called()
+    assert not simulation_service.tasks
+    assert simulation_service.pending_creates == 0
+
+
+@pytest.mark.asyncio
+async def test_unreachable_endpoint_blocks_rerun(simulation_root, monkeypatch):
+    original = task_record(simulation_root, "1234abcd")
+    await save_task(original)
+    probe = AsyncMock(side_effect=SimulationConfigurationError("Connection refused"))
+    save = AsyncMock()
+    schedule = Mock()
+    monkeypatch.setattr(simulation_service, "discover_models", probe)
+    monkeypatch.setattr(simulation_service, "save_task", save)
+    monkeypatch.setattr(simulation_service, "_schedule_task", schedule)
+    with pytest.raises(SimulationConfigurationError, match="Connection refused"):
+        await rerun_task(original.id, override=SimulationTaskRerunRequest(
+            endpoint_url="http://new-endpoint.local", api_key="new-token",
+        ))
+    probe.assert_awaited_once_with("http://new-endpoint.local", api_key="new-token")
+    save.assert_not_awaited()
+    schedule.assert_not_called()
+    assert simulation_service.pending_creates == 0
+
+
+def test_discovery_api_forwards_token_without_serializing_it(simulation_root, monkeypatch):
+    probe = AsyncMock(return_value={"endpoint": "http://endpoint.local", "models": ["model"]})
+    monkeypatch.setattr(importlib.import_module("llm_d_lens.simulation.router"), "discover_models", probe)
+    with TestClient(app) as client:
+        response = client.post("/api/simulation/models/discover", json={
+            "endpoint_url": "http://endpoint.local", "api_key": "test-token",
+        })
+    assert response.status_code == 200
+    assert "test-token" not in response.text
+    probe.assert_awaited_once_with("http://endpoint.local", api_key="test-token")
+
+
+def test_create_api_rejects_unreachable_endpoint(simulation_root, monkeypatch):
+    trace = simulation_root / "datasets" / "mooncake_trace.jsonl"
+    trace.write_text('{"timestamp":0,"input_length":1,"output_length":1,"hash_ids":[]}\n')
+    probe = AsyncMock(side_effect=SimulationConfigurationError("Connection refused"))
+    save = AsyncMock()
+    schedule = Mock()
+    monkeypatch.setattr(simulation_service, "discover_models", probe)
+    monkeypatch.setattr(simulation_service, "save_task", save)
+    monkeypatch.setattr(simulation_service, "_schedule_task", schedule)
+    with TestClient(app) as client:
+        response = client.post("/api/simulation/tasks", json={
+            "scenario": "chat", "backend": "aiperf", "endpoint_mode": "external",
+            "endpoint_url": "http://unreachable.local", "model_name": "manual-model",
+            "trace_dataset": "mooncake-arxiv", "trace_path": trace.name,
+        })
+    assert response.status_code == 400
+    assert "Connection refused" in response.text
+    save.assert_not_awaited()
+    schedule.assert_not_called()

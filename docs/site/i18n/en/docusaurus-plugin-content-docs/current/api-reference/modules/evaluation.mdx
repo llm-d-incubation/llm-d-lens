@@ -1000,6 +1000,10 @@ Cleanup errors remain in the owning case's `cleanup_error` and do not replace a
 successful result. Deleting the workflow waits for its in-flight cleanup before
 removing history. Cancellation retains its existing cleanup-before-cancelled
 contract.
+Successful cleanup removes Evaluation-owned temporary deployment records from
+Deployments as well as their cluster resources, including on cancellation.
+Evaluation reports and captured evidence remain available. Borrowed deployments
+are not deleted; failed cleanup retains deployment records for retry.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">

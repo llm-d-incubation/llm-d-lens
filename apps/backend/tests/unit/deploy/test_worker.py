@@ -95,7 +95,9 @@ def test_evaluation_cancel_cleans_ready_and_inflight_resources_and_updates_run()
 
         worker._cancel_and_wait = AsyncMock(side_effect=settle)
         worker.clean_case = AsyncMock(side_effect=clean)
+        worker.delete_run = AsyncMock()
         await worker.cancel_evaluation_deployment("run")
+        worker.delete_run.assert_awaited_once_with("run")
         assert order == ["settled", "ready", "deploying"]
         assert run.status == DeploymentRunStatus.CANCELLED
         assert ready.status == deploying.status == DeploymentCaseStatus.CLEANED

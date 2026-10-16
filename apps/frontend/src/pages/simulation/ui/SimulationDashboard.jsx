@@ -124,6 +124,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
     const [endpointModels, setEndpointModels] = useState([]);
     const [modelsLoading, setModelsLoading] = useState(false);
     const [modelDiscoveryError, setModelDiscoveryError] = useState('');
+    const [verifiedEndpoint, setVerifiedEndpoint] = useState(null);
     const [submitting, setSubmitting] = useState(false);
     const [stoppingTaskId, setStoppingTaskId] = useState('');
     const [rerunningTaskId, setRerunningTaskId] = useState('');
@@ -188,6 +189,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
     const resetModelDiscovery = useCallback(() => {
         modelDiscoveryRequestRef.current += 1;
+        setVerifiedEndpoint(null);
         setEndpointModels([]);
         setModelDiscoveryError('');
         setModelsLoading(false);
@@ -206,8 +208,15 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         if (value === 'deployment') void loadModelServices();
     };
 
-    const discoverEndpointModels = useCallback(async (endpointUrl) => {
+    const endpointReady = form.endpointMode === 'deployment' || (
+        verifiedEndpoint?.url === form.endpointUrl.trim()
+        && verifiedEndpoint?.apiKey === form.apiKey
+        && !modelsLoading && !modelDiscoveryError
+    );
+
+    const discoverEndpointModels = useCallback(async (endpointUrl, apiKey) => {
         const requestId = ++modelDiscoveryRequestRef.current;
+        setVerifiedEndpoint(null);
         setModelsLoading(true);
         setModelDiscoveryError('');
         setEndpointModels([]);
@@ -215,20 +224,21 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
             const payload = await requestJson('/api/v1/simulation/models/discover', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ endpoint_url: endpointUrl }),
+                body: JSON.stringify({ endpoint_url: endpointUrl, api_key: apiKey || null }),
             });
             const models = Array.isArray(payload?.models) ? payload.models : [];
             if (!models.length) throw new Error('The endpoint reported no models.');
             if (modelDiscoveryRequestRef.current !== requestId) return;
             setEndpointModels(models);
+            setVerifiedEndpoint({ url: endpointUrl, apiKey });
             setForm((current) => (
-                current.endpointUrl === endpointUrl
+                current.endpointUrl.trim() === endpointUrl && current.apiKey === apiKey
                     ? { ...current, modelName: models.length === 1 ? models[0] : '' }
                     : current
             ));
         } catch (error) {
             if (modelDiscoveryRequestRef.current !== requestId) return;
-            setModelDiscoveryError(`${error.message} Enter the model name manually.`);
+            setModelDiscoveryError(`Endpoint validation failed. Task creation is blocked. ${error.message}`);
         } finally {
             if (modelDiscoveryRequestRef.current === requestId) setModelsLoading(false);
         }
@@ -236,6 +246,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
     useEffect(() => {
         if (form.endpointMode === 'deployment') return undefined;
+        resetModelDiscovery();
         const endpointUrl = form.endpointUrl.trim();
         if (!endpointUrl) {
             resetModelDiscovery();
@@ -247,11 +258,15 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
         } catch {
             return undefined;
         }
+        setModelsLoading(true);
         const timeout = window.setTimeout(() => {
-            void discoverEndpointModels(endpointUrl);
+            void discoverEndpointModels(endpointUrl, form.apiKey);
         }, 500);
-        return () => window.clearTimeout(timeout);
-    }, [discoverEndpointModels, form.endpointMode, form.endpointUrl, resetModelDiscovery]);
+        return () => {
+            window.clearTimeout(timeout);
+            modelDiscoveryRequestRef.current += 1;
+        };
+    }, [discoverEndpointModels, form.endpointMode, form.endpointUrl, form.apiKey, resetModelDiscovery]);
 
     const updateExternalEndpoint = (value) => {
         resetModelDiscovery();
@@ -732,6 +747,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
             if (form.endpointMode === 'deployment' && !form.apiKey.trim()) {
                 next.push('A model access token is required to call a Model Service through the cluster\'s shared Gateway.');
             }
+            if (!endpointReady) next.push('Endpoint validation must succeed before creating a task.');
             if (!form.modelName.trim()) next.push('Model name is required.');
             if (incompatibleDeploymentGuideError) next.push(incompatibleDeploymentGuideError);
             if (form.backend === 'aiperf') {
@@ -1688,11 +1704,11 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                     </Button>
                                 )}
                                 {wizardStep < TASK_WIZARD_STEPS.length - 1 ? (
-                                    <Button variant="sky" onClick={advanceWizard} disabled={downloading}>
+                                    <Button variant="sky" onClick={advanceWizard} disabled={downloading || (wizardStep === 0 && !endpointReady)}>
                                         Next <ArrowRight className="h-3.5 w-3.5" />
                                     </Button>
                                 ) : (
-                                    <Button variant="sky" onClick={startTask} isLoading={submitting}>
+                                    <Button variant="sky" onClick={startTask} isLoading={submitting} disabled={!endpointReady}>
                                         <Play className="h-3.5 w-3.5" /> Create Task
                                     </Button>
                                 )}
@@ -1916,7 +1932,10 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                         autoComplete="off"
                                         placeholder="lens-mk-…"
                                         value={form.apiKey}
-                                        onChange={(event) => update('apiKey', event.target.value)}
+                                        onChange={(event) => {
+                                            resetModelDiscovery();
+                                            update('apiKey', event.target.value);
+                                        }}
                                     />
                                     <p className="mt-1 text-[10px] text-slate-500">
                                         Needed when the harness calls a Model Service through the cluster&apos;s shared Gateway. Used for this run only; never stored.
@@ -1943,7 +1962,12 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                             <p className="mt-1 text-[10px] text-emerald-400">Automatically selected from the endpoint.</p>
                                         )}
                                         {modelDiscoveryError && (
-                                            <p className="mt-1 text-[10px] text-amber-300">{modelDiscoveryError}</p>
+                                            <div role="alert" className="mt-1 text-xs text-theme-muted">
+                                                <p>{modelDiscoveryError}</p>
+                                                <Button variant="outline" size="xs" onClick={() => discoverEndpointModels(form.endpointUrl.trim(), form.apiKey)}>
+                                                    Retry endpoint validation
+                                                </Button>
+                                            </div>
                                         )}
                                 </div>
                             </div>

@@ -45,6 +45,13 @@ select it again in Evaluation.
 7. Review the selected candidates and baselines, then click **Launch evaluation**.
 8. Open **Results → Compare** when measurements are available.
 
+**Generate YAML** proceeds directly when currently available cards cover the
+required cards per deployment. Otherwise, a red warning shows the required,
+currently available, and total physical card counts. If the physical total is
+sufficient, **Continue & generate** allows generation, with a reminder that the
+deployment may remain **Pending** until enough cards become available. If the
+physical total is insufficient, reduce replicas / TP before generating YAML.
+
 **View YAML** lets you inspect a saved configuration. Editing its YAML saves a new
 configuration and keeps the original.
 

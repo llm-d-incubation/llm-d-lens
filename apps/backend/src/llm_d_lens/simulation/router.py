@@ -95,7 +95,7 @@ async def backends_catalog() -> dict[str, Any]:
 )
 async def endpoint_models(request: ModelDiscoveryRequest) -> dict[str, Any]:
     try:
-        return await discover_models(request.endpoint_url)
+        return await discover_models(request.endpoint_url, api_key=request.api_key)
     except SimulationConfigurationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

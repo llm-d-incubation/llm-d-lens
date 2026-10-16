@@ -119,6 +119,7 @@ class DeploymentRunWorker:
             run.status = DeploymentRunStatus.CANCELLED
             run.finished_at = datetime.now(UTC)
             self._store.save_run(run)
+            await self.delete_run(run_id)
 
     async def get_case_logs(self, run_id: str, case_id: str, limit: int = 200):
         _run, case, execution = self._case_execution(run_id, case_id)

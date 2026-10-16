@@ -24,7 +24,7 @@ Start with **Optimized Baseline** before testing a more specialized option.
 2. Choose the cluster, model and cache storage.
 3. Under **Guide template**, select **Guide**, **Accelerator** and the available variant.
 4. Set replicas and tensor parallel size. Keep advanced settings unchanged for the first run.
-5. Click **Generate YAML**, select the resource budget, and click **Confirm & generate**.
+5. Click **Generate YAML**. If currently available cards are insufficient, review the red warning and physical card total. When the physical total is sufficient, click **Continue & generate**; deployment may remain **Pending** until enough cards are available. Otherwise, reduce replicas / TP.
 6. Correct any highlighted errors, review the configuration, and save it.
 7. Return to the evaluation task, select the configuration and set the workload.
 

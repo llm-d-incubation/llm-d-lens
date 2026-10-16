@@ -1741,7 +1741,7 @@ async def _execute_shared_pods_baseline_case(workflow: dict, case: dict) -> None
         ):
             try:
                 with _deployment_cleanup_guard(guide_case["execution_id"]):
-                    await deployment_run_manager.worker_for_run(deployment_run_id).clean_case(
+                    await deployment_run_manager.worker_for_run(deployment_run_id).delete_case_execution(
                         deployment_run_id,
                         deployment_case_id,
                     )
@@ -1881,7 +1881,7 @@ async def _execute_evaluation(workflow_id: str) -> None:
                 ):
                     try:
                         with _deployment_cleanup_guard(ready_case.execution_id):
-                            await deployment_run_manager.worker_for_run(deployment.id).clean_case(
+                            await deployment_run_manager.worker_for_run(deployment.id).delete_case_execution(
                                 deployment.id, ready_case.id
                             )
                     except Exception as cleanup_error:

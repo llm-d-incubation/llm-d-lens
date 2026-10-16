@@ -90,7 +90,7 @@ for backend in list_backends():
 
 ### Discover endpoint models
 
-Probe a model endpoint and discover which models it reports.
+Probe a model endpoint and discover which models it reports. The optional `api_key` is sent as a Bearer token and is not included in the response. Failed connectivity, authentication, or invalid model lists return HTTP 400.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -98,6 +98,7 @@ Probe a model endpoint and discover which models it reports.
 
     Request body: `ModelDiscoveryRequest`
     - `endpoint_url` (`string`, required)
+    - `api_key` (`string`, optional, maximum 4096 characters; used only for this request)
 
     ```json
     {
@@ -126,7 +127,7 @@ from llm_d_lens.simulation.endpoints import discover_models
 
 
 async def main() -> None:
-    models = await discover_models("http://127.0.0.1:38000/v1")
+    models = await discover_models("http://127.0.0.1:38000/v1", api_key="your-model-access-token")
     print(models["endpoint"], models["models"])
 
 
@@ -447,6 +448,12 @@ asyncio.run(main())
 </Tabs>
 
 ### Create a simulation task
+
+For Endpoint URL targets (`endpoint_mode != "deployment"`), the service checks
+`/v1/models` with the supplied `api_key` before persisting or scheduling the task.
+A failed check returns HTTP 400; direct Python calls raise
+`SimulationConfigurationError`. Manual model names do not bypass this check.
+Deployment-bound Model Service tasks retain their cluster execution path.
 
 Create a Simulation task that replays a trace dataset against a target model endpoint.
 
@@ -881,6 +888,12 @@ asyncio.run(main())
 </Tabs>
 
 ### Rerun a simulation task
+
+For Endpoint URL targets (`endpoint_mode != "deployment"`), the service checks
+`/v1/models` with the supplied `api_key` before persisting or scheduling the task.
+A failed check returns HTTP 400; direct Python calls raise
+`SimulationConfigurationError`. Manual model names do not bypass this check.
+Deployment-bound Model Service tasks retain their cluster execution path.
 
 Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh endpoint or deployment execution.
 

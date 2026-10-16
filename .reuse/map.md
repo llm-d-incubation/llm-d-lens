@@ -4,6 +4,26 @@
 
 This is a starting point for discovery, not a complete function inventory. Source code, callers, and tests are authoritative. See the [reuse development guide](../docs/design/reuse-workflow.md) for usage.
 
+## evaluation-resource-confirmation
+
+Generate directly with sufficient available cards; confirm physical capacity and Pending scheduling when cards are busy.
+
+- Entry point: [apps/frontend/src/pages/evaluation/ui/evaluation/ResourceBasisControl.jsx](../apps/frontend/src/pages/evaluation/ui/evaluation/ResourceBasisControl.jsx)
+- Symbols: `ResourceBasisControl`
+- Boundaries: Presentation only. Uses recommendationBudget and caller-supplied demand. Calls onGenerate with available or total; callers refresh capacity and own actual generation or deployment. Blocks confirmation when total capacity is insufficient.
+- Examples: [apps/frontend/src/pages/optimization/ui/OptimizationConfiguration.jsx](../apps/frontend/src/pages/optimization/ui/OptimizationConfiguration.jsx), [apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx](../apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx)
+- Tests: [apps/frontend/src/pages/evaluation/ui/evaluation/GenerationControls.test.jsx](../apps/frontend/src/pages/evaluation/ui/evaluation/GenerationControls.test.jsx)
+
+## simulation-endpoint-validation
+
+Validate OpenAI-compatible endpoint model discovery before creating or rerunning Endpoint URL simulations.
+
+- Entry point: [apps/backend/src/llm_d_lens/simulation/endpoints.py](../apps/backend/src/llm_d_lens/simulation/endpoints.py)
+- Symbols: `discover_models`, `models_url`
+- Boundaries: Bounded authenticated GET /v1/models with no redirects; failures prevent non-deployment task persistence and scheduling. Deployment-bound tasks retain cluster execution. Optional bearer tokens are never returned.
+- Examples: [apps/backend/src/llm_d_lens/simulation/router.py](../apps/backend/src/llm_d_lens/simulation/router.py), [apps/backend/src/llm_d_lens/simulation/service.py](../apps/backend/src/llm_d_lens/simulation/service.py)
+- Tests: [apps/backend/tests/integration/test_simulation.py](../apps/backend/tests/integration/test_simulation.py), [apps/backend/tests/unit/simulation/test_endpoints.py](../apps/backend/tests/unit/simulation/test_endpoints.py)
+
 ## router-pd-plugin-compatibility
 
 Adapt legacy P/D plugin configurations to Router 0.11 while preserving source snapshots and disaggregation decisions.
@@ -1393,7 +1413,7 @@ Publish successful evaluation results before final owned-deployment cleanup fini
 
 - Entry point: [apps/backend/src/llm_d_lens/evaluation/router.py](../apps/backend/src/llm_d_lens/evaluation/router.py)
 - Symbols: `_run_case_benchmark`, `_execute_evaluation`, `delete_workflow_run`
-- Boundaries: Evaluation orchestration only. All cases must succeed before report and completion time are published. Existing tracked orchestration continues final cleanup, records cleanup errors separately and preserves successful outcomes. Intermediate cleanup still precedes later independent cases; shared-pod baselines retain deployment ownership. Deletion waits for in-flight cleanup to prevent history recreation. Explicit cancellation semantics are unchanged.
+- Boundaries: Evaluation orchestration only. All cases must succeed before report and completion time are published. Existing tracked orchestration continues final cleanup, records cleanup errors separately and preserves successful outcomes. Intermediate cleanup still precedes later independent cases; shared-pod baselines retain deployment ownership. Deletion waits for in-flight cleanup to prevent history recreation. Successful cleanup deletes owned temporary deployment records as well as cluster resources; cancellation removes the settled deployment run after confirmed cleanup. Borrowed deployments and evaluation result history remain intact; cleanup failures retain deployment records for retry.
 - Examples: [apps/backend/src/llm_d_lens/evaluation/router.py](../apps/backend/src/llm_d_lens/evaluation/router.py)
 - Tests: [apps/backend/tests/unit/evaluation/test_deployments.py](../apps/backend/tests/unit/evaluation/test_deployments.py), [apps/backend/tests/unit/evaluation/test_cancellation.py](../apps/backend/tests/unit/evaluation/test_cancellation.py), [apps/backend/tests/unit/evaluation/test_kubernetes_service_baseline.py](../apps/backend/tests/unit/evaluation/test_kubernetes_service_baseline.py)
 

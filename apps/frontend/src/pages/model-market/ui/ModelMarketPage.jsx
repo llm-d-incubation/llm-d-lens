@@ -2,8 +2,8 @@ import { requestJson } from '../../../shared/api/httpClient';
 import { openClusterSession } from '../../optimization';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePolling } from '../../../shared/lib/usePolling';
-import { ArrowLeft, Box, CheckCircle2, ChevronDown, Cpu, Database, Rocket, Sparkles } from 'lucide-react';
-import { Button, Input, ModuleHeader, ModulePage, Badge } from '../../../shared/ui';
+import { ArrowLeft, Box, CheckCircle2, ChevronDown, Cpu, Database, Rocket, Search, Sparkles } from 'lucide-react';
+import { Button, Input, ModuleHeader, ModulePage, Badge, EmptyState } from '../../../shared/ui';
 import { CATEGORIES, MODELS } from '@repo/shared/catalog';
 import { listStorageVolumes } from '../../storage';
 import { listModelCacheEntries } from '../../model-cache';
@@ -94,6 +94,7 @@ export default function ModelMarketPage({ onNavigate }) {
         }
     });
     const [category, setCategory] = useState('All');
+    const [search, setSearch] = useState('');
     const [deployName, setDeployName] = useState('');
     const [deploymentDescription, setDeploymentDescription] = useState('');
     const [cluster, setCluster] = useState('');
@@ -165,7 +166,14 @@ export default function ModelMarketPage({ onNavigate }) {
     usePolling(loadClusters);
 
     const plan = useMemo(() => selected && standardRecommendation(selected, hardware, resourceBasis), [selected, hardware, resourceBasis]);
-    const visibleModels = useMemo(() => MODELS.filter((model) => category === 'All' || model.category === category), [category]);
+    const visibleModels = useMemo(() => {
+        const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        return MODELS.filter((model) => {
+            if (category !== 'All' && model.category !== category) return false;
+            const text = [model.name, model.family, model.repository, model.category, model.modelType, model.dtype].join(' ').toLowerCase();
+            return terms.every((term) => text.includes(term));
+        });
+    }, [category, search]);
     const availableGpuCount = recommendationBudget(hardware, resourceBasis);
     const hasGpuCapacity = Number.isInteger(availableGpuCount);
     const requiresModelCache = mode === 'standard' || mode === 'agentic';
@@ -402,11 +410,20 @@ export default function ModelMarketPage({ onNavigate }) {
                 <ModuleHeader icon={Database} title="Model Market" />
                 <div className="flex items-center justify-between gap-4">
                     <div><h1 className="text-xl font-semibold text-white">Select a model</h1><p className="mt-1 text-sm text-slate-400">Popular open models across language, vision, image, speech, retrieval, and diffusion.</p></div>
-                    <span className="text-xs text-slate-500">{visibleModels.length} models</span>
+                    <span role="status" className="shrink-0 text-xs text-theme-muted">{visibleModels.length} models</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="min-w-0 flex-1 basis-64">
+                        <Input type="search" icon={Search} value={search} onChange={(event) => setSearch(event.target.value)}
+                            aria-label="Search models" placeholder="Search models, publishers, repositories, types, or precision..." />
+                    </div>
+                    {(search || category !== 'All') && <Button type="button" variant="secondary" onClick={() => { setSearch(''); setCategory('All'); }}>Clear filters</Button>}
                 </div>
                 <div className="flex flex-wrap gap-2" role="tablist" aria-label="Model categories">{CATEGORIES.map((item) => <button key={item} type="button" role="tab" aria-selected={category === item} onClick={() => setCategory(item)} className={`rounded-md border px-3 py-1.5 text-xs ${category === item ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>{item}</button>)}</div>
                 <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {visibleModels.map((model) => <ModelCard key={model.id} model={model} onSelect={chooseModel} />)}
+                    {!visibleModels.length && <EmptyState className="col-span-full" icon={<Search size={22} aria-hidden="true" />}
+                        title="No matching models" message="Try another search or change the model category." />}
                 </section>
             </ModulePage>
         );

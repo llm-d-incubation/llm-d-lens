@@ -543,7 +543,7 @@ async def test_workflow_completes_before_final_deployment_cleanup(monkeypatch, c
         case.update(status="succeeded", finished_at=router._now())
 
     class Worker:
-        async def clean_case(self, run_id, _case_id):
+        async def delete_case_execution(self, run_id, _case_id):
             cleaned.append(run_id)
             if len(cleaned) < case_count:
                 assert saved[-1]["status"] == "running"

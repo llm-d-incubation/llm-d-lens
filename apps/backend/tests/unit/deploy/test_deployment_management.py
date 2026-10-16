@@ -535,3 +535,26 @@ def test_legacy_execution_records_load_without_metadata(tmp_path):
 
     assert loaded is not None
     assert loaded.metadata == DeploymentMetadata()
+
+
+@pytest.mark.asyncio
+async def test_cancel_evaluation_removes_deployment_records(deployment_store, worker_factory):
+    worker = worker_factory(FakeDeploymentService())
+
+    await worker.cancel_evaluation_deployment("run-1")
+
+    assert deployment_store.get_run("run-1") is None
+    assert deployment_store.get_execution("execution-ready") is None
+    assert deployment_store.get_execution("execution-cleaned") is None
+    assert executions.list_execution_contexts() == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_evaluation_retains_records_on_cleanup_failure(deployment_store, worker_factory):
+    worker = worker_factory(FakeDeploymentService(fail=True))
+
+    with pytest.raises(ValueError, match="namespace could not be deleted"):
+        await worker.cancel_evaluation_deployment("run-1")
+
+    assert deployment_store.get_run("run-1") is not None
+    assert deployment_store.get_execution("execution-ready") is not None

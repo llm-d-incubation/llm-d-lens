@@ -32,6 +32,7 @@ from .backends import (
     response_code_issues_from_artifacts,
     status_code_breakdown_from_artifacts,
 )
+from .endpoints import discover_models
 from .errors import (
     SimulationCancelledError,
     SimulationConfigurationError,
@@ -746,6 +747,8 @@ async def create_task(request: SimulationTaskCreateRequest, *, http_request: obj
             force_gateway=bool(request.model_service_group_id),
         )
         endpoint_url = resolved_endpoint.url
+        if request.endpoint_mode != "deployment":
+            await discover_models(endpoint_url, api_key=request.api_key)
         while True:
             task_id = uuid.uuid4().hex[:8]
             if task_id not in tasks and not await asyncio.to_thread(_task_id_exists, task_id):
@@ -877,6 +880,8 @@ async def rerun_task(
             force_gateway=bool(model_service_group_id),
         )
         endpoint_url = resolved_endpoint.url
+        if source.endpoint_mode != "deployment":
+            await discover_models(endpoint_url, api_key=override.api_key)
         cluster_id = cluster_id or resolved_endpoint.cluster_id
         cluster_name = cluster_name or resolved_endpoint.cluster_name
         deployment_name = deployment_name or resolved_endpoint.deployment_name

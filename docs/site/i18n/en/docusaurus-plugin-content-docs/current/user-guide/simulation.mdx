@@ -25,6 +25,19 @@ Use **Simulation** to replay a trace dataset against a model service or an endpo
 To create a service and token, follow [Publish a model service](/tutorials/publish-a-model-service).
 Leave **Advanced backend settings** unchanged for the first run.
 
+With **Endpoint URL**, Lens validates the endpoint through its `/v1/models` API,
+using the optional model access token. You cannot continue or create a task while
+validation is pending or failed, even if you enter a model name manually. Correct
+the URL or token, or click **Retry endpoint validation** after restoring connectivity.
+The backend checks again before saving or scheduling a new task or rerun. DNS,
+connection, timeout, authentication, and invalid model-list responses block creation.
+A successful check does not guarantee that the endpoint will remain available during the run.
+
+Addresses ending in `.svc.cluster.local` use Kubernetes cluster DNS and may not
+resolve from the Lens backend host. For a published cluster service, choose
+**Model Service** to use the cluster's benchmark execution path. Otherwise, supply
+an endpoint reachable from the Lens backend and benchmark runtime.
+
 ## Read the result
 
 1. Open the task card.

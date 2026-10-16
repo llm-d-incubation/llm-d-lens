@@ -141,6 +141,7 @@ class TraceDatasetDownloadRequest(FrozenDomainModel):
 
 class ModelDiscoveryRequest(FrozenDomainModel):
     endpoint_url: str = Field(min_length=1, max_length=2000)
+    api_key: str | None = Field(default=None, exclude=True, max_length=4096)
 
 
 class SimulationArtifact(FrozenDomainModel):

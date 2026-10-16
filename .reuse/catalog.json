@@ -2,6 +2,40 @@
   "version": 1,
   "entries": [
     {
+      "id": "evaluation-resource-confirmation",
+      "path": "apps/frontend/src/pages/evaluation/ui/evaluation/ResourceBasisControl.jsx",
+      "symbols": [
+        "ResourceBasisControl"
+      ],
+      "purpose": "Generate directly with sufficient available cards; confirm physical capacity and Pending scheduling when cards are busy.",
+      "boundaries": "Presentation only. Uses recommendationBudget and caller-supplied demand. Calls onGenerate with available or total; callers refresh capacity and own actual generation or deployment. Blocks confirmation when total capacity is insufficient.",
+      "examples": [
+        "apps/frontend/src/pages/optimization/ui/OptimizationConfiguration.jsx",
+        "apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx"
+      ],
+      "tests": [
+        "apps/frontend/src/pages/evaluation/ui/evaluation/GenerationControls.test.jsx"
+      ]
+    },
+    {
+      "id": "simulation-endpoint-validation",
+      "path": "apps/backend/src/llm_d_lens/simulation/endpoints.py",
+      "symbols": [
+        "discover_models",
+        "models_url"
+      ],
+      "purpose": "Validate OpenAI-compatible endpoint model discovery before creating or rerunning Endpoint URL simulations.",
+      "boundaries": "Bounded authenticated GET /v1/models with no redirects; failures prevent non-deployment task persistence and scheduling. Deployment-bound tasks retain cluster execution. Optional bearer tokens are never returned.",
+      "examples": [
+        "apps/backend/src/llm_d_lens/simulation/router.py",
+        "apps/backend/src/llm_d_lens/simulation/service.py"
+      ],
+      "tests": [
+        "apps/backend/tests/integration/test_simulation.py",
+        "apps/backend/tests/unit/simulation/test_endpoints.py"
+      ]
+    },
+    {
       "id": "router-pd-plugin-compatibility",
       "path": "apps/backend/src/llm_d_lens/configuration/router_compatibility.py",
       "symbols": ["compatible_router_values"],
@@ -2410,11 +2444,21 @@
     {
       "id": "evaluation-workflow-completion",
       "path": "apps/backend/src/llm_d_lens/evaluation/router.py",
-      "symbols": ["_run_case_benchmark", "_execute_evaluation", "delete_workflow_run"],
+      "symbols": [
+        "_run_case_benchmark",
+        "_execute_evaluation",
+        "delete_workflow_run"
+      ],
       "purpose": "Publish successful evaluation results before final owned-deployment cleanup finishes.",
-      "boundaries": "Evaluation orchestration only. All cases must succeed before report and completion time are published. Existing tracked orchestration continues final cleanup, records cleanup errors separately and preserves successful outcomes. Intermediate cleanup still precedes later independent cases; shared-pod baselines retain deployment ownership. Deletion waits for in-flight cleanup to prevent history recreation. Explicit cancellation semantics are unchanged.",
-      "examples": ["apps/backend/src/llm_d_lens/evaluation/router.py"],
-      "tests": ["apps/backend/tests/unit/evaluation/test_deployments.py", "apps/backend/tests/unit/evaluation/test_cancellation.py", "apps/backend/tests/unit/evaluation/test_kubernetes_service_baseline.py"]
+      "boundaries": "Evaluation orchestration only. All cases must succeed before report and completion time are published. Existing tracked orchestration continues final cleanup, records cleanup errors separately and preserves successful outcomes. Intermediate cleanup still precedes later independent cases; shared-pod baselines retain deployment ownership. Deletion waits for in-flight cleanup to prevent history recreation. Successful cleanup deletes owned temporary deployment records as well as cluster resources; cancellation removes the settled deployment run after confirmed cleanup. Borrowed deployments and evaluation result history remain intact; cleanup failures retain deployment records for retry.",
+      "examples": [
+        "apps/backend/src/llm_d_lens/evaluation/router.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/evaluation/test_deployments.py",
+        "apps/backend/tests/unit/evaluation/test_cancellation.py",
+        "apps/backend/tests/unit/evaluation/test_kubernetes_service_baseline.py"
+      ]
     },
     {
       "id": "evaluation-target-submission",

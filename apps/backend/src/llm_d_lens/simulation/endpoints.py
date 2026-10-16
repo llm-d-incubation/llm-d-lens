@@ -24,8 +24,11 @@ def models_url(endpoint_url: str) -> str:
     return urlunparse(parsed._replace(path=f"{path}/models", params="", query="", fragment=""))
 
 
-async def discover_models(endpoint_url: str) -> dict:
+async def discover_models(endpoint_url: str, *, api_key: str | None = None) -> dict:
     url = models_url(endpoint_url)
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     timeout = aiohttp.ClientTimeout(total=10)
     try:
         async with (
@@ -33,7 +36,7 @@ async def discover_models(endpoint_url: str) -> dict:
             session.get(
                 url,
                 allow_redirects=False,
-                headers={"Accept": "application/json"},
+                headers=headers,
             ) as response,
         ):
             if response.status < 200 or response.status >= 300:

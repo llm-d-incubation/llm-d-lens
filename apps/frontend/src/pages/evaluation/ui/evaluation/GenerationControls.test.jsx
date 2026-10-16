@@ -5,12 +5,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ResourceBasisControl from './ResourceBasisControl.jsx';
 import Tree from './OptimizationComparisonTree.jsx';
 
-test('generation has one main button that opens resource confirmation', () => {
+test('generation skips resource confirmation when currently available cards are sufficient', () => {
  const html=renderToStaticMarkup(createElement(ResourceBasisControl,{value:'available',hardware:{availableGpuCount:2,gpuCount:8},onGenerate(){}}));
  assert.match(html,/Generate YAML/);
  assert.equal((html.match(/<button/g)||[]).length,1);
- assert.match(html,/aria-haspopup="dialog"/);
+ assert.doesNotMatch(html,/aria-haspopup="dialog"/);
  assert.doesNotMatch(html,/aria-label="YAML resource budget"/);
+});
+test('generation requires confirmation when current availability is insufficient', () => {
+ const html=renderToStaticMarkup(createElement(ResourceBasisControl,{hardware:{availableGpuCount:2,gpuCount:8},requiredCards:5,onGenerate(){}}));
+ assert.match(html,/aria-haspopup="dialog"/);
+ assert.doesNotMatch(html,/Replica \/ TP resource budget/);
 });
 test('multiple branches remain active simultaneously and use a single selection entry',()=>{
  const html=renderToStaticMarkup(createElement(Tree,{guide:'optimized-baseline',selected:['full','affinity-only','load-only'],onChange(){}}));
