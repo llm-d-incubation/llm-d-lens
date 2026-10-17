@@ -1,5 +1,5 @@
 // Carries a cluster selection made outside the Model Market page (e.g. the
-// "Plan & Deploy" button on the Clusters page) across the view navigation so
+// "Deploy a model" button on the Clusters page) across the view navigation so
 // the One-click deployment form can pre-select it, mirroring the pattern
 // used by `src/features/evaluation/transfer.js`.
 const PENDING_CLUSTER_KEY = 'prism_model_market_pending_cluster';

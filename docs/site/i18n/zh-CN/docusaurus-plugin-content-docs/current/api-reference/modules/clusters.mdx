@@ -235,6 +235,12 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
 
 修改集群的可编辑设置，包括名称、描述、代理设置和草稿状态。kubeconfig 本身不在此补丁契约范围内。版本字段（`llmDRef`、`llmDBenchmarkRef`、`routerVersion`、`gieVersion`、`ippVersion`）由服务端根据技术栈配置文件管理，输入时会被忽略。
 
+Gateway 命名空间前缀会附加该 Lens 集群注册的稳定短 ID。注册 ID 为 `1234abcd` 时，
+默认命名空间为 `lens-gateway-1234abcd`；`gatewayNamespace: "custom"` 会解析为
+`custom-1234abcd`。再次传入带后缀的值不会重复添加。集群响应返回实际命名空间，
+以前使用共享 `lens-gateway` 默认值的记录也遵循此规则。
+`service.update_cluster_settings(..., gateway_namespace="custom")` 的行为相同。
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`PATCH /api/cluster/clusters/{cluster_id}`**
@@ -247,6 +253,7 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
     - `llmDRef`（`string`，可选）
     - `llmDBenchmarkRef`（`string`，可选）
     - `gatewayProvider`（`string`，可选）
+    - `gatewayNamespace`（`string`，可选）：最多 63 个字符的命名空间前缀，会附加注册的稳定短 ID。
     - `gatewayPort`（`integer`，可选）
     - `gatewayPublicUrl`（`string`，可选）：外部可达的网关主机/IP —— Lens 会自动添加暴露端口；为空时将自动推导。
     - `gatewayAuthzHost`（`string`）：该集群用来访问 Lens 的主机/IP（对于带有 Lens 地址钩子的供应商为必填；Lens 会自动添加自身服务端口；为空时会自动填入该主机地址）。
@@ -683,10 +690,13 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
 
 该接口会执行以下远端清理：
 
+- 删除注册独立的 Gateway 命名空间（通常为 `lens-gateway-<cluster-id>`），以及其中的 Gateway、IPP、鉴权资源和路由。命名空间不存在视为成功，不删除旧共享命名空间、其他注册的命名空间或共享 Gateway 控制器。
 - 删除 `hfTokenSecret` 中记录的集群 `HF_TOKEN` Secret；当其所在命名空间没有理由在集群之后继续存在时，该命名空间也会一并删除。以下情况属于此类：Lens 自有的 `llm-d-bench-storage-{cluster_id}` 命名空间、Lens 为该 Secret 创建的任何命名空间（带有 `app.kubernetes.io/managed-by: llm-d-lens` 标签），以及删除该 Secret 后仅剩 Kubernetes 和集群插件注入到每个命名空间中的对象（`default` 服务账号及其令牌 Secret、`kube-root-ca.crt` 等 CA 证书包 ConfigMap）的命名空间。仍包含任何其他对象（包括自定义资源）的命名空间会被保留；`default`、`kube-system`、`kube-public` 和 `kube-node-lease` 永远不会被删除。如果无法列出命名空间内容，则保留该命名空间。
 - 对于草稿集群，仍挂在其上的每个存储卷都会连同其 `PersistentVolumeClaim` 和 `PersistentVolume` 对象一起删除。底层 NFS 或主机路径存储上的模型文件会保留，因为 `PersistentVolume` 使用 `Retain` 回收策略。
 
-所有远端清理均为尽力而为：失败只会记录日志，Lens 记录仍会被删除，因此无法访问的集群永远不会变得无法删除。如果非草稿集群仍存在存储卷，则请求会被拒绝；请先删除这些卷。
+Gateway 命名空间必须清理成功：失败或超时返回 `502 cluster_gateway_cleanup_failed`，
+并保留集群记录和 kubeconfig 以便重试。HF-token 和草稿存储清理仍为尽力而为。
+非草稿集群仍有可用部署或存储卷时返回 `409`，请先清理这些资源。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -697,8 +707,14 @@ llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 
     - `cluster_id`（`string`，路径参数）：目标集群 id。
 
     响应：`204 No Content`。此端点不返回 JSON 响应体。
+
+    失败：`502 cluster_gateway_cleanup_failed` 表示独立 Gateway 命名空间无法删除；
+    `409 cluster_has_available_deployments` 或 `cluster_has_storage_volumes`
+    表示已完成注册的集群仍有对应资源。
   </TabItem>
   <TabItem value="python-api" label="Python API">
+    必要清理失败时，`service.delete_cluster()` 抛出包含相同状态和错误码的 `ClusterOverviewError`。
+
     ```python
     import asyncio
 

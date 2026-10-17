@@ -27,12 +27,16 @@
 /* Directional flow for the model-service data-plane chain highlight. The path
    itself is built source -> target, so a decreasing dash offset flows forward. */
 @keyframes lens-chain-flow {
-  to { stroke-dashoffset: -24; }
+  from { stroke-dashoffset: var(--flow-offset, 0px); }
+  to { stroke-dashoffset: calc(var(--flow-offset, 0px) - 160px); }
 }
 .lens-chain-flow {
-  stroke-dasharray: 4 20;
   stroke-linecap: round;
-  animation: lens-chain-flow 0.8s linear infinite;
+  animation: lens-chain-flow 4s linear infinite;
+  animation-delay: var(--flow-delay, 0s);
+}
+.lens-chain-flow-head {
+  --flow-offset: -18px;
 }
 @media (prefers-reduced-motion: reduce) {
   .lens-chain-flow { animation: none; }
@@ -209,11 +213,11 @@ main span:has(> :only-child) + p.text-slate-600 {
     --text-primary: #0f172a;
     --text-secondary: #475569;
     --text-muted: #94a3b8;
-    
+
     --brand-accent: #059669;
     --brand-accent-hover: #047857;
     --brand-accent-bg: rgba(16, 185, 129, 0.1);
-    
+
     --chart-grid: #cbd5e1;
     --chart-axis: #475569;
   }
@@ -226,11 +230,11 @@ main span:has(> :only-child) + p.text-slate-600 {
     --text-primary: #f8fafc;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
-    
+
     --brand-accent: #34d399;
     --brand-accent-hover: #10b981;
     --brand-accent-bg: rgba(52, 211, 153, 0.15);
-    
+
     --chart-grid: #1e293b;
     --chart-axis: #64748b;
   }
@@ -244,8 +248,8 @@ main span:has(> :only-child) + p.text-slate-600 {
   button, a, select, [role="button"] {
     cursor: pointer !important;
   }
-  
-  .recharts-dot, 
+
+  .recharts-dot,
   .recharts-active-dot,
   .recharts-symbols,
   .recharts-layer,

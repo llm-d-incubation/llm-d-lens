@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-    Cpu, GitBranch, Layers, Menu, Network, Play, Plus, RotateCw, Router, Square, Settings, Terminal, Trash2, Waypoints,
+    Boxes, Cpu, GitBranch, Layers, Menu, Network, Play, Plus, RotateCw, Router, ShieldCheck, Square, Settings, Terminal, Trash2, Unlink, Waypoints,
 } from 'lucide-react';
 import { cn } from '../../../../shared/lib/cn';
-import { Badge } from '../../../../shared/ui/Badge';
+import { Badge, StatusChip } from '../../../../shared/ui/Badge';
 import { Button } from '../../../../shared/ui/Button';
+import { HelpTooltip } from '../../../../shared/ui/FormControls';
+import { Panel } from '../../../../shared/ui/Panel';
 import { PermissionGate } from '../../../auth';
+import { trafficShare, trafficTotal } from '../../model/modelService';
 
 // Canonical llm-d Gateway Mode data plane.
 //   Lens control plane           (config publishing)
@@ -15,39 +18,54 @@ import { PermissionGate } from '../../../auth';
 //            |
 //   IPP (ext_proc: body.model -> X-Gateway-Base-Model-Name)
 //
-// Each cluster has its OWN Gateway + IPP, and llm-d's data plane is one EPP per
-// InferencePool, so each model service publishes ONE HTTPRoute per cluster that
-// references exactly ONE InferencePool (the highest-priority active member).
-const COL = { httpRoute: 560, pool: 770, epp: 980, model: 1150 };
-const WB = { httpRoute: 200, pool: 180, epp: 140, model: 200 };
+// Each cluster has its own Gateway + IPP. A model service has one HTTPRoute
+// and deployment-owned pools/EPPs; Lens publishes the positive-weight pools.
+const COL = { httpRoute: 560, pool: 896, epp: 1108, model: 1320 };
+const WB = { httpRoute: 200, pool: 200, epp: 200, model: 200 };
 const BOX_H = 64;
-// Extra vertical gap between rows so connector lines and their captions do not
-// touch the boxes above/below.
-const ROW_H = 126;
-const TOP = 12;
-const GW = { x: 300, w: 180, h: 64 };
-const IPP = { x: 300, w: 180, h: 64 };
-const CP = { x: 300, y: 12, w: 260, h: 54 };
-const CLIENTS = { x: 8, y: 12, w: 128, h: 54 };
+const DEPLOYMENT = { x: COL.pool - 16, w: COL.model + WB.model - COL.pool + 32, header: 36 };
+const DEPLOYMENT_H = DEPLOYMENT.header + BOX_H + 12;
+const MODEL = { x: COL.httpRoute - 16, w: DEPLOYMENT.x + DEPLOYMENT.w - COL.httpRoute + 32, header: 36 };
+const ROUTE_BRANCH_X = (COL.httpRoute + WB.httpRoute + DEPLOYMENT.x) / 2 - MODEL.x;
+const MODEL_H = MODEL.header + DEPLOYMENT_H + 12;
+const COMPONENT_Y = MODEL.header + DEPLOYMENT.header;
+const DEPLOYMENT_GAP = 16;
+const GW = { x: 300, w: 200, h: BOX_H };
+const IPP = { ...GW };
+const CP = { ...GW, y: 12 };
+const CLIENTS = { x: 8, y: 12, w: 128, h: BOX_H };
 const CLIENT_BUS = 240;
 const CP_TRUNK_X = 270;
 const GW_BUS = 520;
-const HEADER_H = 30;
+const CLUSTER = { x: GW.x - 16, w: MODEL.x + MODEL.w - GW.x + 32, header: 48, bottom: 16 };
 const SECTION_GAP = 40;
-const WIDTH = COL.model + WB.model + 24;
+const WIDTH = MODEL.x + MODEL.w + 24;
+const TRAFFIC_HELP = 'Configure relative traffic weights across this model’s deployment providers. Weight 0 keeps a provider on standby; offline providers receive no traffic.';
 
-function Box({ x, y, w = 180, h = BOX_H, label, sub, icon, status, statusText, crd, menuOpen, onToggleMenu }) {
+function Box({ x, y, w = 180, h = BOX_H, label, help, helpSource, helpPlacement = 'top', sub, icon, status, statusText, crd, menuOpen, onToggleMenu }) {
     return (
         <div className="absolute" style={{ left: x, top: y, width: w, height: h }}>
             <div className={cn(
                 'flex h-full flex-col justify-center rounded-lg border bg-slate-950/95 px-2.5 shadow-lg',
                 menuOpen ? 'border-sky-500/70' : 'border-slate-700/80',
             )}>
-                <div className="flex items-center gap-1.5 pr-1">
+                <div className="flex items-center gap-1 pr-1">
                     {status && <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full motion-safe:animate-pulse [animation-duration:2.4s]', status)} title={statusText} />}
                     {icon}
                     <span className="text-xs font-semibold text-slate-200">{label}</span>
-                    {crd && <Badge tone="neutral" size="xs">CRD</Badge>}
+                    {help && (
+                        <HelpTooltip label={`${label} help`} className="relative"
+                            tooltipClassName={cn('right-0 w-80', helpPlacement === 'bottom' ? 'top-full pt-2' : 'bottom-full pb-2')}>
+                            {help}
+                            {helpSource && (
+                                <a className="mt-2 inline-block underline underline-offset-2"
+                                    href={helpSource} target="_blank" rel="noopener noreferrer">
+                                    Official {label} documentation
+                                </a>
+                            )}
+                        </HelpTooltip>
+                    )}
+                    {crd && <Badge tone="neutral" size="xxs">CRD</Badge>}
                     {onToggleMenu && (
                         <PermissionGate permission="model-service:gateway:manage">
                             <span className="ml-auto inline-flex">
@@ -58,33 +76,69 @@ function Box({ x, y, w = 180, h = BOX_H, label, sub, icon, status, statusText, c
                         </PermissionGate>
                     )}
                 </div>
-                <span className="mt-0.5 truncate text-[9.5px] leading-tight text-slate-500" title={sub}>{sub}</span>
+                {sub && <span className="mt-0.5 truncate text-[9.5px] leading-tight text-slate-500" title={sub}>{sub}</span>}
             </div>
         </div>
     );
 }
 
-function MenuAction({ icon, label, onClick }) {
+function MenuAction({ icon, label, onClick, disabled = false, title }) {
     return (
-        <button type="button" role="menuitem" onClick={onClick} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-slate-300 hover:bg-slate-800">
+        <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={onClick}
+            disabled={disabled} title={title}
+            className="w-full justify-start gap-2 rounded-md px-2 py-1.5 text-left font-normal disabled:pointer-events-auto disabled:cursor-not-allowed disabled:hover:bg-transparent">
             {icon} {label}
-        </button>
+        </Button>
     );
 }
 
-function Flow({ d, dashed = false, dotted = false, tone = 'blue', width = 1.5 }) {
-    // blue = token/data path, green = control/config path.
-    const stroke = tone === 'green' ? 'stroke-emerald-500' : tone === 'slate' ? 'stroke-slate-600' : 'stroke-blue-500';
-    const dash = dotted ? '1 4' : dashed ? '4 4' : undefined;
+export function PublicationToggleAction({ kind, stopped, pending, onClick }) {
+    const model = kind === 'model';
+    const label = model
+        ? (stopped ? 'Resume serving' : 'Stop serving')
+        : (stopped ? 'Bring online' : 'Take offline');
     return (
-        <g>
-            <path d={d} fill="none" className={stroke} strokeWidth={width} strokeDasharray={dash}
-                opacity={dotted || dashed ? 0.8 : 0.3} />
-            {!dotted && <path d={d} fill="none" className={cn('lens-chain-flow', stroke)} strokeWidth={width} opacity="0.95" />}
-        </g>
+        <MenuAction icon={stopped ? <Play size={12} /> : <Square size={12} />}
+            label={label} disabled={pending} onClick={onClick}
+            title={model
+                ? 'Control this public model without changing provider states, weights or running Pods.'
+                : 'Control routing to this deployment without changing its weight or scaling its Pods. Weight 0 remains standby.'} />
     );
 }
 
+export function ProvidersToggleAction({ members, pending, onClick }) {
+    const online = members.length > 0 && members.every((member) => member.status === 'disabled');
+    return <MenuAction icon={online ? <Play size={12} /> : <Square size={12} />}
+        label={online ? 'Bring providers online' : 'Take providers offline'}
+        disabled={pending || members.length === 0}
+        title={online
+            ? 'Bring all providers online. Every deployment must be ready; weights, model state and Pods are unchanged.'
+            : 'Take all providers offline, including a mix of online and offline providers. Weights, model state and Pods are unchanged.'}
+        onClick={() => onClick(online)} />;
+}
+
+export function ManageDeploymentAction({ deployment, onNavigate }) {
+    return (
+        <PermissionGate permission="deployment:run:read">
+            <MenuAction icon={<Settings size={12} />} label="Manage"
+                disabled={!deployment.namespace}
+                title={deployment.namespace ? 'Find this deployment by namespace.' : 'Deployment namespace is unavailable.'}
+                onClick={() => onNavigate('optimization-deployments', { deploymentSearch: deployment.namespace })} />
+        </PermissionGate>
+    );
+}
+
+export function ComponentLogAction({ component, cluster, onClick }) {
+    const gateway = component === 'gateway';
+    const label = gateway ? 'Gateway' : 'IPP';
+    const installed = (gateway ? cluster.gatewayState : cluster.ippState) === 'installed';
+    const running = installed && (gateway ? cluster.gatewayRunning !== false : Boolean(cluster.ippReady));
+    const reason = running ? undefined : `${installed ? 'Start' : 'Install'} ${label} before viewing logs.`;
+    return (
+        <MenuAction icon={<Terminal size={12} />} label="View logs" disabled={!running} title={reason}
+            onClick={running ? onClick : undefined} />
+    );
+}
 
 // "Stop" scales the Gateway's data-plane Deployment to zero but leaves the
 // Gateway resource in place, so `gatewayState` stays `installed` and the
@@ -124,6 +178,7 @@ const STATUS_LABEL = {
     external: 'external',
     unknown: 'unknown',
     stopped: 'stopped',
+    standby: 'standby (0 weight; not routed)',
     absent: 'no members',
     disabled: 'disabled',
 };
@@ -134,7 +189,7 @@ function statusLabel(name) {
 
 // Per-component health reported by the backend (healthJson.components) so each
 // box reflects its own resource instead of one shared member status.
-const COMPONENT_STATE = { ready: 'active', degraded: 'degraded', missing: 'unhealthy', unknown: 'unknown' };
+const COMPONENT_STATE = { ready: 'active', standby: 'standby', degraded: 'degraded', missing: 'unhealthy', unknown: 'unknown' };
 
 function componentName(member, key) {
     const state = member.components?.[key];
@@ -144,52 +199,94 @@ function componentName(member, key) {
 
 export function DataPlaneTopology({
     clusters = [],
-    services = [],
     memberGroups = [],
     statusDot,
     onComponentAction,
-    onAddService,
-    onAddMemberGlobal,
-    onDeleteService,
+    onEditTraffic,
+    onToggleService,
+    onSetProvidersStatus,
+    onRemoveModel,
+    onManageAccess,
+    onToggleDeployment,
+    onNavigate,
+    publicationPending = false,
     onDeleteDeployment,
 }) {
     const [menu, setMenu] = useState(null);
+    const dragRef = useRef(null);
+
+    const finishDrag = (event) => {
+        if (dragRef.current?.pointerId !== event.pointerId) return;
+        dragRef.current = null;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+    };
+    const startDrag = (event) => {
+        if (event.button !== 0 || event.pointerType !== 'mouse'
+            || event.target.closest('button, a, input, select, textarea, summary, [role="button"], [role="link"]')) return;
+        const viewport = event.currentTarget;
+        dragRef.current = {
+            pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+            left: viewport.scrollLeft, top: viewport.scrollTop,
+        };
+        viewport.focus({ preventScroll: true });
+        viewport.setPointerCapture(event.pointerId);
+        event.preventDefault();
+    };
+    const moveDrag = (event) => {
+        const start = dragRef.current;
+        if (!start || start.pointerId !== event.pointerId) return;
+        if (!(event.buttons & 1)) { finishDrag(event); return; }
+        event.currentTarget.scrollLeft = start.left + start.x - event.clientX;
+        event.currentTarget.scrollTop = start.top + start.y - event.clientY;
+    };
 
     const layout = useMemo(() => {
         const sections = clusters.map((cluster) => {
-            const rows = memberGroups.flatMap((group) =>
-                group.clusters
+            const rows = memberGroups.flatMap((group) => {
+                const members = group.clusters
                     .filter((gc) => gc.clusterId === cluster.clusterId)
-                    .flatMap((gc) => gc.deployments.map((member) => ({
-                        serviceId: group.id,
-                        serviceName: group.name,
-                        member,
-                    }))),
-            );
+                    .flatMap((gc) => gc.deployments);
+                if (!group.clusters.some((gc) => gc.clusterId === cluster.clusterId)) return [];
+                return [{
+                    serviceId: group.id,
+                    serviceName: group.name,
+                    serviceStatus: group.status || 'active',
+                    members,
+                    height: MODEL_H + Math.max(0, members.length - 1) * (DEPLOYMENT_H + DEPLOYMENT_GAP),
+                    routeY: COMPONENT_Y + Math.max(0, members.length - 1) * (DEPLOYMENT_H + DEPLOYMENT_GAP) / 2,
+                }];
+            });
             return { cluster, rows };
         });
         const heights = sections.map((section) =>
-            Math.max(Math.max(section.rows.length, 1) * ROW_H, GW.h + IPP.h + 12));
+            Math.max(section.rows.reduce((sum, row, index) => sum + row.height + (index ? 16 : 0), 0), GW.h + IPP.h + 12));
         const base = CP.y + CP.h + 40;
         const starts = heights.map((_, index) =>
-            base + heights.slice(0, index).reduce((sum, height) => sum + height + SECTION_GAP, 0));
+            base + heights.slice(0, index).reduce((sum, height) => sum + CLUSTER.header + height + CLUSTER.bottom + SECTION_GAP, 0));
         return sections.map((section, index) => {
             const headerY = starts[index];
-            const sectionTop = headerY + HEADER_H;
+            const sectionTop = headerY + CLUSTER.header;
             const bodyH = heights[index];
             const gwY = sectionTop + (bodyH - GW.h - IPP.h - 12) / 2;
             const ippY = gwY + GW.h + 12;
-            const rows = section.rows.map((row, rowIndex) => ({ ...row, y: sectionTop + rowIndex * ROW_H }));
-            return { cluster: section.cluster, headerY, gwY, ippY, rows };
+            let nextY = sectionTop;
+            const rows = section.rows.map((row) => {
+                const positioned = { ...row, y: nextY };
+                nextY += row.height + 16;
+                return positioned;
+            });
+            return { cluster: section.cluster, headerY, height: CLUSTER.header + bodyH + CLUSTER.bottom, gwY, ippY, rows };
         });
     }, [clusters, memberGroups]);
 
-    const totalRows = layout.reduce((sum, section) => sum + section.rows.length, 0);
     // Keep enough room for the always-rendered control plane/clients row even
     // before clusters resolve, so the absolutely positioned boxes are not
     // clipped to a thin strip while the first load is in flight.
-    const emptyHeight = CP.y + CP.h + HEADER_H + GW.h + IPP.h + 12;
-    const height = Math.max(layout.reduce((max, s) => Math.max(max, s.ippY + IPP.h), 0), emptyHeight) + 24;
+    const emptyHeight = CP.y + CP.h + CLUSTER.header + GW.h + IPP.h + 12;
+    const height = Math.max(layout.reduce((max, section) =>
+        Math.max(max, section.headerY + section.height), 0), emptyHeight) + 24;
     const lastGwMid = layout.length ? layout[layout.length - 1].gwY + GW.h / 2 : 0;
 
     const toggleMenu = (key, event) => {
@@ -215,6 +312,62 @@ export function DataPlaneTopology({
 
     const menuItems = () => {
         if (!menu) return null;
+        if (menu.key.startsWith('model:')) {
+            const section = layout.find((item) => item.rows.some((row) => menu.key === `model:${item.cluster.clusterId}:${row.serviceId}`));
+            const row = section?.rows.find((item) => menu.key === `model:${section.cluster.clusterId}:${item.serviceId}`);
+            if (!row) return null;
+            return (
+                <>
+                    {onToggleService && <PermissionGate permission="model-service:group:manage">
+                        <PublicationToggleAction kind="model" stopped={row.serviceStatus === 'disabled'}
+                            pending={publicationPending}
+                            onClick={() => choose(() => onToggleService({ id: row.serviceId, name: row.serviceName }))} />
+                    </PermissionGate>}
+                    {onSetProvidersStatus && <PermissionGate permission="model-service:member:manage">
+                        <ProvidersToggleAction members={row.members} pending={publicationPending}
+                            onClick={(online) => choose(() => onSetProvidersStatus(row.serviceId, online))} />
+                    </PermissionGate>}
+                    {onEditTraffic && <PermissionGate permission="model-service:member:manage">
+                        <MenuAction icon={<GitBranch size={12} />} label="Traffic distribution"
+                            title={TRAFFIC_HELP} disabled={publicationPending}
+                            onClick={() => choose(() => onEditTraffic(row.serviceId))} />
+                    </PermissionGate>}
+                    {onRemoveModel && <PermissionGate permission="model-service:group:manage">
+                        <MenuAction icon={<Unlink size={12} />} label="Remove model"
+                            disabled={publicationPending || row.members.length > 0}
+                            title={row.members.length ? 'Remove every deployment from this model first.' : 'Safely remove this empty model and its HTTPRoute.'}
+                            onClick={() => choose(() => onRemoveModel(row.serviceId))} />
+                    </PermissionGate>}
+                    {onManageAccess && <PermissionGate permission="model-service:group:share">
+                        <MenuAction icon={<ShieldCheck size={12} />} label="Manage access"
+                            title="Grant or revoke model inference for users and groups in this cluster."
+                            onClick={() => choose(() => onManageAccess(row.serviceId))} />
+                    </PermissionGate>}
+                </>
+            );
+        }
+        if (menu.key.startsWith('deployment:')) {
+            const memberId = menu.key.slice('deployment:'.length);
+            const row = layout.flatMap((section) => section.rows)
+                .find((item) => item.members.some((member) => member.memberId === memberId));
+            const member = row?.members.find((item) => item.memberId === memberId);
+            if (!member) return null;
+            return (
+                <>
+                    <PermissionGate permission="model-service:member:manage">
+                        {onToggleDeployment && <PublicationToggleAction kind="deployment" stopped={member.status === 'disabled'}
+                            pending={publicationPending} onClick={() => choose(() => onToggleDeployment(member))} />}
+                    </PermissionGate>
+                    {onNavigate && <ManageDeploymentAction deployment={member}
+                        onNavigate={(view, params) => choose(() => onNavigate(view, params))} />}
+                    <PermissionGate permission="model-service:member:manage">
+                        {onDeleteDeployment && <MenuAction icon={<Unlink size={12} />} label="Remove from model"
+                            title="Detach this provider from the model without deleting its deployment or Pods."
+                            onClick={() => choose(() => onDeleteDeployment(member, row.serviceName))} />}
+                    </PermissionGate>
+                </>
+            );
+        }
         if (menu.key.startsWith('gw:')) {
             const cluster = clusters.find((item) => item.clusterId === menu.key.slice(3));
             if (!cluster) return null;
@@ -223,14 +376,15 @@ export function DataPlaneTopology({
             return (
                 <>
                     <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{cluster.clusterName || cluster.clusterId} · {cluster.gatewayProvider || 'gateway'}</div>
-                    <MenuAction icon={installed ? <Trash2 size={12} /> : <Plus size={12} />} label={installed ? 'Uninstall' : 'Install'}
-                        onClick={() => choose(() => onComponentAction(cluster, 'gateway', installed ? 'uninstall' : 'install'))} />
-                    <MenuAction icon={<RotateCw size={12} />} label="Reconcile" onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'reconcile'))} />
                     {installed && (
                         <MenuAction icon={running ? <Square size={12} /> : <Play size={12} />} label={running ? 'Stop' : 'Start'}
                             onClick={() => choose(() => onComponentAction(cluster, 'gateway', running ? 'stop' : 'start'))} />
                     )}
-                    <MenuAction icon={<Terminal size={12} />} label="View logs" onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'logs'))} />
+                    <MenuAction icon={<RotateCw size={12} />} label="Reconcile" onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'reconcile'))} />
+                    <MenuAction icon={installed ? <Trash2 size={12} /> : <Plus size={12} />} label={installed ? 'Uninstall' : 'Install'}
+                        onClick={() => choose(() => onComponentAction(cluster, 'gateway', installed ? 'uninstall' : 'install'))} />
+                    <ComponentLogAction component="gateway" cluster={cluster}
+                        onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'logs'))} />
                 </>
             );
         }
@@ -242,45 +396,41 @@ export function DataPlaneTopology({
             return (
                 <>
                     <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{cluster.clusterName || cluster.clusterId} · IPP</div>
-                    <MenuAction icon={installed ? <Trash2 size={12} /> : <Plus size={12} />} label={installed ? 'Uninstall IPP' : 'Install IPP'}
-                        onClick={() => choose(() => onComponentAction(cluster, 'ipp', installed ? 'uninstall' : 'install'))} />
                     {installed && (
                         <MenuAction icon={running ? <Square size={12} /> : <Play size={12} />} label={running ? 'Stop' : 'Start'}
                             onClick={() => choose(() => onComponentAction(cluster, 'ipp', running ? 'stop' : 'start'))} />
                     )}
-                    <MenuAction icon={<Terminal size={12} />} label="View logs" onClick={() => choose(() => onComponentAction(cluster, 'ipp', 'logs'))} />
                     <MenuAction icon={<Settings size={12} />} label="Configure" onClick={() => choose(() => onComponentAction(cluster, 'ipp', 'configure'))} />
+                    <MenuAction icon={installed ? <Trash2 size={12} /> : <Plus size={12} />} label={installed ? 'Uninstall' : 'Install'}
+                        onClick={() => choose(() => onComponentAction(cluster, 'ipp', installed ? 'uninstall' : 'install'))} />
+                    <ComponentLogAction component="ipp" cluster={cluster}
+                        onClick={() => choose(() => onComponentAction(cluster, 'ipp', 'logs'))} />
                 </>
             );
         }
         if (menu.key.startsWith('route:')) {
-            const memberId = menu.key.slice(6);
-            const row = layout.flatMap((section) => section.rows).find((item) => item.member.memberId === memberId);
+            const section = layout.find((item) => item.rows.some((row) => menu.key === `route:${item.cluster.clusterId}:${row.serviceId}`));
+            const row = section?.rows.find((item) => menu.key === `route:${section.cluster.clusterId}:${item.serviceId}`);
             if (!row) return null;
-            const cluster = clusters.find((item) => item.clusterId === row.member.clusterId);
+            const cluster = section.cluster;
             return (
                 <>
                     <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{row.serviceName} · HTTPRoute</div>
-                    <MenuAction icon={<RotateCw size={12} />} label="Reconcile route" onClick={() => choose(() => onComponentAction({ clusterId: row.member.clusterId }, 'gateway', 'reconcile'))} />
-                    {onDeleteDeployment && (
-                        <MenuAction icon={<Trash2 size={12} />} label="Remove provider (this cluster)" onClick={() => choose(() => onDeleteDeployment(row.member, row.serviceName))} />
-                    )}
-                    {onDeleteService && (
-                        <MenuAction icon={<Trash2 size={12} />} label="Remove model service (all clusters)" onClick={() => choose(() => onDeleteService({ id: row.serviceId, name: row.serviceName }, cluster))} />
-                    )}
+                    <MenuAction icon={<RotateCw size={12} />} label="Reconcile route" onClick={() => choose(() => onComponentAction(cluster, 'gateway', 'reconcile'))} />
                 </>
             );
         }
         if (menu.key.startsWith('epp:')) {
             const memberId = menu.key.slice(4);
-            const row = layout.flatMap((section) => section.rows).find((item) => item.member.memberId === memberId);
-            if (!row) return null;
+            const member = layout.flatMap((section) => section.rows.flatMap((row) => row.members)).find((item) => item.memberId === memberId);
+            if (!member) return null;
+            const running = componentName(member, 'epp') === 'active';
             return (
                 <>
-                    <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{row.member.name}</div>
-                    <MenuAction icon={row.member.status === 'active' ? <Square size={12} /> : <Play size={12} />} label={row.member.status === 'active' ? 'Stop' : 'Start'}
-                        onClick={() => choose(() => onComponentAction({ clusterId: row.member.clusterId }, 'epp', row.member.status === 'active' ? 'stop' : 'start', null, row.member))} />
-                    <MenuAction icon={<Terminal size={12} />} label="View logs" onClick={() => choose(() => onComponentAction({ clusterId: row.member.clusterId }, 'epp', 'logs', null, row.member))} />
+                    <div className="truncate px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">{member.name}</div>
+                    <MenuAction icon={running ? <Square size={12} /> : <Play size={12} />} label={running ? 'Stop' : 'Start'}
+                        onClick={() => choose(() => onComponentAction({ clusterId: member.clusterId }, 'epp', running ? 'stop' : 'start', null, member))} />
+                    <MenuAction icon={<Terminal size={12} />} label="View logs" onClick={() => choose(() => onComponentAction({ clusterId: member.clusterId }, 'epp', 'logs', null, member))} />
                 </>
             );
         }
@@ -289,35 +439,37 @@ export function DataPlaneTopology({
 
     return (
         <div className="flex w-full flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-                {onAddService && (
-                    <PermissionGate permission="model-service:group:manage">
-                        <Button variant="secondary" size="xs" onClick={onAddService}><Plus size={12} /> Add model service</Button>
-                    </PermissionGate>
-                )}
-                {onAddMemberGlobal && (
-                    <PermissionGate permission="model-service:member:manage">
-                        <Button variant="secondary" size="xs" onClick={onAddMemberGlobal}><Plus size={12} /> Add model server</Button>
-                    </PermissionGate>
-                )}
-                <span className="ml-auto text-[10px] text-slate-500">
-                    {clusters.length} cluster(s) · {services.length} model service(s) · {totalRows} route(s)
-                </span>
-            </div>
-
-            <div className="w-full shrink-0 overflow-x-auto">
+            <div role="region" aria-label="Service flow canvas" tabIndex={0}
+                aria-description="Drag with the left mouse button to pan, or use the scrollbars and arrow keys."
+                className="w-full min-h-64 max-h-[max(16rem,calc(100vh-18rem))] shrink-0 cursor-grab select-none overflow-auto focus-visible:outline-2 focus-visible:outline-theme-border active:cursor-grabbing"
+                onPointerDown={startDrag} onPointerMove={moveDrag}
+                onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}>
+                <div className="mx-auto w-max">
                 <div className="relative" style={{ width: WIDTH, height, minWidth: WIDTH }}>
+                    {layout.map((section) => (
+                        <Panel key={section.cluster.clusterId} padding="none" tone="subtle"
+                            className="pointer-events-none absolute rounded-2xl shadow-none" aria-hidden="true"
+                            style={{ left: CLUSTER.x, top: section.headerY, width: CLUSTER.w, height: section.height }} />
+                    ))}
                     <svg className="pointer-events-none absolute inset-0" width={WIDTH} height={height} viewBox={`0 0 ${WIDTH} ${height}`}>
                         {layout.length > 0 && (
                             <>
-                                <Flow d={`M ${CLIENTS.x + CLIENTS.w} ${CLIENTS.y + CLIENTS.h / 2} H ${CLIENT_BUS}`} width={2.6} />
-                                <Flow d={`M ${CLIENT_BUS} ${CLIENTS.y + CLIENTS.h / 2} V ${lastGwMid - 14}`} width={2.6} />
-                                {layout.map((section) => (
-                                    <Flow key={`c-${section.cluster.clusterId}`} width={2.6} d={`M ${CLIENT_BUS} ${section.gwY + GW.h / 2 - 14} H ${GW.x}`} />
+                                <Flow width={1.4} points={[
+                                    [CLIENTS.x + CLIENTS.w, CLIENTS.y + CLIENTS.h / 2],
+                                    [CLIENT_BUS, CLIENTS.y + CLIENTS.h / 2],
+                                    [CLIENT_BUS, lastGwMid - 14],
+                                    [GW.x, lastGwMid - 14],
+                                ]} />
+                                {layout.slice(0, -1).map((section) => (
+                                    <Flow key={`c-${section.cluster.clusterId}`} width={1.4} d={`M ${CLIENT_BUS} ${section.gwY + GW.h / 2 - 14} H ${GW.x}`} />
                                 ))}
-                                <Flow tone="green" d={`M ${CP.x} ${CP.y + CP.h / 2} H ${CP_TRUNK_X}`} />
-                                <Flow tone="green" d={`M ${CP_TRUNK_X} ${CP.y + CP.h / 2} V ${lastGwMid + 14}`} />
-                                {layout.map((section) => (
+                                <Flow tone="green" points={[
+                                    [CP.x, CP.y + CP.h / 2],
+                                    [CP_TRUNK_X, CP.y + CP.h / 2],
+                                    [CP_TRUNK_X, lastGwMid + 14],
+                                    [GW.x, lastGwMid + 14],
+                                ]} />
+                                {layout.slice(0, -1).map((section) => (
                                     <Flow key={`cp-${section.cluster.clusterId}`} tone="green"
                                         d={`M ${CP_TRUNK_X} ${section.gwY + GW.h / 2 + 14} H ${GW.x}`} />
                                 ))}
@@ -329,33 +481,22 @@ export function DataPlaneTopology({
                             return (
                                 <g key={section.cluster.clusterId}>
                                     <Flow tone="green" d={`M ${IPP.x + IPP.w / 2} ${section.ippY} V ${section.gwY + GW.h}`} />
-                                    <Flow width={2.6} d={`M ${gwRight} ${gwMid} H ${GW_BUS}`} />
-                                    {section.rows.map((row, rowIndex) => (
-                                        <g key={row.member.memberId}>
-                                            {/* Config: Gateway resolves the model's HTTPRoute, whose
-                                                backendRef points at the InferencePool (no data flows here). */}
-                                            <Flow tone="green" d={`M ${GW_BUS} ${gwMid} V ${row.y + BOX_H / 2} H ${COL.httpRoute}`} />
-                                            <Flow tone="green" d={`M ${COL.httpRoute + WB.httpRoute} ${row.y + BOX_H / 2} H ${COL.pool}`} />
-                                            {/* InferencePool's endpointPickerRef -> EPP (config). */}
-                                            <Flow tone="green" d={`M ${COL.pool + WB.pool} ${row.y + BOX_H / 2} H ${COL.epp}`} />
-                                            {/* InferencePool selector picks the model-server pods (config). */}
-                                            <Flow tone="green" d={`M ${COL.pool + WB.pool / 2} ${row.y + BOX_H} V ${row.y + BOX_H + 26} H ${COL.model + WB.model / 2} V ${row.y + BOX_H}`} />
-                                            {/* ext_proc: the pool's EPP picks the endpoint. */}
-                                            <Flow tone="green" d={`M ${GW_BUS} ${gwMid} V ${row.y + BOX_H + 12} H ${COL.epp + WB.epp / 2} V ${row.y + BOX_H}`} />
-                                            {/* data: Gateway forwards to the EPP-chosen pod (ORIGINAL_DST). */}
-                                            <Flow width={2.6} d={`M ${GW_BUS} ${gwMid} V ${row.y - 12} H ${COL.model + WB.model / 2} V ${row.y}`} />
-                                            {rowIndex === 0 && (
-                                                <>
-                                                </>
-                                            )}
-                                        </g>
+                                    {section.rows.length > 0 && <Flow width={1.4} d={`M ${gwRight} ${gwMid} H ${GW_BUS}`} />}
+                                    {section.rows.map((row) => (
+                                        <Flow key={row.serviceId} width={1.4}
+                                            dotted={row.serviceStatus === 'disabled' || trafficTotal(row.members) === 0}
+                                            tone={row.serviceStatus === 'disabled' || trafficTotal(row.members) === 0 ? 'slate' : 'blue'}
+                                            points={[[GW_BUS, gwMid], [GW_BUS, row.y + row.routeY + BOX_H / 2], [MODEL.x, row.y + row.routeY + BOX_H / 2]]} />
                                     ))}
                                 </g>
                             );
                         })}
                     </svg>
 
-                    <Box x={CP.x} y={CP.y} w={CP.w} h={CP.h} label="Lens control plane" icon={<Waypoints size={13} className="shrink-0 text-slate-400" />} status="bg-emerald-400" statusText="Lens control plane: connected" sub="tokens · permissions · model catalog" />
+                    <Box x={CP.x} y={CP.y} w={CP.w} h={CP.h} label="Lens control plane" icon={<Waypoints size={13} className="shrink-0 text-slate-400" />}
+                        help="Lens manages the model catalog, API tokens and access permissions, and reconciles model publication into cluster routing configuration. It is the management layer, not the inference proxy: client inference traffic goes to the cluster Gateway."
+                        helpPlacement="bottom"
+                        status="bg-emerald-400" statusText="Lens control plane: connected" />
                     <Box x={CLIENTS.x} y={CLIENTS.y} w={CLIENTS.w} h={CLIENTS.h} label="Clients / SDK" icon={<Waypoints size={13} className="shrink-0 text-slate-400" />} sub="Gateway URL + token" />
 
                     {layout.map((section) => {
@@ -368,37 +509,146 @@ export function DataPlaneTopology({
                         const gwState = clusterDot(cluster);
                         const gwDetail = gatewayDetail(cluster);
                         return (
-                            <div key={cluster.clusterId}>
-                                <div className="absolute text-[10px] font-semibold uppercase tracking-wide text-slate-500" style={{ left: GW.x, top: section.headerY }}>
-                                    {cluster.clusterName || cluster.clusterId}
+                            <div key={cluster.clusterId} role="group" aria-label={`Cluster ${cluster.clusterName || cluster.clusterId}`}>
+                                <div className="absolute flex items-center gap-2.5 px-4"
+                                    style={{ left: CLUSTER.x, top: section.headerY, width: CLUSTER.w, height: CLUSTER.header }}>
+                                    <Boxes size={16} className="shrink-0 text-theme-muted" aria-hidden="true" />
+                                    <span className="truncate text-sm font-semibold text-theme-text" title={cluster.clusterName || cluster.clusterId}>
+                                        {cluster.clusterName || cluster.clusterId}
+                                    </span>
                                 </div>
                                 <Box x={GW.x} y={section.gwY} w={GW.w} label="Gateway" icon={<Network size={13} className="shrink-0 text-slate-400" />}
+                                    help="Gateway exposes the inference endpoint, routes requests to InferencePools using HTTPRoute rules, and works with EPP to select model-server endpoints."
+                                    helpSource="https://github.com/llm-d/llm-d/blob/f83d4f331ec87a82fa11c84449738705ac4d1424/docs/infrastructure/gateway/README.md"
                                     status={statusDot[gwState] || statusDot.unknown}
                                     statusText={`Gateway: ${gwDetail} (${statusLabel(gwState)})`}
-                                    sub={`${cluster.clusterName || cluster.clusterId} · ${cluster.gatewayProvider || 'gateway'} · ${gwDetail}`}
                                     menuOpen={menu?.key === `gw:${cluster.clusterId}`} onToggleMenu={(event) => toggleMenu(`gw:${cluster.clusterId}`, event)} />
                                 <Box x={IPP.x} y={section.ippY} w={IPP.w} label="IPP" icon={<Waypoints size={13} className="shrink-0 text-slate-400" />}
+                                    help={
+                                        <>
+                                            <span className="block font-semibold">Inference Payload Processor (IPP)</span>
+                                            <span className="mt-1 block">
+                                                The Inference Payload Processor (IPP) is a pluggable framework for processing inference request and response payloads before and after routing decisions.
+                                            </span>
+                                            <span className="mt-2 block">
+                                                It integrates with the proxy via Envoy&apos;s ext-proc protocol to inspect and modify headers, bodies, and trailers. Model-aware routing is one use case; EPP selects the pod within the chosen pool.
+                                            </span>
+                                        </>
+                                    }
+                                    helpSource="https://github.com/llm-d/llm-d/blob/f83d4f331ec87a82fa11c84449738705ac4d1424/docs/architecture/router/ipp.md"
                                     status={statusDot[ippState] || statusDot.unknown}
                                     statusText={`IPP: ${ippDetail} (${statusLabel(ippState)})`}
-                                    sub={`${cluster.clusterName || cluster.clusterId} · ext_proc ${ippDetail}`}
                                     menuOpen={menu?.key === `ipp:${cluster.clusterId}`} onToggleMenu={(event) => toggleMenu(`ipp:${cluster.clusterId}`, event)} />
                                 {section.rows.map((row) => {
-                                    const name = (key) => componentName(row.member, key);
-                                    const dot = (key) => statusDot[name(key)] || statusDot.unknown;
-                                    const eppKey = `epp:${row.member.memberId}`;
-                                    const routeKey = `route:${row.member.memberId}`;
+                                    const routeKey = `route:${cluster.clusterId}:${row.serviceId}`;
+                                    const modelKey = `model:${cluster.clusterId}:${row.serviceId}`;
+                                    const totalWeight = trafficTotal(row.members);
+                                    const stopped = row.serviceStatus === 'disabled';
+                                    const routed = !stopped && totalWeight !== 0;
+                                    const routedMember = row.members.find((member) => member.status !== 'disabled' && member.weight > 0);
+                                    const routeState = routed ? componentName(routedMember || row.members[0], 'httpRoute') : 'stopped';
                                     return (
-                                        <div key={row.member.memberId}>
-                                            <Box x={COL.httpRoute} y={row.y} w={WB.httpRoute} label="HTTPRoute" icon={<GitBranch size={13} className="shrink-0 text-slate-400" />} crd
-                                                status={dot('httpRoute')} statusText={`HTTPRoute: ${statusLabel(name('httpRoute'))}`} sub={row.serviceName}
+                                        <Panel key={row.serviceId} padding="none" tone="soft" className="absolute shadow-none"
+                                            role="group" aria-label={`Model ${row.serviceName}`}
+                                            style={{ left: MODEL.x, top: row.y, width: MODEL.w, height: row.height }}>
+                                            <svg className="pointer-events-none absolute inset-0" width={MODEL.w} height={row.height}>
+                                                <Flow width={1.4} dotted={!routed} tone={routed ? 'blue' : 'slate'}
+                                                    d={`M ${COL.httpRoute + WB.httpRoute - MODEL.x} ${row.routeY + BOX_H / 2} H ${ROUTE_BRANCH_X}`} />
+                                                {row.members.map((member, index) => (
+                                                    <g key={member.memberId}>
+                                                        <Flow width={1.4} dotted={!routed || member.weight === 0 || member.status === 'disabled'}
+                                                            tone={!routed || member.weight === 0 || member.status === 'disabled' ? 'slate' : 'blue'}
+                                                            points={[[ROUTE_BRANCH_X, row.routeY + BOX_H / 2], [ROUTE_BRANCH_X, COMPONENT_Y + index * (DEPLOYMENT_H + DEPLOYMENT_GAP) + BOX_H / 2], [DEPLOYMENT.x - MODEL.x, COMPONENT_Y + index * (DEPLOYMENT_H + DEPLOYMENT_GAP) + BOX_H / 2]]} />
+                                                        {totalWeight !== null && <text
+                                                            x={(ROUTE_BRANCH_X + DEPLOYMENT.x - MODEL.x) / 2}
+                                                            y={COMPONENT_Y + index * (DEPLOYMENT_H + DEPLOYMENT_GAP) + BOX_H / 2 - 8}
+                                                            textAnchor="middle" className="fill-current text-[10px] text-theme-muted">
+                                                            <title>Configured request share; not measured traffic</title>
+                                                            {trafficShare(member, totalWeight)}
+                                                        </text>}
+                                                    </g>
+                                                ))}
+                                            </svg>
+                                            {onEditTraffic && row.members.length > 0 && (
+                                                <PermissionGate permission="model-service:member:manage">
+                                                    <Button variant="sky" size="icon"
+                                                        className="absolute z-10 h-7 w-7 -translate-x-1/2 -translate-y-1/2 rounded-full p-0"
+                                                        style={{ left: ROUTE_BRANCH_X, top: row.routeY + BOX_H / 2 }}
+                                                        aria-label={`${row.serviceName} traffic distribution`}
+                                                        title={TRAFFIC_HELP} disabled={publicationPending}
+                                                        onClick={() => onEditTraffic(row.serviceId)}>
+                                                        <GitBranch size={14} aria-hidden="true" />
+                                                    </Button>
+                                                </PermissionGate>
+                                            )}
+                                            <div className="flex h-9 items-center gap-2 px-4">
+                                                <span className="truncate text-xs font-semibold text-theme-text" title={row.serviceName}>{row.serviceName}</span>
+                                                <StatusChip variant="compact" className="shrink-0" status={routed ? 'active' : 'inactive'}
+                                                    label={stopped ? 'Stopped' : routed ? 'Serving' : 'No traffic'} />
+                                                {(onEditTraffic || onToggleService || onSetProvidersStatus || onRemoveModel || onManageAccess) && <PermissionGate permission={[
+                                                    ...(onEditTraffic || onSetProvidersStatus ? ['model-service:member:manage'] : []),
+                                                    ...(onToggleService || onRemoveModel ? ['model-service:group:manage'] : []),
+                                                    ...(onManageAccess ? ['model-service:group:share'] : []),
+                                                ]}>
+                                                    <Button variant="ghost" size="icon" className="shrink-0"
+                                                        aria-label={`${row.serviceName} actions`} aria-haspopup="menu"
+                                                        aria-expanded={menu?.key === modelKey}
+                                                        onClick={(event) => toggleMenu(modelKey, event)}>
+                                                        <Menu size={12} />
+                                                    </Button>
+                                                </PermissionGate>}
+                                            </div>
+                                            <Box x={COL.httpRoute - MODEL.x} y={row.routeY} w={WB.httpRoute} label="HTTPRoute" icon={<GitBranch size={13} className="shrink-0 text-slate-400" />} crd
+                                                help="HTTPRoute defines rules for routing HTTP requests from a Gateway listener to backend resources."
+                                                helpSource="https://github.com/kubernetes-sigs/gateway-api/blob/main/site/content/en/reference/api-types/httproute.md"
+                                                status={statusDot[routeState] || statusDot.unknown} statusText={`HTTPRoute: ${statusLabel(routeState)}`}
                                                 menuOpen={menu?.key === routeKey} onToggleMenu={(event) => toggleMenu(routeKey, event)} />
-                                            <Box x={COL.pool} y={row.y} w={WB.pool} label="InferencePool" icon={<Layers size={13} className="shrink-0 text-slate-400" />} crd
-                                                status={dot('inferencePool')} statusText={`InferencePool: ${statusLabel(name('inferencePool'))}`} sub={row.member.poolName || row.serviceName} />
-                                            <Box x={COL.epp} y={row.y} w={WB.epp} label="EPP" icon={<Router size={13} className="shrink-0 text-slate-400" />} status={dot('epp')}
-                                                statusText={`EPP: ${statusLabel(name('epp'))}`} sub={row.member.eppRef || '—'} menuOpen={menu?.key === eppKey} onToggleMenu={(event) => toggleMenu(eppKey, event)} />
-                                            <Box x={COL.model} y={row.y} w={WB.model} label="model server" icon={<Cpu size={13} className="shrink-0 text-slate-400" />} status={dot('modelServer')}
-                                                statusText={`model server: ${statusLabel(name('modelServer'))}`} sub={row.member.name} />
-                                        </div>
+                                            {row.members.length === 0 && <p className="absolute text-xs text-theme-muted"
+                                                style={{ left: DEPLOYMENT.x - MODEL.x, top: COMPONENT_Y, width: DEPLOYMENT.w }}>
+                                                No providers. Add providers through Traffic distribution, or remove this model.
+                                            </p>}
+                                            {row.members.map((member, index) => {
+                                                const name = (key) => componentName(member, key);
+                                                const dot = (key) => statusDot[name(key)] || statusDot.unknown;
+                                                const eppKey = `epp:${member.memberId}`;
+                                                const deploymentKey = `deployment:${member.memberId}`;
+                                                return (
+                                                    <Panel key={member.memberId} padding="none" tone="inset" className="absolute shadow-none"
+                                                        role="group" aria-label={`Deployment ${member.name}`}
+                                                        style={{ left: DEPLOYMENT.x - MODEL.x, top: MODEL.header + index * (DEPLOYMENT_H + DEPLOYMENT_GAP), width: DEPLOYMENT.w, height: DEPLOYMENT_H }}>
+                                                        <div className="flex h-9 items-center gap-2 px-4">
+                                                            <span className="truncate text-xs font-semibold text-theme-text" title={member.name}>{member.name}</span>
+                                                            {(onNavigate || onToggleDeployment || onDeleteDeployment) && <PermissionGate permission={[
+                                                                ...(onNavigate ? ['deployment:run:read'] : []),
+                                                                ...(onToggleDeployment || onDeleteDeployment ? ['model-service:member:manage'] : []),
+                                                            ]}>
+                                                                <Button variant="ghost" size="icon" className="shrink-0"
+                                                                    aria-label={`${member.name} deployment actions`} aria-haspopup="menu"
+                                                                    aria-expanded={menu?.key === deploymentKey}
+                                                                    onClick={(event) => toggleMenu(deploymentKey, event)}>
+                                                                    <Menu size={12} />
+                                                                </Button>
+                                                            </PermissionGate>}
+                                                            <StatusChip variant="compact" className="ml-auto"
+                                                                status={member.status === 'disabled' || member.weight === 0 ? 'inactive' : 'active'}
+                                                                label={member.status === 'disabled' ? 'Offline' : member.weight === 0 ? 'Standby' : 'Online'} />
+                                                        </div>
+                                                        <Box x={COL.pool - DEPLOYMENT.x} y={DEPLOYMENT.header} w={WB.pool} label="InferencePool" icon={<Layers size={13} className="shrink-0 text-slate-400" />} crd
+                                                            help="The InferencePool API defines a group of Pods (containers) dedicated to serving AI models."
+                                                            helpSource="https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/db75ec81b80f8728835b56cdb445e8ff1fbfd430/site-src/api-types/inferencepool.md"
+                                                            status={dot('inferencePool')} statusText={`InferencePool: ${statusLabel(name('inferencePool'))}`} />
+                                                        <Box x={COL.epp - DEPLOYMENT.x} y={DEPLOYMENT.header} w={WB.epp} label="EPP" icon={<Router size={13} className="shrink-0 text-slate-400" />} status={dot('epp')}
+                                                            help="EPP selects the model-server pod within an InferencePool that should process each request, using KV-cache utilization, prefix-cache locality, queue depth, and active request counts."
+                                                            helpSource="https://github.com/llm-d/llm-d/blob/f83d4f331ec87a82fa11c84449738705ac4d1424/docs/architecture/router/epp.md"
+                                                            statusText={`EPP: ${statusLabel(name('epp'))}`} menuOpen={menu?.key === eppKey} onToggleMenu={(event) => toggleMenu(eppKey, event)} />
+                                                        <Box x={COL.model - DEPLOYMENT.x} y={DEPLOYMENT.header} w={WB.model} label="model server" icon={<Cpu size={13} className="shrink-0 text-slate-400" />} status={dot('modelServer')}
+                                                            help="Model servers load model weights, execute prefill and decode forward passes, manage the local KV cache, and expose an OpenAI-compatible HTTP API."
+                                                            helpSource="https://github.com/llm-d/llm-d/blob/f83d4f331ec87a82fa11c84449738705ac4d1424/docs/architecture/model-servers/README.md"
+                                                            statusText={`model server: ${statusLabel(name('modelServer'))}`} />
+                                                    </Panel>
+                                                );
+                                            })}
+                                        </Panel>
                                     );
                                 })}
                             </div>
@@ -410,6 +660,7 @@ export function DataPlaneTopology({
                             No cluster with model services yet
                         </div>
                     )}
+                </div>
                 </div>
             </div>
 
@@ -427,3 +678,75 @@ export function DataPlaneTopology({
 }
 
 export default DataPlaneTopology;
+
+const FLOW_TONES = {
+    blue: {
+        base: 'stroke-blue-500',
+        trail: 'stroke-sky-500 dark:stroke-sky-400',
+        head: 'stroke-sky-600 dark:stroke-sky-100',
+    },
+    green: {
+        base: 'stroke-emerald-500',
+        trail: 'stroke-emerald-500 dark:stroke-emerald-400',
+        head: 'stroke-emerald-600 dark:stroke-emerald-100',
+    },
+    slate: {
+        base: 'stroke-slate-600',
+    },
+};
+
+function roundedPath(points) {
+    const vertices = points.filter((point, index) => index === 0 || point.some((value, axis) => value !== points[index - 1][axis]));
+    let cursor = vertices[0];
+    const commands = [`M ${cursor[0]} ${cursor[1]}`];
+    const lineTo = (point) => {
+        if (point[1] === cursor[1]) commands.push(`H ${point[0]}`);
+        else if (point[0] === cursor[0]) commands.push(`V ${point[1]}`);
+        else commands.push(`L ${point[0]} ${point[1]}`);
+        cursor = point;
+    };
+    for (let index = 1; index < vertices.length - 1; index += 1) {
+        const previous = vertices[index - 1];
+        const corner = vertices[index];
+        const next = vertices[index + 1];
+        const incoming = Math.hypot(corner[0] - previous[0], corner[1] - previous[1]);
+        const outgoing = Math.hypot(next[0] - corner[0], next[1] - corner[1]);
+        const radius = Math.min(12, incoming / 2, outgoing / 2);
+        const start = corner.map((value, axis) => value + (previous[axis] - value) * radius / incoming);
+        const end = corner.map((value, axis) => value + (next[axis] - value) * radius / outgoing);
+        lineTo(start);
+        commands.push(`Q ${corner[0]} ${corner[1]} ${end[0]} ${end[1]}`);
+        cursor = end;
+    }
+    if (vertices.length > 1) lineTo(vertices.at(-1));
+    return commands.join(' ');
+}
+
+export function Flow({ d, points, dashed = false, dotted = false, tone = 'blue', width = 1.1 }) {
+    const colors = FLOW_TONES[tone] || FLOW_TONES.blue;
+    const path = points ? roundedPath(points) : d;
+    const dash = dotted ? '1 4' : dashed ? '4 4' : undefined;
+    const animated = !dotted && tone !== 'slate';
+    const motion = 'lens-chain-flow motion-reduce:hidden';
+    const phase = points ? (points[0][0] + points[0][1]) % 160 : 0;
+    return (
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+            style={{ '--flow-delay': `${-phase / 40}s` }}>
+            <path d={path} className={colors.base} strokeWidth={width} strokeDasharray={dash}
+                opacity={dotted || dashed ? 0.65 : 0.25} />
+            {animated && (
+                <>
+                    <path d={path} className={cn(motion, colors.trail, 'blur-[2px]')}
+                        strokeDasharray="21 139" strokeWidth={width + 2.5} opacity="0.15" />
+                    {[0.1, 0.25, 0.5].map((opacity, index) => (
+                        <path key={index} d={path} className={cn(motion, colors.trail)}
+                            style={{ '--flow-offset': `${-index * 6}px` }}
+                            strokeDasharray="6 154" strokeWidth={width} opacity={opacity} />
+                    ))}
+                    <path d={path} className={cn(motion, 'lens-chain-flow-head', colors.head)}
+                        strokeDasharray="3 157" strokeWidth={width + 0.3} opacity="0.9" />
+                </>
+            )}
+        </g>
+    );
+}

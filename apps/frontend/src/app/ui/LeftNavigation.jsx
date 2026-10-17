@@ -5,55 +5,13 @@ import { Database, Webcam, Rocket, Gauge, Network, HardDrive, Download, Plug, Bo
 import { cn } from '../../shared/lib/cn';
 import { SimulationIcon } from '../../pages/simulation';
 import { ChangePasswordModal, useAuth } from '../../pages/auth';
+import { NAVIGATION_GROUPS } from '../routes/views';
 
-const MENU_GROUPS = [
-    {
-        id: 'services',
-        title: "Services",
-        items: [
-            { id: 'model-market', label: 'Model market', icon: Database, view: 'model-market', iconColor: 'text-white' },
-            { id: 'optimization-deployments', label: 'Deployments', icon: Rocket, view: 'optimization-deployments', iconColor: 'text-white' },
-            { id: 'admin-model-service', label: 'Model services', icon: Boxes, view: 'admin/model-service', iconColor: 'text-white', badge: 'Exp' },
-            { id: 'admin-usage', label: 'Usage reports', icon: Activity, view: 'admin/usage', iconColor: 'text-white' },
-            { id: 'optimization-evaluate', label: 'Evaluation', icon: Gauge, view: 'optimization-evaluate', iconColor: 'text-white' },
-            { id: 'optimization-simulate', label: 'Simulation', icon: SimulationIcon, view: 'optimization-simulate', iconColor: 'text-white' },
-            { id: 'playground-chat', label: 'Lens Assistant', icon: Bot, view: 'playground', iconColor: 'text-white', badge: 'Exp' }
-        ]
-    },
-    {
-        id: 'user-services',
-        title: "User services",
-        items: [
-            { id: 'usage', label: 'My usage', icon: Activity, view: 'usage', iconColor: 'text-white' },
-            { id: 'api-keys', label: 'API keys', icon: KeyRound, view: 'api-keys', iconColor: 'text-white' },
-            { id: 'model-service', label: 'My services', icon: Waypoints, view: 'model-service', iconColor: 'text-white', badge: 'Exp' }
-        ]
-    },
-    {
-        id: 'resources',
-        title: "Resources",
-        items: [
-            { id: 'clusters', label: 'Clusters', icon: Network, view: 'clusters', iconColor: 'text-white' },
-            { id: 'storage', label: 'Storage', icon: HardDrive, view: 'storage-management', iconColor: 'text-white' },
-            { id: 'model-cache', label: 'Model cache', icon: Download, view: 'model-cache', iconColor: 'text-white' },
-            { id: 'ai-providers', label: 'External providers', icon: Plug, view: 'ai-providers', iconColor: 'text-white' },
-            { id: 'cluster-monitoring-stack', label: 'Observability', icon: Webcam, view: 'cluster-monitoring-stack', iconColor: 'text-white' }
-        ]
-    },
-    {
-        id: 'administration',
-        title: "Administration",
-        items: [
-            { id: 'admin-users', label: 'Users', icon: Users, view: 'admin/users', iconColor: 'text-white' },
-            { id: 'admin-groups', label: 'Groups', icon: UserCog, view: 'admin/groups', iconColor: 'text-white' },
-            { id: 'admin-roles', label: 'Roles', icon: ShieldCheck, view: 'admin/roles', iconColor: 'text-white' },
-            { id: 'admin-identity-providers', label: 'Identity providers', icon: KeyRound, view: 'admin/identity-providers', iconColor: 'text-white', badge: 'Exp' },
-            { id: 'admin-master-key', label: 'Master key', icon: KeyRound, view: 'admin/master-key', iconColor: 'text-white' },
-            { id: 'admin-audit', label: 'Audit log', icon: ScrollText, view: 'admin/audit', iconColor: 'text-white' },
-            { id: 'admin-sessions', label: 'Sessions', icon: Monitor, view: 'admin/sessions', iconColor: 'text-white' }
-        ]
-    }
-];
+const MENU_ICONS = {
+    Database, Webcam, Rocket, Gauge, Network, HardDrive, Download, Plug, Bot,
+    Users, UserCog, ShieldCheck, KeyRound, Monitor, ScrollText, Boxes, Activity,
+    Waypoints, SimulationIcon,
+};
 
 // Groups that start collapsed. Everything else opens with the sidebar.
 const DEFAULT_COLLAPSED_GROUPS = [];
@@ -125,7 +83,7 @@ export default function LeftNavigation({ currentView, onNavigate, isMobileOpen, 
         }
     };
 
-    const visibleGroups = MENU_GROUPS
+    const visibleGroups = NAVIGATION_GROUPS
         .map(group => ({
         ...group,
         items: group.items.filter(item => !item.disabled && canView(item.view))
@@ -181,7 +139,7 @@ export default function LeftNavigation({ currentView, onNavigate, isMobileOpen, 
 
                         <div id={`nav-group-${group.id}`} className={cn('flex flex-col gap-1', isGroupCollapsed && 'hidden')}>
                         {group.items.map((item) => {
-                            const Icon = item.icon;
+                            const Icon = MENU_ICONS[item.icon];
                             const isActive = currentView === item.view;
 
                             return (

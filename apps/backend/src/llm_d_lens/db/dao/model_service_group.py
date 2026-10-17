@@ -9,7 +9,8 @@ from sqlalchemy import select
 
 from llm_d_lens.db.dao.base import BaseDao
 from llm_d_lens.db.models.model_service_group import ModelServiceGroupRow
-from llm_d_lens.model_service.contracts import ModelServiceGroup
+from llm_d_lens.db.models.model_service_member import ModelServiceMemberRow
+from llm_d_lens.model_service.contracts import ModelServiceGroup, ModelServiceMember
 
 
 class ModelServiceGroupDaoError(Exception):
@@ -17,7 +18,10 @@ class ModelServiceGroupDaoError(Exception):
 
 
 class ModelServiceGroupDao(BaseDao):
-    def create(self, group: ModelServiceGroup) -> ModelServiceGroup:
+    def create(self, group: ModelServiceGroup, *, member: ModelServiceMember | None = None) -> ModelServiceGroup:
+        """Insert a group and optional initial member in one transaction."""
+        if member is not None and (member.group_id != group.id or member.cluster_id != group.cluster_id):
+            raise ModelServiceGroupDaoError("initial member must belong to the new group and its cluster")
         with self._transaction() as session:
             if session.get(ModelServiceGroupRow, group.id) is not None:
                 raise ModelServiceGroupDaoError(f"group already exists: {group.id}")
@@ -35,6 +39,9 @@ class ModelServiceGroupDao(BaseDao):
             row = ModelServiceGroupRow.from_dto(group)
             session.add(row)
             session.flush()
+            if member is not None:
+                session.add(ModelServiceMemberRow.from_dto(member))
+                session.flush()
             return row.to_dto()
 
     def get(self, group_id: str) -> ModelServiceGroup | None:
@@ -64,6 +71,10 @@ class ModelServiceGroupDao(BaseDao):
 
     def delete(self, group_id: str) -> None:
         with self._transaction() as session:
-            row = session.get(ModelServiceGroupRow, group_id)
+            row = session.scalar(
+                select(ModelServiceGroupRow).where(ModelServiceGroupRow.id == group_id).with_for_update()
+            )
             if row is not None:
+                if session.scalar(select(ModelServiceMemberRow.id).where(ModelServiceMemberRow.group_id == group_id)):
+                    raise ModelServiceGroupDaoError("remove every provider from the model before removing it")
                 session.delete(row)

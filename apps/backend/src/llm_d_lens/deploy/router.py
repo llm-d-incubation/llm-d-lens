@@ -20,7 +20,6 @@ from llm_d_lens.auth.access import (
     resource_readable,
     visible_cluster_ids,
 )
-from llm_d_lens.auth.service import default_service
 from llm_d_lens.db.dao.deployment_batch import DeploymentBatchDao
 from llm_d_lens.deploy.application import deployment_run_manager
 from llm_d_lens.deploy.contracts import (
@@ -77,14 +76,6 @@ class CleanOrphansRequest(BaseModel):
 
 class RestartCaseRequest(BaseModel):
     model_token: str | None = None
-
-
-class ShareRequest(BaseModel):
-    subject_type: str = Field(alias="subjectType")  # user | group
-    subject_id: str = Field(alias="subjectId")
-    role_id: str = Field(alias="roleId")
-
-    model_config = {"populate_by_name": True}
 
 
 def _ready_model_cache_entry(entries, model: str):
@@ -334,8 +325,7 @@ def _run_readable(principal, run_id: str, cluster_id, owner) -> bool:
 
 
 def _execution_readable(principal, context, owner) -> bool:
-    """A run is readable if it is owned/shared at run level, or if the concrete
-    execution was shared directly (design section 7.7)."""
+    """Evaluate the run or concrete execution's management scope and ownership."""
     owner_user_id, owner_group_id = owner if owner else (None, None)
     if context.run_id and resource_readable(
         principal,
@@ -408,193 +398,6 @@ def _require_execution(execution_id: str):
     if context is None:
         raise HTTPException(status_code=404, detail="deployment execution not found")
     return context
-
-
-def _share_payload(subject_type: str, binding) -> dict:
-    return {
-        "id": binding.id,
-        "subjectType": subject_type,
-        "subjectId": binding.user_id if subject_type == "user" else binding.group_id,
-        "roleId": binding.role_id,
-        "scopeType": binding.scope_type,
-        "scopeClusterId": binding.scope_cluster_id,
-        "scopeResourceType": binding.scope_resource_type,
-        "scopeResourceId": binding.scope_resource_id,
-        "grantedByUserId": binding.granted_by_user_id,
-        "createdAt": binding.created_at.isoformat() if hasattr(binding.created_at, "isoformat") else binding.created_at,
-    }
-
-
-def _share_requirements_met(principal, *, run_id: str | None, cluster_id: str | None, owner) -> None:
-    """Only the creator or a cluster maintainer/admin may grant or revoke shares."""
-    if principal is None:
-        return
-    owner_user_id, owner_group_id = owner if owner else (None, None)
-    resource_type = "deployment_run" if run_id else "deployment_execution"
-    resource_id = run_id or ""
-    if not resource_id:
-        raise HTTPException(status_code=409, detail="deployment run is not resolved yet")
-    if not resource_readable(
-        principal,
-        permission="deployment:run:share",
-        resource_type=resource_type,
-        resource_id=resource_id,
-        cluster_id=cluster_id,
-        owner_user_id=owner_user_id,
-        owner_group_id=owner_group_id,
-    ):
-        raise HTTPException(status_code=403, detail="you cannot share this deployment")
-
-
-@router.get("/executions/{execution_id}/access")
-async def list_execution_access(execution_id: str, request: Request = None) -> list[dict]:
-    context = _require_execution(execution_id)
-    owner = _owner_for_run(context.run_id)
-    _share_requirements_met(
-        current_principal(request), run_id=context.run_id, cluster_id=context.cluster_id, owner=owner
-    )
-    return [
-        _share_payload(subject_type, binding)
-        for subject_type, binding in default_service().list_resource_shares("deployment_execution", execution_id)
-    ]
-
-
-@router.post("/executions/{execution_id}/access", status_code=201)
-async def grant_execution_access(execution_id: str, body: ShareRequest, request: Request = None) -> dict:
-    context = _require_execution(execution_id)
-    owner = _owner_for_run(context.run_id)
-    actor = current_principal(request)
-    _share_requirements_met(actor, run_id=context.run_id, cluster_id=context.cluster_id, owner=owner)
-    binding = default_service().share_resource(
-        subject_type=body.subject_type,
-        subject_id=body.subject_id,
-        role_id=body.role_id,
-        resource_type="deployment_execution",
-        resource_id=execution_id,
-        cluster_id=context.cluster_id,
-        granted_by=actor.user_id if actor else None,
-    )
-    return _share_payload(body.subject_type, binding)
-
-
-@router.delete("/executions/{execution_id}/access/{binding_id}", status_code=204)
-async def revoke_execution_access(execution_id: str, binding_id: str, request: Request = None) -> Response:
-    context = _require_execution(execution_id)
-    owner = _owner_for_run(context.run_id)
-    _share_requirements_met(
-        current_principal(request), run_id=context.run_id, cluster_id=context.cluster_id, owner=owner
-    )
-    default_service().revoke_resource_share(
-        binding_id,
-        resource_type="deployment_execution",
-        resource_id=execution_id,
-        cluster_id=context.cluster_id,
-    )
-    return Response(status_code=204)
-
-
-def _share_subject_catalog() -> dict:
-    """Minimal user/group/role directory for the share picker.
-
-    Deliberately separate from the admin Users/Groups/Roles APIs: an end-user
-    who may share one of their own deployments still cannot read those admin
-    lists, so this endpoint exposes only the id/display fields needed to pick a
-    subject and stays gated by the same per-resource share check.
-    """
-    service = default_service()
-    return {
-        "users": [
-            {"id": user.id, "username": user.username, "displayName": user.display_name}
-            for user in service.user_dao.list(status="active")
-        ],
-        "groups": [{"id": group.id, "name": group.name} for group in service.group_dao.list()],
-        "roles": [
-            {"id": role.id, "name": role.name, "builtin": bool(getattr(role, "is_builtin", False))}
-            for role in service.role_dao.list()
-        ],
-    }
-
-
-@router.get("/executions/{execution_id}/access/options")
-async def execution_share_options(execution_id: str, request: Request = None) -> dict:
-    context = _require_execution(execution_id)
-    owner = _owner_for_run(context.run_id)
-    _share_requirements_met(
-        current_principal(request), run_id=context.run_id, cluster_id=context.cluster_id, owner=owner
-    )
-    return _share_subject_catalog()
-
-
-@router.get("/runs/{run_id}/access/options")
-async def run_share_options(run_id: str, request: Request = None) -> dict:
-    run = _store.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="deployment run not found")
-    _share_requirements_met(
-        current_principal(request),
-        run_id=run_id,
-        cluster_id=run.provenance.get("cluster_server_id"),
-        owner=_owner_for_run(run_id),
-    )
-    return _share_subject_catalog()
-
-
-@router.get("/runs/{run_id}/access")
-async def list_run_access(run_id: str, request: Request = None) -> list[dict]:
-    run = _store.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="deployment run not found")
-    _share_requirements_met(
-        current_principal(request),
-        run_id=run_id,
-        cluster_id=run.provenance.get("cluster_server_id"),
-        owner=_owner_for_run(run_id),
-    )
-    return [
-        _share_payload(subject_type, binding)
-        for subject_type, binding in default_service().list_resource_shares("deployment_run", run_id)
-    ]
-
-
-@router.post("/runs/{run_id}/access", status_code=201)
-async def grant_run_access(run_id: str, body: ShareRequest, request: Request = None) -> dict:
-    run = _store.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="deployment run not found")
-    actor = current_principal(request)
-    _share_requirements_met(
-        actor, run_id=run_id, cluster_id=run.provenance.get("cluster_server_id"), owner=_owner_for_run(run_id)
-    )
-    binding = default_service().share_resource(
-        subject_type=body.subject_type,
-        subject_id=body.subject_id,
-        role_id=body.role_id,
-        resource_type="deployment_run",
-        resource_id=run_id,
-        cluster_id=run.provenance.get("cluster_server_id"),
-        granted_by=actor.user_id if actor else None,
-    )
-    return _share_payload(body.subject_type, binding)
-
-
-@router.delete("/runs/{run_id}/access/{binding_id}", status_code=204)
-async def revoke_run_access(run_id: str, binding_id: str, request: Request = None) -> Response:
-    run = _store.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="deployment run not found")
-    _share_requirements_met(
-        current_principal(request),
-        run_id=run_id,
-        cluster_id=run.provenance.get("cluster_server_id"),
-        owner=_owner_for_run(run_id),
-    )
-    default_service().revoke_resource_share(
-        binding_id,
-        resource_type="deployment_run",
-        resource_id=run_id,
-        cluster_id=run.provenance.get("cluster_server_id"),
-    )
-    return Response(status_code=204)
 
 
 def _list_runs(query: str = "", principal=None):

@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi.responses import JSONResponse
 
-from llm_d_lens.auth.records import GroupRecord, RoleRecord, UserRecord
+from llm_d_lens.auth.records import GroupRecord, GroupRoleBindingRecord, RoleRecord, UserRecord, UserRoleBindingRecord
 from llm_d_lens.auth.service import default_service
 from llm_d_lens.db.dao.cluster import ClusterDao
 from llm_d_lens.db.dao.group import GroupDao
@@ -307,7 +307,7 @@ async def test_delete_removes_the_run_once_its_last_deployment_is_gone(deploymen
 
 
 def _resource_bindings(*, role_id):
-    """Create one user and one group share helper bound to a role."""
+    """Seed legacy rows directly; public APIs no longer accept deployment shares."""
     service = default_service()
     suffix = uuid4().hex[:8]
     scope_cluster_id = ClusterDao().create(f"dep-{suffix}", "", "apiVersion: v1\nkind: Config").id
@@ -322,8 +322,10 @@ def _resource_bindings(*, role_id):
             "scope_resource_id": resource_id,
         }
         if subject_type == "group":
-            return service.add_group_binding(group.id, role_id, **kwargs)
-        return service.add_user_binding(user.id, role_id, **kwargs)
+            return service.group_binding_dao.create(
+                GroupRoleBindingRecord(group_id=group.id, role_id=role_id, **kwargs)
+            )
+        return service.user_binding_dao.create(UserRoleBindingRecord(user_id=user.id, role_id=role_id, **kwargs))
 
     return service, add
 

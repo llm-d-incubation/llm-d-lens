@@ -135,15 +135,14 @@ instead.
 4. If you decide not to keep the edit, click **Cancel**.
 To change the model, image, resources or cluster, [create a new deployment](/user-guide/model-market); this dialog only edits its name and description.
 
-## Share a deployment with another user or group
+## Model inference access
 
-1. In the deployment row, click the action with tooltip **Share deployment**.
-2. In **Share deployment**, choose **Share with**: **User** or **Group**.
-3. Pick the target from **User** or **Group**.
-4. Choose **Permission on this deployment**.
-5. Click **Share**.
-6. To remove a share later, click the **Revoke access** action beside that user or group.
-7. Click **Close** when you are finished.
+Deployment sharing is no longer supported. Admin and maintainers manage
+deployments within their cluster scope. Consumers do not get deployment pages
+or direct deployment access; publish a model service and use its
+[Manage access drawer](/user-guide/model-services#manage-model-access) to grant
+inference to users or groups. Old deployment shares are not automatically
+converted into model grants.
 
 ## Delete a deployment
 
@@ -157,8 +156,8 @@ To change the model, image, resources or cluster, [create a new deployment](/use
 ## Cannot find a deployment or action?
 
 Clear the search, status and cluster filters first. If the deployment or action
-is still unavailable, ask an administrator to check your cluster access or the
-deployment's sharing settings.
+is still unavailable, ask an administrator to check your role's deployment
+permissions and cluster scope.
 
 To let applications call a ready deployment, [publish a model service](/tutorials/publish-a-model-service).
 

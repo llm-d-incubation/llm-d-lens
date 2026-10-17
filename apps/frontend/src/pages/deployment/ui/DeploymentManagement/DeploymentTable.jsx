@@ -1,6 +1,6 @@
 import { useClipboard } from '../../../../shared/lib/useClipboard';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy, FileText, Info, Link2, Loader2, Pencil, Share2, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy, FileText, Info, Link2, Loader2, Pencil, Trash2 } from 'lucide-react';
 import {
     deploymentInternalEndpoint,
     deploymentKind,
@@ -56,7 +56,7 @@ function EndpointCell({ value, copiedEndpoint, onCopy, emptyLabel = '—' }) {
     );
 }
 
-function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint, onShare }) {
+function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint }) {
     const name = deploymentTitle(item);
     const isInProgress = statusGroup(item.status) === 'In progress';
     const localEndpoint = deploymentLocalEndpoint(item);
@@ -112,16 +112,6 @@ function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit,
                     <FileText size={14} />
                 </button>
                 {!item.pending && <DeploymentMonitoringButton deployment={item} onNavigate={onNavigate} />}
-                {!item.pending && onShare && <button
-                    type="button"
-                    onClick={() => onShare(item)}
-                    disabled={busy}
-                    aria-label={`Share ${name}`}
-                    title="Share deployment"
-                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-violet-200 disabled:opacity-40"
-                >
-                    <Share2 size={14} />
-                </button>}
                 {!item.pending && <button
                     type="button"
                     onClick={() => onDelete(item)}
@@ -199,7 +189,7 @@ function ExpandToggle({ expanded, onToggle, name }) {
     );
 }
 
-export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', clusterNameById = {}, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint, onShare }) {
+export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', clusterNameById = {}, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint }) {
     const { copiedValue: copiedEndpoint, copy: copyEndpoint } = useClipboard();
     const [expandedId, setExpandedId] = useState('');
     const [podsById, setPodsById] = useState({});
@@ -305,7 +295,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                         <EndpointCell value={internalEndpoint} copiedEndpoint={copiedEndpoint} onCopy={copyEndpoint} />
                                     </td>
                                     <td className="px-4 py-3">
-                                        <RowActions item={item} busy={busy} connecting={connecting} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} onShare={onShare} />
+                                        <RowActions item={item} busy={busy} connecting={connecting} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} />
                                     </td>
                                 </tr>
                                 {expanded && (
@@ -376,7 +366,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                 </div>
                             )}
                             <div className="mt-3 border-t border-slate-800/60 pt-2">
-                                <RowActions item={item} busy={busy} connecting={connecting} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} onShare={onShare} />
+                                <RowActions item={item} busy={busy} connecting={connecting} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} />
                             </div>
                             {expanded && (
                                 <div className="mt-3 rounded-lg border border-slate-800/60 bg-slate-950/60">

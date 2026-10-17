@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from llm_d_lens.cluster.registry import gateway_namespace_for
 from llm_d_lens.db.dao.model_service_gateway_operation import GatewayOperationDao
 from llm_d_lens.db.dao.model_service_group import ModelServiceGroupDao
 from llm_d_lens.db.dao.model_service_member import ModelServiceMemberDao
@@ -20,6 +23,56 @@ class _Result:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["none", "unmanaged", "delete", "still-present", "missing"])
+async def test_remove_model_route_only_deletes_owned_named_resources(monkeypatch, failure):
+    from llm_d_lens.model_service.gateway_ops import GatewayOpsError
+    from llm_d_lens.model_service.gateway_providers import MANAGED_LABEL, MANAGED_VALUE, resource_name
+
+    group = ModelServiceGroup(name="public", model_ref="provider", cluster_id="cluster-a")
+    monkeypatch.setattr(gateway_ops_module, "get_cluster", lambda _: SimpleNamespace(gateway_namespace="lens-gateway"))
+    ops = GatewayOpsService()
+    deleted = set()
+    calls = []
+
+    async def kubectl(cluster_id, argv, **kwargs):
+        assert cluster_id == group.cluster_id
+        calls.append(argv)
+        kind = argv[1]
+        if argv[0] == "get":
+            if failure == "missing" or (kind in deleted and failure != "still-present"):
+                return _Result()
+            return _Result(
+                stdout=json.dumps(
+                    {
+                        "metadata": {
+                            "labels": {
+                                MANAGED_LABEL: "other" if failure == "unmanaged" else MANAGED_VALUE,
+                            }
+                        }
+                    }
+                )
+            )
+        assert argv[0] == "delete"
+        name = resource_name(f"{group.name}-{group.id}") + ("-model-map" if kind == "configmap" else "")
+        assert argv[argv.index("--field-selector") + 1] == f"metadata.name={name}"
+        assert argv[argv.index("-l") + 1] == f"{MANAGED_LABEL}={MANAGED_VALUE}"
+        assert "--wait=true" in argv and "--timeout=60s" in argv
+        deleted.add(kind)
+        return _Result(
+            returncode=1 if failure == "delete" else 0, stderr="deletion failed" if failure == "delete" else ""
+        )
+
+    monkeypatch.setattr(ops, "_kubectl", kubectl)
+    if failure in ("none", "missing"):
+        await ops.remove_model_route(group)
+        assert deleted == ({"httproute", "configmap"} if failure == "none" else set())
+    else:
+        with pytest.raises(GatewayOpsError):
+            await ops.remove_model_route(group)
+        assert not any(call[1] == "configmap" for call in calls)
 
 
 class _FakeRunner:
@@ -136,6 +189,50 @@ async def test_install_inference_gateway_applies_shared_gateway(monkeypatch):
     assert "kind: Gateway" in manifest
     assert "controllerName: istio.io/gateway-controller" in manifest
     assert "kind: HTTPRoute" not in manifest
+    assert f"namespace: {gateway_namespace_for('cluster-a')}" in manifest
+
+
+@pytest.mark.asyncio
+async def test_uninstall_only_removes_this_registration_gateway_resources(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(
+            gateway_namespace="lens-gateway",
+            gateway_provider="istio",
+            gateway_name="lens-inference-gateway",
+            gateway_port=None,
+        ),
+    )
+    operation = await _service(calls=calls).uninstall_inference_gateway("cluster-a")
+    assert operation.status == "succeeded"
+    deletions = [argv for argv, _ in calls if list(argv[:2]) == ["kubectl", "delete"]]
+    assert len(deletions) == 1
+    argv = deletions[0]
+    assert argv[argv.index("-n") + 1] == gateway_namespace_for("cluster-a")
+    assert "-A" not in argv
+    assert not {"gatewayclass", "inferencepool", "namespace"} & set(argv[2].split(","))
+
+
+@pytest.mark.asyncio
+async def test_gateway_install_does_not_register_a_global_istio_auth_provider(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(gateway_authz_host="10.0.0.9", gateway_namespace="lens-gateway"),
+    )
+    monkeypatch.setattr(gateway_ops_module, "apply_gateway_crds", AsyncMock(return_value={}))
+    monkeypatch.setattr(gateway_ops_module, "ensure_istioctl", lambda _: "istioctl")
+    operation = await _service(calls=calls).install_inference_gateway("cluster-a", "istio")
+    assert operation.status == "succeeded"
+    installs = [argv for argv, _ in calls if argv[0] == "istioctl"]
+    assert installs
+    assert all("-f" not in argv for argv in installs)
+    manifest = [body for argv, body in calls if list(argv[:3]) == ["kubectl", "apply", "-f"]][-1]
+    assert "kind: EnvoyFilter" in manifest
+    assert "meshConfig" not in manifest
 
 
 @pytest.mark.asyncio
@@ -152,7 +249,7 @@ async def test_install_preserves_existing_envoy_service_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_routes_a_single_pool_per_service(monkeypatch):
+async def test_reconcile_routes_weighted_pools_per_service(monkeypatch):
     import yaml
 
     group = ModelServiceGroupDao().create(
@@ -173,6 +270,7 @@ async def test_reconcile_routes_a_single_pool_per_service(monkeypatch):
                 target_port=80,
                 epp_ref=service_name,
                 endpoint_kind="llm-d-epp",
+                weight=90 if index == 0 else 10,
             )
         )
     calls: list = []
@@ -187,7 +285,155 @@ async def test_reconcile_routes_a_single_pool_per_service(monkeypatch):
     assert operation.detail_json["routes"] == 1
     manifest = [c for c in calls if list(c[0][:3]) == ["kubectl", "apply", "-f"]][-1][1]
     route = next(doc for doc in yaml.safe_load_all(manifest) if doc and doc["kind"] == "HTTPRoute")
-    assert len(route["spec"]["rules"][0]["backendRefs"]) == 1
+    refs = route["spec"]["rules"][0]["backendRefs"]
+    assert len(refs) == 2
+    assert {ref["namespace"]: ref["weight"] for ref in refs} == {"ns-a": 90, "ns-b": 10}
+    assert all("port" not in ref for ref in refs)
+    grants = [doc for doc in yaml.safe_load_all(manifest) if doc and doc["kind"] == "ReferenceGrant"]
+    assert {grant["metadata"]["namespace"] for grant in grants} == {"ns-a", "ns-b"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("excluded", ["zero", "disabled"])
+async def test_reconcile_omits_non_routable_providers(monkeypatch, excluded):
+    import yaml
+
+    member = _seed_member()
+    ModelServiceMemberDao().create(
+        member.model_copy(
+            update={
+                "id": "other-member",
+                "execution_id": "other-exec",
+                "pool_name": "other",
+                "weight": 0 if excluded == "zero" else 100,
+                "status": "active" if excluded == "zero" else "disabled",
+            }
+        )
+    )
+    calls = []
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(
+            gateway_provider="istio", gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"
+        ),
+    )
+    operation = await _service(calls=calls).reconcile_cluster_gateway("cluster-a")
+    assert operation.status == "succeeded"
+    manifest = [call for call in calls if list(call[0][:3]) == ["kubectl", "apply", "-f"]][-1][1]
+    route = next(doc for doc in yaml.safe_load_all(manifest) if doc and doc["kind"] == "HTTPRoute")
+    assert [ref["name"] for ref in route["spec"]["rules"][0]["backendRefs"]] == ["qwen"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_model", [True, False])
+async def test_stop_and_resume_remove_and_restore_route_without_scaling(monkeypatch, stop_model):
+    member = _seed_member()
+    service = _service(calls=[], runner_cls=_ExistingRouteRunner)
+    group = service.groups.get(member.group_id)
+    if stop_model:
+        group.status = "disabled"
+        service.groups.save(group)
+    else:
+        member.status = "disabled"
+        service.members.save(member)
+    calls = []
+    service = _service(calls=calls, runner_cls=_ExistingRouteRunner)
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(
+            gateway_provider="istio", gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"
+        ),
+    )
+    stopped = await service.reconcile_cluster_gateway(member.cluster_id)
+    assert stopped.status == "succeeded"
+    assert stopped.detail_json["routes"] == 0
+    assert any(argv[:4] == ["kubectl", "delete", "httproute", "qwen-empty"] for argv, _ in calls)
+    assert not any("kind: HTTPRoute" in (manifest or "") for _, manifest in calls)
+    assert not any("scale" in argv for argv, _ in calls)
+    assert service.members.get(member.id).weight == 1
+
+    if stop_model:
+        group.status = "active"
+        service.groups.save(group)
+    else:
+        member.status = "active"
+        service.members.save(member)
+    calls.clear()
+    resumed = await service.reconcile_cluster_gateway(member.cluster_id)
+    assert resumed.status == "succeeded"
+    assert resumed.detail_json["routes"] == 1
+    assert any("kind: HTTPRoute" in (manifest or "") for _, manifest in calls)
+    assert not any("scale" in argv for argv, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_route_discovery_failure_does_not_report_stop_applied(monkeypatch):
+    member = _seed_member()
+    service = _service(calls=[])
+    group = service.groups.get(member.group_id)
+    group.status = "disabled"
+    service.groups.save(group)
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(
+            gateway_provider="istio", gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"
+        ),
+    )
+    original = service._kubectl
+
+    async def fail_route_list(cluster_id, argv, **kwargs):
+        if argv[:2] == ["get", "httproute"]:
+            return _Result(returncode=1, stderr="route listing forbidden")
+        return await original(cluster_id, argv, **kwargs)
+
+    monkeypatch.setattr(service, "_kubectl", fail_route_list)
+    operation = await service.reconcile_cluster_gateway(member.cluster_id)
+    assert operation.status == "failed"
+    assert operation.message == "route listing forbidden"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_model", [True, False])
+async def test_intentionally_stopped_publication_is_not_probed_or_healed(monkeypatch, stop_model):
+    member = _seed_member()
+    service = _service(calls=[])
+    if stop_model:
+        group = service.groups.get(member.group_id)
+        group.status = "disabled"
+        service.groups.save(group)
+    else:
+        member.status = "disabled"
+        service.members.save(member)
+    health, install = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(service, "_member_health", health)
+    monkeypatch.setattr(service, "_heal_data_plane_locked", install)
+    assert await service.probe_members() == 0
+    await service._heal_data_plane(member.cluster_id)
+    health.assert_not_awaited()
+    install.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_offline_during_probe_is_preserved_and_does_not_trigger_healing(monkeypatch):
+    member = _seed_member()
+    service = _service(calls=[])
+    service._target_resolver = lambda _: SimpleNamespace(status="ready")
+
+    async def health(_):
+        offline = service.members.get(member.id)
+        offline.status = "disabled"
+        service.members.save(offline)
+        return False, {"components": {"httpRoute": "missing"}}
+
+    monkeypatch.setattr(service, "_member_health", health)
+    heal = AsyncMock()
+    monkeypatch.setattr(service, "_heal_data_plane", heal)
+    await service.probe_members()
+    assert service.members.get(member.id).status == "disabled"
+    heal.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -342,7 +588,7 @@ async def test_resolve_log_target_for_ipp(monkeypatch):
         ),
     )
     namespace, name = await service.resolve_log_target("cluster-a", component="ipp", namespace=None, name=None)
-    assert (namespace, name) == ("lens-gateway", "lens-ipp")
+    assert (namespace, name) == (gateway_namespace_for("cluster-a"), "lens-ipp")
 
 
 @pytest.mark.asyncio
@@ -438,6 +684,39 @@ async def test_status_reports_gateway_state(monkeypatch):
     assert cluster_status.members[0].pool_name == "qwen"
     # A gateway operation is not created merely by reading status.
     assert cluster_status.last_operation is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disappeared", [False, True])
+async def test_status_keeps_registered_empty_models_but_never_probes_orphan_clusters(monkeypatch, disappeared):
+    ModelServiceGroupDao().create(ModelServiceGroup(name="empty-model", model_ref="provider", cluster_id="registered"))
+    ModelServiceGroupDao().create(ModelServiceGroup(name="orphan-empty", model_ref="provider", cluster_id="deleted"))
+    _seed_member(cluster_id="deleted-with-members")
+    cluster = SimpleNamespace(
+        id="registered",
+        name="Registered cluster",
+        gateway_provider=None,
+        gateway_namespace="lens-gateway",
+        gateway_name="lens-inference-gateway",
+    )
+    monkeypatch.setattr("llm_d_lens.cluster.registry.list_clusters", lambda: [cluster])
+    looked_up = []
+
+    def get_cluster(cluster_id):
+        looked_up.append(cluster_id)
+        assert cluster_id == "registered"
+        return None if disappeared else cluster
+
+    monkeypatch.setattr(gateway_ops_module, "get_cluster", get_cluster)
+    calls = []
+    service = _service(calls=calls)
+    status = await service.status()
+    assert [item.cluster_id for item in status.clusters] == ([] if disappeared else ["registered"])
+    assert looked_up == ["registered"]
+    if disappeared:
+        assert calls == []
+    else:
+        assert status.clusters[0].members == []
 
 
 class _DriftedProviderRunner(_FakeRunner):
@@ -651,9 +930,12 @@ async def test_apply_node_inotify_limit_rejects_zero(monkeypatch):
 class _ComponentRunner(_FakeRunner):
     """Canned HTTPRoute/InferencePool/Service/EndpointSlice reads."""
 
-    def __init__(self, calls: list, *, model_server_ready: bool = True) -> None:
+    def __init__(
+        self, calls: list, *, model_server_ready: bool = True, pool_statuses: dict[str, dict] | None = None
+    ) -> None:
         super().__init__(calls)
         self._model_server_ready = model_server_ready
+        self._pool_statuses = pool_statuses or {}
 
     async def run(self, argv, *, cwd=None, env=None, input=None, timeout=10):  # noqa: A002
         self.calls.append((argv, input))
@@ -662,9 +944,12 @@ class _ComponentRunner(_FakeRunner):
         if list(argv[:3]) == ["kubectl", "get", "httproute"]:
             return _Result(stdout='{"status":{"parents":[{"conditions":[{"type":"Accepted","status":"True"}]}]}}')
         if list(argv[:3]) == ["kubectl", "get", "inferencepool"]:
+            namespace = argv[argv.index("-n") + 1]
+            status = self._pool_statuses.get(
+                namespace, {"parents": [{"conditions": [{"type": "Accepted", "status": "True"}]}]}
+            )
             return _Result(
-                stdout='{"spec":{"selector":{"matchLabels":{"llm-d.ai/guide":"pool"}}},'
-                '"status":{"parents":[{"conditions":[{"type":"Accepted","status":"True"}]}]}}'
+                stdout=json.dumps({"spec": {"selector": {"matchLabels": {"llm-d.ai/guide": "pool"}}}, "status": status})
             )
         if list(argv[:3]) == ["kubectl", "get", "endpointslices"]:
             ready = "true" if self._model_server_ready else "false"
@@ -674,7 +959,7 @@ class _ComponentRunner(_FakeRunner):
         return await super().run(argv, cwd=cwd, env=env, input=input, timeout=timeout)
 
 
-def _seed_component_member(name: str) -> ModelServiceMember:
+def _seed_component_member(name: str, *, weight: int = 1) -> ModelServiceMember:
     group = ModelServiceGroupDao().create(
         ModelServiceGroup(name=name, model_ref=name, cluster_id="cluster-a", base_model=name)
     )
@@ -689,6 +974,7 @@ def _seed_component_member(name: str) -> ModelServiceMember:
             pool_name="ns/pool",
             epp_ref="pool-epp",
             endpoint_kind="llm-d-epp",
+            weight=weight,
         )
     )
 
@@ -723,6 +1009,39 @@ async def test_probe_members_reports_per_component_health(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_standby_provider_does_not_require_route_when_last_positive_provider_is_offline(monkeypatch):
+    standby = _seed_component_member("no-routed-provider", weight=0)
+    members = ModelServiceMemberDao()
+    members.create(
+        standby.model_copy(
+            update={
+                "id": "offline-provider",
+                "execution_id": "offline-execution",
+                "status": "disabled",
+                "weight": 90,
+            }
+        )
+    )
+    calls = []
+    service = GatewayOpsService(
+        runner_factory=lambda _: _ComponentRunner(calls, pool_statuses={"ns": {}}),
+        target_resolver=lambda _: SimpleNamespace(status="ready"),
+    )
+    monkeypatch.setattr(gateway_ops_module, "get_cluster", lambda _: SimpleNamespace(gateway_namespace="lens-gateway"))
+    heal = AsyncMock()
+    monkeypatch.setattr(service, "_heal_data_plane", heal)
+    await service.probe_members()
+    saved = members.get(standby.id)
+    assert saved.status == "active"
+    assert saved.health_json["components"]["httpRoute"] == "standby"
+    assert saved.health_json["components"]["inferencePool"] == "standby"
+    assert saved.health_json["components"]["serving"] == "n/a"
+    assert members.get("offline-provider").status == "disabled"
+    assert not any(argv[:3] == ["kubectl", "get", "httproute"] for argv, _ in calls)
+    heal.assert_not_awaited()
+
+
 def test_data_plane_degraded_detects_broken_paths():
     assert gateway_ops_module._data_plane_degraded({"ipp": "missing"})
     assert gateway_ops_module._data_plane_degraded({"serving": "degraded"})
@@ -732,6 +1051,125 @@ def test_data_plane_degraded_detects_broken_paths():
     assert not gateway_ops_module._data_plane_degraded({"epp": "ready", "ipp": "ready", "serving": "ready"})
     # A model server still starting is not a data-plane failure.
     assert not gateway_ops_module._data_plane_degraded({"modelServer": "missing"})
+    assert not gateway_ops_module._data_plane_degraded({"inferencePool": "standby"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("weight", "pool_status", "model_ready", "expected_pool", "healthy", "heals"),
+    [
+        (0, {}, True, "standby", True, False),
+        (0, {"parents": []}, False, "standby", False, False),
+        (1, {}, True, "degraded", False, True),
+        (
+            0,
+            {"parents": [{"conditions": [{"type": "Accepted", "status": "False"}]}]},
+            True,
+            "degraded",
+            False,
+            True,
+        ),
+        (
+            0,
+            {"parents": [{"conditions": [{"type": "Accepted", "status": "True"}]}]},
+            True,
+            "ready",
+            True,
+            False,
+        ),
+    ],
+)
+async def test_probe_distinguishes_standby_pools_from_failures(
+    monkeypatch, weight, pool_status, model_ready, expected_pool, healthy, heals
+):
+    member = _seed_component_member("standby", weight=weight)
+    calls: list = []
+    service = GatewayOpsService(
+        runner_factory=lambda _: _ComponentRunner(
+            calls, model_server_ready=model_ready, pool_statuses={"ns": pool_status}
+        ),
+        target_resolver=lambda _: SimpleNamespace(status="ready"),
+    )
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"),
+    )
+    heal = AsyncMock()
+    monkeypatch.setattr(service, "_heal_data_plane", heal)
+
+    await service.probe_members()
+
+    saved = ModelServiceMemberDao().get(member.id)
+    assert saved.weight == weight
+    assert saved.status == ("active" if healthy else "unhealthy")
+    assert saved.health_json["ready"] == healthy
+    assert saved.health_json["components"]["inferencePool"] == expected_pool
+    assert saved.health_json["components"]["modelServer"] == ("ready" if model_ready else "missing")
+    if heals:
+        heal.assert_awaited_once_with("cluster-a")
+    else:
+        heal.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "state"),
+    [(_Result(returncode=1), "missing"), (_Result(stdout="not JSON"), "degraded")],
+)
+async def test_zero_weight_does_not_mask_missing_or_invalid_pool(monkeypatch, result, state):
+    service = _service(calls=[])
+    monkeypatch.setattr(service, "_kubectl", AsyncMock(return_value=result))
+    assert await service._pool_state("cluster-a", "ns", "pool", routed=False) == (state, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weights", [(1, 0), (0, 1), (90, 10)])
+async def test_repeated_probe_and_reconcile_preserve_namespaced_pool_weights(monkeypatch, weights):
+    import yaml
+
+    first = _seed_component_member("shared-pool-name", weight=weights[0])
+    second = ModelServiceMemberDao().create(
+        first.model_copy(
+            update={
+                "id": "second-member",
+                "execution_id": "second-execution",
+                "target_namespace": "ns-b",
+                "pool_name": "ns-b/pool",
+                "weight": weights[1],
+            }
+        )
+    )
+    calls: list = []
+    pool_statuses = {member.target_namespace: {} for member in (first, second) if member.weight == 0}
+    service = GatewayOpsService(
+        runner_factory=lambda _: _ComponentRunner(calls, pool_statuses=pool_statuses),
+        target_resolver=lambda _: SimpleNamespace(status="ready"),
+    )
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(
+            gateway_provider="istio", gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"
+        ),
+    )
+    heal = AsyncMock()
+    monkeypatch.setattr(service, "_heal_data_plane", heal)
+    expected = {(member.target_namespace, "pool"): member.weight for member in (first, second) if member.weight > 0}
+    for _ in range(2):
+        await service.probe_members()
+        operation = await service.reconcile_cluster_gateway("cluster-a")
+        assert operation.status == "succeeded"
+        manifest = [call[1] for call in calls if list(call[0][:3]) == ["kubectl", "apply", "-f"]][-1]
+        routes = [doc for doc in yaml.safe_load_all(manifest) if doc and doc["kind"] == "HTTPRoute"]
+        assert len(routes) == 1
+        refs = routes[0]["spec"]["rules"][0]["backendRefs"]
+        assert {(ref["namespace"], ref["name"]): ref["weight"] for ref in refs} == expected
+        for member in (first, second):
+            saved = ModelServiceMemberDao().get(member.id)
+            assert saved.status == "active"
+            assert saved.weight == member.weight
+    heal.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -741,6 +1179,7 @@ async def test_heal_data_plane_uses_no_actor_so_the_operation_can_be_recorded(mo
     self-heal path, so automatic runs must pass actor=None like every other
     background reconcile (see GatewayOpsService._finish's `is_automatic` check).
     """
+    _seed_member("cluster-heal")
     calls: list[tuple[str, object]] = []
     service = GatewayOpsService(
         operations=GatewayOperationDao(),
@@ -748,7 +1187,8 @@ async def test_heal_data_plane_uses_no_actor_so_the_operation_can_be_recorded(mo
         groups=ModelServiceGroupDao(),
     )
 
-    async def fake_install_cluster_gateway(cluster_id, *, actor=None):
+    async def fake_install_cluster_gateway(cluster_id, *, actor=None, install_prerequisites=True):
+        assert install_prerequisites is False
         calls.append(("gateway", actor))
 
     async def fake_install_ipp(cluster_id, *, actor=None):

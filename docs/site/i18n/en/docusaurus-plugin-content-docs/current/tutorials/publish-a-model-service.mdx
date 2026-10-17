@@ -6,19 +6,24 @@ description: Publish a ready deployment and send an authenticated model request.
 Start with a [ready llm-d deployment](/tutorials/bootstrap-and-deploy).
 Use an account with model-service management access to publish it.
 
-## 1. Create a public model name
+## 1. Add the model
 
-1. Open **Model services** and click **Add model service**.
+1. Open **Model services** and click **Add model** to open the right-side drawer.
 2. Select the deployment's **Cluster**.
-3. In **Model name (user-facing)**, enter a name such as `qwen-demo`.
-4. Click **Create**.
+3. Select a ready deployment in **Provider**. Deployments already added to a model are excluded.
+4. Under **Model name mapping**, confirm the read-only **Provider model name**.
+5. Below **Exposed to users as**, select an existing **Public model name** from the current cluster's dropdown or type a new name such as `qwen-demo`, then click **Add**. Use the question-mark icons beside field names for help.
 
-## 2. Attach the deployment
+To add another deployment to an existing model, enter that model's public name
+in the same cluster. Lens reuses its service and HTTPRoute, preserves existing
+weights, and adds the new provider at weight 1. Adjust its share in
+the three-line menu beside the model name → **Traffic distribution**.
+The provider model names must match.
 
-1. Click **Add model server**.
-2. Select **Cluster**, then the new **Model service**, then the ready **Deployment**.
-3. Check **Derived target (from the deployment)** and click **Add provider**.
-4. In **Service flow**, inspect the status dots for the service.
+## 2. Check the published model
+
+The model service and its model server are created together.
+In **Service flow**, inspect the status dots for the service.
 
 If there is no eligible deployment, confirm it is in the same cluster and was
 created with an llm-d Guide that provides an InferencePool.

@@ -165,7 +165,12 @@ Revoke one previously issued model access token for the caller. After revocation
 
 ### List accessible models
 
-List the model groups that the caller is currently allowed to use through the model gateway. Only active groups with at least one authorized active member are returned. Each entry includes `clusterName` (resolved from the group's `clusterId`) so callers choosing between several model services -- for example the same public name published in different clusters -- can tell them apart without a separate cluster lookup.
+List callable active models with online positive-weight providers. Consumers need
+inference permission in the model's cluster plus a direct or group model grant;
+non-self-scoped operators retain inference access in their binding's scope.
+Deployment shares and ownership do not grant consumer inference. This policy
+also applies to `/v1/models` and Gateway authorization. Entries include
+`clusterName` to distinguish identical public names in different clusters.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -434,7 +439,84 @@ Aggregate the caller's recent usage records into daily token totals. The handler
 
 ### List model routing groups
 
-List all configured model routing groups. Each group is a cluster-scoped user-facing model name that routes to one or more deployment-owned InferencePools.
+List configured model groups in the caller's cluster-scoped read authority.
+Each group is a public model name routing to deployment-owned InferencePools.
+`GET /api/v1/model-service/admin/groups/{group_id}` enforces the same scoped
+`model-service:group:read` permission. Group payloads also include nullable
+`ownerUserId` and `ownerGroupId`; ownership alone does not grant consumer inference.
+
+### Model inference grants
+
+All access-management endpoints require `model-service:group:share` in the
+model's cluster. Admin and maintainer have this permission; it does not imply
+group or Gateway management. Grants cover every provider of the model, not its
+management APIs. Model deletion revokes grants; renaming preserves them.
+An empty model cannot move clusters while grants remain.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+| Method | Path below `/api/v1/model-service/admin/groups/{group_id}` | Result |
+| --- | --- | --- |
+| GET | `/access` | `{"items":[...]}` with grant IDs, `subjectType`, `subjectId`, `subjectName`, `permission`, `createdAt` |
+| GET | `/access/options` | `{"users":[{"id":"user-123","username":"alice"}],"groups":[{"id":"group-123","name":"team"}]}` |
+| POST | `/access` | HTTP 201 with grant ID, recipient and inference permission |
+| DELETE | `/access/{binding_id}` | HTTP 204, empty body |
+
+POST body:
+
+```json
+{"subjectType":"user","subjectId":"user-123"}
+```
+
+Response example:
+
+```json
+{"id":"binding-123","subjectType":"user","subjectId":"user-123","permission":"model-service:inference:use"}
+```
+
+Use `subjectType: "group"` for a group. No role, cluster or owner field is accepted.
+The server fixes the grant role and derives the cluster from the stored model.
+Recipients must already have inference permission in that cluster. The options
+endpoint exposes only eligible recipient IDs and display names, not full
+identity records. Disabled/protected users are not selectable.
+
+Insufficient scope returns 403, missing resources or a mismatched revoke binding
+return 404, duplicates return 409, and invalid/extra fields return 422.
+Revocation re-evaluates subsequent requests using existing API keys without
+interrupting already-running streams or changing HTTPRoute weights.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.model_service.contracts import ModelGrantRequest
+from llm_d_lens.model_service.service import default_service
+
+def grant_model(model_id: str, user_id: str, principal):
+    service = default_service()
+    return service.grant_access(
+        model_id,
+        ModelGrantRequest(subject_type="user", subject_id=user_id),
+        principal=principal,
+    )
+
+def read_model_access(model_id: str, principal):
+    service = default_service()
+    return (
+        service.list_access(model_id, principal=principal),
+        service.access_options(model_id, principal=principal),
+    )
+
+def revoke_model(model_id: str, binding_id: str, principal):
+    default_service().revoke_access(model_id, binding_id, principal=principal)
+```
+
+Pass the authenticated caller's resolved principal. These methods enforce
+grant-management action and model cluster scope, including for internal callers.
+  </TabItem>
+</Tabs>
+
+### List model routing groups: examples
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -479,7 +561,7 @@ List all configured model routing groups. Each group is a cluster-scoped user-fa
 
 ### Create a model routing group
 
-Create a routing group that exposes one user-facing model name in a single cluster. `name` and `clusterId` are required; the public name is unique per cluster (`clusterId`) and every provider must be a deployment in that same cluster. Lens derives `modelRef`/`baseModel` from `name` and `displayName` defaults to `name`.
+Create a routing group that exposes one user-facing model name in a single cluster. `name` and `clusterId` are required; the public name is unique per cluster (`clusterId`) and every provider must be a deployment in that same cluster. Supplying `executionId` creates the group and its initial member in one transaction, as used by **Add model**. The deployment must be ready and have a model name. Lens derives `modelRef` and `servedName` from that deployment and sets `baseModel` to the public name, ignoring caller overrides for those three fields. Without `executionId`, standalone group creation remains supported.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -487,26 +569,25 @@ Create a routing group that exposes one user-facing model name in a single clust
 
     Request body (`GroupCreateRequest`):
 
-    - `name` (`string`): the model name clients use (also the routing/model ref).
+    - `name` (`string`): the public model name clients use in Chat Completions API requests.
     - `clusterId` (`string`): the cluster the service belongs to (required); its providers must be in this cluster and the name is unique within it.
     - `displayName` (`string`, optional): UI-friendly label; defaults to `name`.
     - `description` (`string`, optional): free-form description.
-    - `modelRef` / `servedName` / `baseModel` (`string`, optional, advanced): derived from `name` when omitted.
+    - `executionId` (`string`, optional): ready deployment to publish as the first member. Requires both `model-service:group:manage` and `model-service:member:manage` in the deployment's cluster.
+    - `modelRef` / `servedName` / `baseModel` (`string`, optional, advanced): with `executionId`, derived server-side. Without it, `modelRef` defaults to `name`, `baseModel` to `modelRef`, and `servedName` to null.
     - `selectionPolicy` (`string`, legacy): accepted for compatibility; the llm-d data plane ignores it.
 
     ```json
     {
       "name": "qwen3-8b",
-      "modelRef": "Qwen/Qwen3-8B",
       "clusterId": "cluster-a",
-      "servedName": "Qwen/Qwen3-8B",
-      "baseModel": "Qwen/Qwen3-8B",
+      "executionId": "exec-123",
       "displayName": "Qwen3 8B",
       "description": "Shared Qwen 3 8B service"
     }
     ```
 
-    Response: the created `ModelServiceGroup`.
+    Response: `201` with the created `ModelServiceGroup`. When `executionId` is supplied, its member is also committed and gateway reconciliation is scheduled in the background. Errors: `403` for missing management permissions or scope, `404` for a missing deployment target, `409` for a duplicate name, cluster mismatch, non-ready deployment or missing deployment model name, and `422` for invalid input. A failed transaction leaves neither record behind.
 
     ```json
     {
@@ -515,7 +596,7 @@ Create a routing group that exposes one user-facing model name in a single clust
       "modelRef": "Qwen/Qwen3-8B",
       "clusterId": "cluster-a",
       "servedName": "Qwen/Qwen3-8B",
-      "baseModel": "Qwen/Qwen3-8B",
+      "baseModel": "qwen3-8b",
       "displayName": "Qwen3 8B",
       "description": "Shared Qwen 3 8B service",
       "selectionPolicy": "random",
@@ -535,17 +616,22 @@ Create a routing group that exposes one user-facing model name in a single clust
     group = service.create_group(
         GroupCreateRequest(
             name="qwen3-8b",
-            modelRef="Qwen/Qwen3-8B",
             clusterId="cluster-a",
-            servedName="Qwen/Qwen3-8B",
-            baseModel="Qwen/Qwen3-8B",
+            executionId="exec-123",
             displayName="Qwen3 8B",
             description="Shared Qwen 3 8B service",
         ),
         created_by="user-123",
     )
     print(group.api_payload())
+    print([member.api_payload() for member in service.list_members(group.id)])
     ```
+
+    `exec-123` must identify an existing ready deployment in `cluster-a`.
+    Trusted Python callers may omit `principal`; request adapters must pass the
+    authenticated principal to enforce both permissions and cluster scope.
+    `create_group` commits records only; the HTTP route additionally schedules
+    gateway reconciliation.
   </TabItem>
 </Tabs>
 
@@ -561,7 +647,7 @@ List the published members that back routing groups. The route can optionally fi
 
     - `group_id` (`string`, query, optional): only return members for one routing group.
 
-    Response: returns an `items` array of member payloads.
+    Response: returns an `items` array of member payloads, including integer `weight` (0 through 1000000).
 
     ```json
     {
@@ -575,6 +661,7 @@ List the published members that back routing groups. The route can optionally fi
           "targetService": "vllm",
           "targetPort": 8000,
           "endpointKind": "vllm",
+          "weight": 1,
           "status": "active",
           "publishedByUserId": "user-123",
           "createdAt": "2026-09-23T09:12:00Z",
@@ -605,6 +692,9 @@ List the published members that back routing groups. The route can optionally fi
 ### Publish a deployment as a member
 
 Publish one ready deployment execution into a routing group. The route derives the actual namespace, service, port, and endpoint kind from the execution id. The execution's cluster must be the group's cluster, otherwise the call is rejected with `409` (`model_member_conflict`).
+Every new provider defaults to weight 1; existing provider weights are preserved.
+Use the traffic-distribution endpoint to change the allocation.
+The HTTP route schedules reconciliation; the direct Python call only persists.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -636,6 +726,7 @@ Publish one ready deployment execution into a routing group. The route derives t
       "targetService": "qwen-epp",
       "targetPort": 8000,
       "endpointKind": "llm-d-epp",
+      "weight": 1,
       "poolName": "qwen",
       "eppRef": "qwen-epp",
       "status": "active",
@@ -664,6 +755,89 @@ Publish one ready deployment execution into a routing group. The route derives t
     ```
   </TabItem>
 </Tabs>
+
+### Save and apply traffic distribution
+
+Atomically replace all weights and optionally add deployment providers, then
+reconcile the cluster's shared Gateway and weighted HTTPRoute. The
+`model-service:member:manage` permission is required in the group's cluster.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PUT /api/v1/model-service/admin/groups/{group_id}/traffic`**
+
+    Request body (`TrafficUpdateRequest`):
+
+    - `members`: complete list of 1 to 16 entries with `executionId` and integer `weight` in **0..1000000**. Existing providers cannot be omitted; use member deletion separately.
+    - `expectedWeights`: previously read execution-ID-to-weight map, including every existing provider and excluding new providers.
+
+    ```json
+    {
+      "members": [
+        {"executionId": "stable", "weight": 90},
+        {"executionId": "canary", "weight": 10}
+      ],
+      "expectedWeights": {"stable": 1}
+    }
+    ```
+
+    New deployments and zero-weight providers being activated must be ready,
+    in the same cluster, backed by distinct InferencePools/EPPs, and use the
+    group's provider model name. At least one non-disabled provider must have
+    positive weight. Zero-weight members remain stored but are not rendered
+    in backendRefs; disabled members also receive no traffic.
+
+    Response: `200` with `items` (full updated member payloads, including `weight`)
+    and `operation` (a `GatewayOperation` with `status`, `message`, and
+    `detailJson`). **A failed operation does not roll back the saved weights.**
+    `succeeded` means the configuration was submitted, not that request counts
+    have verified the split.
+
+    Validation returns `422` for malformed/range-invalid values, `409`
+    (`model_traffic_conflict`) for stale snapshots or invalid allocations,
+    `404` for missing targets, and `403` for insufficient permissions.
+    A transport/domain exception after saving returns `502`
+    (`model_traffic_apply_failed`) explicitly stating that configuration was saved.
+    Reload the allocation and retry Reconcile after resolving the failure.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    `ModelService.update_traffic()` validates and persists; call
+    `GatewayOpsService.reconcile_cluster_gateway()` separately to submit it.
+    Obtain the principal from the authenticated request, not user-supplied identity.
+
+    ```python
+    from llm_d_lens.auth.access import current_principal
+    from llm_d_lens.model_service.contracts import TrafficUpdateRequest
+    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
+    from llm_d_lens.model_service.service import default_service
+
+    async def configure_traffic(request, group_id, canary_execution_id):
+        service = default_service()
+        principal = current_principal(request)
+        existing = service.list_members(group_id)
+        weights = {member.execution_id: member.weight for member in existing}
+        members = [{"executionId": member.execution_id, "weight": member.weight}
+                   for member in existing]
+        members[0]["weight"] = 90
+        members.append({"executionId": canary_execution_id, "weight": 10})
+        saved = service.update_traffic(
+            group_id,
+            TrafficUpdateRequest(members=members, expectedWeights=weights),
+            principal=principal,
+        )
+        operation = await GatewayOpsService().reconcile_cluster_gateway(
+            saved[0].cluster_id, actor=principal.user_id,
+        )
+        return {"items": [member.api_payload() for member in saved],
+                "operation": operation.api_payload()}
+    ```
+  </TabItem>
+</Tabs>
+
+The renderer `render_model_route(..., pools=[PoolBinding(...)])` emits exact
+relative weights, one IPP model map, and cross-namespace ReferenceGrants.
+Its existing `pool=PoolBinding(...)` single-backend calling convention remains
+supported. Do not pass both forms. `PoolBinding.weight` defaults to 1.
 
 ### Get usage analytics
 
@@ -840,6 +1014,8 @@ List recent usage records across users/models/clusters for the admin dashboard, 
 ### Get gateway status
 
 Get the current gateway status across clusters: published members, the pinned provider, and the shared Gateway's programmed state.
+`gatewayNamespace` and `ippNamespace` contain the effective namespace including
+the stable cluster-registration short ID.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -853,7 +1029,7 @@ Get the current gateway status across clusters: published members, the pinned pr
     {
       "clusters": [
         {
-          "clusterId": "cluster-a",
+          "clusterId": "1234abcd",
           "clusterName": "Primary cluster",
           "members": [
             {
@@ -868,19 +1044,19 @@ Get the current gateway status across clusters: published members, the pinned pr
           ],
           "gatewayProvider": "istio",
           "gatewayState": "installed",
-          "gatewayNamespace": "lens-gateway",
+          "gatewayNamespace": "lens-gateway-1234abcd",
           "gatewayName": "lens-inference-gateway",
           "gatewayReady": true,
           "gatewayRunning": true,
           "ippState": "installed",
           "ippReady": false,
           "ippName": "lens-ipp",
-          "ippNamespace": "lens-gateway",
+          "ippNamespace": "lens-gateway-1234abcd",
           "lastOperation": {
             "id": "gop-2a7f0d9c0c11",
             "kind": "reconcile-gateway",
             "status": "succeeded",
-            "clusterId": "cluster-a",
+            "clusterId": "1234abcd",
             "message": "gateway reconciled (istio); 1 model route(s)",
             "createdAt": "2026-09-23T09:15:00Z",
             "finishedAt": "2026-09-23T09:15:18Z"
@@ -944,6 +1120,17 @@ Schedule a full data-plane reconciliation for every cluster that currently has a
 ### Install or reuse the shared Gateway
 
 Install (or reuse) the cluster's shared llm-d Gateway. The provider is user-selectable (`istio`, `gke`, `agentgateway`, `envoy-ai-gateway`); when omitted, the cluster record's pinned provider is used.
+The namespace defaults to `lens-gateway-<cluster-id>`; custom prefixes receive the
+same stable short-ID suffix. Gateway and IPP operations resolve that namespace
+consistently. Istio authentication uses a namespace-local `EnvoyFilter` scoped to
+this Gateway's pods, with fail-closed HTTP external authorization; installation
+does not register a shared mesh-wide auth provider.
+
+Existing unsuffixed resources are not adopted or removed. A NodePort owned by
+the old Gateway remains a conflict until an operator selects an available port
+or deliberately retires that old Gateway. Uninstall through the operation stream
+deletes only this registration's labelled namespace-local Gateway resources,
+never another namespace, a shared GatewayClass, or deployment-owned InferencePools.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -955,7 +1142,7 @@ Install (or reuse) the cluster's shared llm-d Gateway. The provider is user-sele
     - `provider` (`string`, optional): `istio` | `gke` | `agentgateway` | `envoy-ai-gateway`.
 
     ```json
-    { "clusterId": "cluster-a", "provider": "istio" }
+    { "clusterId": "1234abcd", "provider": "istio" }
     ```
 
     Response: recorded `GatewayOperation` for the install.
@@ -965,9 +1152,9 @@ Install (or reuse) the cluster's shared llm-d Gateway. The provider is user-sele
       "id": "gop-9c1a2b3d4e5f",
       "kind": "install-gateway",
       "status": "succeeded",
-      "clusterId": "cluster-a",
+      "clusterId": "1234abcd",
       "message": "shared Gateway ready (istio)",
-      "detailJson": { "provider": "istio", "namespace": "lens-gateway", "name": "lens-inference-gateway", "programmed": true },
+      "detailJson": { "provider": "istio", "namespace": "lens-gateway-1234abcd", "name": "lens-inference-gateway", "programmed": true },
       "createdAt": "2026-09-24T16:20:00Z",
       "finishedAt": "2026-09-24T16:20:12Z"
     }
@@ -980,7 +1167,7 @@ Install (or reuse) the cluster's shared llm-d Gateway. The provider is user-sele
     from llm_d_lens.model_service.gateway_ops import GatewayOpsService
 
     async def main() -> None:
-        operation = await GatewayOpsService().install_cluster_gateway("cluster-a", provider="istio")
+        operation = await GatewayOpsService().install_cluster_gateway("1234abcd", provider="istio")
         print(operation.api_payload())
 
     asyncio.run(main())
@@ -1026,6 +1213,11 @@ Fetch one routing group by id.
 ### Update a model routing group
 
 Update mutable fields of a routing group (name, model references, display name, description, status, cluster, served name, base model).
+The HTTP handler saves configuration and awaits reconciliation of the affected
+clusters. `status: "disabled"` stops the public model and removes its route;
+`"active"` restores routes to enabled, positive-weight providers. Provider status,
+weights and running Pods are unchanged. The caller needs group-management
+permission in every affected cluster. Controller convergence is asynchronous.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -1037,7 +1229,9 @@ Update mutable fields of a routing group (name, model references, display name, 
     { "displayName": "Qwen3 8B (prod)", "status": "active" }
     ```
 
-    Response: the updated `ModelServiceGroup`.
+    Response: the updated `ModelServiceGroup` after successful reconciliation submission.
+    `502 model_publication_apply_failed` means configuration was saved but routing
+    could not be applied; use Reconcile to retry. `403` rejects out-of-scope changes.
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
@@ -1050,12 +1244,25 @@ Update mutable fields of a routing group (name, model references, display name, 
     )
     print(group.api_payload())
     ```
+
+    `update_group(..., principal=principal)` enforces the caller's cluster-scoped
+    management permission. This service method only persists configuration;
+    direct Python callers must also await
+    `GatewayOpsService().reconcile_cluster(group.cluster_id)` to apply routing
+    and check the returned operation status. Trusted internal callers may omit
+    `principal`; HTTP requests always supply it.
   </TabItem>
 </Tabs>
 
 ### Delete a model routing group
 
-Delete a routing group. The handler schedules a reconcile of the affected clusters so their model HTTPRoutes are removed.
+Remove an empty routing group with cluster-scoped group-management permission.
+Any attached provider, even offline or weight 0, returns `409 model_group_conflict`.
+The handler serializes with Gateway reconciliation, removes the model's
+Lens-managed HTTPRoute and IPP mapping, and confirms deletion before deleting
+the record. Missing models return `404`; cleanup failure returns
+`502 model_removal_failed` and retains the record for retry. Other models,
+shared Gateway resources, deployments and Pods are not removed.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -1065,10 +1272,68 @@ Delete a routing group. The handler schedules a reconcile of the affected cluste
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
+    from llm_d_lens.cluster.registry import gateway_lock
+    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
     from llm_d_lens.model_service.service import default_service
 
-    default_service().delete_group("msg-4a8b41f3dd6c")
+    async def remove_model(group_id, principal):
+        service = default_service()
+        group = service.require_empty_group(group_id, principal=principal)
+        async with gateway_lock(group.cluster_id):
+            group = service.require_empty_group(group_id, principal=principal)
+            await GatewayOpsService().remove_model_route(group)
+            service.delete_group(group_id, principal=principal)
     ```
+
+    `delete_group()` alone only removes the database record and rechecks empty
+    membership transactionally. Use the complete sequence above for live models;
+    cleanup exceptions must stop deletion. Trusted internal callers may omit the
+    principal in the service calls; HTTP requests always supply it.
+  </TabItem>
+</Tabs>
+
+### Start or stop all providers
+
+Requires member-management permission in the model's cluster. Changes all provider
+statuses atomically, then reconciles routing once per affected cluster. Weights,
+parent model status and Pods are unchanged. Starting requires every deployment
+to be ready in the registered cluster. An empty model, unready deployment or
+concurrent provider change returns `409 model_member_conflict` without partial
+status updates; missing models return `404`. A `502 model_publication_apply_failed`
+means statuses were saved but route application failed: retry **Reconcile**.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`PUT /api/v1/model-service/admin/groups/{group_id}/providers/status`**
+
+    ```json
+    { "status": "disabled" }
+    ```
+
+    Use `"active"` to start all providers or `"disabled"` to stop all providers.
+    Success: `200` with `{"items": [...]}` containing the updated member payloads.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.model_service.contracts import ProvidersStatusRequest
+    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
+    from llm_d_lens.model_service.service import default_service
+
+    async def stop_providers(group_id, principal):
+        members = default_service().set_providers_status(
+            group_id, ProvidersStatusRequest(status="disabled"), principal=principal
+        )
+        for cluster_id in {member.cluster_id for member in members}:
+            operation = await GatewayOpsService().reconcile_cluster(
+                cluster_id, actor=principal.user_id
+            )
+            if operation.status != "succeeded":
+                raise RuntimeError(operation.message)
+        return members
+    ```
+
+    `set_providers_status()` persists only; direct callers must reconcile and
+    inspect the operation result as above.
   </TabItem>
 </Tabs>
 
@@ -1117,7 +1382,13 @@ List ready deployments (executions) that can be published as members, with the d
 
 ### Update a member
 
-Update a published member's status. The handler schedules a reconcile; a model service routes to one InferencePool (the first active member).
+Update a published member's status and await cluster routing reconciliation.
+`disabled` takes the provider offline without changing its saved weight or
+scaling its Pods. Re-enabling requires a ready deployment in its registered
+cluster. Weight 0 remains standby, and a disabled parent group stays stopped.
+All providers may be offline; with no enabled positive weights the HTTPRoute is
+removed. Otherwise it references all enabled positive-weight InferencePools.
+Health probes cannot overwrite an explicit offline decision.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -1126,19 +1397,28 @@ Update a published member's status. The handler schedules a reconcile; a model s
     Request body (`MemberUpdateRequest`; all fields optional): `status` (`active` | `disabled` | `unhealthy`).
 
     ```json
-    { "status": "unhealthy" }
+    { "status": "disabled" }
     ```
 
-    Response: the updated `ModelServiceMember`.
+    Response: the updated `ModelServiceMember` after successful reconciliation submission.
+    `409 model_member_conflict` rejects an unready provider being brought online;
+    `403` rejects callers without member-management permission in its cluster.
+    `502 model_publication_apply_failed` means the state was saved but routing
+    could not be applied; use Reconcile to retry.
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
     from llm_d_lens.model_service.contracts import MemberUpdateRequest
     from llm_d_lens.model_service.service import default_service
 
-    member = default_service().update_member("msm-32d55cb7f9a1", MemberUpdateRequest(status="unhealthy"))
+    member = default_service().update_member("msm-32d55cb7f9a1", MemberUpdateRequest(status="disabled"))
     print(member.api_payload())
     ```
+
+    Pass `principal=principal` for caller-scoped authorization. This method
+    persists state only; direct Python callers must also await
+    `GatewayOpsService().reconcile_cluster(member.cluster_id)` and check its
+    operation status. Neither method scales the provider's Pods.
   </TabItem>
 </Tabs>
 
@@ -1163,7 +1443,17 @@ Remove a published member. The handler schedules a reconcile of its cluster.
 
 ### Probe member backends
 
-Probe every non-disabled member's Kubernetes Endpoints and refresh `health_json` / `last_health_at`, flipping `status` between `active` and `unhealthy`.
+Probe non-disabled members of enabled models and refresh `health_json` / `last_health_at`,
+flipping `status` between `active` and `unhealthy`. Stopped models and offline
+providers are skipped; concurrent health writes cannot re-enable an offline provider.
+When no provider has an enabled positive weight, the missing HTTPRoute is expected,
+Gateway serving checks are skipped, and the model does not trigger auto-healing.
+An existing zero-weight InferencePool without Gateway parent status reports
+`healthJson.components.inferencePool: "standby"`. This expected absence of routing
+does not make an otherwise healthy provider unhealthy or trigger Gateway/IPP
+auto-healing. Missing resources, explicit pool rejection, and EPP/model-server
+endpoint failures still report unhealthy; positive-weight pools still require
+Gateway acceptance.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">

@@ -57,11 +57,11 @@ export function DeleteStorageVolumeModal({ volume, onCancel, onDelete }) {
                 footer={
                     <>
                         <Button variant="secondary" onClick={() => setStep('confirm')} disabled={deleting}>Back</Button>
-                        <Button variant="secondary" onClick={() => runDelete(true)} disabled={deleting} isLoading={deleting}>
-                            Keep model files
-                        </Button>
                         <Button ref={confirmRef} variant="danger" onClick={() => runDelete(false)} disabled={deleting} isLoading={deleting}>
                             Delete model files
+                        </Button>
+                        <Button variant="primary" onClick={() => runDelete(true)} disabled={deleting} isLoading={deleting}>
+                            Keep model files
                         </Button>
                     </>
                 }

@@ -24,7 +24,7 @@ import yaml
 
 from llm_d_lens.auth.service import default_service as default_auth_service
 from llm_d_lens.cluster.gateway_crds import apply_gateway_crds
-from llm_d_lens.cluster.registry import get_cluster, update_cluster
+from llm_d_lens.cluster.registry import gateway_lock, gateway_namespace_for, get_cluster, update_cluster
 from llm_d_lens.db.dao.model_service_gateway_operation import GatewayOperationDao
 from llm_d_lens.db.dao.model_service_group import ModelServiceGroupDao
 from llm_d_lens.db.dao.model_service_member import ModelServiceMemberDao
@@ -35,7 +35,7 @@ from llm_d_lens.infrastructure.kubernetes import (
     stop_port_forward_for,
 )
 from llm_d_lens.infrastructure.network import hostinfo
-from llm_d_lens.model_service.contracts import utcnow
+from llm_d_lens.model_service.contracts import ModelServiceGroup, utcnow
 from llm_d_lens.model_service.gateway_contracts import (
     GatewayOperation,
     GatewayStatus,
@@ -43,14 +43,12 @@ from llm_d_lens.model_service.gateway_contracts import (
     GatewayStatusMember,
 )
 from llm_d_lens.model_service.gateway_providers import (
-    AUTHZ_SERVICE_PORT,
     DEFAULT_PROVIDER,
     MANAGED_LABEL,
     MANAGED_VALUE,
     PoolBinding,
     default_pool_name,
     ensure_istioctl,
-    istio_authz_overlay,
     provider_spec,
     render_inference_gateway,
     render_model_route,
@@ -94,7 +92,7 @@ def resolve_authz_endpoint(value: str | None) -> tuple[str | None, int]:
     uses its own live serving port
     (:func:`llm_d_lens.infrastructure.network.hostinfo.current_serving_port`), falling back to
     :data:`DEFAULT_AUTHZ_PORT` before the first request. The in-cluster
-    ``lens-authz`` Service keeps a stable port (:data:`AUTHZ_SERVICE_PORT`) and its
+    ``lens-authz`` Service keeps a stable port (8081) and its
     Endpoints route there. An unset host disables ext_authz.
     """
     host = (value or "").strip()
@@ -424,10 +422,10 @@ class GatewayOpsService:
                 ],
                 timeout=20,
             )
-        except (FileNotFoundError, TimeoutError, OSError):
-            return set()
+        except (FileNotFoundError, TimeoutError, OSError) as error:
+            raise GatewayOpsError("could not list managed model routes") from error
         if result.returncode != 0:
-            return set()
+            raise GatewayOpsError((result.stderr or "could not list managed model routes").strip())
         return set((result.stdout or "").split())
 
     async def _gateway_service(
@@ -638,7 +636,7 @@ class GatewayOpsService:
         if cluster is None:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
         provider = cluster.gateway_provider or DEFAULT_PROVIDER
-        namespace = cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace)
         name = cluster.gateway_name or DEFAULT_GATEWAY_NAME
         target = await self._gateway_deployment(cluster_id, namespace, name, provider)
         if target is None:
@@ -669,7 +667,7 @@ class GatewayOpsService:
         cluster = get_cluster(cluster_id)
         if cluster is None:
             raise GatewayOpsError(f"cluster not found: {cluster_id}")
-        gateway_namespace = cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+        gateway_namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace)
         if component == "gateway":
             provider = cluster.gateway_provider or DEFAULT_PROVIDER
             gateway_name = cluster.gateway_name or DEFAULT_GATEWAY_NAME
@@ -678,7 +676,7 @@ class GatewayOpsService:
                 raise GatewayOpsError("Gateway data-plane Deployment not found")
             return target
         if component == "ipp":
-            return (namespace or gateway_namespace, name or DEFAULT_IPP_NAME)
+            return (gateway_namespace_for(cluster_id, namespace or gateway_namespace), name or DEFAULT_IPP_NAME)
         if not namespace or not name:
             raise GatewayOpsError("namespace and name are required")
         return namespace, name
@@ -728,7 +726,7 @@ class GatewayOpsService:
         """Public port-conflict check: who (if anyone) already uses ``port``."""
         cluster = get_cluster(cluster_id)
         provider = (cluster.gateway_provider if cluster else None) or DEFAULT_PROVIDER
-        namespace = (cluster.gateway_namespace if cluster else None) or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace if cluster else None)
         name = (cluster.gateway_name if cluster else None) or DEFAULT_GATEWAY_NAME
         service = await self._gateway_service(cluster_id, namespace, name, provider)
         return await self._node_port_owner(cluster_id, port, service)
@@ -739,7 +737,7 @@ class GatewayOpsService:
             return
         cluster = get_cluster(cluster_id)
         provider = (cluster.gateway_provider if cluster else None) or DEFAULT_PROVIDER
-        namespace = (cluster.gateway_namespace if cluster else None) or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace if cluster else None)
         name = (cluster.gateway_name if cluster else None) or DEFAULT_GATEWAY_NAME
         await self._stop_gateway_exposure(cluster_id, provider, namespace, name, port)
 
@@ -775,7 +773,7 @@ class GatewayOpsService:
             port = getattr(cluster, "gateway_port", None)
             if not port:
                 continue
-            namespace = cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+            namespace = gateway_namespace_for(cluster.id, cluster.gateway_namespace)
             name = cluster.gateway_name or DEFAULT_GATEWAY_NAME
             provider = cluster.gateway_provider or DEFAULT_PROVIDER
             try:
@@ -808,19 +806,20 @@ class GatewayOpsService:
         cluster_id: str,
         provider: str = DEFAULT_PROVIDER,
         *,
-        namespace: str = DEFAULT_GATEWAY_NAMESPACE,
+        namespace: str | None = None,
         name: str = DEFAULT_GATEWAY_NAME,
         install_prerequisites: bool = True,
         actor: str | None = None,
         on_log: OnLog | None = None,
     ) -> GatewayOperation:
-        """Install (or reuse) the cluster's shared llm-d Gateway."""
+        """Install the Gateway in a namespace suffixed with its Lens cluster ID."""
         operation = self._record(
             GatewayOperation(kind="install-gateway", cluster_id=cluster_id, created_by_user_id=actor)
         )
         cluster = get_cluster(cluster_id)
         if cluster is None:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
+        namespace = gateway_namespace_for(cluster_id, namespace or getattr(cluster, "gateway_namespace", None))
         try:
             spec = provider_spec(provider)
         except ValueError as error:
@@ -847,16 +846,6 @@ class GatewayOpsService:
                 except Exception as error:  # noqa: BLE001 - report download failures
                     return self._finish(operation, ok=False, message=f"could not obtain istioctl {version}: {error}")
                 install_commands = [(istioctl, *command[1:]) for command in install_commands]
-                if authz_host:
-                    # Istio's ext_authz provider lives in meshConfig, which must be applied
-                    # at install time; a values overlay is the reliable way to express the
-                    # nested extensionProviders config.
-                    overlay = tempfile.NamedTemporaryFile(  # noqa: SIM115 - kept for istioctl -f
-                        mode="w", suffix="-istio-authz.yaml", delete=False, prefix="lens-"
-                    )
-                    overlay.write(istio_authz_overlay(namespace, AUTHZ_SERVICE_PORT, cluster_id))
-                    overlay.close()
-                    install_commands = [(istioctl, "install", "-y", "-f", overlay.name)]
             for argv in install_commands:
                 argv = list(argv)
                 await self._log(on_log, f"$ {' '.join(argv)}")
@@ -981,7 +970,7 @@ class GatewayOpsService:
         return await self.install_inference_gateway(
             cluster_id,
             provider or cluster.gateway_provider or DEFAULT_PROVIDER,
-            namespace=cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE,
+            namespace=gateway_namespace_for(cluster_id, cluster.gateway_namespace),
             name=cluster.gateway_name or DEFAULT_GATEWAY_NAME,
             install_prerequisites=install_prerequisites,
             actor=actor,
@@ -1002,7 +991,7 @@ class GatewayOpsService:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
         if limit < 1:
             return self._finish(operation, ok=False, message="inotify limit must be at least 1")
-        namespace = cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace)
         image = os.environ.get("LENS_NODE_SYSCTL_IMAGE")
         manifest = render_node_inotify_daemonset(limit, namespace, image=image)
         await self._log(on_log, f"Applying node inotify limit {limit} in {namespace}...")
@@ -1020,44 +1009,40 @@ class GatewayOpsService:
         )
 
     async def uninstall_inference_gateway(self, cluster_id: str, *, actor: str | None = None) -> GatewayOperation:
-        """Delete the managed shared Gateway resources on a cluster."""
+        """Delete only this registration's namespaced Gateway resources, not shared controllers or pools."""
         operation = self._record(
             GatewayOperation(kind="uninstall-gateway", cluster_id=cluster_id, created_by_user_id=actor)
         )
         if get_cluster(cluster_id) is None:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
         cluster = get_cluster(cluster_id)
+        namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace)
         await self._stop_gateway_exposure(
             cluster_id,
             (cluster.gateway_provider if cluster else None) or DEFAULT_PROVIDER,
-            (cluster.gateway_namespace if cluster else None) or DEFAULT_GATEWAY_NAMESPACE,
+            namespace,
             (cluster.gateway_name if cluster else None) or DEFAULT_GATEWAY_NAME,
             getattr(cluster, "gateway_port", None) if cluster else None,
         )
         try:
+            policy_kinds = {
+                "istio": ",envoyfilter,authorizationpolicy",
+                "envoy-ai-gateway": ",envoyproxy,clienttrafficpolicy,securitypolicy",
+                "agentgateway": ",agentgatewaypolicy",
+                "gke": "",
+            }
             first = await self._kubectl(
                 cluster_id,
                 [
                     "delete",
-                    "gateway,gatewayclass,clienttrafficpolicy,httproute,inferencepool",
-                    "-A",
+                    "gateway,httproute,service,endpoints,configmap"
+                    + policy_kinds[cluster.gateway_provider or DEFAULT_PROVIDER],
+                    "-n",
+                    namespace,
                     "-l",
                     "app.kubernetes.io/part-of=lens-inference-gateway",
                     "--ignore-not-found=true",
                     "--wait=false",
-                ],
-                timeout=120,
-            )
-            # Legacy leftovers from the retired Agent Router (lens-agent-router).
-            await self._kubectl(
-                cluster_id,
-                [
-                    "delete",
-                    "gateway,gatewayclass,httproute,aigatewayroute,aiservicebackend,backend",
-                    "-l",
-                    "app.kubernetes.io/part-of=lens-agent-router",
-                    "-A",
-                    "--ignore-not-found=true",
                 ],
                 timeout=120,
             )
@@ -1090,7 +1075,7 @@ class GatewayOpsService:
         cluster = get_cluster(cluster_id)
         if cluster is None:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
-        namespace = namespace or cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, namespace or cluster.gateway_namespace)
         gateway_name = gateway_name or cluster.gateway_name or DEFAULT_GATEWAY_NAME
         provider = provider or cluster.gateway_provider or DEFAULT_PROVIDER
         chart = (chart or inference_payload_processor_chart()).strip()
@@ -1237,7 +1222,7 @@ class GatewayOpsService:
         cluster = get_cluster(cluster_id)
         if cluster is None:
             return {"config": "", "custom": False, "default": ""}
-        namespace = namespace or cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, namespace or cluster.gateway_namespace)
         result = await self._kubectl(
             cluster_id,
             ["get", "configmap", DEFAULT_IPP_NAME, "-n", namespace, "-o", "jsonpath={.data}"],
@@ -1269,7 +1254,7 @@ class GatewayOpsService:
         if get_cluster(cluster_id) is None:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
         cluster = get_cluster(cluster_id)
-        namespace = namespace or (cluster.gateway_namespace if cluster else None) or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, namespace or (cluster.gateway_namespace if cluster else None))
         await self._log(on_log, f"helm uninstall {name} -n {namespace}")
         try:
             result = await self._run(cluster_id, ["helm", "uninstall", name, "--namespace", namespace], timeout=300)
@@ -1345,7 +1330,18 @@ class GatewayOpsService:
     async def reconcile_cluster_gateway(
         self, cluster_id: str, *, actor: str | None = None, on_log: OnLog | None = None
     ) -> GatewayOperation:
-        """Ensure the shared Gateway and each model service's HTTPRoute + IPP config."""
+        """Submit the shared Gateway and weighted HTTPRoutes, serially per cluster.
+
+        Each positive-weight, non-disabled member contributes its deployment-owned
+        InferencePool. Zero-weight members remain associated but are omitted from
+        backendRefs. Successful submission does not prove the traffic split.
+        """
+        async with gateway_lock(cluster_id):
+            return await self._reconcile_cluster_gateway(cluster_id, actor=actor, on_log=on_log)
+
+    async def _reconcile_cluster_gateway(
+        self, cluster_id: str, *, actor: str | None = None, on_log: OnLog | None = None
+    ) -> GatewayOperation:
         operation = self._record(
             GatewayOperation(kind="reconcile-gateway", cluster_id=cluster_id, created_by_user_id=actor)
         )
@@ -1353,7 +1349,7 @@ class GatewayOpsService:
         if cluster is None:
             return self._finish(operation, ok=False, message=f"cluster not found: {cluster_id}")
         provider = cluster.gateway_provider or DEFAULT_PROVIDER
-        namespace = cluster.gateway_namespace or DEFAULT_GATEWAY_NAMESPACE
+        namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace)
         name = cluster.gateway_name or DEFAULT_GATEWAY_NAME
         # Reconcile only (re)applies the Gateway resources; it must not re-run the
         # provider install (helm/istioctl) on every pass — that is slow and fail-prone.
@@ -1379,7 +1375,8 @@ class GatewayOpsService:
         if provider in ("istio", "agentgateway"):
             healed: set[tuple[str, str]] = set()
             for member in self.members.list_by_cluster(cluster_id):
-                if member.status != "active":
+                group = groups.get(member.group_id)
+                if member.status != "active" or group is None or group.status == "disabled":
                     continue
                 epp_name = member.epp_ref or (f"{member.pool_name}-epp" if member.pool_name else "")
                 if not epp_name:
@@ -1392,20 +1389,29 @@ class GatewayOpsService:
         applied_names: set[str] = set()
         for group_id, cluster_members in by_group.items():
             group = groups.get(group_id)
-            if group is None:
+            if group is None or group.status == "disabled":
                 continue
             # A model service is served per cluster: render a route from the members
             # that live in THIS cluster (a service may also have members elsewhere).
             # Include every published member, not only healthy ones: the health
             # probe marks a member unhealthy when its route is missing, so routing
             # only "active" members would never create the route that heals it.
-            published = [m for m in cluster_members if m.status != "disabled" and member_pool_name(m)]
+            published = [m for m in cluster_members if m.status != "disabled" and m.weight > 0 and member_pool_name(m)]
             if not published:
                 continue
-            # llm-d's data plane is one EPP per InferencePool and its gateway chart
-            # renders one pool per HTTPRoute, so a model service routes to a single
-            # pool (the first published member in this cluster).
-            member = published[0]
+            bindings = [
+                PoolBinding(
+                    member_pool_name(member),
+                    member.target_port,
+                    split_pool_name(member.pool_name)[0] or member.target_namespace,
+                    member.weight,
+                )
+                for member in published
+            ]
+            if len(bindings) > 16 or len({(pool.namespace, pool.pool_name) for pool in bindings}) != len(bindings):
+                return self._finish(
+                    operation, ok=False, message=f"model {group.name}: requires at most 16 distinct pools"
+                )
             applied_names.add(resource_name(f"{group.name}-{group.id}"))
             documents.append(
                 render_model_route(
@@ -1414,7 +1420,7 @@ class GatewayOpsService:
                     # ConfigMap names must be unique per group.
                     model_name=f"{group.name}-{group.id}",
                     base_model=group.base_model or group.model_ref,
-                    pool=PoolBinding(member_pool_name(member), member.target_port, member.target_namespace),
+                    pools=bindings,
                     gateway_name=name,
                     gateway_namespace=namespace,
                 )
@@ -1429,17 +1435,28 @@ class GatewayOpsService:
             if applied.returncode != 0:
                 return self._finish(operation, ok=False, message=(applied.stderr or "route apply failed").strip())
         # Remove routes this cluster no longer serves (member deleted/moved away).
-        stale = sorted(await self._managed_route_names(cluster_id, namespace) - applied_names)
+        try:
+            stale = sorted(await self._managed_route_names(cluster_id, namespace) - applied_names)
+        except GatewayOpsError as error:
+            return self._finish(operation, ok=False, message=str(error))
         for route_name in stale:
             await self._log(on_log, f"Removing stale model route {route_name}...")
-            await self._kubectl(
+            deleted = await self._kubectl(
                 cluster_id, ["delete", "httproute", route_name, "-n", namespace, "--ignore-not-found=true"], timeout=60
             )
-            await self._kubectl(
+            if deleted.returncode != 0:
+                return self._finish(
+                    operation, ok=False, message=(deleted.stderr or "stale route removal failed").strip()
+                )
+            deleted = await self._kubectl(
                 cluster_id,
                 ["delete", "configmap", f"{route_name}-model-map", "-n", namespace, "--ignore-not-found=true"],
                 timeout=60,
             )
+            if deleted.returncode != 0:
+                return self._finish(
+                    operation, ok=False, message=(deleted.stderr or "stale model map removal failed").strip()
+                )
         return self._finish(
             operation,
             ok=True,
@@ -1451,6 +1468,57 @@ class GatewayOpsService:
                 "removed": len(stale),
             },
         )
+
+    async def remove_model_route(self, group: ModelServiceGroup) -> None:
+        """Remove only this model's managed route/map and wait for deletion.
+
+        The caller holds the cluster Gateway lock and checks that the model is
+        empty before cleanup and again when deleting its database record.
+        """
+        cluster = get_cluster(group.cluster_id)
+        if cluster is None:
+            raise GatewayOpsError("cluster is unavailable; cannot confirm model route cleanup")
+        namespace = gateway_namespace_for(group.cluster_id, cluster.gateway_namespace)
+        route_name = resource_name(f"{group.name}-{group.id}")
+        for kind, name in (("httproute", route_name), ("configmap", f"{route_name}-model-map")):
+            result = await self._kubectl(
+                group.cluster_id,
+                ["get", kind, name, "-n", namespace, "-o", "json", "--ignore-not-found=true"],
+                timeout=30,
+            )
+            if result.returncode != 0:
+                raise GatewayOpsError(result.stderr or f"cannot inspect {kind}/{name}")
+            if not result.stdout.strip():
+                continue
+            metadata = json.loads(result.stdout).get("metadata", {})
+            if metadata.get("labels", {}).get(MANAGED_LABEL) != MANAGED_VALUE:
+                raise GatewayOpsError(f"refusing to remove unmanaged {kind}/{name}")
+            result = await self._kubectl(
+                group.cluster_id,
+                [
+                    "delete",
+                    kind,
+                    "-n",
+                    namespace,
+                    "-l",
+                    f"{MANAGED_LABEL}={MANAGED_VALUE}",
+                    "--field-selector",
+                    f"metadata.name={name}",
+                    "--ignore-not-found=true",
+                    "--wait=true",
+                    "--timeout=60s",
+                ],
+                timeout=70,
+            )
+            if result.returncode != 0:
+                raise GatewayOpsError(result.stderr or f"cannot remove {kind}/{name}")
+            remaining = await self._kubectl(
+                group.cluster_id,
+                ["get", kind, name, "-n", namespace, "-o", "json", "--ignore-not-found=true"],
+                timeout=30,
+            )
+            if remaining.returncode != 0 or remaining.stdout.strip():
+                raise GatewayOpsError(f"cannot confirm removal of {kind}/{name}; retry model removal")
 
     async def scale_component(
         self,
@@ -1486,15 +1554,18 @@ class GatewayOpsService:
         return await self.reconcile_cluster_gateway(cluster_id, actor=actor)
 
     async def probe_members(self) -> int:
-        """Probe each non-disabled member's backend and refresh health/status.
+        """Probe online members of enabled models and refresh health/status.
 
         Members whose deployment execution record no longer exists (the
         deployment was deleted) are removed instead of left dangling.
+        Zero-weight pools without Gateway parent status are standby, not
+        degraded; that expected state alone does not trigger auto-healing.
         """
         updated = 0
         heal: set[str] = set()
         for member in self.members.list_all():
-            if member.status == "disabled":
+            group = self.groups.get(member.group_id)
+            if member.status == "disabled" or group is None or group.status == "disabled":
                 continue
             try:
                 self._target_resolver(member.execution_id)
@@ -1504,18 +1575,31 @@ class GatewayOpsService:
             except ExecutionTargetError:
                 pass  # not publishable yet; fall through to record health
             healthy, detail = await self._member_health(member)
+            group = self.groups.get(member.group_id)
+            if group is None or group.status == "disabled":
+                continue
             member.health_json = detail
             member.last_health_at = utcnow()
             member.status = "active" if healthy else "unhealthy"
-            self.members.save(member)
+            member = self.members.save_health(member)
             updated += 1
-            if not healthy and _data_plane_degraded(detail.get("components") or {}):
+            if member.status != "disabled" and not healthy and _data_plane_degraded(detail.get("components") or {}):
                 heal.add(member.cluster_id)
         for cluster_id in heal:
             await self._heal_data_plane(cluster_id)
         return updated
 
     async def _heal_data_plane(self, cluster_id: str) -> None:
+        async with gateway_lock(cluster_id):
+            active_groups = {group.id for group in self.groups.list() if group.status == "active"}
+            if not any(
+                member.group_id in active_groups and member.status != "disabled" and member.weight > 0
+                for member in self.members.list_by_cluster(cluster_id)
+            ):
+                return
+            await self._heal_data_plane_locked(cluster_id)
+
+    async def _heal_data_plane_locked(self, cluster_id: str) -> None:
         """Reconcile the shared Gateway and IPP when the data plane is broken.
 
         A stale ext_proc connection (for example after an IPP restart) leaves the
@@ -1532,7 +1616,7 @@ class GatewayOpsService:
         # has no human actor, so it must be None (the same convention the
         # background reconcile loop uses), never a literal placeholder string.
         try:
-            await self.install_cluster_gateway(cluster_id, actor=None)
+            await self.install_cluster_gateway(cluster_id, actor=None, install_prerequisites=False)
         except Exception as error:  # noqa: BLE001 - best effort; the probe retries
             logger.warning("data-plane auto-heal gateway failed for %s: %s", cluster_id, error)
         try:
@@ -1566,21 +1650,37 @@ class GatewayOpsService:
         components: dict[str, str] = {"epp": "ready" if epp_ready else "missing"}
         if member.endpoint_kind == "llm-d-epp":
             cluster = get_cluster(member.cluster_id)
-            gateway_ns = (cluster.gateway_namespace if cluster else None) or DEFAULT_GATEWAY_NAMESPACE
+            gateway_ns = gateway_namespace_for(member.cluster_id, cluster.gateway_namespace if cluster else None)
             group = self.groups.get(member.group_id)
             route_name = f"{resource_name(group.name)}-{group.id}" if group else None
-            components["httpRoute"] = await self._route_state(member.cluster_id, gateway_ns, route_name)
+            route_expected = (
+                group is not None
+                and group.status == "active"
+                and any(
+                    item.cluster_id == member.cluster_id and item.status != "disabled" and item.weight > 0
+                    for item in self.members.list_by_group(member.group_id)
+                )
+            )
+            components["httpRoute"] = (
+                await self._route_state(member.cluster_id, gateway_ns, route_name) if route_expected else "standby"
+            )
             pool_ns, pool_name = split_pool_name(member.pool_name) if member.pool_name else (None, None)
             pool_ns = pool_ns or member.target_namespace
-            pool_state, selector = await self._pool_state(member.cluster_id, pool_ns, pool_name)
+            pool_state, selector = await self._pool_state(
+                member.cluster_id, pool_ns, pool_name, routed=route_expected and member.weight > 0
+            )
             components["inferencePool"] = pool_state
             components["modelServer"] = await self._model_server_state(member.cluster_id, pool_ns, selector)
             # The shared Gateway reaches the model only through the Inference
             # Payload Processor (ext_proc); a down IPP breaks every request even
             # though the route/pool/model look healthy.
-            ipp_ready, _ = await self._service_ready(member.cluster_id, DEFAULT_IPP_NAME, gateway_ns)
-            components["ipp"] = "ready" if ipp_ready else "missing"
-            components["serving"] = await self._gateway_serving_state(member, group)
+            if route_expected:
+                ipp_ready, _ = await self._service_ready(member.cluster_id, DEFAULT_IPP_NAME, gateway_ns)
+                components["ipp"] = "ready" if ipp_ready else "missing"
+                components["serving"] = await self._gateway_serving_state(member, group)
+            else:
+                components["ipp"] = "n/a"
+                components["serving"] = "n/a"
         else:
             # A plain vllm endpoint: no HTTPRoute/InferencePool; the target Service
             # itself is the model server.
@@ -1589,7 +1689,7 @@ class GatewayOpsService:
             components["modelServer"] = components["epp"]
             components["serving"] = "n/a"
 
-        ready = status == "ready" and all(state in ("ready", "n/a") for state in components.values())
+        ready = status == "ready" and all(state in ("ready", "standby", "n/a") for state in components.values())
         detail: dict = {
             "ready": ready,
             "addresses": addresses,
@@ -1671,8 +1771,10 @@ class GatewayOpsService:
                     return "ready"
         return "degraded"
 
-    async def _pool_state(self, cluster_id: str, namespace: str, name: str | None) -> tuple[str, str | None]:
-        """``(state, selector)`` for the member's InferencePool."""
+    async def _pool_state(
+        self, cluster_id: str, namespace: str, name: str | None, *, routed: bool = True
+    ) -> tuple[str, str | None]:
+        """Return pool state and selector; an unreferenced zero-weight pool is standby."""
         if not name:
             return "unknown", None
         try:
@@ -1689,8 +1791,10 @@ class GatewayOpsService:
             return "degraded", None
         labels = ((payload.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
         selector = ",".join(f"{key}={value}" for key, value in labels.items()) or None
-        state = "degraded"
-        for parent in (payload.get("status") or {}).get("parents") or []:
+        parents = (payload.get("status") or {}).get("parents") or []
+        # Gateway parent status need not exist when no route references this pool.
+        state = "standby" if not routed and not parents else "degraded"
+        for parent in parents:
             if any(
                 condition.get("type") == "Accepted" and condition.get("status") == "True"
                 for condition in parent.get("conditions") or []
@@ -1724,7 +1828,8 @@ class GatewayOpsService:
     async def status(self) -> GatewayStatus:
         member_rows = self.members.list_all()
         by_cluster: dict[str, list[GatewayStatusMember]] = {}
-        group_names = {group.id: group.name for group in self.groups.list()}
+        groups = self.groups.list()
+        group_names = {group.id: group.name for group in groups}
         for member in member_rows:
             by_cluster.setdefault(member.cluster_id, []).append(
                 GatewayStatusMember(
@@ -1741,15 +1846,18 @@ class GatewayOpsService:
 
         all_clusters = list_clusters()
         cluster_names = {cluster.id: cluster.name for cluster in all_clusters}
-        # Show a cluster whenever it has members OR a Gateway (a Gateway with no
-        # deployments still exists and must stay visible/ operable).
-        candidate_ids = set(by_cluster) | {
-            cluster.id for cluster in all_clusters if getattr(cluster, "gateway_provider", None)
-        }
+        # Empty models must remain manageable even without an installed Gateway.
+        candidate_ids = (
+            set(by_cluster)
+            | {group.cluster_id for group in groups if group.cluster_id}
+            | {cluster.id for cluster in all_clusters if getattr(cluster, "gateway_provider", None)}
+        ) & cluster_names.keys()
         clusters: list[GatewayStatusCluster] = []
         for cluster_id in sorted(candidate_ids):
             cluster = get_cluster(cluster_id)
-            namespace = (cluster.gateway_namespace if cluster else None) or DEFAULT_GATEWAY_NAMESPACE
+            if cluster is None:
+                continue
+            namespace = gateway_namespace_for(cluster_id, cluster.gateway_namespace if cluster else None)
             name = (cluster.gateway_name if cluster else None) or DEFAULT_GATEWAY_NAME
             state, ready = await self._gateway_state(cluster_id, namespace, name)
             # Only fill in an unset provider. Never overwrite the operator's
@@ -1776,9 +1884,7 @@ class GatewayOpsService:
             # condition changes. Read the Deployment to tell stopped from running.
             gateway_running: bool | None = None
             if state == "installed":
-                target = await self._gateway_deployment(
-                    cluster_id, namespace, name, provider or DEFAULT_PROVIDER
-                )
+                target = await self._gateway_deployment(cluster_id, namespace, name, provider or DEFAULT_PROVIDER)
                 if target is not None:
                     _, gateway_running = await self._deployment_state(cluster_id, target[0], target[1])
             last = self.operations.latest_for_kind("reconcile-gateway", cluster_id=cluster_id)

@@ -1,7 +1,7 @@
 from llm_d_lens.auth.access import owner_for_create, resource_readable
 from llm_d_lens.auth.contracts import Principal, ResourceRef, RoleBinding, ScopeType
 from llm_d_lens.auth.permissions import BUILTIN_ROLE_PERMISSIONS, BUILTIN_ROLE_SELF_SCOPED
-from llm_d_lens.auth.policy import accessible_cluster_ids, authorize, role_has_permission
+from llm_d_lens.auth.policy import accessible_cluster_ids, authorize, principal_permissions, role_has_permission
 
 #: Synthetic self-scoped workload role for policy-engine tests. The built-in
 #: ``end-user`` is model-service-only (D15), so ownership/self-scope semantics
@@ -10,7 +10,6 @@ _WORKLOAD_PERMISSIONS = frozenset(
     {
         "deployment:run:read",
         "deployment:run:cancel",
-        "deployment:run:share",
         "deployment:execution:update",
         "deployment:execution:delete",
         "deployment:execution:connect",
@@ -121,22 +120,22 @@ def test_owner_group_member_can_operate_but_not_delete():
 
 def test_resource_share_requires_existing_cluster_access():
     shared = RoleBinding(
-        "workload",
+        "end-user",
         ScopeType.RESOURCE,
         scope_cluster_id="c1",
-        scope_resource_type="deployment_run",
+        scope_resource_type="model_service_group",
         scope_resource_id="r1",
     )
-    resource = _deployment(cluster="c1", owner="creator")
+    resource = ResourceRef("model_service_group", "r1", "c1")
     with_cluster = _principal(
-        RoleBinding("workload", ScopeType.CLUSTER, scope_cluster_id="c1"),
+        RoleBinding("end-user", ScopeType.CLUSTER, scope_cluster_id="c1"),
         shared,
         user_id="u4",
     )
-    assert authorize(with_cluster, "deployment:run:read", resource=resource).allowed
+    assert authorize(with_cluster, "model-service:inference:use", resource=resource).allowed
     # Without a cluster/global binding, the share alone grants nothing.
     share_only = _principal(shared, user_id="u5")
-    assert not authorize(share_only, "deployment:run:read", resource=resource).allowed
+    assert not authorize(share_only, "model-service:inference:use", resource=resource).allowed
 
 
 def test_share_does_not_cross_cluster():
@@ -153,6 +152,19 @@ def test_share_does_not_cross_cluster():
         user_id="u6",
     )
     assert not authorize(user, "deployment:run:read", resource=_deployment(cluster="c2", owner="creator")).allowed
+
+
+def test_resource_grants_do_not_add_session_action_permissions():
+    shared = RoleBinding(
+        "end-user",
+        ScopeType.RESOURCE,
+        scope_cluster_id="c1",
+        scope_resource_type="model_service_group",
+        scope_resource_id="model-1",
+    )
+    assert principal_permissions(_principal(shared)) == frozenset()
+    user = _principal(RoleBinding("workload", ScopeType.CLUSTER, scope_cluster_id="c1"), shared)
+    assert principal_permissions(user) == _WORKLOAD_PERMISSIONS
 
 
 def test_list_action_gate_only():
@@ -252,23 +264,21 @@ def _resource_share(role="workload", cluster="c1", resource_type="deployment_run
     )
 
 
-def test_resource_share_confers_operate_but_not_creator_only_actions():
+def test_retired_deployment_share_confers_no_actions():
     grantee = _principal(
         RoleBinding("workload", ScopeType.CLUSTER, scope_cluster_id="c1"),
         _resource_share(),
         user_id="u9",
     )
     resource = _deployment(cluster="c1", owner="creator")
-    assert authorize(grantee, "deployment:run:read", resource=resource).allowed
-    assert authorize(grantee, "deployment:execution:update", resource=resource).allowed
-    assert authorize(grantee, "deployment:execution:connect", resource=resource).allowed
-    # delete and re-share remain creator-only even though the shared end-user
-    # role lists them; the grantee is not the creator.
+    assert not authorize(grantee, "deployment:run:read", resource=resource).allowed
+    assert not authorize(grantee, "deployment:execution:update", resource=resource).allowed
+    assert not authorize(grantee, "deployment:execution:connect", resource=resource).allowed
     assert not authorize(grantee, "deployment:execution:delete", resource=resource).allowed
     assert not authorize(grantee, "deployment:run:share", resource=resource).allowed
 
 
-def test_maintainer_share_can_confer_delete():
+def test_maintainer_cluster_scope_confers_delete_without_relying_on_retired_share():
     grantee = _principal(
         RoleBinding("maintainer", ScopeType.CLUSTER, scope_cluster_id="c1"),
         _resource_share(role="maintainer"),

@@ -17,6 +17,14 @@
 > [`observability-design.md`](observability-design.md#cluster-monitoring-stack-service-design),
 > [`observability-design.md`](observability-design.md#accelerator-observability-services).
 
+**Current model inference policy (D28, approved 2026-10-17):** end-user is a
+model-service consumer with only own-token, own-usage and inference permissions.
+Inference requires an applicable cluster/global inference binding plus a
+model-service user/group grant. Admin and scoped maintainer manage those grants
+and retain scoped operator inference. Deployment sharing is retired. Historical
+workload-role and deployment-sharing descriptions below are superseded for
+these behaviors; other domains' ownership rules are unchanged.
+
 ---
 
 ## 0. High-Level Design
@@ -1067,6 +1075,16 @@ authorize(user, required, resource):
 
 ### 7.7 Resource sharing and access management
 
+Current inference grants follow
+[Model service Alternative A](model-service-design.md#alternative-a-cluster-scope-plus-model-service-grants),
+approved in D28. They reuse resource bindings with `model_service_group`, fixed
+to the built-in end-user role, and convey inference only. Recipients must
+independently hold inference permission in the model's cluster. Only admin and
+scoped maintainers (or a custom role explicitly granted
+`model-service:group:share`) manage these grants. Model ownership alone is not
+an inference or sharing grant. The deployment-sharing rules below are historical
+and superseded by D28, including their creator/role-picker behavior.
+
 | Permission code | Description |
 | --- | --- |
 | `cluster:cluster:grant-access` | Grant a cluster as `scope=cluster` to a user/group |
@@ -1424,12 +1442,15 @@ src/components/Administration/         # UsersPage/GroupsPage/RolesPage/Director
 
 - Wrap the outermost layer in `<AuthProvider>`; inside the `ErrorBoundary` at `App.jsx:153`.
 - If `status === 'anonymous'` → render `<LoginPage/>`, and do not render navigation or business pages.
+- A successful interactive sign-in selects the first enabled sidebar entry allowed by the principal's
+  effective permissions and clears the previous page's URL parameters. An existing authenticated session
+  preserves explicit supported deep links; missing or unknown views default to that same first accessible
+  entry. No accessible entries means an access-denied state, not an unauthorized default page.
 - If logged in but lacking the permissions required by `currentView` → render `<ForbiddenState/>` (reusing
   `EmptyState`), without changing the URL or redirecting to the first visible page.
-- The route-permission mapping comes from `permissions.js` and stays consistent with the table in §6.4; it is recommended to merge
-  `SUPPORTED_VIEWS` (`src/App.jsx:43`) and `MENU_GROUPS`
-  (`src/components/LeftNavigation.jsx:7`) into a single `routeCatalog`
-  (including `requiredAny`) to eliminate duplicate registration (they are currently maintained independently).
+- The route-permission mapping comes from `permissions.js` and stays consistent with the table in §6.4.
+  `apps/frontend/src/app/routes/views.js` owns `NAVIGATION_GROUPS`, shared by the sidebar and landing-page
+  selection so their order cannot drift. Supported detail views and permission mappings remain explicit.
 
 ### 10.3 Sidebar filtering
 
@@ -1606,8 +1627,8 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 5. **`SIMULATION_ALLOW_UNAUTHENTICATED`**: recognized as an alias for `disabled`, with a warning in logs.
 6. **Existing sessionStorage cluster sessions**: unrelated to user sessions and not changed; however, assigning `owner_user_id`
    to them is a future enhancement (§16 P6).
-7. **Existing frontend behavior**: before login, `App` does not render business pages; after login, the default `model-market`
-   page still falls back by permissions if it is not visible.
+7. **Existing frontend behavior**: before login, `App` does not render business pages; after login, it opens
+   the first accessible page in sidebar order, using the principal's effective permissions.
 8. **Migration downgrade**: every added table/column must provide an executable `downgrade()`,
    with deletion order inverse to FK dependencies; the `owner_user_id` column may be dropped safely; do not delete existing business data
    in downgrade. Before release, rehearse `upgrade → downgrade → upgrade` on a throwaway database (part of migration review, not touching production).
@@ -1759,6 +1780,7 @@ human-review requirement from the [database skill](../../.agents/skills/database
 | D25 | Deployment monitoring permissions | `end-user` may execute `monitoring:deployment:action` (install/enable/disable/uninstall) on deployments **created by themselves / owned by their owner group**; **cluster-level** monitoring installation (cluster-stack/accelerator/gpu-driver) remains limited to maintainer/admin (§6.3.9/§7.8) |
 | D26 | end-user forbidden from creating deployments | Remove `deployment:run:create` from built-in `end-user` (covering `POST /runs`, `POST /standard-vllm-runs`), and remove `deployment:agentic:create` / `approve` (approve starts a deployment); add `evaluate:workflow:create` (`POST /evaluations`, `POST /workflow-runs`) to distinguish “benchmark an existing deployment” (`evaluate:run:create` retained) from “evaluation that creates a deployment”. end-users may use only existing or explicitly shared deployments (they can still use `evaluate:run:create` to benchmark existing deployments: the wizard locks to "Use existing endpoint" and disables "Design configurations"); all other read/operate capabilities remain unchanged. **Implementation correction (§21)**: change the Casbin matcher to `keyMatch`; otherwise `keyMatch2` treats `:` in permission codes as wildcards, causing `deployment:agentic:create` and similar to unexpectedly match `deployment:run:create` |
 | D27 | Single-session policy | **Finalized (user)**: an account may have only one active session at a time—new login revokes all other sessions for that account (`PRISM_SESSION_SINGLE_ACTIVE`, default `true`) and audits with `session_revoked`; when disabled, fall back to “keep the latest `PRISM_SESSION_MAX_PER_USER`” (§5.3) |
+| D28 | Model-service inference boundary (2026-10-17) | **Approved by user:** implement Alternative A. Retire deployment sharing and `deployment:run:share`; add `model-service:group:share` for admin and cluster-scoped maintainer without changing group/Gateway management restrictions. Consumers require an inference-capable binding in the model's cluster AND a user/group model grant; operators retain non-self-scoped inference in scope. Reuse resource bindings fixed to the end-user role, limited to inference. Approve nullable model `owner_user_id` / `owner_group_id` foreign keys with SET NULL, creator backfill and initially empty historical owner groups; ownership alone grants no consumer inference or sharing. Audit and remove old deployment shares without conversion; administrators/maintainers grant model access afresh. Downgrade must not resurrect retired grants. Native HTTPRoute/EPP behavior is unchanged. |
 
 > D1–D24 correspond to the “recommended” paths in the preceding sections and have been synced into the relevant chapters; implementation should follow them,
 > and there are no remaining blocking undecided items other than the schema approval in §18.1.

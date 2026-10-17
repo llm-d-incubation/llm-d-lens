@@ -69,10 +69,10 @@ def test_roles_permissions_and_user_bindings():
     assert roles.get_by_name("CUSTOM-REVIEWER").id == role.id
 
     permissions = RolePermissionDao()
-    permissions.set_for_role(role.id, {"deployment:run:read", "deployment:run:share"})
+    permissions.set_for_role(role.id, {"deployment:run:read", "model-service:group:share"})
     assert {p.permission for p in permissions.list_for_role(role.id)} == {
         "deployment:run:read",
-        "deployment:run:share",
+        "model-service:group:share",
     }
     permissions.set_for_role(role.id, {"deployment:run:read"})
     assert {p.permission for p in permissions.list_for_role(role.id)} == {"deployment:run:read"}

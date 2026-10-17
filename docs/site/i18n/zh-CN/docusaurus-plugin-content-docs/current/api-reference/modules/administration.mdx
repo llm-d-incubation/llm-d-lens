@@ -12,6 +12,56 @@ import TabItem from '@theme/TabItem';
 
 身份验证与管理相关路由位于 `llm_d_lens/auth/router.py` 中的 `/api/v1` 前缀下。
 
+### 资源绑定限制
+
+模型推理授权替代了部署分享。资源级绑定只接受
+`scopeResourceType: "model_service_group"` 和内置 end-user 的 `roleId`。
+模型 ID 与集群必须匹配已存储记录，授权对象必须独立具备该集群的推理权限。
+全局和集群级角色分配不变。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+这些限制适用于 POST `/api/v1/users/{user_id}/role-bindings` 和
+POST `/api/v1/groups/{group_id}/role-bindings`，二者都要求角色绑定管理权限。
+成功创建返回 HTTP 201 和绑定记录。
+
+```json
+{
+  "roleId": "existing-built-in-end-user-role-id",
+  "scopeType": "resource",
+  "scopeClusterId": "cluster-id",
+  "scopeResourceType": "model_service_group",
+  "scopeResourceId": "msg-existing-model-id"
+}
+```
+
+已退役的部署资源类型、特权授权角色和集群不匹配都会被拒绝。
+日常模型授权请使用[带 scope 校验的模型访问 API](/api-reference/modules/model-services#模型推理授权)，
+由服务器推导角色及集群，而不是接受调用方指定的值。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.auth.service import default_service
+
+def add_inference_binding(user_id: str, model_id: str, cluster_id: str):
+    service = default_service()
+    role = service.require_role("end-user")
+    return service.add_user_binding(
+        user_id, role.id, scope_type="resource",
+        scope_cluster_id=cluster_id,
+        scope_resource_type="model_service_group",
+        scope_resource_id=model_id,
+    )
+```
+
+这是供已完成管理员鉴权的服务端代码使用的底层方法。`add_group_binding`
+对用户组执行相同限制。优先使用 `ModelService.grant_access(..., principal=principal)`，
+以同时执行调用方对该模型的授权管理 scope 校验。
+  </TabItem>
+</Tabs>
+
 ### 列出用户
 
 列出用户，包括直接角色、群组成员关系以及继承的角色。

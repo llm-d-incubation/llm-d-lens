@@ -30,15 +30,20 @@ from llm_d_lens.auth.access import (
     filter_by_cluster,
     owner_for_create,
     require_cluster_access,
+    resource_readable,
     visible_cluster_ids,
 )
+from llm_d_lens.cluster.registry import gateway_lock
 from llm_d_lens.model_service.contracts import (
     AuthorizeRequest,
     GroupCreateRequest,
     GroupUpdateRequest,
     MemberCreateRequest,
     MemberUpdateRequest,
+    ModelGrantRequest,
+    ProvidersStatusRequest,
     TokenCreateRequest,
+    TrafficUpdateRequest,
     UsageRecordRequest,
 )
 from llm_d_lens.model_service.gateway_contracts import (
@@ -49,6 +54,7 @@ from llm_d_lens.model_service.gateway_contracts import (
     IppConfigRequest,
 )
 from llm_d_lens.model_service.gateway_ops import (
+    GatewayOpsError,
     GatewayOpsService,
     gateway_base_url,
     local_public_ip,
@@ -131,6 +137,23 @@ async def _reconcile_clusters(cluster_ids: list[str]) -> None:
         await _gateway_ops.reconcile_cluster(cluster_id)
 
 
+async def _apply_publication_change(cluster_ids: list[str], *, actor: str | None) -> Response | None:
+    try:
+        for cluster_id in sorted(set(cluster_ids)):
+            operation = await _gateway_ops.reconcile_cluster(cluster_id, actor=actor)
+            if operation.status != "succeeded":
+                raise GatewayOpsError(operation.message)
+    except (GatewayOpsError, OSError, ValueError):
+        logger.exception("publication state saved but Gateway reconciliation failed for %s", cluster_ids)
+        return problem(
+            502,
+            "State saved; Gateway reconciliation failed",
+            "The requested state was saved, but routing could not be updated. Reload and use Reconcile to retry.",
+            "model_publication_apply_failed",
+        )
+    return None
+
+
 # --- user: tokens ------------------------------------------------------------
 
 
@@ -173,7 +196,14 @@ async def revoke_token(token_id: str, request: Request) -> Response:
 # --- user: models + usage ----------------------------------------------------
 
 
-@router.get("/models", summary="List the model names the caller may call.")
+@router.get(
+    "/models",
+    summary="List the model names the caller may call.",
+    description="Return active services with positive-weight online providers. Consumers need inference permission "
+    "in the model's cluster and a user/group grant on the model service. Operators retain non-self-scoped inference "
+    "access in their binding's cluster scope. Deployment grants do not confer access. "
+    "Includes the cluster display name.",
+)
 async def list_models(request: Request) -> dict:
     user_id = _user_id(request)
     return {"items": _service.list_model_entries_for_user(user_id)}
@@ -218,7 +248,13 @@ async def model_service_connection(request: Request) -> dict:
     return {"baseUrl": global_url, "clusters": clusters}
 
 
-@public_router.get("/v1/models", summary="OpenAI-compatible model list for a model token.")
+@public_router.get(
+    "/v1/models",
+    summary="OpenAI-compatible model list for a model token.",
+    description="Validate the model token and list callable active services with positive-weight online providers. "
+    "Consumers require inference cluster scope plus a model-service user/group grant; non-self-scoped operators "
+    "retain inference access in scope. Uses the same entitlement rule as Gateway authorization.",
+)
 async def public_list_models(request: Request) -> Response:
     """OpenAI ``GET /v1/models`` served by the control plane (decision D13).
 
@@ -283,45 +319,218 @@ def _daily_totals(records) -> list[dict]:
 # --- admin: groups / members / usage -----------------------------------------
 
 
-@admin_router.get("/groups", summary="List model routing groups.")
-async def admin_list_groups() -> dict:
-    return {"items": [group.api_payload() for group in _service.list_groups()]}
+@admin_router.get("/groups", summary="List model routing groups in the caller's cluster scope.")
+async def admin_list_groups(request: Request) -> dict:
+    principal = current_principal(request)
+    groups = [
+        group
+        for group in _service.list_groups()
+        if resource_readable(
+            principal,
+            permission="model-service:group:read",
+            resource_type="cluster",
+            resource_id=group.cluster_id or "",
+            cluster_id=group.cluster_id,
+        )
+    ]
+    return {"items": [group.api_payload() for group in groups]}
 
 
-@admin_router.post("/groups", status_code=201, summary="Create a model routing group.")
-async def admin_create_group(request: Request, body: GroupCreateRequest) -> dict:
+@admin_router.post(
+    "/groups",
+    status_code=201,
+    summary="Create a model service with an optional ready deployment.",
+    description="Create a cluster-scoped public model name. With executionId, derive the deployment model names "
+    "server-side and create the service and first member in one transaction, then schedule gateway reconciliation. "
+    "Combined creation requires group and member management permissions in the deployment's cluster. "
+    "Returns the created group (201); inaccessible clusters or missing permissions return 403, "
+    "missing deployment targets return 404, and duplicate names, non-ready providers or cluster mismatch return 409. "
+    "Without executionId, retains standalone group creation.",
+)
+async def admin_create_group(request: Request, body: GroupCreateRequest, background: BackgroundTasks) -> dict:
     try:
-        group = _service.create_group(body, created_by=owner_for_create(current_principal(request)))
-    except ModelServiceConflictError as error:
-        return problem(409, "Model group conflict", str(error), "model_group_conflict")
-    return group.api_payload()
-
-
-@admin_router.get("/groups/{group_id}", summary="Get a model routing group.")
-async def admin_get_group(group_id: str) -> dict:
-    group = _service.get_group(group_id)
-    if group is None:
-        raise HTTPException(status_code=404, detail=f"group not found: {group_id}")
-    return group.api_payload()
-
-
-@admin_router.patch("/groups/{group_id}", summary="Update a model routing group.")
-async def admin_update_group(group_id: str, body: GroupUpdateRequest) -> dict:
-    try:
-        group = _service.update_group(group_id, body)
+        principal = current_principal(request)
+        group = _service.create_group(body, created_by=owner_for_create(principal), principal=principal)
     except ModelServiceNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ModelServiceConflictError as error:
         return problem(409, "Model group conflict", str(error), "model_group_conflict")
+    if body.execution_id is not None:
+        background.add_task(_reconcile_clusters, [group.cluster_id])
     return group.api_payload()
 
 
-@admin_router.delete("/groups/{group_id}", status_code=204, summary="Delete a model routing group.")
-async def admin_delete_group(group_id: str, background: BackgroundTasks) -> Response:
-    cluster_ids = [member.cluster_id for member in _service.list_members(group_id)]
-    _service.delete_group(group_id)
-    background.add_task(_reconcile_clusters, cluster_ids)
+@admin_router.get("/groups/{group_id}", summary="Get a model routing group with cluster-scoped read permission.")
+async def admin_get_group(group_id: str, request: Request) -> dict:
+    group = _service.require_group_access(group_id, current_principal(request), "model-service:group:read")
+    return group.api_payload()
+
+
+@admin_router.get(
+    "/groups/{group_id}/access",
+    summary="List a model service's inference grants.",
+    description="Requires model-service:group:share in the model's cluster. Returns user/group grants with display "
+    "names, binding IDs and inference permission. A missing model returns 404; insufficient scope returns 403.",
+)
+async def list_model_access(group_id: str, request: Request) -> dict:
+    return {"items": _service.list_access(group_id, principal=current_principal(request))}
+
+
+@admin_router.get(
+    "/groups/{group_id}/access/options",
+    summary="List eligible model inference grant recipients.",
+    description="Requires scoped model-service:group:share. Returns only user IDs/usernames and group IDs/names "
+    "for recipients with inference permission in this model's cluster; does not expose the full identity directory. "
+    "Only active, non-protected users are selectable. Model grants do not establish cluster scope.",
+)
+async def model_access_options(group_id: str, request: Request) -> dict:
+    return _service.access_options(group_id, principal=current_principal(request))
+
+
+@admin_router.post(
+    "/groups/{group_id}/access",
+    status_code=201,
+    summary="Grant inference access to a model service.",
+    description="Requires model-service:group:share in the model's cluster. Accepts subjectType (user/group) and "
+    "subjectId only. The server derives cluster and inference-only grant role; no management, direct deployment "
+    "access or onward sharing is granted. Recipient must already have inference cluster scope. Returns the grant "
+    "ID and recipient (201), 403 for insufficient scope, 404 for missing resources, or 409 for duplicate grants. "
+    "The grant covers all providers of this model without changing HTTPRoute weights.",
+)
+async def grant_model_access(group_id: str, body: ModelGrantRequest, request: Request) -> dict:
+    return _service.grant_access(group_id, body, principal=current_principal(request))
+
+
+@admin_router.delete(
+    "/groups/{group_id}/access/{binding_id}",
+    status_code=204,
+    summary="Revoke a model service's inference grant.",
+    description="Requires scoped model-service:group:share. Deletes only the specified model's grant and invalidates "
+    "recipient authorization. New inference requests re-evaluate access; existing streams are not interrupted. "
+    "A missing or mismatched binding returns 404. Other grants and HTTPRoute weights are unchanged.",
+)
+async def revoke_model_access(group_id: str, binding_id: str, request: Request) -> Response:
+    _service.revoke_access(group_id, binding_id, principal=current_principal(request))
     return Response(status_code=204)
+
+
+@admin_router.put(
+    "/groups/{group_id}/traffic",
+    summary="Save and apply model traffic distribution.",
+    description="Atomically update all provider weights and optionally add ready llm-d deployments in the same cluster "
+    "with the same provider model name. Weights are integers from 0 to 1000000; zero receives no traffic. "
+    "At least one non-disabled provider must have positive weight; at most 16 distinct pools are supported. "
+    "expectedWeights must match the previously read executionId-to-weight map. Returns 409 for stale or invalid "
+    "allocations, 404 for missing targets, and 403 for insufficient cluster-scoped member-management permission. "
+    "After commit, reconciles the cluster Gateway and returns members and the operation result. A failed operation "
+    "does not roll back saved weights: configuration remains saved and can be retried with Reconcile. "
+    "Known reconciliation exceptions return 502 model_traffic_apply_failed, explicitly indicating saved configuration.",
+)
+async def admin_update_traffic(group_id: str, body: TrafficUpdateRequest, request: Request) -> dict:
+    principal = current_principal(request)
+    try:
+        members = _service.update_traffic(group_id, body, principal=principal)
+    except ModelServiceNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ModelServiceConflictError as error:
+        return problem(409, "Traffic distribution conflict", str(error), "model_traffic_conflict")
+    try:
+        operation = await _gateway_ops.reconcile_cluster(members[0].cluster_id, actor=principal.user_id)
+    except (GatewayOpsError, OSError, ValueError):
+        logger.exception("traffic configuration saved but Gateway reconciliation failed for group %s", group_id)
+        return problem(
+            502,
+            "Configuration saved; Gateway reconciliation failed",
+            "Traffic weights were saved. Reload the configuration and use Reconcile to retry.",
+            "model_traffic_apply_failed",
+        )
+    return {"items": [member.api_payload() for member in members], "operation": operation.api_payload()}
+
+
+@admin_router.patch(
+    "/groups/{group_id}",
+    summary="Update or stop/resume a model routing group.",
+    description="Save group configuration and reconcile affected cluster routes before returning. "
+    "Status disabled stops this public model; active restores routing to enabled positive-weight providers. "
+    "Provider states, weights and running Pods are preserved. A 502 model_publication_apply_failed means "
+    "configuration was saved but routing could not be applied; use Reconcile to retry.",
+)
+async def admin_update_group(group_id: str, body: GroupUpdateRequest, request: Request) -> dict:
+    principal = current_principal(request)
+    previous = _service.groups.get(group_id)
+    cluster_ids = [member.cluster_id for member in _service.list_members(group_id)]
+    if previous and previous.cluster_id:
+        cluster_ids.append(previous.cluster_id)
+    try:
+        group = _service.update_group(group_id, body, principal=principal)
+    except ModelServiceNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ModelServiceConflictError as error:
+        return problem(409, "Model group conflict", str(error), "model_group_conflict")
+    if group.cluster_id:
+        cluster_ids.append(group.cluster_id)
+    failure = await _apply_publication_change(cluster_ids, actor=principal.user_id if principal else None)
+    if failure is not None:
+        return failure
+    return group.api_payload()
+
+
+@admin_router.delete(
+    "/groups/{group_id}",
+    status_code=204,
+    summary="Safely remove an empty model.",
+    description="Requires group management in the model's cluster. Returns 409 model_group_conflict "
+    "while any provider remains, including offline providers. Removes the model's Lens-managed HTTPRoute "
+    "and IPP mapping and confirms deletion before deleting the record. Returns 404 for a missing model; "
+    "502 model_removal_failed preserves the record for retry when cleanup fails. Deployments, Pods, "
+    "other models and shared Gateway resources are not deleted. Associated model inference grants are revoked.",
+)
+async def admin_delete_group(group_id: str, request: Request) -> Response:
+    principal = current_principal(request)
+    try:
+        group = _service.require_empty_group(group_id, principal=principal)
+        async with gateway_lock(group.cluster_id):
+            group = _service.require_empty_group(group_id, principal=principal)
+            await _gateway_ops.remove_model_route(group)
+            _service.delete_group(group_id, principal=principal)
+    except ModelServiceNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ModelServiceConflictError as error:
+        return problem(409, "Model group conflict", str(error), "model_group_conflict")
+    except (GatewayOpsError, FileNotFoundError, TimeoutError, OSError, ValueError) as error:
+        logger.warning("Model removal cleanup failed for %s: %s", group_id, error)
+        return problem(
+            502,
+            "Model removal failed",
+            "Route cleanup could not be confirmed. The model record was retained; retry Remove model.",
+            "model_removal_failed",
+        )
+    return Response(status_code=204)
+
+
+@admin_router.put(
+    "/groups/{group_id}/providers/status",
+    summary="Start or stop all model providers.",
+    description="Requires member management in the model's cluster. Atomically sets every provider active "
+    "or disabled, preserving weights, model status and Pods, then reconciles routing. Starting requires "
+    "every deployment to be ready in its registered cluster. Empty models, unready deployments or concurrent "
+    "provider changes return 409 model_member_conflict without partial status updates; a missing model returns "
+    "404. A 502 model_publication_apply_failed means statuses were saved but routing failed; use Reconcile.",
+)
+async def admin_set_providers_status(group_id: str, body: ProvidersStatusRequest, request: Request) -> dict:
+    principal = current_principal(request)
+    try:
+        members = _service.set_providers_status(group_id, body, principal=principal)
+    except ModelServiceNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ModelServiceConflictError as error:
+        return problem(409, "Model member conflict", str(error), "model_member_conflict")
+    failure = await _apply_publication_change(
+        [member.cluster_id for member in members], actor=principal.user_id if principal else None
+    )
+    if failure is not None:
+        return failure
+    return {"items": [member.api_payload() for member in members]}
 
 
 @admin_router.get("/members", summary="List published model service members.")
@@ -342,7 +551,13 @@ async def admin_publishable_deployments(request: Request) -> dict:
     return {"items": [item.api_payload() for item in items]}
 
 
-@admin_router.post("/members", status_code=201, summary="Publish a deployment as a group member.")
+@admin_router.post(
+    "/members",
+    status_code=201,
+    summary="Publish a deployment as a group member.",
+    description="Publish a deployment in the group's cluster with default weight 1, preserving existing provider "
+    "weights. Schedules Gateway reconciliation; use traffic distribution to change the allocation.",
+)
 async def admin_create_member(request: Request, body: MemberCreateRequest, background: BackgroundTasks) -> dict:
     principal = current_principal(request)
     try:
@@ -355,15 +570,26 @@ async def admin_create_member(request: Request, body: MemberCreateRequest, backg
     return member.api_payload()
 
 
-@admin_router.patch("/members/{member_id}", summary="Update a member (status).")
-async def admin_update_member(
-    member_id: str, body: MemberUpdateRequest, background: BackgroundTasks, request: Request
-) -> dict:
+@admin_router.patch(
+    "/members/{member_id}",
+    summary="Take a model deployment offline or online.",
+    description="Save member status and reconcile its cluster routing before returning. Disabled excludes this "
+    "deployment from the model's route without scaling Pods or changing its saved weight. Restoring active "
+    "requires a ready deployment; weight 0 remains standby, and a stopped parent model remains stopped. "
+    "All providers may be offline. A 409 rejects an unready deployment; a 502 model_publication_apply_failed "
+    "means state was saved but routing could not be applied.",
+)
+async def admin_update_member(member_id: str, body: MemberUpdateRequest, request: Request) -> dict:
+    principal = current_principal(request)
     try:
-        member = _service.update_member(member_id, body, principal=current_principal(request))
+        member = _service.update_member(member_id, body, principal=principal)
     except ModelServiceNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    background.add_task(_reconcile_clusters, [member.cluster_id])
+    except ModelServiceConflictError as error:
+        return problem(409, "Model member conflict", str(error), "model_member_conflict")
+    failure = await _apply_publication_change([member.cluster_id], actor=principal.user_id if principal else None)
+    if failure is not None:
+        return failure
     return member.api_payload()
 
 
@@ -435,6 +661,9 @@ async def admin_gateway_status(request: Request) -> dict:
 @admin_router.post(
     "/gateway/reconcile",
     summary="Sync the shared Gateway and model routes for every cluster with members.",
+    description="Schedule Gateway and HTTPRoute reconciliation. Each enabled positive-weight provider contributes "
+    "a weighted InferencePool backendRef; zero-weight providers remain stored but are omitted. Returns the scheduled "
+    "cluster IDs, not proof of controller acceptance or observed traffic ratios.",
 )
 async def admin_gateway_reconcile(background: BackgroundTasks) -> dict:
     cluster_ids = sorted({member.cluster_id for member in _service.members.list_all() if member.status == "active"})
@@ -442,7 +671,14 @@ async def admin_gateway_reconcile(background: BackgroundTasks) -> dict:
     return {"scheduled": True, "clusters": cluster_ids}
 
 
-@admin_router.post("/gateway/probe", summary="Probe members' backends now and refresh health/status.")
+@admin_router.post(
+    "/gateway/probe",
+    summary="Probe members' backends now and refresh health/status.",
+    description="Refresh non-disabled providers of enabled models and return the updated count. Stopped models "
+    "and offline providers are skipped, and health writes cannot re-enable an offline provider. A zero-weight "
+    "InferencePool without Gateway parent status is standby, not degraded; that alone does not trigger "
+    "Gateway/IPP auto-healing. Missing resources and endpoint failures still mark the provider unhealthy.",
+)
 async def admin_gateway_probe() -> dict:
     updated = await _gateway_ops.probe_members()
     return {"updated": updated}
@@ -486,7 +722,13 @@ async def admin_gateway_preflight(body: ClusterGatewayRequest, request: Request)
     return operation.api_payload()
 
 
-@admin_router.post("/gateway/install", summary="Install or reuse the cluster's shared llm-d Gateway.")
+@admin_router.post(
+    "/gateway/install",
+    summary="Install or reuse the cluster's shared llm-d Gateway.",
+    description="Install in a namespace suffixed with the stable Lens cluster-registration short ID. "
+    "Gateway, IPP and authentication resources are isolated from other registrations. Existing unsuffixed "
+    "resources are not adopted or deleted. A NodePort still used by another Gateway is reported as a conflict.",
+)
 async def admin_gateway_install(body: ClusterGatewayRequest, request: Request) -> dict:
     require_cluster_access(current_principal(request), body.cluster_id)
     operation = await _gateway_ops.install_cluster_gateway(
@@ -593,7 +835,12 @@ async def admin_gateway_logs(body: ComponentLogsRequest, request: Request) -> St
 
 @internal_router.post(
     "/authorize",
-    summary="ext_authz: validate token, resolve model, select backend.",
+    summary="ext_authz: validate token and authorize model access.",
+    description="Validate the inference token and authorize the model in the requested cluster. Consumers require "
+    "inference cluster scope and a direct or group model grant. Non-self-scoped operators retain inference in scope. "
+    "An active positive-weight provider is required. Gateway independently selects its weighted pool; "
+    "the legacy member is not actual "
+    "Gateway destination attribution. Invalid tokens return 401; unavailable or forbidden models return 404.",
 )
 async def internal_authorize(request: Request) -> Response:
     return await _authorize(request, None)

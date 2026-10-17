@@ -102,7 +102,6 @@ _PERMISSIONS: tuple[Permission, ...] = (
     _permission("deployment:run:read", "View deployments", READ),
     _permission("deployment:run:create", "Create deployments"),
     _permission("deployment:run:cancel", "Cancel deployments"),
-    _permission("deployment:run:share", "Share deployments"),
     _permission("deployment:execution:update", "Edit deployment metadata"),
     _permission("deployment:execution:delete", "Delete deployments"),
     _permission("deployment:execution:connect", "Connect to deployment endpoints"),
@@ -146,6 +145,7 @@ _PERMISSIONS: tuple[Permission, ...] = (
     _permission("model-service:usage:read", "View one's own model usage", READ),
     _permission("model-service:group:read", "View model routing groups and members", READ),
     _permission("model-service:group:manage", "Create/edit/delete/enable-disable model services"),
+    _permission("model-service:group:share", "Grant or revoke model-service inference access"),
     _permission("model-service:member:manage", "Publish/edit/remove a cluster deployment as a service provider"),
     _permission("model-service:gateway:read", "View model gateway data-plane status", READ),
     _permission("model-service:gateway:manage", "Install/uninstall/reload the shared Edge Envoy data plane"),
@@ -270,7 +270,7 @@ BUILTIN_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 
 #: end-user's model-service actions are self-scoped: a cluster binding does not
 #: grant them on models the user is not authorized for; it needs ownership or an
-#: explicit resource share on the target execution.
+#: explicit model-service grant in addition to an inference-capable cluster binding.
 _END_USER_SELF_SCOPED = _permissions_named(
     "model-service:token:manage",
     "model-service:inference:use",

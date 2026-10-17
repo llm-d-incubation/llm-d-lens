@@ -558,6 +558,9 @@ async def update_hf_token_secret(cluster_id: str, payload: HfTokenSecretUpdateRe
     summary="Delete a Lens-managed cluster record and clean up related state.",
     description=(
         "Delete a Lens-managed cluster record and clean up related state. "
+        "Delete its isolated Gateway namespace before removing the record and kubeconfig. "
+        "Return 502 cluster_gateway_cleanup_failed and retain the record if that cleanup fails. "
+        "The legacy shared lens-gateway namespace and shared Gateway controllers are not deleted. "
         "Use this only when the cluster should be removed from Lens entirely."
     ),
     operation_id="delete_cluster",

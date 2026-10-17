@@ -1,7 +1,9 @@
 """Tests for cluster hardware capacity accounting."""
 
+import asyncio
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -14,6 +16,20 @@ from llm_d_lens.infrastructure.process import CommandResult
 
 def _claim(*results: dict) -> dict:
     return {"status": {"allocation": {"devices": {"results": list(results)}}}}
+
+
+def test_gateway_namespace_is_stable_unique_and_visible_on_cluster_records():
+    first = registry.Cluster(id="dcea6ee0", name="first", description="", created_at="")
+    second = registry.Cluster(id="1234abcd", name="second", description="", created_at="")
+    assert first.gateway_namespace == "lens-gateway-dcea6ee0"
+    assert second.gateway_namespace == "lens-gateway-1234abcd"
+    assert first.to_dict()["gatewayNamespace"] == first.gateway_namespace
+    assert registry.gateway_namespace_for(first.id, first.gateway_namespace) == first.gateway_namespace
+    assert registry.gateway_namespace_for(first.id, "lens-gateway") == first.gateway_namespace
+    assert registry.gateway_namespace_for(first.id, "custom") == "custom-dcea6ee0"
+    assert len(registry.gateway_namespace_for(first.id, "x" * 63)) == 63
+    with pytest.raises(ValueError, match="cluster id"):
+        registry.gateway_namespace_for("")
 
 
 @pytest.mark.asyncio
@@ -59,7 +75,7 @@ async def test_delete_cluster_succeeds_when_no_storage_volumes(monkeypatch):
 
     await service.delete_cluster("cluster-1")
     assert deleted == ["cluster-1"]
-    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+    assert deleted_namespaces == [cluster.gateway_namespace, "llm-d-bench-storage-cluster-1"]
 
 
 @pytest.mark.asyncio
@@ -106,7 +122,7 @@ async def test_delete_cluster_deletes_secret_without_dropping_a_shared_namespace
 
     assert deleted_secrets == [("inference-scheduling", "llm-d-hf-token")]
     # The Lens-owned namespace is still removed; the busy shared one is never deleted.
-    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+    assert deleted_namespaces == [cluster.gateway_namespace, "llm-d-bench-storage-cluster-1"]
 
 
 _BUSY_ITEMS = [
@@ -173,17 +189,17 @@ async def test_delete_cluster_drops_a_namespace_left_holding_only_the_hf_token_s
     namespace gets for free, so keeping it serves no purpose."""
     deleted_namespaces: list[str] = []
     deleted_secrets: list[tuple[str, str]] = []
-    _stub_delete_cluster_dependencies(
-        monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets
-    )
-    monkeypatch.setattr(
-        service, "scoped_runner", _namespace_inspection_runner(labels={}, items=_INJECTED_ONLY_ITEMS)
-    )
+    _stub_delete_cluster_dependencies(monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets)
+    monkeypatch.setattr(service, "scoped_runner", _namespace_inspection_runner(labels={}, items=_INJECTED_ONLY_ITEMS))
 
     await service.delete_cluster("cluster-1")
 
     assert deleted_secrets == [("team-tokens", "hf-token-1")]
-    assert deleted_namespaces == ["team-tokens", "llm-d-bench-storage-cluster-1"]
+    assert deleted_namespaces == [
+        registry.gateway_namespace_for("cluster-1"),
+        "team-tokens",
+        "llm-d-bench-storage-cluster-1",
+    ]
 
 
 @pytest.mark.asyncio
@@ -192,9 +208,7 @@ async def test_delete_cluster_drops_a_namespace_lens_created_for_the_secret(monk
     the content probe to agree."""
     deleted_namespaces: list[str] = []
     deleted_secrets: list[tuple[str, str]] = []
-    _stub_delete_cluster_dependencies(
-        monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets
-    )
+    _stub_delete_cluster_dependencies(monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets)
     monkeypatch.setattr(
         service,
         "scoped_runner",
@@ -206,7 +220,11 @@ async def test_delete_cluster_drops_a_namespace_lens_created_for_the_secret(monk
 
     await service.delete_cluster("cluster-1")
 
-    assert deleted_namespaces == ["team-tokens", "llm-d-bench-storage-cluster-1"]
+    assert deleted_namespaces == [
+        registry.gateway_namespace_for("cluster-1"),
+        "team-tokens",
+        "llm-d-bench-storage-cluster-1",
+    ]
 
 
 @pytest.mark.asyncio
@@ -214,9 +232,7 @@ async def test_delete_cluster_keeps_a_namespace_whose_contents_cannot_be_listed(
     """An uncertain answer must never authorise deleting a namespace."""
     deleted_namespaces: list[str] = []
     deleted_secrets: list[tuple[str, str]] = []
-    _stub_delete_cluster_dependencies(
-        monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets
-    )
+    _stub_delete_cluster_dependencies(monkeypatch, _cluster_with_external_secret(), deleted_namespaces, deleted_secrets)
     monkeypatch.setattr(
         service,
         "scoped_runner",
@@ -225,7 +241,7 @@ async def test_delete_cluster_keeps_a_namespace_whose_contents_cannot_be_listed(
 
     await service.delete_cluster("cluster-1")
 
-    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+    assert deleted_namespaces == [registry.gateway_namespace_for("cluster-1"), "llm-d-bench-storage-cluster-1"]
 
 
 @pytest.mark.asyncio
@@ -246,15 +262,66 @@ async def test_delete_cluster_never_deletes_a_protected_namespace(monkeypatch):
     monkeypatch.setattr(
         service,
         "scoped_runner",
-        _namespace_inspection_runner(
-            labels={"app.kubernetes.io/managed-by": "llm-d-lens"}, items=_INJECTED_ONLY_ITEMS
-        ),
+        _namespace_inspection_runner(labels={"app.kubernetes.io/managed-by": "llm-d-lens"}, items=_INJECTED_ONLY_ITEMS),
     )
 
     await service.delete_cluster("cluster-1")
 
     assert deleted_secrets == [("default", "hf-token-1")]
-    assert deleted_namespaces == ["llm-d-bench-storage-cluster-1"]
+    assert deleted_namespaces == [cluster.gateway_namespace, "llm-d-bench-storage-cluster-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["returncode", "timeout"])
+async def test_gateway_namespace_delete_failure_keeps_cluster_and_session(monkeypatch, failure):
+    cluster = registry.Cluster(id="1234abcd", name="c", description="", created_at="")
+    monkeypatch.setattr(registry, "require_cluster", lambda _: cluster)
+    monkeypatch.setattr(service, "_has_available_deployments", lambda _: False)
+    monkeypatch.setattr(service, "_has_storage_volumes", lambda _: False)
+    delete_record, close_session, delete_hf = Mock(), Mock(), AsyncMock()
+    monkeypatch.setattr(registry, "delete_cluster", delete_record)
+    monkeypatch.setattr(service.sessions, "close_session_for_server", close_session)
+    monkeypatch.setattr(service, "_delete_hf_token_resources", delete_hf)
+    delete_ns = AsyncMock(
+        side_effect=TimeoutError("namespace still terminating") if failure == "timeout" else None,
+        return_value=CommandResult(argv=(), returncode=1, stdout="", stderr="forbidden"),
+    )
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", delete_ns)
+
+    with pytest.raises(ClusterOverviewError) as error:
+        await service.delete_cluster(cluster.id)
+
+    assert error.value.code == "cluster_gateway_cleanup_failed"
+    assert error.value.status_code == 502
+    delete_ns.assert_awaited_once_with("lens-gateway-1234abcd", cluster_id=cluster.id, timeout=120)
+    delete_record.assert_not_called()
+    close_session.assert_not_called()
+    delete_hf.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cluster_deletion_waits_for_gateway_work_and_cleans_namespace_before_record(monkeypatch):
+    cluster = registry.Cluster(id="a1b2c3d4", name="c", description="", created_at="", gateway_namespace="custom")
+    monkeypatch.setattr(registry, "require_cluster", lambda _: cluster)
+    monkeypatch.setattr(service, "_has_available_deployments", lambda _: False)
+    monkeypatch.setattr(service, "_has_storage_volumes", lambda _: False)
+    monkeypatch.setattr(service, "_delete_hf_token_resources", AsyncMock())
+    events = []
+
+    async def delete_ns(namespace, *, cluster_id, timeout):
+        events.append(("namespace", namespace))
+        assert registry.gateway_lock(cluster_id).locked()
+        return CommandResult(argv=(), returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.delete_namespace", delete_ns)
+    monkeypatch.setattr(service.sessions, "close_session_for_server", lambda _: events.append(("session", None)))
+    monkeypatch.setattr(registry, "delete_cluster", lambda _: events.append(("record", None)))
+    async with registry.gateway_lock(cluster.id):
+        deletion = asyncio.create_task(service.delete_cluster(cluster.id))
+        await asyncio.sleep(0)
+        assert not events
+    await deletion
+    assert events == [("namespace", "custom-a1b2c3d4"), ("session", None), ("record", None)]
 
 
 @pytest.mark.asyncio
@@ -1153,9 +1220,7 @@ async def test_update_hf_token_secret_repoints_cluster_to_new_coordinates(monkey
     """Supplying namespace/name moves the cluster's pointer, so later deploys
     default to the new Secret rather than the one created by the wizard."""
     cluster = registry.create_cluster("cluster-repoint", "", "kubeconfig: {}")
-    registry.update_cluster(
-        cluster.id, hf_token_secret_namespace="old-ns", hf_token_secret_name="hf-token-old"
-    )
+    registry.update_cluster(cluster.id, hf_token_secret_namespace="old-ns", hf_token_secret_name="hf-token-old")
     cluster = registry.get_cluster(cluster.id)
     captured: dict[str, object] = {}
     monkeypatch.setattr(service, "scoped_runner", lambda cluster_id: _apply_only_runner(captured))

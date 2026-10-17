@@ -794,7 +794,7 @@ async def test_list_executions_rejects_other_cluster(monkeypatch):
     assert response == {"items": []}
 
 
-def test_execution_readable_honors_a_direct_execution_share():
+def test_execution_readable_rejects_a_retired_execution_share():
     from uuid import uuid4
 
     from llm_d_lens.auth.records import RoleRecord, UserRecord, UserRoleBindingRecord
@@ -814,16 +814,18 @@ def test_execution_readable_honors_a_direct_execution_share():
         UserRoleBindingRecord(user_id=user.id, role_id=base_role.id, scope_type="cluster", scope_cluster_id=cluster_id)
     )
     service = default_service()
-    service.share_resource(
-        subject_type="user",
-        subject_id=user.id,
-        role_id=share_role.id,
-        resource_type="deployment_execution",
-        resource_id="exec-x",
-        cluster_id=cluster_id,
+    UserRoleBindingDao().create(
+        UserRoleBindingRecord(
+            user_id=user.id,
+            role_id=share_role.id,
+            scope_type="resource",
+            scope_resource_type="deployment_execution",
+            scope_resource_id="exec-x",
+            scope_cluster_id=cluster_id,
+        )
     )
     principal = service.principal_for(user)
     shared = SimpleNamespace(run_id="run-x", execution_id="exec-x", cluster_id=cluster_id)
-    assert router._execution_readable(principal, shared, None)
+    assert not router._execution_readable(principal, shared, None)
     unshared = SimpleNamespace(run_id="run-y", execution_id="exec-y", cluster_id=cluster_id)
     assert not router._execution_readable(principal, unshared, None)

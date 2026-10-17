@@ -1,244 +1,345 @@
-"""Resource-share service tests (design section 7.7)."""
+"""Model-service inference grants and retired deployment-share boundaries."""
 
-from __future__ import annotations
-
-from uuid import uuid4
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
-from llm_d_lens.auth.contracts import ResourceRef
+from llm_d_lens.auth.contracts import Principal, ResourceRef, RoleBinding, ScopeType
+from llm_d_lens.auth.permissions import ALL_PERMISSIONS, BUILTIN_ROLE_PERMISSIONS, BUILTIN_ROLE_SELF_SCOPED
 from llm_d_lens.auth.policy import authorize
-from llm_d_lens.auth.records import GroupRecord, RoleRecord, UserRecord, UserRoleBindingRecord
+from llm_d_lens.auth.records import GroupRecord, UserRecord
 from llm_d_lens.auth.service import default_service
-from llm_d_lens.core.exceptions import ConflictError, DomainValidationError, ForbiddenError
+from llm_d_lens.core.exceptions import ConflictError, DomainValidationError, ForbiddenError, NotFoundError
 from llm_d_lens.db.dao.cluster import ClusterDao
-from llm_d_lens.db.dao.group import GroupDao
-from llm_d_lens.db.dao.role import RoleDao, RolePermissionDao, UserRoleBindingDao
-from llm_d_lens.db.dao.user import UserDao
+from llm_d_lens.model_service.contracts import (
+    AuthorizeRequest,
+    GroupCreateRequest,
+    GroupUpdateRequest,
+    ModelGrantRequest,
+    ModelServiceMember,
+)
+from llm_d_lens.model_service.service import ModelService, ModelServiceConflictError, ModelServiceNotFoundError
+
+USE = "model-service:inference:use"
+SHARE = "model-service:group:share"
 
 
-def _cluster() -> str:
-    return ClusterDao().create(f"share-{uuid4().hex[:6]}", "", "apiVersion: v1\nkind: Config").id
-
-
-def _role(permissions: set[str]) -> str:
-    role = RoleDao().create(RoleRecord(name=f"share-role-{uuid4().hex[:8]}", description=""))
-    RolePermissionDao().set_for_role(role.id, permissions)
-    return role.id
-
-
-def _reachable_user(role_id: str, cluster_id: str, username: str) -> str:
-    user = UserDao().create(UserRecord(username=username))
-    UserRoleBindingDao().create(
-        UserRoleBindingRecord(user_id=user.id, role_id=role_id, scope_type="cluster", scope_cluster_id=cluster_id)
+def _principal(*bindings, user_id="operator"):
+    return Principal(
+        user_id=user_id,
+        username=user_id,
+        bindings=bindings,
+        role_permissions=BUILTIN_ROLE_PERMISSIONS,
+        role_self_scoped=BUILTIN_ROLE_SELF_SCOPED,
     )
-    return user.id
 
 
-def test_share_requires_a_reachable_cluster_for_the_grantee():
-    service = default_service()
-    cluster_id = _cluster()
-    role_id = _role({"deployment:run:read", "deployment:run:share"})
-    grantee = UserDao().create(UserRecord(username=f"grantee-{uuid4().hex[:6]}")).id
-    with pytest.raises(ForbiddenError):
-        service.share_resource(
-            subject_type="user",
-            subject_id=grantee,
-            role_id=role_id,
-            resource_type="deployment_run",
-            resource_id="run-1",
-            cluster_id=cluster_id,
+@pytest.fixture
+def access():
+    auth = default_service()
+    auth.ensure_builtin_roles()
+    cluster = ClusterDao().create("model-access-a", "", "apiVersion: v1\nkind: Config").id
+    other = ClusterDao().create("model-access-b", "", "apiVersion: v1\nkind: Config").id
+    user = auth.user_dao.create(UserRecord(username="consumer"))
+    role = auth.require_role("end-user")
+    scope = auth.add_user_binding(user.id, role.id, scope_type="cluster", scope_cluster_id=cluster)
+    operator = _principal(RoleBinding("maintainer", ScopeType.CLUSTER, scope_cluster_id=cluster), user_id=user.id)
+    service = ModelService(auth_service=auth)
+    model = service.create_group(GroupCreateRequest(name="public-model", clusterId=cluster), created_by=None)
+    member = service.members.create(
+        ModelServiceMember(
+            group_id=model.id,
+            execution_id="provider-a",
+            cluster_id=cluster,
+            target_namespace="ns",
+            target_service="epp",
+            target_port=80,
+            endpoint_kind="llm-d-epp",
         )
-
-
-def test_share_grants_read_scope_and_lists_and_revokes():
-    service = default_service()
-    cluster_id = _cluster()
-    # Reachability comes from a cluster binding; the share itself adds the read
-    # action scoped to one execution (a cluster role without it grants nothing).
-    base_role_id = _role({"cluster:cluster:read"})
-    share_role_id = _role({"deployment:run:read"})
-    grantee = _reachable_user(base_role_id, cluster_id, f"reader-{uuid4().hex[:6]}")
-
-    binding = service.share_resource(
-        subject_type="user",
-        subject_id=grantee,
-        role_id=share_role_id,
-        resource_type="deployment_execution",
-        resource_id="exec-1",
-        cluster_id=cluster_id,
     )
-    listed = service.list_resource_shares("deployment_execution", "exec-1")
-    assert [entry[1].id for entry in listed] == [binding.id]
-
-    principal = service.principal_for(UserDao().get(grantee))
-    resource = ResourceRef(resource_type="deployment_execution", resource_id="exec-1", cluster_id=cluster_id)
-    assert authorize(principal, "deployment:run:read", resource=resource).allowed
-
-    # A different execution in the same cluster is not covered by the share.
-    other = ResourceRef(resource_type="deployment_execution", resource_id="exec-2", cluster_id=cluster_id)
-    assert not authorize(principal, "deployment:run:read", resource=other).allowed
-
-    service.revoke_resource_share(
-        binding.id, resource_type="deployment_execution", resource_id="exec-1", cluster_id=cluster_id
+    return SimpleNamespace(
+        auth=auth,
+        cluster=cluster,
+        other=other,
+        user=user,
+        role=role,
+        scope=scope,
+        operator=operator,
+        service=service,
+        model=model,
+        member=member,
     )
-    assert service.list_resource_shares("deployment_execution", "exec-1") == []
 
 
-def test_duplicate_share_is_rejected():
-    service = default_service()
-    cluster_id = _cluster()
-    role_id = _role({"deployment:run:read"})
-    grantee = _reachable_user(role_id, cluster_id, f"dupe-{uuid4().hex[:6]}")
-    kwargs = {
-        "subject_type": "user",
-        "subject_id": grantee,
-        "role_id": role_id,
-        "resource_type": "deployment_run",
-        "resource_id": "run-dupe",
-        "cluster_id": cluster_id,
-    }
-    service.share_resource(**kwargs)
+def _grant(state, subject_type="user", subject_id=None):
+    return state.service.grant_access(
+        state.model.id,
+        ModelGrantRequest(subjectType=subject_type, subjectId=subject_id or state.user.id),
+        principal=state.operator,
+    )
+
+
+def test_model_grant_covers_all_providers_without_deployment_access(access):
+    a = access
+    assert a.service.list_models_for_user(a.user.id) == []
+    grant = _grant(a)
+    a.service.members.create(a.member.model_copy(update={"id": "second", "execution_id": "provider-b", "weight": 2}))
+    principal = a.auth.principal_for(a.user)
+    assert len(a.service.authorized_members(a.model, principal)) == 2
+    assert [item.id for item in a.service.list_models_for_user(a.user.id)] == [a.model.id]
+    assert a.service.list_access(a.model.id, principal=a.operator)[0]["id"] == grant["id"]
+    for permission in ("deployment:run:read", "deployment:execution:connect", "deployment:execution:delete", SHARE):
+        resource = ResourceRef(
+            "model_service_group" if permission == SHARE else "deployment_execution",
+            a.model.id if permission == SHARE else a.member.execution_id,
+            a.cluster,
+        )
+        assert not authorize(principal, permission, resource=resource).allowed
+    assert authorize(principal, "model-service:token:manage").allowed
+    assert authorize(principal, "model-service:usage:read").allowed
+
+
+def test_grant_revocation_and_cluster_scope_removal_affect_existing_tokens(access):
+    a = access
+    _, token = a.service.tokens.create(a.user.id)
+    request = AuthorizeRequest(token=token, model=a.model.name)
+    with pytest.raises(ModelServiceNotFoundError):
+        a.service.authorize_request(request, cluster_id=a.cluster)
+    grant = _grant(a)
+    assert a.service.authorize_request(request, cluster_id=a.cluster).group_id == a.model.id
+    a.service.revoke_access(a.model.id, grant["id"], principal=a.operator)
+    with pytest.raises(ModelServiceNotFoundError):
+        a.service.authorize_request(request, cluster_id=a.cluster)
+    _grant(a)
+    a.auth.remove_user_binding(a.user.id, a.scope.id)
+    with pytest.raises(ModelServiceNotFoundError):
+        a.service.authorize_request(request, cluster_id=a.cluster)
+
+
+def test_operator_scope_cannot_be_borrowed_from_another_binding(access):
+    a = access
+    consumer = a.auth.principal_for(a.user)
+    mixed = replace(
+        consumer,
+        bindings=consumer.bindings + (RoleBinding("maintainer", ScopeType.CLUSTER, scope_cluster_id=a.other),),
+        role_permissions=BUILTIN_ROLE_PERMISSIONS,
+        role_self_scoped=BUILTIN_ROLE_SELF_SCOPED,
+    )
+    assert not a.service.group_authorized(a.model, mixed)
+    with pytest.raises(ForbiddenError):
+        a.service.access_options(a.model.id, principal=mixed)
+    assert a.service.group_authorized(a.model, a.operator)
+    assert a.service.group_authorized(a.model, _principal(RoleBinding("admin", ScopeType.GLOBAL)))
+
+
+def test_grant_requires_inference_scope_not_just_any_cluster_access(access):
+    a = access
+    a.auth.remove_user_binding(a.user.id, a.scope.id)
+    read_role = a.auth.create_role(name="cluster-reader", description="")
+    a.auth.set_role_permissions(read_role.id, {"cluster:cluster:read"})
+    a.auth.add_user_binding(a.user.id, read_role.id, scope_type="cluster", scope_cluster_id=a.cluster)
+    with pytest.raises(ForbiddenError):
+        _grant(a)
+    assert a.service.access_options(a.model.id, principal=a.operator)["users"] == []
+
+
+def test_model_ownership_alone_does_not_grant_consumer_inference(access):
+    a = access
+    model = a.model.model_copy(update={"owner_user_id": a.user.id})
+    assert not a.service.group_authorized(model, a.auth.principal_for(a.user))
+
+
+def test_group_grant_membership_and_each_members_cluster_scope(access):
+    a = access
+    group = a.auth.group_dao.create(GroupRecord(name="model-users"))
+    with pytest.raises(ForbiddenError):
+        _grant(a, "group", group.id)
+    a.auth.add_group_binding(group.id, a.role.id, scope_type="cluster", scope_cluster_id=a.cluster)
+    _grant(a, "group", group.id)
+    assert not a.service.group_authorized(a.model, a.auth.principal_for(a.user))
+    a.auth.add_group_member(group.id, a.user.id)
+    assert a.service.group_authorized(a.model, a.auth.principal_for(a.user))
+    a.auth.remove_group_member(group.id, a.user.id)
+    assert not a.service.group_authorized(a.model, a.auth.principal_for(a.user))
+
+
+def test_model_identity_rename_and_move_do_not_expand_grants(access):
+    a = access
+    _grant(a)
+    other_model = a.service.create_group(GroupCreateRequest(name=a.model.name, clusterId=a.other), created_by=None)
+    principal = a.auth.principal_for(a.user)
+    assert not a.service.group_authorized(other_model, principal)
+    renamed = a.service.update_group(a.model.id, GroupUpdateRequest(name="renamed"))
+    assert a.service.group_authorized(renamed, principal)
+    a.service.members.delete(a.member.id)
+    with pytest.raises(ModelServiceConflictError, match="access grants"):
+        a.service.update_group(a.model.id, GroupUpdateRequest(clusterId=a.other))
+    a.service.delete_group(a.model.id)
+    assert a.auth.list_resource_shares("model_service_group", a.model.id) == []
+    recreated = a.service.create_group(GroupCreateRequest(name="renamed", clusterId=a.cluster), created_by=None)
+    assert not a.service.group_authorized(recreated, a.auth.principal_for(a.user))
+
+
+def test_duplicate_grants_and_resource_bound_revocation(access):
+    a = access
+    grant = _grant(a)
     with pytest.raises(ConflictError):
-        service.share_resource(**kwargs)
-
-
-def test_unsupported_resource_type_is_rejected():
-    service = default_service()
-    cluster_id = _cluster()
-    role_id = _role({"deployment:run:read"})
-    grantee = _reachable_user(role_id, cluster_id, f"type-{uuid4().hex[:6]}")
-    with pytest.raises(DomainValidationError):
-        service.share_resource(
-            subject_type="user",
-            subject_id=grantee,
-            role_id=role_id,
-            resource_type="cluster",
-            resource_id="c1",
-            cluster_id=cluster_id,
-        )
-
-
-def test_group_share_requires_a_group_cluster_binding():
-    service = default_service()
-    cluster_id = _cluster()
-    role_id = _role({"deployment:run:read"})
-    group = GroupDao().create(GroupRecord(name=f"share-group-{uuid4().hex[:6]}"))
+        _grant(a)
+    other = a.service.create_group(GroupCreateRequest(name="other", clusterId=a.cluster), created_by=None)
+    with pytest.raises(NotFoundError):
+        a.service.revoke_access(other.id, grant["id"], principal=a.operator)
     with pytest.raises(ForbiddenError):
-        service.share_resource(
-            subject_type="group",
-            subject_id=group.id,
-            role_id=role_id,
-            resource_type="deployment_run",
-            resource_id="run-group",
-            cluster_id=cluster_id,
-        )
-
-
-def test_revoke_resource_shares_removes_user_and_group_bindings_only_for_that_resource():
-    service = default_service()
-    cluster_id = _cluster()
-    role_id = _role({"deployment:run:read"})
-    grantee = _reachable_user(role_id, cluster_id, f"bulk-{uuid4().hex[:6]}")
-    group = GroupDao().create(GroupRecord(name=f"bulk-group-{uuid4().hex[:6]}"))
-    service.add_group_binding(group.id, role_id, scope_type="cluster", scope_cluster_id=cluster_id)
-
-    for subject_type, subject_id in (("user", grantee), ("group", group.id)):
-        service.share_resource(
-            subject_type=subject_type,
-            subject_id=subject_id,
-            role_id=role_id,
-            resource_type="deployment_execution",
-            resource_id="exec-deleted",
-            cluster_id=cluster_id,
-        )
-    survivor = service.share_resource(
-        subject_type="user",
-        subject_id=grantee,
-        role_id=role_id,
-        resource_type="deployment_execution",
-        resource_id="exec-kept",
-        cluster_id=cluster_id,
-    )
-
-    assert service.revoke_resource_shares(resource_type="deployment_execution", resource_ids=["exec-deleted"]) == 2
-    assert service.list_resource_shares("deployment_execution", "exec-deleted") == []
-    assert [binding.id for _, binding in service.list_resource_shares("deployment_execution", "exec-kept")] == [
-        survivor.id
-    ]
+        a.service.revoke_access(a.model.id, grant["id"], principal=a.auth.principal_for(a.user))
+    assert len(a.service.list_access(a.model.id, principal=a.operator)) == 1
 
 
 @pytest.mark.parametrize("subject_type", ["user", "group"])
-@pytest.mark.parametrize("mismatch", ["resource_id", "resource_type", "cluster_id", "global", "cluster", None])
-def test_share_revocation_is_bound_to_authorized_resource(subject_type, mismatch):
-    from llm_d_lens.core.exceptions import NotFoundError
+@pytest.mark.parametrize("resource_type", ["deployment_execution", "deployment_run", "cluster"])
+def test_retired_resource_bindings_cannot_be_recreated_through_generic_api(access, subject_type, resource_type):
+    a = access
+    subject_id = a.user.id if subject_type == "user" else a.auth.group_dao.create(GroupRecord(name="target")).id
+    add = a.auth.add_user_binding if subject_type == "user" else a.auth.add_group_binding
+    with pytest.raises(DomainValidationError):
+        add(
+            subject_id,
+            a.role.id,
+            scope_type="resource",
+            scope_cluster_id=a.cluster,
+            scope_resource_type=resource_type,
+            scope_resource_id="old-resource",
+        )
 
-    service = default_service()
-    cluster_id = _cluster()
-    role_id = _role({"deployment:run:read"})
-    if subject_type == "user":
-        subject_id = _reachable_user(role_id, cluster_id, f"revoke-{uuid4().hex[:6]}")
-        add = service.add_user_binding
-        dao = service.user_binding_dao
-    else:
-        subject_id = GroupDao().create(GroupRecord(name=f"revoke-{uuid4().hex[:6]}")).id
-        add = service.add_group_binding
-        dao = service.group_binding_dao
 
-    scope = {
-        "scope_type": "resource",
-        "scope_cluster_id": cluster_id,
-        "scope_resource_type": "deployment_execution",
-        "scope_resource_id": "exec-owned",
+@pytest.mark.parametrize("role", ["admin", "maintainer"])
+def test_model_grants_never_confer_privileged_roles(access, role):
+    a = access
+    with pytest.raises(DomainValidationError, match="built-in end-user"):
+        a.auth.add_user_binding(
+            a.user.id,
+            a.auth.require_role(role).id,
+            scope_type="resource",
+            scope_cluster_id=a.cluster,
+            scope_resource_type="model_service_group",
+            scope_resource_id=a.model.id,
+        )
+
+
+def test_grant_scope_cannot_be_forged(access):
+    a = access
+    with pytest.raises(DomainValidationError, match="cluster must match"):
+        a.auth.add_user_binding(
+            a.user.id,
+            a.role.id,
+            scope_type="resource",
+            scope_cluster_id=a.other,
+            scope_resource_type="model_service_group",
+            scope_resource_id=a.model.id,
+        )
+
+
+def test_builtin_roles_keep_management_boundaries():
+    assert "deployment:run:share" not in ALL_PERMISSIONS
+    assert SHARE in BUILTIN_ROLE_PERMISSIONS["maintainer"]
+    assert "model-service:group:manage" not in BUILTIN_ROLE_PERMISSIONS["maintainer"]
+    assert "model-service:gateway:manage" not in BUILTIN_ROLE_PERMISSIONS["maintainer"]
+    assert BUILTIN_ROLE_PERMISSIONS["end-user"] == {
+        USE,
+        "model-service:token:manage",
+        "model-service:usage:read",
     }
-    if mismatch in {"global", "cluster"}:
-        scope.update(scope_type=mismatch, scope_resource_type=None, scope_resource_id=None)
-        if mismatch == "global":
-            scope["scope_cluster_id"] = None
-    binding = add(subject_id, role_id, **scope)
-    authorized = {"resource_type": "deployment_execution", "resource_id": "exec-owned", "cluster_id": cluster_id}
-    if mismatch in authorized:
-        authorized[mismatch] = "other-resource"
-
-    if mismatch is None:
-        service.revoke_resource_share(binding.id, **authorized)
-        assert dao.get(binding.id) is None
-    else:
-        with pytest.raises(NotFoundError, match="binding not found"):
-            service.revoke_resource_share(binding.id, **authorized)
-        assert dao.get(binding.id) is not None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("resource_type", ["deployment_execution", "deployment_run"])
-async def test_deployment_revoke_routes_pass_server_derived_resource_scope(monkeypatch, resource_type):
-    from types import SimpleNamespace
+def test_access_routes_and_public_models_use_the_same_policy(access, monkeypatch):
+    from llm_d_lens.api.main import app
+    from llm_d_lens.model_service import router
 
-    from llm_d_lens.deploy import router
+    a = access
+    monkeypatch.setattr(router, "_service", a.service)
+    monkeypatch.setattr(router, "current_principal", lambda _: a.operator)
+    client = TestClient(app)
+    path = f"/api/v1/model-service/admin/groups/{a.model.id}/access"
+    assert client.get(path).json() == {"items": []}
+    assert client.get(path + "/options").json()["users"] == [{"id": a.user.id, "username": a.user.username}]
+    body = {"subjectType": "user", "subjectId": a.user.id}
+    assert client.post(path, json={**body, "roleId": "admin"}).status_code == 422
+    response = client.post(path, json=body)
+    assert response.status_code == 201
+    assert client.post(path, json=body).status_code == 409
+    _, token = a.service.tokens.create(a.user.id)
+    assert client.get("/v1/models", headers={"Authorization": f"Bearer {token}"}).json()["data"]
+    assert client.delete(path + "/" + response.json()["id"]).status_code == 204
+    assert client.get("/v1/models", headers={"Authorization": f"Bearer {token}"}).json()["data"] == []
+    monkeypatch.setattr(router, "current_principal", lambda _: a.auth.principal_for(a.user))
+    assert client.get(path).status_code == 403
+    assert client.get(path + "/options").status_code == 403
+    assert client.post(path, json=body).status_code == 403
+    schema = app.openapi()
+    assert not any("/deployments/" in p and "/access" in p for p in schema["paths"])
+    assert SHARE in schema["paths"][path.replace(a.model.id, "{group_id}")]["post"]["description"]
 
-    calls, guards = [], []
-    monkeypatch.setattr(
-        router,
-        "default_service",
-        lambda: SimpleNamespace(revoke_resource_share=lambda binding_id, **scope: calls.append((binding_id, scope))),
-    )
-    monkeypatch.setattr(router, "_share_requirements_met", lambda *args, **kwargs: guards.append(kwargs))
-    monkeypatch.setattr(router, "_owner_for_run", lambda run_id: ("owner", None))
-    monkeypatch.setattr(
-        router,
-        "_require_execution",
-        lambda execution_id: SimpleNamespace(run_id="run-owned", cluster_id="cluster-owned"),
-    )
-    monkeypatch.setattr(
-        router,
-        "_store",
-        SimpleNamespace(get_run=lambda run_id: SimpleNamespace(provenance={"cluster_server_id": "cluster-owned"})),
-    )
-    resource_id = "exec-owned" if resource_type == "deployment_execution" else "run-owned"
-    route = router.revoke_execution_access if resource_type == "deployment_execution" else router.revoke_run_access
-    response = await route(resource_id, "binding", None)
-    assert response.status_code == 204
-    assert guards[0]["cluster_id"] == "cluster-owned"
-    assert calls == [
-        ("binding", {"resource_type": resource_type, "resource_id": resource_id, "cluster_id": "cluster-owned"})
-    ]
+
+def test_model_access_migration_audits_revocation_backfills_owners_and_never_restores_shares(access):
+    import importlib
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    from llm_d_lens.db.engine import get_engine
+
+    a = access
+    migration = importlib.import_module("llm_d_lens.db.migrations.versions.42a3e9b47726_model_service_inference_grants")
+    group = a.auth.group_dao.create(GroupRecord(name="legacy-group"))
+    with get_engine().begin() as connection, Operations.context(MigrationContext.configure(connection)):
+        migration.downgrade()
+        connection.execute(
+            sa.text("UPDATE model_service_groups SET created_by_user_id = :user_id"), {"user_id": a.user.id}
+        )
+        for table_name, subject_key, subject_id, resource_type in (
+            ("user_role_bindings", "user_id", a.user.id, "deployment_execution"),
+            ("group_role_bindings", "group_id", group.id, "deployment_run"),
+        ):
+            table = sa.Table(table_name, sa.MetaData(), autoload_with=connection)
+            connection.execute(
+                table.insert().values(
+                    id=f"legacy-{subject_key}",
+                    **{subject_key: subject_id},
+                    role_id=a.role.id,
+                    scope_type="resource",
+                    scope_cluster_id=a.cluster,
+                    scope_resource_type=resource_type,
+                    scope_resource_id="retired-resource",
+                )
+            )
+        migration.upgrade()
+        assert connection.scalar(sa.text("SELECT owner_user_id FROM model_service_groups")) == a.user.id
+        for table_name in ("user_role_bindings", "group_role_bindings"):
+            table = sa.Table(table_name, sa.MetaData(), autoload_with=connection)
+            assert (
+                connection.scalar(sa.select(sa.func.count()).select_from(table).where(table.c.scope_type == "resource"))
+                == 0
+            )
+        assert (
+            connection.scalar(sa.text("SELECT count(*) FROM audit_logs WHERE event_type = 'resource_share_retired'"))
+            == 2
+        )
+        assert (
+            connection.scalar(
+                sa.text("SELECT count(*) FROM role_permissions WHERE permission = 'deployment:run:share'")
+            )
+            == 0
+        )
+        assert (
+            connection.scalar(
+                sa.text("SELECT count(*) FROM role_permissions WHERE permission = 'model-service:group:share'")
+            )
+            == 2
+        )
+        migration.downgrade()
+        assert "owner_user_id" not in {
+            column["name"] for column in sa.inspect(connection).get_columns("model_service_groups")
+        }
+        assert connection.scalar(sa.text("SELECT count(*) FROM user_role_bindings WHERE scope_type = 'resource'")) == 0
+        migration.upgrade()

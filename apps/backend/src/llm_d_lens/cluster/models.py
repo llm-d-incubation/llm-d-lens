@@ -55,7 +55,11 @@ class ClusterRecord(StrictModel):
     benchmark_source: dict | None = Field(default=None, alias="benchmarkSource")
     deployment_source: dict | None = Field(default=None, alias="deploymentSource")
     gateway_provider: str | None = Field(default=None, alias="gatewayProvider")
-    gateway_namespace: str | None = Field(default=None, alias="gatewayNamespace")
+    gateway_namespace: str | None = Field(
+        default=None,
+        alias="gatewayNamespace",
+        description="Effective Gateway namespace including the stable Lens cluster-registration short ID.",
+    )
     gateway_name: str | None = Field(default=None, alias="gatewayName")
     gateway_public_url: str | None = Field(default=None, alias="gatewayPublicUrl")
     gateway_port: int | None = Field(default=None, alias="gatewayPort")
@@ -87,7 +91,13 @@ class ClusterSettingsUpdateRequest(StrictModel):
     llm_d_ref: str | None = Field(default=None, alias="llmDRef")
     llm_d_lensmark_ref: str | None = Field(default=None, alias="llmDBenchmarkRef")
     gateway_provider: str | None = Field(default=None, alias="gatewayProvider")
-    gateway_namespace: str | None = Field(default=None, alias="gatewayNamespace")
+    gateway_namespace: str | None = Field(
+        default=None,
+        alias="gatewayNamespace",
+        max_length=63,
+        description="Gateway namespace prefix; Lens appends this registration's stable short ID for isolation. "
+        "Passing the effective suffixed namespace preserves it.",
+    )
     gateway_name: str | None = Field(default=None, alias="gatewayName")
     gateway_public_url: str | None = Field(default=None, alias="gatewayPublicUrl")
     gateway_port: int | None = Field(default=None, alias="gatewayPort")

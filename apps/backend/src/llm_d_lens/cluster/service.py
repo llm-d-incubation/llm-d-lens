@@ -535,8 +535,17 @@ def list_clusters(*, include_drafts: bool = False) -> list[registry.Cluster]:
 
 
 async def delete_cluster(cluster_id: str) -> None:
-    """Delete a cluster and any deploy session registered against it.
+    """Delete a cluster, its isolated Gateway namespace and its deploy session.
 
+    Gateway namespace cleanup must succeed before the cluster record is removed.
+    A cleanup failure retains the record and kubeconfig for a retry.
+    """
+    async with registry.gateway_lock(cluster_id):
+        await _delete_cluster_locked(cluster_id)
+
+
+async def _delete_cluster_locked(cluster_id: str) -> None:
+    """
     Draft clusters (still being assembled by the creation wizard, not yet
     finalized) skip the "still has deployments/Storage volumes" guards
     below: they are only reachable from within the wizard itself, so if the
@@ -561,6 +570,25 @@ async def delete_cluster(cluster_id: str) -> None:
             )
     else:
         await _delete_storage_volumes(cluster_id)
+    from llm_d_lens.infrastructure.kubernetes import delete_namespace
+
+    gateway_namespace = registry.gateway_namespace_for(cluster.id, cluster.gateway_namespace)
+    try:
+        result = await delete_namespace(gateway_namespace, cluster_id=cluster_id, timeout=120)
+    except (FileNotFoundError, TimeoutError, OSError) as error:
+        logger.warning("Gateway namespace cleanup failed for cluster %s: %s", cluster_id, error)
+        raise ClusterOverviewError(
+            f"Could not delete Gateway namespace {gateway_namespace}; cluster record retained. Retry deletion.",
+            status_code=502,
+            code="cluster_gateway_cleanup_failed",
+        ) from error
+    if result.returncode != 0:
+        logger.warning("Gateway namespace cleanup failed for cluster %s: %s", cluster_id, result.stderr)
+        raise ClusterOverviewError(
+            f"Could not delete Gateway namespace {gateway_namespace}; cluster record retained. Retry deletion.",
+            status_code=502,
+            code="cluster_gateway_cleanup_failed",
+        )
     # Best-effort: delete the HF_TOKEN Secret and the per-cluster model-cache
     # namespace (see the Create Cluster wizard's Model Cache step) before the
     # cluster's kubeconfig is removed below -- once it's gone there is no
@@ -1039,9 +1067,7 @@ async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name
             status_code=409,
             code="secret_already_exists",
         )
-    await _write_hf_token_secret(
-        cluster, namespace, name, token, verb="create", failure_code="secret_create_failed"
-    )
+    await _write_hf_token_secret(cluster, namespace, name, token, verb="create", failure_code="secret_create_failed")
     return {"namespace": namespace, "name": name}
 
 

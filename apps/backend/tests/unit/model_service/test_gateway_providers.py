@@ -272,9 +272,25 @@ def test_ext_auth_uses_each_provider_policy_kind():
     assert "x-llm-d-inference-fairness-id" in http["headersToBackend"]
 
     istio = _ext_auth_docs("istio")
-    policy = next(doc for doc in istio if doc["kind"] == "AuthorizationPolicy")
-    assert policy["spec"]["action"] == "CUSTOM"
-    assert policy["spec"]["provider"]["name"] == "lens-authz"
+    policy = next(doc for doc in istio if doc["kind"] == "EnvoyFilter")
+    assert policy["spec"]["workloadSelector"]["labels"] == {
+        "gateway.networking.k8s.io/gateway-name": "lens-inference-gateway"
+    }
+    patch = policy["spec"]["configPatches"][0]
+    assert patch["match"]["context"] == "GATEWAY"
+    # IPP prepends itself at priority 0, leaving auth before Istio's EPP.
+    # Do not depend on an EPP subfilter: auth must also cover gateways with no pools.
+    assert policy["spec"]["priority"] < 0
+    assert patch["patch"]["operation"] == "INSERT_FIRST"
+    assert patch["match"]["listener"]["filterChain"]["filter"] == {
+        "name": "envoy.filters.network.http_connection_manager"
+    }
+    auth = patch["patch"]["value"]["typed_config"]
+    assert auth["failure_mode_allow"] is False
+    assert auth["status_on_error"]["code"] == "ServiceUnavailable"
+    assert auth["http_service"]["server_uri"]["cluster"] == "outbound|8081||lens-authz.lens-gateway.svc.cluster.local"
+    assert {"exact": "authorization"} in auth["allowed_headers"]["patterns"]
+    assert not any(doc["kind"] == "AuthorizationPolicy" for doc in istio)
 
     agent = _ext_auth_docs("agentgateway")
     policy = next(doc for doc in agent if doc["kind"] == "AgentgatewayPolicy")
@@ -347,6 +363,40 @@ def test_ext_auth_path_carries_cluster_id():
     )
     policy = next(doc for doc in docs if doc["kind"] == "SecurityPolicy")
     assert policy["spec"]["extAuth"]["http"]["path"].endswith("/cluster/cluster-a")
+
+
+def test_istio_auth_is_scoped_to_each_gateway_namespace():
+    from llm_d_lens.cluster.registry import gateway_namespace_for
+
+    upstreams = []
+    for cluster_id, port in (("dcea6ee0", 8093), ("1234abcd", 8095)):
+        namespace = gateway_namespace_for(cluster_id)
+        docs = _docs(
+            render_inference_gateway(
+                namespace=namespace,
+                gateway_name="gw",
+                provider="istio",
+                authz_host="10.0.0.9",
+                authz_port=port,
+                authz_cluster_id=cluster_id,
+            )
+        )
+        auth_filter = next(doc for doc in docs if doc["kind"] == "EnvoyFilter")
+        assert auth_filter["metadata"]["namespace"] == namespace
+        assert auth_filter["spec"]["priority"] < 0
+        auth = auth_filter["spec"]["configPatches"][0]["patch"]["value"]["typed_config"]
+        http = auth["http_service"]
+        upstreams.append(http["server_uri"]["cluster"])
+        assert http["path_prefix"].endswith(f"/cluster/{cluster_id}")
+        assert {"exact": BASE_MODEL_HEADER.lower()} in auth["allowed_headers"]["patterns"]
+        assert {"exact": "x-llm-d-inference-fairness-id"} in http["authorization_response"]["allowed_upstream_headers"][
+            "patterns"
+        ]
+        endpoints = next(doc for doc in docs if doc["kind"] == "Endpoints")
+        assert endpoints["metadata"]["namespace"] == namespace
+        assert endpoints["subsets"][0]["ports"][0]["port"] == port
+        assert not any("meshConfig" in doc.get("spec", {}) for doc in docs)
+    assert len(set(upstreams)) == 2
 
 
 def test_render_node_inotify_daemonset_sets_limit():

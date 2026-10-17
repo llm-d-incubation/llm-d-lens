@@ -19,7 +19,9 @@ from llm_d_lens.auth.permissions import (
     BUILTIN_ROLE_END_USER,
     BUILTIN_ROLE_MAINTAINER,
     BUILTIN_ROLE_PERMISSIONS,
+    permission_granted,
 )
+from llm_d_lens.auth.policy import role_has_permission
 from llm_d_lens.auth.principal import build_principal
 from llm_d_lens.auth.providers.base import ExternalIdentity, IdentityProviderError
 from llm_d_lens.auth.providers.registry import get_provider, provider_class
@@ -34,7 +36,6 @@ from llm_d_lens.auth.records import (
     UserRoleBindingRecord,
     utcnow,
 )
-from llm_d_lens.auth.scope import cluster_reachable
 from llm_d_lens.auth.security import (
     SecretCipher,
     generate_session_token,
@@ -53,6 +54,7 @@ from llm_d_lens.core.exceptions import (
 from llm_d_lens.db.dao.audit_log import AuditLogDao
 from llm_d_lens.db.dao.group import GroupDao, GroupRoleBindingDao, UserGroupDao
 from llm_d_lens.db.dao.identity_provider import IdentityGroupMappingDao, IdentityProviderDao
+from llm_d_lens.db.dao.model_service_group import ModelServiceGroupDao
 from llm_d_lens.db.dao.role import RoleDao, RolePermissionDao, UserRoleBindingDao
 from llm_d_lens.db.dao.session import SessionDao
 from llm_d_lens.db.dao.user import UserDao
@@ -61,7 +63,7 @@ MIN_PASSWORD_LENGTH = 12
 _SPECIAL = set("!@#$%^&*()-_=+[]{};:,.<>?/\\|`~\"'")
 
 #: Resource types that may be shared with a resource-scoped role binding.
-SHARE_RESOURCE_TYPES = frozenset({"deployment_run", "deployment_execution"})
+SHARE_RESOURCE_TYPES = frozenset({"model_service_group"})
 
 
 @dataclass(frozen=True)
@@ -893,6 +895,9 @@ class AuthService:
         if is_protected_user(target):
             raise ConflictError("the built-in admin account's roles cannot be changed")
         self.require_role(role_id)
+        self._validate_resource_binding(
+            "user", user_id, role_id, scope_type, scope_cluster_id, scope_resource_type, scope_resource_id
+        )
         binding = self.user_binding_dao.create(
             UserRoleBindingRecord(
                 user_id=user_id,
@@ -933,6 +938,9 @@ class AuthService:
         if self.group_dao.get(group_id) is None:
             raise NotFoundError("group not found")
         self.require_role(role_id)
+        self._validate_resource_binding(
+            "group", group_id, role_id, scope_type, scope_cluster_id, scope_resource_type, scope_resource_id
+        )
         binding = self.group_binding_dao.create(
             GroupRoleBindingRecord(
                 group_id=group_id,
@@ -966,11 +974,11 @@ class AuthService:
         cluster_id: str | None,
         granted_by: str | None = None,
     ) -> UserRoleBindingRecord | GroupRoleBindingRecord:
-        """Grant one user/group a role scoped to a single deployment resource.
+        """Grant inference-only access to one model service for a scoped user/group.
 
-        Enforces the design's share rules: the grantee must already reach the
-        resource's cluster, shares never cross cluster boundaries, and a
-        duplicate grant is rejected rather than silently re-created.
+        Only the built-in end-user role is accepted for model resource bindings.
+        The recipient must already have inference permission in the model's
+        cluster. Deployment sharing is retired; duplicate grants are rejected.
         """
         if subject_type not in {"user", "group"}:
             raise DomainValidationError("subject_type must be 'user' or 'group'")
@@ -1091,22 +1099,77 @@ class AuthService:
                 matches.append(("group", binding))
         return matches
 
-    def _require_share_reachability(self, subject_type: str, subject_id: str, cluster_id: str) -> None:
+    def _validate_resource_binding(
+        self,
+        subject_type: str,
+        subject_id: str,
+        role_id: str,
+        scope_type: str,
+        cluster_id: str | None,
+        resource_type: str | None,
+        resource_id: str | None,
+    ) -> None:
+        if scope_type != "resource":
+            return
+        if resource_type not in SHARE_RESOURCE_TYPES:
+            raise DomainValidationError("resource bindings only support model-service inference grants")
+        role = self.require_role(role_id)
+        if not role.is_builtin or role.name != BUILTIN_ROLE_END_USER:
+            raise DomainValidationError("model grants require the built-in end-user role")
+        group = ModelServiceGroupDao().get(resource_id) if resource_id else None
+        if group is None:
+            raise NotFoundError("model service not found")
+        if not cluster_id or cluster_id != group.cluster_id:
+            raise DomainValidationError("grant cluster must match the model service")
+        self._require_share_reachability(subject_type, subject_id, cluster_id)
+
+    def model_share_eligible(self, subject_type: str, subject_id: str, cluster_id: str) -> bool:
+        """Whether a subject has inference action and cluster scope independently of a model grant."""
         if subject_type == "user":
             user = self.user_dao.get(subject_id)
-            if user is None:
-                raise NotFoundError("user not found")
-            if not cluster_reachable(self.principal_for(user), cluster_id):
-                raise ForbiddenError("the grantee cannot reach the resource's cluster")
-            return
+            return bool(
+                user is not None
+                and user.status == "active"
+                and not is_protected_user(user)
+                and role_has_permission(
+                    self.principal_for(user), "model-service:inference:use", target_cluster_id=cluster_id
+                )
+            )
         if self.group_dao.get(subject_id) is None:
-            raise NotFoundError("group not found")
+            return False
         for binding in self.group_binding_dao.list_for_group(subject_id):
             if binding.scope_type == "global" or (
                 binding.scope_type == "cluster" and binding.scope_cluster_id == cluster_id
             ):
-                return
-        raise ForbiddenError("the grantee cannot reach the resource's cluster")
+                role = self.require_role(binding.role_id)
+                codes = self.role_permission_dao.permissions_for_roles([role.id])[role.id]
+                if not codes:
+                    codes = BUILTIN_ROLE_PERMISSIONS.get(role.name, frozenset())
+                if permission_granted(codes, "model-service:inference:use"):
+                    return True
+        return False
+
+    def _require_share_reachability(self, subject_type: str, subject_id: str, cluster_id: str) -> None:
+        subject = self.user_dao.get(subject_id) if subject_type == "user" else self.group_dao.get(subject_id)
+        if subject is None:
+            raise NotFoundError(f"{subject_type} not found")
+        if not self.model_share_eligible(subject_type, subject_id, cluster_id):
+            raise ForbiddenError("the grantee requires inference permission in the model's cluster")
+
+    def model_share_options(self, cluster_id: str) -> dict:
+        """Return only display fields for eligible model-grant recipients in one cluster."""
+        return {
+            "users": [
+                {"id": user.id, "username": user.username}
+                for user in self.user_dao.list(status="active")
+                if self.model_share_eligible("user", user.id, cluster_id)
+            ],
+            "groups": [
+                {"id": group.id, "name": group.name}
+                for group in self.group_dao.list()
+                if self.model_share_eligible("group", group.id, cluster_id)
+            ],
+        }
 
     def _find_resource_binding(
         self, subject_type: str, subject_id: str, role_id: str, resource_type: str, resource_id: str

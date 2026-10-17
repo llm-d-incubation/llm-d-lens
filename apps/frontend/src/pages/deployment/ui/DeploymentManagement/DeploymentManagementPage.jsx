@@ -28,7 +28,6 @@ import { DeploymentDetailsModal } from './DeploymentDetailsModal';
 import { EditDeploymentModal } from './EditDeploymentModal';
 import { DeleteDeploymentModal } from './DeleteDeploymentModal';
 import { DeploymentPodsLogsModal } from './DeploymentPodsLogsModal';
-import { DeploymentShareDrawer } from './DeploymentShareDrawer';
 import { useAuth } from '../../../auth';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import {
@@ -53,15 +52,14 @@ function StatCard({ label, value, tone = 'text-white' }) {
     );
 }
 
-export function DeploymentManagementPage({ onNavigate } = {}) {
-    const [searchInput, setSearchInput] = useState('');
+export function DeploymentManagementPage({ onNavigate, initialSearch = '', initialClusterId = '' } = {}) {
+    const [searchInput, setSearchInput] = useState(initialSearch);
     const query = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
     const [statuses, setStatuses] = useState(new Set());
-    const [clusterId, setClusterId] = useState('');
+    const [clusterId, setClusterId] = useState(initialClusterId);
     const [dialog, setDialog] = useState(null);
     const [selected, setSelected] = useState(null);
     const { can } = useAuth();
-    const canShare = can('deployment:run:share');
     const [mutatingId, setMutatingId] = useState(null);
     const [connectingEndpointId, setConnectingEndpointId] = useState('');
     const [notice, setNotice] = useNotice();
@@ -318,7 +316,6 @@ export function DeploymentManagementPage({ onNavigate } = {}) {
                         onDelete={openDialog('delete')}
                         onNavigate={onNavigate}
                         onConnectLocalEndpoint={handleConnectLocalEndpoint}
-                        onShare={canShare ? openDialog('share') : undefined}
                     />
                     <PaginationControls className="mt-2" page={currentPage} totalPages={totalPages} onPageChange={setPage}
                         total={items.length} pageStart={pageStart} pageEnd={pageEnd} itemLabel="deployments"
@@ -333,14 +330,6 @@ export function DeploymentManagementPage({ onNavigate } = {}) {
             {dialog === 'edit' && <EditDeploymentModal deployment={selected} onCancel={closeDialog} onSave={handleSave} />}
             {dialog === 'delete' && <DeleteDeploymentModal deployment={selected} clusterNameById={clusterNameById} onCancel={closeDialog} onDelete={handleDelete} />}
             {dialog === 'pods-logs' && <DeploymentPodsLogsModal deployment={selected} onClose={closeDialog} />}
-            {dialog === 'share' && selected && (
-                <DeploymentShareDrawer
-                    targetType="execution"
-                    targetId={selected.execution_id}
-                    targetLabel={selected.display_name || selected.name || selected.execution_id}
-                    onClose={closeDialog}
-                />
-            )}
         </ModulePage>
     );
 }

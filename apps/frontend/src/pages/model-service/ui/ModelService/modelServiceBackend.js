@@ -57,6 +57,28 @@ export async function listUsageTimeseries({ days = 30, signal } = {}) {
 // --- admin -------------------------------------------------------------------
 
 const admin = `${base}/admin`;
+const accessPath = (groupId) => `${admin}/groups/${encodeURIComponent(groupId)}/access`;
+
+export async function getModelAccess(groupId, { signal } = {}) {
+    const [grants, options] = await Promise.all([
+        requestJson(accessPath(groupId), { signal }),
+        requestJson(`${accessPath(groupId)}/options`, { signal }),
+    ]);
+    if (!Array.isArray(grants?.items) || !Array.isArray(options?.users) || !Array.isArray(options?.groups)) {
+        throw new Error('Model access response is invalid');
+    }
+    return { grants: grants.items, users: options.users, groups: options.groups };
+}
+
+export function grantModelAccess(groupId, { subjectType, subjectId }) {
+    return requestJson(accessPath(groupId), {
+        method: 'POST', headers: jsonHeaders, body: JSON.stringify({ subjectType, subjectId }),
+    });
+}
+
+export function revokeModelAccess(groupId, bindingId) {
+    return requestJson(`${accessPath(groupId)}/${encodeURIComponent(bindingId)}`, { method: 'DELETE' });
+}
 
 export async function listGroups({ signal } = {}) {
     const payload = await requestJson(`${admin}/groups`, { signal });
@@ -68,6 +90,28 @@ export function createGroup(body) {
     return requestJson(`${admin}/groups`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) });
 }
 
+export async function addModel({ name, clusterId, executionId }) {
+    const publicName = name.trim();
+    const [groups, members] = await Promise.all([listGroups(), listMembers()]);
+    if (members.some((member) => member.clusterId === clusterId && member.executionId === executionId)) {
+        throw new Error('This deployment has already been added to a model. Select another provider.');
+    }
+    const group = groups.find((item) => item.clusterId === clusterId && item.name === publicName);
+    if (!group) {
+        return { group: await createGroup({ name: publicName, clusterId, executionId }), created: true };
+    }
+    const providers = members.filter((member) => member.groupId === group.id);
+    const weight = 1;
+    const result = await updateTrafficDistribution(group.id, {
+        expectedWeights: Object.fromEntries(providers.map((member) => [member.executionId, member.weight])),
+        members: [
+            ...providers.map((member) => ({ executionId: member.executionId, weight: member.weight })),
+            { executionId, weight },
+        ],
+    });
+    return { group, created: false, weight, operation: result.operation };
+}
+
 export function updateGroup(groupId, body) {
     return requestJson(`${admin}/groups/${encodeURIComponent(groupId)}`, {
         method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
@@ -76,6 +120,16 @@ export function updateGroup(groupId, body) {
 
 export async function deleteGroup(groupId) {
     await requestJson(`${admin}/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' });
+}
+
+export async function setProvidersStatus(groupId, status) {
+    const payload = await requestJson(`${admin}/groups/${encodeURIComponent(groupId)}/providers/status`, {
+        method: 'PUT',
+        headers: jsonHeaders,
+        body: JSON.stringify({ status }),
+    });
+    if (!Array.isArray(payload?.items)) throw new Error('Provider status response is invalid; refresh before retrying.');
+    return payload.items;
 }
 
 export async function listMembers(groupId, { signal } = {}) {
@@ -99,6 +153,16 @@ export function updateMember(memberId, body) {
     return requestJson(`${admin}/members/${encodeURIComponent(memberId)}`, {
         method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
     });
+}
+
+export async function updateTrafficDistribution(groupId, body) {
+    const payload = await requestJson(`${admin}/groups/${encodeURIComponent(groupId)}/traffic`, {
+        method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body),
+    });
+    if (!Array.isArray(payload?.items) || !payload?.operation?.status) {
+        throw new Error('Traffic distribution response is invalid; refresh before retrying.');
+    }
+    return payload;
 }
 
 export async function deleteMember(memberId) {
@@ -185,4 +249,3 @@ export function streamGatewayOperation(payload, onEvent, signal) {
 export function streamComponentLogs(payload, onEvent, signal) {
     return streamSseRequest(`${gateway}/logs`, payload, onEvent, signal);
 }
-

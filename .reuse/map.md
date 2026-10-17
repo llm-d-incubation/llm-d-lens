@@ -519,9 +519,9 @@ path
 principal_id), with AsyncLocalStorage propagating authenticated callers to deeper internal reads.
 Entry: [apps/server/src/middleware/internalAuth.ts](../apps/server/src/middleware/internalAuth.ts) — `signInternalHeaders`, `verifyInternalHeaders`, `internalHeadersFor`, `runWithInternalAuth`, `currentInternalPrincipalId`, `internalAuthEnabled`
 
-## deployment-resource-sharing
+## model-service-resource-sharing
 
-Share an individual deployment run or execution with users/groups through resource-scoped role bindings: create, revoke, and list bindings.
+Grant inference on one model service to users/groups through constrained resource-scoped bindings: create, revoke and list access.
 Entry: [apps/backend/src/llm_d_lens/auth/service.py](../apps/backend/src/llm_d_lens/auth/service.py) — `share_resource`, `revoke_resource_share`, `list_resource_shares`
 
 ## frontend-polling

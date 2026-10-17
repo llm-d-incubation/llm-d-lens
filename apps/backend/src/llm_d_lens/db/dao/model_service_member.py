@@ -8,8 +8,9 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from llm_d_lens.db.dao.base import BaseDao
+from llm_d_lens.db.models.model_service_group import ModelServiceGroupRow
 from llm_d_lens.db.models.model_service_member import ModelServiceMemberRow
-from llm_d_lens.model_service.contracts import ModelServiceMember
+from llm_d_lens.model_service.contracts import ModelServiceMember, utcnow
 
 
 class ModelServiceMemberDaoError(Exception):
@@ -19,6 +20,9 @@ class ModelServiceMemberDaoError(Exception):
 class ModelServiceMemberDao(BaseDao):
     def create(self, member: ModelServiceMember) -> ModelServiceMember:
         with self._transaction() as session:
+            session.scalar(
+                select(ModelServiceGroupRow).where(ModelServiceGroupRow.id == member.group_id).with_for_update()
+            )
             if session.get(ModelServiceMemberRow, member.id) is not None:
                 raise ModelServiceMemberDaoError(f"member already exists: {member.id}")
             duplicate = session.scalars(
@@ -62,15 +66,104 @@ class ModelServiceMemberDao(BaseDao):
 
     def save(self, member: ModelServiceMember) -> ModelServiceMember:
         with self._transaction() as session:
-            row = session.get(ModelServiceMemberRow, member.id)
+            row = session.scalar(
+                select(ModelServiceMemberRow).where(ModelServiceMemberRow.id == member.id).with_for_update()
+            )
             if row is None:
                 raise ModelServiceMemberDaoError(f"member not found: {member.id}")
-            row.sync_from_dto(member)
+            # Health and status writers may hold a DTO read before a traffic edit.
+            # Weights are changed only by the atomic traffic operation.
+            row.sync_from_dto(member, weight=row.weight)
             session.flush()
             return row.to_dto()
+
+    def save_health(self, member: ModelServiceMember) -> ModelServiceMember:
+        """Update probe-owned fields without undoing an explicit offline decision."""
+        with self._transaction() as session:
+            row = session.scalar(
+                select(ModelServiceMemberRow).where(ModelServiceMemberRow.id == member.id).with_for_update()
+            )
+            if row is None:
+                raise ModelServiceMemberDaoError(f"member not found: {member.id}")
+            if row.status != "disabled":
+                row.status = member.status
+                row.health_json = member.health_json
+                row.last_health_at = member.last_health_at
+            session.flush()
+            return row.to_dto()
+
+    def save_traffic(
+        self, group_id: str, members: list[ModelServiceMember], expected_weights: dict[str, int]
+    ) -> list[ModelServiceMember]:
+        """Atomically add providers and replace weights, rejecting stale snapshots."""
+        with self._transaction() as session:
+            group = session.scalar(
+                select(ModelServiceGroupRow).where(ModelServiceGroupRow.id == group_id).with_for_update()
+            )
+            if group is None:
+                raise ModelServiceMemberDaoError(f"group not found: {group_id}")
+            rows = list(
+                session.scalars(
+                    select(ModelServiceMemberRow).where(ModelServiceMemberRow.group_id == group_id).with_for_update()
+                )
+            )
+            if {row.execution_id: row.weight for row in rows} != expected_weights:
+                raise ModelServiceMemberDaoError("providers or weights changed; reload traffic distribution and retry")
+            existing = {row.execution_id: row for row in rows}
+            if len({member.execution_id for member in members}) != len(members):
+                raise ModelServiceMemberDaoError("duplicate deployment in traffic distribution")
+            if not set(existing).issubset({member.execution_id for member in members}):
+                raise ModelServiceMemberDaoError("traffic updates must include every existing provider")
+            if any(member.group_id != group_id or member.cluster_id != group.cluster_id for member in members):
+                raise ModelServiceMemberDaoError("all providers must belong to the model and its cluster")
+            if not any(
+                member.weight > 0
+                and (existing[member.execution_id].status if member.execution_id in existing else member.status)
+                != "disabled"
+                for member in members
+            ):
+                raise ModelServiceMemberDaoError("at least one enabled provider must have a positive weight")
+            saved = []
+            for member in members:
+                row = existing.get(member.execution_id)
+                if row is None:
+                    row = ModelServiceMemberRow.from_dto(member)
+                    session.add(row)
+                else:
+                    row.weight = member.weight
+                    row.updated_at = utcnow()
+                saved.append(row)
+            session.flush()
+            return [row.to_dto() for row in saved]
 
     def delete(self, member_id: str) -> None:
         with self._transaction() as session:
             row = session.get(ModelServiceMemberRow, member_id)
             if row is not None:
+                session.scalar(
+                    select(ModelServiceGroupRow).where(ModelServiceGroupRow.id == row.group_id).with_for_update()
+                )
                 session.delete(row)
+
+    def set_group_status(
+        self, group_id: str, status: str, expected_statuses: dict[str, str]
+    ) -> list[ModelServiceMember]:
+        """Change the validated provider snapshot atomically without changing weights."""
+        with self._transaction() as session:
+            group = session.scalar(
+                select(ModelServiceGroupRow).where(ModelServiceGroupRow.id == group_id).with_for_update()
+            )
+            if group is None:
+                raise ModelServiceMemberDaoError(f"group not found: {group_id}")
+            rows = list(
+                session.scalars(
+                    select(ModelServiceMemberRow).where(ModelServiceMemberRow.group_id == group_id).with_for_update()
+                )
+            )
+            if {row.id: row.status for row in rows} != expected_statuses:
+                raise ModelServiceMemberDaoError("providers changed; reload the model and retry")
+            for row in rows:
+                row.status = status
+                row.updated_at = utcnow()
+            session.flush()
+            return [row.to_dto() for row in rows]

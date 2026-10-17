@@ -31,6 +31,8 @@ class ModelServiceGroupRow(Base, DeclarativeDtoMixin):
         "served_name": "served_name",
         "base_model": "base_model",
         "created_by_user_id": "created_by_user_id",
+        "owner_user_id": "owner_user_id",
+        "owner_group_id": "owner_group_id",
         "created_at": "created_at",
         "updated_at": "updated_at",
     }
@@ -51,6 +53,12 @@ class ModelServiceGroupRow(Base, DeclarativeDtoMixin):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, server_default=func.now())
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", name="fk_model_service_owner_user", ondelete="SET NULL"), nullable=True, index=True
+    )
+    owner_group_id: Mapped[str | None] = mapped_column(
+        ForeignKey("groups.id", name="fk_model_service_owner_group", ondelete="SET NULL"), nullable=True, index=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), nullable=False, server_default=func.now(), onupdate=func.now()
     )

@@ -15,10 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from llm_d_lens.auth.casbin_adapter import role_has_permission as _casbin_role_has_permission
-from llm_d_lens.auth.contracts import Principal, ResourceRef, ScopeType, action_of
+from llm_d_lens.auth.contracts import Principal, ResourceRef, ScopeType
 from llm_d_lens.auth.permissions import permission_granted, permission_matches  # noqa: F401  (re-export)
 from llm_d_lens.auth.scope import (
-    OWNER_GROUP_EXCLUDED_ACTIONS,
     binding_applies,
     cluster_reachable,
     ownership_covers,
@@ -58,15 +57,20 @@ def accessible_cluster_ids(principal: Principal) -> set[str] | None:
 
 
 def principal_permissions(principal: Principal) -> frozenset[str]:
-    """Union of permission codes across all roles the principal holds."""
+    """Union of action permissions; resource grants only narrow existing scope."""
     codes: set[str] = set()
     for binding in principal.bindings:
-        codes |= set(principal.permissions_for(binding.role))
+        if binding.scope_type is not ScopeType.RESOURCE:
+            codes |= set(principal.permissions_for(binding.role))
     return frozenset(codes)
 
 
 def _resource_share_allows(principal: Principal, required: str, resource: ResourceRef) -> bool:
-    action = action_of(required)
+    # Resource grants only convey model inference, never management or cluster access.
+    if resource.resource_type != "model_service_group" or required != "model-service:inference:use":
+        return False
+    if not role_has_permission(principal, required, resource=resource):
+        return False
     for binding in principal.bindings:
         if binding.scope_type is not ScopeType.RESOURCE:
             continue
@@ -76,11 +80,7 @@ def _resource_share_allows(principal: Principal, required: str, resource: Resour
             continue
         if not _role_contains(principal, binding.role, required):
             continue
-        # A share only conveys the role's non-creator-only actions. Actions the
-        # shared role scopes to the owner (delete / share / grant-access) stay
-        # with the creator, exactly as they do for owner-group members (section
-        # 7.4); a grantee is not the creator, so a share must not elevate it.
-        if action in OWNER_GROUP_EXCLUDED_ACTIONS and required in principal.self_scoped_for(binding.role):
+        if binding.role != "end-user":
             continue
         return True
     return False
@@ -116,6 +116,8 @@ def authorize(
         if required in principal.self_scoped_for(binding.role):
             continue
         return Decision(True, "binding_scope")
+    if resource.resource_type == "model_service_group" and required == "model-service:inference:use":
+        return Decision(False, "model_grant_required")
     if ownership_covers(principal, resource, required):
         return Decision(True, "ownership")
     return Decision(False, "out_of_scope")

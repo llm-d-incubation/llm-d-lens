@@ -2331,41 +2331,34 @@ print(result.model_dump(mode="json"))
   </TabItem>
 </Tabs>
 
-### Revoke deployment access
+### Deployment access APIs (removed)
 
-Remove a user or group share from the deployment resource the caller is authorized to manage.
-A binding belonging to another resource or cluster, a global/cluster role binding, or an unknown binding returns `404` without removing it. Existing creator/maintainer share permissions still apply.
+Deployment sharing and `deployment:run:share` have been retired. Use
+[model-service inference grants](/api-reference/modules/model-services#model-inference-grants)
+instead. Migration audits and removes existing deployment shares; it does not
+convert them into broader model grants.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`DELETE /api/v1/deployments/executions/{execution_id}/access/{binding_id}`**
-
-**`DELETE /api/v1/deployments/runs/{run_id}/access/{binding_id}`**
-
-No request body. Success: HTTP `204` with an empty body. For a missing or mismatched binding, the problem response contains:
-
-```json
-{"type":"about:blank","title":"Domain request failed","status":404,"detail":"binding not found","code":"not_found"}
-```
+The former GET/POST/DELETE `/api/v1/deployments/executions/{execution_id}/access`
+and `/api/v1/deployments/runs/{run_id}/access` routes, including
+`/access/options` and `/access/{binding_id}`, are no longer registered.
+They no longer grant, list or revoke access.
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-For trusted server code, first authorize the resource and obtain its identity and cluster from the stored deployment. Then call the shared service with that scope:
+Replace deployment-share calls with the model service's scoped grant methods:
 
 ```python
-from llm_d_lens.auth.service import default_service
+from llm_d_lens.model_service.service import default_service
 
-def revoke_execution_share(binding_id: str, execution_id: str, cluster_id: str) -> None:
-    # The caller has already authorized this stored execution.
-    default_service().revoke_resource_share(
-        binding_id,
-        resource_type="deployment_execution",
-        resource_id=execution_id,
-        cluster_id=cluster_id,
-    )
+def revoke_model_grant(model_id: str, binding_id: str, principal) -> None:
+    default_service().revoke_access(model_id, binding_id, principal=principal)
 ```
 
-For a run, pass `resource_type="deployment_run"`, its run ID, and the cluster ID from its stored provenance. The service validates binding ownership; route-level permission checks remain mandatory.
+The method requires `model-service:group:share` in the model's cluster and rejects
+bindings belonging to another model. Generic binding creation rejects retired
+`deployment_run` and `deployment_execution` resource types.
   </TabItem>
 </Tabs>

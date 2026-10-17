@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, Integer, String, func
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from llm_d_lens.db.base import Base, DeclarativeDtoMixin, JSONVariant, UTCDateTime
@@ -31,6 +31,7 @@ class ModelServiceMemberRow(Base, DeclarativeDtoMixin):
         "pool_name": "pool_name",
         "epp_ref": "epp_ref",
         "status": "status",
+        "weight": "weight",
         "health_json": "health_json",
         "last_health_at": "last_health_at",
         "owner_user_id": "owner_user_id",
@@ -54,6 +55,7 @@ class ModelServiceMemberRow(Base, DeclarativeDtoMixin):
     pool_name: Mapped[str | None] = mapped_column(String(253), nullable=True)
     epp_ref: Mapped[str | None] = mapped_column(String(253), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    weight: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     health_json: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
     last_health_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     owner_user_id: Mapped[str | None] = mapped_column(
@@ -69,6 +71,7 @@ class ModelServiceMemberRow(Base, DeclarativeDtoMixin):
 
     __mapper_args__ = {"version_id_col": version_id}
     __table_args__ = (
+        CheckConstraint("weight >= 0 AND weight <= 1000000", name="ck_model_service_members_weight"),
         Index("uq_model_service_members_group_execution", "group_id", "execution_id", unique=True),
         Index("ix_model_service_members_group_status", "group_id", "status"),
         Index("ix_model_service_members_cluster", "cluster_id"),

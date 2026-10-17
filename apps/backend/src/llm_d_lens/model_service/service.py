@@ -5,11 +5,13 @@ Design reference: docs/design/model-service-design.md#6-domain-model
 
 from __future__ import annotations
 
+from llm_d_lens.auth.access import owner_for_create
 from llm_d_lens.auth.contracts import Principal, ResourceRef
 from llm_d_lens.auth.policy import authorize
 from llm_d_lens.auth.service import default_service as default_auth_service
-from llm_d_lens.db.dao.model_service_group import ModelServiceGroupDao
-from llm_d_lens.db.dao.model_service_member import ModelServiceMemberDao
+from llm_d_lens.core.exceptions import ForbiddenError, NotFoundError
+from llm_d_lens.db.dao.model_service_group import ModelServiceGroupDao, ModelServiceGroupDaoError
+from llm_d_lens.db.dao.model_service_member import ModelServiceMemberDao, ModelServiceMemberDaoError
 from llm_d_lens.db.dao.usage_record import UsageRecordDao
 from llm_d_lens.model_service.contracts import (
     AuthorizeRequest,
@@ -19,16 +21,19 @@ from llm_d_lens.model_service.contracts import (
     MemberCreateRequest,
     MemberUpdateRequest,
     ModelAccessToken,
+    ModelGrantRequest,
     ModelServiceGroup,
     ModelServiceMember,
+    ProvidersStatusRequest,
     PublishableDeployment,
+    TrafficUpdateRequest,
     UsageRecord,
     UsageRecordRequest,
     utcnow,
 )
-from llm_d_lens.model_service.gateway_providers import default_pool_name, qualified_pool_name
+from llm_d_lens.model_service.gateway_providers import default_pool_name, qualified_pool_name, split_pool_name
 from llm_d_lens.model_service.selection import select_member
-from llm_d_lens.model_service.targets import ExecutionTargetError, resolve_execution_target
+from llm_d_lens.model_service.targets import ExecutionTarget, ExecutionTargetError, resolve_execution_target
 from llm_d_lens.model_service.tokens import ModelTokenService
 from llm_d_lens.model_service.usage_analytics import build_usage_analytics
 
@@ -74,10 +79,39 @@ class ModelService:
     def get_group(self, group_id: str) -> ModelServiceGroup | None:
         return self.groups.get(group_id)
 
-    def create_group(self, request: GroupCreateRequest, *, created_by: str | None) -> ModelServiceGroup:
-        # Only the public name is user-facing; derive the internal model ref and the
-        # routing base model from it when the caller did not supply them.
-        model_ref = request.model_ref or request.name
+    def create_group(
+        self, request: GroupCreateRequest, *, created_by: str | None, principal: Principal | None = None
+    ) -> ModelServiceGroup:
+        """Create a service, atomically publishing its ready execution when supplied.
+
+        Combined creation derives the deployment model names server-side and
+        requires both management permissions in the deployment's cluster.
+        Gateway reconciliation is scheduled by the HTTP caller after commit.
+        """
+        if principal is not None:
+            resource = ResourceRef(
+                resource_type="cluster", resource_id=request.cluster_id, cluster_id=request.cluster_id
+            )
+            if not authorize(principal, "model-service:group:manage", resource=resource).allowed:
+                raise ForbiddenError("model-service group management is required in this cluster")
+        target = None
+        if request.execution_id is not None:
+            try:
+                target = resolve_execution_target(request.execution_id)
+            except ExecutionTargetError as error:
+                raise ModelServiceNotFoundError(str(error)) from error
+            if target.cluster_id != request.cluster_id:
+                raise ModelServiceConflictError("provider must be in the model service's cluster")
+            if principal is not None:
+                resource = ResourceRef(
+                    resource_type="cluster", resource_id=target.cluster_id, cluster_id=target.cluster_id
+                )
+                for permission in ("model-service:group:manage", "model-service:member:manage"):
+                    if not authorize(principal, permission, resource=resource).allowed:
+                        raise ForbiddenError(f"permission denied: {permission}")
+            if target.status != "ready" or not target.model:
+                raise ModelServiceConflictError("provider must be ready and have a deployment model name")
+        model_ref = (target.model_ref or target.model) if target else (request.model_ref or request.name)
         group = ModelServiceGroup(
             name=request.name,
             model_ref=model_ref,
@@ -85,25 +119,39 @@ class ModelService:
             description=request.description,
             selection_policy=request.selection_policy,
             cluster_id=request.cluster_id,
-            served_name=request.served_name,
-            base_model=request.base_model or model_ref,
+            served_name=target.model if target else request.served_name,
+            base_model=request.name if target else (request.base_model or model_ref),
             created_by_user_id=created_by,
+            owner_user_id=owner_for_create(principal) if principal is not None else created_by,
         )
+        member = self._member_for_target(group.id, target, published_by=created_by) if target else None
         try:
-            return self.groups.create(group)
+            return self.groups.create(group, member=member) if member else self.groups.create(group)
         except Exception as error:  # noqa: BLE001 - map DAO conflict to domain error
             raise ModelServiceConflictError(str(error)) from error
 
-    def update_group(self, group_id: str, request: GroupUpdateRequest) -> ModelServiceGroup:
+    def update_group(
+        self, group_id: str, request: GroupUpdateRequest, *, principal: Principal | None = None
+    ) -> ModelServiceGroup:
+        """Update a model's configuration, preserving provider status and weights when stopped."""
         group = self.groups.get(group_id)
         if group is None:
             raise ModelServiceNotFoundError(f"group not found: {group_id}")
+        if principal is not None:
+            cluster_ids = {value for value in (group.cluster_id, request.cluster_id) if value is not None}
+            cluster_ids.update(member.cluster_id for member in self.members.list_by_group(group_id))
+            for cluster_id in cluster_ids or {""}:
+                resource = ResourceRef(resource_type="cluster", resource_id=cluster_id, cluster_id=cluster_id)
+                if not authorize(principal, "model-service:group:manage", resource=resource).allowed:
+                    raise ForbiddenError("model-service group management is required in this cluster")
         if (
             request.cluster_id is not None
             and request.cluster_id != group.cluster_id
-            and self.members.list_by_group(group_id)
+            and (
+                self.members.list_by_group(group_id) or self._auth.list_resource_shares("model_service_group", group_id)
+            )
         ):
-            raise ModelServiceConflictError("cannot move a model service to another cluster while it has providers")
+            raise ModelServiceConflictError("remove all providers and access grants before changing a model's cluster")
         for field in (
             "name",
             "model_ref",
@@ -124,8 +172,124 @@ class ModelService:
         except Exception as error:  # noqa: BLE001
             raise ModelServiceConflictError(str(error)) from error
 
-    def delete_group(self, group_id: str) -> None:
-        self.groups.delete(group_id)
+    def require_empty_group(self, group_id: str, *, principal: Principal | None = None) -> ModelServiceGroup:
+        group = self.groups.get(group_id)
+        if group is None:
+            raise ModelServiceNotFoundError(f"group not found: {group_id}")
+        if principal is not None:
+            resource = ResourceRef(resource_type="cluster", resource_id=group.cluster_id, cluster_id=group.cluster_id)
+            if not authorize(principal, "model-service:group:manage", resource=resource).allowed:
+                raise ForbiddenError("model-service group management is required in this cluster")
+        if self.members.list_by_group(group_id):
+            raise ModelServiceConflictError("remove every provider from the model before removing it")
+        return group
+
+    def delete_group(self, group_id: str, *, principal: Principal | None = None) -> None:
+        """Delete an empty model record; callers must first confirm its route cleanup."""
+        self.require_empty_group(group_id, principal=principal)
+        try:
+            self.groups.delete(group_id)
+        except ModelServiceGroupDaoError as error:
+            raise ModelServiceConflictError(str(error)) from error
+        self._auth.revoke_resource_shares(resource_type="model_service_group", resource_ids=[group_id])
+
+    def require_group_access(self, group_id: str, principal: Principal, permission: str) -> ModelServiceGroup:
+        group = self.groups.get(group_id)
+        if group is None:
+            raise NotFoundError("model service not found")
+        resource = ResourceRef(
+            resource_type="cluster", resource_id=group.cluster_id or "", cluster_id=group.cluster_id or ""
+        )
+        if principal is None or not authorize(principal, permission, resource=resource).allowed:
+            raise ForbiddenError(f"permission denied: {permission}")
+        return group
+
+    def list_access(self, group_id: str, *, principal: Principal) -> list[dict]:
+        """List inference-only user/group grants, requiring scoped grant management."""
+        self.require_group_access(group_id, principal, "model-service:group:share")
+        entries = []
+        for subject_type, binding in self._auth.list_resource_shares("model_service_group", group_id):
+            subject_id = binding.user_id if subject_type == "user" else binding.group_id
+            subject = (
+                self._auth.user_dao.get(subject_id) if subject_type == "user" else self._auth.group_dao.get(subject_id)
+            )
+            entries.append(
+                {
+                    "id": binding.id,
+                    "subjectType": subject_type,
+                    "subjectId": subject_id,
+                    "subjectName": (subject.username if subject_type == "user" else subject.name)
+                    if subject
+                    else subject_id,
+                    "permission": INFERENCE_PERMISSION,
+                    "createdAt": binding.created_at.isoformat(),
+                }
+            )
+        return entries
+
+    def grant_access(self, group_id: str, request: ModelGrantRequest, *, principal: Principal) -> dict:
+        """Grant model inference to a scoped user/group; never assign caller-selected roles."""
+        group = self.require_group_access(group_id, principal, "model-service:group:share")
+        role = self._auth.role_dao.get_by_name("end-user")
+        if role is None:
+            raise ModelServiceConflictError("built-in end-user role is not initialized")
+        binding = self._auth.share_resource(
+            subject_type=request.subject_type,
+            subject_id=request.subject_id,
+            role_id=role.id,
+            resource_type="model_service_group",
+            resource_id=group.id,
+            cluster_id=group.cluster_id,
+            granted_by=owner_for_create(principal),
+        )
+        return {
+            "id": binding.id,
+            "subjectType": request.subject_type,
+            "subjectId": request.subject_id,
+            "permission": INFERENCE_PERMISSION,
+        }
+
+    def revoke_access(self, group_id: str, binding_id: str, *, principal: Principal) -> None:
+        """Revoke only a grant belonging to this caller-authorized model."""
+        group = self.require_group_access(group_id, principal, "model-service:group:share")
+        self._auth.revoke_resource_share(
+            binding_id,
+            resource_type="model_service_group",
+            resource_id=group.id,
+            cluster_id=group.cluster_id,
+        )
+
+    def access_options(self, group_id: str, *, principal: Principal) -> dict:
+        """Minimal recipient directory restricted to inference-capable cluster scope."""
+        group = self.require_group_access(group_id, principal, "model-service:group:share")
+        return self._auth.model_share_options(group.cluster_id)
+
+    def set_providers_status(
+        self, group_id: str, request: ProvidersStatusRequest, *, principal: Principal
+    ) -> list[ModelServiceMember]:
+        group = self.groups.get(group_id)
+        if group is None:
+            raise ModelServiceNotFoundError(f"group not found: {group_id}")
+        resource = ResourceRef(resource_type="cluster", resource_id=group.cluster_id, cluster_id=group.cluster_id)
+        if not authorize(principal, "model-service:member:manage", resource=resource).allowed:
+            raise ForbiddenError("model-service member management is required in this cluster")
+        members = self.members.list_by_group(group_id)
+        if not members:
+            raise ModelServiceConflictError("model has no providers")
+        if request.status == "active":
+            for member in members:
+                try:
+                    target = resolve_execution_target(member.execution_id)
+                except ExecutionTargetError as error:
+                    raise ModelServiceConflictError(f"provider cannot go online: {error}") from error
+                if target.status != "ready" or target.cluster_id != group.cluster_id:
+                    raise ModelServiceConflictError("all providers must be ready in the model's cluster to go online")
+        try:
+            return self.members.set_group_status(
+                group_id, request.status, {member.id: member.status for member in members}
+            )
+        except ModelServiceMemberDaoError as error:
+            raise ModelServiceConflictError(str(error)) from error
 
     # --- members -------------------------------------------------------------
     def list_members(self, group_id: str | None = None) -> list[ModelServiceMember]:
@@ -147,23 +311,31 @@ class ModelService:
             from llm_d_lens.auth.access import require_cluster_access  # noqa: PLC0415
 
             require_cluster_access(principal, target.cluster_id)
-        member = ModelServiceMember(
-            group_id=request.group_id,
+        member = self._member_for_target(
+            request.group_id, target, pool_name=request.pool_name, published_by=published_by
+        )
+        try:
+            return self.members.create(member)
+        except Exception as error:  # noqa: BLE001
+            raise ModelServiceConflictError(str(error)) from error
+
+    @staticmethod
+    def _member_for_target(
+        group_id: str, target: ExecutionTarget, *, published_by: str | None, pool_name: str | None = None
+    ) -> ModelServiceMember:
+        return ModelServiceMember(
+            group_id=group_id,
             execution_id=target.execution_id,
             cluster_id=target.cluster_id,
             target_namespace=target.namespace,
             target_service=target.service,
             target_port=target.port,
             endpoint_kind=target.endpoint_kind,
-            pool_name=request.pool_name or qualified_pool_name(default_pool_name(target.service), target.namespace),
+            pool_name=pool_name or qualified_pool_name(default_pool_name(target.service), target.namespace),
             epp_ref=target.service if target.endpoint_kind == "llm-d-epp" else None,
             owner_user_id=published_by,
             published_by_user_id=published_by,
         )
-        try:
-            return self.members.create(member)
-        except Exception as error:  # noqa: BLE001
-            raise ModelServiceConflictError(str(error)) from error
 
     def list_publishable_deployments(self, principal=None) -> list[PublishableDeployment]:
         """Ready executions with a derivable target, filtered to visible clusters."""
@@ -202,19 +374,80 @@ class ModelService:
     def update_member(
         self, member_id: str, request: MemberUpdateRequest, *, principal: Principal | None = None
     ) -> ModelServiceMember:
+        """Take a provider offline or restore a ready deployment without changing its weight."""
         member = self.members.get(member_id)
         if member is None:
             raise ModelServiceNotFoundError(f"member not found: {member_id}")
         if principal is not None:
-            from llm_d_lens.auth.access import require_cluster_access  # noqa: PLC0415
-
-            require_cluster_access(principal, member.cluster_id)
+            resource = ResourceRef(resource_type="cluster", resource_id=member.cluster_id, cluster_id=member.cluster_id)
+            if not authorize(principal, "model-service:member:manage", resource=resource).allowed:
+                raise ForbiddenError("model-service member management is required in this cluster")
+        if member.status == "disabled" and request.status not in (None, "disabled"):
+            try:
+                target = resolve_execution_target(member.execution_id)
+            except ExecutionTargetError as error:
+                raise ModelServiceConflictError(f"provider cannot go online: {error}") from error
+            if target.status != "ready" or target.cluster_id != member.cluster_id:
+                raise ModelServiceConflictError("provider must be ready in its registered cluster to go online")
         for field in ("status",):
             value = getattr(request, field)
             if value is not None:
                 setattr(member, field, value)
         member.updated_at = utcnow()
         return self.members.save(member)
+
+    def update_traffic(
+        self, group_id: str, request: TrafficUpdateRequest, *, principal: Principal
+    ) -> list[ModelServiceMember]:
+        """Atomically replace relative weights and add ready, compatible deployment providers.
+
+        Requires member management in the model's cluster. Existing providers must all
+        be included; stale snapshots, incompatible deployments and all-zero allocations
+        are conflicts. This method persists configuration; the HTTP handler reconciles it.
+        """
+        group = self.groups.get(group_id)
+        if group is None:
+            raise ModelServiceNotFoundError(f"group not found: {group_id}")
+        resource = ResourceRef(resource_type="cluster", resource_id=group.cluster_id, cluster_id=group.cluster_id)
+        if not authorize(principal, "model-service:member:manage", resource=resource).allowed:
+            raise ForbiddenError("model-service member management is required in this cluster")
+        existing = {member.execution_id: member for member in self.members.list_by_group(group_id)}
+        members = []
+        pools = set()
+        for item in request.members:
+            member = existing.get(item.execution_id)
+            if member is None or (item.weight > 0 and member.weight == 0):
+                try:
+                    target = resolve_execution_target(item.execution_id)
+                except ExecutionTargetError as error:
+                    raise ModelServiceNotFoundError(str(error)) from error
+                if target.cluster_id != group.cluster_id or target.status != "ready":
+                    raise ModelServiceConflictError("providers must be ready deployments in the model's cluster")
+                if target.endpoint_kind != "llm-d-epp":
+                    raise ModelServiceConflictError(
+                        "weighted routing requires a deployment-owned InferencePool and EPP"
+                    )
+                if not target.model or target.model != (group.served_name or group.model_ref):
+                    raise ModelServiceConflictError(
+                        "provider model name must match the model service's provider model name"
+                    )
+                if member is None:
+                    member = self._member_for_target(group_id, target, published_by=principal.user_id)
+            if member.endpoint_kind != "llm-d-epp":
+                raise ModelServiceConflictError("weighted routing requires deployment-owned InferencePools")
+            pool_namespace, pool_name = split_pool_name(member.pool_name)
+            key = (
+                pool_namespace or member.target_namespace,
+                pool_name or default_pool_name(member.epp_ref or member.target_service),
+            )
+            if key in pools:
+                raise ModelServiceConflictError("deployments must reference distinct InferencePools")
+            pools.add(key)
+            members.append(member.model_copy(update={"weight": item.weight}))
+        try:
+            return self.members.save_traffic(group_id, members, request.expected_weights)
+        except ModelServiceMemberDaoError as error:
+            raise ModelServiceConflictError(str(error)) from error
 
     def delete_member(self, member_id: str, *, principal: Principal | None = None) -> None:
         if principal is not None:
@@ -232,22 +465,30 @@ class ModelService:
             raise ModelServiceUnauthorizedError("token owner is not an active user")
         return user, self._auth.principal_for(user)
 
-    def _member_authorized(self, principal, member: ModelServiceMember) -> bool:
+    def group_authorized(self, group: ModelServiceGroup, principal: Principal) -> bool:
         resource = ResourceRef(
-            resource_type="deployment_execution",
-            resource_id=member.execution_id,
-            cluster_id=member.cluster_id or "",
-            owner_user_id=member.owner_user_id,
-            owner_group_id=member.owner_group_id,
+            resource_type="model_service_group",
+            resource_id=group.id,
+            cluster_id=group.cluster_id or "",
         )
-        return authorize(principal, INFERENCE_PERMISSION, resource=resource).allowed
+        return principal is not None and authorize(principal, INFERENCE_PERMISSION, resource=resource).allowed
 
     def authorized_members(self, group: ModelServiceGroup, principal) -> list[ModelServiceMember]:
-        members = self.members.list_by_group(group.id, status="active")
-        return [member for member in members if self._member_authorized(principal, member)]
+        if not self.group_authorized(group, principal):
+            return []
+        published = self.members.list_by_group(group.id)
+        return [
+            member
+            for member in published
+            if member.cluster_id == group.cluster_id and member.status == "active" and member.weight > 0
+        ]
 
     def list_models_for_user(self, user_id: str) -> list[ModelServiceGroup]:
-        """Active groups with at least one member this user may call."""
+        """Active groups with a healthy positive-weight provider the user may call.
+
+        Consumers require inference cluster scope and an explicit model grant.
+        Operators retain non-self-scoped inference within their binding's scope.
+        """
         user = self._auth.user_dao.get(user_id)
         if user is None or user.status != "active":
             return []

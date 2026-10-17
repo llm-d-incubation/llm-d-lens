@@ -99,14 +99,14 @@ def test_ownership_covers_operate_but_not_delete_for_group_member():
     assert ownership_covers(member, resource, "deployment:run:read")
     assert ownership_covers(member, resource, "monitoring:deployment:action")
     assert not ownership_covers(member, resource, "deployment:execution:delete")
-    assert not ownership_covers(member, resource, "deployment:run:share")
+    assert not ownership_covers(member, resource, "model-service:group:share")
 
 
 def test_ownership_covers_all_actions_for_creator():
     resource = _resource(owner="creator")
     creator = _principal(RoleBinding("end-user", ScopeType.CLUSTER, scope_cluster_id="c1"), user_id="creator")
     assert ownership_covers(creator, resource, "deployment:execution:delete")
-    assert ownership_covers(creator, resource, "deployment:run:share")
+    assert ownership_covers(creator, resource, "model-service:group:share")
 
 
 def test_ownership_requires_cluster_reachability():

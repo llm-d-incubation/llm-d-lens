@@ -12,6 +12,59 @@ Administration spans the auth router in `llm_d_lens/auth/router.py` and the syst
 
 Auth and administration routes live under the `/api/v1` prefix from `llm_d_lens/auth/router.py`.
 
+### Resource binding restrictions
+
+Model inference grants replace deployment sharing. Resource-scope bindings only
+accept `scopeResourceType: "model_service_group"` and the built-in end-user
+`roleId`. The model ID and cluster must match stored records, and the recipient
+must independently hold inference permission in that cluster. Global/cluster
+role assignments are unchanged.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+These restrictions apply to POST `/api/v1/users/{user_id}/role-bindings` and
+POST `/api/v1/groups/{group_id}/role-bindings` (both require role binding
+management). Successful creation returns HTTP 201 with the binding.
+
+```json
+{
+  "roleId": "existing-built-in-end-user-role-id",
+  "scopeType": "resource",
+  "scopeClusterId": "cluster-id",
+  "scopeResourceType": "model_service_group",
+  "scopeResourceId": "msg-existing-model-id"
+}
+```
+
+Retired deployment resource types, privileged grant roles and cluster
+mismatches are rejected. Use the
+[scoped model access API](/api-reference/modules/model-services#model-inference-grants)
+for routine model grants; it derives role and cluster rather than accepting them.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.auth.service import default_service
+
+def add_inference_binding(user_id: str, model_id: str, cluster_id: str):
+    service = default_service()
+    role = service.require_role("end-user")
+    return service.add_user_binding(
+        user_id, role.id, scope_type="resource",
+        scope_cluster_id=cluster_id,
+        scope_resource_type="model_service_group",
+        scope_resource_id=model_id,
+    )
+```
+
+This low-level service is for already-authorized administrator code.
+`add_group_binding` enforces the same constraints for groups. Prefer
+`ModelService.grant_access(..., principal=principal)` to enforce the caller's
+model-specific grant-management scope as well.
+  </TabItem>
+</Tabs>
+
 ### List users
 
 List users, including direct roles, group memberships, and inherited roles.

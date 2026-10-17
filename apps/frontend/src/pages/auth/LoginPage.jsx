@@ -6,7 +6,7 @@ import { errorMessage } from '../../shared/lib/errorMessage';
 import { fetchAuthProviders } from './authClient';
 import { useAuth } from './useAuth';
 
-export default function LoginPage() {
+export default function LoginPage({ onSignedIn } = {}) {
     const { login } = useAuth();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -32,7 +32,8 @@ export default function LoginPage() {
         setError('');
         setSubmitting(true);
         try {
-            await login(username.trim(), password, remember);
+            const data = await login(username.trim(), password, remember);
+            onSignedIn?.(data.principal);
         } catch (loginError) {
             setError(errorMessage(loginError));
         } finally {

@@ -139,48 +139,6 @@ export async function connectDeploymentExecution(executionId) {
     return post(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/endpoint`, {});
 }
 
-// Resource-level sharing (design section 7.7). Both execution and run targets
-// are supported; the server derives the cluster and enforces the share rules.
-export async function listExecutionShares(executionId) {
-    const payload = await requestJson(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/access`);
-    return Array.isArray(payload) ? payload : [];
-}
-
-export async function getExecutionShareOptions(executionId) {
-    return requestJson(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/access/options`);
-}
-
-export async function grantExecutionShare(executionId, share) {
-    return post(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/access`, share);
-}
-
-export async function revokeExecutionShare(executionId, bindingId) {
-    return requestJson(
-        `/api/v1/deployments/executions/${encodeURIComponent(executionId)}/access/${encodeURIComponent(bindingId)}`,
-        { method: 'DELETE' }
-    );
-}
-
-export async function listRunShares(runId) {
-    const payload = await requestJson(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/access`);
-    return Array.isArray(payload) ? payload : [];
-}
-
-export async function getRunShareOptions(runId) {
-    return requestJson(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/access/options`);
-}
-
-export async function grantRunShare(runId, share) {
-    return post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/access`, share);
-}
-
-export async function revokeRunShare(runId, bindingId) {
-    return requestJson(
-        `/api/v1/deployments/runs/${encodeURIComponent(runId)}/access/${encodeURIComponent(bindingId)}`,
-        { method: 'DELETE' }
-    );
-}
-
 export async function getLocalDeploymentCase(runId, caseId) {
     const payload = await requestJson(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}`);
     return payload;

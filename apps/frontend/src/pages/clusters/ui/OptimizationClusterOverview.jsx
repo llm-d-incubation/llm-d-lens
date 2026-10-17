@@ -1,23 +1,16 @@
-import { useClipboard } from '../../../shared/lib/useClipboard';
 import { scaleBytes } from '../../../shared/lib/formatBytes';
 import { requestJson } from '../../../shared/api/httpClient';
-import { Fragment, useEffect, useState } from 'react';
+import { usePolling } from '../../../shared/lib/usePolling';
+import { useResourceList } from '../../../shared/lib/useResourceList';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, AlertCircle, BarChart3, Boxes, Check, ChevronDown, ChevronUp, Copy, Cpu, GitBranch, Gpu, HardDrive, Link2, Loader2, MemoryStick, MoreVertical, Network, PanelLeftClose, PanelLeftOpen, Pause, Pencil, Play, Plus, RefreshCw, Rocket, Server, Trash2, Upload, Webcam } from 'lucide-react';
+import { Activity, AlertCircle, ChevronDown, ChevronUp, Cpu, Gpu, HardDrive, MemoryStick, MoreVertical, Network, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Server, Trash2, Upload, Webcam } from 'lucide-react';
 import { Button, EmptyState, Input, Label, Modal, SectionLabel, Select, Textarea, ModuleHeader, ModulePage } from '../../../shared/ui';
 import { CreateClusterWizard } from './CreateClusterWizard';
 import { EditClusterModal } from './EditClusterModal';
-import { getClusterDeploymentMonitoring, manageDeploymentMonitoring } from './ClusterMonitoringStack/clusterMonitoringStackBackend';
-import { getClusterStackLinks } from './ClusterMonitoringStack/clusterMonitoringStackBackend';
-import { connectDeploymentExecution } from '../../optimization';
 import { storePendingModelMarketCluster } from '../../model-market';
-// Imported from the leaf presentation module rather than the deployment page's
-// index so this page does not create a module cycle with it (that module
-// already imports the Clusters page's monitoring client).
-import { isDeploymentReady } from '../../deployment/ui/DeploymentManagement/deploymentPresentation';
-
-const CENTRAL_NAMESPACE = 'llm-d-monitoring';
-const GRAFANA_PERFORMANCE_DASHBOARD = '/d/llm-d-performance/llm-d-performance-dashboard';
+import { PermissionGate } from '../../auth';
+import { VIEW_PERMISSIONS } from '../../auth/permissions';
 
 function request(path, options = {}) {
     return requestJson(path, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -168,38 +161,6 @@ function componentMetricStatus(status) {
     }
 }
 
-function monitoringChip(status) {
-    switch (status) {
-        case 'enabled':
-            return { status: 'ready', label: 'Enabled' };
-        case 'disabled':
-            return { status: 'inactive', label: 'Disabled' };
-        case 'absent':
-            return { status: 'absent', label: 'Not installed' };
-        case 'unreachable':
-            return { status: 'unreachable', label: 'Unreachable' };
-        default:
-            return { status: 'neutral', label: status || 'Unknown' };
-    }
-}
-
-function MonitoringMenuItem({ onClick, disabled, icon, label, danger = false }) {
-    return (
-        <button
-            type="button"
-            role="menuitem"
-            onClick={onClick}
-            disabled={disabled}
-            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                danger ? 'text-rose-400 hover:bg-rose-500/10' : 'text-slate-200 hover:bg-slate-800'
-            }`}
-        >
-            {icon}
-            {label}
-        </button>
-    );
-}
-
 function statusDotClass(status) {
     return {
         ready: 'bg-emerald-400',
@@ -260,45 +221,11 @@ function ClusterMetricCard({ icon, title, value, unit, status, usagePercent, sho
     );
 }
 
-const MONITORING_TONE_CLASSES = {
-    ready: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20',
-    inactive: 'border-slate-700 bg-slate-800 text-slate-400 hover:bg-slate-800/60',
-    absent: 'border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20',
-    unreachable: 'border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20',
-    neutral: 'border-slate-700 bg-slate-800 text-slate-400 hover:bg-slate-800/60',
-};
-
-function deploymentChip(status) {
-    switch (status) {
-        case 'ready':
-            return { status: 'ready', label: 'Ready' };
-        case 'failed':
-            return { status: 'failed', label: 'Failed' };
-        case 'cancelled':
-            return { status: 'failed', label: 'Cancelled' };
-        case 'deploying':
-            return { status: 'installing', label: 'Deploying' };
-        case 'rendering':
-            return { status: 'installing', label: 'Rendering' };
-        case 'queued':
-            return { status: 'pending', label: 'Queued' };
-        case 'stopped':
-            return { status: 'neutral', label: 'Stopped' };
-        case 'cleaned':
-        case 'cleaned_up':
-            return { status: 'neutral', label: 'Cleaned' };
-        default:
-            return { status: 'neutral', label: status || 'Unknown' };
-    }
-}
-
 export default function OptimizationClusterOverview({ onNavigate, onToggleMobileNav }) {
-    const [clusters, setClusters] = useState([]);
     const [selectedId, setSelectedId] = useState('');
     const [overview, setOverview] = useState(null);
     const [overviewByCluster, setOverviewByCluster] = useState({});
     const [expandedNodeName, setExpandedNodeName] = useState(null);
-    const [clustersLoading, setClustersLoading] = useState(true);
     const [error, setError] = useState('');
     const [showCreate, setShowCreate] = useState(false);
     const [openActions, setOpenActions] = useState(null);
@@ -308,45 +235,37 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     const [deleting, setDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState('');
     const [editTarget, setEditTarget] = useState(null);
-    const [deployments, setDeployments] = useState([]);
-    const { copiedValue: copiedEndpoint, copy: copyEndpoint } = useClipboard(2000);
-    const [connectingEndpoint, setConnectingEndpoint] = useState('');
-    const [connectEndpointError, setConnectEndpointError] = useState('');
-    const [deploymentMonitoring, setDeploymentMonitoring] = useState({ items: [] });
-    const [monitoringAction, setMonitoringAction] = useState('');
-    const [monitoringError, setMonitoringError] = useState('');
-    const [openingLink, setOpeningLink] = useState(null);
-    const [linksError, setLinksError] = useState('');
-    const [openMonitoringMenu, setOpenMonitoringMenu] = useState(null);
     const [selectedNodeNames, setSelectedNodeNames] = useState(() => new Set());
     const [maintenanceBusy, setMaintenanceBusy] = useState(false);
     const [maintenanceError, setMaintenanceError] = useState('');
     const [maintenanceConfirm, setMaintenanceConfirm] = useState(null);
 
-    const loadClusters = async (preferredId) => {
-        try {
-            setClustersLoading(true);
-            setError('');
-            const payload = await request('/api/cluster/clusters');
-            const items = payload.items || [];
-            setClusters(items);
-            const ready = items.filter((cluster) => cluster.ready);
-            setSelectedId((current) => {
-                if (current && ready.some((cluster) => cluster.id === current)) return current;
-                if (preferredId && ready.some((cluster) => cluster.id === preferredId)) return preferredId;
-                return ready[0]?.id || '';
-            });
-        } catch (nextError) {
-            setClusters([]);
-            setError(nextError.message);
-        } finally {
-            setClustersLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        loadClusters();
+    const preferredClusterId = useRef('');
+    const fetchClusters = useCallback(async ({ signal }) => {
+        const payload = await request('/api/cluster/clusters', { signal });
+        return payload.items || [];
     }, []);
+    const selectAvailableCluster = useCallback((items) => {
+        const preferredId = preferredClusterId.current;
+        preferredClusterId.current = '';
+        const ready = items.filter((cluster) => cluster.ready);
+        setSelectedId((current) => {
+            if (current && ready.some((cluster) => cluster.id === current)) return current;
+            if (preferredId && ready.some((cluster) => cluster.id === preferredId)) return preferredId;
+            return ready[0]?.id || '';
+        });
+    }, []);
+    const { items: clusters, loading: clustersLoading, error: clusterListError, load: refreshClusters } = useResourceList(fetchClusters, {
+        onLoaded: selectAvailableCluster,
+        errorFallback: 'Failed to load clusters',
+        retainOnError: true,
+    });
+    usePolling(() => refreshClusters({ quiet: true }));
+
+    const loadClusters = (preferredId = '') => {
+        preferredClusterId.current = preferredId;
+        return refreshClusters();
+    };
 
     useEffect(() => {
         if (!selectedId) { setOverview(null); return undefined; }
@@ -403,38 +322,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     }, [selectedId]);
 
     useEffect(() => {
-        if (!selectedId) { setDeployments([]); return undefined; }
-        let cancelled = false;
-        const poll = async () => {
-            try {
-                const payload = await request(`/api/v1/deployments/cluster/${encodeURIComponent(selectedId)}`);
-                if (!cancelled) setDeployments(Array.isArray(payload) ? payload : []);
-            } catch {
-                if (!cancelled) setDeployments([]);
-            }
-        };
-        poll();
-        const interval = window.setInterval(poll, 5000);
-        return () => { cancelled = true; window.clearInterval(interval); };
-    }, [selectedId]);
-
-    useEffect(() => {
-        if (!selectedId) { setDeploymentMonitoring({ items: [] }); return undefined; }
-        let cancelled = false;
-        const poll = async () => {
-            try {
-                const payload = await getClusterDeploymentMonitoring(selectedId);
-                if (!cancelled) { setDeploymentMonitoring(payload || { items: [] }); setMonitoringError(''); }
-            } catch (nextError) {
-                if (!cancelled) { setDeploymentMonitoring({ items: [] }); setMonitoringError(nextError.message); }
-            }
-        };
-        poll();
-        const interval = window.setInterval(poll, 5000);
-        return () => { cancelled = true; window.clearInterval(interval); };
-    }, [selectedId]);
-
-    useEffect(() => {
         if (!selectedId) { syncSession(null); return undefined; }
         let cancelled = false;
         (async () => {
@@ -476,74 +363,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     const components = kubernetes.components || {};
     const nodes = kubernetes.nodes || [];
     const hardware = kubernetes.hardware || {};
-    const availableDeployments = deployments;
-    const monitoringByDeployment = (deploymentMonitoring.items || []).reduce((acc, item) => {
-        acc[item.execution_id] = item;
-        return acc;
-    }, {});
-    const monitoringStackReady = deploymentMonitoring.stack_ready !== false && deploymentMonitoring.cluster_reachable !== false;
-
-    const runMonitoringAction = async (deployment, action) => {
-        const key = `${deployment.execution_id}:${action}`;
-        setMonitoringAction(key);
-        setMonitoringError('');
-        try {
-            await manageDeploymentMonitoring(deployment.execution_id, action, { clusterId: selectedId });
-            const payload = await getClusterDeploymentMonitoring(selectedId);
-            setDeploymentMonitoring(payload || { items: [] });
-        } catch (nextError) {
-            setMonitoringError(nextError.message);
-        } finally {
-            setMonitoringAction((current) => (current === key ? '' : current));
-        }
-    };
-
-    const openStackLink = async (kind, deployment) => {
-        setOpeningLink(kind);
-        setLinksError('');
-        try {
-            const payload = await getClusterStackLinks(CENTRAL_NAMESPACE, { clusterId: selectedId });
-            const link = (payload?.links || []).find((entry) => entry.kind === kind);
-            if (!link?.available || !link.local_port) {
-                setLinksError(link?.message || `${kind} dashboard is not available`);
-                return;
-            }
-            const host = window.location.hostname;
-            let target = `http://${host}:${link.local_port}`;
-            if (kind === 'grafana') {
-                const path = link.dashboard_path || GRAFANA_PERFORMANCE_DASHBOARD;
-                const params = new URLSearchParams();
-                if (deployment?.namespace) params.set('var-namespace', deployment.namespace);
-                const query = params.toString();
-                target = `http://${host}:${link.local_port}${path}${query ? `?${query}` : ''}`;
-            } else if (link.dashboard_path) {
-                target = `http://${host}:${link.local_port}${link.dashboard_path}`;
-            }
-            window.open(target, '_blank', 'noopener,noreferrer');
-        } catch (nextError) {
-            setLinksError(nextError.message || `Unable to open ${kind} dashboard`);
-        } finally {
-            setOpeningLink(null);
-        }
-    };
-    const connectLocalEndpoint = async (executionId) => {
-        if (!executionId) return;
-        setConnectingEndpoint(executionId);
-        setConnectEndpointError('');
-        try {
-            const result = await connectDeploymentExecution(executionId);
-            const forwarded = result?.forwarded_endpoint || result?.endpoint;
-            if (forwarded) {
-                setDeployments((current) => current.map((item) => (
-                    item.execution_id === executionId ? { ...item, forwarded_endpoint: forwarded } : item
-                )));
-            }
-        } catch (error) {
-            setConnectEndpointError(error.message || 'Unable to connect to deployment endpoint');
-        } finally {
-            setConnectingEndpoint('');
-        }
-    };
     const nodesReady = nodes.filter((node) => node.ready).length;
     const nodesTotal = nodes.length;
     const workerNodes = nodes.filter((node) => node.role === 'worker');
@@ -679,8 +498,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
             diskMetric.status === 'degraded' ||
             diskMetric.status === 'unreachable' ||
             (components.intelDevicePlugin && components.intelDevicePlugin.installed && components.intelDevicePlugin.status !== 'ready') ||
-            (components.monitoring && components.monitoring.installed && components.monitoring.status !== 'ready' && components.monitoring.status !== 'external') ||
-            deployments.some((item) => item.status === 'failed')
+            (components.monitoring && components.monitoring.installed && components.monitoring.status !== 'ready' && components.monitoring.status !== 'external')
         )
     );
 
@@ -711,11 +529,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                     description="Register Kubernetes clusters and keep their connectivity, capacity, and readiness up to date."
                     onToggleMobileNav={onToggleMobileNav}
                     className="mb-6"
-                    actions={
-                        <Button variant="secondary" size="icon" onClick={() => loadClusters()} disabled={clustersLoading} title="Refresh" aria-label="Refresh cluster list">
-                            <RefreshCw className={clustersLoading ? 'animate-spin' : ''} size={16} />
-                        </Button>
-                    }
                 />
                 {selectedId && (
                     <div className="mb-6 flex w-full items-end justify-between gap-4">
@@ -768,8 +581,22 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                         onNavigate?.('model-market');
                                     }}
                                 >
-                                    Plan &amp; Deploy
+                                    Deploy a model
                                 </Button>
+                                <PermissionGate permission="deployment:run:read">
+                                    <Button variant="secondary" size="md" className="shrink-0" disabled={!selectedId}
+                                        title="View deployments in the selected cluster"
+                                        onClick={() => onNavigate?.('optimization-deployments', { clusterId: selectedId })}>
+                                        Deployments
+                                    </Button>
+                                </PermissionGate>
+                                <PermissionGate permission={VIEW_PERMISSIONS['admin/model-service']}>
+                                    <Button variant="secondary" size="md" className="shrink-0" disabled={!selectedId}
+                                        title="View model services in the selected cluster"
+                                        onClick={() => onNavigate?.('admin/model-service', { clusterId: selectedId })}>
+                                        Model services
+                                    </Button>
+                                </PermissionGate>
                             </div>
                         </section>
 
@@ -886,10 +713,10 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                 </section>
                     </aside>}
                     <div className="space-y-6 min-w-0">
-                {error && (
+                {(clusterListError || error) && (
                     <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-300 flex items-start gap-2">
                         <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                        <span>{error}</span>
+                        <span>{clusterListError || error}</span>
                     </div>
                 )}
 
@@ -1134,259 +961,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                         </div>
                     </section>
 
-                    <section className="relative overflow-hidden border border-slate-800/80 rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl">
-                        <div className="relative p-6">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <SectionLabel>Deployments{availableDeployments.length > 0 ? ` (${availableDeployments.length})` : ''}</SectionLabel>
-                            </div>
-                            {!availableDeployments.length ? (
-                                <EmptyState
-                                    className="bg-slate-900/40 border border-slate-800/80 rounded-2xl backdrop-blur-sm mt-4"
-                                    icon={
-                                        <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-full">
-                                            <Boxes className="w-8 h-8" />
-                                        </div>
-                                    }
-                                    title="No deployments"
-                                    message="Deployments for this cluster will appear here once a deploy is launched."
-                                />
-                            ) : (
-                                <div className="mt-2 space-y-4">
-                                    {!monitoringStackReady && (
-                                        <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-                                            The cluster monitoring stack is not installed, so deployment metrics cannot be scraped yet.
-                                            Install it from the cluster Observability panel before enabling deployment monitoring.
-                                        </p>
-                                    )}
-                                    {monitoringError && (
-                                        <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">
-                                            {monitoringError}
-                                        </p>
-                                    )}
-                                    {linksError && (
-                                        <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">
-                                            {linksError}
-                                        </p>
-                                    )}
-                                    {connectEndpointError && (
-                                        <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">
-                                            {connectEndpointError}
-                                        </p>
-                                    )}
-                                    <div className="overflow-x-auto rounded-xl border border-slate-800/60">
-                                        <table className="w-full min-w-[58rem] text-left text-sm">
-                                            <thead className="bg-slate-950/60 text-slate-400">
-                                                <tr>
-                                                    <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider">Deployment</th>
-                                                    <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider">Backend</th>
-                                                    <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider">Namespace</th>
-                                                    <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider">Endpoint</th>
-                                                    <th className="px-5 py-3 text-[10px] font-semibold uppercase tracking-wider">Monitoring</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-800/70">
-                                                        {availableDeployments.map((deployment) => {
-                                                            const chip = deploymentChip(deployment.status);
-                                                            const mon = monitoringByDeployment[deployment.execution_id] || {};
-                                                            const monChip = monitoringChip(mon.status);
-                                                            const actionKey = `${deployment.execution_id}:`;
-                                                            // Monitoring scrapes this deployment's Pods, so it can only be
-                                                            // installed or enabled once the rollout is ready (same rule as
-                                                            // the Deployments table's monitoring menu).
-                                                            const deploymentReady = isDeploymentReady(deployment.status);
-                                                            const installingEnabled = monitoringStackReady && mon.status !== 'enabled' && deploymentReady;
-                                                            return (
-                                                                <tr key={deployment.execution_id || `${deployment.run_id}-${deployment.case_id}`} className="transition-colors hover:bg-slate-800/40">
-                                                                    <td className="px-5 py-3 font-mono text-xs text-slate-200">
-                                                                        <span className="inline-flex items-center gap-2">
-                                                                            <span
-                                                                                className={`h-1.5 w-1.5 shrink-0 rounded-full motion-safe:animate-pulse [animation-duration:2.4s] ${statusDotClass(chip.status)}`}
-                                                                                title={chip.label}
-                                                                                aria-label={chip.label}
-                                                                            />
-                                                                            {deployment.display_name || deployment.name || deployment.guide || '—'}
-                                                                        </span>
-                                                                    </td>
-                                                                    <td className="px-5 py-3 text-xs text-slate-300">
-                                                                        {deployment.backend || 'vLLM'}
-                                                                    </td>
-                                                                    <td className="px-5 py-3">
-                                                                        {deployment.namespace ? (
-                                                                            <div className="flex items-center gap-2">
-                                                                                <span className="font-mono text-xs text-slate-400">{deployment.namespace}</span>
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() => copyEndpoint(deployment.namespace)}
-                                                                                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-medium text-slate-300 transition-colors hover:border-emerald-500/40 hover:text-slate-100"
-                                                                                    title="Copy namespace"
-                                                                                >
-                                                                                    {copiedEndpoint === deployment.namespace ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                                                                </button>
-                                                                            </div>
-                                                                        ) : (
-                                                                            <span className="text-slate-500">—</span>
-                                                                        )}
-                                                                    </td>
-                                                                    <td className="px-5 py-3">
-                                                                        {deployment.endpoint ? (
-                                                                            <div className="flex items-center gap-2">
-                                                                                <span className="min-w-0 max-w-[14rem] truncate font-mono text-xs text-slate-300" title={deployment.endpoint}>{deployment.endpoint}</span>
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() => copyEndpoint(deployment.endpoint)}
-                                                                                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-medium text-slate-300 transition-colors hover:border-emerald-500/40 hover:text-slate-100"
-                                                                                    title="Copy endpoint"
-                                                                                >
-                                                                                    {copiedEndpoint === deployment.endpoint ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                                                                </button>
-                                                                                {deployment.forwarded_endpoint ? (
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => copyEndpoint(deployment.forwarded_endpoint)}
-                                                                                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-medium text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200"
-                                                                                        title={`Copy local endpoint (${deployment.forwarded_endpoint})`}
-                                                                                    >
-                                                                                        <Link2 className="w-3 h-3" />
-                                                                                    </button>
-                                                                                ) : deployment.execution_id ? (
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => connectLocalEndpoint(deployment.execution_id)}
-                                                                                        disabled={connectingEndpoint === deployment.execution_id}
-                                                                                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-medium text-slate-300 transition-colors hover:border-cyan-500/40 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                                                                                        title="Open a local port-forward to this deployment"
-                                                                                    >
-                                                                                        {connectingEndpoint === deployment.execution_id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Link2 className="w-3 h-3" />}
-                                                                                    </button>
-                                                                                ) : null}
-                                                                            </div>
-                                                                        ) : (
-                                                                            <span className="text-slate-500">—</span>
-                                                                        )}
-                                                                    </td>
-                                                                    <td className="px-5 py-3">
-                                                                        <div className="relative inline-block">
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={(event) => {
-                                                                                        const rect = event.currentTarget.getBoundingClientRect();
-                                                                                        setOpenMonitoringMenu((current) => (current?.key === actionKey ? null : { key: actionKey, top: rect.bottom, right: window.innerWidth - rect.right }));
-                                                                                    }}
-                                                                                    disabled={!!monitoringAction || !!openingLink}
-                                                                                    className={`inline-flex w-40 items-center gap-1.5 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${MONITORING_TONE_CLASSES[monChip.status] || MONITORING_TONE_CLASSES.neutral}`}
-                                                                                    aria-haspopup="menu"
-                                                                                    aria-expanded={openMonitoringMenu?.key === actionKey}
-                                                                                >
-                                                                                    <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" aria-hidden="true" />
-                                                                                    <span className="flex-1 whitespace-nowrap text-left">{monChip.label}</span>
-                                                                                    {monitoringAction.startsWith(actionKey) || openingLink ? <Loader2 size={12} className="animate-spin opacity-70" /> : <ChevronDown size={12} className="opacity-70" />}
-                                                                                </button>
-                                                                                {openMonitoringMenu?.key === actionKey && createPortal(
-                                                                                    <>
-                                                                                        <div className="fixed inset-0 z-[290]" onClick={() => setOpenMonitoringMenu(null)} />
-                                                                                        <div className="fixed z-[300] w-44 overflow-hidden rounded-lg border border-slate-700/70 bg-slate-900 shadow-xl" style={{ top: openMonitoringMenu.top + 6, right: openMonitoringMenu.right }} role="menu">
-                                                                                            {mon.status === 'enabled' && (
-                                                                                                <>
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); openStackLink('grafana', deployment); }}
-                                                                                                        disabled={!!openingLink}
-                                                                                                        icon={<BarChart3 size={14} className="shrink-0 text-blue-300" />}
-                                                                                                        label="Open Grafana"
-                                                                                                    />
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); openStackLink('prometheus', deployment); }}
-                                                                                                        disabled={!!openingLink}
-                                                                                                        icon={<Activity size={14} className="shrink-0 text-orange-300" />}
-                                                                                                        label="Open Prometheus"
-                                                                                                    />
-                                                                                                    <div className="h-px bg-slate-700/70" />
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => {
-                                                                                                            setOpenMonitoringMenu(null);
-                                                                                                            onNavigate?.('cluster-monitoring-stack', {
-                                                                                                                clusterId: selectedId,
-                                                                                                                profileDeployment: {
-                                                                                                                    execution_id: deployment.execution_id,
-                                                                                                                    name: deployment.display_name || deployment.name || deployment.guide || '—',
-                                                                                                                    namespace: deployment.namespace,
-                                                                                                                },
-                                                                                                            });
-                                                                                                        }}
-                                                                                                        disabled={!!openingLink}
-                                                                                                        icon={<GitBranch size={14} className="shrink-0 text-violet-300" />}
-                                                                                                        label="Profiling"
-                                                                                                    />
-                                                                                                    <div className="h-px bg-slate-700/70" />
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'disable'); }}
-                                                                                                        disabled={!!monitoringAction}
-                                                                                                        icon={<Pause size={14} className="shrink-0 text-slate-300" />}
-                                                                                                        label="Disable"
-                                                                                                    />
-                                                                                                    <div className="h-px bg-slate-700/70" />
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'uninstall'); }}
-                                                                                                        disabled={!!monitoringAction}
-                                                                                                        icon={<Trash2 size={14} className="shrink-0 text-rose-400" />}
-                                                                                                        label="Uninstall"
-                                                                                                        danger
-                                                                                                    />
-                                                                                                </>
-                                                                                            )}
-                                                                                            {mon.status === 'disabled' && (
-                                                                                                <>
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'enable'); }}
-                                                                                                        disabled={!installingEnabled || !!monitoringAction}
-                                                                                                        icon={<Play size={14} className="shrink-0 text-emerald-400" />}
-                                                                                                        label="Enable"
-                                                                                                    />
-                                                                                                    {!deploymentReady && (
-                                                                                                        <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
-                                                                                                            Available once the deployment is ready.
-                                                                                                        </p>
-                                                                                                    )}
-                                                                                                    <div className="h-px bg-slate-700/70" />
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'uninstall'); }}
-                                                                                                        disabled={!!monitoringAction}
-                                                                                                        icon={<Trash2 size={14} className="shrink-0 text-rose-400" />}
-                                                                                                        label="Uninstall"
-                                                                                                        danger
-                                                                                                    />
-                                                                                                </>
-                                                                                            )}
-                                                                                            {mon.status !== 'enabled' && mon.status !== 'disabled' && (
-                                                                                                <>
-                                                                                                    <MonitoringMenuItem
-                                                                                                        onClick={() => { setOpenMonitoringMenu(null); runMonitoringAction(deployment, 'install'); }}
-                                                                                                        disabled={!installingEnabled || !!monitoringAction}
-                                                                                                        icon={<Rocket size={14} className="shrink-0 text-cyan-400" />}
-                                                                                                        label="Install"
-                                                                                                    />
-                                                                                                    {!deploymentReady && (
-                                                                                                        <p className="border-t border-slate-700/70 px-3 py-2 text-[11px] text-slate-400">
-                                                                                                            Available once the deployment is ready.
-                                                                                                        </p>
-                                                                                                    )}
-                                                                                                </>
-                                                                                            )}
-                                                                                        </div>
-                                                                                    </>,
-                                                                                    document.body
-                                                                                )}
-                                                                            </div>
-                                                                    </td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                </div>
-                            )}
-                        </div>
-                    </section>
                 </>}
                     </div>
                 </div>

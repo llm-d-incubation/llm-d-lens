@@ -21,7 +21,10 @@ create an import cycle.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -31,6 +34,26 @@ from llm_d_lens.cluster.settings import cluster_settings
 
 if TYPE_CHECKING:
     from llm_d_lens.db.dao.cluster import ClusterDao
+
+_GATEWAY_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def gateway_lock(cluster_id: str) -> asyncio.Lock:
+    """Serialize Gateway reconciliation, auto-healing and cluster deletion in this process."""
+    return _GATEWAY_LOCKS.setdefault(cluster_id, asyncio.Lock())
+
+
+def gateway_namespace_for(cluster_id: str, namespace: str | None = None) -> str:
+    """Scope a Gateway namespace prefix to a stable Lens cluster-registration ID."""
+    if not cluster_id:
+        raise ValueError("cluster id is required for Gateway namespace isolation")
+    suffix = (
+        cluster_id if re.fullmatch(r"[0-9a-f]{8}", cluster_id) else hashlib.sha256(cluster_id.encode()).hexdigest()[:8]
+    )
+    prefix = namespace or "lens-gateway"
+    if prefix.endswith(f"-{suffix}"):
+        return prefix
+    return f"{prefix[:54].rstrip('-')}-{suffix}"
 
 
 @dataclass(frozen=True)
@@ -92,6 +115,9 @@ class Cluster:
     # it -- if the wizard is cancelled early, the caller deletes the draft
     # record instead of leaving a half-configured cluster visible.
     draft: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "gateway_namespace", gateway_namespace_for(self.id, self.gateway_namespace))
 
     def to_dict(self) -> dict[str, Any]:
         return {

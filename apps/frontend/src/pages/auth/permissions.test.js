@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { canAccessView, hasPermission, permissionMatches } from './permissions.js';
+import { NAVIGATION_GROUPS } from '../../app/routes/views.js';
 
 test('permissionMatches supports segment wildcards', () => {
     assert.equal(permissionMatches('deployment:run:read', 'deployment:run:read'), true);
@@ -27,13 +28,7 @@ test('canAccessView enforces the route catalog', () => {
 
 // Every sidebar entry in LeftNavigation must be permission-mapped (an unmapped
 // view id would be visible to everyone because canAccessView allows unknowns).
-const NAV_VIEWS = [
-    'model-market', 'optimization-deployments', 'optimization-evaluate', 'optimization-simulate',
-    'playground', 'clusters', 'storage-management', 'model-cache', 'ai-providers',
-    'cluster-monitoring-stack', 'model-service', 'usage',
-    'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/sessions',
-    'admin/audit', 'admin/model-service', 'admin/usage',
-];
+const NAV_VIEWS = NAVIGATION_GROUPS.flatMap(group => group.items.map(item => item.view));
 
 test('every sidebar view has a permission mapping', () => {
     for (const view of NAV_VIEWS) {
@@ -41,10 +36,10 @@ test('every sidebar view has a permission mapping', () => {
     }
 });
 
-test('a model-service consumer only sees model-service and usage', () => {
+test('a model-service consumer only sees their usage, API keys and services', () => {
     const consumer = ['model-service:token:manage', 'model-service:inference:use', 'model-service:usage:read'];
     for (const view of NAV_VIEWS) {
-        const expected = view === 'model-service' || view === 'usage';
+        const expected = ['model-service', 'usage', 'api-keys'].includes(view);
         assert.equal(canAccessView(consumer, view), expected, `${view} visibility for a model-service consumer`);
     }
 });

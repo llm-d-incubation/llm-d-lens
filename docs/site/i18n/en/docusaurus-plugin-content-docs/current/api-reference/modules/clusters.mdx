@@ -234,6 +234,13 @@ llm-d component versions are fixed by the Lens stack profile (see [Get supported
 ### Update a cluster
 
 Patch a cluster's editable settings, including name, description, proxy settings, and draft status. The kubeconfig itself is not part of this patch contract. Version fields (`llmDRef`, `llmDBenchmarkRef`, `routerVersion`, `gieVersion`, `ippVersion`) are server-managed from the stack profile and ignored on input.
+Gateway namespace prefixes are scoped to the stable Lens cluster-registration
+short ID. For registration `1234abcd`, the default becomes
+`lens-gateway-1234abcd`; `gatewayNamespace: "custom"` resolves to
+`custom-1234abcd`. Passing that suffixed value again does not append it twice.
+Cluster responses report the effective namespace, including existing records
+that previously used the shared `lens-gateway` default. This is also the behavior
+of `service.update_cluster_settings(..., gateway_namespace="custom")`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -247,6 +254,7 @@ Patch a cluster's editable settings, including name, description, proxy settings
     - `llmDRef` (`string`, optional)
     - `llmDBenchmarkRef` (`string`, optional)
     - `gatewayProvider` (`string`, optional)
+    - `gatewayNamespace` (`string`, optional): namespace prefix, at most 63 characters; receives the registration's stable short-ID suffix.
     - `gatewayPort` (`integer`, optional)
     - `gatewayPublicUrl` (`string`, optional): externally reachable Gateway host/IP — Lens adds the exposed port; empty derives it.
     - `gatewayAuthzHost` (`string`): the host/IP this cluster uses to reach Lens (required for providers with a Lens address hook; Lens adds its own serving port; empty fills in this host's address).
@@ -685,10 +693,11 @@ Delete a Lens-managed cluster record and clean up related state. This should onl
 
 Remote cleanup performed by this endpoint:
 
+- The registration's isolated Gateway namespace, normally `lens-gateway-<cluster-id>`, is deleted with its Gateway, IPP, authorization resources and routes. A missing namespace is a successful no-op. The old shared `lens-gateway` namespace, other registrations' namespaces and shared Gateway controllers are not deleted.
 - The cluster's `HF_TOKEN` secret recorded in `hfTokenSecret` is deleted, and its namespace is deleted with it when the namespace has no reason to outlive the cluster. That is the case for the Lens-owned `llm-d-bench-storage-{cluster_id}` namespace, for any namespace Lens created for the secret (labelled `app.kubernetes.io/managed-by: llm-d-lens`), and for a namespace that, once the secret is gone, holds nothing but the objects Kubernetes and cluster add-ons inject into every namespace (the `default` service account, its token secret, and CA-bundle config maps such as `kube-root-ca.crt`). A namespace that still holds any other object -- including a custom resource -- is kept, and `default`, `kube-system`, `kube-public` and `kube-node-lease` are never deleted. If the namespace contents cannot be listed, the namespace is kept.
 - For a draft cluster, every Storage volume still attached to it is removed together with its `PersistentVolumeClaim` and `PersistentVolume` objects. Model files on the underlying NFS or host-path storage are kept, because the `PersistentVolume` uses the `Retain` reclaim policy.
 
-All remote cleanup is best-effort: a failure is logged and the Lens record is still deleted, so an unreachable cluster never becomes permanently undeletable. A non-draft cluster that still has Storage volumes is rejected instead; delete its volumes first.
+Gateway namespace cleanup is required: a failure or timeout returns `502` with code `cluster_gateway_cleanup_failed`, retaining the cluster record and kubeconfig so deletion can be retried. HF-token and draft-storage cleanup remain best-effort. A non-draft cluster that still has available deployments or Storage volumes is rejected with `409`; clean up those resources first.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -699,8 +708,12 @@ All remote cleanup is best-effort: a failure is logged and the Lens record is st
     - `cluster_id` (`string`, path): target cluster id.
 
     Response: `204 No Content`. This endpoint does not return a JSON body.
+
+    Failure: `502 cluster_gateway_cleanup_failed` if the isolated Gateway namespace could not be deleted; `409 cluster_has_available_deployments` or `cluster_has_storage_volumes` if a finalized cluster still has those resources.
   </TabItem>
   <TabItem value="python-api" label="Python API">
+    `service.delete_cluster()` raises `ClusterOverviewError` with the same status and code when required cleanup fails.
+
     ```python
     import asyncio
 

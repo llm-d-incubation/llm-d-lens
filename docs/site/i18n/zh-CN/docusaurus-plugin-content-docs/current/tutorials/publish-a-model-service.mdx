@@ -6,19 +6,21 @@ description: 发布就绪的部署，并发送带认证的模型请求。
 先准备一个[已就绪的 llm-d 部署](/tutorials/bootstrap-and-deploy)。
 发布操作需要模型服务管理权限。
 
-## 1. 创建公开模型名称
+## 1. 添加模型
 
-1. 打开 **Model services**，点击 **Add model service（添加模型服务）**。
+1. 打开 **Model services**，点击 **Add model（添加模型）**，展开右侧抽屉。
 2. 选择部署所在的 **Cluster（集群）**。
-3. 在 **Model name (user-facing)** 中填写名称，例如 `qwen-demo`。
-4. 点击 **Create（创建）**。
+3. 在 **Provider** 中选择就绪的部署。已经添加到模型的部署不会再次列出。
+4. 在 **Model name mapping** 中核对只读的 **Provider model name**。
+5. 在 **Exposed to users as** 下方，从当前集群的下拉建议中选择已有的 **Public model name**，或输入新名称，例如 `qwen-demo`，然后点击 **Add**。字段旁的问号图标提供说明。
 
-## 2. 关联部署
+向已有模型添加部署时，在同一集群中选择该模型的公开名称。Lens 复用模型服务和 HTTPRoute，
+保留已有权重，并以默认权重 1 添加新提供方。通过模型名称旁的三线菜单 →
+**Traffic distribution** 调整流量比例。所有提供方的模型名称必须一致。
 
-1. 点击 **Add model server（添加模型服务器）**。
-2. 依次选择 **Cluster**、刚创建的 **Model service** 和已就绪的 **Deployment**。
-3. 核对 **Derived target (from the deployment)**，点击 **Add provider**。
-4. 在 **Service flow（服务流程）**中查看各组件状态点。
+## 2. 检查已发布模型
+
+模型服务和模型服务器会一并创建。在 **Service flow（服务流程）**中检查各组件的状态点。
 
 没有可选部署时，确认它与服务位于同一集群，且通过提供 InferencePool 的 llm-d Guide 创建。
 

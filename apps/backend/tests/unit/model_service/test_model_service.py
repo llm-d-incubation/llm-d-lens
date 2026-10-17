@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from llm_d_lens.api.main import app
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
 from llm_d_lens.auth.records import UserRecord
+from llm_d_lens.auth.service import AuthService
 from llm_d_lens.db.dao.user import UserDao
 from llm_d_lens.model_service.contracts import (
     AuthorizeRequest,
@@ -75,10 +76,7 @@ def _admin_principal(user_id: str, username: str) -> Principal:
     )
 
 
-class _StubAuth:
-    def __init__(self) -> None:
-        self.user_dao = UserDao()
-
+class _StubAuth(AuthService):
     def principal_for(self, user: UserRecord) -> Principal:
         return _admin_principal(user.id, user.username)
 
@@ -206,6 +204,30 @@ def test_authorize_request_unknown_model_and_bad_token():
         service.authorize_request(AuthorizeRequest(token=raw, model="unknown"))
     with pytest.raises(ModelServiceUnauthorizedError):
         service.authorize_request(AuthorizeRequest(token="lens-mk-bogus", model="known"))  # noqa: S106
+
+
+@pytest.mark.parametrize("stop_model", [True, False])
+def test_stopped_publication_denies_new_inference_until_resumed(monkeypatch, stop_model):
+    _patch_target(monkeypatch)
+    user = _create_user("publication-owner")
+    service = _service()
+    group = service.create_group(GroupCreateRequest(name="public", clusterId="cluster-a"), created_by=user.id)
+    member = service.create_member(MemberCreateRequest(groupId=group.id, executionId="exec-1"), published_by=user.id)
+    _, raw = service.tokens.create(user.id)
+    request = AuthorizeRequest(token=raw, model=group.name)
+    assert service.authorize_request(request).execution_id == member.execution_id
+    if stop_model:
+        service.update_group(group.id, GroupUpdateRequest(status="disabled"))
+    else:
+        service.update_member(member.id, MemberUpdateRequest(status="disabled"))
+    assert service.list_models_for_user(user.id) == []
+    with pytest.raises(ModelServiceNotFoundError):
+        service.authorize_request(request)
+    if stop_model:
+        service.update_group(group.id, GroupUpdateRequest(status="active"))
+    else:
+        service.update_member(member.id, MemberUpdateRequest(status="active"))
+    assert service.authorize_request(request).execution_id == member.execution_id
 
 
 def test_membership_conflict_and_update_delete(monkeypatch):
@@ -459,7 +481,7 @@ def test_admin_member_operations_reject_unreachable_cluster(monkeypatch):
         MemberCreateRequest(group_id=group.id, execution_id="exec-theirs"), published_by=None
     )
 
-    scoped = _cluster_principal("cluster-mine")
+    scoped = _cluster_principal("cluster-mine", with_permissions=True)
     with pytest.raises(ForbiddenError):
         service.create_member(
             MemberCreateRequest(group_id=group.id, execution_id="exec-theirs"), published_by=None, principal=scoped
@@ -470,7 +492,7 @@ def test_admin_member_operations_reject_unreachable_cluster(monkeypatch):
         service.delete_member(member.id, principal=scoped)
 
     # A maintainer scoped to the member's own cluster may still operate on it.
-    allowed = _cluster_principal("cluster-theirs")
+    allowed = _cluster_principal("cluster-theirs", with_permissions=True)
     updated = service.update_member(member.id, MemberUpdateRequest(status="active"), principal=allowed)
     assert updated.status == "active"
     service.delete_member(member.id, principal=allowed)
@@ -547,6 +569,163 @@ def test_model_service_is_scoped_to_one_cluster(monkeypatch):
     _patch_target(monkeypatch, execution_id="exec-a", cluster_id="cluster-a")
     member = service.create_member(MemberCreateRequest(group_id=group.id, execution_id="exec-a"), published_by=None)
     assert member.group_id == group.id and member.cluster_id == "cluster-a"
+
+
+def test_create_model_with_provider_derives_names_and_ownership(monkeypatch):
+    _patch_target(monkeypatch, kind="llm-d-epp")
+    user = _create_user("combined-owner")
+    service = _service()
+    group = service.create_group(
+        GroupCreateRequest(
+            name="public-chat",
+            clusterId="cluster-a",
+            executionId="exec-1",
+            modelRef="ignored",
+            servedName="ignored",
+            baseModel="ignored",
+        ),
+        created_by=user.id,
+        principal=Principal(
+            user_id=user.id,
+            username=user.username,
+            bindings=(RoleBinding("publisher", ScopeType.CLUSTER, scope_cluster_id="cluster-a"),),
+            role_permissions={"publisher": ("model-service:group:manage", "model-service:member:manage")},
+        ),
+    )
+    assert group.name == "public-chat"
+    assert group.model_ref == group.served_name == "Qwen/Qwen3-8B"
+    assert group.base_model == "public-chat"
+    assert group.created_by_user_id == user.id
+    [member] = service.list_members(group.id)
+    assert member.execution_id == "exec-1" and member.cluster_id == "cluster-a"
+    assert member.owner_user_id == member.published_by_user_id == user.id
+    assert member.target_namespace == "ns" and member.target_port == 8000
+    assert member.pool_name == "ns/vllm" and member.epp_ref == "vllm"
+
+
+@pytest.mark.parametrize("change", [{"cluster_id": "cluster-b"}, {"status": "failed"}, {"model": None}])
+def test_create_model_rejects_invalid_provider_without_creating_group(monkeypatch, change):
+    from dataclasses import replace
+
+    from llm_d_lens.model_service import service as service_module
+
+    _patch_target(monkeypatch)
+    target = replace(service_module.resolve_execution_target("exec-1"), **change)
+    monkeypatch.setattr(service_module, "resolve_execution_target", lambda _: target)
+    service = _service()
+    with pytest.raises(ModelServiceConflictError):
+        service.create_group(
+            GroupCreateRequest(name="public-chat", clusterId="cluster-a", executionId="exec-1"), created_by=None
+        )
+    assert service.list_groups() == []
+    assert service.list_members() == []
+
+
+def test_create_model_rejects_missing_target(monkeypatch):
+    from llm_d_lens.model_service import service as service_module
+    from llm_d_lens.model_service.targets import ExecutionTargetError
+
+    def missing(_execution_id):
+        raise ExecutionTargetError("execution not found")
+
+    monkeypatch.setattr(service_module, "resolve_execution_target", missing)
+    service = _service()
+    with pytest.raises(ModelServiceNotFoundError):
+        service.create_group(
+            GroupCreateRequest(name="public-chat", clusterId="cluster-a", executionId="missing"), created_by=None
+        )
+    assert service.list_groups() == []
+
+
+@pytest.mark.parametrize(
+    ("cluster_id", "permissions"),
+    [
+        ("cluster-b", ("model-service:group:manage", "model-service:member:manage")),
+        ("cluster-a", ("model-service:group:manage",)),
+        ("cluster-a", ("model-service:member:manage",)),
+    ],
+)
+def test_create_model_requires_both_permissions_in_provider_cluster(monkeypatch, cluster_id, permissions):
+    from llm_d_lens.core.exceptions import ForbiddenError
+
+    _patch_target(monkeypatch)
+    principal = Principal(
+        user_id="maintainer",
+        username="maintainer",
+        bindings=(RoleBinding("custom", ScopeType.CLUSTER, scope_cluster_id=cluster_id),),
+        role_permissions={"custom": permissions},
+    )
+    service = _service()
+    with pytest.raises(ForbiddenError):
+        service.create_group(
+            GroupCreateRequest(name="public-chat", clusterId="cluster-a", executionId="exec-1"),
+            created_by=None,
+            principal=principal,
+        )
+    assert service.list_groups() == []
+    assert service.list_members() == []
+
+
+def test_create_model_rolls_back_group_when_member_insert_fails(monkeypatch):
+    _patch_target(monkeypatch)
+    service = _service()
+    original = service.create_group(
+        GroupCreateRequest(name="original", clusterId="cluster-a", executionId="exec-1"), created_by=None
+    )
+    [member] = service.list_members(original.id)
+    build_member = service._member_for_target
+
+    def duplicate_id(*args, **kwargs):
+        return build_member(*args, **kwargs).model_copy(update={"id": member.id})
+
+    monkeypatch.setattr(service, "_member_for_target", duplicate_id)
+    with pytest.raises(ModelServiceConflictError):
+        service.create_group(
+            GroupCreateRequest(name="failed", clusterId="cluster-a", executionId="exec-1"), created_by=None
+        )
+    assert [group.id for group in service.list_groups()] == [original.id]
+    assert [item.id for item in service.list_members()] == [member.id]
+
+
+def test_create_model_duplicate_name_preserves_existing_provider(monkeypatch):
+    _patch_target(monkeypatch)
+    service = _service()
+    body = GroupCreateRequest(name="public-chat", clusterId="cluster-a", executionId="exec-1")
+    group = service.create_group(body, created_by=None)
+    with pytest.raises(ModelServiceConflictError):
+        service.create_group(body, created_by=None)
+    assert [item.id for item in service.list_groups()] == [group.id]
+    assert len(service.list_members(group.id)) == 1
+
+
+def test_combined_create_route_schedules_reconciliation_after_commit(monkeypatch):
+    import asyncio
+
+    from fastapi import BackgroundTasks
+
+    from llm_d_lens.model_service import router as router_module
+
+    _patch_target(monkeypatch)
+    service = _service()
+    monkeypatch.setattr(router_module, "_service", service)
+    background = BackgroundTasks()
+    user = _create_user("route-publisher")
+    payload = asyncio.run(
+        router_module.admin_create_group(
+            _fake_request(_admin_principal(user.id, user.username)),
+            GroupCreateRequest(name="public-chat", clusterId="cluster-a", executionId="exec-1"),
+            background,
+        )
+    )
+    assert len(service.list_members(payload["id"])) == 1
+    assert len(background.tasks) == 1
+    assert background.tasks[0].func is router_module._reconcile_clusters
+    assert background.tasks[0].args == (["cluster-a"],)
+    schema = app.openapi()
+    operation = schema["paths"]["/api/v1/model-service/admin/groups"]["post"]
+    assert "one transaction" in operation["description"]
+    body_schema = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].split("/")[-1]
+    assert "executionId" in schema["components"]["schemas"][body_schema]["properties"]
 
 
 def test_authorize_is_scoped_to_the_request_cluster(monkeypatch):

@@ -41,34 +41,210 @@ Update those clients with the replacement key.
 ## Create a model service
 
 1. Open **Model services**.
-2. Click **Add model service**.
-3. In **New service**, choose the **Cluster (required)** containing your deployment.
-4. Fill in **Model name (user-facing)**, for example `team-chat`. Applications use this name in requests.
-5. Optionally fill in **Display name (optional)** and **Description**.
-6. Click **Create**.
+2. Click the sky-blue **Add model** button in the upper-right page header, beside **Reconcile**, to open the full-height drawer from the right side of the page.
+3. Choose the **Cluster** containing your deployment.
+4. Choose a **Provider**. Only ready deployments in the selected cluster that have not already been added to a model are listed. Existing providers are excluded even when disabled or assigned weight 0.
+5. Under **Model name mapping**, check the read-only **Provider model name**, filled from the selected deployment.
+6. Below **Exposed to users as**, choose an existing **Public model name** from the dropdown or type a name, for example `team-chat`. The dropdown only suggests names from the selected cluster. A name that does not exist creates a new model when you click **Add**. Applications use this value in the `model` field of Chat Completions API requests, rather than the provider model name.
+7. Click **Add**. A new public name creates the model service and its model server together. An existing public name in the same cluster adds the deployment to that model and reuses its HTTPRoute; it does not create another service. Click **Cancel** to discard the form.
+8. Check the service's status in **Service flow**, then open **My services** and send a copied **cURL** request.
 
-## Add a model server to a model service
+Each field label has a question-mark icon. Hover over it or focus it with the
+keyboard to learn what the field does.
+Changing the cluster clears the selected provider and provider model name.
+If no deployment is ready, the form explains why no provider can be selected.
+For a new model, creation is transactional: if either record cannot be saved, neither is created.
+When adding to an existing model, the provider model name must match. Existing
+weights are preserved; the new provider defaults to weight **1** and participates
+in routing after reconciliation. Use **Traffic distribution** to adjust its share.
+The gateway and model route reconcile automatically after adding. Apply failures
+explicitly indicate when the deployment was already added.
 
-1. On **Model services**, click **Add model server**.
-2. In the **Add provider** drawer, choose the **Cluster** first, then the **Model service** in that cluster, then one of its **Deployment** options (only deployments in the service's cluster can be providers).
-3. Check **Derived target (from the deployment)** to confirm you chose the right deployment; no manual target entry is needed.
-4. Click **Add provider**.
-5. Check the service's status in **Service flow**, then open **My services** and send a copied **cURL** request.
+## Filter service flow
 
-Choose a deployment in the service's cluster. Adding several providers does not
-combine their capacity: the service publishes the first active provider's pool.
+Use **Cluster** and **Public model name** above **Service flow** to narrow the
+topology. The cluster dropdown defaults to **All clusters**. Public model search
+matches part of the name, ignores case and surrounding whitespace, and suggests
+names from the selected cluster. Both filters apply together.
+
+Model-name searches hide clusters without a matching model. Selecting only a
+cluster still shows its Gateway and IPP even when it has no published models.
+Use **Clear filters** (the reset icon) to restore the full topology. Automatic refresh keeps your
+filters; filtering does not change provider states, weights, routing, or the
+scope of the page-level **Reconcile** action.
+
+The flow is horizontally centered when it fits the canvas. Hold the left mouse
+button on the diagram background or non-interactive cards and drag to pan when
+the diagram overflows. Scrollbars, touch scrolling, and arrow keys while the
+canvas is focused remain available. Buttons, menus, and help links keep their
+normal interactions.
+
+## Stop a model or take a deployment offline
+
+Open the three-line menu beside the public model name and choose **Stop serving**
+or **Resume serving**. Stopping disables that model's public entry and removes
+its HTTPRoute. Resuming restores routing only to its online, positive-weight
+providers; it does not bring offline providers online.
+
+Each deployment name also has a three-line menu. **Manage** opens **Deployments**
+with that deployment's namespace prefilled in the search box, when you have deployment
+read access. The menu also offers **Take offline** or
+**Bring online**. Offline providers remain attached with their saved weights,
+but are excluded from routing. Bringing a provider online requires a ready
+deployment. Weight **0** remains **Standby** until you assign traffic, and
+bringing a deployment online does not resume a stopped parent model.
+
+These controls do not scale Pods or free accelerator resources. Other online
+providers share requests according to their remaining relative weights. Taking
+the last routed provider offline removes the route and the model shows
+**No traffic**; all providers may be offline. In-flight requests may finish, and
+Gateway configuration changes take effect after the controller applies them.
+
+The model status badge sits beside its name. **Serving** means the model is enabled
+with at least one online, positive-weight provider; component health is shown separately.
+The page shows **Stopped**, **Offline**, and **Standby** separately from component
+health. Health polling does not undo an offline decision or reinstall a
+deliberately stopped model's route. If routing cannot be updated, Lens reports
+**State saved; Gateway reconciliation failed**; the selected state stays saved.
+Use **Reconcile** after fixing the problem. Model controls require model-group
+management permission; deployment controls require member-management permission.
+Page notifications appear in a dismissible floating card at the bottom right,
+without moving the service-flow panel. Informational notices disappear after six
+seconds; errors remain until dismissed, cleared by a successful refresh, or retried.
+
+## Distribute traffic across deployments
+
+1. In the public model frame, open the three-line menu beside the model name and select **Traffic distribution** to open the right-side drawer.
+   You can also click the sky-blue circular branch button between HTTPRoute and
+   the deployment providers. Both entry points explain relative weights, standby
+   and offline providers on hover.
+2. Review the cluster and each deployment's status badge beside its name. **Weight**, its input, and the configured traffic percentage appear together on the next line.
+3. Use **Add deployment** to select a ready llm-d deployment in the same cluster with the same provider model name. It defaults to weight **1** and takes effect after saving and reconciliation.
+4. Set relative weights, for example **90** and **10** for approximately 90% and 10% of requests.
+5. Click **Save and apply** to save the complete allocation and reconcile the shared HTTPRoute, or **Cancel** to discard the draft.
+
+Weights are integers from **0 to 1,000,000**, matching the
+[Gateway API specification](https://github.com/kubernetes-sigs/gateway-api/blob/main/apis/v1/shared_types.go),
+not percentages that must sum to 100. A weight of **0** keeps the association and
+deployment running but omits its pool from the route. Disabled providers receive
+0% regardless of their stored weight. Saving a traffic allocation requires at
+least one enabled provider with a positive weight; the editor supports up to 16 providers.
+
+Existing services retain their previous provider at weight 1 and other providers
+at 0. Polling does not reset an open draft. Concurrent membership or weight edits
+produce a conflict: close and reopen the drawer to load the current allocation.
+If reconciliation fails after saving, the drawer explicitly reports
+**Configuration saved**; the previous Gateway configuration may still serve traffic.
+Retry with **Save and apply** or **Reconcile** after fixing the reported problem.
+Successful submission is not proof of controller acceptance or measured traffic
+ratios. Inspect HTTPRoute Accepted/ResolvedRefs and real request counts.
+
+Weights do not rewrite `model` in request bodies or provide automatic failover.
+All providers must accept the same provider model name. Authorization applies to
+the model service, not individual deployments. Authorized callers use all online,
+positive-weight providers through the unchanged native HTTPRoute weights.
+
+## Manage model access
+
+Admin and maintainers can manage inference grants in their authorized clusters.
+This does not give maintainers permission to create/delete model services or
+manage the shared Gateway.
+
+1. Open the public model name's menu and choose **Manage access**.
+2. In the right-hand drawer, choose **User** or **Group**, then the recipient.
+3. Click **Grant inference access**. Only recipients with inference permission
+   in the model's cluster are offered; a model grant never adds cluster scope.
+4. Use **Revoke** beside an existing grant to remove it, or **Close** to leave.
+
+Consumers need both inference cluster scope and a direct or group model grant.
+The grant covers all of this model's providers, including future additions, but
+not deployment management or onward sharing. Scoped operators retain their
+existing inference access without an individual model grant. Own API keys and
+usage remain private. New models have no consumer grants.
+
+Revocation affects subsequent inference requests, including existing API keys;
+already-running streams are not interrupted. Models must also be serving with
+an online positive-weight provider to appear in **My services** or `/v1/models`.
+Renaming a model preserves its grants; deletion removes them, and recreating the
+same name does not restore access.
+
+Deployment sharing has been removed. The migration audits and removes old
+deployment grants without converting them into broader model grants. An admin
+or scoped maintainer must grant model access again to affected consumers.
 
 ## Remove a model service or a provider
 
 1. Open **Model services**.
-2. On a model service's **HTTPRoute** node, open its menu.
-3. Choose **Remove provider (this cluster)** to remove that provider. Removing the last provider also removes its model service.
-4. To remove the selected service and all its providers, choose **Remove model service (all clusters)**.
-5. Review the affected service and cluster in the dialog, then confirm.
+2. Open the three-line menu beside the provider's deployment name.
+3. Choose **Remove from model** to detach that provider without deleting its deployment or Pods. Removing the last provider leaves an empty model in the service flow.
+4. Review the affected service and cluster in the dialog, then confirm.
+
+To remove the model itself, first detach **every** provider, including offline and
+zero-weight providers. Then use the public model name's menu → **Remove model**
+and confirm. The action is disabled while providers remain, and the backend
+enforces the same restriction. Lens removes only this model's managed HTTPRoute
+and IPP mapping, confirms their deletion, then deletes the model record. If
+cleanup fails or times out, the record remains so you can retry.
+
+The model menu uses one slot for **Bring providers online** when all providers
+are offline, or **Take providers offline** otherwise. Mixed states are taken
+offline together. These batch operations preserve weights, model state and running
+Pods; they do not scale workloads. Starting validates that every deployment is
+ready before changing any provider status. A stopped model remains stopped, and
+weight-0 providers remain standby. If routing fails after saving provider states,
+use **Reconcile**; saved states are not rolled back automatically.
 
 **Removing a published route interrupts clients using it.** Notify callers before removal.
 
+## Read component logs
+
+**View logs** for Gateway, IPP, or EPP opens a live log drawer in **Readable**
+mode. Each record occupies one compact row: timestamp, severity, message,
+additional `key=value` fields, and Pod/container source. Nested objects stay
+inline, and embedded line breaks appear as `\n`. **ERROR** and **FATAL** records
+are the exception: multiline messages and `stack`, `stacktrace`, `stack_trace`,
+or `exception.stacktrace` fields retain their line breaks and indentation below
+the summary row. Timestamps use your browser's
+local time; hover over one to see its full value. The drawer scales with the
+screen width and fills small screens. Scroll horizontally to read long records
+without wrapping or truncation.
+
+Switch to **Raw** for the original lines, including their Kubernetes prefixes.
+Plain text is preserved, and malformed JSON is marked rather than discarded.
+The drawer retains the latest 500 lines. **Follow latest** is enabled by default
+and scrolls to new output;
+scrolling up pauses following so you can read.
+Enable it again to return to the newest entries. Closing the drawer stops its
+log stream.
+
 ## Manage the data-plane components
+
+In **Service flow**, each public model frame contains one **HTTPRoute** and nested
+frames labeled with their **deployment names**. Each deployment frame groups
+**InferencePool**, **EPP**, and **model server** without connector lines between them.
+The cluster's **Gateway** connects to the model frame, and **HTTPRoute** connects to
+the deployment frames. Each component retains its own status indicator, help tooltip,
+and available actions.
+
+Each Lens cluster registration uses a stable isolated namespace, for example
+`lens-gateway-dcea6ee0`. Gateway, IPP, authentication and HTTPRoute resources live
+there; provider deployments keep their own namespaces. Custom Gateway namespace
+prefixes receive the same short-ID suffix.
+
+Existing resources in an unsuffixed namespace are not moved or deleted
+automatically. When upgrading, install the isolated Gateway/IPP and use its
+published endpoint. If the previous Gateway still owns the configured NodePort,
+choose a free exposed port rather than taking it from another installation.
+Separate namespaces do not isolate backends sharing the same Lens database and
+cluster record; those backends must not run competing control loops.
+
+Multiple providers branch from the same HTTPRoute, not duplicate routes. Branch
+percentages show the saved, configured request shares, not observed traffic.
+Zero-weight and disabled providers have dotted connections and 0% shares.
+An existing zero-weight InferencePool with no Gateway parent status shows a
+neutral **standby (0 weight; not routed)** indicator rather than degraded.
+EPP and model-server failures remain visible; standby alone does not trigger
+Gateway or IPP auto-healing.
 
 1. Open **Model services → Service flow** and hover an unhealthy status dot to read the problem.
 2. Open that component's menu and use the action below.
@@ -78,8 +254,11 @@ combine their capacity: the service publishes the first active provider's pool.
 | --- | --- |
 | Install a missing gateway | **Gateway → Install** |
 | Apply saved gateway and route settings | **Gateway → Reconcile**, or page-level **Reconcile** for all clusters with members |
-| Inspect gateway logs | **Gateway → View logs** |
-| Install the payload processor | **IPP → Install IPP** |
+| Inspect gateway or payload-processor logs | **Gateway → View logs** or **IPP → View logs**; disabled while the component is stopped or not installed, with a hover hint to start or install it |
+| Understand the control plane and gateway | Hover over or focus the **?** icon beside **Lens control plane** or **Gateway**; Gateway help links to the upstream documentation |
+| Read the official payload-processor definition | Hover over or focus the **?** icon beside **IPP**; the tooltip includes a link to the upstream documentation |
+| Understand model components | **HTTPRoute**, **InferencePool**, **EPP**, and **model server** have no subtitles; their **?** icons show a one-sentence description based on official documentation and a source link |
+| Install the payload processor | **IPP → Install** |
 | Restart a stopped component | **Gateway**, **IPP** or **EPP → Start** |
 | Edit payload-processor settings | **IPP → Configure**; **Use chart default** removes your custom settings |
 | Stop or remove a component | Its **Stop** or **Uninstall** action |

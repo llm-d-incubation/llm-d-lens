@@ -1,7 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { canAccessView } from '../../pages/auth/permissions.js';
-import { resolveView } from './views.js';
+import { firstAccessibleView, NAVIGATION_GROUPS, resolveView } from './views.js';
+
+test('landing page follows the first accessible sidebar entry, including custom grants', () => {
+  for (const [permissions, expected] of [
+    [['*:*:*'], 'model-market'],
+    [['deployment:run:read', 'cluster:cluster:read'], 'model-market'],
+    [['model-service:group:read', 'model-service:usage:read'], 'admin/model-service'],
+    [['evaluate:run:read', 'model-service:usage:read'], 'optimization-evaluate'],
+    [['model-service:usage:read', 'model-service:token:manage', 'model-service:inference:use'], 'usage'],
+    [['model-service:token:manage'], 'api-keys'],
+    [['cluster:cluster:read', 'user:user:read'], 'clusters'],
+    [['user:user:read'], 'admin/users'],
+    [[], ''],
+  ]) {
+    assert.equal(firstAccessibleView(view => canAccessView(permissions, view)), expected);
+  }
+});
+
+test('every sidebar entry can be the first accessible destination without a separate priority list', () => {
+  for (const item of NAVIGATION_GROUPS.flatMap(group => group.items)) {
+    assert.equal(firstAccessibleView(view => view === item.view), item.view);
+    assert.equal(resolveView(item.view), item.view);
+  }
+});
+
+test('default URLs use the accessible landing page but supported deep links remain intact', () => {
+  const fallback = firstAccessibleView(view => canAccessView(['model-service:usage:read'], view));
+  for (const view of [null, '', 'unknown']) assert.equal(resolveView(view, fallback), 'usage');
+  assert.equal(resolveView('admin/model-service', fallback), 'admin/model-service');
+  assert.equal(resolveView(null, ''), '');
+});
 
 test('legacy configuration URLs resolve to the shared evaluation wizard', () => {
   assert.equal(resolveView('optimization-explore'), 'optimization-evaluate-new');

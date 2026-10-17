@@ -14,6 +14,8 @@ import threading
 from collections.abc import Sequence
 from typing import Protocol, TypeVar
 
+from llm_d_lens.model_service.contracts import MAX_BACKEND_WEIGHT
+
 T = TypeVar("T")
 
 
@@ -72,7 +74,11 @@ class WeightedSelection:
         if not candidates:
             raise ValueError("no candidates to select from")
         ordered = list(candidates)
-        weights = [max(1, int(getattr(candidate, "weight", 1) or 1)) for candidate in ordered]
+        weights = [getattr(candidate, "weight", 1) for candidate in ordered]
+        if any(type(weight) is not int or not 0 <= weight <= MAX_BACKEND_WEIGHT for weight in weights):
+            raise ValueError("weights must be integers between 0 and 1000000")
+        if not any(weights):
+            raise ValueError("at least one candidate must have a positive weight")
         return self._rng.choices(ordered, weights=weights, k=1)[0]
 
 

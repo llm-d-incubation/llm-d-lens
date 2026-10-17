@@ -33,6 +33,7 @@ const TONES = {
 };
 
 const SIZES = {
+    xxs: 'h-3.5 px-1 py-0 text-[9px] font-normal leading-none tracking-normal',
     xs: 'px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider',
     sm: 'px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider',
     md: 'px-2.5 py-1 text-xs font-semibold',
@@ -83,9 +84,19 @@ const STATUS_MAP = {
     inactive: { tone: 'neutral', label: 'Inactive' },
 };
 
-// Status is never conveyed by color alone: the chip always carries a dot + label.
-export function StatusChip({ status, label, size = 'sm', className, pulse = false, ...props }) {
+// Status is never conveyed by color alone: every variant carries a text label.
+export function StatusChip({ status, label, size = 'sm', variant = 'badge', className, pulse = false, ...props }) {
     const meta = STATUS_MAP[status] || { tone: 'neutral', label: status };
+    if (variant === 'compact') {
+        return (
+            <Badge tone={meta.tone} size="xs" className={cn(
+                'h-4 shrink-0 rounded border-0 px-1.5 py-0 text-[10px] font-normal normal-case leading-4 tracking-normal',
+                className,
+            )} {...props}>
+                {label || meta.label}
+            </Badge>
+        );
+    }
     return (
         <Badge tone={meta.tone} size={size} className={className} {...props}>
             <span

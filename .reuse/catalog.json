@@ -1861,20 +1861,20 @@
       ]
     },
     {
-      "id": "deployment-resource-sharing",
+      "id": "model-service-resource-sharing",
       "path": "apps/backend/src/llm_d_lens/auth/service.py",
       "symbols": [
         "share_resource",
         "revoke_resource_share",
         "list_resource_shares"
       ],
-      "purpose": "Share an individual deployment run or execution with users/groups through resource-scoped role bindings: create, revoke, and list bindings.",
-      "boundaries": "Supports only deployment_run/deployment_execution resources. Recipients must already have access to the resource's cluster; sharing cannot bypass cluster boundaries or span clusters. Only creators or cluster maintainers/admins may share; ordinary owner-group members may not. Duplicate bindings return 409. Read-side _run_readable/_execution_readable checks in deployment routes match the same resource_type+id. The share drawer subject/role picker uses the resource-scoped GET .../access/options catalog (id/display only) instead of the admin Users/Groups/Roles APIs, which end-users cannot read. Shares are purged when the deployment is deleted: the run worker revokes deployment_execution shares for each removed execution and deployment_run shares only when the run record itself is deleted (users and groups alike). Revocation requires the authorized resource type, ID and cluster; unknown, mismatched or non-resource bindings return 404 before mutation.",
+      "purpose": "Grant inference on one model service to users/groups through constrained resource-scoped bindings: create, revoke and list access.",
+      "boundaries": "Only model_service_group resources and the built-in end-user grant role are accepted. Consumers need an independently applicable inference cluster binding plus a model grant. Scoped operators retain inference access; admin and maintainer manage grants through model-service:group:share. Grants confer no deployment management or onward sharing. The resource-scoped options API exposes only eligible recipient IDs/display names. Deletion purges grants; revocation validates resource ID/type/cluster. Deployment sharing is retired without automatic grant conversion.",
       "examples": [
-        "apps/backend/src/llm_d_lens/deploy/router.py",
+        "apps/backend/src/llm_d_lens/model_service/router.py",
         "apps/backend/src/llm_d_lens/auth/routes.py",
-        "apps/frontend/src/pages/deployment/ui/DeploymentManagement/DeploymentShareDrawer.jsx",
-        "apps/frontend/src/pages/optimization/ui/OptimizationWorkspace/remoteDeployBackend.js"
+        "apps/frontend/src/pages/model-service/ui/ModelService/ModelServiceAdminPage.jsx",
+        "apps/frontend/src/pages/model-service/ui/ModelService/modelServiceBackend.js"
       ],
       "tests": [
         "apps/backend/tests/unit/auth/test_sharing.py",

@@ -217,16 +217,6 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("GET", "/api/v1/deployments/orphans", "deployment:run:read"),
     RoutePermission("POST", "/api/v1/deployments/orphans/clean", "deployment:execution:delete"),
     # --- deployment resource sharing ---
-    RoutePermission("GET", "/api/v1/deployments/executions/{execution_id}/access", "deployment:run:share"),
-    RoutePermission("POST", "/api/v1/deployments/executions/{execution_id}/access", "deployment:run:share"),
-    RoutePermission(
-        "DELETE", "/api/v1/deployments/executions/{execution_id}/access/{binding_id}", "deployment:run:share"
-    ),
-    RoutePermission("GET", "/api/v1/deployments/executions/{execution_id}/access/options", "deployment:run:share"),
-    RoutePermission("GET", "/api/v1/deployments/runs/{run_id}/access", "deployment:run:share"),
-    RoutePermission("POST", "/api/v1/deployments/runs/{run_id}/access", "deployment:run:share"),
-    RoutePermission("DELETE", "/api/v1/deployments/runs/{run_id}/access/{binding_id}", "deployment:run:share"),
-    RoutePermission("GET", "/api/v1/deployments/runs/{run_id}/access/options", "deployment:run:share"),
     # --- evaluate ---
     RoutePermission("GET", "/api/v1/evaluate/benchmark-defaults", "evaluate:run:read"),
     RoutePermission("POST", "/api/v1/evaluate/timing-estimate", "evaluate:run:read"),
@@ -323,6 +313,16 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/v1/model-service/admin/groups", "model-service:group:manage"),
     RoutePermission("GET", "/api/v1/model-service/admin/groups/{group_id}", "model-service:group:read"),
     RoutePermission("PATCH", "/api/v1/model-service/admin/groups/{group_id}", "model-service:group:manage"),
+    RoutePermission("GET", "/api/v1/model-service/admin/groups/{group_id}/access", "model-service:group:share"),
+    RoutePermission("POST", "/api/v1/model-service/admin/groups/{group_id}/access", "model-service:group:share"),
+    RoutePermission("GET", "/api/v1/model-service/admin/groups/{group_id}/access/options", "model-service:group:share"),
+    RoutePermission(
+        "DELETE", "/api/v1/model-service/admin/groups/{group_id}/access/{binding_id}", "model-service:group:share"
+    ),
+    RoutePermission("PUT", "/api/v1/model-service/admin/groups/{group_id}/traffic", "model-service:member:manage"),
+    RoutePermission(
+        "PUT", "/api/v1/model-service/admin/groups/{group_id}/providers/status", "model-service:member:manage"
+    ),
     RoutePermission("DELETE", "/api/v1/model-service/admin/groups/{group_id}", "model-service:group:manage"),
     RoutePermission("GET", "/api/v1/model-service/admin/members", "model-service:group:read"),
     RoutePermission("GET", "/api/v1/model-service/admin/deployments", "model-service:group:read"),

@@ -11,12 +11,14 @@ Design reference: docs/design/model-service-design.md#6-domain-model
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 TOKEN_PREFIX = "lens-mk-"  # noqa: S105 - public token prefix, not a secret
+MAX_BACKEND_WEIGHT = 1_000_000
+BackendWeight = Annotated[int, Field(strict=True, ge=0, le=MAX_BACKEND_WEIGHT)]
 
 SelectionPolicy = Literal["random", "round_robin", "weighted", "affinity"]
 EndpointKind = Literal["vllm", "llm-d-epp"]
@@ -71,6 +73,8 @@ class ModelServiceGroup(StrictModel):
     served_name: str | None = Field(default=None, alias="servedName")
     base_model: str | None = Field(default=None, alias="baseModel")
     created_by_user_id: str | None = Field(default=None, alias="createdByUserId")
+    owner_user_id: str | None = Field(default=None, alias="ownerUserId")
+    owner_group_id: str | None = Field(default=None, alias="ownerGroupId")
     created_at: datetime = Field(default_factory=utcnow, alias="createdAt")
     updated_at: datetime = Field(default_factory=utcnow, alias="updatedAt")
 
@@ -94,6 +98,7 @@ class ModelServiceMember(StrictModel):
     pool_name: str | None = Field(default=None, alias="poolName")
     epp_ref: str | None = Field(default=None, alias="eppRef")
     status: MemberStatus = "active"
+    weight: BackendWeight = Field(default=1, description="Gateway API relative request weight; 0 receives no traffic.")
     health_json: dict[str, Any] | None = Field(default=None, alias="healthJson")
     last_health_at: datetime | None = Field(default=None, alias="lastHealthAt")
     owner_user_id: str | None = Field(default=None, alias="ownerUserId")
@@ -141,12 +146,19 @@ class UsageRecord(StrictModel):
 # --- request contracts -------------------------------------------------------
 
 
+class ModelGrantRequest(StrictModel):
+    """Grant inference only; cluster and grant role are derived by the server."""
+
+    subject_type: Literal["user", "group"] = Field(alias="subjectType", description="Recipient kind.")
+    subject_id: str = Field(min_length=1, alias="subjectId", description="Existing user or group ID.")
+
+
 class TokenCreateRequest(StrictModel):
     name: str = Field(default="default", min_length=1, max_length=100)
 
 
 class GroupCreateRequest(StrictModel):
-    """"""
+    """Create a public model service, optionally with its first ready deployment."""
 
     name: str = Field(min_length=1, max_length=100)
     #: Optional; defaults to ``name``. Lens derives the rest (model ref / base model).
@@ -159,6 +171,13 @@ class GroupCreateRequest(StrictModel):
     cluster_id: str = Field(alias="clusterId", min_length=1, max_length=32)
     served_name: str | None = Field(default=None, alias="servedName")
     base_model: str | None = Field(default=None, alias="baseModel")
+    execution_id: str | None = Field(
+        default=None,
+        alias="executionId",
+        min_length=1,
+        description="Optional ready deployment in clusterId. Creates the service and its first member atomically; "
+        "modelRef and servedName are derived from the deployment, and baseModel from the public name.",
+    )
 
 
 class GroupUpdateRequest(StrictModel):
@@ -167,7 +186,11 @@ class GroupUpdateRequest(StrictModel):
     display_name: str | None = Field(default=None, max_length=200, alias="displayName")
     description: str | None = None
     selection_policy: SelectionPolicy | None = Field(default=None, alias="selectionPolicy")
-    status: GroupStatus | None = None
+    status: GroupStatus | None = Field(
+        default=None,
+        description="disabled stops this public model; active resumes enabled positive-weight providers. "
+        "Provider states, weights and running Pods are preserved.",
+    )
     cluster_id: str | None = Field(default=None, alias="clusterId")
     served_name: str | None = Field(default=None, alias="servedName")
     base_model: str | None = Field(default=None, alias="baseModel")
@@ -179,6 +202,21 @@ class MemberCreateRequest(StrictModel):
     group_id: str = Field(alias="groupId")
     execution_id: str = Field(alias="executionId")
     pool_name: str | None = Field(default=None, alias="poolName")
+
+
+class TrafficMemberRequest(StrictModel):
+    execution_id: str = Field(alias="executionId", min_length=1)
+    weight: BackendWeight
+
+
+class TrafficUpdateRequest(StrictModel):
+    """Replace weights together, optionally adding ready deployments at the same time."""
+
+    members: list[TrafficMemberRequest] = Field(min_length=1, max_length=16)
+    expected_weights: dict[str, BackendWeight] = Field(
+        alias="expectedWeights",
+        description="Previously read executionId-to-weight map; stale membership or weights return 409.",
+    )
 
 
 class PublishableDeployment(StrictModel):
@@ -202,7 +240,18 @@ class PublishableDeployment(StrictModel):
 
 
 class MemberUpdateRequest(StrictModel):
-    status: MemberStatus | None = None
+    status: MemberStatus | None = Field(
+        default=None,
+        description="disabled takes the provider offline without scaling Pods or changing weight. "
+        "Re-enabling requires a ready deployment. Weight 0 remains standby and parent model state is unchanged.",
+    )
+
+
+class ProvidersStatusRequest(StrictModel):
+    status: Literal["active", "disabled"] = Field(
+        description="Bring every provider online (active) or offline (disabled). "
+        "Preserves weights, model status and Pods. Starting requires all deployments to be ready."
+    )
 
 
 class AuthorizeRequest(StrictModel):

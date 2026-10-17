@@ -196,7 +196,12 @@ class BindingRequest(BaseModel):
     role_id: str = Field(alias="roleId")
     scope_type: str = Field(default="global", alias="scopeType")
     scope_cluster_id: str | None = Field(default=None, alias="scopeClusterId")
-    scope_resource_type: str | None = Field(default=None, alias="scopeResourceType")
+    scope_resource_type: str | None = Field(
+        default=None,
+        alias="scopeResourceType",
+        description="For resource scope, only model_service_group is supported, with the built-in end-user role. "
+        "The recipient must independently have inference permission in the model's cluster.",
+    )
     scope_resource_id: str | None = Field(default=None, alias="scopeResourceId")
 
     model_config = {"populate_by_name": True}
@@ -439,7 +444,14 @@ async def user_bindings(user_id: str) -> list[dict[str, Any]]:
     return _jsonify(default_service().user_binding_dao.list_for_user(user_id))
 
 
-@router.post("/users/{user_id}/role-bindings", status_code=201)
+@router.post(
+    "/users/{user_id}/role-bindings",
+    status_code=201,
+    summary="Assign a user role at global, cluster or model-inference resource scope.",
+    description="Requires role binding management. Model resource bindings accept only model_service_group and "
+    "the built-in end-user role, with a server-validated model cluster and existing recipient inference scope. "
+    "Deployment resource bindings are retired and rejected.",
+)
 async def add_user_binding(user_id: str, body: BindingRequest, request: Request) -> dict[str, Any]:
     actor = _principal(request)
     record = default_service().add_user_binding(
@@ -529,7 +541,14 @@ async def group_bindings(group_id: str) -> list[dict[str, Any]]:
     return _jsonify(default_service().group_binding_dao.list_for_group(group_id))
 
 
-@router.post("/groups/{group_id}/role-bindings", status_code=201)
+@router.post(
+    "/groups/{group_id}/role-bindings",
+    status_code=201,
+    summary="Assign a group role at global, cluster or model-inference resource scope.",
+    description="Requires role binding management. Resource grants only support model_service_group with the "
+    "built-in end-user role. The group must already have inference permission in the model's cluster. "
+    "Deployment resource bindings are retired and rejected.",
+)
 async def add_group_binding(group_id: str, body: BindingRequest, request: Request) -> dict[str, Any]:
     actor = _principal(request)
     record = default_service().add_group_binding(

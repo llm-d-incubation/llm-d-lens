@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import React from 'react';
+import { ChevronDown, CircleHelp } from 'lucide-react';
 import { cn } from '../lib/cn';
 
 const fieldBase =
@@ -21,23 +22,36 @@ const fieldBase =
     'focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 ' +
     'disabled:opacity-50 disabled:cursor-not-allowed';
 
-export function Label({ className, children, ...props }) {
-    return (
+const fieldVariants = {
+    toolbar: 'h-8 rounded-lg border-transparent bg-transparent py-1.5 text-xs dark:border-transparent dark:bg-transparent hover:bg-theme-bg/70 focus:bg-theme-bg focus:ring-1 focus:ring-sky-500/30 focus:border-sky-500/40',
+};
+
+export function Label({ className, children, help, ...props }) {
+    const label = (
         <label
-            className={cn('block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5', className)}
+            className={cn('block text-xs font-semibold text-slate-600 dark:text-slate-400', help ? 'mb-0' : 'mb-1.5', className)}
             {...props}
         >
             {children}
         </label>
     );
+    if (!help) return label;
+    return (
+        <div className="relative mb-1.5 flex items-center gap-1.5">
+            {label}
+            <HelpTooltip label={`${typeof children === 'string' ? children : 'Field'} help`}>
+                {help}
+            </HelpTooltip>
+        </div>
+    );
 }
 
-export const Input = React.forwardRef(function Input({ className, error, icon: Icon, ...props }, ref) {
+export const Input = React.forwardRef(function Input({ className, error, icon: Icon, variant, ...props }, ref) {
     if (!Icon) {
         return (
             <input
                 ref={ref}
-                className={cn(fieldBase, error && 'border-red-500 focus:border-red-500 focus:ring-red-500/40', className)}
+                className={cn(fieldBase, fieldVariants[variant], error && 'border-red-500 focus:border-red-500 focus:ring-red-500/40', className)}
                 {...props}
             />
         );
@@ -52,6 +66,7 @@ export const Input = React.forwardRef(function Input({ className, error, icon: I
                 ref={ref}
                 className={cn(
                     fieldBase,
+                    fieldVariants[variant],
                     'pl-9',
                     error && 'border-red-500 focus:border-red-500 focus:ring-red-500/40',
                     className
@@ -62,15 +77,25 @@ export const Input = React.forwardRef(function Input({ className, error, icon: I
     );
 });
 
-export const Select = React.forwardRef(function Select({ className, error, children, ...props }, ref) {
-    return (
+export const Select = React.forwardRef(function Select({ className, error, children, icon: Icon, variant, ...props }, ref) {
+    const decorated = Icon || variant === 'toolbar';
+    const select = (
         <select
             ref={ref}
-            className={cn(fieldBase, 'pr-8', error && 'border-red-500 focus:border-red-500 focus:ring-red-500/40', className)}
+            className={cn(fieldBase, fieldVariants[variant], 'pr-8', decorated && 'appearance-none', Icon && 'pl-9',
+                error && 'border-red-500 focus:border-red-500 focus:ring-red-500/40', className)}
             {...props}
         >
             {children}
         </select>
+    );
+    if (!decorated) return select;
+    return (
+        <div className="relative">
+            {Icon && <Icon className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-muted" aria-hidden="true" />}
+            {select}
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-theme-muted" aria-hidden="true" />
+        </div>
     );
 });
 
@@ -106,3 +131,22 @@ export const Checkbox = React.forwardRef(function Checkbox({ className, label, .
         </label>
     );
 });
+
+export function HelpTooltip({ label, children, className, tooltipClassName = 'inset-x-0 top-full pt-1' }) {
+    const helpId = React.useId();
+    return (
+        <span className={cn('group inline-flex', className)}>
+            <button type="button" aria-label={label}
+                aria-describedby={helpId}
+                className="inline-flex rounded-full p-0.5 text-theme-muted hover:text-theme-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40">
+                <CircleHelp size={14} aria-hidden="true" />
+            </button>
+            <span className={cn('invisible absolute z-10 group-hover:visible group-focus-within:visible', tooltipClassName)}>
+                <span id={helpId} role="tooltip"
+                    className="block rounded-lg border border-theme-border bg-theme-card p-3 text-xs font-normal leading-relaxed text-theme-text shadow-lg">
+                    {children}
+                </span>
+            </span>
+        </span>
+    );
+}

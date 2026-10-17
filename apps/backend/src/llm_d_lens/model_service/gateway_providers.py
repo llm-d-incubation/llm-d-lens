@@ -21,6 +21,7 @@ from typing import Literal
 
 import yaml
 
+from llm_d_lens.model_service.contracts import MAX_BACKEND_WEIGHT
 from llm_d_lens.versions import gateway_provider_version
 
 GATEWAY_API = "gateway.networking.k8s.io/v1"
@@ -250,6 +251,11 @@ class PoolBinding:
     pool_name: str
     port: int
     namespace: str | None = None
+    weight: int = 1
+
+    def __post_init__(self) -> None:
+        if type(self.weight) is not int or not 0 <= self.weight <= MAX_BACKEND_WEIGHT:
+            raise ValueError(f"backend weight must be an integer between 0 and {MAX_BACKEND_WEIGHT}")
 
 
 def _envoy_service(service_type: str, service_port: int | None) -> dict:
@@ -391,7 +397,7 @@ def render_gateway_ext_auth(
     and copies the returned identity headers (notably
     ``x-llm-d-inference-fairness-id``) onto the upstream request, which the EPP then
     records as its ``fairness_id`` metric label. All three HTTP-capable providers
-    share an in-cluster ``lens-authz`` Service/Endpoints that points at the Lens
+    use a namespace-local ``lens-authz`` Service/Endpoints that points at the Lens
     backend (``authz_host``), so the Gateway does not need to reach the Lens host
     directly. ``authz_port`` is the *destination* port on the Lens host (Lens' own
     live serving port); the Service itself listens on the stable
@@ -469,16 +475,70 @@ def render_gateway_ext_auth(
             }
         )
     elif provider == "istio":
+        service = f"{AUTHZ_SERVICE_NAME}.{namespace}.svc.cluster.local"
         documents.append(
             {
-                "apiVersion": "security.istio.io/v1",
-                "kind": "AuthorizationPolicy",
+                "apiVersion": "networking.istio.io/v1alpha3",
+                "kind": "EnvoyFilter",
                 "metadata": {"name": policy_name, "namespace": namespace, "labels": labels},
                 "spec": {
-                    "targetRefs": target,
-                    "action": "CUSTOM",
-                    "provider": {"name": AUTHZ_SERVICE_NAME},
-                    "rules": [{}],
+                    "workloadSelector": {"labels": {"gateway.networking.k8s.io/gateway-name": gateway_name}},
+                    # Insert auth first, then let the default-priority IPP
+                    # prepend itself: IPP -> auth -> EPP -> router. Matching an
+                    # EPP subfilter would omit auth when no pool is routed.
+                    "priority": -100,
+                    "configPatches": [
+                        {
+                            "applyTo": "HTTP_FILTER",
+                            "match": {
+                                "context": "GATEWAY",
+                                "listener": {
+                                    "filterChain": {
+                                        "filter": {
+                                            "name": "envoy.filters.network.http_connection_manager",
+                                        }
+                                    }
+                                },
+                            },
+                            "patch": {
+                                "operation": "INSERT_FIRST",
+                                "value": {
+                                    "name": "envoy.filters.http.ext_authz",
+                                    "typed_config": {
+                                        "@type": (
+                                            "type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz"
+                                        ),
+                                        "failure_mode_allow": False,
+                                        "status_on_error": {"code": "ServiceUnavailable"},
+                                        "allowed_headers": {
+                                            "patterns": [
+                                                {"exact": header}
+                                                for header in (
+                                                    "authorization",
+                                                    "x-lens-model",
+                                                    BASE_MODEL_HEADER.lower(),
+                                                )
+                                            ]
+                                        },
+                                        "http_service": {
+                                            "server_uri": {
+                                                "uri": f"http://{service}:{AUTHZ_SERVICE_PORT}",
+                                                "cluster": f"outbound|{AUTHZ_SERVICE_PORT}||{service}",
+                                                "timeout": "5s",
+                                            },
+                                            "path_prefix": authz_route,
+                                            "authorization_response": {
+                                                "allowed_upstream_headers": {
+                                                    "patterns": [{"exact": header} for header in AUTHZ_HEADERS]
+                                                },
+                                                "allowed_client_headers": {"patterns": [{"exact": AUTHZ_ERROR_HEADER}]},
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        }
+                    ],
                 },
             }
         )
@@ -486,7 +546,7 @@ def render_gateway_ext_auth(
 
 
 def istio_authz_overlay(namespace: str, authz_port: int = AUTHZ_SERVICE_PORT, cluster_id: str | None = None) -> str:
-    """IstioOperator overlay registering the Lens HTTP ext_authz provider.
+    """Legacy IstioOperator overlay; isolated Gateways use a local EnvoyFilter instead.
 
     ``authz_port`` is the stable in-cluster ``lens-authz`` Service port (not the
     Lens host's port, which the Service's Endpoints route to). Passed to
@@ -532,18 +592,25 @@ def render_model_route(
     namespace: str,
     model_name: str,
     base_model: str,
-    pool: PoolBinding,
+    pool: PoolBinding | None = None,
+    pools: Sequence[PoolBinding] = (),
     gateway_name: str,
     gateway_namespace: str | None = None,
     adapters: Sequence[str] = (),
 ) -> str:
     """Render a model service's HTTPRoute + IPP model-mapping ConfigMap.
 
-    The route references exactly ONE deployment-owned ``InferencePool`` backend.
-    llm-d's data plane is one EPP per InferencePool (`llm-d-router` watches a single
-    pool by name) and its gateway chart renders one pool per HTTPRoute, so Lens does
-    not aggregate or weight multiple pools into one route.
+    Each backend retains its own EPP. Weights follow Gateway API BackendRef:
+    integers in [0, 1000000], with traffic proportional to weight / total weight.
+    ``pool`` retains the single-backend calling convention; use ``pools`` for multiple backends.
     """
+    if pool is not None and pools:
+        raise ValueError("specify pool or pools, not both")
+    bindings = list(pools) if pool is None else [pool]
+    if not 1 <= len(bindings) <= 16 or not any(binding.weight > 0 for binding in bindings):
+        raise ValueError("a route requires 1 to 16 pools and at least one positive weight")
+    if len({(binding.namespace or namespace, binding.pool_name) for binding in bindings}) != len(bindings):
+        raise ValueError("a route cannot contain duplicate InferencePool backends")
     safe_name = resource_name(model_name)
     parent_ref: dict = {"group": GATEWAY_API_GROUP, "kind": "Gateway", "name": gateway_name}
     if gateway_namespace:
@@ -551,13 +618,18 @@ def render_model_route(
     # No ``port``: an InferencePool backend resolves to the pool's own
     # ``spec.targetPorts`` (llm-d's llm-d-router-gateway chart does the same);
     # the member's EPP Service port (80) must not be used here.
-    pool_ref = {
-        "group": INFERENCE_POOL_API_GROUP,
-        "kind": "InferencePool",
-        "name": pool.pool_name,
-    }
-    if pool.namespace and pool.namespace != namespace:
-        pool_ref["namespace"] = pool.namespace
+    pool_refs = []
+    for binding in bindings:
+        pool_ref = {
+            "group": INFERENCE_POOL_API_GROUP,
+            "kind": "InferencePool",
+            "name": binding.pool_name,
+        }
+        if pools or binding.weight != 1:
+            pool_ref["weight"] = binding.weight
+        if binding.namespace and binding.namespace != namespace:
+            pool_ref["namespace"] = binding.namespace
+        pool_refs.append(pool_ref)
     http_route = {
         "apiVersion": GATEWAY_API,
         "kind": "HTTPRoute",
@@ -567,7 +639,7 @@ def render_model_route(
             "rules": [
                 {
                     "matches": [{"headers": [{"type": "Exact", "name": BASE_MODEL_HEADER, "value": base_model}]}],
-                    "backendRefs": [pool_ref],
+                    "backendRefs": pool_refs,
                 }
             ],
         },
@@ -583,7 +655,9 @@ def render_model_route(
                 "to": [{"group": INFERENCE_POOL_API_GROUP, "kind": "InferencePool"}],
             },
         }
-        for pool_ns in sorted({pool.namespace} if pool.namespace and pool.namespace != namespace else set())
+        for pool_ns in sorted(
+            {binding.namespace for binding in bindings if binding.namespace and binding.namespace != namespace}
+        )
     ]
     model_map = {
         "apiVersion": "v1",

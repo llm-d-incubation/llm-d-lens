@@ -98,7 +98,13 @@ If installation or requests fail, use [Troubleshooting](/troubleshooting).
 The create/edit wizard currently offers **Istio**; instructions for manually
 repairing other providers belong to troubleshooting, not the normal registration flow.
 
-## Review cluster health and deployments
+## Review cluster health
+
+The cluster list refreshes quietly every five seconds while the page is visible.
+The selected cluster's health refreshes every five seconds; other clusters' health
+refreshes every ten seconds. No manual refresh is needed. List refreshes preserve
+the current selection and search, and retain existing entries with an error message
+if an update fails.
 
 1. Select a cluster in **Clusters**.
 2. Check **Workers**, **CPU**, **Memory**, **Deployable GPU**, **VRAM**, **Disk**, and **Monitoring**.
@@ -106,11 +112,19 @@ repairing other providers belong to troubleshooting, not the normal registration
    total, and show the percentage already in use on the **Usage** line below.
    A dash means the cluster cannot report that reading right now, not that
    nothing is free.
-3. In **Deployments**, use **Copy endpoint** to copy an address, or **View Pods & Logs** to inspect a deployment.
-4. In a deployment's **Monitoring** menu, choose **Open Grafana**, **Open Prometheus**, or **Profiling**.
-   **Install** and **Enable** in that menu stay unavailable until the deployment is ready.
 
-For log filters and namespace deletion, follow [Manage deployments](/user-guide/deployments).
+Clusters shows infrastructure health and worker nodes, not deployment lists or
+individual deployment failures. Click **Deployments** below **Deploy a model** in the
+**Target cluster** panel to open the
+[Deployments page](/user-guide/deployments) with the selected cluster already set
+in its filter. You can change or clear that filter; the entry URL preserves it on reload.
+Use that page to manage deployments, endpoints and logs. Deployment monitoring and profiling
+remain available through [Observability](/user-guide/observability).
+
+Click **Model services** below **Deployments** to open
+[Model services](/user-guide/model-services) with the same cluster preselected in
+the service-flow filter. This filter can also be changed or cleared, and its entry
+URL restores the cluster on reload or browser history navigation.
 
 When accelerators use DRA, Lens reads their model from ResourceSlice device attributes
 even if nodes do not have GPU product labels. The reported model is used to select
@@ -130,6 +144,8 @@ Plan any required workload shutdown or migration separately.
 1. Open the cluster's **Actions → Delete cluster**.
 2. Check the cluster name and the deletion warning.
 3. Click **Delete** and confirm the registration disappears from the list.
+
+Deletion also removes this registration's isolated Gateway namespace, normally `lens-gateway-<cluster-id>`, including its Gateway, IPP and authorization resources. The old shared `lens-gateway` namespace and other registrations' namespaces are left alone. If Gateway namespace deletion fails or times out, Lens reports the error and keeps the registration and credentials so you can retry.
 
 Lens also cleans up what it created on the cluster. The cluster's `HF_TOKEN` secret is deleted, and its namespace goes with it when keeping the namespace would serve no purpose: Lens created the namespace, or the secret was the only thing in it. If the namespace still holds anything else, it is kept, and the cluster's built-in namespaces are never touched. For a cluster you are still registering, any storage volume created during the wizard is removed together with its PVC and PV, while model files on NFS or hostPath are kept. A fully registered cluster that still has storage volumes cannot be deleted until you delete those volumes first.
 

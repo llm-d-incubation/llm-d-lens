@@ -21,13 +21,21 @@ const PADDING = {
     md: 'p-6',
 };
 
+const TONES = {
+    neutral: '',
+    subtle: 'bg-theme-card/40 bg-linear-to-br from-slate-100/70 to-transparent dark:from-slate-900/50',
+    soft: 'border-cyan-500/15 bg-linear-to-br from-slate-100/80 via-slate-50/70 to-cyan-50/15 dark:from-slate-900/80 dark:via-slate-950/70 dark:to-cyan-950/15',
+    inset: 'bg-linear-to-br from-slate-50/70 to-cyan-50/10 dark:from-slate-950/70 dark:to-cyan-950/10',
+};
+
 // The standard card surface. Replaces hand-rolled
 // "bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700" shells.
-export function Panel({ title, actions, padding = 'md', className, children, ...props }) {
+export function Panel({ title, actions, padding = 'md', tone = 'neutral', className, children, ...props }) {
     return (
         <div
             className={cn(
                 'bg-theme-card border border-theme-border rounded-xl shadow-lg transition-colors',
+                TONES[tone],
                 PADDING[padding],
                 className
             )}

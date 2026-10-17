@@ -2208,47 +2208,31 @@ print(result.model_dump(mode="json"))
   </TabItem>
 </Tabs>
 
-### 撤销部署访问权限
+### 部署访问 API（已移除）
 
-从调用方有权管理的部署资源上移除一个用户或组的共享权限。
-如果某个绑定属于另一个资源或集群、是一个全局/集群角色绑定，
-或者是一个未知的绑定，则会返回 `404` 且不会移除它。创建者/维护者
-现有的共享权限仍然适用。
+部署分享和 `deployment:run:share` 已退役。请改用
+[模型服务推理授权](/api-reference/modules/model-services#模型推理授权)。
+迁移会审计并清理旧部署授权，不会自动扩大为模型授权。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`DELETE /api/v1/deployments/executions/{execution_id}/access/{binding_id}`**
-
-**`DELETE /api/v1/deployments/runs/{run_id}/access/{binding_id}`**
-
-无请求体。成功：HTTP `204`，空响应体。对于缺失或不匹配的绑定，
-problem 响应包含：
-
-```json
-{"type":"about:blank","title":"Domain request failed","status":404,"detail":"binding not found","code":"not_found"}
-```
+原 GET/POST/DELETE `/api/v1/deployments/executions/{execution_id}/access`
+和 `/api/v1/deployments/runs/{run_id}/access` 路由，包括 `/access/options`
+及 `/access/{binding_id}`，均已取消注册，不再提供授权、列表或撤权功能。
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-对于受信任的服务端代码，先对该资源进行鉴权，并从存储的部署信息中
-获取其身份和集群。然后带着这个范围调用共享服务：
+将部署分享调用替换成模型服务的、带 scope 校验的授权方法：
 
 ```python
-from llm_d_lens.auth.service import default_service
+from llm_d_lens.model_service.service import default_service
 
-def revoke_execution_share(binding_id: str, execution_id: str, cluster_id: str) -> None:
-    # The caller has already authorized this stored execution.
-    default_service().revoke_resource_share(
-        binding_id,
-        resource_type="deployment_execution",
-        resource_id=execution_id,
-        cluster_id=cluster_id,
-    )
+def revoke_model_grant(model_id: str, binding_id: str, principal) -> None:
+    default_service().revoke_access(model_id, binding_id, principal=principal)
 ```
 
-对于一次运行，传入 `resource_type="deployment_run"`、其运行 ID，
-以及来自其存储溯源信息中的集群 ID。该服务会校验绑定的归属关系；
-路由级别的权限检查仍然是强制性的。
+该方法要求调用方在模型所属集群拥有 `model-service:group:share`，并拒绝撤销其他模型的绑定。
+通用绑定创建方法也会拒绝已退役的 `deployment_run` 和 `deployment_execution` 资源类型。
   </TabItem>
 </Tabs>

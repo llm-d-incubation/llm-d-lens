@@ -85,7 +85,12 @@ class ClusterGatewayRequest(StrictModel):
 
     cluster_id: str = Field(alias="clusterId")
     provider: str | None = None
-    namespace: str = Field(default="lens-gateway", max_length=253)
+    namespace: str = Field(
+        default="lens-gateway",
+        max_length=63,
+        description="Namespace prefix; Lens appends the stable cluster-registration short ID. "
+        "An already suffixed namespace is accepted unchanged.",
+    )
     name: str = Field(default="lens-inference-gateway", max_length=253)
     install_prerequisites: bool = Field(default=True, alias="installPrerequisites")
 
