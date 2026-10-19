@@ -418,6 +418,13 @@ class BaselineVllmAdapter:
             ]
             if parameters["model_source"] == "shared-path":
                 pod_spec["containers"][0]["args"][0] = "/model-cache"
+        # vLLM's multiprocessing queues can exceed the runtime's default 64 MiB /dev/shm.
+        pod_spec.setdefault("volumes", []).append(
+            {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "1Gi"}}
+        )
+        pod_spec["containers"][0].setdefault("volumeMounts", []).append(
+            {"name": "dshm", "mountPath": "/dev/shm"}  # noqa: S108 - mount target in an isolated Pod, not a temp file.
+        )
         labels = {"app": "vllm", "llm-d.ai/role": "decode", "prism.ai/evaluation-kind": "baseline"}
         gpu_request: dict[str, Any] = {
             "name": claim_request_name(accelerator=accelerator, access_mode=access_mode),

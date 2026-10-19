@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+import yaml
 
 from llm_d_lens.deploy.providers.baseline_vllm import BaselineVllmAdapter
 from llm_d_lens.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
@@ -63,6 +64,76 @@ def test_resources_name_the_modelserver_container_port():
     # and leaves the profiling Flow Map with no traffic at all.
     container = _container(_base_overrides())
     assert container["ports"] == [{"name": "modelserver", "containerPort": 8000}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accelerator", ["intel-xpu", "nvidia"])
+@pytest.mark.parametrize("tensor_parallel_size", [1, 8])
+@pytest.mark.parametrize("mount_kind", ["none", "host-path", "pvc", "resolved"])
+async def test_render_mounts_shared_memory_without_replacing_model_cache(
+    monkeypatch, tmp_path, accelerator, tensor_parallel_size, mount_kind
+):
+    from unittest.mock import AsyncMock
+
+    overrides = _base_overrides()
+    overrides["hardware_profile"] = accelerator
+    overrides["decode"]["tensorParallelSize"] = tensor_parallel_size
+    expected_cache_volume = None
+    resolved_mount = None
+    if mount_kind == "host-path":
+        overrides["runtime"].update(modelSource="shared-path", mountPath="/shared/models")
+        expected_cache_volume = {
+            "name": "model-cache",
+            "hostPath": {"path": "/shared/models", "type": "DirectoryOrCreate"},
+        }
+    elif mount_kind in {"pvc", "resolved"}:
+        overrides["runtime"]["modelSource"] = "auto-cache"
+        expected_cache_volume = {
+            "name": "model-cache",
+            "persistentVolumeClaim": {"claimName": "shared-model-cache"},
+        }
+        if mount_kind == "pvc":
+            overrides["runtime"]["pvcName"] = "shared-model-cache"
+        else:
+            resolved_mount = {
+                "volume_source": expected_cache_volume.copy(),
+                "mount_path": "/model-cache",
+                "read_only": True,
+                "model_source": "auto-cache",
+            }
+            resolved_mount["volume_source"].pop("name")
+    monkeypatch.setattr(
+        "llm_d_lens.deploy.providers.baseline_vllm.resolve_mount", AsyncMock(return_value=resolved_mount)
+    )
+    delegate = BaselineVllmAdapter(None, "llmd-", 900, None)
+    delegate._root = tmp_path / "rendered"
+    adapter = ConfigurationManifestAdapter(delegate, None, "llmd-", 900, output_root=tmp_path / "instrumented")
+
+    artifact = await adapter.render(delegate.discover(), overrides)
+
+    assert artifact.manifest_ref
+    with open(artifact.manifest_ref, encoding="utf-8") as manifest:
+        documents = list(yaml.safe_load_all(manifest))
+    deployment = next(item for item in documents if item.get("kind") == "Deployment")
+    pod_spec = deployment["spec"]["template"]["spec"]
+    container = pod_spec["containers"][0]
+    volumes = {volume["name"]: volume for volume in pod_spec["volumes"]}
+    mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
+    assert volumes["dshm"] == {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "1Gi"}}
+    assert mounts["dshm"] == {"name": "dshm", "mountPath": "/dev/shm"}
+    assert not pod_spec.get("hostIPC", False)
+    assert f"--tensor-parallel-size={tensor_parallel_size}" in container["args"]
+    assert mounts["prism-kv-trace"]["mountPath"] == "/opt/prism-kv-trace"
+    if expected_cache_volume is None:
+        assert "model-cache" not in volumes
+        assert "model-cache" not in mounts
+    else:
+        assert volumes["model-cache"] == expected_cache_volume
+        assert mounts["model-cache"] == {
+            "name": "model-cache",
+            "mountPath": "/model-cache",
+            "readOnly": mount_kind != "pvc",
+        }
 
 
 def test_auto_cache_serving_pod_runs_huggingface_offline():

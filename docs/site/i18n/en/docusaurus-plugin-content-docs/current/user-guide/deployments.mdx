@@ -95,6 +95,13 @@ instead.
 
 ## View pods and stream logs
 
+Newly rendered `baseline-vllm` deployments mount a per-Pod, memory-backed
+`emptyDir` at `/dev/shm`, with a size limit of 1 GiB, for vLLM multiprocessing
+communication. This avoids the container runtime's default 64 MiB shared-memory
+limit without enabling host IPC. The volume consumes memory as used, not 1 GiB
+up front; account for it when sizing Pod memory. Existing deployments retain
+their original manifests; recreate them to receive this mount.
+
 1. To see pod status inline, click the row toggle with tooltip **Show pods**.
 2. In the expanded row, review the pod table columns **Pod**, **Status**, **Restarts**, **Node**, and **Pod IP**.
 3. For the full log viewer, click the action with tooltip **View Pods & Logs**.
