@@ -213,6 +213,18 @@ class ExecutionLogArchive:
         return records
 
 
+def _resource_wait_reason(reasons: list[str]) -> bool:
+    markers = (
+        "insufficient ",
+        "waiting for resourceclaim",
+        "waiting for resource claim",
+        "resourceclaim is not allocated",
+        "resource claim is not allocated",
+        "cannot allocate all claims",
+    )
+    return any(marker in reason.lower() for reason in reasons for marker in markers)
+
+
 def _readiness_is_transient(reasons: list[str], diagnostics: dict | None = None) -> bool:
     """Return true for errors that reflect a temporary inability to reach the
     cluster/control-plane rather than an actual workload failure, so a brief
@@ -245,15 +257,8 @@ def _readiness_is_transient(reasons: list[str], diagnostics: dict | None = None)
     workload_failures = ("crashloopbackoff", "imagepullbackoff", "errimagepull", "oomkilled", "invalid image")
     if any(marker in reason.lower() for reason in reasons for marker in workload_failures):
         return False
-    resource_wait = (
-        "insufficient ",
-        "waiting for resourceclaim",
-        "waiting for resource claim",
-        "resourceclaim is not allocated",
-        "resource claim is not allocated",
-    )
-    markers = timeout_markers + connectivity_markers + resource_wait
-    if any(any(marker in reason.lower() for marker in markers) for reason in reasons):
+    markers = timeout_markers + connectivity_markers
+    if _resource_wait_reason(reasons) or any(any(marker in reason.lower() for marker in markers) for reason in reasons):
         return True
     # Kubernetes may acknowledge apply before a following read observes the
     # new Deployment.  Only that exact ``rollout status`` response is treated
@@ -732,7 +737,12 @@ class GuideAdapterDeploymentService:
             # briefly unreachable) says nothing about the workload itself --
             # leave the previously observed status (e.g. READY) untouched
             # instead of downgrading a healthy deployment.
-            pass
+            if (
+                status == DeploymentStatus.FAILED
+                and "pending" in str(diagnostics.get("pods") or "").lower()
+                and _resource_wait_reason([str(diagnostics.get("events") or "")])
+            ):
+                status = DeploymentStatus.DEPLOYING
         elif execution.status not in {DeploymentStatus.CLEANED, DeploymentStatus.CLEANED_UP}:
             status = DeploymentStatus.FAILED
         return self._store(

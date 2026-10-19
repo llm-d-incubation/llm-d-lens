@@ -75,3 +75,43 @@ def test_rollout_deadline_with_pending_resource_claim_keeps_waiting():
             "events": "FailedScheduling Insufficient nvidia.com/gpu",
         },
     )
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        "0/1 nodes are available: 1 cannot allocate all claims. still not schedulable, "
+        "preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.",
+        "0/2 nodes are available: 2 cannot allocate all claims.",
+    ],
+)
+def test_pending_dra_allocation_is_transient(event):
+    assert _readiness_is_transient(
+        ["deployment exceeded progress deadline"],
+        {"pods": "model-0 0/1 Pending", "events": f"FailedScheduling {event}"},
+    )
+
+
+@pytest.mark.parametrize("status", ["Running", "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "OOMKilled"])
+def test_old_dra_event_does_not_hide_current_workload_failure(status):
+    assert not _readiness_is_transient(
+        ["deployment exceeded progress deadline"],
+        {"pods": f"model-0 0/1 {status}", "events": "FailedScheduling cannot allocate all claims"},
+    )
+
+
+def test_pending_dra_wait_does_not_hide_another_crashed_pod():
+    assert not _readiness_is_transient(
+        ["deployment exceeded progress deadline"],
+        {
+            "pods": "model-0 0/1 Pending\nmodel-1 0/1 CrashLoopBackOff",
+            "events": "FailedScheduling cannot allocate all claims",
+        },
+    )
+
+
+def test_pending_without_resource_evidence_is_not_transient():
+    assert not _readiness_is_transient(
+        ["deployment exceeded progress deadline"],
+        {"pods": "model-0 0/1 Pending", "events": 'persistentvolumeclaim "missing" not found'},
+    )

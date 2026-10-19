@@ -93,6 +93,15 @@ serve again, so leave the deployment in place rather than recreating it
 immediately. If the namespace is gone, the deployment is corrected to **Cleaned**
 instead.
 
+Pending Pods waiting for accelerator resources, including DRA scheduler reports
+such as `cannot allocate all claims`, keep the deployment **In progress** even
+after the rollout progress deadline. Refreshing a deployment previously marked
+**Failed** returns it to **In progress** when current diagnostics confirm this
+resource wait. The scheduler reason remains available in diagnostics. This does
+not release devices held by other deployments; stop or remove an unused deployment
+to free them. Container crashes and image-pull failures still count as failures;
+Pending alone is not enough to classify a deployment as waiting for resources.
+
 ## View pods and stream logs
 
 Newly rendered `baseline-vllm` deployments mount a per-Pod, memory-backed
