@@ -443,10 +443,76 @@ PostgreSQL and the retained `LENS_DATA_DIR` archive must both be reachable by
 each serving instance; this does not provision shared storage or complete
 real-cluster acceptance.
 
-The Agentic branch remains disabled (`internal_branch_enabled: false`).
+The default request remains public-only (`include_internal: false`).
 The tool is not a planner tool, accepts no caller-provided SQL or
-ingestion/admin commands, and neither reads nor writes Agentic benchmark
-records. Step-5 changes introduce no schema migration.
+ingestion/admin commands, and never writes Agentic benchmark records.
+Neither the public path nor the optional internal path introduces a schema
+migration or changes planning/ranking behavior.
+
+### Optional caller-authorized Agentic evidence
+
+Step 6 adds explicit `include_internal: true` to the same REST/MCP request.
+Omitting it preserves the public-only path, including no reads of Agentic
+or evaluation records. The operation/tool name stays
+`query_public_benchmark_rag` for compatibility. Internal numeric/comparison
+lookups require both the GLOBAL RAG feature grant and the caller's existing
+`evaluate:run:read` authorization for each owning evaluation. MCP still
+requires its separate invocation policy.
+
+`db/dao/rag_agentic_query.py` reads existing normalized
+`agentic_benchmark_records`, joined to a live `evaluate_runs` owner context.
+An eligible record must use the canonical `evaluate:<UUID>` identity, agree
+with its soft reference and the owning run, and have a verifiable existing
+owner. Typed/legacy JSON ownership projections must not conflict. Missing,
+deleted, malformed or ambiguous contexts are omitted even for global admins.
+The SQL action/scope/ownership predicate applies before counting, ordering,
+pagination or record materialization. The original authorization policy is
+also checked for retrieved records, and caller freshness and owner/version
+state are checked again before returning. A stale caller or mid-query
+revocation/deletion produces a conflict, not stale evidence.
+
+The existing planning history writer currently creates `evaluate:<id>` names
+from eight-character simulation task IDs, not owning Evaluate UUIDs. These
+legacy rows deliberately remain ineligible: a name prefix, similar model,
+deployment, or matching hardware is not proof of evaluation ownership.
+This step neither repairs/relabels those records nor changes their producer
+or the planner. As a result, an existing installation may have no eligible
+internal evidence despite having planning history. No backfill is implied.
+
+Internal evidence is labeled `origin: agentic` and
+`evidence_type: agentic_measurement`, with the owning evaluation API URI,
+benchmark/run/cluster identity, timestamp, metric field and checksum of the
+normalized record. It preserves reported descriptors and configuration.
+These existing metrics are stored Float values; Decimal serialization does
+not recover original report-token precision. The citation explicitly records
+`numeric_precision: stored_float`; public evidence retains its original exact
+bytes and tokens.
+
+Supported internal fields are TTFT p95 (`ms`), TPOT p95 (`ms/token`), E2E p95
+(`ms`), throughput with unspecified statistic (`tokens/s`, not assumed output
+tokens), and error rate (`fraction`). Explicit filters never invent missing
+statistics, units or conditions. Source-file/revision/series filters do not
+match normalized internal records. Workload filtering uses only fields of the
+stored descriptor. Raw fraction bounds are supported; normalized fractions
+and TPOT normalization are not. Definitions and figures remain public-only.
+
+Verified merging is deliberately narrow: the pinned original Prism JSON
+object must itself carry the canonical `evaluate:<UUID>` ID, and the
+authorized internal observation must agree in metric, statistic, unit, value
+and reported model/hardware/runtime/workload conditions. One returned
+observation then retains its public citation and authorized
+`corroborating_citations`, labeled `public_and_agentic`. Similar names, bare
+UUIDs, series or conflicting observations remain separate; values are not
+averaged. No inaccessible record contributes provenance, overlap status,
+snippets or counts.
+
+`matched_items` remains a candidate count: public index items plus authorized
+internal benchmark records, before merging/metric expansion; it is not an
+experiment count. `returned_observations` counts only displayed envelopes
+after verified merging. The overall output stays within `limit` (1--50),
+with truncation explicit. Neither field claims full-corpus independent-run
+deduplication or the number of hidden records. Internal opt-in is a request
+choice, not permission to bypass an owner gate.
 
 ### Target-local rebuild, backup and incremental migration
 
@@ -631,8 +697,14 @@ the reviewed Prism/administration work. Step 5 subsequently passed isolated
 acceptance and user review: 564 combined database/auth/query tests passed,
 and 85 focused query/route cases passed after final keyword-rule adjustments.
 All 2,153 guide measurement tokens were checked by the runtime evidence verifier.
-The user approved step 5 and authorized a local commit only, without pushing;
-further implementation and deployment remain paused.
+The user approved step 5 and authorized a local commit only, without pushing.
+The subsequent explicit step-6 request added opt-in authorized Agentic reads.
+The combined database/auth/query regression passed 630 cases; after final
+DAO filter simplification, the 69 focused authorization/service/merge cases
+passed again. The server suite passed 136 cases, and the independent generator
+tests passed three cases. Step 6 passed user review; the user explicitly
+paused further work. Its changes remain uncommitted and unpushed.
+Deployment and step 7 remain deferred.
 No business database or real cluster was modified.
 All these tests use disposable PostgreSQL schemas and temporary evidence roots,
 not a remote machine or business database. Test schemas are dropped and servers
@@ -652,6 +724,9 @@ PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_guide_tables.py \
   apps/backend/tests/unit/db/test_guide_json.py \
   apps/backend/tests/unit/db/test_rag_query.py \
+  apps/backend/tests/unit/db/test_rag_agentic_query.py \
+  apps/backend/tests/unit/db/test_rag_agentic_service.py \
+  apps/backend/tests/unit/benchmark_rag/test_agentic_answers.py \
   apps/backend/tests/unit/benchmark_rag/test_query_routes.py \
   apps/backend/tests/unit/db/test_agentic_benchmark_record_dao.py -q
 ```

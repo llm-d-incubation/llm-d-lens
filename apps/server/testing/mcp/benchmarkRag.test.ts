@@ -30,12 +30,13 @@ const request = {
     intent: 'numeric',
     filters: { metric: 'throughput', unit: 'tokens/s', value_min: '0.000000001', workload: { batch_size: 8 } },
     limit: 3,
+    include_internal: false,
 };
 const response = {
     contract: 'benchmark-rag.query.v1', question: request.question, intent: 'numeric',
     filters: { ...request.filters, origins: ['prism:public-snapshot'], normalized: false, series: {} },
     status: 'answered', answer: 'Published measurement.', matched_items: 1, truncated: false,
-    generation_mode: 'deterministic', internal_branch_enabled: false, warnings: [], abstentions: [],
+    generation_mode: 'deterministic', internal_branch_enabled: false, returned_observations: 1, warnings: [], abstentions: [],
     evidence: [{
         item_id: 'metric-1', origin: 'public', evidence_type: 'raw_json',
         citation: {
@@ -46,6 +47,29 @@ const response = {
         metric: 'throughput', statistic: 'mean', value: '1234567890.123456789',
         unit: 'tokens/s', missing_series: [], related_experiments: [],
     }],
+};
+const agenticCitation = {
+    origin_id: 'agentic:evaluate', evidence_type: 'agentic_measurement',
+    benchmark_id: 'benchmark-1', evaluate_run_id: '12345678-1234-4234-8234-123456789abc',
+    cluster_id: 'cluster-1', resource_uri: '/api/v1/evaluate/runs/12345678-1234-4234-8234-123456789abc',
+    record_sha256: 'b'.repeat(64), metric_field: 'throughput',
+    record_timestamp: '2026-10-19T12:00:00Z', access_scope: 'owning_evaluation', numeric_precision: 'stored_float',
+};
+const mixedResponse = {
+    ...response, internal_branch_enabled: true, matched_items: 4, returned_observations: 3, truncated: true,
+    evidence: [
+        response.evidence[0],
+        {
+            ...response.evidence[0], item_id: 'verified-public-metric', origin: 'public_and_agentic',
+            value: '0.10000000000000002', corroborating_citations: [agenticCitation],
+            identity_verification: 'canonical_evaluate_run_and_metric',
+        },
+        {
+            ...response.evidence[0], item_id: 'agentic-metric', origin: 'agentic',
+            evidence_type: 'agentic_measurement', citation: { ...agenticCitation, benchmark_id: 'benchmark-2' },
+            value: '0.30000000000000004', corroborating_citations: [], identity_verification: null,
+        },
+    ],
 };
 
 test('strict transport requires a signed caller, not an anonymous or disabled-auth sentinel', async (t) => {
@@ -61,6 +85,12 @@ test('query is one generated read tool, available under MCP/Playground policy bu
     assert.ok(tool, 'regenerate MCP tools after the REST operation is registered');
     assert.equal(tool.riskTier, 'read');
     assert.equal(tool.strictInput, true);
+    const inputSchema = z.object(tool.inputShape);
+    assert.equal(inputSchema.safeParse({ question: 'throughput' }).success, true);
+    for (const includeInternal of [false, true]) {
+        assert.equal(inputSchema.parse({ question: 'throughput', include_internal: includeInternal }).include_internal, includeInternal);
+    }
+    assert.equal(inputSchema.safeParse({ question: 'throughput', include_internal: 'true' }).success, false);
     assert.equal(prismTools.filter(item => item.name === toolName).length, 1);
     assert.equal(specialTools.some(item => item.name === toolName), false);
     const policy = permissionForNodeRoute('POST', '/api/mcp');
@@ -86,6 +116,7 @@ test('HTTP MCP requires invocation policy AND upstream feature access, forwardin
     delete process.env.PRISM_ALLOW_UNAUTHENTICATED;
     delete process.env.SIMULATION_ALLOW_UNAUTHENTICATED;
     let queryCalls = 0;
+    const receivedBodies: unknown[] = [];
     const upstream = http.createServer((req, res) => {
         const caller = verifyInternalHeaders(req.method || '', req.url || '', {
             principalId: String(req.headers['x-prism-principal-id'] || ''),
@@ -109,10 +140,16 @@ test('HTTP MCP requires invocation policy AND upstream feature access, forwardin
         queryCalls++;
         assert.ok(caller, 'backend query must receive an actual HMAC-signed identity');
         if (caller !== 'both') {
-            res.writeHead(403).end(JSON.stringify({ code: 'forbidden', evidence: response.evidence }));
+            res.writeHead(403).end(JSON.stringify({ code: 'forbidden', evidence: mixedResponse.evidence }));
             return;
         }
-        res.end(JSON.stringify(response));
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', () => {
+            const payload = JSON.parse(body) as typeof request;
+            receivedBodies.push(payload);
+            res.end(JSON.stringify(payload.include_internal ? mixedResponse : response));
+        });
     });
     const app = express();
     app.use(express.json(), authMiddleware, mcpRouter, backendApiProxyRouter);
@@ -127,7 +164,7 @@ test('HTTP MCP requires invocation policy AND upstream feature access, forwardin
     });
     process.env.LLM_D_DEPLOY_API_URL = `http://127.0.0.1:${upstreamPort}`;
     process.env.PRISM_MCP_INTERNAL_BASE_URL = `http://127.0.0.1:${gatewayPort}`;
-    const invoke = (session?: string) => fetch(`http://127.0.0.1:${gatewayPort}/api/mcp`, {
+    const invoke = (session?: string, includeInternal?: boolean) => fetch(`http://127.0.0.1:${gatewayPort}/api/mcp`, {
         method: 'POST',
         headers: {
             'content-type': 'application/json', accept: 'application/json, text/event-stream',
@@ -135,21 +172,38 @@ test('HTTP MCP requires invocation policy AND upstream feature access, forwardin
             ...(session ? { cookie: `prism_session=${session}` } : {}),
             'x-prism-principal-id': 'both', 'x-prism-internal-ts': '1', 'x-prism-internal-sig': 'spoof',
         },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: toolName, arguments: request } }),
+        body: JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'tools/call',
+            params: { name: toolName, arguments: { ...request, include_internal: includeInternal } },
+        }),
     });
     assert.equal((await invoke()).status, 401);
     assert.equal((await invoke('featureonly')).status, 403);
     assert.equal(queryCalls, 0);
     for (const session of ['invoker', 'playground']) {
-        const denied = await invoke(session);
+        const denied = await invoke(session, true);
         const text = await denied.text();
         assert.equal(denied.status, 200);
         assert.match(text, /"isError":true/);
         assert.match(text, /status 403/);
         assert.equal(text.includes('metric-1'), false);
+        assert.equal(text.includes('agentic-metric'), false);
+        assert.equal(text.includes(agenticCitation.evaluate_run_id), false);
     }
     const allowed = await invoke('both');
     assert.match(await allowed.text(), /1234567890\.123456789/);
+    const defaultRequest = { question: request.question, intent: request.intent, filters: request.filters, limit: request.limit };
+    assert.deepEqual(receivedBodies, [defaultRequest], 'omitted opt-in preserves the backend public-only default');
+    const explicitPublic = await invoke('both', false);
+    assert.match(await explicitPublic.text(), /1234567890\.123456789/);
+    const optedIn = await invoke('both', true);
+    const optedInText = await optedIn.text();
+    assert.equal(optedInText.includes('"isError":true'), false);
+    const data = optedInText.split('\n').find(line => line.startsWith('data: '));
+    assert.ok(data);
+    const optedInResult = JSON.parse(data.slice(6));
+    assert.deepEqual(optedInResult.result.content, [{ type: 'text', text: JSON.stringify(mixedResponse, null, 2) }]);
+    assert.deepEqual(receivedBodies, [defaultRequest, request, { ...request, include_internal: true }]);
     const before = queryCalls;
     process.env.PRISM_AUTH_MODE = 'disabled';
     const disabled = await invoke();
@@ -221,7 +275,7 @@ test('MCP forwards the real signed caller and exact JSON; denied/corrupt results
     for (const corrupt of [
         new Response('not-json'), Response.json(null), Response.json({}),
         Response.json({ ...response, generation_mode: 'agentic' }),
-        Response.json({ ...response, internal_branch_enabled: true }),
+        Response.json({ ...response, internal_branch_enabled: 'true' }),
         Response.json({ ...response, evidence: [{ ...response.evidence[0], origin: 'internal' }] }),
     ]) {
         upstream = corrupt;

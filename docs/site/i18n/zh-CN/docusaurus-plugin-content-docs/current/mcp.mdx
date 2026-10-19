@@ -75,16 +75,33 @@ JSON 证据响应，包括 Decimal 字符串、引用和拒答原因。Lens Assi
 GLOBAL 授权。集群授权、匿名调用者和禁用认证模式的 `system` 哨兵身份均不能查询。
 适配器通过现有内部 HMAC 传输签名转发真实已认证调用者，工具参数不能指定身份。
 
-检索仅覆盖已发布的公开来源：获批准的 Prism 公开快照、`VincyZhang/llm-d` 和
+默认检索仅覆盖已发布的公开来源：获批准的 Prism 公开快照、`VincyZhang/llm-d` 和
 `llm-d/llm-d-benchmark`。部署必须恢复已发布语料**及其不可变来源归档**；
-仅复制数据库并不足够。不会检索私有或内部记录。响应固定使用
-`generation_mode: "deterministic"` 和 `internal_branch_enabled: false`，
-不经过 LLM 生成路径。问题规划采用有界、确定性的关键词规则，而非通用自然语言处理
+仅复制数据库并不足够。布尔参数 `include_internal` 默认为 `false`；
+未显式启用时，不访问内部数据、计数或身份检查。设为 `true` 可同时检索已授权的
+存储 Agentic 评估测量值；仍须拥有 GLOBAL RAG 授权，并通过每条记录可验证的
+所属上下文中的现有 `evaluate:run:read` 策略。缺失、已删除或无法验证的所属对象
+即使对管理员也会排除。`internal_branch_enabled` 表示请求是否显式启用，
+而不是拥有所有内部记录的权限。端点、operation ID、只读级别和规划器排除均不变。
+响应固定使用 `generation_mode: "deterministic"`，不经过 LLM 生成路径。
+问题规划采用有界、确定性的关键词规则，而非通用自然语言处理
 或 LLM 推理；显式结构化筛选条件具有权威性。
 自动关键词规则仅支持英语。其他语言的问题请显式指定 `intent` 和结构化
 `filters`；系统不会自动推断语言。
 图表证据可以通过 `related_experiments` 展示显式关联的已发布场景，
-适配器不会猜测实验身份。上游拒绝、不可用或响应损坏时会返回明确的工具错误，
+适配器不会猜测实验身份。
+证据来源为 `public`、`agentic` 或 `public_and_agentic`。内部
+`agentic_measurement` 引用保留所属评估来源，并声明 `numeric_precision: "stored_float"`：
+Decimal 字符串表示已存储 Float，而不是原始来源 token 的精确值；公开原始字节精度不变。
+只有固定版本的公开原始 JSON 中实际存在规范 `evaluate:<UUID>` 身份，且指标、
+统计量、单位和数值一致才允许合并；合并保留公开引用与内部 `corroborating_citations`，
+并标注 `identity_verification: "canonical_evaluate_run_and_metric"`。
+无法确定的重叠保持独立，未授权重叠不会泄露。历史八字符模拟任务 ID 无法证明
+评估所属关系，因此省略。
+`limit`（1–50）限制合并后返回的封装总数；`returned_observations` 统计这些封装，
+`matched_items` 统计候选公开索引项与已授权内部基准记录，而不是独立实验或精确的
+去重运行数量；`truncated` 明确报告省略的结果。
+上游拒绝、不可用或响应损坏时会返回明确的工具错误，
 不会返回伪装为成功的空答案。
 
 参阅[请求、筛选及响应契约](/api-reference/modules/lens-assistant#query-public-benchmark-evidence)。

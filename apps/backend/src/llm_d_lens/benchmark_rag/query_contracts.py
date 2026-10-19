@@ -1,7 +1,8 @@
-"""Caller-scoped public RAG request and deterministic evidence responses."""
+"""Caller-scoped RAG requests and deterministic, provenance-aware responses."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal, Self
 
@@ -12,7 +13,7 @@ from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRI
 QUERY_PERMISSION = "benchmark-rag:query:read"
 PUBLIC_ORIGINS = (PRISM_ORIGIN, LLM_D_ORIGIN, BENCHMARK_ORIGIN)
 QueryIntent = Literal["auto", "numeric", "comparison", "definition", "figure"]
-EvidenceType = Literal["raw_json", "published_table", "prose_summary", "image_trend"]
+EvidenceType = Literal["raw_json", "published_table", "prose_summary", "image_trend", "agentic_measurement"]
 
 
 class QueryModel(BaseModel):
@@ -65,6 +66,7 @@ class QueryRequest(QueryModel):
     intent: QueryIntent = "auto"
     filters: QueryFilters = Field(default_factory=QueryFilters)
     limit: int = Field(default=10, ge=1, le=50)
+    include_internal: bool = False
 
 
 class Citation(QueryModel):
@@ -89,11 +91,27 @@ class ExperimentContext(QueryModel):
     source_pointer: dict[str, JsonValue]
 
 
+class AgenticCitation(QueryModel):
+    origin_id: Literal["agentic:evaluate"] = "agentic:evaluate"
+    evidence_type: Literal["agentic_measurement"] = "agentic_measurement"
+    benchmark_id: str
+    evaluate_run_id: str
+    cluster_id: str
+    resource_uri: str
+    record_sha256: str
+    metric_field: str
+    record_timestamp: datetime
+    access_scope: Literal["owning_evaluation"] = "owning_evaluation"
+    numeric_precision: Literal["stored_float"] = "stored_float"
+
+
 class QueryEvidence(QueryModel):
     item_id: str
-    origin: Literal["public"] = "public"
+    origin: Literal["public", "agentic", "public_and_agentic"] = "public"
     evidence_type: EvidenceType
-    citation: Citation
+    citation: Citation | AgenticCitation
+    corroborating_citations: tuple[AgenticCitation, ...] = ()
+    identity_verification: Literal["canonical_evaluate_run_and_metric"] | None = None
     experiment: ExperimentContext | None = None
     related_experiments: tuple[ExperimentContext, ...] = ()
     metric: str | None = None
@@ -127,4 +145,5 @@ class QueryResponse(QueryModel):
     abstentions: tuple[Abstention, ...] = ()
     warnings: tuple[str, ...] = ()
     generation_mode: Literal["deterministic"] = "deterministic"
-    internal_branch_enabled: Literal[False] = False
+    internal_branch_enabled: bool = False
+    returned_observations: int = Field(default=0, ge=0)

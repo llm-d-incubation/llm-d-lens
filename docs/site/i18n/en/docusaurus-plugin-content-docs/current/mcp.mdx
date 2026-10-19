@@ -78,17 +78,39 @@ grants, anonymous callers and the disabled-auth `system` sentinel cannot query.
 The adapter signs the actual authenticated caller through the existing internal
 HMAC transport; tool arguments cannot supply an identity.
 
-Only published public sources are searched: the approved Prism public snapshot,
+By default, only published public sources are searched: the approved Prism public snapshot,
 `VincyZhang/llm-d`, and `llm-d/llm-d-benchmark`. The deployment must have the
 published corpus **and its immutable source archive** restored; a database-only
-copy is insufficient. Private/internal records are never searched. Answers use
-`generation_mode: "deterministic"` with `internal_branch_enabled: false`, not an
-LLM generation path. Question planning uses bounded deterministic keyword rules,
+copy is insufficient. `include_internal` is a boolean defaulting to `false`;
+without opt-in, there is no internal data, count or identity access.
+With `include_internal: true`, authorized stored Agentic evaluation measurements
+may also be returned. The GLOBAL RAG grant is still required, together with the
+existing `evaluate:run:read` policy in each record's verifiable owning context;
+missing/deleted/unverifiable owners are excluded even for admins.
+`internal_branch_enabled` reflects opt-in, not permission to every internal record.
+The endpoint, operation ID, read tier and planner exclusion remain unchanged.
+Answers use `generation_mode: "deterministic"`, not an LLM generation path.
+Question planning uses bounded deterministic keyword rules,
 not general NLP or LLM inference; explicit structured filters are authoritative.
 Automatic keyword rules are English-only. For questions in other languages,
 provide explicit `intent` and structured `filters`; language is not inferred.
 Figure evidence can include `related_experiments` for explicitly linked
 published scenarios; the adapter never guesses experiment identities.
+Evidence origins are `public`, `agentic` or `public_and_agentic`. Internal
+`agentic_measurement` citations preserve owning-evaluation provenance and declare
+`numeric_precision: "stored_float"`: Decimal strings reflect stored Float values,
+not exact source tokens. Public raw-byte precision is unchanged.
+Only canonical `evaluate:<UUID>` identity in pinned public raw JSON plus matching
+metric/statistic/unit/value permits a merge; the public citation and internal
+`corroborating_citations` are retained with
+`identity_verification: "canonical_evaluate_run_and_metric"`. Unknown overlaps
+stay separate, and unauthorized overlaps do not leak. Legacy eight-character
+simulation task IDs cannot establish evaluation ownership and are omitted.
+`limit` (1–50) bounds total returned envelopes after merges;
+`returned_observations` counts those envelopes, while `matched_items` counts
+candidate public index items plus authorized internal benchmark records, not
+independent experiments or exact distinct runs. `truncated` explicitly reports
+omitted results.
 Denied, unavailable or malformed upstream results produce
 explicit tool errors, not empty successful answers.
 

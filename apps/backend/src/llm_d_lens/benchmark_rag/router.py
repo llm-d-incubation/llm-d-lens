@@ -1,4 +1,4 @@
-"""Authenticated REST transport for deterministic public benchmark evidence."""
+"""Authenticated deterministic benchmark retrieval with optional owning-context evidence."""
 
 from __future__ import annotations
 
@@ -33,7 +33,18 @@ def get_service() -> PublicRagQueryService:
         "only global admins receive it by default. Cluster/resource grants, unrelated "
         "evaluation or MCP permissions, and disabled-auth identities do not grant access. "
         "Browser sessions must satisfy the standard CSRF policy. "
-        "This endpoint does not query private or Agentic deployment data."
+        "include_internal defaults to false: no internal data, counts or identity checks "
+        "are accessed without opt-in. When true, also retrieve stored Agentic evaluation "
+        "measurements authorized by evaluate:run:read in their verifiable owning context. "
+        "Missing, deleted or unverifiable owners are excluded even for admins. "
+        "internal_branch_enabled reports request opt-in, not access to every internal record. "
+        "limit (1–50) bounds total returned evidence envelopes after verified merges; "
+        "returned_observations counts those envelopes, while matched_items counts candidate "
+        "public index items plus authorized internal benchmark records, not experiments or runs. "
+        "Public/internal evidence merges only for a canonical evaluate:<UUID> identity present "
+        "in pinned public raw JSON with matching metric/statistic/unit/value; both citations "
+        "are retained. Internal Decimal strings represent stored Float precision, not source "
+        "token precision. This remains a deterministic read operation, not an Agentic planner tool."
     ),
 )
 def query_public_benchmark_rag(payload: QueryRequest, request: Request) -> QueryResponse:

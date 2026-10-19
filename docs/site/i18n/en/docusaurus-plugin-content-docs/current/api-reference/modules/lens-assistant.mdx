@@ -175,6 +175,8 @@ The tool catalog is assembled in two parts: `server/mcp/tools.ts` contains 138 g
 ### Query public benchmark evidence
 
 The generated `query_public_benchmark_rag` tool is read-only despite using POST.
+The endpoint and operation ID retain their public-query names for compatibility,
+including when the caller opts into the authorized internal branch.
 It passes the REST body unchanged and returns the same `QueryResponse` JSON in
 an MCP text block. It is not a deployment-planner tool or a corpus ingestion API.
 
@@ -204,13 +206,20 @@ principal or an identity provided in arguments.
     "value_min": "100.000000001",
     "normalized": false
   },
-  "limit": 10
+  "limit": 10,
+  "include_internal": false
 }
 ```
 
 `question` is required (1–2048 characters). `intent` is `auto` (default),
 `numeric`, `comparison`, `definition` or `figure`; `limit` defaults to 10
-(1–50). Extra request/filter fields are rejected; there is no arbitrary SQL.
+(1–50 total returned evidence envelopes across both branches, after verified merges).
+`include_internal` is a boolean defaulting to `false`. Without opt-in, no internal
+data, counts or identity checks are accessed. With `true`, the existing GLOBAL
+RAG grant is still required, and internal records additionally require the existing
+`evaluate:run:read` policy in their owning evaluation context. Missing, deleted or
+unverifiable owners are excluded even for admins; opt-in is not an authorization bypass.
+Extra request/filter fields are rejected; there is no arbitrary SQL.
 Filters include `origins`, `source_revision`, `source_path`, `record_id`,
 `experiment_id`, `model`, `hardware`, `runtime`, `metric`, `statistic`, `unit`,
 structured JSON `workload` and `series`, `value_min`, `value_max` and `normalized`.
@@ -227,16 +236,46 @@ language understanding.
 
 The response has `contract: "benchmark-rag.query.v1"`, resolved `intent`,
 `question`, `filters`, `status` (`answered`, `partial`, `abstained`), `answer`,
-`evidence`, `matched_items`, `truncated`, `abstentions` and `warnings`.
-It always reports `generation_mode: "deterministic"` and
-`internal_branch_enabled: false`. Evidence contains Decimal string values,
+`evidence`, `matched_items`, `returned_observations`, `truncated`, `abstentions` and `warnings`.
+It always reports `generation_mode: "deterministic"`.
+`internal_branch_enabled` defaults to `false` and reflects request opt-in, not
+whether any internal record was authorized or returned. `matched_items` counts
+candidate public index items plus authorized internal benchmark records; it is
+neither an independent-experiment count nor an exact distinct-run count.
+`returned_observations` counts returned metric/evidence envelopes **after verified
+merges**. `truncated` explicitly reports omitted results under the total `limit`.
+Evidence contains Decimal string values,
 units/statistics, experiment context, optional normalized values and figure
 coverage/missing-series information. Figure evidence may also include
 `related_experiments` (default: empty), containing only explicitly linked
 published scenarios with their experiment context; identities are not guessed.
-Each citation identifies the origin,
+Public citations identify the origin,
 revision, path, SHA-256, archived artifact URI, source pointer, heading path
-and published manifest. An abstention is an explicit domain result; upstream
+and published manifest.
+
+Evidence `origin` is `public`, `agentic` or `public_and_agentic`; internal
+measurements use `evidence_type: "agentic_measurement"`. An `AgenticCitation`
+contains `origin_id: "agentic:evaluate"`, `evidence_type: "agentic_measurement"`,
+`benchmark_id`, `evaluate_run_id`, `cluster_id`, `resource_uri`, `record_sha256`,
+`metric_field`, `record_timestamp`, `access_scope: "owning_evaluation"` and
+`numeric_precision: "stored_float"`. Internal normalized metrics are persisted
+as Float values: their response Decimal strings represent the stored float,
+**not** the exact original source token. Public raw-byte precision is unchanged.
+
+A public/internal merge requires a canonical `evaluate:<UUID>` identifier
+actually present in the pinned public raw JSON and a matching metric, statistic,
+unit and value. Model/workload similarity is not identity proof. A verified merge
+returns one envelope with the public `citation`, retained internal
+`corroborating_citations`, and
+`identity_verification: "canonical_evaluate_run_and_metric"`.
+Otherwise `corroborating_citations` defaults to empty and `identity_verification`
+is optional/null. Unknown overlaps remain separate; unauthorized records cannot
+affect overlap identity or leak through counts or citations. Historical writer
+records with eight-character simulation task IDs in `evaluate:<id>` lack a
+verifiable canonical evaluation owner and are intentionally omitted; querying
+does not rewrite them or change the planner.
+
+An abstention is an explicit domain result; upstream
 authorization, transport or corrupt-response failures are MCP `isError: true`
 results without evidence, not successful empty responses.
 
@@ -244,7 +283,9 @@ Only approved published public sources are eligible: `prism:public-snapshot`,
 `https://github.com/VincyZhang/llm-d`, and
 `https://github.com/llm-d/llm-d-benchmark.git`. Restore the published corpus and
 its immutable source archive together; database records alone are insufficient.
-There is no internal/private record search or Agentic generation path.
+These are the public branch's sources. The opt-in internal branch retrieves only
+authorized stored evaluation measurements, not arbitrary private data. Neither
+branch uses an Agentic generation path.
 Real deployment behavior has not yet been verified.
 
   </TabItem>

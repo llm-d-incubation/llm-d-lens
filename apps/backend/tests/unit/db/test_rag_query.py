@@ -258,7 +258,7 @@ def test_service_authorization_precedes_every_read(principal):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"question": "x", "include_internal": True},
+        {"question": "x", "principal": {"user_id": "admin"}},
         {"question": "x", "filters": {"origins": ["private:secret"]}},
         {"question": "x", "filters": {"value_min": "1"}},
         {"question": "x", "filters": {"unit": "s", "value_min": "2", "value_max": "1"}},

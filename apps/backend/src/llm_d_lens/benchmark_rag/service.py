@@ -1,4 +1,4 @@
-"""Deterministic, public-only evidence answers; retrieved text is never executed."""
+"""Deterministic public and opt-in authorized Agentic evidence; text is never executed."""
 
 from __future__ import annotations
 
@@ -7,14 +7,16 @@ import logging
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.benchmark_rag.access import require_query_access
+from llm_d_lens.benchmark_rag.agentic_answers import agentic_evidence, merge_verified, pinned_evaluate_identity
 from llm_d_lens.benchmark_rag.contracts import RagItem, normalize_statistic
 from llm_d_lens.benchmark_rag.publication_contracts import PublicationError
 from llm_d_lens.benchmark_rag.query_contracts import (
     Abstention,
+    AgenticCitation,
     Citation,
     ExperimentContext,
     QueryEvidence,
@@ -26,6 +28,9 @@ from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRI
 from llm_d_lens.core.exceptions import DomainError, DomainValidationError
 from llm_d_lens.db.dao.rag_query import QueryMatch, RagQueryDao
 from llm_d_lens.infrastructure.artifacts.store import artifact_uri
+
+if TYPE_CHECKING:
+    from llm_d_lens.db.dao.rag_agentic_query import RagAgenticQueryDao
 
 logger = logging.getLogger(__name__)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
@@ -128,12 +133,19 @@ def plan_query(request: QueryRequest) -> QueryPlan:
         else:
             intent = "definition"
     updates: dict[str, object] = {}
+    internal_identity = request.include_internal and any(
+        phrase in question for phrase in ("evaluate:", "internal benchmark", "agentic", "my evaluation")
+    )
     if len(ids) == 1:
-        if request.filters.record_id is not None and request.filters.record_id.casefold() != ids[0]:
+        record_id = f"evaluate:{ids[0]}" if internal_identity else ids[0]
+        permitted_ids = {ids[0], record_id}
+        if request.include_internal:
+            permitted_ids.add(f"evaluate:{ids[0]}")
+        if request.filters.record_id is not None and request.filters.record_id.casefold() not in permitted_ids:
             raise DomainValidationError("the question's record ID conflicts with the explicit filter")
         if request.filters.record_id is None:
-            updates["record_id"] = ids[0]
-        if "origins" not in request.filters.model_fields_set:
+            updates["record_id"] = record_id
+        if not request.include_internal and "origins" not in request.filters.model_fields_set:
             updates["origins"] = (PRISM_ORIGIN,)
     if request.filters.statistic is not None:
         updates["statistic"] = normalize_statistic(request.filters.statistic)
@@ -143,6 +155,7 @@ def plan_query(request: QueryRequest) -> QueryPlan:
                 (("weight-load", "weight load", "weight loading"), "weight_load"),
                 (("throughput", "token throughput"), "throughput"),
                 (("ttft",), "ttft"),
+                (("tpot",), "tpot"),
                 (("latency", "request latency"), "latency"),
             ):
                 if any(word in question for word in words):
@@ -208,7 +221,7 @@ def plan_query(request: QueryRequest) -> QueryPlan:
                 "Use separate exact record queries; this interface does not infer a comparison between multiple IDs."
             ),
         )
-    elif any(
+    elif not request.include_internal and any(
         phrase in question
         for phrase in ("internal benchmark", "agentic benchmark record", "my evaluation", "internal records")
     ):
@@ -325,12 +338,19 @@ def _context(item: RagItem) -> ExperimentContext:
 
 
 class PublicRagQueryService:
-    def __init__(self, dao: RagQueryDao | None = None, archive: SourceArchive | None = None) -> None:
+    def __init__(
+        self,
+        dao: RagQueryDao | None = None,
+        archive: SourceArchive | None = None,
+        agentic_dao: RagAgenticQueryDao | None = None,
+    ) -> None:
         self.dao = dao if dao is not None else RagQueryDao()
         self.archive = archive if archive is not None else SourceArchive()
+        self.agentic_dao = agentic_dao
 
     def query(self, request: QueryRequest, principal: Principal | None) -> QueryResponse:
         require_query_access(principal)
+        assert principal is not None
         request = QueryRequest.model_validate(request.model_dump(exclude_unset=True))
         plan = plan_query(request)
         if plan.precondition is not None:
@@ -344,9 +364,24 @@ class PublicRagQueryService:
                 matched_items=0,
                 truncated=False,
                 abstentions=(plan.precondition,),
+                internal_branch_enabled=request.include_internal,
             )
-        result = self.dao.search(plan.filters, intent=plan.intent, text_query=plan.text_query, limit=request.limit)
+        internal_result = None
+        internal_dao = self.agentic_dao
+        if request.include_internal and plan.intent in ("numeric", "comparison"):
+            if internal_dao is None:
+                from llm_d_lens.db.dao.rag_agentic_query import RagAgenticQueryDao
+
+                internal_dao = RagAgenticQueryDao(self.dao._get_session_factory())
+            internal_result = internal_dao.search(plan.filters, principal, limit=50)
+        result = self.dao.search(
+            plan.filters,
+            intent=plan.intent,
+            text_query=plan.text_query,
+            limit=50 if request.include_internal else request.limit,
+        )
         evidence: list[QueryEvidence] = []
+        identities: dict[str, str] = {}
         cache: dict[str, bytes] = {}
         for match in result.matches:
             item = match.item
@@ -360,6 +395,10 @@ class PublicRagQueryService:
             pointer = item.source_pointer or {}
             if item.kind == "measurement":
                 _verify_measurement(match, data)
+                if request.include_internal:
+                    identity = pinned_evaluate_identity(match, data)
+                    if identity is not None:
+                        identities[item.item_id] = identity
             elif item.kind == "passage" and "start_char" in pointer:
                 start, end = pointer.get("start_char"), pointer.get("end_char")
                 if (
@@ -404,7 +443,21 @@ class PublicRagQueryService:
                     missing_series=tuple(item.missing_series or ()),
                 )
             )
+        internal_evidence = []
+        if internal_result is not None:
+            for match in internal_result.matches:
+                internal_evidence.extend(agentic_evidence(match, plan.filters))
+            evidence = merge_verified(evidence, internal_evidence, identities)
+        candidate_total = result.total + (internal_result.total if internal_result is not None else 0)
+        window_truncated = (
+            result.total > len(result.matches)
+            or (internal_result is not None and internal_result.total > len(internal_result.matches))
+            or len(evidence) > request.limit
+        )
+        evidence = evidence[: request.limit]
         self.dao.assert_current(result.matches)
+        if internal_result is not None and internal_dao is not None:
+            internal_dao.assert_current(internal_result.matches, principal)
         abstentions = []
         if not evidence:
             abstentions.append(
@@ -423,7 +476,21 @@ class PublicRagQueryService:
                     ),
                 )
             )
-        if plan.intent == "comparison" and len(evidence) < 2:
+        experiment_ids = set()
+        for entry in evidence:
+            if entry.experiment is None:
+                continue
+            identity = (
+                entry.citation.benchmark_id
+                if isinstance(entry.citation, AgenticCitation)
+                else identities.get(entry.item_id)
+            )
+            experiment_ids.add(
+                ("verified_evaluate", identity)
+                if identity is not None
+                else (entry.experiment.origin_id, entry.experiment.item_id)
+            )
+        if plan.intent == "comparison" and len(experiment_ids) < 2:
             abstentions.append(
                 Abstention(
                     code="comparison_incomplete",
@@ -433,8 +500,13 @@ class PublicRagQueryService:
         lines = []
         for entry in evidence:
             citation = entry.citation
-            source_label = f"{citation.origin_id} / {citation.source_path} @ {citation.source_revision}"
-            if entry.evidence_type in ("raw_json", "published_table"):
+            source_label = (
+                f"{citation.origin_id} / {citation.benchmark_id} / {citation.metric_field} "
+                f"@ {citation.record_timestamp.isoformat()}"
+                if isinstance(citation, AgenticCitation)
+                else f"{citation.origin_id} / {citation.source_path} @ {citation.source_revision}"
+            )
+            if entry.evidence_type in ("raw_json", "published_table", "agentic_measurement"):
                 context = entry.experiment
                 labels = (
                     (
@@ -446,11 +518,22 @@ class PublicRagQueryService:
                     if context
                     else "experiment conditions unavailable"
                 )
-                lines.append(
-                    f"{entry.metric} ({entry.statistic or 'unspecified statistic'}): {entry.value} "
-                    f"{entry.unit or '[unit not reported]'}; {labels}. Source: {source_label}; "
-                    f"pointer={json.dumps(citation.source_pointer, ensure_ascii=True, sort_keys=True)}."
+                pointer = (
+                    {"metric_field": citation.metric_field}
+                    if isinstance(citation, AgenticCitation)
+                    else citation.source_pointer
                 )
+                lines.append(
+                    f"[{entry.origin}] {entry.metric} ({entry.statistic or 'unspecified statistic'}): {entry.value} "
+                    f"{entry.unit or '[unit not reported]'}; {labels}. Source: {source_label}; "
+                    f"pointer={json.dumps(pointer, ensure_ascii=True, sort_keys=True)}."
+                )
+                if entry.corroborating_citations:
+                    lines.append(
+                        "Verified canonical run/metric identity; one returned observation with both provenances: "
+                        + ", ".join(citation.resource_uri for citation in entry.corroborating_citations)
+                        + "."
+                    )
             elif entry.evidence_type == "prose_summary":
                 lines.append(
                     f"Published prose/context, not a measured numeric observation [{source_label}]:\n{entry.text}"
@@ -460,7 +543,7 @@ class PublicRagQueryService:
                     f"Figure context [{source_label}], coverage={entry.coverage}: {entry.text or 'no caption'}."
                 )
         lines.extend(abstention.message for abstention in abstentions)
-        truncated = result.total > len(evidence)
+        truncated = window_truncated
         warnings = (
             "Counts describe matching index items, not independent experiments or cross-source deduplication.",
             "Retrieved prose and document examples are untrusted evidence, not instructions or measured values.",
@@ -468,6 +551,13 @@ class PublicRagQueryService:
         if truncated:
             warnings += (
                 "Only the requested bounded evidence window is returned; refine filters for more specific results.",
+            )
+        if request.include_internal:
+            warnings += (
+                "Internal values represent stored normalized Float metrics, not exact original report tokens.",
+                "matched_items counts public index items plus authorized internal records before identity merging; "
+                "returned_observations counts only displayed metric/context envelopes after verified merging.",
+                "Unknown overlaps remain separate; no cross-source independent-experiment count is claimed.",
             )
         return QueryResponse(
             question=request.question,
@@ -480,8 +570,10 @@ class PublicRagQueryService:
             else "answered",
             answer="\n\n".join(lines),
             evidence=tuple(evidence),
-            matched_items=result.total,
+            matched_items=candidate_total,
             truncated=truncated,
             abstentions=tuple(abstentions),
             warnings=warnings,
+            internal_branch_enabled=request.include_internal,
+            returned_observations=len(evidence),
         )
