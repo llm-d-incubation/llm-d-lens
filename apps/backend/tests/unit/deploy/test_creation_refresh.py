@@ -11,6 +11,7 @@ from llm_d_lens.deploy.providers.guide_catalog import GuideCatalog
 from llm_d_lens.deploy.service import ExecutionLogArchive, GuideAdapterDeploymentService
 from tests.unit.deploy.providers.test_storage_mount import cached_model as cached_model
 from tests.unit.deploy.test_bundle_evidence import EvidenceAdapter
+from tests.unit.deploy.test_readiness_transient import startup_snapshot
 
 
 @pytest.mark.asyncio
@@ -195,7 +196,8 @@ async def test_refresh_reconciles_resource_wait_without_masking_other_states(
 
 
 @pytest.mark.asyncio
-async def test_resource_wait_recovery_clears_case_failure_and_marks_run_running(tmp_path):
+@pytest.mark.parametrize("starting", [False, True])
+async def test_resource_wait_recovery_clears_case_failure_and_marks_run_running(tmp_path, starting):
     from llm_d_lens.deploy.contracts import (
         DeployableConfiguration,
         DeploymentCaseStatus,
@@ -210,7 +212,9 @@ async def test_resource_wait_recovery_clears_case_failure_and_marks_run_running(
     adapter = EvidenceAdapter()
     adapter.readiness = AsyncMock(return_value=ValidationResult(False, ["deployment exceeded progress deadline"]))
     adapter.diagnostics = AsyncMock(
-        return_value={"pods": "model-0 0/1 Pending", "events": "FailedScheduling cannot allocate all claims"}
+        return_value=startup_snapshot()
+        if starting
+        else {"pods": "model-0 0/1 Pending", "events": "FailedScheduling cannot allocate all claims"}
     )
     service = GuideAdapterDeploymentService(GuideCatalog([adapter]), lambda _: "ns", ExecutionLogArchive(tmp_path))
     store = JsonDeploymentRunStore(tmp_path / "runs")
@@ -239,11 +243,14 @@ async def test_resource_wait_recovery_clears_case_failure_and_marks_run_running(
 
 
 @pytest.mark.asyncio
-async def test_creation_keeps_pending_dra_workload_without_cleanup(tmp_path, cached_model):
+@pytest.mark.parametrize("starting", [False, True])
+async def test_creation_keeps_resource_wait_or_startup_without_cleanup(tmp_path, cached_model, starting):
     adapter = EvidenceAdapter()
     adapter.readiness = AsyncMock(return_value=ValidationResult(False, ["deployment exceeded progress deadline"]))
     adapter.diagnostics = AsyncMock(
-        return_value={"pods": "model-0 0/1 Pending", "events": "FailedScheduling cannot allocate all claims"}
+        return_value=startup_snapshot()
+        if starting
+        else {"pods": "model-0 0/1 Pending", "events": "FailedScheduling cannot allocate all claims"}
     )
     adapter.cleanup = AsyncMock()
     service = GuideAdapterDeploymentService(GuideCatalog([adapter]), lambda _: "ns", ExecutionLogArchive(tmp_path))
@@ -265,4 +272,10 @@ async def test_creation_keeps_pending_dra_workload_without_cleanup(tmp_path, cac
 
     assert execution.status == DeploymentStatus.DEPLOYING
     assert execution.diagnostics.value["reasons"] == ["deployment exceeded progress deadline"]
+    adapter.cleanup.assert_not_awaited()
+
+    adapter.readiness.return_value = ValidationResult(True)
+    refreshed = await service.refresh_diagnostics(execution)
+    assert refreshed.status == DeploymentStatus.READY
+    assert refreshed.endpoint.url == "http://router:8000"
     adapter.cleanup.assert_not_awaited()

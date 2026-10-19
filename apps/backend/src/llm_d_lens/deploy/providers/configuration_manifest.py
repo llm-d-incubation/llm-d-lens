@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +29,8 @@ from llm_d_lens.infrastructure.artifacts.manifests import (
 from llm_d_lens.infrastructure.artifacts.store import register_artifacts
 from llm_d_lens.monitoring.kv_trace.manifest import instrument_manifest
 from llm_d_lens.storage.service import ensure_mount_in_namespace, get_ready_volume
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigurationManifestAdapter:
@@ -338,9 +342,11 @@ class ConfigurationManifestAdapter:
 
     async def diagnostics(self, execution: dict[str, Any]) -> dict[str, Any]:
         artifact = execution.get("_artifact")
-        if not isinstance(artifact, GuideDeploymentArtifact) or not artifact.deployment_contract:
-            return await self._delegate.diagnostics(execution)
-        if self._uses_delegate_lifecycle(artifact):
+        if (
+            not isinstance(artifact, GuideDeploymentArtifact)
+            or not artifact.deployment_contract
+            or self._uses_delegate_lifecycle(artifact)
+        ):
             diagnostics = await self._delegate.diagnostics(execution)
         else:
             namespace = self._namespace(execution)
@@ -359,7 +365,38 @@ class ConfigurationManifestAdapter:
                     ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
                 ),
             }
-        if "sharedMemory" in artifact.deployment_contract:
+        if "running" in str(diagnostics.get("pods") or "").lower():
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "get", "pods", "--namespace", self._namespace(execution), "-o", "json"]
+            )
+            if status != 0:
+                diagnostics["pod_statuses_error"] = (stderr or stdout or "Pod status query failed").strip()
+                logger.warning("Pod startup diagnostics failed: %s", diagnostics["pod_statuses_error"])
+            else:
+                pods = json.loads(stdout)["items"]
+                timing_fields = ("initialDelaySeconds", "periodSeconds", "timeoutSeconds", "failureThreshold")
+                diagnostics["pod_statuses"] = [
+                    {
+                        "name": pod["metadata"]["name"],
+                        "deleting": bool(pod["metadata"].get("deletionTimestamp")),
+                        "status": pod.get("status") or {},
+                        "containers": [
+                            {
+                                "name": container["name"],
+                                **{
+                                    probe: {
+                                        key: container[probe][key] for key in timing_fields if key in container[probe]
+                                    }
+                                    for probe in ("startupProbe", "readinessProbe")
+                                    if probe in container
+                                },
+                            }
+                            for container in pod.get("spec", {}).get("containers") or []
+                        ],
+                    }
+                    for pod in pods
+                ]
+        if isinstance(artifact, GuideDeploymentArtifact) and "sharedMemory" in artifact.deployment_contract:
             diagnostics = {**diagnostics, "shared_memory": artifact.deployment_contract["sharedMemory"]}
         return diagnostics
 

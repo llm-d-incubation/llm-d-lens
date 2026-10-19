@@ -1321,6 +1321,12 @@ worker 对生命周期冲突抛出 `ValueError`，路由映射为 `409`。
 不要求请求体，可发送 `{}`；需要 `deployment:case:execute`。
 根据 provider 诊断刷新，返回 `200`，结构与获取用例相同，包含 `case`、`execution`、`deployment`。
 已停止或已清理记录不会被重新标记为 ready。缺失用例／执行或刷新 `ValueError` 返回 `404`。
+
+如果当前 Pod 诊断确认容器仍在探针预算内正常启动，即使报告进度期限超时也保持 `deploying`。
+预算从容器实际启动时刻计算，不包含 Pending 等待时间。可恢复的 `failed` 记录会返回
+`deploying` 并清除用例失败信息。`diagnostics.value.snapshot.pod_statuses` 包含 Pod 状态
+和探针时间字段，不包含容器环境变量值。仅有 Running 状态不会设为 `ready`；
+当前工作负载失败或启动预算耗尽不会被视为正常启动。
 响应节选：
 
 ```json

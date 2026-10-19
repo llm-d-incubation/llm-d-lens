@@ -102,6 +102,15 @@ not release devices held by other deployments; stop or remove an unused deployme
 to free them. Container crashes and image-pull failures still count as failures;
 Pending alone is not enough to classify a deployment as waiting for resources.
 
+After scheduling, a Running Pod can still be loading the model and not yet Ready.
+If rollout reports an exceeded progress deadline, Lens preserves **In progress**
+without automatic cleanup while current containers remain within their
+`startupProbe` budget (or `readinessProbe` budget when no startup probe exists),
+measured from each container's actual start time. Time spent Pending does not
+consume this budget. Current crashes, image-pull failures, container restarts and
+expired probe budgets are not covered by this grace period. Running alone is not
+proof of readiness; the provider's readiness checks must still pass.
+
 ## View pods and stream logs
 
 Lens checks `/dev/shm` in rendered model-server Pods across all deployment

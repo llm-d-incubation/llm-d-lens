@@ -225,6 +225,36 @@ def _resource_wait_reason(reasons: list[str]) -> bool:
     return any(marker in reason.lower() for reason in reasons for marker in markers)
 
 
+def _pods_are_starting(diagnostics: dict) -> bool:
+    """Honor container probe budgets from actual start, not time spent unscheduled."""
+    pods = diagnostics.get("pod_statuses") or []
+    starting = False
+    now = datetime.now(UTC)
+    for pod in pods:
+        if pod.get("deleting") or pod.get("status", {}).get("phase") != "Running":
+            return False
+        containers = pod.get("containers") or []
+        statuses = {item["name"]: item for item in pod.get("status", {}).get("containerStatuses") or []}
+        if not containers:
+            return False
+        for container in containers:
+            status = statuses.get(container["name"]) or {}
+            if status.get("ready"):
+                continue
+            probe = container.get("startupProbe", container.get("readinessProbe"))
+            started_at = (status.get("state", {}).get("running") or {}).get("startedAt")
+            if probe is None or not started_at or status.get("restartCount", 0):
+                return False
+            budget = probe.get("initialDelaySeconds", 0) + probe.get("failureThreshold", 3) * max(
+                probe.get("periodSeconds", 10), probe.get("timeoutSeconds", 1)
+            )
+            elapsed = (now - datetime.fromisoformat(started_at.replace("Z", "+00:00"))).total_seconds()
+            if not 0 <= elapsed < budget:
+                return False
+            starting = True
+    return starting
+
+
 def _readiness_is_transient(reasons: list[str], diagnostics: dict | None = None) -> bool:
     """Return true for errors that reflect a temporary inability to reach the
     cluster/control-plane rather than an actual workload failure, so a brief
@@ -247,16 +277,38 @@ def _readiness_is_transient(reasons: list[str], diagnostics: dict | None = None)
         "client.timeout exceeded",
         "context deadline exceeded",
     )
+    evidence = list(reasons)
     if diagnostics:
         # Rollout timeouts hide scheduler reasons. Current Pending pods together
         # with allocation events distinguish resource waits from startup failures.
         pods = str(diagnostics.get("pods") or "")
         events = str(diagnostics.get("events") or "")
+        evidence.append(pods)
+        for pod in diagnostics.get("pod_statuses") or []:
+            status = pod.get("status") or {}
+            for container in [*(status.get("containerStatuses") or []), *(status.get("initContainerStatuses") or [])]:
+                state = container.get("state") or {}
+                evidence.append(str((state.get("waiting") or {}).get("reason") or ""))
+                terminated = state.get("terminated") or {}
+                if terminated.get("exitCode", 0) != 0:
+                    return False
         if "pending" in pods.lower():
             reasons = [*reasons, pods, events]
     workload_failures = ("crashloopbackoff", "imagepullbackoff", "errimagepull", "oomkilled", "invalid image")
-    if any(marker in reason.lower() for reason in reasons for marker in workload_failures):
+    if any(marker in reason.lower() for reason in evidence for marker in workload_failures):
         return False
+    # Failed observation is not evidence that a running workload should be
+    # deleted. The adapter logs and retains the query error in diagnostics.
+    if (
+        diagnostics
+        and reasons
+        and all(
+            "exceeded its progress deadline" in reason.lower() or "exceeded progress deadline" in reason.lower()
+            for reason in reasons
+        )
+        and (diagnostics.get("pod_statuses_error") or _pods_are_starting(diagnostics))
+    ):
+        return True
     markers = timeout_markers + connectivity_markers
     if _resource_wait_reason(reasons) or any(any(marker in reason.lower() for marker in markers) for reason in reasons):
         return True
@@ -739,8 +791,13 @@ class GuideAdapterDeploymentService:
             # instead of downgrading a healthy deployment.
             if (
                 status == DeploymentStatus.FAILED
-                and "pending" in str(diagnostics.get("pods") or "").lower()
-                and _resource_wait_reason([str(diagnostics.get("events") or "")])
+                and (
+                    (
+                        "pending" in str(diagnostics.get("pods") or "").lower()
+                        and _resource_wait_reason([str(diagnostics.get("events") or "")])
+                    )
+                    or _pods_are_starting(diagnostics)
+                )
             ):
                 status = DeploymentStatus.DEPLOYING
         elif execution.status not in {DeploymentStatus.CLEANED, DeploymentStatus.CLEANED_UP}:

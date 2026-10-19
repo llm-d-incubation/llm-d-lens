@@ -1453,6 +1453,14 @@ Get case, refreshed from provider diagnostics. Stopped or cleaned records are
 preserved rather than made ready again. Missing case/execution or refresh
 `ValueError` returns `404`. Response excerpt:
 
+Progress-deadline errors remain `deploying` while current Pod diagnostics confirm
+normal container startup within probe budgets, counted from container start
+rather than time spent Pending. A recoverable `failed` record returns to
+`deploying`; the case failure is cleared. `diagnostics.value.snapshot.pod_statuses`
+contains Pod status and probe timing fields, not container environment values.
+Running alone does not set `ready`, and current workload failures or expired
+startup budgets are not treated as normal startup.
+
 ```json
 {
   "case": {"id": "case-1", "status": "ready", "execution_id": "execution-1"},

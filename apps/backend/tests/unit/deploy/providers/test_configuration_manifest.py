@@ -1,6 +1,7 @@
 """Tests for deploying published configuration manifests."""
 
 import hashlib
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -359,6 +360,7 @@ async def test_direct_data_plane_contract_delegates_lifecycle(tmp_path: Path):
     runner = _Runner()
     delegate = AsyncMock()
     delegate.deploy.return_value = {"namespace": "llm-d-bench-run"}
+    delegate.diagnostics.return_value = {}
     adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
     context = {"namespace": "llm-d-bench-run", "_artifact": artifact}
 
@@ -374,6 +376,72 @@ async def test_direct_data_plane_contract_delegates_lifecycle(tmp_path: Path):
     delegate.stop.assert_awaited_once_with(context, artifact)
     delegate.cleanup.assert_awaited_once_with(context, artifact, force=True)
     assert runner.commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lifecycle", ["pd-disaggregation", "baseline-vllm", "manifest", "legacy"])
+async def test_startup_diagnostics_cover_delegate_and_manifest_lifecycles(tmp_path, lifecycle):
+    from tests.unit.deploy.test_readiness_transient import startup_snapshot
+
+    snapshot = startup_snapshot()
+    pod = snapshot["pod_statuses"][0]
+    raw_pod = {
+        "metadata": {"name": pod["name"]},
+        "spec": {
+            "containers": [
+                {
+                    **pod["containers"][0],
+                    "env": [{"name": "PRIVATE_VALUE", "value": "not-for-diagnostics"}],
+                }
+            ]
+        },
+        "status": pod["status"],
+    }
+
+    class Runner(_Runner):
+        async def __call__(self, command):
+            self.commands.append(command)
+            if command[-2:] == ["-o", "json"]:
+                return 0, json.dumps({"items": [raw_pod]}), ""
+            if command[1:3] == ["get", "pods"]:
+                return 0, snapshot["pods"], ""
+            return 0, "ok", ""
+
+    delegate = AsyncMock()
+    delegate.diagnostics.return_value = {"pods": snapshot["pods"]}
+    runner = Runner()
+    contract = {
+        "readinessDeployments": ["model"],
+        "endpoint": {"protocol": "http", "serviceName": "model", "port": 8000},
+    }
+    artifact = GuideDeploymentArtifact(
+        lifecycle, "hash", deployment_contract={} if lifecycle == "baseline-vllm" else contract
+    )
+    context = {"namespace": "llm-d-bench-run"}
+    if lifecycle != "legacy":
+        context["_artifact"] = artifact
+    adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
+
+    diagnostics = await adapter.diagnostics(context)
+
+    assert diagnostics["pod_statuses"] == [pod]
+    assert "not-for-diagnostics" not in json.dumps(diagnostics)
+    assert "PRIVATE_VALUE" not in json.dumps(diagnostics)
+    assert runner.commands[-1] == ["kubectl", "get", "pods", "--namespace", "llm-d-bench-run", "-o", "json"]
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_query_is_reported_in_diagnostics(tmp_path, caplog):
+    delegate = AsyncMock()
+    delegate.diagnostics.return_value = {"pods": "model-0 0/1 Running"}
+    runner = AsyncMock(return_value=(1, "", "Unable to connect to the server"))
+    adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
+
+    diagnostics = await adapter.diagnostics({"namespace": "llm-d-bench-run"})
+
+    assert diagnostics["pod_statuses_error"] == "Unable to connect to the server"
+    assert "pod_statuses" not in diagnostics
+    assert "Pod startup diagnostics failed" in caplog.text
 
 
 @pytest.mark.asyncio

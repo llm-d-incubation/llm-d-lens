@@ -403,6 +403,7 @@ class RestrictedKubectlRunner:
             raise RuntimeConfigurationError("Kubernetes command namespace is outside the configured allowlist")
         diagnostics_commands = {
             ("kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"),
+            ("kubectl", "get", "pods", "--namespace", namespace, "-o", "json"),
             ("kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"),
             (
                 "kubectl",
