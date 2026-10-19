@@ -57,6 +57,16 @@ must contain `DeploymentEndpoint`: `url`, `protocol="http"` and optional
 `service_ref`, `model_ref`, `baseline_url`. Endpoint metadata must not carry
 credentials, kubeconfig or authorization values.
 
+Shared-memory preparation is recorded under
+`artifact.rendered_payload.value.deployment_contract.sharedMemory` and copied to
+`diagnostics.value.snapshot.shared_memory`. The report contains `defaultSizeLimit`
+(`4Gi`), `addedMounts`, per-container `mounts`, `warnings`, and `manifestChecksum`
+for the shared-memory preparation stage (before later placement or tracing).
+Ordinary renders complete missing model-server `/dev/shm` mounts; existing mounts
+and host IPC are retained. Published `officialGuide` manifests are checked without
+shared-memory mutation. Warnings are also logged; invalid or duplicate mount
+bindings fail rendering. This does not change the supplied Configuration artifact.
+
 `get(execution_id)` returns `DeploymentExecution`, not another status DTO.
 The concrete service looks up its in-memory execution state and raises `KeyError`
 for unknown IDs; it is not itself a database query. The worker/DAO boundary owns

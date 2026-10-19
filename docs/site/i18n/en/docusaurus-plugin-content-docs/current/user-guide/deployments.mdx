@@ -104,12 +104,27 @@ Pending alone is not enough to classify a deployment as waiting for resources.
 
 ## View pods and stream logs
 
-Newly rendered `baseline-vllm` deployments mount a per-Pod, memory-backed
-`emptyDir` at `/dev/shm`, with a size limit of 1 GiB, for vLLM multiprocessing
-communication. This avoids the container runtime's default 64 MiB shared-memory
-limit without enabling host IPC. The volume consumes memory as used, not 1 GiB
-up front; account for it when sizing Pod memory. Existing deployments retain
-their original manifests; recreate them to receive this mount.
+Lens checks `/dev/shm` in rendered model-server Pods across all deployment
+providers. Ordinary rendering adds a per-Pod, memory-backed `emptyDir` with a
+**4 GiB** limit when the mount is missing and host IPC is not enabled.
+`baseline-vllm` also defaults to 4 GiB. This avoids the container runtime's
+default 64 MiB shared-memory limit without enabling host IPC or changing
+the upstream Guide checkout.
+
+Existing mounts and their limits are preserved, including mounts with no explicit
+limit and alternative volume sources. Missing limits, alternative sources,
+read-only/subpath mounts and existing host IPC produce warnings in service logs
+and deployment diagnostics (`snapshot.shared_memory`). An omitted `sizeLimit`
+on a memory-backed volume does not mean a 64 MiB limit or unlimited usable memory.
+Duplicate `/dev/shm` mounts and invalid volume bindings are rejected.
+
+Exact published manifests (`officialGuide`) are checked but never receive an
+automatic shared-memory mount; missing mounts produce warnings instead.
+The report is also retained in the deployment artifact's
+`rendered_payload.value.deployment_contract.sharedMemory`.
+Volumes consume memory as used, not their full limit up front; account for
+shared memory when sizing Pod memory. Existing deployments retain their original
+manifests; recreate them to receive the new default or missing-mount completion.
 
 1. To see pod status inline, click the row toggle with tooltip **Show pods**.
 2. In the expanded row, review the pod table columns **Pod**, **Status**, **Restarts**, **Node**, and **Pod IP**.

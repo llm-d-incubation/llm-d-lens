@@ -186,10 +186,13 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     for deployment in rendered:
         pod_spec = deployment["spec"]["template"]["spec"]
         container = pod_spec["containers"][0]
-        assert pod_spec["volumes"] == [{"name": "model-cache", **mount["volume_source"]}]
-        assert container["volumeMounts"] == [
-            {"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}
-        ]
+        expected_volumes = [{"name": "model-cache", **mount["volume_source"]}]
+        expected_mounts = [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
+        if not read_only:
+            expected_volumes.append({"name": "lens-shm", "emptyDir": {"medium": "Memory", "sizeLimit": "4Gi"}})
+            expected_mounts.append({"name": "lens-shm", "mountPath": "/dev/shm"})
+        assert pod_spec["volumes"] == expected_volumes
+        assert container["volumeMounts"] == expected_mounts
         assert container["args"][0] == ("/model-cache" if read_only else "Qwen/Qwen3-8B")
         environment = {item["name"]: item["value"] for item in container["env"]}
         assert environment["HF_HUB_OFFLINE"] == "1"

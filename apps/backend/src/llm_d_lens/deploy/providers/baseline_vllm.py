@@ -21,6 +21,7 @@ from llm_d_lens.deploy.providers.hardware_profile import (
     set_accelerator_request,
 )
 from llm_d_lens.deploy.providers.model_cache_environment import model_cache_environment
+from llm_d_lens.deploy.providers.shared_memory import DEFAULT_SHM_SIZE
 from llm_d_lens.deploy.providers.storage_mount import resolve_mount
 from llm_d_lens.infrastructure.storage.paths import prism_temp_root
 
@@ -420,7 +421,7 @@ class BaselineVllmAdapter:
                 pod_spec["containers"][0]["args"][0] = "/model-cache"
         # vLLM's multiprocessing queues can exceed the runtime's default 64 MiB /dev/shm.
         pod_spec.setdefault("volumes", []).append(
-            {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "1Gi"}}
+            {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": DEFAULT_SHM_SIZE}}
         )
         pod_spec["containers"][0].setdefault("volumeMounts", []).append(
             {"name": "dshm", "mountPath": "/dev/shm"}  # noqa: S108 - mount target in an isolated Pod, not a temp file.

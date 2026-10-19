@@ -119,7 +119,7 @@ async def test_render_mounts_shared_memory_without_replacing_model_cache(
     container = pod_spec["containers"][0]
     volumes = {volume["name"]: volume for volume in pod_spec["volumes"]}
     mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
-    assert volumes["dshm"] == {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "1Gi"}}
+    assert volumes["dshm"] == {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "4Gi"}}
     assert mounts["dshm"] == {"name": "dshm", "mountPath": "/dev/shm"}
     assert not pod_spec.get("hostIPC", False)
     assert f"--tensor-parallel-size={tensor_parallel_size}" in container["args"]

@@ -531,7 +531,7 @@ def test_baseline_vllm_renders_model_cache_pvc():
     pod_spec = resources[1]["spec"]["template"]["spec"]
     assert pod_spec["volumes"] == [
         {"name": "model-cache", "persistentVolumeClaim": {"claimName": "shared-model-cache"}},
-        {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "1Gi"}},
+        {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "4Gi"}},
     ]
 
 

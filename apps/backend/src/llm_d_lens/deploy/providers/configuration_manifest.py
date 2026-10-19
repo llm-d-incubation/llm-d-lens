@@ -17,6 +17,7 @@ from llm_d_lens.deploy.providers.guide_adapter import (
     ValidationResult,
 )
 from llm_d_lens.deploy.providers.hardware_profile import accelerator_supported
+from llm_d_lens.deploy.providers.shared_memory import prepare_shared_memory
 from llm_d_lens.deploy.providers.target_node import apply_placement, configured_target_node, write_pinned_manifest
 from llm_d_lens.infrastructure.artifacts.manifests import (
     DEPLOYMENT_MANIFEST_DIR,
@@ -131,6 +132,7 @@ class ConfigurationManifestAdapter:
                 deployment_contract=deployment_contract,
             )
 
+        artifact = prepare_shared_memory(artifact, self._output_root, exact=self._is_exact(overrides))
         if "_model_cache_dependencies" in overrides:
             from llm_d_lens.deploy.providers.storage_mount import validate_cached_model_arguments
 
@@ -339,21 +341,27 @@ class ConfigurationManifestAdapter:
         if not isinstance(artifact, GuideDeploymentArtifact) or not artifact.deployment_contract:
             return await self._delegate.diagnostics(execution)
         if self._uses_delegate_lifecycle(artifact):
-            return await self._delegate.diagnostics(execution)
-        namespace = self._namespace(execution)
+            diagnostics = await self._delegate.diagnostics(execution)
+        else:
+            namespace = self._namespace(execution)
 
-        async def capture(arguments: list[str]) -> str:
-            status, stdout, stderr = await self._runner(arguments)
-            return (stdout if status == 0 else stderr).strip()
+            async def capture(arguments: list[str]) -> str:
+                status, stdout, stderr = await self._runner(arguments)
+                return (stdout if status == 0 else stderr).strip()
 
-        return {
-            "namespace": namespace,
-            "pods": await capture(["kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"]),
-            "events": await capture(["kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]),
-            "resource_claims": await capture(
-                ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
-            ),
-        }
+            diagnostics = {
+                "namespace": namespace,
+                "pods": await capture(["kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"]),
+                "events": await capture(
+                    ["kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]
+                ),
+                "resource_claims": await capture(
+                    ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
+                ),
+            }
+        if "sharedMemory" in artifact.deployment_contract:
+            diagnostics = {**diagnostics, "shared_memory": artifact.deployment_contract["sharedMemory"]}
+        return diagnostics
 
     async def stop(self, execution, artifact):
         if not artifact.deployment_contract:

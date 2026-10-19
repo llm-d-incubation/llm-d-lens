@@ -254,6 +254,7 @@ async def test_render_preserves_validated_deployment_bundle_and_router_profile(m
 async def test_target_node_does_not_read_kustomize_directory_as_manifest(monkeypatch, tmp_path: Path):
     overlay = tmp_path / "overlay"
     overlay.mkdir()
+    (overlay / "manifest.yaml").write_text("kind: Service\n", encoding="utf-8")
     delegate = AsyncMock()
     delegate.render.return_value = GuideDeploymentArtifact(
         guide_id="optimized-baseline", artifact_hash="hash", manifest_ref=str(overlay)
@@ -271,6 +272,7 @@ async def test_target_node_does_not_read_kustomize_directory_as_manifest(monkeyp
 async def test_placement_accepts_overlay_when_delegate_applied_it(monkeypatch, tmp_path: Path):
     overlay = tmp_path / "overlay"
     overlay.mkdir()
+    (overlay / "manifest.yaml").write_text("kind: Service\n", encoding="utf-8")
     delegate = AsyncMock()
     delegate.render.return_value = GuideDeploymentArtifact(
         guide_id="optimized-baseline",

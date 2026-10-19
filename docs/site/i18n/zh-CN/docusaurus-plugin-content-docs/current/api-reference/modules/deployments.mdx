@@ -54,6 +54,15 @@ Simulation 不负责部署生命周期。
 `service_ref`、`model_ref`、`baseline_url`。端点元数据不得包含凭据、
 kubeconfig 或授权值。
 
+共享内存检查结果保存在
+`artifact.rendered_payload.value.deployment_contract.sharedMemory`，并复制到
+`diagnostics.value.snapshot.shared_memory`。报告包含 `defaultSizeLimit`（`4Gi`）、
+`addedMounts`、各容器的 `mounts`、`warnings`，以及共享内存处理阶段的
+`manifestChecksum`（在后续放置和追踪处理之前）。普通渲染会补充模型容器缺少的
+`/dev/shm` 挂载；已有挂载和主机 IPC 设置保持不变。发布的 `officialGuide` 清单
+只检查，不修改共享内存配置。警告也会写入日志；无效或重复挂载绑定会使渲染失败。
+这不会修改传入的 Configuration 产物。
+
 `get(execution_id)` 返回 `DeploymentExecution`，而非另一套状态 DTO。
 具体服务查询内存中的执行状态，未知 ID 会抛出 `KeyError`，它本身不是数据库查询。
 Worker/DAO 边界负责持久化记录并在需要时恢复执行上下文。协议还提供
