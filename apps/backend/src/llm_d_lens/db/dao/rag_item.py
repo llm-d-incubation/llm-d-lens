@@ -1,4 +1,4 @@
-"""Append-only, import-side access. No query endpoint or publication operation."""
+"""Immutable evidence writes; internal import/audit access only."""
 
 from __future__ import annotations
 
@@ -19,24 +19,28 @@ class RagItemDao(BaseDao):
     def save(self, item: RagItem) -> RagItem:
         item = RagItem.model_validate(item.model_dump())
         with self._transaction() as session:
-            self._validate_links(session, item)
-            try:
-                with session.begin_nested():
-                    row = RagItemRow.from_dto(item)
-                    session.add(row)
-                    session.flush()
-            except IntegrityError as exc:
-                existing = session.scalar(
-                    select(RagItemRow).where(
-                        RagItemRow.origin_id == item.origin_id,
-                        RagItemRow.logical_key == item.logical_key,
-                        RagItemRow.source_revision == item.source_revision,
-                    )
+            return self._save_in_session(session, item)
+
+    @classmethod
+    def _save_in_session(cls, session: Session, item: RagItem) -> RagItem:
+        cls._validate_links(session, item)
+        try:
+            with session.begin_nested():
+                row = RagItemRow.from_dto(item)
+                session.add(row)
+                session.flush()
+        except IntegrityError as exc:
+            existing = session.scalar(
+                select(RagItemRow).where(
+                    RagItemRow.origin_id == item.origin_id,
+                    RagItemRow.logical_key == item.logical_key,
+                    RagItemRow.source_revision == item.source_revision,
                 )
-                if existing is None or existing.to_dto() != item:
-                    raise RagItemDaoError("conflicting or invalid immutable RAG item version") from exc
-                return existing.to_dto()
-            return row.to_dto()
+            )
+            if existing is None or existing.to_dto() != item:
+                raise RagItemDaoError("conflicting or invalid immutable RAG item version") from exc
+            return existing.to_dto()
+        return row.to_dto()
 
     def get(self, item_id: str) -> RagItem | None:
         """Import/audit lookup, not a permission-filtered retrieval method."""

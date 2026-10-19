@@ -104,23 +104,24 @@ Changing a table's shape:
 
 `benchmark_rag/contracts.py`, `models/rag_item.py`, and `dao/rag_item.py`
 implement the first storage step of Public Benchmark RAG v1. The schema proposal
-was approved in the implementation conversation on 2026-10-19; completed
-implementation review remains a separate gate. Alembic revision `7a12c8e49b60`
+and its completed implementation were approved in the implementation conversation
+on 2026-10-19. Alembic revision `7a12c8e49b60`
 follows `42a3e9b47726` and only adds `rag_items` and its constraints/indexes.
 
 The six item kinds are source, experiment, measurement, passage, figure, and
 figure_link. `(origin_id, logical_key, source_revision)` identifies an immutable
 version; import retries must reuse its `item_id` and entire payload. A conflicting
-version raises `RagItemDaoError`. There is no update/delete DAO operation.
+version raises `RagItemDaoError`. The generic evidence DAO has no update/delete
+operation; the publication DAO's registry-only operational updates are described
+below.
 CHECK constraints and DTO validation restrict per-kind fields; the DAO verifies
 link target kinds, origins/revisions, and exact versioned manifest membership.
 Only `verified_public` items are accepted. Source bytes remain outside the index.
 
 Source roles distinguish registry, manifest, and file rows.
 `manifest_item_ids` can reference unchanged items pinned to older file versions;
-only a registry may carry `published_manifest_id`. These are storage primitives:
-atomic publication, inventory/source approval, rollback, locking, and tombstones
-are step 2, not enabled here. Per-row state alone never authorizes retrieval.
+only a registry may carry `published_manifest_id`. Per-row state alone never
+authorizes retrieval.
 `get`/`list_version` are internal import/audit methods, not permission-filtered
 end-user search. No importer, REST/MCP query, or Agentic branch is enabled.
 
@@ -133,6 +134,63 @@ are mapped; adapters must retain original labels in source pointers.
 PostgreSQL uses native NUMERIC, JSONB, and a stored `simple` TSVECTOR with GIN.
 SQLite compatibility uses text-backed decimals and a null generated vector,
 not a full-text retrieval fallback.
+
+### Atomic publication (step 2)
+
+`benchmark_rag/publication_contracts.py`, `benchmark_rag/sources.py`,
+`benchmark_rag/publication.py`, and `dao/rag_publication.py` implement an internal
+administrative publication library on the existing schema. No additional
+migration, corpus parser/import, REST/MCP endpoint, refresh trigger, user
+permission assignment, or planner integration is enabled by this step.
+
+- Registration requires an explicit verified-public approval, reviewer, approval
+  and license references, parser version, and paths from the fixed v1 allowlist.
+  Source discovery never grants approval. Changes to approvals/parser versions
+  fail closed pending a separate compatibility review.
+- The offline Git collector verifies the exact approved origin and full commit,
+  inventories the entire pinned tree rather than the worktree, and reads binary
+  blobs without text conversion. The snapshot collector compares all eligible
+  files with a reviewed path/hash inventory. Missing, extra, truncated, symlinked,
+  inaccessible, or changed inputs fail validation, not prove deletion.
+  `PinnedInventory.complete` is a trusted adapter assertion, not proof supplied
+  by a user: future network adapters must establish full pagination/download
+  completeness themselves before constructing it.
+- `SourceArchive` retains SHA256-addressed raw bytes under
+  `DATA/artifacts/benchmark-rag/<sha256>/source` using `storage_path` and the
+  shared artifact registry. Publication is exclusive and fsynced, existing bytes
+  are never overwritten, and reads verify the hash. Stable references use
+  `lens-artifact://benchmark-rag/<sha256>/source`. No deletion or garbage
+  collection is provided: history is retained indefinitely, satisfying the
+  minimum 365-day retention and retained-dependency requirement conservatively.
+- Staging validates formats, parser errors, expected per-kind counts, exact
+  pinned identities, and closure over all source/experiment/figure dependencies.
+  It stores immutable members and a deterministic manifest in one transaction.
+  Unchanged files can retain their older pinned item versions; affected linked
+  files must be reparsed together when old links no longer close. Identical
+  retries create no duplicate evidence or manifests.
+- Stage and activation lock the canonical source registry with
+  `SELECT FOR UPDATE`. Activation compares both the base pointer and monotonic
+  generation, revalidates membership and source bytes, then commits tombstones,
+  the new pointer, and activation history atomically. Failure preserves the
+  previous release. Competing stale releases fail explicitly.
+- Only the canonical registry's `published_manifest_id` and operational JSONB
+  state/history mutate. Evidence and manifest payloads stay immutable, commonly
+  retaining their original `staged` row state even after publication. Tombstones
+  are separate audit rows outside the current manifest; historical rows and
+  source bytes remain available. Rollback requires an explicit current generation
+  and a previously published target, and restores its exact manifest. Generation
+  checks prevent stale activation after rollback or source disable/enable.
+- `list_published` and `count_published` join registry, current manifest, and exact
+  member IDs in one SQL statement. Source enablement and public classification
+  apply before ranking/counts; setting an unrelated row to `published` cannot
+  expose it. These are internal membership APIs, not caller-authorized retrieval.
+  Step 5 must add authenticated feature permission checks before user access.
+  `get`/`list_version` remain internal audit reads, including historical data.
+
+Publication requires PostgreSQL; SQLite fails explicitly rather than providing
+a non-atomic fallback. This library never writes `agentic_benchmark_records`.
+The step-2 implementation passed its separate user review; real corpus imports
+and later steps remain separately gated.
 
 ## Testing
 
@@ -151,6 +209,11 @@ the RAG migration, and verify native NUMERIC, JSONB, generated TSVECTOR/GIN,
 constraints, idempotency, and downgrade/upgrade. They never resolve the
 application's configured database URL. Without `pgserver`, those PostgreSQL
 cases explicitly skip; SQLite-only success does not satisfy the RAG gate.
+`tests/unit/db/test_rag_publication.py` shares the disposable PostgreSQL fixtures
+in `tests/unit/db/conftest.py`. It tests concurrent staging/activation, atomic
+failure, exact membership before full-text ranking/counts, incomplete inventories,
+immutable binary bytes, link invalidation, empty-release retirement, rollback,
+source revocation, and absence of Agentic-table SQL during publication.
 The prior PostgreSQL schema is created from metadata excluding `rag_items` and
 stamped at `42a3e9b47726`; this tests the new migration, not a replay of all
 historical migrations. Downgrade runs only in disposable schemas; dropping live
@@ -159,5 +222,6 @@ evidence requires a reviewed retention/dependency decision.
 ```bash
 PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_rag_item_dao.py \
+  apps/backend/tests/unit/db/test_rag_publication.py \
   apps/backend/tests/unit/db/test_agentic_benchmark_record_dao.py -q
 ```

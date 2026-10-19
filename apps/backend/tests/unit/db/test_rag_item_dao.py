@@ -1,70 +1,26 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from threading import Barrier
-from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from pydantic import ValidationError
-from sqlalchemy import CheckConstraint, Engine, create_engine, func, inspect, select, text
+from sqlalchemy import CheckConstraint, Engine, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.schema import CreateSchema, DropSchema
 
 from llm_d_lens.benchmark_rag.contracts import ItemKind, RagItem, normalize_statistic, normalize_unit
-from llm_d_lens.db.base import Base
 from llm_d_lens.db.dao.rag_item import RagItemDao, RagItemDaoError
 from llm_d_lens.db.engine import get_session_factory
 from llm_d_lens.db.models.agentic_benchmark_record import BenchmarkRecordRow
 from llm_d_lens.db.models.rag_item import RagItemRow
 
-_BACKEND = Path(__file__).resolve().parents[3]
 _PREVIOUS_REVISION = "42a3e9b47726"
 _REVISION = "7a12c8e49b60"
-
-
-def _config(engine: Engine) -> Config:
-    config = Config(str(_BACKEND / "alembic.ini"))
-    config.set_main_option("script_location", str(_BACKEND / "src/llm_d_lens/db/migrations"))
-    config.set_main_option("sqlalchemy.url", engine.url.render_as_string(hide_password=False).replace("%", "%%"))
-    return config
-
-
-@pytest.fixture(scope="module")
-def postgres_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    pgserver = pytest.importorskip("pgserver", reason="PostgreSQL acceptance needs the embedded-db extra")
-    server = pgserver.get_server(tmp_path_factory.mktemp("rag-postgres") / "data", cleanup_mode="stop")
-    try:
-        yield server.get_uri().replace("postgresql://", "postgresql+psycopg://", 1)
-    finally:
-        server.cleanup()
-
-
-@pytest.fixture
-def postgres_engine(postgres_url: str) -> Iterator[Engine]:
-    schema = f"rag_test_{uuid4().hex}"
-    admin = create_engine(postgres_url)
-    with admin.begin() as connection:
-        connection.execute(CreateSchema(schema))
-    engine = create_engine(admin.url.update_query_dict({"options": f"-csearch_path={schema}"}))
-    try:
-        Base.metadata.create_all(
-            engine, tables=[table for table in Base.metadata.sorted_tables if table.name != "rag_items"]
-        )
-        command.stamp(_config(engine), _PREVIOUS_REVISION)
-        command.upgrade(_config(engine), _REVISION)
-        yield engine
-    finally:
-        engine.dispose()
-        with admin.begin() as connection:
-            connection.execute(DropSchema(schema, cascade=True))
-        admin.dispose()
 
 
 @pytest.fixture(params=["sqlite", "postgresql"])
@@ -307,7 +263,7 @@ def test_postgres_concurrent_same_version_import_is_idempotent(postgres_engine: 
     assert dao.list_version(item.origin_id, item.source_revision) == [item]
 
 
-def test_postgres_schema_migration_numeric_filters_and_full_text(postgres_engine: Engine):
+def test_postgres_schema_migration_numeric_filters_and_full_text(postgres_engine: Engine, postgres_config: Config):
     inspector = inspect(postgres_engine)
     assert {constraint["name"] for constraint in inspector.get_check_constraints("rag_items")} == {
         constraint.name for constraint in RagItemRow.__table__.constraints if isinstance(constraint, CheckConstraint)
@@ -338,11 +294,11 @@ def test_postgres_schema_migration_numeric_filters_and_full_text(postgres_engine
         ).all()
         assert any(name == "ix_rag_search_vector" and "USING gin" in definition for name, definition in indexes)
         assert connection.scalar(select(func.count()).select_from(BenchmarkRecordRow)) == 0
-    command.check(_config(postgres_engine))
+    command.check(postgres_config)
     before = set(inspect(postgres_engine).get_table_names())
-    command.downgrade(_config(postgres_engine), _PREVIOUS_REVISION)
+    command.downgrade(postgres_config, _PREVIOUS_REVISION)
     assert set(inspect(postgres_engine).get_table_names()) == before - {"rag_items"}
-    command.upgrade(_config(postgres_engine), _REVISION)
+    command.upgrade(postgres_config, _REVISION)
     assert set(inspect(postgres_engine).get_table_names()) == before
 
 
