@@ -1,5 +1,6 @@
 """Tests for portable Deploy runtime path discovery."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from llm_d_lens.deploy.runtime.composition import (
     _build_optimized_baseline_provider,
     _build_precise_prefix_cache_routing_provider,
     _build_tiered_prefix_cache_provider,
+    build_deployment_service_from_environment,
     build_namespace_factory,
 )
 
@@ -30,6 +32,10 @@ def _executable(directory: Path, name: str) -> Path:
 def _environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     root = tmp_path / "llm-d"
     (root / "guides").mkdir(parents=True)
+    for relative in ("recipes/router/base.values.yaml", "optimized-baseline/router/optimized-baseline.values.yaml"):
+        path = root / "guides" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
     for relative in (
         "tiered-prefix-cache/modelserver/xpu/vllm/base",
         "tiered-prefix-cache/modelserver/xpu/vllm/native/cpu/base",
@@ -84,14 +90,41 @@ def test_optimized_baseline_reports_missing_generic_entry(tmp_path, entries):
         overlay.mkdir(parents=True)
         (overlay / "kustomization.yaml").write_text("resources: []")
 
-    with pytest.raises(ValueError) as failure:
-        _build_optimized_baseline_provider(runtime)
-
-    message = str(failure.value)
+    adapter = _build_optimized_baseline_provider(runtime)
+    validation = adapter.validate_inputs(adapter.discover(), {}, {})
+    assert not validation.accepted
+    message = "; ".join(validation.reasons)
     assert "optimized-baseline" in message
     assert "nvidia" in message
     assert "expected '.' or 'base'" in message
     assert "available variants:" in message
+    with pytest.raises(ValueError, match="no generic Kustomize entry point"):
+        asyncio.run(adapter.render(adapter.discover(), {}))
+
+
+@pytest.mark.parametrize("accelerator,tree,entry", [("nvidia", "gpu", "base"), ("intel-xpu", "xpu", ".")])
+def test_optimized_baseline_resolves_registered_hardware_entry(tmp_path, accelerator, tree, entry):
+    environment, _ = _environment(tmp_path)
+    environment["PRISM_DEPLOY_ACCELERATOR"] = accelerator
+    root = Path(environment["LLM_D_ROOT"])
+    overlay = root / "guides/optimized-baseline/modelserver" / tree / "vllm" / entry
+    overlay.mkdir(parents=True)
+    (overlay / "kustomization.yaml").write_text("resources: []")
+
+    adapter = _build_optimized_baseline_provider(RuntimeEnvironment.from_environment(environment))
+
+    assert adapter._policy.overlay_path == overlay
+    assert adapter._policy.source_error is None
+
+
+def test_catalog_registration_does_not_require_resolved_hardware(tmp_path, monkeypatch):
+    environment, _ = _environment(tmp_path)
+    environment["PRISM_DEPLOY_ACCELERATOR"] = ""
+    monkeypatch.delenv("PRISM_DEPLOY_ACCELERATOR", raising=False)
+
+    configured = build_deployment_service_from_environment(environment)
+
+    assert configured is not None
 
 
 def test_tiered_prefix_cache_provider_registers_all_upstream_xpu_variants(tmp_path: Path):

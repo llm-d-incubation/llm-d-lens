@@ -20,7 +20,7 @@ function api(path, options = {}) {
 const DEFAULT_REQUIREMENTS = {
     ttftSloMs: '2000', tpotSloMs: '30',
     hardwareCapacityMode: 'free', customGpuCount: '',
-    useCase: 'general-chat', inputTokens: '', outputTokens: '', concurrency: '', requestRate: '',
+    useCase: 'general-chat', inputTokens: '4000', outputTokens: '1000', concurrency: '', requestRate: '',
 };
 
 const GENERATION_STAGES = [
@@ -186,6 +186,10 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
     }, []);
 
     const createPlan = async () => {
+        if (numeric(requirements.concurrency) !== null && numeric(requirements.requestRate) !== null) {
+            setError('AIC accepts only one load target: Concurrent requests or Request rate (QPS). Both were provided; choose one and clear the other because AIC does not support joint load targets.');
+            return;
+        }
         if (!draft?.storageVolumeId) {
             setError('Select a model cache storage before creating an Agentic recommendation.');
             return;

@@ -13,6 +13,8 @@ test('Agentic deployment prefills AIC latency defaults without an end-to-end lat
     }));
     assert.match(html, /TTFT SLO \(ms\)<input[^>]*value="2000"/);
     assert.match(html, /TPOT SLO \(ms\)<input[^>]*value="30"/);
+    assert.match(html, /Input tokens[^<]*<input[^>]*value="4000"/);
+    assert.match(html, /Output tokens[^<]*<input[^>]*value="1000"/);
     assert.doesNotMatch(html, /End-to-end latency/);
 });
 

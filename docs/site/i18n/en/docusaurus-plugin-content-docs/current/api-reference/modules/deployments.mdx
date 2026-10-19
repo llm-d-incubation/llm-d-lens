@@ -43,6 +43,12 @@ artifact directly to this adapter and assume it supports it.
 when supplied, and provider state managed by that service before cleanup. It
 does not accept arbitrary resource selectors.
 
+The `baseline-vllm` renderer copies a selected hardware access mode's optional
+`runtime_class_name` into the Pod's `runtimeClassName`. The NVIDIA plugin mode
+declares `nvidia`, which must be registered on the target cluster; modes without
+this setting retain the cluster default. This does not change accelerator resource
+requests or rewrite saved deployment artifacts.
+
 ### Execution, observation and evidence
 
 `DeploymentExecution` carries `execution_id`, `request_id`, `status`, `artifact`,
@@ -223,6 +229,46 @@ prohibition. The 0.12.0 matrix passes Qwen/Qwen3-0.6B on B60/vLLM for P/D;
 candidate availability still depends on the requested workload and GPU budget.
 After changing the dependency pin, reinstall project dependencies and restart
 the backend so support checks and searches use the same SDK release.
+
+### Search or size an AIC workload
+
+The MCP generation and plain-estimate fallback behavior above applies when no load
+target is supplied. Agentic load-target planning instead validates the exact native
+AIC recommendations, including replica counts outside the ordinary candidate grid.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/aic/search`**
+
+    `mean_input_tokens` defaults to `4000` and `mean_output_tokens` to `1000`, matching
+    native AIC search/recommend. Supply either positive `target_concurrency` or
+    `target_request_rate` (requests/second), or omit both for fixed-GPU search.
+    Supplying both is rejected with an explanation that AIC does not support joint
+    load targets. Agentic maps `planning_facts.workload_profile.concurrency` and
+    `.request_rate` to these fields; QPS and request rate are the same quantity.
+
+    With a load target, `gpu_count` is an acceptance budget, not a native recommend
+    input. Lens scales the recommended worker pools and accepts only configurations
+    within that budget and the TTFT/TPOT targets (native defaults `2000`/`30` ms).
+    Unavailable predictions, insufficient capacity or unmet SLOs return an explicit
+    error instead of silently selecting a prediction without a load target.
+    Agentic forwards that reason to the frontend error alert.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.aic.models import AICRequest
+    from llm_d_lens.aic.service import search
+
+    result = await search(AICRequest(
+        model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
+        gpu_count=8, target_request_rate=10,
+    ))
+    ```
+
+    Use `target_concurrency` instead of `target_request_rate` for a concurrent-request
+    target. Leave both unset to retain the existing fixed-GPU search.
+  </TabItem>
+</Tabs>
 
 ### Estimate an AIC topology
 

@@ -33,6 +33,7 @@ from llm_d_lens.capacity import (
     wrap_config,
 )
 from llm_d_lens.hardware.registry import all_profiles
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS
 
 from .facts import PlanningEvidence, ResolvedPlanningFacts, _aic_predictions, _select_gpu_capacity
 from .planner import OpenAIPlannerSettings, PlannedCandidate, PlanningFacts, WorkloadProfile, provider_guidance
@@ -752,8 +753,19 @@ class AICandidateGenerator:
                     if profile
                     else None
                 )
-                workload["isl"] = int(input_tokens) if input_tokens is not None else 1024
-                workload["osl"] = int(output_tokens) if output_tokens is not None else 256
+                workload["isl"] = int(input_tokens) if input_tokens is not None else DEFAULT_INPUT_TOKENS
+                workload["osl"] = int(output_tokens) if output_tokens is not None else DEFAULT_OUTPUT_TOKENS
+                for field in ("concurrency", "request_rate"):
+                    value = profile.get(field) if isinstance(profile, dict) else getattr(profile, field, None)
+                    if value is None:
+                        workload.pop(field, None)
+                    else:
+                        workload[field] = value
+                if workload.get("concurrency") is not None and workload.get("request_rate") is not None:
+                    raise CandidateGenerationError(
+                        "AIC accepts only one load target: Concurrent requests or Request rate (QPS). "
+                        "Both were provided; choose one and clear the other because AIC does not support joint load targets."
+                    )
                 for target, value in (("ttftMs", facts.ttft_slo_ms), ("tpotMs", facts.tpot_slo_ms)):
                     if value is None:
                         workload.pop(target, None)

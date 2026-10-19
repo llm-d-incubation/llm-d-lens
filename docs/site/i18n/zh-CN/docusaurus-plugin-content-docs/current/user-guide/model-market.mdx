@@ -47,7 +47,7 @@ description: 选择模型，创建手动或 AI 辅助部署。
 
 1. 打开模型，填写部署名称，选择集群和缓存存储。
 2. 将 **Mode** 改为 **Agentic**。
-3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**TTFT SLO (ms)** 默认填入 `2000`，**TPOT SLO (ms)** 默认填入 `30`，均可修改；不提供端到端延迟输入框。
+3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**Input tokens per request（ISL）**默认填入 `4000`，**Output tokens per request（OSL）**默认填入 `1000`，与 AIC 原生 search/recommend 默认值一致。**TTFT SLO (ms)** 默认填入 `2000`，**TPOT SLO (ms)** 默认填入 `30`，均可修改；不提供端到端延迟输入框。
 4. **AI provider** 可保持 **Default (no external AI provider)（不使用外部 AI）**，也可选择已配置的提供方辅助排序。
 5. 可选：展开 **Preference（偏好）**，用英文填写，例如 `use fewer GPU resources`（少用 GPU）或 `prefer prefix cache`（优先前缀缓存）。
 6. 点击 **Generate recommendation（生成推荐）**。
@@ -55,6 +55,11 @@ description: 选择模型，创建手动或 AI 辅助部署。
 8. 点击所选方案的 **Deploy recommendation（部署推荐方案）**，到**部署**页查看启动状态。
 
 可选：生成推荐前展开 **Pod placement（Pod 放置）**，选择部署运行的位置。
+
+按负载估算容量时，填写 **Concurrent requests（并发请求数）**或 **Request rate (QPS)（每秒请求数）**之一，不能同时填写。
+两项均为可选，不预填目标值。提供其中一项时调用 AIC 原生推荐模式；两项留空时保留固定 GPU 数搜索。
+Lens 会按所选 GPU 容量和部署约束校验推荐的精确拓扑。联合输入、预测不可用、容量不足或延迟 SLO 无法满足时，
+Agentic 页面会明确显示原因和处理建议，不会悄悄回退为没有负载目标的预测。
 
 要调整推荐，在备选方案下方输入新的偏好，点击 **Recalculate selection（重新计算）**。
 不配置外部 AI 提供方也可以使用此操作。
@@ -73,6 +78,12 @@ description: 选择模型，创建手动或 AI 辅助部署。
 | 修改副本或加速器数量 | **Replicas** 和 **Tensor parallelism** / **TP** |
 
 启动时提示 KV 缓存容量不足，可在新配置中降低最大上下文长度或增加资源。
+
+使用 NVIDIA 设备插件的 `baseline-vllm` 部署，会在生成的 Pod 中选择硬件访问模式声明的
+`nvidia` RuntimeClass；目标集群必须已注册该 RuntimeClass。当节点默认容器运行时为 `runc` 时，
+仅申请 GPU 资源并不能完成设备注入。若 vLLM 报告 `Failed to infer device type`，
+请检查 Pod 的 RuntimeClass 和设备访问；`VLLM_LOGGING_LEVEL=DEBUG` 只会增加诊断日志。
+Lens 更新不会改写已有 Pod 或已保存清单；请重新生成并创建部署以应用修复。
 
 出现 **Your role cannot create deployments.（当前角色无法创建部署）**时，请管理员授予目标集群的部署权限。
 仍可点击 **Open Deployments** 查看有权访问的部署。

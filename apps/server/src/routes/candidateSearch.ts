@@ -56,8 +56,10 @@ function predictPayload(workload: JsonRecord, searchConfig: JsonRecord, profiles
     return {
         model_name: String(workload.model || ''),
         gpu_count: positiveInteger(searchConfig.totalGpus, 8, 64),
-        mean_input_tokens: positiveInteger(workload.isl, 1024, 1_000_000),
-        mean_output_tokens: positiveInteger(workload.osl, 256, 1_000_000),
+        mean_input_tokens: positiveInteger(workload.isl, 4000, 1_000_000),
+        mean_output_tokens: positiveInteger(workload.osl, 1000, 1_000_000),
+        target_concurrency: workload.concurrency ?? null,
+        target_request_rate: workload.request_rate ?? null,
         ttft_target_ms: finiteNumber(workload.ttftMs),
         tpot_target_ms: finiteNumber(workload.tpotMs),
         aic_system_name: aicSystemName,

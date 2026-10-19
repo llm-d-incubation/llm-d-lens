@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { describePendingState, pollUntilTerminalOrPending, specialTools } from '../../src/mcp/specialTools.ts';
+import { z } from 'zod';
+
+for (const field of ['concurrency', 'request_rate']) {
+    test(`candidate search preserves the ${field} load target`, async (t) => {
+        const calls: Record<string, unknown>[] = [];
+        t.mock.method(globalThis, 'fetch', async (_input, init) => {
+            calls.push(JSON.parse(String(init?.body)));
+            return Response.json({ candidates: [] });
+        });
+        const tool = specialTools.find(item => item.name === 'search_candidates');
+        assert.ok(tool);
+        const workload = { model: 'model', isl: 4000, osl: 1000, [field]: 10 };
+        const args = z.object(tool.inputShape).parse({ workload, searchConfig: {}, sourceIds: ['aic'] });
+        await tool.handler(args);
+        assert.deepEqual(calls[0].workload, workload);
+    });
+}
 
 test('relaxed AIC MCP tool obtains cluster GPU budget and forwards original targets', async (t) => {
     const calls: {url: string; body?: Record<string, unknown>}[] = [];

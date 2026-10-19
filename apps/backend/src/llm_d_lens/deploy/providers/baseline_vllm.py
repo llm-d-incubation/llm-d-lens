@@ -390,6 +390,8 @@ class BaselineVllmAdapter:
             ],
             "resourceClaims": [{"name": claim_name, "resourceClaimTemplateName": claim_name}],
         }
+        if binding.get("runtime_class_name"):
+            pod_spec["runtimeClassName"] = binding["runtime_class_name"]
         if resolved_mount is not None:
             pod_spec["volumes"] = [{"name": "model-cache", **resolved_mount["volume_source"]}]
             pod_spec["containers"][0]["volumeMounts"] = [

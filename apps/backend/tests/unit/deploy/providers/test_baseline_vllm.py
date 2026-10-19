@@ -65,6 +65,28 @@ def test_resources_name_the_modelserver_container_port():
     assert container["ports"] == [{"name": "modelserver", "containerPort": 8000}]
 
 
+@pytest.mark.parametrize(
+    "accelerator,access_mode,runtime_class",
+    [("nvidia", "plugin", "nvidia"), ("nvidia", "dra", None), ("intel-xpu", "dra", None)],
+)
+def test_resources_use_the_hardware_access_mode_runtime_class(accelerator, access_mode, runtime_class):
+    overrides = {
+        **_base_overrides(),
+        "hardware_profile": accelerator,
+        "hardware_request": {"access_mode": access_mode},
+    }
+    resources = BaselineVllmAdapter._resources(BaselineVllmAdapter._parameters(overrides))
+    deployment = next(item for item in resources if item["kind"] == "Deployment")
+    pod_spec = deployment["spec"]["template"]["spec"]
+
+    assert pod_spec.get("runtimeClassName") == runtime_class
+    if access_mode == "plugin":
+        assert pod_spec["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "1"
+        assert "resourceClaims" not in pod_spec
+    else:
+        assert pod_spec["resourceClaims"]
+
+
 def test_auto_cache_serving_pod_runs_huggingface_offline():
     overrides = _base_overrides()
     overrides["runtime"]["modelSource"] = "auto-cache"

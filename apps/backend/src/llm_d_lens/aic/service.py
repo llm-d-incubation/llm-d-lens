@@ -92,6 +92,11 @@ async def check_support(request: AICRequest) -> AICSupportResponse:
 
 
 def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
+    scale = max(1, int(row.get("replicas_needed") or 1))
+    row = dict(row)
+    row["num_total_gpus"] = int(row.get("num_total_gpus") or row.get("tp") or 1) * scale
+    if row.get("tokens/s") is not None:
+        row["tokens/s"] *= scale
     if mode == "agg":
         tp = int(row.get("tp") or 1)
         replicas = max(1, int(row.get("num_total_gpus") or tp) // max(tp, 1))
@@ -109,9 +114,9 @@ def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": "disagg",
         "prefill_tp": prefill_tp,
-        "prefill_replicas": int(row.get("(p)workers") or 1),
+        "prefill_replicas": int(row.get("(p)workers") or 1) * scale,
         "decode_tp": decode_tp,
-        "decode_replicas": int(row.get("(d)workers") or 1),
+        "decode_replicas": int(row.get("(d)workers") or 1) * scale,
         "num_total_gpus": int(row.get("num_total_gpus") or 1),
         "ttft_ms": row.get("ttft"),
         "tpot_ms": row.get("tpot"),
@@ -145,6 +150,34 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
     if request.tpot_target_ms is not None:
         kwargs["tpot"] = request.tpot_target_ms
     try:
+        if request.target_concurrency is not None or request.target_request_rate is not None:
+            from aiconfigurator.cli.api import cli_recommend
+
+            kwargs.pop("total_gpus")
+            kwargs["target_concurrency"] = request.target_concurrency
+            kwargs["target_request_rate"] = request.target_request_rate
+            result = cli_recommend(**kwargs)
+            configs = _result_candidates(result, request.max_candidates)
+            fitting = [item for item in configs if item["num_total_gpus"] <= request.gpu_count]
+            if not fitting:
+                required = min((item["num_total_gpus"] for item in configs), default=None)
+                raise AICError(
+                    f"AIC cannot serve the requested load within the selected {request.gpu_count}-GPU budget. "
+                    f"Minimum recommended GPUs: {required if required is not None else 'unavailable'}. "
+                    "Reduce the load target, select more accelerator capacity, or relax the latency SLOs."
+                )
+            compliant = [
+                item for item in fitting
+                if item.get("ttft_ms") is not None and item.get("tpot_ms") is not None
+                and 0 < item["ttft_ms"] <= (request.ttft_target_ms or 2000)
+                and 0 < item["tpot_ms"] <= (request.tpot_target_ms or 30)
+            ]
+            if not compliant:
+                raise AICError(
+                    "AIC found no configuration meeting the TTFT/TPOT SLOs at the requested load. "
+                    "Reduce the load target, relax the latency SLOs, or select more compatible accelerator capacity."
+                )
+            return AICSearchResponse(configs=compliant, chosen_mode=result.chosen_exp)
         result = cli_default(**kwargs)
     except Exception as error:
         raise AICError(str(error)) from error

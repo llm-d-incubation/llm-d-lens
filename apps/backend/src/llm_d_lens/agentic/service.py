@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from llm_d_lens.ai_providers.client import AIProviderClientError
-from llm_d_lens.aic.models import AICEstimateRequest
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
 from llm_d_lens.aic.service import AICError, estimate
 from llm_d_lens.capacity import ValidationParams, evaluate_capacity
 from llm_d_lens.cluster.sessions import require_active_session
@@ -35,7 +35,13 @@ from .models import (
     AgenticDeploymentStatus,
 )
 from .performance_evidence import BenchmarkPerformanceEvidence
-from .planner import AICCandidatePrediction, DeterministicPlanner, OpenAICompatiblePlanner, OpenAIPlannerError
+from .planner import (
+    AICCandidatePrediction,
+    DeterministicPlanner,
+    OpenAICompatiblePlanner,
+    OpenAIPlannerError,
+    resolve_workload_signals,
+)
 from .planning_snapshot import PlanningSnapshotStore
 
 logger = logging.getLogger(__name__)
@@ -68,6 +74,13 @@ class AgenticDeploymentService:
         *,
         principal_id: str | None = None,
     ) -> AgenticDeploymentRun:
+        profile = request.planning_facts.workload_profile
+        if profile and profile.concurrency is not None and profile.request_rate is not None:
+            raise ValueError(
+                "AIC accepts only one load target: Concurrent requests or Request rate (QPS). "
+                "Both were provided; choose one and clear the other because AIC does not support joint load targets."
+            )
+        resolve_workload_signals(request.planning_facts)
         await self._emit_progress(
             on_progress,
             {
@@ -529,6 +542,36 @@ class AgenticDeploymentService:
             "candidate_proposals": [],
             "rejected": [],
         }
+        profile = facts.workload_profile
+        if profile and (profile.concurrency is not None or profile.request_rate is not None):
+            resolved = await resolve_planning_facts(cluster_id, model, facts)
+            proposals = [
+                CandidateProposal(
+                    provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "baseline-vllm",
+                    replicas=prediction.replicas,
+                    tensor_parallel_size=prediction.tensor_parallel_size,
+                    prefill_replicas=prediction.prefill_replicas,
+                    prefill_tensor_parallel_size=prediction.prefill_tensor_parallel_size,
+                    rationale="AIC recommendation for the requested load target.",
+                    evidence_ids=["aic:search"],
+                )
+                for prediction in resolved.facts.aic_predictions
+            ]
+            validated = CandidateValidator().validate(resolved.facts, proposals)
+            generation["candidate_proposals"] = [proposal.model_dump() for proposal in proposals]
+            generation["rejected"] = validated.rejected
+            if not validated.accepted:
+                reasons = sorted({reason for item in validated.rejected for reason in item.rejection_reasons})
+                raise ValueError(
+                    "No AIC load-target recommendation passes deployment validation: "
+                    + ("; ".join(reasons) or "AIC returned no matching prediction")
+                    + ". Reduce the load target or select more compatible accelerator capacity."
+                )
+            await self._emit_progress(on_progress, {
+                "phase": "generation", "status": "complete",
+                "message": f"Validated {len(validated.accepted)} AIC load-target recommendation(s).",
+            })
+            return validated.accepted, generation, resolved
         if provider is None or not hasattr(provider, "settings"):
             await self._emit_progress(
                 on_progress,
@@ -718,8 +761,8 @@ class AgenticDeploymentService:
         arguments = (searches[-1] or {}) if searches else {}
         profile = facts.workload_profile
         workload = arguments.get("workload") or {
-            "isl": profile.mean_input_tokens if profile else facts.context_length,
-            "osl": profile.mean_output_tokens if profile else 256,
+            "isl": profile.mean_input_tokens if profile else DEFAULT_INPUT_TOKENS,
+            "osl": profile.mean_output_tokens if profile else DEFAULT_OUTPUT_TOKENS,
         }
         config = arguments.get("searchConfig") or {}
         aic_system_name = config.get("aicSystemName")
@@ -740,8 +783,8 @@ class AgenticDeploymentService:
                     model_name=model,
                     scenario="pd_disaggregation" if is_pd else "inference_scheduling",
                     gpu_count=candidate.required_gpus,
-                    mean_input_tokens=int(workload.get("isl") or facts.context_length),
-                    mean_output_tokens=int(workload.get("osl") or 256),
+                    mean_input_tokens=int(workload.get("isl") or DEFAULT_INPUT_TOKENS),
+                    mean_output_tokens=int(workload.get("osl") or DEFAULT_OUTPUT_TOKENS),
                     aic_system_name=aic_system_name,
                     aic_backend_name=config.get("aicBackendName") or "vllm",
                     aic_database_mode=config.get("aicDatabaseMode") or "SILICON",

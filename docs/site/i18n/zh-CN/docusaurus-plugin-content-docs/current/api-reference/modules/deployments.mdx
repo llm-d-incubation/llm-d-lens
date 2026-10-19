@@ -40,6 +40,11 @@ Simulation 不负责部署生命周期。
 `kill(request, execution)` 在清理前验证执行 ID、可选的预期命名空间，以及该服务
 所管理的提供方状态，不接受任意资源选择器。
 
+`baseline-vllm` 渲染器会将所选硬件访问模式中可选的 `runtime_class_name`
+写入 Pod 的 `runtimeClassName`。NVIDIA plugin 模式声明 `nvidia`，目标集群必须已注册
+该 RuntimeClass；未声明此设置的模式继续使用集群默认运行时。此设置不改变加速器资源请求，
+也不会改写已保存的部署产物。
+
 ### 执行、观察与证据
 
 `DeploymentExecution` 包含 `execution_id`、`request_id`、`status`、`artifact`、
@@ -149,6 +154,43 @@ GPU 节省量更大的方案。未知的估算值不会被视为失败。
 规划事实，解释为什么每一个评分较低的返回候选方案排在最高选择之后。
 只有返回的前三个候选方案会被评分；对于该集合之外的候选方案，
 不会推断出任何理由。
+
+### 搜索或估算 AIC 负载容量
+
+上文的 MCP 生成和普通 estimate 回退行为适用于未提供负载目标的请求。
+Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包括普通候选网格之外的副本数。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/aic/search`**
+
+    `mean_input_tokens` 默认 `4000`，`mean_output_tokens` 默认 `1000`，与 AIC 原生
+    search/recommend 一致。可以提供正数 `target_concurrency` 或 `target_request_rate`
+    （每秒请求数），二选一；两项均不提供时保留固定 GPU 数搜索。
+    同时提供会被拒绝，错误中会明确说明 AIC 不支持联合负载目标。
+    Agentic 将 `planning_facts.workload_profile.concurrency` 和 `.request_rate`
+    映射到这些字段；QPS 和 request rate 是同一项。
+
+    存在负载目标时，`gpu_count` 是 Lens 的验收预算，不传给原生 recommend。
+    Lens 会扩展推荐的各 worker 池，只接受所需 GPU 不超预算且满足 TTFT/TPOT 目标
+    （原生默认 `2000`/`30` 毫秒）的配置。预测不可用、容量不足或 SLO 无法满足时，
+    会明确报错，不会悄悄选择没有负载目标的预测。Agentic 会将原因传到前端错误提示区。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.aic.models import AICRequest
+    from llm_d_lens.aic.service import search
+
+    result = await search(AICRequest(
+        model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
+        gpu_count=8, target_request_rate=10,
+    ))
+    ```
+
+    要指定目标并发请求数，使用 `target_concurrency` 替代 `target_request_rate`。
+    两项都不设置则保持原来的固定 GPU 数搜索。
+  </TabItem>
+</Tabs>
 
 ### 估算 AIC 拓扑结构
 

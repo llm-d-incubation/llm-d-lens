@@ -161,7 +161,7 @@ def _aic_tool():
 
 def _aic_arguments():
     return {
-        "workload": {"model": "Qwen/Qwen3-8B", "isl": 1024, "osl": 256},
+        "workload": {"model": "Qwen/Qwen3-8B", "isl": 4000, "osl": 1000},
         "searchConfig": {"totalGpus": 4},
         "sourceIds": ["aic"],
     }
@@ -392,8 +392,8 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         | {
             "workload": {
                 "model": "model",
-                "isl": 1024,
-                "osl": 256,
+                "isl": 4000,
+                "osl": 1000,
                 "ttftMs": 500,
             }
         },
@@ -402,7 +402,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         "search_aic_with_relaxation",
         {
             "clusterId": "cluster-a",
-            "workload": {"model": "model", "isl": 1024, "osl": 256, "ttftMs": 500},
+            "workload": {"model": "model", "isl": 4000, "osl": 1000, "ttftMs": 500},
             "searchConfig": {"capacityMode": "free", "customGpuCount": None},
         },
     )
@@ -1339,6 +1339,7 @@ def test_aic_tool_arguments_use_requested_workload_and_slo():
         "model": "Qwen/Qwen3-0.6B",
         "isl": 1000,
         "osl": 200,
+        "concurrency": 10,
         "ttftMs": 500,
         "tpotMs": 50,
     }
@@ -1426,6 +1427,7 @@ def test_preference_constraints_override_form_values_for_aic_and_slo_filter(monk
         "model": "Qwen/Qwen3-0.6B",
         "isl": 1000,
         "osl": 200,
+        "concurrency": 10,
         "ttftMs": 500,
         "tpotMs": 50,
     }
@@ -1454,6 +1456,7 @@ def test_preference_only_supplies_workload_and_slo_for_aic():
         "model": "Qwen/Qwen3-0.6B",
         "isl": 1000,
         "osl": 200,
+        "concurrency": 10,
         "ttftMs": 500,
         "tpotMs": 50,
     }
@@ -1476,8 +1479,8 @@ def test_preference_natural_language_upper_limits_override_aic_targets():
         facts,
     )[0].arguments["workload"] == {
         "model": "Qwen/Qwen3-0.6B",
-        "isl": 1024,
-        "osl": 256,
+        "isl": 4000,
+        "osl": 1000,
         "ttftMs": 40,
         "tpotMs": 10,
     }
@@ -1554,7 +1557,7 @@ def test_ai_generator_uses_aic_default_workload_when_none_is_provided(monkeypatc
     assert calls[1] == (
         "search_candidates",
         {
-            "workload": {"model": "Qwen/Qwen3-8B", "isl": 1024, "osl": 256},
+            "workload": {"model": "Qwen/Qwen3-8B", "isl": 4000, "osl": 1000},
             "searchConfig": {"totalGpus": 4},
             "sourceIds": ["aic"],
         },

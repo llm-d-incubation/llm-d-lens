@@ -879,10 +879,15 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
     if not guide_root.is_dir():
         guide_root = settings.manifest_root
     sources = guide_overlays(guide_root, "optimized-baseline", accelerator=settings.accelerator)
-    variant = default_guide_variant(
-        sources, guide="optimized-baseline", accelerator=settings.accelerator
-    )
-    overlay_path = sources[variant]
+    source_error = None
+    try:
+        variant = default_guide_variant(
+            sources, guide="optimized-baseline", accelerator=settings.accelerator
+        )
+        overlay_path = sources[variant]
+    except ValueError as error:
+        source_error = str(error)
+        overlay_path = guide_root / "guides" / "optimized-baseline" / "unavailable-overlay"
     router_base_values_path = guide_root / "guides" / "recipes" / "router" / "base.values.yaml"
     router_values_path = guide_root / "guides" / "optimized-baseline" / "router" / "optimized-baseline.values.yaml"
     neutral_router_values_path = (
@@ -976,6 +981,7 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
             retain_namespace_on_failure=settings.retain_namespace_on_failure,
             readiness_timeout_seconds=settings.readiness_timeout_seconds,
             docker_path=settings.docker_path,
+            source_error=source_error,
         ),
     )
 

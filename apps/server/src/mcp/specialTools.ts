@@ -347,6 +347,8 @@ const candidateSupportShape: z.ZodRawShape = {
         model: z.string().min(1).describe('Model name to check.'),
         isl: z.number().int().min(1).optional().describe('Mean input sequence length in tokens.'),
         osl: z.number().int().min(1).optional().describe('Mean output sequence length in tokens.'),
+        concurrency: z.number().positive().optional().describe('Target concurrent requests; mutually exclusive with request_rate.'),
+        request_rate: z.number().positive().optional().describe('Target requests per second (QPS); mutually exclusive with concurrency.'),
         ttftMs: z.number().positive().optional().describe('Optional TTFT target in milliseconds.'),
         tpotMs: z.number().positive().optional().describe('Optional TPOT target in milliseconds.'),
     }).passthrough().describe('Workload description used to check AIConfigurator support.'),
