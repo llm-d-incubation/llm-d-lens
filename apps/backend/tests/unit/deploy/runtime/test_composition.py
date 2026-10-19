@@ -13,6 +13,7 @@ from llm_d_lens.deploy.runtime.composition import (
     RestrictedKubectlRunner,
     RuntimeConfigurationError,
     RuntimeEnvironment,
+    _build_optimized_baseline_provider,
     _build_precise_prefix_cache_routing_provider,
     _build_tiered_prefix_cache_provider,
     build_namespace_factory,
@@ -73,6 +74,26 @@ def test_runtime_rejects_relative_executable_override(tmp_path: Path):
         RuntimeEnvironment.from_environment(environment)
 
 
+@pytest.mark.parametrize("entries", [[], ["gke", "coreweave"]])
+def test_optimized_baseline_reports_missing_generic_entry(tmp_path, entries):
+    environment, _ = _environment(tmp_path)
+    environment["PRISM_DEPLOY_ACCELERATOR"] = "nvidia"
+    runtime = RuntimeEnvironment.from_environment(environment)
+    for entry in entries:
+        overlay = runtime.manifest_root / "guides/optimized-baseline/modelserver/gpu/vllm" / entry
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+
+    with pytest.raises(ValueError) as failure:
+        _build_optimized_baseline_provider(runtime)
+
+    message = str(failure.value)
+    assert "optimized-baseline" in message
+    assert "nvidia" in message
+    assert "expected '.' or 'base'" in message
+    assert "available variants:" in message
+
+
 def test_tiered_prefix_cache_provider_registers_all_upstream_xpu_variants(tmp_path: Path):
     environment, _ = _environment(tmp_path)
     runtime = RuntimeEnvironment.from_environment(environment)
@@ -87,7 +108,7 @@ def test_tiered_prefix_cache_provider_registers_all_upstream_xpu_variants(tmp_pa
     assert adapter._descriptor.variants["lmcache-connector/cpu/base"].name == "base"
     assert adapter._descriptor.variants["lmcache-connector/cpu/base"].parent.name == "cpu"
     # Native OffloadingConnector stays the recommended default; LMCache is opt-in.
-    assert adapter._descriptor.default_variant == "base"
+    assert adapter._descriptor.default_variant == "native/cpu/base"
 
 
 def test_existing_model_secret_requires_namespace_and_name():

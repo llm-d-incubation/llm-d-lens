@@ -195,4 +195,5 @@ def test_source_default_and_nested_runtime_entries_are_discovered(plugin, tmp_pa
         (directory / "kustomization.yaml").write_text("resources: []")
     sources = PdDisaggregationAdapter._guide_sources(tmp_path, plugin.id)
     assert set(sources) == {"custom/deep", "vllm-special/other/deep"}
-    assert default_guide_variant(sources) == "custom/deep"
+    with pytest.raises(ValueError, match="no generic Kustomize entry point"):
+        default_guide_variant(sources, guide="pd-disaggregation", accelerator=plugin.id)

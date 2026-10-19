@@ -54,7 +54,7 @@ again. A resource or network error during generation must be resolved before dep
 
 1. Open a model and fill in the deployment name, cluster and cache storage.
 2. Set **Mode** to **Agentic**.
-3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields.
+3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **TTFT SLO (ms)** defaults to `2000` and **TPOT SLO (ms)** to `30`; both are editable. There is no end-to-end latency input.
 4. Leave **AI provider** on **Default (no external AI provider)**, or select a configured provider to help rank the options.
 5. Optional: expand **Preference** and enter an English preference, such as `use fewer GPU resources` or `prefer prefix cache`.
 6. Click **Generate recommendation**.

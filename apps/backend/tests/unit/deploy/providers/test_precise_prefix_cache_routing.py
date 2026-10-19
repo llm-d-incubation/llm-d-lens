@@ -38,6 +38,7 @@ async def test_render_resolves_selected_storage_volume(monkeypatch, tmp_path: Pa
     adapter._definition = GuideDefinition("precise-prefix-cache-routing", "source", "content", "supported-extension")
     adapter._root = tmp_path
     adapter._modelserver_source = tmp_path
+    adapter._modelserver_source_error = None
     adapter._kustomize_build = AsyncMock(return_value=[{"kind": "ConfigMap"}])
     adapter._patch_modelserver = Mock()
     adapter._patched_router_values = Mock(return_value="router: {}\n")
@@ -122,6 +123,26 @@ def test_modelserver_overlay_follows_the_active_accelerator(tmp_path: Path):
         (overlay / "kustomization.yaml").write_text("resources: []")
         adapter._accelerator = key
         assert adapter._modelserver_overlay(tmp_path) == overlay
+
+
+@pytest.mark.parametrize("entries", [[], ["gke", "coreweave"]])
+def test_modelserver_overlay_reports_missing_generic_entry(tmp_path, entries):
+    for entry in entries:
+        overlay = tmp_path / "guides/precise-prefix-cache-routing/modelserver/gpu/vllm" / entry
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+    adapter = PrecisePrefixCacheRoutingAdapter(
+        _ReadinessRunner(), tmp_path, "llmd-", 30, Path("helm"), None, accelerator="nvidia"
+    )
+
+    result = adapter.validate_inputs(adapter.discover(), {}, {})
+
+    assert not result.accepted
+    message = " ".join(result.reasons)
+    assert "precise-prefix-cache-routing" in message
+    assert "nvidia" in message
+    assert "expected '.' or 'base'" in message
+    assert "available variants:" in message
 
 
 def _upstream_deployment_documents():

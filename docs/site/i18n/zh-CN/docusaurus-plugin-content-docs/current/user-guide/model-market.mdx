@@ -47,7 +47,7 @@ description: 选择模型，创建手动或 AI 辅助部署。
 
 1. 打开模型，填写部署名称，选择集群和缓存存储。
 2. 将 **Mode** 改为 **Agentic**。
-3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。
+3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**TTFT SLO (ms)** 默认填入 `2000`，**TPOT SLO (ms)** 默认填入 `30`，均可修改；不提供端到端延迟输入框。
 4. **AI provider** 可保持 **Default (no external AI provider)（不使用外部 AI）**，也可选择已配置的提供方辅助排序。
 5. 可选：展开 **Preference（偏好）**，用英文填写，例如 `use fewer GPU resources`（少用 GPU）或 `prefer prefix cache`（优先前缀缓存）。
 6. 点击 **Generate recommendation（生成推荐）**。

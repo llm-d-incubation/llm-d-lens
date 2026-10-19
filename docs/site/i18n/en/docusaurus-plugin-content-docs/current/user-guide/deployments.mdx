@@ -25,6 +25,16 @@ change the available variants. A listed overlay can still require cluster resour
 such as NIC device classes, storage or runtime support; planning validates these
 requirements before deployment.
 
+Automatic generic entry selection prefers the root (`.`), then `base`. If neither
+exists, deployment reports the Guide, hardware profile and available variants
+instead of silently choosing a platform-specific overlay. Select a compatible
+Guide source or explicitly choose a listed variant where supported.
+
+Agentic tiered prefix cache requests native CPU caching without pinning the source
+layout. Lens resolves `native/cpu` or `native/cpu/base` from the selected source and
+accepts the legacy path. Missing native CPU entries produce an error; Lens never
+substitutes another cache implementation, storage tier or platform overlay.
+
 The deployment list cancels superseded filter requests so older results cannot replace the current selection. Cluster names are shown when available, with IDs as a fallback. Deletion still requires the displayed confirmation phrase and preserves the namespace choice; while deletion is pending, submission and dialog dismissal are disabled.
 
 When specifying an operator preference for deployment planning, use English, such as

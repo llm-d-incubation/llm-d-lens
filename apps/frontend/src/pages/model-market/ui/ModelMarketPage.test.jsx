@@ -4,7 +4,17 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MODELS } from '@repo/shared/catalog';
 import { AuthContext } from '../../auth/AuthContext.js';
+import AgenticDeploymentWorkspace from '../../deployment/ui/AgenticDeploymentWorkspace.jsx';
 import ModelMarketPage from './ModelMarketPage.jsx';
+
+test('Agentic deployment prefills AIC latency defaults without an end-to-end latency input', () => {
+    const html = renderToStaticMarkup(createElement(AgenticDeploymentWorkspace, {
+        draft: {}, embedded: true,
+    }));
+    assert.match(html, /TTFT SLO \(ms\)<input[^>]*value="2000"/);
+    assert.match(html, /TPOT SLO \(ms\)<input[^>]*value="30"/);
+    assert.doesNotMatch(html, /End-to-end latency/);
+});
 
 test('model cards offer Manual mode and an explicit Configure deployment action', (testContext) => {
     const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');

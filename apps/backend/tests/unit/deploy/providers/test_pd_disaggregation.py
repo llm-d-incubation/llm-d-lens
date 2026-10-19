@@ -361,5 +361,30 @@ def test_guide_sources_follow_the_active_accelerator(monkeypatch, tmp_path):
         overlay = tmp_path / "guides/pd-disaggregation/modelserver" / relative
         overlay.mkdir(parents=True)
         (overlay / "kustomization.yaml").write_text("resources: []")
-    assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "gpu")) == {"base"}
+    assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "gpu")) == {"base", "vllm"}
     assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "xpu")) == {".", "vllm", "vllm-rdma"}
+
+
+@pytest.mark.parametrize(
+    ("accelerator", "variant", "entries", "expected"),
+    [
+        ("gpu", "gpu", ("base",), "base"),
+        ("xpu", "xpu", (".",), "."),
+        ("gpu", "gpu", (".", "base"), "."),
+        ("gpu", "gpu", ("gke",), None),
+        ("unknown", "gpu", (".", "base"), None),
+    ],
+)
+def test_vllm_alias_uses_an_existing_generic_entry(tmp_path, accelerator, variant, entries, expected):
+    source_root = tmp_path / "guides/pd-disaggregation/modelserver" / variant / "vllm"
+    for entry in entries:
+        overlay = source_root / entry
+        overlay.mkdir(parents=True, exist_ok=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+
+    sources = PdDisaggregationAdapter._guide_sources(tmp_path, accelerator)
+
+    if expected is None:
+        assert "vllm" not in sources
+    else:
+        assert sources["vllm"] == source_root / expected

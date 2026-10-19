@@ -187,6 +187,15 @@ def set_accelerator_request(
         resources.setdefault(group, {})[name] = str(count)
 
 
-def default_guide_variant(variants) -> str:
+def default_guide_variant(variants, *, guide: str = "Guide", accelerator: str | None = None) -> str:
     """Choose only an entry point present in the selected source."""
-    return next((name for name in (".", "base") if name in variants), next(iter(sorted(variants)), ""))
+    for name in (".", "base"):
+        if name in variants:
+            return name
+    available = ", ".join(sorted(variants)) or "none"
+    raise ValueError(
+        f"{guide} has no generic Kustomize entry point for accelerator {accelerator or 'unresolved'}: "
+        f"expected '.' or 'base'; available variants: {available}. "
+        "Select a compatible Guide source or explicitly choose a supported variant; "
+        "platform-specific variants are not selected automatically."
+    )

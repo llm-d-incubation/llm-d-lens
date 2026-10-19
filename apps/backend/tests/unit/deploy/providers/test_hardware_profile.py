@@ -15,6 +15,24 @@ def test_unknown_hardware_stays_neutral(monkeypatch):
     assert hardware_profile.overlay_variant(accelerator="unknown") == ""
 
 
+@pytest.mark.parametrize("variants, expected", [(["base", "gke"], "base"), (["base", "."], ".")])
+def test_default_guide_variant_requires_a_generic_entry(variants, expected):
+    assert hardware_profile.default_guide_variant(variants) == expected
+
+
+@pytest.mark.parametrize("variants, available", [(["gke", "aws"], "aws, gke"), ([], "none")])
+def test_default_guide_variant_reports_missing_generic_entry(variants, available):
+    with pytest.raises(ValueError) as failure:
+        hardware_profile.default_guide_variant(variants, guide="optimized-baseline", accelerator="nvidia")
+
+    message = str(failure.value)
+    assert "optimized-baseline" in message
+    assert "nvidia" in message
+    assert "expected '.' or 'base'" in message
+    assert f"available variants: {available}" in message
+    assert "not selected automatically" in message
+
+
 def test_router_topology_defaults_to_single_host_for_every_registered_profile():
     """No registered profile is multi-host today; the field is neutral unless set."""
     assert hardware_profile.router_topology(accelerator="xpu") == "single-host"

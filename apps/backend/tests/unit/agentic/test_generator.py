@@ -210,7 +210,17 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
     assert resolved.cluster_snapshot["cluster"]["id"] == "cluster-a"
 
 
-def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeypatch):
+@pytest.mark.parametrize(
+    "accelerators,expected_system",
+    [
+        (None, "a100"),
+        ([{"id": "nvidia", "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "a100_sxm"),
+        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], "a100"),
+    ],
+)
+def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
+    monkeypatch, accelerators, expected_system
+):
     captured = {"tool_args": []}
 
     class Tools:
@@ -219,7 +229,12 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeyp
 
         async def call(self, name, arguments):
             captured["tool_args"].append((name, arguments))
-            return _cluster_result() if name == "get_cluster_overview" else _aic_result()
+            if name == "get_cluster_overview":
+                cluster = _cluster_result()
+                if accelerators is not None:
+                    cluster["hardware"]["accelerators"] = accelerators
+                return cluster
+            return _aic_result()
 
     class Provider:
         calls = 0
@@ -231,7 +246,14 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeyp
                 return AIToolTurn(
                     tool_calls=[
                         AIToolCall(id="call-1", name="get_cluster_overview", arguments={"clusterId": "cluster-a"}),
-                        AIToolCall(id="call-2", name="search_candidates", arguments=_aic_arguments()),
+                        AIToolCall(
+                            id="call-2",
+                            name="search_candidates",
+                            arguments={
+                                **_aic_arguments(),
+                                "searchConfig": {"aicSystemName": "a100", "totalGpus": 8},
+                            },
+                        ),
                     ]
                 )
             return AIToolTurn(
@@ -270,7 +292,10 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeyp
 
     assert captured["tool_args"] == [
         ("get_cluster_overview", {"clusterId": "cluster-a"}),
-        ("search_candidates", _aic_arguments()),
+        (
+            "search_candidates",
+            {**_aic_arguments(), "searchConfig": {"aicSystemName": expected_system, "totalGpus": 4}},
+        ),
     ]
     assert "The server will independently recompute" in captured["system_prompt"]
     assert "Do not score, select, render, approve, or deploy" in captured["system_prompt"]
@@ -773,7 +798,14 @@ def test_ai_generator_does_not_replay_an_empty_assistant_response(monkeypatch):
     ]
 
 
-def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(monkeypatch):
+@pytest.mark.parametrize(
+    "optional_names",
+    [
+        ("list_simulation_tasks",),
+        ("list_simulation_tasks", "list_deployment_executions", "list_evaluate_runs", "list_model_cache_entries"),
+    ],
+)
+def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(monkeypatch, optional_names):
     calls = []
     exposed_tools = []
 
@@ -782,11 +814,14 @@ def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(mo
             return [
                 _cluster_tool(),
                 _aic_tool(),
-                {
-                    "name": "list_simulation_tasks",
-                    "description": "[read] List simulation history.",
-                    "input_schema": {"type": "object", "properties": {"model": {"type": "string"}}},
-                },
+                *(
+                    {
+                        "name": name,
+                        "description": "[read] List planning history.",
+                        "input_schema": {"type": "object", "properties": {"model": {"type": "string"}}},
+                    }
+                    for name in optional_names
+                ),
             ]
 
         async def call(self, name, arguments):
@@ -804,6 +839,9 @@ def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(mo
             self.turns += 1
             exposed_tools.append([AICandidateGenerator._provider_tool_name(tool) for tool in kwargs["tools"]])
             if self.turns == 1:
+                assert "at most 4 MCP tool calls in one response and 8 across at most 4 tool rounds" in kwargs[
+                    "system_prompt"
+                ]
                 return AIToolTurn(
                     tool_calls=[
                         AIToolCall(id="call-1", name="get_cluster_overview", arguments={"clusterId": "cluster-a"}),
@@ -814,10 +852,11 @@ def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(mo
                 return AIToolTurn(
                     tool_calls=[
                         AIToolCall(
-                            id="call-3",
-                            name="list_simulation_tasks",
+                            id=f"call-{index}",
+                            name=name,
                             arguments={"model": "Qwen/Qwen3-8B"},
                         )
+                        for index, name in enumerate(optional_names, start=3)
                     ]
                 )
             return AIToolTurn(
@@ -857,16 +896,16 @@ def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(mo
     assert calls == [
         ("get_cluster_overview", {"clusterId": "cluster-a"}),
         ("search_candidates", _aic_arguments()),
-        ("list_simulation_tasks", {"model": "Qwen/Qwen3-8B"}),
+        *((name, {"model": "Qwen/Qwen3-8B"}) for name in optional_names),
     ]
     assert set(exposed_tools[0]) == {"get_cluster_overview", "search_candidates"}
-    assert "list_simulation_tasks" in exposed_tools[1]
+    assert set(optional_names) <= set(exposed_tools[1])
     assert "submit_candidate_proposals" in exposed_tools[1]
     assert proposals.proposals.candidates[0].provider_ref == "optimized-baseline"
     assert proposals.resolved.facts.aic_predictions == ()
     assert "aic:search" not in proposals.resolved.facts.evidence_ids
-    assert proposals.proposals.tool_trace[2]["tool"] == "list_simulation_tasks"
-    assert proposals.proposals.tool_trace[2]["status"] == "success"
+    assert [trace["tool"] for trace in proposals.proposals.tool_trace[2:]] == list(optional_names)
+    assert all(trace["status"] == "success" for trace in proposals.proposals.tool_trace[2:])
     assert len(proposals.proposals.tool_trace[2]["arguments_digest"]) == 64
     assert len(proposals.proposals.tool_trace[2]["result_digest"]) == 64
     assert "arguments" not in proposals.proposals.tool_trace[2]
@@ -1028,7 +1067,7 @@ def test_ai_generator_enforces_per_round_mcp_call_limit(monkeypatch):
             return AIToolTurn(
                 tool_calls=[
                     AIToolCall(id=f"call-{index}", name="get_cluster_overview", arguments={"clusterId": "cluster-a"})
-                    for index in range(4)
+                    for index in range(5)
                 ]
             )
 
@@ -1038,7 +1077,7 @@ def test_ai_generator_enforces_per_round_mcp_call_limit(monkeypatch):
         tools=Tools(),
     )
 
-    with pytest.raises(CandidateGenerationError, match=r"too many tool calls in round 1: 4 \(limit 3\)"):
+    with pytest.raises(CandidateGenerationError, match=r"too many tool calls in round 1: 5 \(limit 4\)"):
         asyncio.run(generator.generate("cluster-a", "Qwen/Qwen3-8B", PlanningFacts(8, 32, 4), None))
 
 

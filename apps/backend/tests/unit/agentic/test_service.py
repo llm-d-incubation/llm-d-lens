@@ -908,9 +908,9 @@ def test_create_falls_back_only_when_all_ai_generated_candidates_are_invalid(mon
     [
         ('MCP tool "search_candidates" failed: unavailable', "mcp_unavailable", None),
         (
-            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "AI candidate generation returned too many tool calls in round 1: 5 (limit 4)",
             "invalid_response",
-            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "AI candidate generation returned too many tool calls in round 1: 5 (limit 4)",
         ),
     ],
 )

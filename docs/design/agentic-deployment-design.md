@@ -555,7 +555,7 @@ workload/guide fit, history, and resource use.
 - Simulation: `list_simulation_tasks`, `get_simulation_task`
 - Model Cache: `list_model_cache_entries`
 
-The tool loop permits at most four rounds, eight MCP calls, three concurrent calls per round,
+The tool loop permits at most four rounds, eight MCP calls, four concurrent calls per round,
 and 200 KB of combined results. Names pass both catalog filtering and pre-execution allowlist
 checks. No create/update/delete/deploy/approve/port-forward tools are exposed. Although
 `search_candidates` uses POST, it is a reviewed exception with no persistence side effects.

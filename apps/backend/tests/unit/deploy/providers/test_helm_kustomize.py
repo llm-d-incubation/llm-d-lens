@@ -7,11 +7,69 @@ import pytest
 import yaml
 
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
-from llm_d_lens.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter
+from llm_d_lens.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter, resolve_tiered_cache_variant
 
 
 def _asset(name: str, content: str) -> dict[str, str]:
     return {"name": name, "content": content, "checksum": f"sha256:{hashlib.sha256(content.encode()).hexdigest()}"}
+
+
+@pytest.mark.parametrize(
+    "requested, entries, expected",
+    [
+        ("native/cpu", ["native/cpu/base"], "native/cpu/base"),
+        ("native/cpu/base", ["native/cpu"], "native/cpu"),
+        ("native/cpu", ["native/cpu", "native/cpu/base"], "native/cpu"),
+        ("native/cpu/base", ["native/cpu", "native/cpu/base"], "native/cpu/base"),
+        ("lmcache-connector/fs/base", ["lmcache-connector/fs/base"], "lmcache-connector/fs/base"),
+    ],
+)
+def test_tiered_cache_variant_preserves_cache_semantics(requested, entries, expected):
+    assert resolve_tiered_cache_variant(entries, requested, accelerator="nvidia") == expected
+
+
+@pytest.mark.parametrize("entries", [[], ["base"], ["native/fs/base"], ["lmcache-connector/cpu/base"], ["native/cpu/gke"]])
+def test_tiered_cache_variant_does_not_select_a_different_cache_or_platform(entries):
+    with pytest.raises(ValueError) as failure:
+        resolve_tiered_cache_variant(entries, accelerator="nvidia")
+
+    assert "native/cpu" in str(failure.value)
+    assert "nvidia" in str(failure.value)
+    assert "available variants:" in str(failure.value)
+    assert "not changed automatically" in str(failure.value)
+
+
+@pytest.mark.parametrize("entry", ["native/cpu", "native/cpu/base"])
+@pytest.mark.parametrize("requested", [None, "native/cpu", "native/cpu/base"])
+def test_tiered_parameters_resolve_semantic_and_legacy_variants(tmp_path, entry, requested):
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = "nvidia"
+    adapter._descriptor = SimpleNamespace(guide_id="tiered-prefix-cache", variants={entry: tmp_path})
+    overrides = {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+        "runtime": {"image": "model-server:test"},
+    }
+    if requested:
+        overrides["guideVariant"] = requested
+
+    assert adapter._parameters(overrides)["variant"] == entry
+
+
+def test_tiered_parameters_keep_explicit_cache_choice(tmp_path):
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = "nvidia"
+    adapter._descriptor = SimpleNamespace(
+        guide_id="tiered-prefix-cache", variants={"lmcache-connector/fs/base": tmp_path}
+    )
+    overrides = {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+        "runtime": {"image": "model-server:test"},
+        "cache": {"variant": "lmcache-connector/fs/base"},
+    }
+
+    assert adapter._parameters(overrides)["variant"] == "lmcache-connector/fs/base"
 
 
 @pytest.mark.asyncio
