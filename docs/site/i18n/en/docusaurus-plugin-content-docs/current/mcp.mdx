@@ -63,6 +63,39 @@ evolve). All tools return JSON; a failing call comes back as an MCP error result
 
 ## Connect a client
 
+### Public benchmark evidence
+
+`query_public_benchmark_rag` is a generated **read** tool wrapping
+`POST /api/v1/benchmark-rag/query`. Its arguments are the REST request body, and
+its text result contains the same JSON evidence response, including Decimal
+strings, citations and abstentions. It is available in Lens Assistant read-only
+mode, but is **not** part of the Agentic Deployment planner's tool allowlist.
+
+The MCP invocation permission above is necessary but not sufficient:
+`benchmark-rag:query:read` must also be granted at **GLOBAL** scope. Only GLOBAL
+admins receive it by default; other roles need an explicit GLOBAL grant. Cluster
+grants, anonymous callers and the disabled-auth `system` sentinel cannot query.
+The adapter signs the actual authenticated caller through the existing internal
+HMAC transport; tool arguments cannot supply an identity.
+
+Only published public sources are searched: the approved Prism public snapshot,
+`VincyZhang/llm-d`, and `llm-d/llm-d-benchmark`. The deployment must have the
+published corpus **and its immutable source archive** restored; a database-only
+copy is insufficient. Private/internal records are never searched. Answers use
+`generation_mode: "deterministic"` with `internal_branch_enabled: false`, not an
+LLM generation path. Question planning uses bounded deterministic keyword rules,
+not general NLP or LLM inference; explicit structured filters are authoritative.
+Automatic keyword rules are English-only. For questions in other languages,
+provide explicit `intent` and structured `filters`; language is not inferred.
+Figure evidence can include `related_experiments` for explicitly linked
+published scenarios; the adapter never guesses experiment identities.
+Denied, unavailable or malformed upstream results produce
+explicit tool errors, not empty successful answers.
+
+See the [request, filters and response contract](/api-reference/modules/lens-assistant#query-public-benchmark-evidence).
+This integration has focused local automated coverage; a real deployment has
+**not yet been verified**.
+
 ### MCP Inspector
 
 1. Start the Lens dev stack (`scripts/lens-local.sh start`).

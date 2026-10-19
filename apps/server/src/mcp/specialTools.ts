@@ -40,6 +40,7 @@ export interface PrismTool {
     description: string;
     riskTier: ToolRiskTier;
     inputShape: z.ZodRawShape;
+    strictInput?: boolean;
     // eslint-disable-next-line no-unused-vars -- TypeScript function parameter names.
     handler: (args: Record<string, unknown>) => Promise<unknown>;
 }

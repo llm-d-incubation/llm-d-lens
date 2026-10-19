@@ -21,8 +21,9 @@
 
 import fs from 'fs';
 import { Agent } from 'undici';
+import type { z } from 'zod';
 
-import { internalHeadersFor } from '../middleware/internalAuth.ts';
+import { currentInternalPrincipalId, internalAuthEnabled, internalHeadersFor } from '../middleware/internalAuth.ts';
 
 const DEFAULT_PORT = 3000;
 
@@ -104,4 +105,25 @@ export function buildQuery(params: Record<string, string | number | undefined | 
     }
     const query = search.toString();
     return query ? `?${query}` : '';
+}
+
+// Opt-in strict transport for caller-scoped evidence; legacy tools retain their
+// existing result handling. Validate without transforming Decimal strings or JSON.
+export async function strictJsonRequest(
+    path: string,
+    method: string,
+    body: Record<string, unknown>,
+    responseSchema: z.ZodType,
+): Promise<unknown> {
+    if (!currentInternalPrincipalId() || !internalAuthEnabled()) {
+        throw new Error('Authenticated signed caller required (status 401)');
+    }
+    const result = await internalRequest(path, { method, body: JSON.stringify(body) });
+    if (!result.ok) {
+        throw new Error(`Upstream request failed (status ${result.status})`);
+    }
+    if (!responseSchema.safeParse(result.body).success) {
+        throw new Error('Invalid upstream query response (status 502)');
+    }
+    return result.body;
 }

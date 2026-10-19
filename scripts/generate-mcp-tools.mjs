@@ -39,9 +39,8 @@
 //     POST/PUT/PATCH -> write, DELETE -> approve (see docs/design/mcp-playground-design.md)
 //     -- no attempt is made to infer risk from the route's real side effects.
 //     RISK_TIER_OVERRIDES below is a small, explicit, named exception list
-//     for the rare operationId that's known to kick off a real side effect
-//     despite its HTTP method (e.g. approve_agentic_plan actually starts a
-//     deployment even though it's a POST) -- not a general inference engine.
+//     for operations whose semantics differ from their HTTP method, not a
+//     general inference engine.
 //   - The tool's name comes from the route's OpenAPI operationId, and its
 //     description from the route's OpenAPI `description`. BOTH `summary` and
 //     `description` must be set on the FastAPI route (e.g.
@@ -71,8 +70,7 @@ const METHOD_TO_RISK_TIER = {
     delete: 'approve',
 };
 // Narrow, explicit exceptions to the method-derived riskTier above, for
-// operations whose operationId is known to kick off a real, hard-to-undo
-// side effect (e.g. actually starting a deployment) despite being a POST.
+// operations whose semantics differ from their HTTP method.
 // Kept as a tiny, named allowlist -- NOT a general risk-inference mechanism
 // -- so it stays easy to audit; mirrors the same manual 'approve' tier
 // already used for hand-written tools like start_deploy_poc/
@@ -82,6 +80,8 @@ const RISK_TIER_OVERRIDES = {
     // selected candidate) -- must pause for human confirmation like any
     // other "start a deployment" action, not auto-run as a plain write.
     approve_agentic_plan: 'approve',
+    // Public evidence retrieval only; does not ingest, publish, or plan deployments.
+    query_public_benchmark_rag: 'read',
 };
 const JSON_BODY_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 
@@ -110,26 +110,29 @@ function resolveRef(schema, components) {
 // this codebase actually produces (string/number/integer/boolean/array/
 // object/enum, nullable via anyOf-with-null or "nullable: true"), and falls
 // back to z.unknown() for anything unusual rather than guessing wrong.
-function jsonSchemaToZod(schema, components, seenRefs = new Set()) {
+export function jsonSchemaToZod(schema, components, seenRefs = new Set(), strict = false) {
     if (!schema || typeof schema !== 'object') return 'z.unknown()';
 
     if (schema.$ref) {
         const refName = schema.$ref.split('/').pop();
         if (seenRefs.has(refName)) return 'z.unknown()'; // cycle guard
-        return jsonSchemaToZod(resolveRef(schema, components), components, new Set([...seenRefs, refName]));
+        return jsonSchemaToZod(resolveRef(schema, components), components, new Set([...seenRefs, refName]), strict);
     }
 
+    if (strict && Object.hasOwn(schema, 'const')) return `z.literal(${JSON.stringify(schema.const)})`;
     // Pydantic's Optional[X] usually renders as anyOf: [X, {type: null}] (or
     // "nullable: true" alongside a concrete type on older OpenAPI versions).
     const anyOf = schema.anyOf || schema.oneOf;
     if (Array.isArray(anyOf)) {
         const nonNull = anyOf.filter((entry) => entry.type !== 'null');
         if (nonNull.length === 1) {
-            const inner = jsonSchemaToZod(nonNull[0], components, seenRefs);
+            const inner = jsonSchemaToZod(nonNull[0], components, seenRefs, strict);
             const isNullable = anyOf.length !== nonNull.length;
             return isNullable ? `${inner}.nullable()` : inner;
         }
-        return 'z.unknown()';
+        return strict
+            ? `z.union([${anyOf.map((entry) => entry.type === 'null' ? 'z.null()' : jsonSchemaToZod(entry, components, seenRefs, strict)).join(', ')}])`
+            : 'z.unknown()';
     }
 
     let zodExpr;
@@ -147,7 +150,7 @@ function jsonSchemaToZod(schema, components, seenRefs = new Set()) {
             zodExpr = 'z.boolean()';
             break;
         case 'array': {
-            const itemExpr = jsonSchemaToZod(schema.items || {}, components, seenRefs);
+            const itemExpr = jsonSchemaToZod(schema.items || {}, components, seenRefs, strict);
             zodExpr = `z.array(${itemExpr})`;
             break;
         }
@@ -157,19 +160,30 @@ function jsonSchemaToZod(schema, components, seenRefs = new Set()) {
                 const props = schema.properties || {};
                 const required = new Set(schema.required || []);
                 const fieldLines = Object.entries(props).map(([key, propSchema]) => {
-                    let expr = jsonSchemaToZod(propSchema, components, seenRefs);
+                    let expr = jsonSchemaToZod(propSchema, components, seenRefs, strict);
                     if (!required.has(key)) expr += '.optional()';
                     const description = describeOf(propSchema, components);
                     if (description) expr += `.describe(${JSON.stringify(description)})`;
                     return `${JSON.stringify(key)}: ${expr}`;
                 });
-                zodExpr = fieldLines.length
+                zodExpr = strict && schema.additionalProperties === false
+                    ? `z.strictObject({ ${fieldLines.join(', ')} })`
+                    : fieldLines.length
                     ? `z.object({ ${fieldLines.join(', ')} }).passthrough()`
                     : 'z.record(z.string(), z.unknown())';
             } else {
                 zodExpr = 'z.unknown()';
             }
         }
+    }
+    if (strict) {
+        if (schema.pattern) zodExpr += `.regex(new RegExp(${JSON.stringify(schema.pattern)}))`;
+        if (schema.minLength !== undefined) zodExpr += `.min(${schema.minLength})`;
+        if (schema.maxLength !== undefined) zodExpr += `.max(${schema.maxLength})`;
+        if (schema.minimum !== undefined) zodExpr += `.min(${schema.minimum})`;
+        if (schema.maximum !== undefined) zodExpr += `.max(${schema.maximum})`;
+        if (schema.minItems !== undefined) zodExpr += `.min(${schema.minItems})`;
+        if (schema.maxItems !== undefined) zodExpr += `.max(${schema.maxItems})`;
     }
     if (schema.nullable) zodExpr += '.nullable()';
     return zodExpr;
@@ -182,7 +196,11 @@ function describeOf(schema, components) {
 
 // Builds one PrismTool entry's source text for a single OpenAPI operation
 // that has already passed the summary/description/operationId checks.
-function buildToolSource(apiPath, method, operation, components) {
+export function buildToolSource(apiPath, method, operation, components) {
+    const strict = operation.operationId === 'query_public_benchmark_rag';
+    if (strict && (method !== 'post' || apiPath !== '/api/v1/benchmark-rag/query')) {
+        throw new Error('query_public_benchmark_rag must be POST /api/v1/benchmark-rag/query');
+    }
     const riskTier = RISK_TIER_OVERRIDES[operation.operationId] || METHOD_TO_RISK_TIER[method];
     const pathParams = (operation.parameters || []).filter((p) => p.in === 'path');
     const queryParams = (operation.parameters || []).filter((p) => p.in === 'query');
@@ -211,7 +229,7 @@ function buildToolSource(apiPath, method, operation, components) {
             // param that is also echoed in the request body); the path/query entry
             // already covers it in inputShape, so just reuse it as the body value too.
             if (!usedNames.has(key)) {
-                let expr = jsonSchemaToZod(propSchema, components);
+                let expr = jsonSchemaToZod(propSchema, components, new Set(), strict);
                 if (!required.has(key)) expr += '.optional()';
                 const description = describeOf(propSchema, components);
                 if (description) expr += `.describe(${JSON.stringify(description)})`;
@@ -242,13 +260,18 @@ function buildToolSource(apiPath, method, operation, components) {
             ? `{ ${bodyFieldNames.map((n) => `${JSON.stringify(n)}: args[${JSON.stringify(n)}]`).join(', ')} }`
             : 'undefined';
         handlerBody = `jsonRequest(${pathExpr}${queryExpr}, ${JSON.stringify(method.toUpperCase())}, ${bodyExpr})`;
+        if (strict) {
+            const responseSchema = operation.responses?.['200']?.content?.['application/json']?.schema;
+            if (!responseSchema) throw new Error('query_public_benchmark_rag requires a JSON 200 response schema');
+            handlerBody = `strictJsonRequest(${pathExpr}, "POST", args, ${jsonSchemaToZod(responseSchema, components, new Set(), true)})`;
+        }
     } else {
         handlerBody = `toPlainResult(await internalRequest(${pathExpr}${queryExpr}))`;
     }
 
     const name = operation.operationId;
     const description = operation.description;
-    const usesArgs = handlerBody.includes('args[');
+    const usesArgs = strict || handlerBody.includes('args[');
     const paramList = usesArgs ? 'args' : '';
 
     return [
@@ -256,6 +279,7 @@ function buildToolSource(apiPath, method, operation, components) {
         `        name: ${JSON.stringify(name)},`,
         `        description: ${JSON.stringify(description)},`,
         `        riskTier: ${JSON.stringify(riskTier)},`,
+        ...(strict ? ['        strictInput: true,'] : []),
         '        inputShape: {',
         ...shapeFields,
         '        },',
@@ -358,7 +382,7 @@ function main() {
         '// instead and re-run the generator. riskTier is derived from HTTP method by',
         '// default (GET/HEAD -> read, POST/PUT/PATCH -> write, DELETE -> approve), with a',
         '// small named exception list (RISK_TIER_OVERRIDES in the generator script) for',
-        '// operationIds known to have a real side effect despite their HTTP method.',
+        '// operations whose semantics differ from their HTTP method.',
         '//',
         '// Hand-written tools that are not a 1:1 wrapper over one FastAPI operation live',
         '// in server/mcp/specialTools.ts instead -- edit that file directly, never this',
@@ -366,7 +390,7 @@ function main() {
         '// -----------------------------------------------------------------------------',
         '',
         "import { z } from 'zod';",
-        "import { buildQuery, internalRequest } from './internal.ts';",
+        "import { buildQuery, internalRequest, strictJsonRequest } from './internal.ts';",
         "import { jsonRequest, toPlainResult, prismTools, findTool, type PrismTool } from './specialTools.ts';",
         '',
         'const generatedTools: PrismTool[] = [',
@@ -403,4 +427,4 @@ function main() {
     console.log(`[generate-mcp-tools] wrote ${TOOLS_TS_PATH}`);
 }
 
-main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

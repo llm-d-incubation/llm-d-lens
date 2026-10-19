@@ -39,6 +39,7 @@ def test_admin_has_every_permission():
         "audit:log:read",
         "model-service:group:manage",
         "model-service:gateway:manage",
+        "benchmark-rag:query:read",
     ],
 )
 def test_maintainer_cannot_administer(code):
@@ -120,6 +121,7 @@ def test_group_update_route_requires_group_manage_not_member_manage():
         "session:session:revoke",
         "user:user:read",
         "role:binding:manage",
+        "benchmark-rag:query:read",
     ],
 )
 def test_end_user_is_restricted(code):
@@ -171,6 +173,7 @@ def test_permission_granted_uses_wildcards():
 
 
 def test_risk_of_defaults_for_unknown_codes():
+    assert risk_of("benchmark-rag:query:read") == READ
     assert risk_of("monitoring:cluster-stack:read") == READ
     assert risk_of("evaluate:run:create") == WRITE
     assert risk_of("deployment:agentic:approve") == "approve"

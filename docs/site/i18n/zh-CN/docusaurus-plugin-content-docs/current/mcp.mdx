@@ -63,6 +63,33 @@ Authorization: ******
 
 ## 连接客户端
 
+### 公开基准证据
+
+`query_public_benchmark_rag` 是自动生成的 **read** 工具，直接包装
+`POST /api/v1/benchmark-rag/query`。工具参数就是 REST 请求体，文本结果包含相同的
+JSON 证据响应，包括 Decimal 字符串、引用和拒答原因。Lens Assistant 的只读模式
+可以使用该工具，但它**不在** Agentic Deployment 规划器的工具允许列表中。
+
+上述 MCP 调用权限只是必要条件：调用者还必须在 **GLOBAL** 作用域拥有
+`benchmark-rag:query:read`。默认仅 GLOBAL 管理员拥有此权限，其他角色需要显式的
+GLOBAL 授权。集群授权、匿名调用者和禁用认证模式的 `system` 哨兵身份均不能查询。
+适配器通过现有内部 HMAC 传输签名转发真实已认证调用者，工具参数不能指定身份。
+
+检索仅覆盖已发布的公开来源：获批准的 Prism 公开快照、`VincyZhang/llm-d` 和
+`llm-d/llm-d-benchmark`。部署必须恢复已发布语料**及其不可变来源归档**；
+仅复制数据库并不足够。不会检索私有或内部记录。响应固定使用
+`generation_mode: "deterministic"` 和 `internal_branch_enabled: false`，
+不经过 LLM 生成路径。问题规划采用有界、确定性的关键词规则，而非通用自然语言处理
+或 LLM 推理；显式结构化筛选条件具有权威性。
+自动关键词规则仅支持英语。其他语言的问题请显式指定 `intent` 和结构化
+`filters`；系统不会自动推断语言。
+图表证据可以通过 `related_experiments` 展示显式关联的已发布场景，
+适配器不会猜测实验身份。上游拒绝、不可用或响应损坏时会返回明确的工具错误，
+不会返回伪装为成功的空答案。
+
+参阅[请求、筛选及响应契约](/api-reference/modules/lens-assistant#query-public-benchmark-evidence)。
+本集成有针对性的本地自动化测试覆盖，但**尚未完成真实部署验证**。
+
 ### MCP Inspector
 
 1. 启动 Lens 开发技术栈（`scripts/lens-local.sh start`）。

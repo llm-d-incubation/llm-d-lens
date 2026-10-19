@@ -116,6 +116,8 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/agentic-deployments/{run_id}/select", "deployment:agentic:create"),
     # --- capacity planning ---
     RoutePermission("POST", "/api/v1/capacity/estimate", "deployment:agentic:read"),
+    # --- public benchmark corpus (not an unauthenticated endpoint) ---
+    RoutePermission("POST", "/api/v1/benchmark-rag/query", "benchmark-rag:query:read"),
     # --- cluster ---
     RoutePermission("GET", "/api/cluster/clusters", "cluster:cluster:read"),
     RoutePermission("POST", "/api/cluster/clusters", "cluster:cluster:create"),

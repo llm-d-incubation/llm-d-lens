@@ -172,6 +172,101 @@ print(configuration.checksum)
 
 ## MCP 工具调用的内容 {/* #what-the-mcp-tools-call */}
 
+### 查询公开基准证据 {/* #query-public-benchmark-evidence */}
+
+自动生成的 `query_public_benchmark_rag` 工具虽然使用 POST，但属于只读工具。
+它原样传递 REST 请求体，并在 MCP 文本块中返回相同的 `QueryResponse` JSON。
+它不是部署规划器工具，也不是语料导入接口。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/benchmark-rag/query`**
+
+要求真实已认证调用者在 GLOBAL 作用域拥有 `benchmark-rag:query:read`。
+默认仅 GLOBAL 管理员拥有此权限，其他角色需要显式 GLOBAL 授权；
+集群授权、匿名身份及禁用认证模式的 `system` 身份均不符合要求。
+浏览器 Cookie 调用还必须满足标准 CSRF 策略。MCP 调用者还需要
+`mcp:tool:invoke` 或 `playground:chat:use`。
+Node 使用内部 HMAC 签名转发真实调用者，不使用服务身份或参数中指定的身份。
+
+```json
+{
+  "question": "What published throughput measurements match this workload?",
+  "intent": "numeric",
+  "filters": {
+    "origins": ["prism:public-snapshot"],
+    "metric": "throughput",
+    "statistic": "mean",
+    "unit": "tokens/s",
+    "workload": {"batch_size": 8},
+    "value_min": "100.000000001",
+    "normalized": false
+  },
+  "limit": 10
+}
+```
+
+`question` 为必填字段（1–2048 字符）。`intent` 支持默认的 `auto` 以及
+`numeric`、`comparison`、`definition`、`figure`；`limit` 默认为 10（范围 1–50）。
+请求和筛选器中的额外字段会被拒绝；不支持任意 SQL。
+筛选字段包括 `origins`、`source_revision`、`source_path`、`record_id`、
+`experiment_id`、`model`、`hardware`、`runtime`、`metric`、`statistic`、`unit`、
+结构化 JSON `workload` 和 `series`、`value_min`、`value_max` 以及 `normalized`。
+数值范围必须显式指定 `unit`，下限不得超过上限。使用 Decimal 字符串保留精度。
+归一化检索必须显式启用；响应保留原始单位，另行提供归一化数值、单位和规则，
+不会隐式混合不可比较的测量值。
+问题规划使用有界、确定性的关键词规则，而非通用自然语言处理或 LLM 推理。
+显式结构化筛选条件具有权威性；不要假设自由文本问题会隐含额外的模型、硬件、
+指标或单位筛选条件。
+自动关键词规则仅支持英语。其他语言的问题通过显式 `intent` 和结构化
+`filters` 获得支持，而非依赖自动语言理解。
+
+响应包含 `contract: "benchmark-rag.query.v1"`、解析后的 `intent`、
+`question`、`filters`、`status`（`answered`、`partial`、`abstained`）、`answer`、
+`evidence`、`matched_items`、`truncated`、`abstentions` 和 `warnings`。
+响应固定报告 `generation_mode: "deterministic"` 和 `internal_branch_enabled: false`。
+证据包含 Decimal 字符串数值、单位和统计量、实验上下文、可选归一化数值，
+以及图表覆盖情况和缺失序列信息。图表证据还可以包含 `related_experiments`
+（默认为空），仅展示显式关联的已发布场景及其实验上下文，不猜测身份。
+每个引用标明来源、版本、路径、SHA-256、
+归档制品 URI、来源指针、标题路径和已发布清单。
+拒答是明确的领域结果；上游授权、传输或响应损坏则返回 MCP `isError: true`，
+不包含证据，也不会伪装为成功的空响应。
+
+仅允许已批准并发布的公开来源：`prism:public-snapshot`、
+`https://github.com/VincyZhang/llm-d` 和
+`https://github.com/llm-d/llm-d-benchmark.git`。必须同时恢复已发布语料及其不可变
+来源归档，仅有数据库记录并不足够。不会查询内部或私有记录，也没有 Agentic 生成路径。
+尚未完成真实部署验证。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+传输层委托给同一个具有调用者作用域的查询服务。Python 客户端可以验证共享 DTO，
+而无需建立另一条检索路径：
+
+```python
+from llm_d_lens.benchmark_rag.query_contracts import QueryRequest, QueryResponse
+
+request = QueryRequest.model_validate({
+    "question": "What published throughput measurements are available?",
+    "intent": "numeric",
+    "filters": {"metric": "throughput", "unit": "tokens/s", "value_min": "100.1"},
+    "limit": 10,
+})
+body = request.model_dump(mode="json")
+# Send body to the authenticated REST endpoint; validate its successful JSON:
+# result = QueryResponse.model_validate(response_json)
+# print(result.model_dump(mode="json"))  # Decimal values remain strings.
+```
+
+DTO 验证不是授权：请使用已认证 REST 会话，或通过真实调用者解析后的 principal
+访问共享服务。不要伪造 `system` 或管理员身份，也不要绕过 GLOBAL 权限检查。
+
+  </TabItem>
+</Tabs>
+
 具有代表性的自动生成 MCP 工具会直接转发到已有的 Python 支撑的 REST 模块：
 
 | MCP 工具 | 转发的 HTTP 端点 | 底层模块 |

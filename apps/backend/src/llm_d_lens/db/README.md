@@ -325,7 +325,8 @@ authorize a production import. To stage without publishing, call
 `stage_repository`; `import_repository` stages and activates one origin.
 The two origins publish separately; no cross-origin experiment links are
 inferred. A failure in the second origin does not undo an already published
-first origin. No user-facing retrieval is enabled by these operations.
+first origin. These administration APIs do not create a standalone query
+endpoint; public-only serving is described separately below.
 
 For a target with reviewed migrations already applied, securely configure
 `LLM_D_BENCH_DATABASE_URL` and `LENS_DATA_DIR`, install this code and its backend
@@ -375,6 +376,77 @@ CLI `rebuild` remains initial-Prism-only; `backup`/`restore` include all RAG
 origins and their evidence after repository imports. Each serving instance
 must have access to the evidence archive as well as PostgreSQL; this library
 does not provision shared cluster storage.
+
+### Public-only question answering
+
+Step 5 adds `POST /api/v1/benchmark-rag/query` and the generated read-only MCP
+tool `query_public_benchmark_rag`. Both use `benchmark_rag/service.py`, the
+same `QueryRequest`/`QueryResponse` contract, and `db/dao/rag_query.py`; the
+MCP adapter forwards the actual caller rather than creating another retriever
+or substituting a service identity.
+
+Authentication and the GLOBAL `benchmark-rag:query:read` permission are
+mandatory. Only the global admin role receives the permission by default;
+other roles require an explicit global grant. Cluster-scoped grants, unrelated
+playground privileges, anonymous requests, password-change-required callers,
+and the auth-disabled system identity do not provide RAG access. Existing
+installations use the normal built-in-role synchronization on startup.
+MCP additionally requires its existing invocation policy. Browser POSTs retain
+the standard CSRF requirement; signed internal calls retain their verified
+caller identity.
+
+For example, send this JSON through an authenticated REST client (with the
+session's CSRF token where applicable), or pass the identical body to the MCP
+tool:
+
+```json
+{
+  "question": "What was the recorded throughput for this Prism record?",
+  "intent": "numeric",
+  "filters": {
+    "origins": ["prism:public-snapshot"],
+    "record_id": "02c8f038-1cad-4ee8-a72e-724affa923f4",
+    "metric": "throughput"
+  },
+  "limit": 10
+}
+```
+
+The shared DTO rejects unknown origins and fields. Filters support
+source revision/path, source-scoped experiment or Prism record, exact
+case-insensitive model/hardware/runtime, workload/series JSON containment,
+metric/statistic, unit, and exact numeric bounds. Bounds require a unit.
+`normalized: true` selects only the documented normalized columns for unit
+and range comparisons; it never equates different throughput denominators.
+`limit` is 1--50. Deterministic English-keyword planning handles the pinned
+question set, not general NLP: use explicit intent/filters for other languages
+or precise conditions and inspect the applied filters in the response.
+
+Publication membership, source approval and enabled status are enforced in
+SQL before ranks and counts. Source-scoped observations are not merged by
+similar model names. Figure-condition matches require currently published,
+typed figure links; linked scenarios are returned without multiplying figure
+counts. Every answer includes evidence types, pinned path/revision/hash,
+stable artifact URI, and original JSON/table/section pointers. Numeric
+responses preserve exact Decimal strings and experimental conditions.
+Source bytes and numeric tokens or passage offsets are verified on read.
+Publication generation is checked again before returning: a concurrent
+revocation/switch causes a conflict rather than a stale successful answer.
+
+The answer mode is always deterministic and does not require an LLM.
+Examples and prose are labeled context, never promoted to measured values;
+figures cannot yield unreported plot points. Missing conditions/comparison
+evidence produce explicit abstention. Counts are matching index items, not
+independent experiments or cross-source semantic deduplication. Missing or
+corrupt evidence is an explicit 503 error, not an empty successful response.
+PostgreSQL and the retained `LENS_DATA_DIR` archive must both be reachable by
+each serving instance; this does not provision shared storage or complete
+real-cluster acceptance.
+
+The Agentic branch remains disabled (`internal_branch_enabled: false`).
+The tool is not a planner tool, accepts no caller-provided SQL or
+ingestion/admin commands, and neither reads nor writes Agentic benchmark
+records. Step-5 changes introduce no schema migration.
 
 ### Target-local rebuild, backup and incremental migration
 
@@ -554,8 +626,14 @@ The two actual-repository cases subsequently passed stronger cross-schema
 restore checks, including identical published DTOs, repeat no-op and all raw
 byte hashes. This is isolated acceptance, not production deployment or the
 step-5 question-answering/authorization gate.
-The step-4 implementation passed user review; the user explicitly paused
-step 5. No business database or real cluster was modified.
+The step-4 implementation passed user review and was committed locally with
+the reviewed Prism/administration work. Step 5 subsequently passed isolated
+acceptance and user review: 564 combined database/auth/query tests passed,
+and 85 focused query/route cases passed after final keyword-rule adjustments.
+All 2,153 guide measurement tokens were checked by the runtime evidence verifier.
+The user approved step 5 and authorized a local commit only, without pushing;
+further implementation and deployment remain paused.
+No business database or real cluster was modified.
 All these tests use disposable PostgreSQL schemas and temporary evidence roots,
 not a remote machine or business database. Test schemas are dropped and servers
 stopped; pytest may retain temporary files according to its own retention policy.
@@ -573,5 +651,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_repository_corpus.py \
   apps/backend/tests/unit/db/test_guide_tables.py \
   apps/backend/tests/unit/db/test_guide_json.py \
+  apps/backend/tests/unit/db/test_rag_query.py \
+  apps/backend/tests/unit/benchmark_rag/test_query_routes.py \
   apps/backend/tests/unit/db/test_agentic_benchmark_record_dao.py -q
 ```

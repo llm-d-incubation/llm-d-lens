@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { prismTools } from './tools.ts';
 
 // Builds a fresh MCP server instance with the Phase 1 read-only tool catalog
@@ -42,9 +44,9 @@ export function createPrismMcpServer(): McpServer {
             tool.name,
             {
                 description: `[${tool.riskTier}] ${tool.description}`,
-                inputSchema: tool.inputShape,
+                inputSchema: tool.strictInput ? z.strictObject(tool.inputShape) : tool.inputShape,
             },
-            async (args) => {
+            async (args): Promise<CallToolResult> => {
                 try {
                     const result = await tool.handler(args as Record<string, unknown>);
                     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };

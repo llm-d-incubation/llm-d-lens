@@ -34,6 +34,7 @@ backendApiProxyRouter.use([
     '/api/v1/configurations', '/api/v1/cluster', '/api/v1/simulation', '/api/v1/deployments', '/api/v1/evaluate',
     '/api/v1/storage',
     '/api/v1/capacity',
+    '/api/v1/benchmark-rag',
     '/api/v1/model-cache',
     '/api/v1/model-service',
     '/api/v1/ai-providers',

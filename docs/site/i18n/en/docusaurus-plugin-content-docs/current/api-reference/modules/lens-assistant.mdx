@@ -172,6 +172,109 @@ The tool catalog is assembled in two parts: `server/mcp/tools.ts` contains 138 g
 
 ## What the MCP tools call
 
+### Query public benchmark evidence
+
+The generated `query_public_benchmark_rag` tool is read-only despite using POST.
+It passes the REST body unchanged and returns the same `QueryResponse` JSON in
+an MCP text block. It is not a deployment-planner tool or a corpus ingestion API.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/benchmark-rag/query`**
+
+Requires a real authenticated caller with `benchmark-rag:query:read` at GLOBAL
+scope. Only GLOBAL admins receive it by default. Other roles require explicit
+GLOBAL grants; cluster grants, anonymous and disabled-auth `system` identities
+do not qualify. Browser cookie calls must also satisfy the standard CSRF policy.
+MCP callers additionally need `mcp:tool:invoke` or `playground:chat:use`.
+Node forwards the actual caller using internal HMAC signatures, never a service
+principal or an identity provided in arguments.
+
+```json
+{
+  "question": "What published throughput measurements match this workload?",
+  "intent": "numeric",
+  "filters": {
+    "origins": ["prism:public-snapshot"],
+    "metric": "throughput",
+    "statistic": "mean",
+    "unit": "tokens/s",
+    "workload": {"batch_size": 8},
+    "value_min": "100.000000001",
+    "normalized": false
+  },
+  "limit": 10
+}
+```
+
+`question` is required (1–2048 characters). `intent` is `auto` (default),
+`numeric`, `comparison`, `definition` or `figure`; `limit` defaults to 10
+(1–50). Extra request/filter fields are rejected; there is no arbitrary SQL.
+Filters include `origins`, `source_revision`, `source_path`, `record_id`,
+`experiment_id`, `model`, `hardware`, `runtime`, `metric`, `statistic`, `unit`,
+structured JSON `workload` and `series`, `value_min`, `value_max` and `normalized`.
+Numeric ranges require an explicit `unit`; minimum must not exceed maximum.
+Use Decimal strings to preserve precision. Normalized retrieval is explicit;
+responses retain original units and expose normalized values, units and rules
+separately rather than silently mixing incompatible measurements.
+Question planning uses bounded deterministic keyword rules, not general NLP or
+LLM inference. Explicit structured filters are authoritative; do not assume a
+free-form question implies additional model, hardware, metric or unit filters.
+Automatic keyword rules are English-only. Questions in other languages are
+supported through explicit `intent` and structured `filters`, not automatic
+language understanding.
+
+The response has `contract: "benchmark-rag.query.v1"`, resolved `intent`,
+`question`, `filters`, `status` (`answered`, `partial`, `abstained`), `answer`,
+`evidence`, `matched_items`, `truncated`, `abstentions` and `warnings`.
+It always reports `generation_mode: "deterministic"` and
+`internal_branch_enabled: false`. Evidence contains Decimal string values,
+units/statistics, experiment context, optional normalized values and figure
+coverage/missing-series information. Figure evidence may also include
+`related_experiments` (default: empty), containing only explicitly linked
+published scenarios with their experiment context; identities are not guessed.
+Each citation identifies the origin,
+revision, path, SHA-256, archived artifact URI, source pointer, heading path
+and published manifest. An abstention is an explicit domain result; upstream
+authorization, transport or corrupt-response failures are MCP `isError: true`
+results without evidence, not successful empty responses.
+
+Only approved published public sources are eligible: `prism:public-snapshot`,
+`https://github.com/VincyZhang/llm-d`, and
+`https://github.com/llm-d/llm-d-benchmark.git`. Restore the published corpus and
+its immutable source archive together; database records alone are insufficient.
+There is no internal/private record search or Agentic generation path.
+Real deployment behavior has not yet been verified.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+The transport delegates to the same caller-scoped query service. Python clients
+can validate the shared DTOs without creating a separate retrieval path:
+
+```python
+from llm_d_lens.benchmark_rag.query_contracts import QueryRequest, QueryResponse
+
+request = QueryRequest.model_validate({
+    "question": "What published throughput measurements are available?",
+    "intent": "numeric",
+    "filters": {"metric": "throughput", "unit": "tokens/s", "value_min": "100.1"},
+    "limit": 10,
+})
+body = request.model_dump(mode="json")
+# Send body to the authenticated REST endpoint; validate its successful JSON:
+# result = QueryResponse.model_validate(response_json)
+# print(result.model_dump(mode="json"))  # Decimal values remain strings.
+```
+
+DTO validation is not authorization: use an authenticated REST session, or the
+shared service with the real caller's resolved principal. Do not fabricate a
+`system`/admin identity or bypass GLOBAL permission checks.
+
+  </TabItem>
+</Tabs>
+
 Representative generated MCP tools forward straight into existing Python-backed REST modules:
 
 | MCP tool | Forwarded HTTP endpoint | Underlying module |
