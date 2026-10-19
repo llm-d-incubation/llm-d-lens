@@ -100,12 +100,64 @@ Changing a table's shape:
 → full guide, worked examples for add-column/add-table/drop-table:
 `migrations/README.md`.
 
+## Public benchmark evidence storage
+
+`benchmark_rag/contracts.py`, `models/rag_item.py`, and `dao/rag_item.py`
+implement the first storage step of Public Benchmark RAG v1. The schema proposal
+was approved in the implementation conversation on 2026-10-19; completed
+implementation review remains a separate gate. Alembic revision `7a12c8e49b60`
+follows `42a3e9b47726` and only adds `rag_items` and its constraints/indexes.
+
+The six item kinds are source, experiment, measurement, passage, figure, and
+figure_link. `(origin_id, logical_key, source_revision)` identifies an immutable
+version; import retries must reuse its `item_id` and entire payload. A conflicting
+version raises `RagItemDaoError`. There is no update/delete DAO operation.
+CHECK constraints and DTO validation restrict per-kind fields; the DAO verifies
+link target kinds, origins/revisions, and exact versioned manifest membership.
+Only `verified_public` items are accepted. Source bytes remain outside the index.
+
+Source roles distinguish registry, manifest, and file rows.
+`manifest_item_ids` can reference unchanged items pinned to older file versions;
+only a registry may carry `published_manifest_id`. These are storage primitives:
+atomic publication, inventory/source approval, rollback, locking, and tombstones
+are step 2, not enabled here. Per-row state alone never authorizes retrieval.
+`get`/`list_version` are internal import/audit methods, not permission-filtered
+end-user search. No importer, REST/MCP query, or Agentic branch is enabled.
+
+`value`/`unit` preserve `original_value`/`original_unit`; normalization uses
+separate fields plus an explicit supported conversion rule. Time conversions
+use milliseconds; total tokens/s, output tokens/s, and requests/s keep distinct
+denominators. Unknown units remain verbatim without normalization; absent
+statistics remain null. Only explicit `avg -> mean` and `median -> p50` aliases
+are mapped; adapters must retain original labels in source pointers.
+PostgreSQL uses native NUMERIC, JSONB, and a stored `simple` TSVECTOR with GIN.
+SQLite compatibility uses text-backed decimals and a null generated vector,
+not a full-text retrieval fallback.
+
 ## Testing
 
-Tests never run Alembic migrations and never talk to a real PostgreSQL
-instance. The root `conftest.py` gives every test an isolated, empty in-memory
+By default, tests do not run Alembic migrations or talk to PostgreSQL.
+The root `conftest.py` gives every test an isolated, empty in-memory
 SQLite database (built via `Base.metadata.create_all()`, so it always reflects
 whatever `models/*.py` currently says, regardless of migration history) and
 rebinds the process-wide engine to it for the duration of that test. This means
 DAOs and service code under test always run against a real SQLAlchemy engine,
 just not a persistent/external one.
+
+The RAG storage acceptance tests in `tests/unit/db/test_rag_item_dao.py` also
+exercise an isolated PostgreSQL instance using the existing `embedded-db` extra
+(`pgserver`). They create a temporary data directory and per-test schemas, apply
+the RAG migration, and verify native NUMERIC, JSONB, generated TSVECTOR/GIN,
+constraints, idempotency, and downgrade/upgrade. They never resolve the
+application's configured database URL. Without `pgserver`, those PostgreSQL
+cases explicitly skip; SQLite-only success does not satisfy the RAG gate.
+The prior PostgreSQL schema is created from metadata excluding `rag_items` and
+stamped at `42a3e9b47726`; this tests the new migration, not a replay of all
+historical migrations. Downgrade runs only in disposable schemas; dropping live
+evidence requires a reviewed retention/dependency decision.
+
+```bash
+PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
+  apps/backend/tests/unit/db/test_rag_item_dao.py \
+  apps/backend/tests/unit/db/test_agentic_benchmark_record_dao.py -q
+```
