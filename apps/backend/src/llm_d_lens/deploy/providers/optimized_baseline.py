@@ -29,7 +29,7 @@ from llm_d_lens.deploy.providers.guide_adapter import (
     GuideDeploymentArtifact,
     ValidationResult,
 )
-from llm_d_lens.deploy.providers.hardware_profile import active_profile, set_accelerator_request
+from llm_d_lens.deploy.providers.hardware_profile import active_profile, apply_runtime_class, set_accelerator_request
 from llm_d_lens.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_lens.deploy.providers.storage_mount import resolve_mount
 from llm_d_lens.deploy.providers.target_node import configured_target_node
@@ -664,6 +664,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 None,
             )
             set_accelerator_request(container, claim, deployment["accelerator_count"], accelerator=profile.id)
+            apply_runtime_class(pod, accelerator=profile.id)
             selectors = gpu_device_selectors(accelerator=profile.id)
             if selectors and claim:
                 for request in claim["spec"]["spec"]["devices"]["requests"]:

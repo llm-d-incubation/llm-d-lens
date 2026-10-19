@@ -16,6 +16,7 @@ from llm_d_lens.deploy.providers.gpu_selection import gpu_device_selectors
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_lens.deploy.providers.hardware_profile import (
     active_profile,
+    apply_runtime_class,
     claim_request_name,
     device_class,
     set_accelerator_request,
@@ -390,8 +391,6 @@ class BaselineVllmAdapter:
             ],
             "resourceClaims": [{"name": claim_name, "resourceClaimTemplateName": claim_name}],
         }
-        if binding.get("runtime_class_name"):
-            pod_spec["runtimeClassName"] = binding["runtime_class_name"]
         if resolved_mount is not None:
             pod_spec["volumes"] = [{"name": "model-cache", **resolved_mount["volume_source"]}]
             pod_spec["containers"][0]["volumeMounts"] = [
@@ -467,4 +466,5 @@ class BaselineVllmAdapter:
             set_accelerator_request(
                 container, None, parameters["tensor_parallel_size"], accelerator=accelerator, access_mode=access_mode
             )
+        apply_runtime_class(pod_spec, accelerator=accelerator, access_mode=access_mode)
         return documents

@@ -43,11 +43,14 @@ artifact directly to this adapter and assume it supports it.
 when supplied, and provider state managed by that service before cleanup. It
 does not accept arbitrary resource selectors.
 
-The `baseline-vllm` renderer copies a selected hardware access mode's optional
-`runtime_class_name` into the Pod's `runtimeClassName`. The NVIDIA plugin mode
-declares `nvidia`, which must be registered on the target cluster; modes without
-this setting retain the cluster default. This does not change accelerator resource
-requests or rewrite saved deployment artifacts.
+Model-server renderers for baseline, optimized baseline, P/D disaggregation,
+tiered prefix cache and precise prefix cache routing share RuntimeClass selection.
+They resolve the hardware access mode from the model container's device requests
+and copy its optional `runtime_class_name` into the Pod's `runtimeClassName` only
+when no explicit RuntimeClass is present. The NVIDIA plugin mode declares `nvidia`,
+which must be registered on the target cluster; modes without this setting retain
+the cluster default. Router-only and CPU-only Pods are unchanged. This does not
+change accelerator resource requests or rewrite saved deployment artifacts.
 
 ### Execution, observation and evidence
 

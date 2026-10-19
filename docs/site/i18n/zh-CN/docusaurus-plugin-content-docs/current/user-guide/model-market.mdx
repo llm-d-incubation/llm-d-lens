@@ -79,8 +79,9 @@ Agentic 页面会明确显示原因和处理建议，不会悄悄回退为没有
 
 启动时提示 KV 缓存容量不足，可在新配置中降低最大上下文长度或增加资源。
 
-使用 NVIDIA 设备插件的 `baseline-vllm` 部署，会在生成的 Pod 中选择硬件访问模式声明的
-`nvidia` RuntimeClass；目标集群必须已注册该 RuntimeClass。当节点默认容器运行时为 `runc` 时，
+使用 NVIDIA 设备插件时，生成的模型服务 Pod 会选择硬件访问模式声明的 `nvidia` RuntimeClass，
+但不会覆盖源码中已显式指定的 RuntimeClass。此规则适用于 baseline、optimized baseline、
+P/D 分离、分层前缀缓存和精确前缀缓存路由。目标集群必须已注册该 RuntimeClass。当节点默认容器运行时为 `runc` 时，
 仅申请 GPU 资源并不能完成设备注入。若 vLLM 报告 `Failed to infer device type`，
 请检查 Pod 的 RuntimeClass 和设备访问；`VLLM_LOGGING_LEVEL=DEBUG` 只会增加诊断日志。
 Lens 更新不会改写已有 Pod 或已保存清单；请重新生成并创建部署以应用修复。

@@ -20,7 +20,12 @@ from llm_d_lens.deploy.providers.deployment_bundle import (
     subprocess_bundle_runner,
 )
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
-from llm_d_lens.deploy.providers.hardware_profile import active_profile, default_guide_variant, set_accelerator_request
+from llm_d_lens.deploy.providers.hardware_profile import (
+    active_profile,
+    apply_runtime_class,
+    default_guide_variant,
+    set_accelerator_request,
+)
 from llm_d_lens.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_lens.deploy.providers.storage_mount import resolve_mount
 from llm_d_lens.infrastructure.process import spawn
@@ -455,6 +460,7 @@ class HelmKustomizeGuideAdapter:
                 environment.append({"name": name, "value": value})
         container["args"] = [command]
         set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
+        apply_runtime_class(deployment["spec"]["template"]["spec"], accelerator=self._accelerator)
         if cache_mounted:
             pod_spec = deployment["spec"]["template"]["spec"]
             volume_source = (

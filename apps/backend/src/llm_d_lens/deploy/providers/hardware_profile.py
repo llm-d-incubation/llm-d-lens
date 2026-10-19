@@ -112,6 +112,31 @@ def runtime_image(fallback: str | None = None, *, accelerator: str | None = None
     return (profile.deployment.runtime_image if profile else None) or fallback or ""
 
 
+def apply_runtime_class(pod_spec: dict, *, accelerator: str | None = None, access_mode: str | None = None) -> None:
+    profile = active_profile(accelerator)
+    if profile is None or pod_spec.get("runtimeClassName"):
+        return
+    container = next((item for item in pod_spec.get("containers", []) if item.get("name") == "modelserver"), None)
+    if container is None:
+        return
+    resources = container.get("resources") or {}
+    resource_keys = {key for section in ("limits", "requests") for key in resources.get(section, {})}
+    declared_resources = {
+        name for mode in profile.deployment.modes.values() for name in mode.get("resource_names", [])
+    }
+    if profile.deployment.resource_name:
+        declared_resources.add(profile.deployment.resource_name)
+    if resource_keys & declared_resources:
+        model = "extended-resource"
+    elif resources.get("claims"):
+        model = "dra"
+    else:
+        return
+    mode = deployment_mode(profile, access_mode, request_model=model)
+    if mode.get("runtime_class_name"):
+        pod_spec["runtimeClassName"] = mode["runtime_class_name"]
+
+
 def _image_repository(image: str) -> str:
     """Strip any tag/digest so two references to the same repository compare equal."""
     image = image.split("@", 1)[0]

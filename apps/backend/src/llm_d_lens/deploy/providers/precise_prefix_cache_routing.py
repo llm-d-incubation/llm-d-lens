@@ -40,6 +40,7 @@ from llm_d_lens.deploy.providers.deployment_bundle import (
 )
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_lens.deploy.providers.hardware_profile import (
+    apply_runtime_class,
     default_guide_variant,
     guide_overlays,
     overlay_variant,
@@ -845,6 +846,7 @@ class PrecisePrefixCacheRoutingAdapter:
         container["env"] = environment
         container["image"] = parameters["image"]
         set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
+        apply_runtime_class(deployment["spec"]["template"]["spec"], accelerator=self._accelerator)
         if cache_mounted:
             pod_spec = deployment["spec"]["template"]["spec"]
             volume_source = (

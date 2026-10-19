@@ -216,6 +216,22 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
     assert claim["spec"]["spec"]["devices"]["requests"][0]["exactly"]["count"] == 4
 
 
+@pytest.mark.parametrize("existing", [None, "custom-runtime"])
+def test_patch_modelserver_applies_hardware_runtime_class(existing):
+    documents = [item for item in _upstream_deployment_documents() if item["kind"] == "Deployment"]
+    pod = documents[0]["spec"]["template"]["spec"]
+    if existing:
+        pod["runtimeClassName"] = existing
+    adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+    adapter._accelerator = "nvidia"
+    parameters = adapter._parameters(_valid_overrides(runtime={"image": "model-server:test"}))
+
+    adapter._patch_modelserver(documents, parameters)
+
+    assert pod["runtimeClassName"] == (existing or "nvidia")
+    assert pod["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == str(parameters["tensor_parallel_size"])
+
+
 def test_patch_modelserver_applies_custom_parameters_and_mount_path():
     documents = _upstream_deployment_documents()
     parameters = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)._parameters(

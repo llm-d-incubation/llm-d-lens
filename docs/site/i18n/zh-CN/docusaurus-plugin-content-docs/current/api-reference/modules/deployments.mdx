@@ -40,9 +40,11 @@ Simulation 不负责部署生命周期。
 `kill(request, execution)` 在清理前验证执行 ID、可选的预期命名空间，以及该服务
 所管理的提供方状态，不接受任意资源选择器。
 
-`baseline-vllm` 渲染器会将所选硬件访问模式中可选的 `runtime_class_name`
-写入 Pod 的 `runtimeClassName`。NVIDIA plugin 模式声明 `nvidia`，目标集群必须已注册
-该 RuntimeClass；未声明此设置的模式继续使用集群默认运行时。此设置不改变加速器资源请求，
+baseline、optimized baseline、P/D 分离、分层前缀缓存和精确前缀缓存路由的模型服务渲染器
+共用 RuntimeClass 选择逻辑：按模型容器的设备请求解析硬件访问模式，并仅在 Pod 未显式指定
+RuntimeClass 时，将该模式中可选的 `runtime_class_name` 写入 `runtimeClassName`。
+NVIDIA plugin 模式声明 `nvidia`，目标集群必须已注册该 RuntimeClass；未声明此设置的模式
+继续使用集群默认运行时。仅路由或仅 CPU 的 Pod 不受影响。此设置不改变加速器资源请求，
 也不会改写已保存的部署产物。
 
 ### 执行、观察与证据

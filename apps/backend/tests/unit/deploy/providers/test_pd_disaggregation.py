@@ -126,8 +126,9 @@ def _asset(name: str, content: str) -> dict[str, str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("read_only", [False, True])
+@pytest.mark.parametrize("accelerator", ["xpu", "nvidia"])
 async def test_render_mounts_selected_cache_volume_for_both_roles(
-    monkeypatch, tmp_path: Path, read_only: bool, cached_model
+    monkeypatch, tmp_path: Path, read_only: bool, accelerator: str, cached_model
 ):
     import llm_d_lens.deploy.providers.pd_disaggregation as pd
 
@@ -143,7 +144,6 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     process.communicate = AsyncMock(return_value=(yaml.safe_dump_all(documents).encode(), b""))
     monkeypatch.setattr(pd.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
     monkeypatch.setattr(pd, "gpu_device_selectors", lambda **_: [])
-    monkeypatch.setattr(pd, "requires_dra_claim", lambda **_: True)
     mount = {
         "volume_source": {"persistentVolumeClaim": {"claimName": "cache-in-deployment-namespace"}},
         "mount_path": "/model-cache",
@@ -157,7 +157,7 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     adapter._sources = {"vllm": tmp_path}
     adapter._root = tmp_path
     adapter._environment = None
-    adapter._accelerator = "xpu"
+    adapter._accelerator = accelerator
     overrides = {
         "guideVariant": "vllm",
         "model": {"name": "Qwen/Qwen3-8B"},
@@ -186,6 +186,7 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     for deployment in rendered:
         pod_spec = deployment["spec"]["template"]["spec"]
         container = pod_spec["containers"][0]
+        assert pod_spec.get("runtimeClassName") == ("nvidia" if accelerator == "nvidia" else None)
         assert pod_spec["volumes"] == [{"name": "model-cache", **mount["volume_source"]}]
         assert container["volumeMounts"] == [
             {"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}

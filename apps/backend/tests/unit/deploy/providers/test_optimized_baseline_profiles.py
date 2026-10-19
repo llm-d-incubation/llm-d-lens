@@ -1,4 +1,5 @@
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -358,6 +359,29 @@ def _rendered_container(adapter, overlay: Path, runtime: dict) -> tuple[dict, di
     container = patch["spec"]["template"]["spec"]["containers"][0]
     entries = container.get("env") or []
     return container, {item["name"]: item.get("value") for item in entries}
+
+
+@pytest.mark.parametrize("existing", [None, "custom-runtime"])
+def test_render_overlay_applies_hardware_runtime_class(tmp_path, existing):
+    adapter, overlay = _adapter(tmp_path)
+    adapter._policy = replace(adapter._policy, accelerator="nvidia")
+    _write_model_overlay(overlay)
+    source = overlay / "patch-vllm.yaml"
+    document = yaml.safe_load(source.read_text())
+    pod = document["spec"]["template"]["spec"]
+    pod.pop("resourceClaims")
+    if existing:
+        pod["runtimeClassName"] = existing
+    source.write_text(yaml.safe_dump(document))
+
+    rendered = adapter._render_overlay(_deployment_parameters(), "Qwen/Qwen3-8B", _runtime())
+
+    deployment = next(
+        item for item in yaml.safe_load_all((rendered / "manifest.yaml").read_text()) if item.get("kind") == "Deployment"
+    )
+    result = deployment["spec"]["template"]["spec"]
+    assert result["runtimeClassName"] == (existing or "nvidia")
+    assert result["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "1"
 
 
 @pytest.mark.asyncio

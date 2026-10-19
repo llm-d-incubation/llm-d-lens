@@ -102,6 +102,29 @@ async def test_render_resolves_selected_storage_volume(monkeypatch, tmp_path: Pa
     assert adapter._patch_documents.call_args.args[1]["resolved_mount"] == mount
 
 
+@pytest.mark.parametrize("existing", [None, "custom-runtime"])
+def test_patch_documents_applies_hardware_runtime_class(tmp_path, existing):
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = "nvidia"
+    adapter._descriptor = SimpleNamespace(guide_id="tiered-prefix-cache", variants={"native/cpu": tmp_path})
+    parameters = adapter._parameters(
+        {
+            "model": {"name": "Qwen/Qwen3-8B"},
+            "decode": {"replicaCount": 1, "tensorParallelSize": 2},
+            "runtime": {"image": "model-server:test"},
+        }
+    )
+    pod = {"containers": [{"name": "modelserver", "args": ["exec vllm serve old-model"]}]}
+    if existing:
+        pod["runtimeClassName"] = existing
+    documents = [{"kind": "Deployment", "spec": {"template": {"spec": pod}}}]
+
+    adapter._patch_documents(documents, parameters)
+
+    assert pod["runtimeClassName"] == (existing or "nvidia")
+    assert pod["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "2"
+
+
 @pytest.mark.asyncio
 async def test_deploy_uses_saved_bundle_without_descriptor_source_files(tmp_path: Path):
     commands = []

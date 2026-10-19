@@ -23,6 +23,7 @@ from llm_d_lens.deploy.providers.gpu_selection import gpu_device_selectors
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
 from llm_d_lens.deploy.providers.hardware_profile import (
     active_profile,
+    apply_runtime_class,
     default_guide_variant,
     guide_overlays,
     requires_dra_claim,
@@ -231,6 +232,7 @@ class PdDisaggregationAdapter:
                     set_accelerator_request(
                         container, None, parameters[role]["tensor_parallel_size"], accelerator=self._accelerator
                     )
+            apply_runtime_class(deployment["spec"]["template"]["spec"], accelerator=self._accelerator)
         manifest = directory / "manifest.yaml"
         manifest.write_text(yaml.safe_dump_all(documents, sort_keys=False), encoding="utf-8")
         return GuideDeploymentArtifact(

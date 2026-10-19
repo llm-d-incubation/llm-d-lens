@@ -91,8 +91,10 @@ or resources. [Run an evaluation](/user-guide/evaluation) to measure the deploye
 If startup reports insufficient KV-cache capacity, lower the maximum context
 length or allocate more resources in a new configuration.
 
-For a `baseline-vllm` deployment using the NVIDIA device plugin, the generated
-Pod selects the `nvidia` RuntimeClass declared by its hardware access mode. This
+For deployments using the NVIDIA device plugin, generated model-server Pods select
+the `nvidia` RuntimeClass declared by their hardware access mode unless the source
+already specifies a RuntimeClass. This applies to baseline, optimized baseline,
+P/D disaggregation, tiered prefix cache and precise prefix cache routing. This
 RuntimeClass must exist on the target cluster. GPU requests alone do not inject
 devices when the node's default container runtime is `runc`. If vLLM reports
 `Failed to infer device type`, check the Pod's RuntimeClass and device access;
