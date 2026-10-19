@@ -2,9 +2,41 @@ import { seedHardwareProfiles } from '../hardwareProfiles.ts';
 await seedHardwareProfiles();
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 
 import { pinModelServerImage, ROUTER_DISAGG_SIDECAR_IMAGE } from '../../src/services/guideDeploymentBundle.ts';
-import { applyCustomPatches, isAcceleratorDeviceClass, planDocuments, resolveAcceleratorVariant, runtimeClassForAccelerator, selectManifestPaths, validateManifestCapacity } from '../../src/routes/guidePlanning.ts';
+import { applyCustomPatches, hardwareInspectionCommands, isAcceleratorDeviceClass, planDocuments, resolveAcceleratorVariant, runtimeClassForAccelerator, selectManifestPaths, validateManifestCapacity } from '../../src/routes/guidePlanning.ts';
+
+test('remote hardware discovery preserves shell metacharacters as literal arguments', () => {
+    const args = [
+        '',
+        'device name',
+        "single'quote",
+        'double"quote',
+        '$(printf INJECTED)',
+        '`printf INJECTED`',
+        '; printf INJECTED #',
+        'line\nbreak',
+        '$HOME',
+        '*?[abc]',
+        '\\',
+    ];
+    const commands = hardwareInspectionCommands([
+        { planning: { discovery: { command: ['printf', '%s\\0', ...args] } } },
+    ]);
+    for (const shell of ['sh', 'bash']) {
+        const output = execFileSync(shell, ['-c', commands.join('; ')]);
+        assert.equal(output.toString(), `__PRISM_HARDWARE_0__\n${args.join('\0')}\0`);
+    }
+});
+
+test('remote hardware discovery keeps profile indexes and supports third-party commands', () => {
+    assert.deepEqual(hardwareInspectionCommands([
+        {},
+        { planning: { discovery: { command: [] } } },
+        { planning: { discovery: { command: ['vendor-device-query', '--list'] } } },
+    ]), ["printf '__PRISM_HARDWARE_2__\\n'; (vendor-device-query --list 2>/dev/null || true)"]);
+});
 
 test('guide variant trimming handles long slash runs without changing selection', () => {
     const paths = [

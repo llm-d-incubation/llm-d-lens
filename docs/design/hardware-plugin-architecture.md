@@ -430,6 +430,24 @@ require_accelerator(key: str) -> HardwareProfile                     # Unregiste
 
 ## 5. Hardware integration checklist
 
+### Planning discovery command trust boundary
+
+`planning.discovery.command` is executable plugin configuration, not user input.
+The backend loads it from bundled profile JSON and installed
+`llm_d_lens.hardware.profiles` entry points; the capabilities endpoint only reads
+the registered profiles. Installing a hardware plugin therefore grants its
+discovery commands execution privileges on the gateway and the selected SSH
+target. Only install trusted plugins and configure a trusted backend endpoint;
+protect the gateway-to-backend transport when it crosses a network boundary.
+JSON Schema validation does not establish command trust.
+
+Local discovery passes the executable and arguments to `execFileSync` without a
+shell. Remote discovery serializes the complete argument vector with
+`shell-quote` before embedding it in the SSH inspection script. Quoting prevents
+arguments from becoming shell syntax; it does not make a malicious plugin or
+backend safe. Keep third-party discovery commands profile-driven rather than
+introducing a gateway vendor allowlist.
+
 This table is the core deliverable: integration point → current location → hardcoding → plugin-contract field. Accept implementation row by row.
 
 | # | Layer | Integration point | Current location | Current hardcoding | Plugin contract fields |

@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { quote as quoteShellArguments } from 'shell-quote';
 import { readGuideSource } from '../services/guideSourceFetch.ts';
 import { inspectPlanningCluster } from '../services/planningDiscovery.ts';
 import { performance } from 'node:perf_hooks';
@@ -275,6 +276,13 @@ function remoteAccelerators(sections: Record<string, string>): JsonRecord {
     return { vendor: 'unknown', count: 0, devices: [] };
 }
 
+export function hardwareInspectionCommands(profiles: HardwareProfile[]): string[] {
+    return profiles.flatMap((profile, index) => {
+        const argv: string[] = profile.planning?.discovery?.command || [];
+        return argv.length ? [`printf '__PRISM_HARDWARE_${index}__\\n'; (${quoteShellArguments(argv)} 2>/dev/null || true)`] : [];
+    });
+}
+
 async function discoverRemoteEnvironment(target: unknown, requestCredentials: unknown): Promise<{ machine: JsonRecord; cluster: JsonRecord | null }> {
     const command = [
         'printf "__PRISM_HOST__\\n"; hostname',
@@ -282,11 +290,7 @@ async function discoverRemoteEnvironment(target: unknown, requestCredentials: un
         'printf "__PRISM_CPU__\\n"; (lscpu -J 2>/dev/null || true)',
         'printf "__PRISM_CORES__\\n"; (getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0)',
         'printf "__PRISM_MEMORY__\\n"; awk \'/MemTotal/ {print $2}\' /proc/meminfo 2>/dev/null',
-        ...hardwareProfileSnapshot().flatMap((profile, index) => {
-            const argv = profile.planning?.discovery?.command || [];
-            const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
-            return argv.length ? [`printf '__PRISM_HARDWARE_${index}__\\n'; (${argv.map(quote).join(' ')} 2>/dev/null || true)`] : [];
-        }),
+        ...hardwareInspectionCommands(hardwareProfileSnapshot()),
         'printf "__PRISM_K8S_VERSION__\\n"; (kubectl version -o json 2>/dev/null || true)',
         'printf "__PRISM_K8S_NODES__\\n"; (kubectl get nodes -o json 2>/dev/null || true)',
         'printf "__PRISM_DEVICE_CLASSES__\\n"; (kubectl get deviceclasses.resource.k8s.io -o json 2>/dev/null || true)',
