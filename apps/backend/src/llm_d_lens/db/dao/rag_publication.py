@@ -125,7 +125,21 @@ class RagPublicationDao(RagItemDao):
         approval: SourceApproval,
     ) -> None:
         rows = session.scalars(select(RagItemRow).where(RagItemRow.item_id.in_(metadata.member_ids))).all()
-        members = {row.item_id: row.to_dto() for row in rows}
+        items = {row.item_id: row.to_dto() for row in rows}
+        registry = session.get(RagItemRow, registry_id(manifest.origin_id))
+        if registry is not None:
+            items[registry.item_id] = registry.to_dto()
+        cls._validate_member_map(manifest, metadata, approval, items)
+
+    @classmethod
+    def _validate_member_map(
+        cls,
+        manifest: RagItem,
+        metadata: ReleaseManifest,
+        approval: SourceApproval,
+        items: dict[str, RagItem],
+    ) -> None:
+        members = {key: items[key] for key in metadata.member_ids if key in items}
         if len(members) != len(metadata.member_ids):
             raise PublicationError("manifest has missing members")
         if dict(Counter(item.kind for item in members.values())) != metadata.counts:
@@ -167,7 +181,7 @@ class RagPublicationDao(RagItemDao):
                     raise PublicationError("item must link to its exact pinned source file")
                 if item.kind == "measurement" and item.parent_id != item.experiment_id:
                     raise PublicationError("measurement must link to its experiment")
-                cls._validate_links(session, item)
+                cls._validate_targets(item, items.get)
 
     def stage(self, manifest: RagItem, items: Sequence[RagItem]) -> RagItem:
         with self._transaction() as session:
@@ -230,7 +244,7 @@ class RagPublicationDao(RagItemDao):
             if rollback_generation is not None:
                 if rollback_generation != state.generation:
                     raise PublicationConflictError("source advanced before rollback")
-                if not any(event.manifest_id == manifest_id for event in state.history):
+                if not state.was_published(manifest_id):
                     raise PublicationError("rollback target was never published")
             elif previous_id != manifest_id and (
                 metadata.base_generation != state.generation or metadata.base_manifest_id != previous_id

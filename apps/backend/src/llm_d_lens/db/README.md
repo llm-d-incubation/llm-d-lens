@@ -123,7 +123,8 @@ Source roles distinguish registry, manifest, and file rows.
 only a registry may carry `published_manifest_id`. Per-row state alone never
 authorizes retrieval.
 `get`/`list_version` are internal import/audit methods, not permission-filtered
-end-user search. No importer, REST/MCP query, or Agentic branch is enabled.
+end-user search. No REST/MCP query or Agentic branch is enabled; the administrative
+Prism import adapter is described below.
 
 `value`/`unit` preserve `original_value`/`original_unit`; normalization uses
 separate fields plus an explicit supported conversion rule. Time conversions
@@ -192,6 +193,317 @@ a non-atomic fallback. This library never writes `agentic_benchmark_records`.
 The step-2 implementation passed its separate user review; real corpus imports
 and later steps remain separately gated.
 
+### Initial Prism import (step 3)
+
+`benchmark_rag/prism.py` consumes the existing `normalize-and-merge.jq` archive
+shape and merged source-ID inventory. `benchmark_rag/prism_initial.py` records
+the reviewed 2026-10-13 pins: 22 files and an expected 249 experiments (177
+historical records and 72 stage reports). These are initial acceptance pins,
+not permanent counts: the importer takes a reviewed inventory and expected
+experiment count for each snapshot. It does not execute or change the
+normalization script, fetch network sources, or expand the source allowlist.
+
+The importer requires an injected publication service and an explicit
+`SourceApproval` with parser version `prism-archive-v1`. Its `stage` method
+collects/verifies immutable local inputs, validates the complete Results Store
+indexes and payload/ZIP sets, parses all records, and calls the step-2 staging
+service. `import_snapshot` additionally activates that exact manifest. No
+database configuration, schema migration, public route, scheduled refresh, or
+production approval is selected automatically.
+
+```python
+from pathlib import Path
+
+from llm_d_lens.benchmark_rag.prism import PrismSnapshotImporter
+from llm_d_lens.benchmark_rag.prism_initial import (
+    INITIAL_EXPERIMENTS, INITIAL_FILES, INITIAL_REVISION,
+)
+
+# Both arguments come from an explicitly configured administrative caller.
+importer = PrismSnapshotImporter(publication_service)
+result = importer.import_snapshot(
+    Path("private/prism-public-2026-10-13"),
+    INITIAL_REVISION,
+    INITIAL_FILES,
+    reviewed_approval,
+    expected_experiments=INITIAL_EXPERIMENTS,
+)
+```
+
+Historical experiments and measurements cite their original archive row. Stage
+experiments cite the retained full-run JSON report, and validate identity and
+workload against the existing merged row. Every record also carries the merged
+path, SHA256, row pointer, and snapshot date. ZIP exports renumber reports,
+including summaries: their member names are **not** stage identities. The
+adapter matches each original JSON report to one complete, equal safe-parsed
+YAML report and records the exact ZIP hash/member, rejecting missing or
+ambiguous mappings. ZIPs are never extracted to the filesystem.
+
+Numeric JSON/YAML leaves are parsed as Decimal, not binary floats. Historical
+metric aliases and explicit statistic aliases are deduplicated with conflict
+checks; unsupported metric families fail rather than silently disappearing.
+Raw stage measurements preserve their original value/unit, not the jq-generated
+rounded millisecond value. `s -> ms` and `s/token -> ms/token` conversions use
+separate normalized fields; token denominators remain distinct. Unknown or
+missing raw units remain unnormalized. Historical units use the documented
+normalized-archive convention, identified in the source pointer. Scalar
+statistics are not guessed; reported zeroes remain zeroes. Fractional JSON
+metadata values use decimal strings to avoid binary-float conversion.
+
+Stage submission timestamps are explicitly labeled `submission`; they are not
+experiment dates. Historical timestamps lacking a verified kind/timezone remain
+untyped and are retained verbatim in configuration/provenance. Missing concurrency
+stays null, and workload `target_qps` is distinct from measured `request_rate`.
+The four run-level summaries become context-only passages, never additional
+experiments or independent numeric observations.
+
+The real initial snapshot acceptance publishes 249 experiments, 9,060 exact
+measurement leaves, four summary passages, and 22 source files; repeated import
+does not add rows or change the pointer/generation. All numeric JSON pointers
+round-trip to retained source values. These counts are not a claim that all
+measurements are independent observations or that different source IDs have
+been semantically deduplicated.
+
+Step-3 validation is explicitly limited to disposable isolated PostgreSQL and
+temporary evidence storage. No business database migration/import is performed,
+and no persistent production dataset or user-facing RAG query is enabled.
+The step-3 implementation and supplemental target-local administration tools
+passed their separate user reviews. Real cross-cluster acceptance and shared
+deployment remain deferred until after the separately reviewed steps 4 and 5.
+
+### Guide results and benchmark documentation ingestion
+
+`benchmark_rag/repository_corpus.py` adds the offline repository adapter for
+step 4. It reuses `collect_git`, `SourceArchive`, and the existing publication
+transaction; there is no new table, migration, dependency, network fetch, query
+route, feature permission, or refresh scheduler.
+
+- The initial `llm-d` revision is
+  `080c14d957755da4cc363745638619fc748558f1`: 139 allowlisted files, consisting of
+  97 Markdown files (including 20 result documents), five custom GLM JSON
+  files, and 37 PNG figures. The initial `llm-d-benchmark` revision is
+  `6e081de16d2debc7b29436ad53f2c62e8d475f2e`: 27 documentation Markdown files
+  and `benchmark-report/README.md`. `repository_initial.py` pins the complete
+  inventories and reviewed counts; these are initial acceptance values, not
+  permanent refresh totals.
+- Markdown passages retain exact Unicode-codepoint offsets, line ranges,
+  heading paths, original text, links, and image captions. Fenced examples are
+  not headings or experimental measurements. Benchmark documentation and
+  example values remain passages only.
+- `guide_tables.py` extracts reviewed scenario-specific published table cells,
+  preserving row/column identity, original values and units, surrounding
+  conditions, and applicable caveats. Configuration tables, approximate ranges,
+  derived changes, invalid empty histograms, and ambiguous/superseded evidence
+  must not silently become exact independent observations.
+- `guide_json.py` handles the five custom formats separately from the Prism
+  v0.2 reports. Exact Decimal values round-trip to original JSON pointers;
+  configuration is not a metric. Repeat/aggregate provenance does not prove
+  independent experiments or semantic deduplication with the Markdown reports.
+- Every figure has an explicit coverage review. The initial policy marks
+  15 figures `partial`, three Qwen TPU figures `summary_only`, and 19 figures
+  `unknown`; none yields pixel-derived numbers. Typed links are limited to
+  explicitly referencing reports and reviewed scenario tables, never a
+  model/hardware-name match. Changed/new figures need a new reviewed policy.
+- The initial guide release contains 445 source-scoped experiment records,
+  2,153 measurements, 1,468 passages, 37 figures and 480 typed figure links,
+  besides 139 file sources. The benchmark-documentation release contains
+  392 passages and 28 file sources. These are representation counts, not
+  independent-experiment counts: repeated reports, summaries, and aggregates
+  retain their own provenance and may overlap.
+- Measurement-producing Markdown reports and the custom JSON metadata are
+  reviewed only for the pinned initial `llm-d` revision. A different revision
+  fails explicitly pending metadata/parser compatibility review; a matching
+  filename does not authorize reuse of old model or scenario assumptions.
+  Context-only Markdown can be processed at other valid full revisions.
+
+The administrative Python API requires explicit source approvals using parser
+version `guide-evidence-v1`. It verifies the checkout's exact origin, full
+commit and bytes, reads the committed tree rather than dirty worktree files,
+and checks expected per-kind counts before registering/staging. Production
+approval must verify visibility and license; isolated test approvals do not
+authorize a production import. To stage without publishing, call
+`stage_repository`; `import_repository` stages and activates one origin.
+The two origins publish separately; no cross-origin experiment links are
+inferred. A failure in the second origin does not undo an already published
+first origin. No user-facing retrieval is enabled by these operations.
+
+For a target with reviewed migrations already applied, securely configure
+`LLM_D_BENCH_DATABASE_URL` and `LENS_DATA_DIR`, install this code and its backend
+dependencies, then use the API from the repository root:
+
+```python
+import os
+from pathlib import Path
+
+from llm_d_lens.benchmark_rag.publication import RagPublicationService
+from llm_d_lens.benchmark_rag.publication_contracts import SourceApproval
+from llm_d_lens.benchmark_rag.repository_corpus import RepositoryCorpusImporter
+from llm_d_lens.benchmark_rag.repository_initial import (
+    INITIAL_INVENTORY_DIGESTS,
+    INITIAL_ITEM_COUNTS,
+    INITIAL_REVISIONS,
+    initial_figure_reviews,
+)
+from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN
+from llm_d_lens.db.dao.rag_transfer import transfer_database
+
+with transfer_database(os.environ["LLM_D_BENCH_DATABASE_URL"], schema="public") as dao:
+    dao.prepare()
+    importer = RepositoryCorpusImporter(RagPublicationService(dao=dao))
+    for origin, repo, approval_file in (
+        (LLM_D_ORIGIN, "/srv/sources/llm-d", "/secure/guides-approval.json"),
+        (BENCHMARK_ORIGIN, "/srv/sources/llm-d-benchmark", "/secure/docs-approval.json"),
+    ):
+        approval = SourceApproval.model_validate_json(Path(approval_file).read_bytes())
+        result = importer.import_repository(
+            Path(repo),
+            origin,
+            INITIAL_REVISIONS[origin],
+            approval,
+            expected_counts=INITIAL_ITEM_COUNTS[origin],
+            expected_inventory_digest=INITIAL_INVENTORY_DIGESTS[origin],
+            figure_reviews=initial_figure_reviews() if origin == LLM_D_ORIGIN else {},
+        )
+        print(result.model_dump_json())
+```
+
+Run with `PYTHONPATH=apps/backend/src .venv/bin/python` or an equivalently
+installed package. Supply a source-specific approval file using the fields
+shown below, `allowed_paths(origin)` for its reviewed path scope, and the
+repository parser version above. Do not reuse a Prism approval. The existing
+CLI `rebuild` remains initial-Prism-only; `backup`/`restore` include all RAG
+origins and their evidence after repository imports. Each serving instance
+must have access to the evidence archive as well as PostgreSQL; this library
+does not provision shared cluster storage.
+
+### Target-local rebuild, backup and incremental migration
+
+`benchmark_rag/admin.py` adds a target-local command. It never connects by SSH,
+ships credentials, fetches Prism from the network, or selects the application's
+default/embedded database implicitly. Run with this code version and the backend
+dependencies installed. PostgreSQL is required; no `pg_dump` client is needed.
+
+The operator must provision the PostgreSQL database, create the chosen schema,
+and grant the account the necessary permissions first. The default schema is
+`public`; `--schema` accepts a lowercase, unquoted PostgreSQL identifier.
+Supply the DSN through `LLM_D_BENCH_DATABASE_URL` or name another environment
+variable with `--database-url-env`. Use the normal deployment secret mechanism,
+not a password in a command argument or a committed file. Examples below assume
+the repository root and an existing `.venv`.
+
+```bash
+# Set LLM_D_BENCH_DATABASE_URL securely before running these commands.
+# Keep /srv/lens-data owned by the operator; it is persistent, not a test path.
+
+# Rebuild from the complete, separately transferred initial Prism snapshot.
+PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin rebuild \
+  --snapshot private/prism-public-2026-10-13 \
+  --approval /secure/prism-approval.json --data-dir /srv/lens-data --schema public
+
+# Export every RAG row, including staged/retired history and publication state,
+# together with all referenced original evidence bytes. Output must not exist.
+PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin backup \
+  --data-dir /srv/lens-data --schema public --output /backup/rag-backup.zip
+
+# Verify the copied bundle without database credentials or a target database.
+PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin verify \
+  --bundle /backup/rag-backup.zip
+
+# On the target machine, with its own DSN and persistent data directory:
+PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin restore \
+  --bundle /backup/rag-backup.zip --data-dir /srv/lens-data --schema public
+```
+
+For an empty **standalone RAG schema**, add `--initialize` to `rebuild` or
+`restore`. This creates only the previously reviewed `rag_items` shape and its
+constraints/indexes. It does not initialize the rest of Lens or stamp Alembic.
+If `alembic_version` exists but `rag_items` does not, the command refuses
+standalone initialization: apply the reviewed Lens migration through the normal
+database lifecycle. Existing tables are checked for compatible columns/types,
+constraints, indexes and generated search-vector presence; they are never
+silently altered. Moving a standalone RAG database into a full Lens installation
+requires a separately reviewed baseline/migration plan.
+
+The approval file is a `SourceApproval` JSON object, not a database secret.
+Replace the review placeholders with genuine source-use approval; test fixture
+approval is not production approval. The initial Prism adapter requires:
+
+```json
+{
+  "verified_public": true,
+  "approved_by": "REPLACE_WITH_ACTUAL_REVIEWER",
+  "approval_reference": "REPLACE_WITH_APPROVAL_RECORD",
+  "license_reference": "REPLACE_WITH_SOURCE_USE_REVIEW",
+  "parser_version": "prism-archive-v1",
+  "allowed_paths": [
+    "archives/archived_drive_data.json",
+    "archives/llm-d-benchmarks.json",
+    "results/promoted-index.json",
+    "results/public-index.json",
+    "results/json/*.json",
+    "results/zip/*.zip",
+    "normalize-and-merge.jq",
+    "historical-merged-deduplicated.json"
+  ]
+}
+```
+
+Rebuild uses the reviewed initial pins and the same stage/activate protocol,
+including immutable retries and explicit approval compatibility. It does not
+erase history or unrelated sources. Future snapshot revisions still require
+their separately reviewed inventory/API integration.
+
+The **RAG-specific logical backup** is a versioned ZIP containing a manifest,
+canonical DTO JSONL, and SHA256-addressed source bytes. It is not an arbitrary
+`pg_dump` archive, not a JSON application store, and contains no executable SQL.
+The source DAO captures all rows in one PostgreSQL MVCC SELECT, so registry
+pointers and records share one consistent snapshot even during publication.
+Exact Decimal values are transferred as decimal strings and restored into
+NUMERIC; generated search vectors are recomputed by PostgreSQL. No other Lens
+table, global database configuration, or database credential is exported.
+Publication/tombstone history and evidence for old citations are included.
+
+Backup output is published exclusively and never overwrites an existing file.
+Verification checks contract/version, full record and blob checksums, counts,
+source approvals, immutable identities, referential closure, manifests and
+publication history. Unknown/duplicate/unsafe ZIP members are rejected; files
+are never extracted using paths from the archive. The default uncompressed
+bundle limit is 1 GiB; backup/verify/restore accept `--max-bytes` for an explicit
+operator override. Checksums prove integrity, **not authenticity**: accept
+bundles only from a trusted administrator and protect them in transit/storage.
+
+Restore supports **nonempty targets**:
+
+- All existing immutable evidence and target-only sources are retained.
+  Identical versions are reused; any same-ID/version content conflict aborts
+  the whole database transaction rather than overwriting or partially merging.
+- Included sources switch to the backup's published manifest, while their old
+  target history remains available. A source with no published backup manifest
+  does not clear an existing target publication. Parser incompatibility fails.
+- Existing target source approvals remain authoritative. Imported manifests
+  must satisfy those approvals; restore never expands the local path policy.
+  A disabled source on either side stays disabled, never automatically enabled.
+- One transaction locks affected registry rows, inserts missing dependencies,
+  records restore receipts, bumps each affected source's local generation, and
+  switches pointers. Readers see the old release until commit; stale pre-restore
+  publication jobs cannot activate afterward.
+- Receipts preserve original remote histories separately from the target's
+  monotonic local generation. Old published versions remain rollback-eligible
+  after repeated migrations. Reapplying an already restored backup is a no-op
+  for publication, even if the target has subsequently published a newer release.
+- Verified source bytes are copied immutably before the database transaction.
+  If the merge then fails, the database is unchanged; newly copied unreferenced
+  blobs may remain. They are not deleted automatically, since another operation
+  may already reference them. Corrupt existing evidence is never overwritten.
+
+Commands emit JSON results on stdout and return nonzero with an explicit error
+on failure. Database exceptions are summarized without echoing the DSN. Restore
+uses the operator's explicitly configured persistent directory, unlike the
+disposable acceptance fixtures. Copying the code alone does not copy raw Prism
+inputs; copying a logical backup does include its required evidence. Step 3 and
+these administration changes must be transferred as code/package as well; a
+local commit alone does not make them available on another machine.
+
 ## Testing
 
 By default, tests do not run Alembic migrations or talk to PostgreSQL.
@@ -214,6 +526,39 @@ in `tests/unit/db/conftest.py`. It tests concurrent staging/activation, atomic
 failure, exact membership before full-text ranking/counts, incomplete inventories,
 immutable binary bytes, link invalidation, empty-release retirement, rollback,
 source revocation, and absence of Agentic-table SQL during publication.
+`tests/unit/db/test_prism_import.py` covers the Prism adapter, exact Decimal
+round-trips, alias conflicts, missing/unknown values, incomplete pagination,
+report/ZIP mismatch, failed-refresh atomicity, and same-version idempotency.
+Its real-snapshot case requires the Git-ignored local input directory and skips
+explicitly when it is absent; synthetic-only success is not the 249-row gate.
+Local snapshot files are never copied into Git. The actual local acceptance run
+must include the real-snapshot test without skips.
+`tests/unit/db/test_rag_transfer.py` exercises RAG-only initialization, cross-schema
+backup/restore, nonempty immutable merges, repeated migration/rollback, revocation,
+corrupt bundles, conflict/pointer failure rollback, old-release visibility during
+restore, CLI credential handling and the complete real-Prism CLI round trip.
+`tests/unit/db/test_guide_tables.py` audits all 97 pinned guide Markdown files
+and 155 GFM tables, exact cell/subvalue pointers, scenario separation, missing
+histograms, configuration exclusions, and unreviewed-revision rejection.
+`tests/unit/db/test_guide_json.py` checks all five custom formats, exact numeric
+pointers, schema/units, non-independent aggregates, and the pinned metadata
+guard. `tests/unit/db/test_repository_corpus.py` verifies Markdown offsets,
+coverage policies, committed-tree reads, idempotent publication, failed
+activation, both real inventories, and backup/restore to independent temporary
+schemas/evidence directories. Actual-repository cases explicitly skip if the
+separately provisioned sibling checkouts are absent; fixtures alone do not
+satisfy the real-source gate.
+
+The step-4 validation ran all database tests: **281 passed, zero skipped**.
+The two actual-repository cases subsequently passed stronger cross-schema
+restore checks, including identical published DTOs, repeat no-op and all raw
+byte hashes. This is isolated acceptance, not production deployment or the
+step-5 question-answering/authorization gate.
+The step-4 implementation passed user review; the user explicitly paused
+step 5. No business database or real cluster was modified.
+All these tests use disposable PostgreSQL schemas and temporary evidence roots,
+not a remote machine or business database. Test schemas are dropped and servers
+stopped; pytest may retain temporary files according to its own retention policy.
 The prior PostgreSQL schema is created from metadata excluding `rag_items` and
 stamped at `42a3e9b47726`; this tests the new migration, not a replay of all
 historical migrations. Downgrade runs only in disposable schemas; dropping live
@@ -223,5 +568,10 @@ evidence requires a reviewed retention/dependency decision.
 PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_rag_item_dao.py \
   apps/backend/tests/unit/db/test_rag_publication.py \
+  apps/backend/tests/unit/db/test_prism_import.py \
+  apps/backend/tests/unit/db/test_rag_transfer.py \
+  apps/backend/tests/unit/db/test_repository_corpus.py \
+  apps/backend/tests/unit/db/test_guide_tables.py \
+  apps/backend/tests/unit/db/test_guide_json.py \
   apps/backend/tests/unit/db/test_agentic_benchmark_record_dao.py -q
 ```

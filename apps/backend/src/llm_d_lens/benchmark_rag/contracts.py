@@ -154,6 +154,8 @@ _UNIT_RULES: dict[str, tuple[Decimal, str]] = {
     "s": (Decimal("1000"), "ms"),
     "ms": (Decimal("1"), "ms"),
     "us": (Decimal("0.001"), "ms"),
+    "s/token": (Decimal("1000"), "ms/token"),
+    "ms/token": (Decimal("1"), "ms/token"),
     "output tokens/s": (Decimal("1"), "output tokens/s"),
     "tokens/s": (Decimal("1"), "tokens/s"),
     "requests/s": (Decimal("1"), "requests/s"),

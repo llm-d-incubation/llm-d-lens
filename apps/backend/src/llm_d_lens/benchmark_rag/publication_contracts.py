@@ -126,12 +126,26 @@ class PublicationEvent(PublicationModel):
     counts: dict[ItemKind, int]
 
 
+class RestoreReceipt(PublicationModel):
+    backup_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generation: int = Field(ge=0)
+    published_manifest_id: str | None
+    enabled: bool
+    history: tuple[PublicationEvent, ...]
+
+
 class RegistryState(PublicationModel):
     contract: Literal["benchmark-rag.registry.v1"] = "benchmark-rag.registry.v1"
     approval: SourceApproval
     enabled: bool = True
     generation: int = Field(default=0, ge=0)
     history: tuple[PublicationEvent, ...] = ()
+    restores: tuple[RestoreReceipt, ...] = ()
+
+    def was_published(self, manifest_id: str) -> bool:
+        return any(event.manifest_id == manifest_id for event in self.history) or any(
+            event.manifest_id == manifest_id for receipt in self.restores for event in receipt.history
+        )
 
 
 class SourceHead(PublicationModel):

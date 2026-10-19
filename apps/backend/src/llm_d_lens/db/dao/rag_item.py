@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -61,10 +63,18 @@ class RagItemDao(BaseDao):
             )
             return [row.to_dto() for row in session.scalars(statement)]
 
-    @staticmethod
-    def _validate_links(session: Session, item: RagItem) -> None:
-        def target(item_id: str, kind: str, *, same_revision: bool = True, role: str | None = None) -> RagItemRow:
+    @classmethod
+    def _validate_links(cls, session: Session, item: RagItem) -> None:
+        def lookup(item_id: str) -> RagItem | None:
             row = session.get(RagItemRow, item_id)
+            return row.to_dto() if row is not None else None
+
+        cls._validate_targets(item, lookup)
+
+    @staticmethod
+    def _validate_targets(item: RagItem, lookup: Callable[[str], RagItem | None]) -> None:
+        def target(item_id: str, kind: str, *, same_revision: bool = True, role: str | None = None) -> RagItem:
+            row = lookup(item_id)
             if (
                 row is None
                 or row.kind != kind
@@ -93,7 +103,7 @@ class RagItemDao(BaseDao):
         if item.published_manifest_id is not None:
             target(item.published_manifest_id, "source", same_revision=False, role="manifest")
         for member_id in item.manifest_item_ids or []:
-            row = session.get(RagItemRow, member_id)
+            row = lookup(member_id)
             if (
                 row is None
                 or row.origin_id != item.origin_id
