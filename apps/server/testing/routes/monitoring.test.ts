@@ -18,6 +18,7 @@ let proxy: http.Server;
 let proxyUrl = '';
 let delayMs = 0;
 let lastHeaders: http.IncomingHttpHeaders = {};
+let upstreamRequests = 0;
 
 function listen(server: http.Server): Promise<number> {
     return new Promise((resolve) => {
@@ -27,6 +28,7 @@ function listen(server: http.Server): Promise<number> {
 
 before(async () => {
     upstream = http.createServer((req, res) => {
+        upstreamRequests += 1;
         lastHeaders = req.headers;
         setTimeout(() => {
             res.writeHead(200, { 'content-type': 'application/json' });
@@ -40,6 +42,7 @@ before(async () => {
     process.env.MONITORING_INSTALL_TIMEOUT_MS = '1000';
 
     const app = express();
+    app.set('trust proxy', 'loopback');
     app.use(express.json());
     app.use((req, _res, next) => {
         (req as express.Request & { principal?: { userId: string } }).principal = { userId: 'user-1' };
@@ -81,4 +84,32 @@ test('driver install uses the longer install timeout', async () => {
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
+});
+
+test('standalone monitoring router limits each client before forwarding to the upstream', async () => {
+    delayMs = 0;
+    const headers = { 'x-forwarded-for': '192.0.2.1' };
+    const requestsBefore = upstreamRequests;
+    for (let index = 0; index < 1000; index += 1) {
+        const response = await fetch(`${proxyUrl}/api/v1/monitoring/gpu-driver/status`, { headers });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('ratelimit-limit'), '1000');
+        assert.equal(response.headers.get('ratelimit-remaining'), String(999 - index));
+        await response.text();
+    }
+    assert.equal(upstreamRequests, requestsBefore + 1000);
+    for (const method of ['GET', 'POST']) {
+        const response = await fetch(`${proxyUrl}/api/v1/monitoring/gpu-driver/install`, { method, headers });
+        assert.equal(response.status, 429);
+        assert.ok(Number(response.headers.get('retry-after')) > 0);
+        await response.text();
+    }
+    assert.equal(upstreamRequests, requestsBefore + 1000);
+
+    const otherClient = await fetch(`${proxyUrl}/api/v1/monitoring/gpu-driver/status`, {
+        headers: { 'x-forwarded-for': '192.0.2.2' },
+    });
+    assert.equal(otherClient.status, 200);
+    await otherClient.text();
+    assert.equal(upstreamRequests, requestsBefore + 1001);
 });

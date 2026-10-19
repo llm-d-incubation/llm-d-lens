@@ -7,13 +7,21 @@
 //     https://www.apache.org/licenses/LICENSE-2.0
 
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { sameOriginUrl } from '../infrastructure/sameOriginUrl.ts';
 import { principalOf } from '../middleware/auth.ts';
 import { internalAuthEnabled, signInternalHeaders } from '../middleware/internalAuth.ts';
 
 export const monitoringRouter = Router();
 
-monitoringRouter.use('/api/v1/monitoring', async (req, res) => {
+const monitoringLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+monitoringRouter.use('/api/v1/monitoring', monitoringLimiter, async (req, res) => {
     const upstreamBase = process.env.MONITORING_API_URL
         || process.env.SIMULATION_API_URL
         || process.env.OPTIMALBENCH_URL

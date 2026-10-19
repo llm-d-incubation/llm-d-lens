@@ -444,6 +444,7 @@ with code `SERVICE_RESTARTED`; cluster status is then rediscovered so the UI can
 - Secret contents, tokens, kubeconfig contents, and the Grafana admin password are not returned to the frontend.
 - Do not provide an arbitrary `kubectl` API.
 - mutation endpoints must require authentication, be rate-limited, and record actor, cluster context, namespace, operation ID, and result; the token itself must not be logged.
+- The Express monitoring proxy applies its own per-client-IP limit of 1,000 requests per minute before signing or forwarding requests, including when the router is mounted without the main server's global API limiter. Excess requests return HTTP 429 with standard rate-limit and retry headers without reaching the upstream; the main server's aggregate API limit remains in force.
 
 ### 7. Frontend Design
 
