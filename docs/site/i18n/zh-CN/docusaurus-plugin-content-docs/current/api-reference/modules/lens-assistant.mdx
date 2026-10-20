@@ -10,6 +10,12 @@ import TabItem from '@theme/TabItem';
 
 Lens Assistant 使用统一 Python 服务中的 `llm_d_lens.mcp.router`。其 FastAPI 路由通过官方 MCP Python SDK 在 `/api/mcp` 提供无状态 Streamable HTTP 端点。
 
+候选工具声明并转发 `workload.concurrency` 或 `workload.request_rate`
+（正数且互斥的负载目标）。兼容 API 的输入／输出 token 长度缺省为
+4000／1000，与 Agentic 规划一致。预期的校验提示和无可行候选时的重试行为
+保持不变。其他 AIC 服务错误返回状态码 `400` 及通用响应
+`{ "error": "AIC candidate search failed" }`，内部异常详情仅记录在服务端日志中。
+
 ### 发送一次无状态的 MCP 请求
 
 使用新的 SDK 服务器和传输管理器处理一次无状态 Streamable HTTP MCP 请求。

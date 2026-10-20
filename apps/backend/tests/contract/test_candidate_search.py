@@ -97,3 +97,51 @@ def test_manual_yaml_preserves_chosen_and_replica_inference(monkeypatch):
 
 def test_unknown_sources_are_ignored():
     assert TestClient(app).post("/api/candidate-search", json={"sourceIds": ["unknown"]}).json() == {"candidates": []}
+
+
+@pytest.mark.parametrize("field", ["concurrency", "request_rate"])
+def test_support_preserves_load_target_and_upstream_token_defaults(monkeypatch, field):
+    support = AsyncMock(return_value={"supported": True})
+    monkeypatch.setattr(candidates.aic_service, "check_support", support)
+    response = TestClient(app).post(
+        "/api/candidate-support",
+        json={
+            "workload": {"model": "example/model", field: 10},
+            "searchConfig": {"aicSystemName": "test-system"},
+        },
+    )
+    assert response.status_code == 200
+    payload = support.call_args.args[0]
+    assert payload.mean_input_tokens == 4000
+    assert payload.mean_output_tokens == 1000
+    assert getattr(payload, f"target_{field}") == 10
+
+
+def test_aic_error_details_are_logged_not_exposed(monkeypatch, caplog):
+    detail = "internal traceback /private/aic/config credential-value"
+    monkeypatch.setattr(
+        candidates.aic_service, "check_support", AsyncMock(side_effect=candidates.aic_service.AICError(detail))
+    )
+    response = TestClient(app).post(
+        "/api/candidate-support",
+        json={"workload": {"model": "example/model"}, "searchConfig": {"aicSystemName": "test-system"}},
+    )
+    assert response.status_code == 400
+    assert response.json() == {"error": "AIC candidate search failed"}
+    assert detail not in response.text
+    assert detail in caplog.text
+
+
+def test_support_rejects_joint_load_targets_before_calling_aic(monkeypatch):
+    support = AsyncMock()
+    monkeypatch.setattr(candidates.aic_service, "check_support", support)
+    response = TestClient(app).post(
+        "/api/candidate-support",
+        json={
+            "workload": {"model": "example/model", "concurrency": 10, "request_rate": 2},
+            "searchConfig": {"aicSystemName": "test-system"},
+        },
+    )
+    assert response.status_code == 422
+    assert "only one load target" in response.json()["error"]
+    support.assert_not_awaited()

@@ -119,3 +119,39 @@ def test_remote_start_preserves_response(monkeypatch):
 def test_unknown_hardware_does_not_default_to_supported_vendor():
     with pytest.raises(remote.RemoteError, match="supports"):
         remote.deployment_command({"accelerator": "unknown"}, target(), "namespace", "service")
+
+
+@pytest.mark.parametrize("error_type", [OSError, remote.paramiko.SSHException, EOFError])
+def test_remote_internal_errors_are_logged_not_exposed(monkeypatch, caplog, error_type):
+    detail = "internal traceback /private/ssh/key credential-value"
+    monkeypatch.setenv("NODE_ENV", "development")
+    monkeypatch.setattr(remote, "inspect_host_key", Mock(side_effect=error_type(detail)))
+    app = FastAPI()
+    app.include_router(remote.router)
+    response = TestClient(app).post("/api/remote-deploy/fingerprint", json={"target": {"host": "host.example"}})
+    assert response.status_code == 502
+    assert response.json() == {"error": "Remote deployment failed"}
+    assert detail not in response.text
+    assert detail in caplog.text
+
+
+def test_remote_command_errors_do_not_expose_stderr(monkeypatch, caplog):
+    detail = "internal command failure with credential-value"
+    monkeypatch.setenv("NODE_ENV", "development")
+    monkeypatch.setattr(remote, "execute", AsyncMock(return_value={"code": 1, "stdout": "", "stderr": detail}))
+    app = FastAPI()
+    app.include_router(remote.router)
+    response = TestClient(app).post("/api/remote-deploy/teardown", json={"target": target(), "namespace": "test"})
+    assert response.status_code == 502
+    assert response.json() == {"error": "Remote deployment failed"}
+    assert detail not in response.text
+    assert detail in caplog.text
+
+
+def test_remote_validation_keeps_actionable_message(monkeypatch):
+    monkeypatch.setenv("NODE_ENV", "development")
+    app = FastAPI()
+    app.include_router(remote.router)
+    response = TestClient(app).post("/api/remote-deploy/fingerprint", json={"target": {"host": "invalid;host"}})
+    assert response.status_code == 400
+    assert response.json() == {"error": "Invalid SSH host"}

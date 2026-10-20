@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from llm_d_lens.aic.models import AICRequest
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
 from llm_d_lens.aic.service import AICError, check_support, search
 from llm_d_lens.capacity import load_model_config
 from llm_d_lens.cluster import registry
@@ -176,10 +176,12 @@ async def resolve_planning_facts(
                     "gpu_count": max(selected_gpu_count, 1),
                     "mean_input_tokens": int(facts.workload_profile.mean_input_tokens)
                     if facts.workload_profile and facts.workload_profile.mean_input_tokens
-                    else facts.context_length,
+                    else DEFAULT_INPUT_TOKENS,
                     "mean_output_tokens": int(facts.workload_profile.mean_output_tokens)
                     if facts.workload_profile and facts.workload_profile.mean_output_tokens
-                    else 256,
+                    else DEFAULT_OUTPUT_TOKENS,
+                    "target_concurrency": facts.workload_profile.concurrency if facts.workload_profile else None,
+                    "target_request_rate": facts.workload_profile.request_rate if facts.workload_profile else None,
                     "ttft_target_ms": facts.ttft_slo_ms,
                     "tpot_target_ms": facts.tpot_slo_ms,
                 }
@@ -240,10 +242,12 @@ async def _supplementary_evidence(
             gpu_count=max(gpu_count, 1),
             mean_input_tokens=int(facts.workload_profile.mean_input_tokens)
             if facts.workload_profile and facts.workload_profile.mean_input_tokens
-            else facts.context_length,
+            else DEFAULT_INPUT_TOKENS,
             mean_output_tokens=int(facts.workload_profile.mean_output_tokens)
             if facts.workload_profile and facts.workload_profile.mean_output_tokens
-            else 256,
+            else DEFAULT_OUTPUT_TOKENS,
+            target_concurrency=facts.workload_profile.concurrency if facts.workload_profile else None,
+            target_request_rate=facts.workload_profile.request_rate if facts.workload_profile else None,
             ttft_target_ms=facts.ttft_slo_ms,
             tpot_target_ms=facts.tpot_slo_ms,
             max_candidates=3,
@@ -267,7 +271,17 @@ async def _supplementary_evidence(
                     details=prediction.model_dump(),
                 )
             )
-    except (AICError, ValueError):
+        elif facts.workload_profile and (
+            facts.workload_profile.concurrency is not None or facts.workload_profile.request_rate is not None
+        ):
+            raise ValueError(
+                "AIC does not support this model and hardware. Choose a supported source or clear the load target."
+            )
+    except (AICError, ValueError) as error:
+        if facts.workload_profile and (
+            facts.workload_profile.concurrency is not None or facts.workload_profile.request_rate is not None
+        ):
+            raise ValueError(f"AIC load-target prediction failed: {error}") from error
         evidence.append(PlanningEvidence(id="aic:support", source="aic", status="unavailable"))
     try:
         history_count = len(deployment_run_manager.store.list_runs())

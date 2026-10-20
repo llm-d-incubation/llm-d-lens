@@ -1,5 +1,6 @@
 """Tests for portable Deploy runtime path discovery."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -13,8 +14,10 @@ from llm_d_lens.deploy.runtime.composition import (
     RestrictedKubectlRunner,
     RuntimeConfigurationError,
     RuntimeEnvironment,
+    _build_optimized_baseline_provider,
     _build_precise_prefix_cache_routing_provider,
     _build_tiered_prefix_cache_provider,
+    build_deployment_service_from_environment,
     build_namespace_factory,
 )
 
@@ -29,6 +32,10 @@ def _executable(directory: Path, name: str) -> Path:
 def _environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     root = tmp_path / "llm-d"
     (root / "guides").mkdir(parents=True)
+    for relative in ("recipes/router/base.values.yaml", "optimized-baseline/router/optimized-baseline.values.yaml"):
+        path = root / "guides" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
     for relative in (
         "tiered-prefix-cache/modelserver/xpu/vllm/base",
         "tiered-prefix-cache/modelserver/xpu/vllm/native/cpu/base",
@@ -73,6 +80,53 @@ def test_runtime_rejects_relative_executable_override(tmp_path: Path):
         RuntimeEnvironment.from_environment(environment)
 
 
+@pytest.mark.parametrize("entries", [[], ["gke", "coreweave"]])
+def test_optimized_baseline_reports_missing_generic_entry(tmp_path, entries):
+    environment, _ = _environment(tmp_path)
+    environment["PRISM_DEPLOY_ACCELERATOR"] = "nvidia"
+    runtime = RuntimeEnvironment.from_environment(environment)
+    for entry in entries:
+        overlay = runtime.manifest_root / "guides/optimized-baseline/modelserver/gpu/vllm" / entry
+        overlay.mkdir(parents=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+
+    adapter = _build_optimized_baseline_provider(runtime)
+    validation = adapter.validate_inputs(adapter.discover(), {}, {})
+    assert not validation.accepted
+    message = "; ".join(validation.reasons)
+    assert "optimized-baseline" in message
+    assert "nvidia" in message
+    assert "expected '.' or 'base'" in message
+    assert "available variants:" in message
+    with pytest.raises(ValueError, match="no generic Kustomize entry point"):
+        asyncio.run(adapter.render(adapter.discover(), {}))
+
+
+@pytest.mark.parametrize("accelerator,tree,entry", [("nvidia", "gpu", "base"), ("intel-xpu", "xpu", ".")])
+def test_optimized_baseline_resolves_registered_hardware_entry(tmp_path, accelerator, tree, entry):
+    environment, _ = _environment(tmp_path)
+    environment["PRISM_DEPLOY_ACCELERATOR"] = accelerator
+    root = Path(environment["LLM_D_ROOT"])
+    overlay = root / "guides/optimized-baseline/modelserver" / tree / "vllm" / entry
+    overlay.mkdir(parents=True)
+    (overlay / "kustomization.yaml").write_text("resources: []")
+
+    adapter = _build_optimized_baseline_provider(RuntimeEnvironment.from_environment(environment))
+
+    assert adapter._policy.overlay_path == overlay
+    assert adapter._policy.source_error is None
+
+
+def test_catalog_registration_does_not_require_resolved_hardware(tmp_path, monkeypatch):
+    environment, _ = _environment(tmp_path)
+    environment["PRISM_DEPLOY_ACCELERATOR"] = ""
+    monkeypatch.delenv("PRISM_DEPLOY_ACCELERATOR", raising=False)
+
+    configured = build_deployment_service_from_environment(environment)
+
+    assert configured is not None
+
+
 def test_tiered_prefix_cache_provider_registers_all_upstream_xpu_variants(tmp_path: Path):
     environment, _ = _environment(tmp_path)
     runtime = RuntimeEnvironment.from_environment(environment)
@@ -87,7 +141,7 @@ def test_tiered_prefix_cache_provider_registers_all_upstream_xpu_variants(tmp_pa
     assert adapter._descriptor.variants["lmcache-connector/cpu/base"].name == "base"
     assert adapter._descriptor.variants["lmcache-connector/cpu/base"].parent.name == "cpu"
     # Native OffloadingConnector stays the recommended default; LMCache is opt-in.
-    assert adapter._descriptor.default_variant == "base"
+    assert adapter._descriptor.default_variant == "native/cpu/base"
 
 
 def test_existing_model_secret_requires_namespace_and_name():
@@ -342,6 +396,13 @@ def test_restricted_kubectl_allows_pd_diagnostic_logs(tmp_path: Path, command_ta
             *command_tail,
         ]
     )
+
+
+def test_structured_startup_diagnostics_remain_namespace_scoped(tmp_path: Path):
+    runner = RestrictedKubectlRunner(tmp_path / "kubectl", "llm-d-bench-")
+    runner._validate(["kubectl", "get", "pods", "--namespace", "llm-d-bench-pd-test", "-o", "json"])
+    with pytest.raises(RuntimeConfigurationError, match="outside the configured allowlist"):
+        runner._validate(["kubectl", "get", "pods", "--namespace", "default", "-o", "json"])
 
 
 @pytest.mark.asyncio

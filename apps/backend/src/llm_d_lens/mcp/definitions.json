@@ -1348,6 +1348,16 @@
                 "minimum": 1,
                 "maximum": 9007199254740991
               },
+              "concurrency": {
+                "description": "Target concurrent requests; mutually exclusive with request_rate.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "request_rate": {
+                "description": "Target requests per second (QPS); mutually exclusive with concurrency.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "ttftMs": {
                 "description": "Optional TTFT target in milliseconds.",
                 "type": "number",
@@ -1427,6 +1437,16 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 9007199254740991
+              },
+              "concurrency": {
+                "description": "Target concurrent requests; mutually exclusive with request_rate.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "request_rate": {
+                "description": "Target requests per second (QPS); mutually exclusive with concurrency.",
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "ttftMs": {
                 "description": "Optional TTFT target in milliseconds.",
@@ -1686,6 +1706,16 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 9007199254740991
+              },
+              "concurrency": {
+                "description": "Target concurrent requests; mutually exclusive with request_rate.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "request_rate": {
+                "description": "Target requests per second (QPS); mutually exclusive with concurrency.",
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "ttftMs": {
                 "description": "Optional TTFT target in milliseconds.",

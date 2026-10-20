@@ -426,6 +426,28 @@ require_accelerator(key: str) -> HardwareProfile                     # Unregiste
 10. **Unregistered boundary (4 + D5):** explicit selection of unknown classes/prefixes/accelerator keys raises ACCELERATOR_NOT_REGISTERED, never guessing or silently degrading. Cluster discovery marks unknown classes unsupported and continues.
 11. Multiple profiles matching a key are a registration conflict: reject at load/startup, not later at runtime.
 
+### 4.8 TODO: Cluster-aware, user-configurable RuntimeClass selection
+
+- [ ] Discover target-cluster RuntimeClasses and their scheduling constraints.
+    Validate an automatic profile suggestion against cluster capabilities instead
+    of treating a hardware vendor or device-plugin/DRA mode as proof that a named
+    RuntimeClass is required or available. Class existence alone does not prove
+    node handler or CDI readiness; surface unknown prerequisites explicitly.
+- [ ] Provide per-resource UI controls for automatic selection, explicit use of
+    the node default runtime (omit `runtimeClassName`), and an explicitly named
+    RuntimeClass. Preserve user choices, validate explicit names, and report
+    missing or incompatible selections before deployment without silently
+    overriding them.
+- [ ] Persist the selection policy and apply it consistently across manual
+    planning, Agentic planning, API/MCP inputs, and every model provider. Keep
+    hardware-specific defaults profile-driven and saved/published manifests
+    immutable; policy changes require a newly generated configuration.
+- [ ] Cover default-runtime/CDI clusters without a vendor-named RuntimeClass,
+    device-plugin and DRA access, custom RuntimeClasses, discovery permission
+    failures, and heterogeneous-node compatibility. Do not equate device-plugin
+    access with a mandatory RuntimeClass or DRA access with no RuntimeClass
+    requirement.
+
 ---
 
 ## 5. Hardware integration checklist
@@ -597,6 +619,7 @@ Add a package: for a bundled provider, use `llm_d_lens/hardware/profiles/nvidia.
 ```
 
 Companion changes:
+
 - llm-d upstream supplies `guides/*/modelserver/gpu/vllm/...` (Tier 3, gpu = NVIDIA); Lens does not author these overlays. gpu/vllm/base uses nvidia.com/gpu extended resources; only GKE RDMA uses gpu.nvidia.com DRA.
 - Add NvidiaProvider to the accelerator registry: install nvdp/nvidia-device-plugin through Helm, not host drivers; independently install a pinned dcgm-exporter chart symmetrically with xpumd. Read DCGM device and vLLM pod metrics.
 - Change AcceleratorType from Literal to str, validating every value against registered profiles (decision 4).
@@ -608,30 +631,36 @@ Core changes replace hardcoding with resolver calls without `if nvidia` branches
 ## 7. Phased implementation
 
 **Phase 0 — Extraction and compatibility (no behavior change)**
+
 - Add hardware/schema.json, discovery, models, registry, resolver, and router.
 - Discover profiles/providers through llm_d_lens.hardware entry-point groups, including Intel.
 - Extract intel_xpu.json with exactly existing values; retain constants delegating to resolvers.
 
 **Phase 1 — Telemetry/observability (lowest risk)**
+
 - Open AcceleratorType in monitoring/accelerator/models.py; the existing registry implements TelemetryContribution.provider_id.
 - Inject profile queries/labels into profiling/xpu_metrics.py; resolve evaluation scraping paths/profile mappings.
 - Add `/api/v1/hardware/capabilities`.
 
 **Phase 2 — Discovery, presence, and drivers**
+
 - Resolve cluster GPU counts, component status, and VRAM; bucket hardware summaries by vendor (D4).
 - Extract HardwareProvider.driver_* from gpu_driver/service.py; Intel wraps existing logic and preserves routes.
 - Use blocking HardwarePresence preflight: preserve Intel _ensure_intel_gpu_hardware_detected (90s/422); make accelerator gpu_nodes checks blocking rather than warnings; add equivalent NVIDIA label discovery.
 
 **Phase 3 — Rendering/planning (request_model + one variant)**
+
 - Profiles own accelerator capabilities and provider classes/claims/selectors/extended resources through deploy/providers/hardware_profile.py.
 - dra still requires/rewrites claims; extended-resource skips claims and updates resource_name in container requests/limits (§4.7 rule 9). Node requires claims only when the guide actually contains ResourceClaimTemplate.
 - Keep one overlay root/variant per guide in composition.py, without mixed-vendor roles (§4.7 rule 8).
 - guidePlanning/candidateSearch consume capabilities and recognize multi-vendor deviceClasses; deploy.ts KNOWN_GOOD remains the Intel known-good configuration.
 
 **Phase 4 — UI**
+
 - Drive CreateClusterWizard vendor tabs, AcceleratorObservabilityPanel defaults, and chart titles from profiles.
 
 **Phase 5 — NVIDIA pilot**
+
 - Add nvidia profile/provider and upstream modelserver/gpu overlays; verify driver installation → presence → discovery → deployment → DCGM/vLLM telemetry → nvidia evaluation profile.
 - Delivered: profiles/nvidia.json (extended-resource, gpu.nvidia.com, nvdp/nvidia-device-plugin 0.17.4, nvidia/nvidia-dra-driver-gpu 25.8.0; separate driver.modes.plugin/dra); providers/nvidia.py (profile, read-only presence, Helm driver installation/status); monitoring/accelerator/nvidia_gpu.py (type nvidia_gpu, dcgm-exporter 4.8.4, matching telemetry.provider_id). Entry points are registered; hardware query parameter chooses drivers.
 - Remaining: real-cluster end-to-end verification with upstream modelserver/gpu overlays; unavailable offline without a cluster.
@@ -657,6 +686,7 @@ After each phase, run relevant pytest and npm run build. Synchronize the Docusau
 ## 9. Risks and non-goals
 
 **Risks:**
+
 - Profile drift across Python/Node/UI: mitigate with one REST authority, versioning, and contract tests.
 - Missing overlay arch directories: validate overlay_root at load time and before deployment.
 - Third-party security/compatibility: entry points load executable code in process. Validate JSON profiles, allowlist providers/versions, and isolate loading errors so one failure does not disable registered hardware.
@@ -666,6 +696,7 @@ After each phase, run relevant pytest and npm run build. Synchronize the Docusau
 - Upstream naming drift: centralize cuda (Lens/AIC), nvidia (benchmark), and gpu (upstream) in §10.4's single profile mapping.
 
 **Non-goals:**
+
 - Do not unify RDMA/network-device abstractions here; retain dranet-rdma as a profile field for separate extension.
 - Vendors need not embed drivers/overlays; reference official driver versions and upstream llm-d assets.
 - Heterogeneous discovery resolves per claim/profile, but each deployment stays single-variant (§4.7 rule 8); no mixed vendors across roles.
@@ -730,24 +761,24 @@ These decisions were confirmed by the user in the original hardware-plugin desig
 
 **Integration scope (D1–D7 / ND1–ND6)**
 
-5. **D1:** Do not install NVIDIA kernel drivers/GPU Operator. Host drivers are preinstalled; Lens installs only device plugins or declarative DRA.
-6. **D2/ND5:** Install a separate dcgm-exporter chart, pinned to the latest validated version, symmetrically with XPU telemetry; no driver-installing GPU Operator.
-7. **D3:** Use upstream main's NVIDIA modelserver/gpu/vllm overlays with nvidia.com/gpu; Lens does not author overlays.
-8. **D4:** Bucket cluster statistics by vendor and retain totalGpuCount compatibility.
-9. **D5:** Discovery marks unknown classes unsupported and continues; explicit deployment/evaluation use raises ACCELERATOR_NOT_REGISTERED.
-10. **D6:** Third-party entry points require an allowlist; default to bundled/officially signed plugins.
-11. **D7:** llm-d guides explicitly select hardware.
-12. **ND1:** NVIDIA defaults to extended-resource/device plugin; gpu.nvidia.com DRA is declaratively supported but not default.
-13. **ND2:** NVIDIA Lens/AIC key is cuda (§10.4).
-14. **ND3:** Intel/NVIDIA get full profiles/providers; amd/cpu/tpu/npu/iluvatar/metax/... initially get read-only declarative profiles.
-15. **ND4:** Install pinned nvdp/nvidia-device-plugin via Helm, not host drivers.
-16. **ND6:** NVIDIA upstream directory/variant is gpu, not cuda; no cuda/ directory.
-17. **Presence preflight:** Intel/NVIDIA both block and fail fast after bounded waits without vendor labels, not a five-minute ready poll. Intel gpu_driver already does this; accelerator gpu_nodes must change from warning to blocking.
+1. **D1:** Do not install NVIDIA kernel drivers/GPU Operator. Host drivers are preinstalled; Lens installs only device plugins or declarative DRA.
+2. **D2/ND5:** Install a separate dcgm-exporter chart, pinned to the latest validated version, symmetrically with XPU telemetry; no driver-installing GPU Operator.
+3. **D3:** Use upstream main's NVIDIA modelserver/gpu/vllm overlays with nvidia.com/gpu; Lens does not author overlays.
+4. **D4:** Bucket cluster statistics by vendor and retain totalGpuCount compatibility.
+5. **D5:** Discovery marks unknown classes unsupported and continues; explicit deployment/evaluation use raises ACCELERATOR_NOT_REGISTERED.
+6. **D6:** Third-party entry points require an allowlist; default to bundled/officially signed plugins.
+7. **D7:** llm-d guides explicitly select hardware.
+8. **ND1:** NVIDIA defaults to extended-resource/device plugin; gpu.nvidia.com DRA is declaratively supported but not default.
+9. **ND2:** NVIDIA Lens/AIC key is cuda (§10.4).
+10. **ND3:** Intel/NVIDIA get full profiles/providers; amd/cpu/tpu/npu/iluvatar/metax/... initially get read-only declarative profiles.
+11. **ND4:** Install pinned nvdp/nvidia-device-plugin via Helm, not host drivers.
+12. **ND6:** NVIDIA upstream directory/variant is gpu, not cuda; no cuda/ directory.
+13. **Presence preflight:** Intel/NVIDIA both block and fail fast after bounded waits without vendor labels, not a five-minute ready poll. Intel gpu_driver already does this; accelerator gpu_nodes must change from warning to blocking.
 
 **Research conclusions (R1–R2)**
 
-18. **R1:** Use vLLM `vllm:gpu_*` pod metrics by pod labels, without DRA joins. DCGM is device/cluster-only; NVIDIA allocation_join="none". Intel retains XPUM + DRA joins.
-19. **R2:** Benchmark accelerator.profile values are nvidia, intel-xpu, intel-i915, intel-xe, intel-gaudi, amd, google; NVIDIA uses nvidia.
+1. **R1:** Use vLLM `vllm:gpu_*` pod metrics by pod labels, without DRA joins. DCGM is device/cluster-only; NVIDIA allocation_join="none". Intel retains XPUM + DRA joins.
+2. **R2:** Benchmark accelerator.profile values are nvidia, intel-xpu, intel-i915, intel-xe, intel-gaudi, amd, google; NVIDIA uses nvidia.
 
 Under AGENTS.md, these decisions apply only within their approved scope. Cross-vendor TP groups, mixed-vendor roles, floating driver versions, or other material changes require renewed explicit confirmation. Current constraint: one variant per deployment.
 

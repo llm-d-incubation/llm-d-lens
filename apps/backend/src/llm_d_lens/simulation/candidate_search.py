@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import re
@@ -18,6 +19,7 @@ from llm_d_lens.aic.models import AICEstimateRequest, AICExperimentRequest, AICR
 from llm_d_lens.auth.context import require_route_permission
 
 router = APIRouter(include_in_schema=False)
+logger = logging.getLogger(__name__)
 SEARCH_SOURCES = {"baseline", "pd", "epd", "tiered-cache", "precise-prefix-cache"}
 SOURCE_LABELS = {
     "aic": "AIC Prediction",
@@ -36,6 +38,7 @@ class CandidateError(Exception):
     def __init__(self, message: str, status: int = 400):
         super().__init__(message)
         self.status = status
+        self.public_message = message
 
 
 def record(value) -> dict:
@@ -65,8 +68,10 @@ def predict_payload(workload: dict, config: dict) -> dict:
     return {
         "model_name": str(workload.get("model") or ""),
         "gpu_count": positive_integer(config.get("totalGpus"), 8, 64),
-        "mean_input_tokens": positive_integer(workload.get("isl"), 1024, 1_000_000),
-        "mean_output_tokens": positive_integer(workload.get("osl"), 256, 1_000_000),
+        "mean_input_tokens": positive_integer(workload.get("isl"), 4000, 1_000_000),
+        "mean_output_tokens": positive_integer(workload.get("osl"), 1000, 1_000_000),
+        "target_concurrency": workload.get("concurrency"),
+        "target_request_rate": workload.get("request_rate"),
         "ttft_target_ms": number_field(workload, "ttftMs"),
         "tpot_target_ms": number_field(workload, "tpotMs"),
         "aic_system_name": str(config.get("aicSystemName") or "").strip(),
@@ -93,7 +98,10 @@ async def aic_call(request: Request, operation: str, payload: dict) -> dict:
         detail = "; ".join(f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}" for item in error.errors())
         raise CandidateError(detail, 422) from error
     except aic_service.AICError as error:
-        raise CandidateError(str(error)) from error
+        if str(error) == NO_FEASIBLE:
+            raise CandidateError(NO_FEASIBLE) from error
+        logger.exception("AIC candidate search failed")
+        raise CandidateError("AIC candidate search failed") from error
     except TimeoutError as error:
         raise CandidateError("AIC candidate search timed out", 504) from error
 
@@ -405,7 +413,7 @@ async def candidate_endpoint(request: Request, body: Annotated[Any, Body()] = No
     try:
         return await operation(request, record(body))
     except CandidateError as error:
-        return JSONResponse({"error": str(error)}, status_code=error.status)
+        return JSONResponse({"error": error.public_message}, status_code=error.status)
 
 
 for route_path in ("/api/candidate-search", "/api/candidate-search/relaxed", "/api/candidate-support"):

@@ -1,4 +1,5 @@
 import hashlib
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -7,11 +8,69 @@ import pytest
 import yaml
 
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
-from llm_d_lens.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter
+from llm_d_lens.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter, resolve_tiered_cache_variant
 
 
 def _asset(name: str, content: str) -> dict[str, str]:
     return {"name": name, "content": content, "checksum": f"sha256:{hashlib.sha256(content.encode()).hexdigest()}"}
+
+
+@pytest.mark.parametrize(
+    "requested, entries, expected",
+    [
+        ("native/cpu", ["native/cpu/base"], "native/cpu/base"),
+        ("native/cpu/base", ["native/cpu"], "native/cpu"),
+        ("native/cpu", ["native/cpu", "native/cpu/base"], "native/cpu"),
+        ("native/cpu/base", ["native/cpu", "native/cpu/base"], "native/cpu/base"),
+        ("lmcache-connector/fs/base", ["lmcache-connector/fs/base"], "lmcache-connector/fs/base"),
+    ],
+)
+def test_tiered_cache_variant_preserves_cache_semantics(requested, entries, expected):
+    assert resolve_tiered_cache_variant(entries, requested, accelerator="nvidia") == expected
+
+
+@pytest.mark.parametrize("entries", [[], ["base"], ["native/fs/base"], ["lmcache-connector/cpu/base"], ["native/cpu/gke"]])
+def test_tiered_cache_variant_does_not_select_a_different_cache_or_platform(entries):
+    with pytest.raises(ValueError) as failure:
+        resolve_tiered_cache_variant(entries, accelerator="nvidia")
+
+    assert "native/cpu" in str(failure.value)
+    assert "nvidia" in str(failure.value)
+    assert "available variants:" in str(failure.value)
+    assert "not changed automatically" in str(failure.value)
+
+
+@pytest.mark.parametrize("entry", ["native/cpu", "native/cpu/base"])
+@pytest.mark.parametrize("requested", [None, "native/cpu", "native/cpu/base"])
+def test_tiered_parameters_resolve_semantic_and_legacy_variants(tmp_path, entry, requested):
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = "nvidia"
+    adapter._descriptor = SimpleNamespace(guide_id="tiered-prefix-cache", variants={entry: tmp_path})
+    overrides = {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+        "runtime": {"image": "model-server:test"},
+    }
+    if requested:
+        overrides["guideVariant"] = requested
+
+    assert adapter._parameters(overrides)["variant"] == entry
+
+
+def test_tiered_parameters_keep_explicit_cache_choice(tmp_path):
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = "nvidia"
+    adapter._descriptor = SimpleNamespace(
+        guide_id="tiered-prefix-cache", variants={"lmcache-connector/fs/base": tmp_path}
+    )
+    overrides = {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+        "runtime": {"image": "model-server:test"},
+        "cache": {"variant": "lmcache-connector/fs/base"},
+    }
+
+    assert adapter._parameters(overrides)["variant"] == "lmcache-connector/fs/base"
 
 
 @pytest.mark.asyncio
@@ -42,6 +101,29 @@ async def test_render_resolves_selected_storage_volume(monkeypatch, tmp_path: Pa
 
     resolve.assert_awaited_once_with(overrides["runtime"], cluster_id="cluster-id", namespace="llmd-run")
     assert adapter._patch_documents.call_args.args[1]["resolved_mount"] == mount
+
+
+@pytest.mark.parametrize("existing", [None, "custom-runtime"])
+def test_patch_documents_applies_hardware_runtime_class(tmp_path, existing):
+    adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    adapter._accelerator = "nvidia"
+    adapter._descriptor = SimpleNamespace(guide_id="tiered-prefix-cache", variants={"native/cpu": tmp_path})
+    parameters = adapter._parameters(
+        {
+            "model": {"name": "Qwen/Qwen3-8B"},
+            "decode": {"replicaCount": 1, "tensorParallelSize": 2},
+            "runtime": {"image": "model-server:test"},
+        }
+    )
+    pod = {"containers": [{"name": "modelserver", "args": ["exec vllm serve old-model"]}]}
+    if existing:
+        pod["runtimeClassName"] = existing
+    documents = [{"kind": "Deployment", "spec": {"template": {"spec": pod}}}]
+
+    adapter._patch_documents(documents, parameters)
+
+    assert pod["runtimeClassName"] == (existing or "nvidia")
+    assert pod["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "2"
 
 
 @pytest.mark.asyncio
@@ -145,7 +227,8 @@ async def test_deploy_stops_before_router_if_model_secret_copy_fails():
     assert commands == [["kubectl", "create", "namespace", "llmd-run"]]
 
 
-def test_patch_documents_sets_xpu_startup_budget_and_model_length():
+@pytest.mark.parametrize("invocation", ["shell", "argv", "empty-argv"])
+def test_patch_documents_sets_xpu_startup_budget_and_model_length(invocation):
     documents = [
         {
             "kind": "Deployment",
@@ -171,25 +254,56 @@ def test_patch_documents_sets_xpu_startup_budget_and_model_length():
             },
         },
     ]
-    parameters = {
-        "replicas": 1,
-        "image": "new:image",
-        "mount_path": "",
-        "model": "Qwen/Qwen3-8B",
-        "tensor_parallel_size": 1,
-        "max_model_len": 16384,
-        "custom_parameters": [],
-        "environment": {},
-    }
-
     adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+    container = documents[0]["spec"]["template"]["spec"]["containers"][0]
+    if invocation == "argv":
+        container["command"] = ["vllm", "serve"]
+        container["args"] = ["Qwen/Old", "--max-model-len", "32000", "--max-num-seqs=16"]
+    elif invocation == "empty-argv":
+        container["command"] = ["vllm", "serve"]
+        container.pop("args")
     adapter._accelerator = "intel-xpu"
+    adapter._descriptor = SimpleNamespace(variants={"base": Path(".")}, guide_id="tiered-prefix-cache")
+    parameters = adapter._parameters(
+        {
+            "guideVariant": "base",
+            "model": {"name": "Qwen/Qwen3-8B"},
+            "runtime": {"image": "new:image"},
+            "decode": {
+                "replicaCount": 1,
+                "tensorParallelSize": 1,
+                "maxModelLen": 16384,
+                "maxNumSeqs": 128,
+                "gpuMemoryUtilization": 0.85,
+                "blockSize": 32,
+                "maxNumBatchedTokens": 8192,
+            },
+        }
+    )
     adapter._patch_documents(documents, parameters)
 
     deployment = documents[0]
-    command = deployment["spec"]["template"]["spec"]["containers"][0]["args"][0]
+    args = container["args"]
+    command = shlex.split(args[0].replace("\\\n", " ")) if invocation == "shell" else args
     assert deployment["spec"]["progressDeadlineSeconds"] == 1800
     assert "--max-model-len=16384" in command
+    assert "--max-num-seqs=128" in command
+    assert "--gpu-memory-utilization=0.85" in command
+    assert "--block-size=32" in command
+    assert "--max-num-batched-tokens=8192" in command
+    assert "Qwen/Qwen3-8B" in command
+    assert "--max-model-len" not in command
+
+
+@pytest.mark.parametrize("value", [4096, 2048])
+def test_shell_arguments_preserve_quoted_values_and_replace_old_context(value):
+    command = "exec vllm serve org/model --max-model-len 32000 --kv-transfer-config '{\"kv_role\": \"kv_both\"}'"
+    result = HelmKustomizeGuideAdapter._set_shell_argument(command, "max-model-len", value)
+    tokens = shlex.split(result)
+    assert f"--max-model-len={value}" in tokens
+    assert '{"kv_role": "kv_both"}' in tokens
+    result = HelmKustomizeGuideAdapter._set_shell_argument(result, "served-model-name", "test model")
+    assert "--served-model-name=test model" in shlex.split(result)
 
 
 @pytest.mark.parametrize("read_only", [False, True])
@@ -221,7 +335,7 @@ def test_patch_documents_uses_selected_storage_volume_cache(read_only):
         "mount_path": "",
         "model": "Qwen/Qwen3-8B",
         "tensor_parallel_size": 1,
-        "max_model_len": None,
+        "serving_arguments": {},
         "custom_parameters": [],
         "environment": {},
         "resolved_mount": {

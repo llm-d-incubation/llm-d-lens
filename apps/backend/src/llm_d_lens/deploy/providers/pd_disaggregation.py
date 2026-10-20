@@ -20,9 +20,16 @@ from llm_d_lens.deploy.providers.deployment_bundle import (
     subprocess_bundle_runner,
 )
 from llm_d_lens.deploy.providers.gpu_selection import gpu_device_selectors
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.hardware_profile import (
     active_profile,
+    apply_runtime_class,
     default_guide_variant,
     guide_overlays,
     requires_dra_claim,
@@ -68,7 +75,10 @@ class PdDisaggregationAdapter:
             "supported-core",
             {
                 "variants": sorted(self._sources),
-                "default_variant": default_guide_variant(self._sources),
+                "default_variant": (
+                    default_guide_variant(self._sources, guide="pd-disaggregation", accelerator=self._accelerator)
+                    if any(name in self._sources for name in (".", "base")) else ""
+                ),
                 "structured_custom_parameters": True,
             },
         )
@@ -90,6 +100,8 @@ class PdDisaggregationAdapter:
                             sources[sibling.name if variant == "." else f"{sibling.name}/{variant}"] = path
         if "." in sources:
             sources["vllm"] = sources["."]
+        elif "base" in sources:
+            sources["vllm"] = sources["base"]
         return sources
 
     def discover(self):
@@ -156,6 +168,8 @@ class PdDisaggregationAdapter:
             args = list(container.get("args") or [])
             args[0] = "/model-cache" if cache_mounted and model_source == "shared-path" else parameters["model"]
             args = self._set_argument(args, "tensor-parallel-size", str(parameters[role]["tensor_parallel_size"]))
+            for name, value in parameters[role]["serving_arguments"].items():
+                args = self._set_argument(args, name, value)
             environment = list(container.get("env") or [])
             for name, value in sorted(parameters["environment"].items()):
                 if value:
@@ -226,6 +240,7 @@ class PdDisaggregationAdapter:
                     set_accelerator_request(
                         container, None, parameters[role]["tensor_parallel_size"], accelerator=self._accelerator
                     )
+            apply_runtime_class(deployment["spec"]["template"]["spec"], accelerator=self._accelerator)
         manifest = directory / "manifest.yaml"
         manifest.write_text(yaml.safe_dump_all(documents, sort_keys=False), encoding="utf-8")
         return GuideDeploymentArtifact(
@@ -493,21 +508,7 @@ class PdDisaggregationAdapter:
 
     @staticmethod
     def _set_argument(args, name, value):
-        if name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"} and str(value).lower() in {
-            "true",
-            "false",
-        }:
-            positive, negative = f"--{name}", f"--no-{name}"
-            replacement = positive if str(value).lower() == "true" else negative
-            return [item for item in args if item not in {positive, negative, f"--{name}=true", f"--{name}=false"}] + [
-                replacement
-            ]
-        prefix = f"--{name}="
-        return (
-            [f"{prefix}{value}" if item.startswith(prefix) else item for item in args]
-            if any(item.startswith(prefix) for item in args)
-            else [*args, f"{prefix}{value}"]
-        )
+        return set_vllm_argument(args, name, value)
 
     @staticmethod
     def _set_environment(items, name, value):
@@ -524,7 +525,9 @@ class PdDisaggregationAdapter:
         # The variant id is accelerator-specific (XPU: vllm/vllm-rdma; NVIDIA GPU:
         # the vLLM infra-provider overlay such as base); the adapter validates it
         # against the overlays available for the active accelerator.
-        variant = str(overrides.get("guideVariant") or default_guide_variant(self._sources))
+        variant = str(overrides.get("guideVariant") or default_guide_variant(
+            self._sources, guide="pd-disaggregation", accelerator=self._accelerator
+        ))
         result: dict[str, Any] = {
             "variant": variant,
             "model": model["name"],
@@ -544,5 +547,9 @@ class PdDisaggregationAdapter:
             values = overrides.get(role) or {}
             if not isinstance(values.get("replicaCount"), int) or not isinstance(values.get("tensorParallelSize"), int):
                 raise ValueError(f"pd-disaggregation requires {role} replicaCount and tensorParallelSize")
-            result[role] = {"replicas": values["replicaCount"], "tensor_parallel_size": values["tensorParallelSize"]}
+            result[role] = {
+                "replicas": values["replicaCount"],
+                "tensor_parallel_size": values["tensorParallelSize"],
+                "serving_arguments": serving_arguments(model, values),
+            }
         return result

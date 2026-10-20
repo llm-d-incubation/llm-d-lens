@@ -1,3 +1,5 @@
+import httpx
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -80,3 +82,36 @@ def test_root_backend_routes_are_not_replaced_with_the_spa(tmp_path):
         assert redirect.status_code == 200
         assert "swaggerUIRedirectOauth2" in redirect.text
         assert client.get("/models").text == "<html>Lens</html>"
+
+
+@pytest.mark.asyncio
+async def test_monitoring_rate_limit_preserves_threshold_and_client_isolation(tmp_path):
+    app = application(tmp_path)
+    calls = []
+
+    @app.api_route("/api/v1/monitoring/gpu-driver/status", methods=["GET", "POST"])
+    async def monitoring_status():
+        calls.append(True)
+        return {"ok": True}
+
+    path = "/api/v1/monitoring/gpu-driver/status"
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("192.0.2.1", 12345)), base_url="http://testserver"
+        ) as client,
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("192.0.2.2", 12345)), base_url="http://testserver"
+        ) as other_client,
+    ):
+        for index in range(1000):
+            response = await client.get(path)
+            assert response.status_code == 200
+            assert response.headers["ratelimit-limit"] == "1000"
+            assert response.headers["ratelimit-remaining"] == str(999 - index)
+        for method in ("GET", "POST"):
+            response = await client.request(method, path)
+            assert response.status_code == 429
+            assert int(response.headers["retry-after"]) > 0
+        assert len(calls) == 1000
+        assert (await other_client.get(path)).status_code == 200
+        assert len(calls) == 1001

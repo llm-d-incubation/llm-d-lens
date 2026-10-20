@@ -10,6 +10,14 @@ import TabItem from '@theme/TabItem';
 
 Lens Assistant uses `llm_d_lens.mcp.router` in the unified Python service. Its FastAPI router exposes the stateless Streamable HTTP endpoint at `/api/mcp` using the official MCP Python SDK.
 
+Candidate tools advertise and forward either `workload.concurrency` or
+`workload.request_rate` (positive, mutually exclusive load targets). The compatibility
+API defaults omitted input/output token lengths to 4000/1000, matching Agentic
+planning. Expected validation messages and no-feasible-candidate retry behavior
+are preserved. Other AIC service failures return the generic
+`{ "error": "AIC candidate search failed" }` response with status `400`;
+internal exception details are logged only on the server.
+
 ### Send one stateless MCP request
 
 Handle one stateless Streamable HTTP MCP request with a fresh SDK server and transport manager.

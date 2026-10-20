@@ -43,7 +43,29 @@ artifact directly to this adapter and assume it supports it.
 when supplied, and provider state managed by that service before cleanup. It
 does not accept arbitrary resource selectors.
 
+Model-server renderers for baseline, optimized baseline, P/D disaggregation,
+tiered prefix cache and precise prefix cache routing share RuntimeClass selection.
+They resolve the hardware access mode from the model container's device requests
+and copy its optional `runtime_class_name` into the Pod's `runtimeClassName` only
+when no explicit RuntimeClass is present. The NVIDIA plugin mode declares `nvidia`,
+which must be registered on the target cluster; modes without this setting retain
+the cluster default. Router-only and CPU-only Pods are unchanged. This does not
+change accelerator resource requests or rewrite saved deployment artifacts.
+
 ### Execution, observation and evidence
+
+Ordinary provider rendering maps `maxModelLen`, `maxNumSeqs`,
+`gpuMemoryUtilization`, `blockSize` and `maxNumBatchedTokens` from each role
+to the corresponding vLLM arguments. P/D uses separate `prefill` and `decode`
+values; other providers use `decode` (`precise-prefix-cache-routing` also accepts
+`serving`). `model.maxModelLen` supplies a fallback for missing role lengths.
+Explicit integer controls must be positive integers; `gpuMemoryUtilization`
+must be finite and greater than zero and at most one. Invalid values fail
+validation/rendering instead of silently falling back. Applicable
+`customParameters` override structured controls. Ordinary rendering replaces both
+`--name=value` and `--name value` forms; omitted controls preserve Guide defaults.
+Exact published `officialGuide` manifests remain on their existing validated
+manifest path rather than being rewritten by ordinary provider parameter mapping.
 
 `DeploymentExecution` carries `execution_id`, `request_id`, `status`, `artifact`,
 `configuration_artifacts`, optional `endpoint`/`namespace`/`resource_snapshot`,
@@ -56,6 +78,16 @@ The complete run/case/execution state enums are listed below. A `ready` executio
 must contain `DeploymentEndpoint`: `url`, `protocol="http"` and optional
 `service_ref`, `model_ref`, `baseline_url`. Endpoint metadata must not carry
 credentials, kubeconfig or authorization values.
+
+Shared-memory preparation is recorded under
+`artifact.rendered_payload.value.deployment_contract.sharedMemory` and copied to
+`diagnostics.value.snapshot.shared_memory`. The report contains `defaultSizeLimit`
+(`4Gi`), `addedMounts`, per-container `mounts`, `warnings`, and `manifestChecksum`
+for the shared-memory preparation stage (before later placement or tracing).
+Ordinary renders complete missing model-server `/dev/shm` mounts; existing mounts
+and host IPC are retained. Published `officialGuide` manifests are checked without
+shared-memory mutation. Warnings are also logged; invalid or duplicate mount
+bindings fail rendering. This does not change the supplied Configuration artifact.
 
 `get(execution_id)` returns `DeploymentExecution`, not another status DTO.
 The concrete service looks up its in-memory execution state and raises `KeyError`
@@ -127,6 +159,12 @@ print(sorted(variants))
 ```
 
 ## Backend API
+
+Guide compatibility endpoints keep the `{ "error": "..." }` response shape.
+Expected validation failures retain their actionable message and status.
+Unexpected catalog/preparation failures return a generic `502` response; unexpected
+planning failures return a generic `500` response with `Server-Timing` preserved.
+Exception details are logged on the server, not returned to the browser.
 
 ### Prepare Guide source
 
@@ -224,6 +262,46 @@ prohibition. The 0.12.0 matrix passes Qwen/Qwen3-0.6B on B60/vLLM for P/D;
 candidate availability still depends on the requested workload and GPU budget.
 After changing the dependency pin, reinstall project dependencies and restart
 the backend so support checks and searches use the same SDK release.
+
+### Search or size an AIC workload
+
+The MCP generation and plain-estimate fallback behavior above applies when no load
+target is supplied. Agentic load-target planning instead validates the exact native
+AIC recommendations, including replica counts outside the ordinary candidate grid.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/aic/search`**
+
+    `mean_input_tokens` defaults to `4000` and `mean_output_tokens` to `1000`, matching
+    native AIC search/recommend. Supply either positive `target_concurrency` or
+    `target_request_rate` (requests/second), or omit both for fixed-GPU search.
+    Supplying both is rejected with an explanation that AIC does not support joint
+    load targets. Agentic maps `planning_facts.workload_profile.concurrency` and
+    `.request_rate` to these fields; QPS and request rate are the same quantity.
+
+    With a load target, `gpu_count` is an acceptance budget, not a native recommend
+    input. Lens scales the recommended worker pools and accepts only configurations
+    within that budget and the TTFT/TPOT targets (native defaults `2000`/`30` ms).
+    Unavailable predictions, insufficient capacity or unmet SLOs return an explicit
+    error instead of silently selecting a prediction without a load target.
+    Agentic forwards that reason to the frontend error alert.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.aic.models import AICRequest
+    from llm_d_lens.aic.service import search
+
+    result = await search(AICRequest(
+        model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
+        gpu_count=8, target_request_rate=10,
+    ))
+    ```
+
+    Use `target_concurrency` instead of `target_request_rate` for a concurrent-request
+    target. Leave both unset to retain the existing fixed-GPU search.
+  </TabItem>
+</Tabs>
 
 ### Estimate an AIC topology
 
@@ -1444,6 +1522,14 @@ Get case, refreshed from provider diagnostics. Stopped or cleaned records are
 preserved rather than made ready again. Missing case/execution or refresh
 `ValueError` returns `404`. Response excerpt:
 
+Progress-deadline errors remain `deploying` while current Pod diagnostics confirm
+normal container startup within probe budgets, counted from container start
+rather than time spent Pending. A recoverable `failed` record returns to
+`deploying`; the case failure is cleared. `diagnostics.value.snapshot.pod_statuses`
+contains Pod status and probe timing fields, not container environment values.
+Running alone does not set `ready`, and current workload failures or expired
+startup budgets are not treated as normal startup.
+
 ```json
 {
   "case": {"id": "case-1", "status": "ready", "execution_id": "execution-1"},
@@ -1574,6 +1660,11 @@ asyncio.run(main())
 </Tabs>
 
 ## Remote SSH deployment
+
+SSH transport and remote command failures return `502` with
+`{ "error": "Remote deployment failed" }`; internal exception details and failing
+command output are logged server-side rather than exposed in error responses.
+Expected input and policy errors retain their existing status and actionable message.
 
 These legacy endpoints are implemented in the Python module
 `llm_d_lens.deploy.remote_deploy`. They

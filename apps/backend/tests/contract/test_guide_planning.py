@@ -331,3 +331,69 @@ async def test_remote_bundle_falls_back_to_flat_router_path(monkeypatch):
     bundle = await guide_bundle.build_guide_deployment_bundle("optimized-baseline", manifest, "model", "gpu")
     assert bundle["sourceCommit"] == "a" * 40
     assert any("/router/optimized-baseline.values.yaml" in url for url in fetched)
+
+
+@pytest.mark.parametrize(
+    ("operation", "loader", "status", "message"),
+    [
+        ("catalog", "load_guide_paths", 502, "Guide catalog could not be loaded"),
+        ("prepare", "load_manifests", 502, "Guide preparation failed; retry when generating configuration"),
+        ("plan", "load_selected_manifests", 500, "Guide planning failed"),
+    ],
+)
+def test_guide_internal_errors_are_logged_not_exposed(monkeypatch, caplog, operation, loader, status, message):
+    from unittest.mock import AsyncMock
+
+    from fastapi.testclient import TestClient
+
+    from llm_d_lens.api.main import app
+
+    detail = "internal traceback /private/guide/config credential-value"
+    monkeypatch.setattr(sources, loader, AsyncMock(side_effect=OSError(detail)))
+    client = TestClient(app)
+    response = (
+        client.get("/api/guide-planning/catalog")
+        if operation == "catalog"
+        else client.post(
+            f"/api/guide-planning/{operation}",
+            json={
+                "guide": "optimized-baseline",
+                "accelerator": "gpu",
+                "modelServer": "vllm",
+                "model": "example/model",
+                "environment": {"kubernetesMode": "disabled"},
+            },
+        )
+    )
+    assert response.status_code == status
+    assert response.json() == {"error": message}
+    assert detail not in response.text
+    assert detail in caplog.text
+    if operation == "plan":
+        assert "total;dur=" in response.headers["server-timing"]
+
+
+def test_guide_validation_keeps_actionable_message_and_status(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from fastapi.testclient import TestClient
+
+    from llm_d_lens.api.main import app
+
+    monkeypatch.setattr(
+        sources,
+        "load_selected_manifests",
+        AsyncMock(side_effect=guide.GuideError("Remote branch/ref could not be resolved to a commit", 404)),
+    )
+    response = TestClient(app).post(
+        "/api/guide-planning/plan",
+        json={
+            "guide": "optimized-baseline",
+            "accelerator": "gpu",
+            "modelServer": "vllm",
+            "model": "example/model",
+            "environment": {"kubernetesMode": "disabled"},
+        },
+    )
+    assert response.status_code == 404
+    assert response.json() == {"error": "Remote branch/ref could not be resolved to a commit"}

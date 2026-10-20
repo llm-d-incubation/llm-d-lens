@@ -168,3 +168,29 @@ async def test_agentic_client_connects_to_python_mcp_and_calls_the_canonical_api
         expected = await canonical.get(definition["route"])
     assert expected.status_code == 200
     assert result == expected.json()
+
+
+@pytest.mark.parametrize("field", ["concurrency", "request_rate"])
+@pytest.mark.asyncio
+async def test_candidate_tools_advertise_and_forward_load_targets(monkeypatch, field):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from jsonschema import Draft202012Validator
+
+    from llm_d_lens.api.main import app
+    from llm_d_lens.mcp import tools
+    from llm_d_lens.mcp.catalog import catalog
+
+    indexed = {tool["name"]: tool for tool in catalog(app)}
+    for name in ("check_candidate_support", "search_candidates", "search_aic_with_relaxation"):
+        properties = indexed[name]["inputSchema"]["properties"]["workload"]["properties"]
+        assert properties[field]["exclusiveMinimum"] == 0
+        assert not Draft202012Validator(properties[field]).is_valid(0)
+    upstream = AsyncMock(return_value={"candidates": []})
+    monkeypatch.setattr(tools, "api_request", upstream)
+    workload = {"model": "model", "isl": 4000, "osl": 1000, field: 10}
+    await tools.invoke_tool(
+        SimpleNamespace(app=app), "search_candidates", {"workload": workload, "searchConfig": {}, "sourceIds": ["aic"]}
+    )
+    assert upstream.call_args.args[3]["workload"] == workload

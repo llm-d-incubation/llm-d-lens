@@ -40,7 +40,25 @@ Simulation 不负责部署生命周期。
 `kill(request, execution)` 在清理前验证执行 ID、可选的预期命名空间，以及该服务
 所管理的提供方状态，不接受任意资源选择器。
 
+baseline、optimized baseline、P/D 分离、分层前缀缓存和精确前缀缓存路由的模型服务渲染器
+共用 RuntimeClass 选择逻辑：按模型容器的设备请求解析硬件访问模式，并仅在 Pod 未显式指定
+RuntimeClass 时，将该模式中可选的 `runtime_class_name` 写入 `runtimeClassName`。
+NVIDIA plugin 模式声明 `nvidia`，目标集群必须已注册该 RuntimeClass；未声明此设置的模式
+继续使用集群默认运行时。仅路由或仅 CPU 的 Pod 不受影响。此设置不改变加速器资源请求，
+也不会改写已保存的部署产物。
+
 ### 执行、观察与证据
+
+普通 provider 渲染会把各角色的 `maxModelLen`、`maxNumSeqs`、
+`gpuMemoryUtilization`、`blockSize` 和 `maxNumBatchedTokens` 映射为对应的 vLLM 参数。
+P/D 分别使用 `prefill` 和 `decode`；其他 provider 使用 `decode`
+（`precise-prefix-cache-routing` 也接受 `serving`）。角色未指定长度时，
+使用 `model.maxModelLen`。显式整数控制项必须为正整数；
+`gpuMemoryUtilization` 必须为有限数，且大于零、不超过一。
+非法值会使验证或渲染失败，不会静默回退。匹配目标角色的 `customParameters`
+覆盖结构化控制项。普通渲染会替换 `--name=value` 和 `--name value` 两种形式；
+省略的字段保留 Guide 默认值。精确发布的 `officialGuide` 清单继续走现有清单验证路径，
+不会由普通 provider 参数映射重写。
 
 `DeploymentExecution` 包含 `execution_id`、`request_id`、`status`、`artifact`、
 `configuration_artifacts`、可选 `endpoint`/`namespace`/`resource_snapshot`、
@@ -53,6 +71,15 @@ Simulation 不负责部署生命周期。
 `DeploymentEndpoint`，包含 `url`、`protocol="http"` 和可选
 `service_ref`、`model_ref`、`baseline_url`。端点元数据不得包含凭据、
 kubeconfig 或授权值。
+
+共享内存检查结果保存在
+`artifact.rendered_payload.value.deployment_contract.sharedMemory`，并复制到
+`diagnostics.value.snapshot.shared_memory`。报告包含 `defaultSizeLimit`（`4Gi`）、
+`addedMounts`、各容器的 `mounts`、`warnings`，以及共享内存处理阶段的
+`manifestChecksum`（在后续放置和追踪处理之前）。普通渲染会补充模型容器缺少的
+`/dev/shm` 挂载；已有挂载和主机 IPC 设置保持不变。发布的 `officialGuide` 清单
+只检查，不修改共享内存配置。警告也会写入日志；无效或重复挂载绑定会使渲染失败。
+这不会修改传入的 Configuration 产物。
 
 `get(execution_id)` 返回 `DeploymentExecution`，而非另一套状态 DTO。
 具体服务查询内存中的执行状态，未知 ID 会抛出 `KeyError`，它本身不是数据库查询。
@@ -99,6 +126,12 @@ def simulation_projection(execution: DeploymentExecution) -> SimulationDeploymen
 ```
 
 ## 后端 API
+
+Guide 兼容端点保留 `{ "error": "..." }` 响应结构。
+预期的校验失败保留可操作的错误提示及状态码。
+目录加载和准备阶段的非预期错误返回通用 `502` 响应；
+规划阶段的非预期错误返回通用 `500` 响应，并保留 `Server-Timing`。
+异常详情仅记录在服务端日志中，不返回浏览器。
 
 ### 准备 Guide 源码
 
@@ -163,6 +196,43 @@ GPU 节省量更大的方案。未知的估算值不会被视为失败。
 规划事实，解释为什么每一个评分较低的返回候选方案排在最高选择之后。
 只有返回的前三个候选方案会被评分；对于该集合之外的候选方案，
 不会推断出任何理由。
+
+### 搜索或估算 AIC 负载容量
+
+上文的 MCP 生成和普通 estimate 回退行为适用于未提供负载目标的请求。
+Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包括普通候选网格之外的副本数。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/v1/aic/search`**
+
+    `mean_input_tokens` 默认 `4000`，`mean_output_tokens` 默认 `1000`，与 AIC 原生
+    search/recommend 一致。可以提供正数 `target_concurrency` 或 `target_request_rate`
+    （每秒请求数），二选一；两项均不提供时保留固定 GPU 数搜索。
+    同时提供会被拒绝，错误中会明确说明 AIC 不支持联合负载目标。
+    Agentic 将 `planning_facts.workload_profile.concurrency` 和 `.request_rate`
+    映射到这些字段；QPS 和 request rate 是同一项。
+
+    存在负载目标时，`gpu_count` 是 Lens 的验收预算，不传给原生 recommend。
+    Lens 会扩展推荐的各 worker 池，只接受所需 GPU 不超预算且满足 TTFT/TPOT 目标
+    （原生默认 `2000`/`30` 毫秒）的配置。预测不可用、容量不足或 SLO 无法满足时，
+    会明确报错，不会悄悄选择没有负载目标的预测。Agentic 会将原因传到前端错误提示区。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.aic.models import AICRequest
+    from llm_d_lens.aic.service import search
+
+    result = await search(AICRequest(
+        model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
+        gpu_count=8, target_request_rate=10,
+    ))
+    ```
+
+    要指定目标并发请求数，使用 `target_concurrency` 替代 `target_request_rate`。
+    两项都不设置则保持原来的固定 GPU 数搜索。
+  </TabItem>
+</Tabs>
 
 ### 估算 AIC 拓扑结构
 
@@ -1326,6 +1396,12 @@ worker 对生命周期冲突抛出 `ValueError`，路由映射为 `409`。
 不要求请求体，可发送 `{}`；需要 `deployment:case:execute`。
 根据 provider 诊断刷新，返回 `200`，结构与获取用例相同，包含 `case`、`execution`、`deployment`。
 已停止或已清理记录不会被重新标记为 ready。缺失用例／执行或刷新 `ValueError` 返回 `404`。
+
+如果当前 Pod 诊断确认容器仍在探针预算内正常启动，即使报告进度期限超时也保持 `deploying`。
+预算从容器实际启动时刻计算，不包含 Pending 等待时间。可恢复的 `failed` 记录会返回
+`deploying` 并清除用例失败信息。`diagnostics.value.snapshot.pod_statuses` 包含 Pod 状态
+和探针时间字段，不包含容器环境变量值。仅有 Running 状态不会设为 `ready`；
+当前工作负载失败或启动预算耗尽不会被视为正常启动。
 响应节选：
 
 ```json
@@ -1456,6 +1532,11 @@ asyncio.run(main())
 完整的请求/响应 schema 参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。
 
 ## Remote SSH 部署
+
+SSH 传输和远程命令失败返回 `502` 及
+`{ "error": "Remote deployment failed" }`；内部异常详情及失败命令的输出
+记录在服务端日志中，不暴露在错误响应中。
+预期的输入和策略错误保留原有状态码及可操作的提示。
 
 这些旧版端点由 Python 模块 `llm_d_lens.deploy.remote_deploy` 实现。
 它们通过 SSH 执行命令，不创建 v1 部署运行。当前仅支持单节点 Intel Data Center GPU/XPU，

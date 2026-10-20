@@ -97,6 +97,7 @@
       "dra": { "request_model": "dra", "device_class": "gpu.nvidia.com", "claim_request_name": "nvidia" },
       "plugin": {
         "request_model": "extended-resource",
+        "runtime_class_name": "nvidia",
         "resource_names": ["nvidia.com/gpu"]
       }
     }

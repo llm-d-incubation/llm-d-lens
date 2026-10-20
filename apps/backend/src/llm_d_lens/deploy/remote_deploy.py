@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 import shlex
@@ -22,6 +23,7 @@ from llm_d_lens.infrastructure.ssh import SshTarget, inspect_host_key, remote_ex
 from .legacy_poc import timestamp
 
 router = APIRouter(prefix="/api/remote-deploy", include_in_schema=False)
+logger = logging.getLogger(__name__)
 HOST_PATTERN = r"(?=.{1,253}$)(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?)"
 NAMESPACE_PATTERN = r"(?=.{1,63}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?"
 TERMINAL_REASONS = {
@@ -37,6 +39,7 @@ class RemoteError(Exception):
     def __init__(self, message: str, status: int = 400):
         super().__init__(message)
         self.status = status
+        self.public_message = message if status < 500 else "Remote deployment failed"
 
 
 def assert_enabled():
@@ -505,11 +508,15 @@ async def remote_operation(request: Request):
         if result["code"]:
             raise RemoteError(combined(result), 502)
         return {"success": True, "namespace": namespace, "logTail": combined(result).splitlines()[-100:]}
-    except (RemoteError, OSError, paramiko.SSHException, EOFError) as error:
+    except RemoteError as error:
+        logger.warning("Remote deployment request failed", exc_info=True)
         return JSONResponse(
-            {"error": re.sub(r"password=\S+", "password=[redacted]", str(error), flags=re.IGNORECASE)},
-            status_code=error.status if isinstance(error, RemoteError) else 502,
+            {"error": error.public_message},
+            status_code=error.status,
         )
+    except (OSError, paramiko.SSHException, EOFError):
+        logger.exception("Remote deployment failed")
+        return JSONResponse({"error": "Remote deployment failed"}, status_code=502)
 
 
 for operation in ("fingerprint", "test", "start", "status", "logs", "teardown"):

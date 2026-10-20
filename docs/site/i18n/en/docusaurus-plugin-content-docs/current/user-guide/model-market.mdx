@@ -54,7 +54,7 @@ again. A resource or network error during generation must be resolved before dep
 
 1. Open a model and fill in the deployment name, cluster and cache storage.
 2. Set **Mode** to **Agentic**.
-3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields.
+3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **Input tokens per request** (ISL) defaults to `4000` and **Output tokens per request** (OSL) to `1000`, matching native AIC search/recommend defaults. **TTFT SLO (ms)** defaults to `2000` and **TPOT SLO (ms)** to `30`; all are editable. There is no end-to-end latency input.
 4. Leave **AI provider** on **Default (no external AI provider)**, or select a configured provider to help rank the options.
 5. Optional: expand **Preference** and enter an English preference, such as `use fewer GPU resources` or `prefer prefix cache`.
 6. Click **Generate recommendation**.
@@ -63,6 +63,14 @@ again. A resource or network error during generation must be resolved before dep
 
 Optionally, expand **Pod placement** before generating a recommendation to choose
 where the deployment runs.
+
+For load-based sizing, enter either **Concurrent requests** or **Request rate (QPS)**,
+not both. These are optional and have no prefilled target. A provided target selects
+native AIC recommendation mode; leaving both blank keeps the fixed-GPU search.
+Lens validates the exact recommended topology against the selected GPU capacity and
+deployment constraints. Joint inputs, unavailable predictions, insufficient capacity
+or unmet latency SLOs produce an error in the Agentic workspace with the reason and
+next action, rather than silently falling back to predictions without a load target.
 
 To change the recommendation, enter your revised preference below the alternatives
 and click **Recalculate selection**. This also works without an external AI provider.
@@ -82,6 +90,16 @@ or resources. [Run an evaluation](/user-guide/evaluation) to measure the deploye
 
 If startup reports insufficient KV-cache capacity, lower the maximum context
 length or allocate more resources in a new configuration.
+
+For deployments using the NVIDIA device plugin, generated model-server Pods select
+the `nvidia` RuntimeClass declared by their hardware access mode unless the source
+already specifies a RuntimeClass. This applies to baseline, optimized baseline,
+P/D disaggregation, tiered prefix cache and precise prefix cache routing. This
+RuntimeClass must exist on the target cluster. GPU requests alone do not inject
+devices when the node's default container runtime is `runc`. If vLLM reports
+`Failed to infer device type`, check the Pod's RuntimeClass and device access;
+`VLLM_LOGGING_LEVEL=DEBUG` only adds diagnostics. Existing Pods and saved manifests
+are not rewritten by a Lens update; generate a new deployment to apply the fix.
 
 If **Your role cannot create deployments.** appears, ask an administrator for
 deployment access to the target cluster. **Open Deployments** still lets you view

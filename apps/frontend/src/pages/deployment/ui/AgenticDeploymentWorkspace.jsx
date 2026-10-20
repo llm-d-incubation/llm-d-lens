@@ -18,9 +18,9 @@ function api(path, options = {}) {
 }
 
 const DEFAULT_REQUIREMENTS = {
-    ttftSloMs: '', tpotSloMs: '', endToEndLatencySloMs: '',
+    ttftSloMs: '2000', tpotSloMs: '30',
     hardwareCapacityMode: 'free', customGpuCount: '',
-    useCase: 'general-chat', inputTokens: '', outputTokens: '', concurrency: '', requestRate: '',
+    useCase: 'general-chat', inputTokens: '4000', outputTokens: '1000', concurrency: '', requestRate: '',
 };
 
 const GENERATION_STAGES = [
@@ -186,6 +186,10 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
     }, []);
 
     const createPlan = async () => {
+        if (numeric(requirements.concurrency) !== null && numeric(requirements.requestRate) !== null) {
+            setError('AIC accepts only one load target: Concurrent requests or Request rate (QPS). Both were provided; choose one and clear the other because AIC does not support joint load targets.');
+            return;
+        }
         if (!draft?.storageVolumeId) {
             setError('Select a model cache storage before creating an Agentic recommendation.');
             return;
@@ -212,7 +216,6 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                     custom_gpu_count: requirements.hardwareCapacityMode === 'custom' ? numeric(requirements.customGpuCount) : null,
                     context_length: draft.contextLength, use_case: requirements.useCase,
                     ttft_slo_ms: numeric(requirements.ttftSloMs), tpot_slo_ms: numeric(requirements.tpotSloMs),
-                    end_to_end_latency_slo_ms: numeric(requirements.endToEndLatencySloMs),
                     workload_profile: {
                         mean_input_tokens: numeric(requirements.inputTokens),
                         p95_input_tokens: numeric(requirements.inputTokens),
@@ -333,7 +336,6 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                         </label>
                         {input('TTFT SLO (ms)', 'ttftSloMs', { min: '1' })}
                         {input('TPOT SLO (ms)', 'tpotSloMs', { min: '1' })}
-                        {input('End-to-end latency (ms)', 'endToEndLatencySloMs', { min: '1' })}
                         <label className="text-xs text-slate-400">GPU capacity for planning
                             <Select className="mt-1" value={requirements.hardwareCapacityMode} onChange={updateRequirement('hardwareCapacityMode')}>
                                 <option value="free">Currently free GPUs</option>

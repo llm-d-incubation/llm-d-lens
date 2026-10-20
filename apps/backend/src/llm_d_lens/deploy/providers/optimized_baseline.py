@@ -28,8 +28,10 @@ from llm_d_lens.deploy.providers.guide_adapter import (
     GuideDefinition,
     GuideDeploymentArtifact,
     ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
 )
-from llm_d_lens.deploy.providers.hardware_profile import active_profile, set_accelerator_request
+from llm_d_lens.deploy.providers.hardware_profile import active_profile, apply_runtime_class, set_accelerator_request
 from llm_d_lens.deploy.providers.model_cache_environment import model_cache_environment
 from llm_d_lens.deploy.providers.storage_mount import resolve_mount
 from llm_d_lens.deploy.providers.target_node import configured_target_node
@@ -63,6 +65,7 @@ class OptimizedBaselineGuidePolicy:
     retain_namespace_on_failure: bool = False
     readiness_timeout_seconds: int = 900
     docker_path: Path | None = None
+    source_error: str | None = None
 
 
 class OptimizedBaselineGuideAdapter(GuideAdapter):
@@ -111,6 +114,8 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
     ) -> ValidationResult:
         if definition.guide_id != self._definition.guide_id:
             return ValidationResult(accepted=False, reasons=["unsupported_guide_mapping"])
+        if self._policy.source_error:
+            return ValidationResult(accepted=False, reasons=[self._policy.source_error])
         try:
             deployment, _model_name, _runtime = self._deployment_parameters(overrides)
         except (TypeError, ValueError) as error:
@@ -137,6 +142,8 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
     async def render(self, definition: GuideDefinition, overrides: dict[str, Any]) -> GuideDeploymentArtifact:
         if definition.guide_id != self._definition.guide_id:
             raise ValueError("adapter cannot render a different guide")
+        if self._policy.source_error:
+            raise ValueError(self._policy.source_error)
         deployment, model_id, runtime = self._deployment_parameters(overrides)
         runtime["resolved_mount"] = await resolve_mount(
             overrides.get("runtime") or {},
@@ -616,7 +623,11 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 "tensor-parallel-size": deployment["tensor_parallel_size"],
                 "max-model-len": deployment["max_model_len"],
                 "max-num-seqs": deployment["max_num_seqs"],
+                **(runtime.get("serving_arguments") or {}),
             }
+            custom_parameters = [
+                item for item in runtime.get("custom_parameters") or [] if item.get("target") in {"decode", "both"}
+            ]
             shell = bool(args and "vllm serve" in args[0])
             if shell:
                 import shlex
@@ -629,6 +640,9 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 for key, value in options.items():
                     if value is not None:
                         command = HelmKustomizeGuideAdapter._set_shell_argument(command, key, value)
+                for item in custom_parameters:
+                    if item.get("kind") == "argument":
+                        command = HelmKustomizeGuideAdapter._set_shell_argument(command, item["name"], item["value"])
                 args[0] = command
             else:
                 if not args:
@@ -640,12 +654,11 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 for key, value in options.items():
                     if value is None:
                         continue
-                    for index in range(len(args) - 1, -1, -1):
-                        if args[index] == "--" + key:
-                            del args[index : index + 2]
-                        elif args[index].startswith("--" + key + "="):
-                            del args[index]
-                    args.append(f"--{key}={value}")
+                    args = set_vllm_argument(args, key, value)
+                for item in custom_parameters:
+                    if item.get("kind") == "argument":
+                        args = set_vllm_argument(args, item["name"], item["value"])
+                container["args"] = args
             claim = next(
                 (
                     claims.get(item.get("resourceClaimTemplateName"))
@@ -659,6 +672,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 None,
             )
             set_accelerator_request(container, claim, deployment["accelerator_count"], accelerator=profile.id)
+            apply_runtime_class(pod, accelerator=profile.id)
             selectors = gpu_device_selectors(accelerator=profile.id)
             if selectors and claim:
                 for request in claim["spec"]["spec"]["devices"]["requests"]:
@@ -669,6 +683,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 pod["nodeSelector"]["kubernetes.io/hostname"] = configured_target_node()
             environment = {
                 **(runtime.get("environment") or {}),
+                **{item["name"]: item["value"] for item in custom_parameters if item.get("kind") == "environment"},
                 **model_cache_environment(active_model_source, cache_mounted=cache_mounted),
             }
             for name, value in environment.items():
@@ -771,6 +786,11 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 "mounted_model_path": "/model-cache" if mount_path and model_source == "shared-path" else "",
                 "model_source": model_source,
                 "configuration_source_document": source_document,
+                "serving_arguments": serving_arguments(model, decode),
+                "custom_parameters": (source_content if source_content is not None else overrides).get(
+                    "customParameters"
+                )
+                or [],
                 "environment": (
                     dict(runtime.get("environment")) if isinstance(runtime.get("environment"), dict) else {}
                 ),

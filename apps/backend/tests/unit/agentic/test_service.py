@@ -43,6 +43,40 @@ def validated_model_cache(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.parametrize("target", ["concurrency", "request_rate"])
+def test_load_target_uses_exact_aic_replicas_without_plain_estimates(monkeypatch, target):
+    from llm_d_lens.agentic.planner import AICCandidatePrediction, WorkloadProfile
+
+    facts = PlanningFacts(
+        8, 32, 8,
+        workload_profile=WorkloadProfile(**{target: 10}),
+        aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=3),),
+        evidence_ids=("aic:search",),
+    )
+
+    async def resolve(*args, **kwargs):
+        return SimpleNamespace(facts=facts)
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", resolve)
+    service = AgenticDeploymentService()
+    candidates, _, _ = asyncio.run(service._generate_candidates(
+        None, "cluster-a", "Qwen/Qwen3-8B", facts, None, provider_requested=False,
+    ))
+    assert len(candidates) == 1
+    assert candidates[0].replicas == 3
+    assert candidates[0].required_gpus == 3
+
+
+def test_joint_load_targets_fail_before_cluster_or_cache_access(monkeypatch):
+    from llm_d_lens.agentic.planner import WorkloadProfile
+
+    request = SimpleNamespace(planning_facts=PlanningFacts(
+        8, 32, 8, workload_profile=WorkloadProfile(concurrency=10, request_rate=2),
+    ))
+    with pytest.raises(ValueError, match="choose one and clear the other"):
+        asyncio.run(AgenticDeploymentService().create(request))
+
+
 def _request(**overrides) -> AgenticDeploymentCreateRequest:
     return AgenticDeploymentCreateRequest(
         model="Qwen/Qwen3-8B",
@@ -908,9 +942,9 @@ def test_create_falls_back_only_when_all_ai_generated_candidates_are_invalid(mon
     [
         ('MCP tool "search_candidates" failed: unavailable', "mcp_unavailable", None),
         (
-            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "AI candidate generation returned too many tool calls in round 1: 5 (limit 4)",
             "invalid_response",
-            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "AI candidate generation returned too many tool calls in round 1: 5 (limit 4)",
         ),
     ],
 )

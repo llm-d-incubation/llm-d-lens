@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -20,14 +21,17 @@ from llm_d_lens.hardware.resolver import resolve_by_accelerator_key, resolve_by_
 from llm_d_lens.versions import router_pd_sidecar_image
 
 from .guide_runtime import apply_runtime_overrides, configure_cpu_cache, configure_model_server, runtime_overrides
+from .remote_deploy import RemoteError
 
 router = APIRouter(prefix="/api/guide-planning", include_in_schema=False)
+logger = logging.getLogger(__name__)
 
 
 class GuideError(Exception):
     def __init__(self, message: str, status: int = 400):
         super().__init__(message)
         self.status = status
+        self.public_message = message if status < 500 else "Guide source could not be prepared"
 
 
 def profile_for_key(key: str):
@@ -980,8 +984,12 @@ async def catalog(request: Request):
         }
     except DomainError:
         raise
-    except (GuideError, OSError, ValueError) as error:
-        return JSONResponse({"error": str(error)}, status_code=502)
+    except GuideError as error:
+        logger.warning("Guide catalog request failed", exc_info=True)
+        return JSONResponse({"error": error.public_message}, status_code=502)
+    except (OSError, ValueError):
+        logger.exception("Guide catalog could not be loaded")
+        return JSONResponse({"error": "Guide catalog could not be loaded"}, status_code=502)
 
 
 @router.post("/prepare")
@@ -1004,6 +1012,7 @@ async def prepare(request: Request):
     except DomainError:
         raise
     except Exception:
+        logger.exception("Guide preparation failed")
         return JSONResponse({"error": "Guide preparation failed; retry when generating configuration"}, status_code=502)
 
 
@@ -1165,6 +1174,9 @@ async def plan(request: Request):
         return finish(response)
     except DomainError:
         raise
-    except Exception as error:
-        status = getattr(error, "status", 500)
-        return finish({"error": str(error)}, status if 400 <= status < 600 else 500)
+    except (GuideError, RemoteError) as error:
+        logger.warning("Guide planning request failed", exc_info=True)
+        return finish({"error": error.public_message}, error.status)
+    except Exception:
+        logger.exception("Guide planning failed")
+        return finish({"error": "Guide planning failed"}, 500)

@@ -53,7 +53,7 @@ def test_registered_guide_candidate_maps_to_deployable_configuration(provider_re
     if provider_ref == "pd-disaggregation":
         assert configuration.content["prefill"]["replicaCount"] == 1
     if provider_ref == "tiered-prefix-cache":
-        assert configuration.content["guideVariant"] == "native/cpu/base"
+        assert configuration.content["guideVariant"] == "native/cpu"
 
 
 def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval():
