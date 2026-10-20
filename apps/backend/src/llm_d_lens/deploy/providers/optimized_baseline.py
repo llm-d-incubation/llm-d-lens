@@ -588,9 +588,9 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             }
         )
         self._policy.rendered_overlay_root.mkdir(parents=True, exist_ok=True)
-        rendered_overlay = Path(tempfile.mkdtemp(
-            prefix=f"llm-d-bench-{overlay_hash}-", dir=self._policy.rendered_overlay_root
-        ))
+        rendered_overlay = Path(
+            tempfile.mkdtemp(prefix=f"llm-d-bench-{overlay_hash}-", dir=self._policy.rendered_overlay_root)
+        )
         result = subprocess.run(
             [
                 str(getattr(self._command_runner, "_kubectl_path", "kubectl")),

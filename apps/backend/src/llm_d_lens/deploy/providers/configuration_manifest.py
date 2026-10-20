@@ -201,8 +201,11 @@ class ConfigurationManifestAdapter:
             manifest = path.read_text(encoding="utf-8")
             source = (overrides.get("officialGuide") or {}).get("source") or {}
             rendered, report = prepare_runtime_class_manifest(
-                manifest, runtime_policy, capabilities,
-                accelerator=overrides.get("hardware_profile") or source.get("accelerator")
+                manifest,
+                runtime_policy,
+                capabilities,
+                accelerator=overrides.get("hardware_profile")
+                or source.get("accelerator")
                 or getattr(self._delegate, "_accelerator", None)
                 or getattr(getattr(self._delegate, "_policy", None), "accelerator", None),
             )

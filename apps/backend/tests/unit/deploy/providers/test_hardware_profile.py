@@ -6,7 +6,6 @@ import pytest
 import yaml
 
 from llm_d_lens.deploy.contracts import RuntimeClassPolicy
-
 from llm_d_lens.deploy.providers import hardware_profile
 
 
@@ -28,33 +27,52 @@ def test_select_runtime_class_rejects_unavailable_explicit_class():
         hardware_profile.select_runtime_class({"mode": "named", "name": "missing"}, [], suggested="nvidia")
 
 
-@pytest.mark.parametrize("policy", [
-    {"mode": "named"}, {"mode": "named", "name": "Bad_Name"},
-    {"mode": "named", "name": ""}, {"mode": "named", "name": "a" * 64},
-    {"mode": "auto", "name": "custom"}, {"mode": "invalid"}, {"mode": "auto", "extra": True},
-])
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"mode": "named"},
+        {"mode": "named", "name": "Bad_Name"},
+        {"mode": "named", "name": ""},
+        {"mode": "named", "name": "a" * 64},
+        {"mode": "auto", "name": "custom"},
+        {"mode": "invalid"},
+        {"mode": "auto", "extra": True},
+    ],
+)
 def test_runtime_class_policy_rejects_invalid_values(policy):
     with pytest.raises(ValueError):
         RuntimeClassPolicy.model_validate(policy)
 
 
-@pytest.mark.parametrize("mode,existing,available,expected", [
-    ("auto", None, [], None),
-    ("auto", None, ["nvidia"], "nvidia"),
-    ("auto", "custom", ["custom", "nvidia"], "custom"),
-    ("named", "nvidia", ["custom"], "custom"),
-    ("node-default", "nvidia", [], None),
-])
+@pytest.mark.parametrize(
+    "mode,existing,available,expected",
+    [
+        ("auto", None, [], None),
+        ("auto", None, ["nvidia"], "nvidia"),
+        ("auto", "custom", ["custom", "nvidia"], "custom"),
+        ("named", "nvidia", ["custom"], "custom"),
+        ("node-default", "nvidia", [], None),
+    ],
+)
 def test_runtime_manifest_binds_only_model_pods(mode, existing, available, expected):
-    model = {"kind": "Deployment", "metadata": {"name": "model"}, "spec": {"template": {"spec": {
-        "containers": [{"name": "modelserver", "resources": {"limits": {"nvidia.com/gpu": "1"}}}],
-        **({"runtimeClassName": existing} if existing else {}),
-    }}}}
+    model = {
+        "kind": "Deployment",
+        "metadata": {"name": "model"},
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [{"name": "modelserver", "resources": {"limits": {"nvidia.com/gpu": "1"}}}],
+                    **({"runtimeClassName": existing} if existing else {}),
+                }
+            }
+        },
+    }
     router = {"kind": "Pod", "spec": {"runtimeClassName": "router-class", "containers": [{"name": "router"}]}}
     policy = {"mode": mode, **({"name": "custom"} if mode == "named" else {})}
     manifest = yaml.safe_dump_all([model, router])
     rendered, report = hardware_profile.prepare_runtime_class_manifest(
-        manifest, policy,
+        manifest,
+        policy,
         {"items": [{"metadata": {"name": name}} for name in available], "nodes": [{"metadata": {"name": "gpu"}}]},
         accelerator="nvidia",
     )
@@ -67,22 +85,40 @@ def test_runtime_manifest_binds_only_model_pods(mode, existing, available, expec
 
 
 def test_runtime_manifest_rejects_unavailable_published_choice():
-    manifest = yaml.safe_dump({"kind": "Pod", "spec": {
-        "runtimeClassName": "custom", "containers": [{"name": "modelserver"}],
-    }})
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Pod",
+            "spec": {
+                "runtimeClassName": "custom",
+                "containers": [{"name": "modelserver"}],
+            },
+        }
+    )
     with pytest.raises(ValueError, match="not available"):
         hardware_profile.prepare_runtime_class_manifest(manifest, {"mode": "auto"}, {"items": []})
 
 
-@pytest.mark.parametrize("selector,nodes", [
-    ({"pool": "other"}, [{"metadata": {"labels": {"pool": "gpu"}}}]),
-    ({}, [{"metadata": {"labels": {"pool": "other"}}}]),
-])
+@pytest.mark.parametrize(
+    "selector,nodes",
+    [
+        ({"pool": "other"}, [{"metadata": {"labels": {"pool": "gpu"}}}]),
+        ({}, [{"metadata": {"labels": {"pool": "other"}}}]),
+    ],
+)
 def test_runtime_manifest_rejects_incompatible_scheduling(selector, nodes):
-    manifest = yaml.safe_dump({"kind": "Pod", "spec": {
-        "containers": [{"name": "modelserver"}], "nodeSelector": selector,
-    }})
-    capabilities = {"items": [{"metadata": {"name": "custom"}, "scheduling": {"nodeSelector": {"pool": "gpu"}}}], "nodes": nodes}
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Pod",
+            "spec": {
+                "containers": [{"name": "modelserver"}],
+                "nodeSelector": selector,
+            },
+        }
+    )
+    capabilities = {
+        "items": [{"metadata": {"name": "custom"}, "scheduling": {"nodeSelector": {"pool": "gpu"}}}],
+        "nodes": nodes,
+    }
     with pytest.raises(ValueError, match="conflicts|no nodes"):
         hardware_profile.prepare_runtime_class_manifest(manifest, {"mode": "named", "name": "custom"}, capabilities)
 
@@ -114,9 +150,11 @@ def test_unknown_hardware_stays_neutral(monkeypatch):
         ("nvidia", "modelserver", {"limits": {"nvidia.com/gpu": "1"}}, None, "nvidia"),
         ("nvidia", "modelserver", {"requests": {"nvidia.com/gpu": "1"}}, None, "nvidia"),
         (
-            "nvidia", "modelserver",
+            "nvidia",
+            "modelserver",
             {"limits": {"nvidia.com/gpu": "1"}, "claims": [{"name": "rdma"}]},
-            None, "nvidia",
+            None,
+            "nvidia",
         ),
         ("nvidia", "modelserver", {"claims": [{"name": "gpu"}]}, None, None),
         ("intel-xpu", "modelserver", {"claims": [{"name": "gpu"}]}, None, None),
@@ -131,7 +169,9 @@ def test_apply_runtime_class_uses_modelserver_access_mode(accelerator, container
     if existing:
         pod["runtimeClassName"] = existing
 
-    hardware_profile.apply_runtime_class(pod, accelerator=accelerator, runtime_classes=[{"metadata": {"name": "nvidia"}}])
+    hardware_profile.apply_runtime_class(
+        pod, accelerator=accelerator, runtime_classes=[{"metadata": {"name": "nvidia"}}]
+    )
 
     assert pod.get("runtimeClassName") == expected
 
@@ -140,12 +180,17 @@ def test_apply_runtime_class_reads_the_registered_mode(monkeypatch):
     from dataclasses import replace
 
     original = hardware_profile.active_profile("nvidia")
-    modes = {**original.deployment.modes, "plugin": {**original.deployment.modes["plugin"], "runtime_class_name": "custom"}}
+    modes = {
+        **original.deployment.modes,
+        "plugin": {**original.deployment.modes["plugin"], "runtime_class_name": "custom"},
+    }
     profile = replace(original, deployment=replace(original.deployment, modes=modes))
     monkeypatch.setattr(hardware_profile, "active_profile", lambda _accelerator: profile)
     pod = {"containers": [{"name": "modelserver", "resources": {"limits": {"nvidia.com/gpu": "1"}}}]}
 
-    hardware_profile.apply_runtime_class(pod, accelerator=profile.id, runtime_classes=[{"metadata": {"name": "custom"}}])
+    hardware_profile.apply_runtime_class(
+        pod, accelerator=profile.id, runtime_classes=[{"metadata": {"name": "custom"}}]
+    )
 
     assert pod["runtimeClassName"] == "custom"
 

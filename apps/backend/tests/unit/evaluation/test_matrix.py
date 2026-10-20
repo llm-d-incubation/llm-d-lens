@@ -176,7 +176,10 @@ def test_matrix_workload_yaml_uses_served_model_for_tokenizer():
     stages = [ConcurrencyStage(concurrency=1, num_requests=4)]
 
     content = router._matrix_workload_yaml(
-        point, stages, "qwen3-0.6b", "http://endpoint.local",
+        point,
+        stages,
+        "qwen3-0.6b",
+        "http://endpoint.local",
         tokenizer_model="Qwen/Qwen3-0.6B",
     )
     parsed = yaml.safe_load(content)

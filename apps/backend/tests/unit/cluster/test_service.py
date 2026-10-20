@@ -88,8 +88,8 @@ async def test_delete_cluster_deletes_secret_without_dropping_a_shared_namespace
         name="c1",
         description="",
         created_at="2026-01-01T00:00:00Z",
-        hf_token_secret_namespace="inference-scheduling",
-        hf_token_secret_name="llm-d-hf-token",
+        hf_token_secret_namespace="inference-scheduling",  # noqa: S106 -- Kubernetes resource name, not a credential.
+        hf_token_secret_name="llm-d-hf-token",  # noqa: S106 -- Kubernetes resource name, not a credential.
     )
     monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
     monkeypatch.setattr(service, "_has_available_deployments", lambda cluster_id: False)
@@ -159,8 +159,8 @@ def _cluster_with_external_secret():
         name="c1",
         description="",
         created_at="2026-01-01T00:00:00Z",
-        hf_token_secret_namespace="team-tokens",
-        hf_token_secret_name="hf-token-1",
+        hf_token_secret_namespace="team-tokens",  # noqa: S106 -- Kubernetes resource name, not a credential.
+        hf_token_secret_name="hf-token-1",  # noqa: S106 -- Kubernetes resource name, not a credential.
     )
 
 
@@ -253,8 +253,8 @@ async def test_delete_cluster_never_deletes_a_protected_namespace(monkeypatch):
         name="c1",
         description="",
         created_at="2026-01-01T00:00:00Z",
-        hf_token_secret_namespace="default",
-        hf_token_secret_name="hf-token-1",
+        hf_token_secret_namespace="default",  # noqa: S106 -- Kubernetes resource name, not a credential.
+        hf_token_secret_name="hf-token-1",  # noqa: S106 -- Kubernetes resource name, not a credential.
     )
     deleted_namespaces: list[str] = []
     deleted_secrets: list[tuple[str, str]] = []
@@ -333,8 +333,8 @@ async def test_delete_cluster_does_not_delete_the_secret_twice_in_its_own_namesp
         name="c1",
         description="",
         created_at="2026-01-01T00:00:00Z",
-        hf_token_secret_namespace="llm-d-bench-storage-cluster-1",
-        hf_token_secret_name="hf-token-abc",
+        hf_token_secret_namespace="llm-d-bench-storage-cluster-1",  # noqa: S106 -- Resource name, not a credential.
+        hf_token_secret_name="hf-token-abc",  # noqa: S106 -- Kubernetes resource name, not a credential.
     )
     monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
     monkeypatch.setattr(service, "_has_available_deployments", lambda cluster_id: False)
@@ -1201,7 +1201,9 @@ async def test_update_hf_token_secret_rewrites_recorded_secret_in_place(monkeypa
     existing Secret is replaced instead of failing with a name collision."""
     cluster = registry.create_cluster("cluster-rotate", "", "kubeconfig: {}")
     registry.update_cluster(
-        cluster.id, hf_token_secret_namespace="llm-d-bench-storage-x", hf_token_secret_name="hf-token-old"
+        cluster.id,
+        hf_token_secret_namespace="llm-d-bench-storage-x",  # noqa: S106 -- Resource name, not a credential.
+        hf_token_secret_name="hf-token-old",  # noqa: S106 -- Kubernetes resource name, not a credential.
     )
     cluster = registry.get_cluster(cluster.id)
     captured: dict[str, object] = {}
@@ -1220,7 +1222,11 @@ async def test_update_hf_token_secret_repoints_cluster_to_new_coordinates(monkey
     """Supplying namespace/name moves the cluster's pointer, so later deploys
     default to the new Secret rather than the one created by the wizard."""
     cluster = registry.create_cluster("cluster-repoint", "", "kubeconfig: {}")
-    registry.update_cluster(cluster.id, hf_token_secret_namespace="old-ns", hf_token_secret_name="hf-token-old")
+    registry.update_cluster(
+        cluster.id,
+        hf_token_secret_namespace="old-ns",  # noqa: S106 -- Kubernetes resource name, not a credential.
+        hf_token_secret_name="hf-token-old",  # noqa: S106 -- Kubernetes resource name, not a credential.
+    )
     cluster = registry.get_cluster(cluster.id)
     captured: dict[str, object] = {}
     monkeypatch.setattr(service, "scoped_runner", lambda cluster_id: _apply_only_runner(captured))
@@ -1263,7 +1269,11 @@ def test_cluster_record_exposes_hf_token_secret_coordinates():
     cluster = registry.create_cluster("cluster-record-secret", "", "kubeconfig: {}")
     assert _record(cluster).hf_token_secret is None
 
-    registry.update_cluster(cluster.id, hf_token_secret_namespace="ns-a", hf_token_secret_name="hf-token-a")
+    registry.update_cluster(
+        cluster.id,
+        hf_token_secret_namespace="ns-a",  # noqa: S106 -- Kubernetes resource name, not a credential.
+        hf_token_secret_name="hf-token-a",  # noqa: S106 -- Kubernetes resource name, not a credential.
+    )
     record = _record(registry.get_cluster(cluster.id))
 
     assert record.hf_token_secret is not None

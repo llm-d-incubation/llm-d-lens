@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import yaml
 
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
 from llm_d_lens.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
+from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
 from llm_d_lens.deploy.providers.optimized_baseline import (
     OptimizedBaselineGuideAdapter,
     OptimizedBaselineGuidePolicy,
@@ -385,9 +385,7 @@ def test_repeated_rendering_does_not_delete_or_reuse_another_deployment_director
 async def test_isolated_directory_preserves_deployment_validation_and_cleanup(monkeypatch, tmp_path):
     adapter, overlay = _adapter(tmp_path)
     _write_model_overlay(overlay)
-    monkeypatch.setattr(
-        "llm_d_lens.deploy.providers.optimized_baseline.resolve_mount", AsyncMock(return_value=None)
-    )
+    monkeypatch.setattr("llm_d_lens.deploy.providers.optimized_baseline.resolve_mount", AsyncMock(return_value=None))
     wrapper = ConfigurationManifestAdapter(adapter, _runner, "test", 5, tmp_path / "output")
     overrides = {
         "model": {"name": "Qwen/Qwen3-8B"},
@@ -424,7 +422,9 @@ def test_render_overlay_applies_hardware_runtime_class(tmp_path, existing):
     rendered = adapter._render_overlay(_deployment_parameters(), "Qwen/Qwen3-8B", _runtime())
 
     deployment = next(
-        item for item in yaml.safe_load_all((rendered / "manifest.yaml").read_text()) if item.get("kind") == "Deployment"
+        item
+        for item in yaml.safe_load_all((rendered / "manifest.yaml").read_text())
+        if item.get("kind") == "Deployment"
     )
     result = deployment["spec"]["template"]["spec"]
     assert result.get("runtimeClassName") == existing

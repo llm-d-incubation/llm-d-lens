@@ -180,9 +180,7 @@ class PrecisePrefixCacheRoutingAdapter:
         overlay.
         """
         sources = guide_overlays(guide_root, "precise-prefix-cache-routing", accelerator=self._accelerator)
-        variant = default_guide_variant(
-            sources, guide="precise-prefix-cache-routing", accelerator=self._accelerator
-        )
+        variant = default_guide_variant(sources, guide="precise-prefix-cache-routing", accelerator=self._accelerator)
         return sources[variant]
 
     def discover(self) -> GuideDefinition:

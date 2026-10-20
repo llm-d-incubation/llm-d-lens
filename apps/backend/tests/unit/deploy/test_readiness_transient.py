@@ -170,17 +170,18 @@ def test_failed_observation_is_not_reason_to_delete_running_pods():
 
 
 @pytest.mark.parametrize(
-    "snapshot",
+    "startup_options",
     [
-        startup_snapshot(elapsed=3615),
-        startup_snapshot(elapsed=-60),
-        startup_snapshot(restart_count=1),
-        startup_snapshot(waiting="CrashLoopBackOff"),
-        startup_snapshot(waiting="ImagePullBackOff"),
-        startup_snapshot(waiting="ErrImagePull"),
+        {"elapsed": 3615},
+        {"elapsed": -60},
+        {"restart_count": 1},
+        {"waiting": "CrashLoopBackOff"},
+        {"waiting": "ImagePullBackOff"},
+        {"waiting": "ErrImagePull"},
     ],
 )
-def test_old_allocation_event_does_not_extend_expired_or_failed_startup(snapshot):
+def test_old_allocation_event_does_not_extend_expired_or_failed_startup(startup_options):
+    snapshot = startup_snapshot(**startup_options)
     assert not _readiness_is_transient(["deployment exceeded progress deadline"], snapshot)
 
 

@@ -96,9 +96,7 @@ class StorageVolumeRow(Base, DeclarativeDtoMixin):
     # case-insensitive so it matches the conflict check the API reports (see
     # storage/router.py::create_volume) instead of letting "Cache" and "cache"
     # coexist in one cluster.
-    __table_args__ = (
-        Index("uq_storage_volumes_cluster_id_name", "cluster_id", text("lower(name)"), unique=True),
-    )
+    __table_args__ = (Index("uq_storage_volumes_cluster_id_name", "cluster_id", text("lower(name)"), unique=True),)
 
     @classmethod
     def from_dto(cls, dto: StorageVolume, **extra_columns: object) -> StorageVolumeRow:

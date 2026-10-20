@@ -48,13 +48,13 @@ from llm_d_lens.deploy.orphans import (
     namespace_prefix,
     scan_orphan_namespaces,
 )
-from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.deploy.providers.hardware_profile import active_profile, discover_runtime_classes
-from llm_d_lens.hardware.resolver import deployment_mode
+from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.deploy.standard_kubernetes_service import (
     StandardKubernetesServiceRequest,
     build_standard_kubernetes_service_configuration,
 )
+from llm_d_lens.hardware.resolver import deployment_mode
 from llm_d_lens.infrastructure.kubernetes import PortForwardError, list_resources
 
 router = APIRouter(prefix="/api/v1/deployments", tags=["deployments"])
@@ -265,16 +265,21 @@ async def list_deployment_runtime_classes(
     for runtime in capabilities["items"]:
         scheduling = runtime.get("scheduling") or {}
         selector = scheduling.get("nodeSelector") or {}
-        items.append({
-            "name": runtime["metadata"]["name"],
-            "handler": runtime.get("handler"),
-            "scheduling": scheduling,
-            "overhead": runtime.get("overhead") or {},
-            "matching_nodes": [
-                node["metadata"]["name"] for node in capabilities["nodes"]
-                if all(node.get("metadata", {}).get("labels", {}).get(key) == value for key, value in selector.items())
-            ],
-        })
+        items.append(
+            {
+                "name": runtime["metadata"]["name"],
+                "handler": runtime.get("handler"),
+                "scheduling": scheduling,
+                "overhead": runtime.get("overhead") or {},
+                "matching_nodes": [
+                    node["metadata"]["name"]
+                    for node in capabilities["nodes"]
+                    if all(
+                        node.get("metadata", {}).get("labels", {}).get(key) == value for key, value in selector.items()
+                    )
+                ],
+            }
+        )
     suggested = mode.get("runtime_class_name")
     return {
         "items": items,
@@ -360,7 +365,7 @@ async def create_standard_kubernetes_service_run(
                     "placement": {
                         "replicas": request.placement_replicas,
                         **({"nodeLabel": request.placement_node_label} if request.placement_node_label else {}),
-                    }
+                    },
                 },
             ),
             owner_user_id=owner_for_create(current_principal(http_request)),

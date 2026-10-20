@@ -498,7 +498,9 @@ def test_dashboard_only_monitoring_degradation_is_informational():
         monitoring_dashboard_only=True,
     )
 
-    issue = next(issue for issue in cluster_issues(row, has_services=False) if issue.code == "monitoring.cluster_stack_degraded")
+    issue = next(
+        issue for issue in cluster_issues(row, has_services=False) if issue.code == "monitoring.cluster_stack_degraded"
+    )
 
     assert issue.severity == "info"
     assert issue.evidence["dashboardOnly"] is True

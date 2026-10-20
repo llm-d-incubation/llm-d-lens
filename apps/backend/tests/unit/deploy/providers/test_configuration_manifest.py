@@ -53,38 +53,59 @@ def _asset(name: str, content: str) -> dict[str, str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("directory", [False, True])
-@pytest.mark.parametrize("policy,available,expected", [
-    ({"mode": "auto"}, [], None),
-    ({"mode": "auto"}, ["nvidia"], "nvidia"),
-    ({"mode": "node-default"}, [], None),
-    ({"mode": "named", "name": "custom"}, ["custom"], "custom"),
-])
+@pytest.mark.parametrize(
+    "policy,available,expected",
+    [
+        ({"mode": "auto"}, [], None),
+        ({"mode": "auto"}, ["nvidia"], "nvidia"),
+        ({"mode": "node-default"}, [], None),
+        ({"mode": "named", "name": "custom"}, ["custom"], "custom"),
+    ],
+)
 async def test_runtime_policy_derives_deployment_manifest_without_mutating_configuration(
     monkeypatch, tmp_path, directory, policy, available, expected
 ):
-    manifest = yaml.safe_dump({"kind": "Pod", "spec": {
-        **({"runtimeClassName": "nvidia"} if policy["mode"] == "node-default" else {}),
-        "containers": [{"name": "modelserver", "resources": {"limits": {"nvidia.com/gpu": "1"}}}],
-    }})
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Pod",
+            "spec": {
+                **({"runtimeClassName": "nvidia"} if policy["mode"] == "node-default" else {}),
+                "containers": [{"name": "modelserver", "resources": {"limits": {"nvidia.com/gpu": "1"}}}],
+            },
+        }
+    )
     source = tmp_path / "source.yaml"
     source.write_text(manifest)
     if directory:
         overlay = tmp_path / "overlay"
         overlay.mkdir()
         (overlay / "manifest.yaml").write_text(manifest)
-    delegate = SimpleNamespace(_accelerator="nvidia", render=AsyncMock(return_value=GuideDeploymentArtifact(
-        guide_id="baseline-vllm", artifact_hash="source", manifest_ref=str(overlay if directory else source),
-        manifest_checksum="sha256:source",
-    )))
-    discovery = AsyncMock(return_value={
-        "items": [{"metadata": {"name": name}} for name in available],
-        "nodes": [{"metadata": {"name": "gpu-node"}}],
-    })
+    delegate = SimpleNamespace(
+        _accelerator="nvidia",
+        render=AsyncMock(
+            return_value=GuideDeploymentArtifact(
+                guide_id="baseline-vllm",
+                artifact_hash="source",
+                manifest_ref=str(overlay if directory else source),
+                manifest_checksum="sha256:source",
+            )
+        ),
+    )
+    discovery = AsyncMock(
+        return_value={
+            "items": [{"metadata": {"name": name}} for name in available],
+            "nodes": [{"metadata": {"name": "gpu-node"}}],
+        }
+    )
     monkeypatch.setattr(configuration_manifest, "discover_runtime_classes", discovery)
     adapter = ConfigurationManifestAdapter(delegate, _Runner(), "llmd-", 5, tmp_path / "output")
-    artifact = await adapter.render(GuideDefinition("baseline-vllm", "source", "hash", "stable"), {
-        "_runtime_class_policy": policy, "_cluster_id": "cluster-a",
-    })
+    artifact = await adapter.render(
+        GuideDefinition("baseline-vllm", "source", "hash", "stable"),
+        {
+            "_runtime_class_policy": policy,
+            "_cluster_id": "cluster-a",
+        },
+    )
     path = Path(artifact.manifest_ref)
     if directory:
         path = path / "manifest.yaml"
@@ -105,27 +126,50 @@ async def test_directory_runtime_policies_do_not_overwrite_another_deployment(mo
     manifest = yaml.safe_dump({"kind": "Pod", "spec": {"containers": [{"name": "modelserver"}]}})
     (overlay / "manifest.yaml").write_text(manifest)
     (overlay / "kustomization.yaml").write_text("resources:\n- manifest.yaml\n")
-    delegate = SimpleNamespace(render=AsyncMock(return_value=GuideDeploymentArtifact(
-        guide_id="optimized-baseline", artifact_hash="source", manifest_ref=str(overlay),
-        manifest_checksum="sha256:source",
-    )))
-    monkeypatch.setattr(configuration_manifest, "discover_runtime_classes", AsyncMock(return_value={
-        "items": [{"metadata": {"name": name}} for name in ("first", "second")],
-        "nodes": [{"metadata": {"name": "gpu-node"}}],
-    }))
+    delegate = SimpleNamespace(
+        render=AsyncMock(
+            return_value=GuideDeploymentArtifact(
+                guide_id="optimized-baseline",
+                artifact_hash="source",
+                manifest_ref=str(overlay),
+                manifest_checksum="sha256:source",
+            )
+        )
+    )
+    monkeypatch.setattr(
+        configuration_manifest,
+        "discover_runtime_classes",
+        AsyncMock(
+            return_value={
+                "items": [{"metadata": {"name": name}} for name in ("first", "second")],
+                "nodes": [{"metadata": {"name": "gpu-node"}}],
+            }
+        ),
+    )
     adapter = ConfigurationManifestAdapter(delegate, _Runner(), "llmd-", 5, tmp_path / "output")
     definition = GuideDefinition("optimized-baseline", "source", "hash", "stable")
-    first = await adapter.render(definition, {
-        "_runtime_class_policy": {"mode": "named", "name": "first"}, "_cluster_id": "cluster-a",
-    })
+    first = await adapter.render(
+        definition,
+        {
+            "_runtime_class_policy": {"mode": "named", "name": "first"},
+            "_cluster_id": "cluster-a",
+        },
+    )
     first_manifest = (Path(first.manifest_ref) / "manifest.yaml").read_text()
-    second = await adapter.render(definition, {
-        "_runtime_class_policy": {"mode": "named", "name": "second"}, "_cluster_id": "cluster-a",
-    })
+    second = await adapter.render(
+        definition,
+        {
+            "_runtime_class_policy": {"mode": "named", "name": "second"},
+            "_cluster_id": "cluster-a",
+        },
+    )
     assert first.manifest_ref != second.manifest_ref
     assert (Path(first.manifest_ref) / "manifest.yaml").read_text() == first_manifest
     assert yaml.safe_load(first_manifest)["spec"]["runtimeClassName"] == "first"
-    assert yaml.safe_load((Path(second.manifest_ref) / "manifest.yaml").read_text())["spec"]["runtimeClassName"] == "second"
+    assert (
+        yaml.safe_load((Path(second.manifest_ref) / "manifest.yaml").read_text())["spec"]["runtimeClassName"]
+        == "second"
+    )
     assert (overlay / "manifest.yaml").read_text() == manifest
     assert (Path(first.manifest_ref) / "kustomization.yaml").read_text() == "resources:\n- manifest.yaml\n"
 

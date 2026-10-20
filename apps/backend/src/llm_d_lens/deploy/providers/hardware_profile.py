@@ -119,8 +119,10 @@ def validate_runtime_class_policy(policy: dict) -> None:
     if mode not in {"auto", "node-default", "named"} or set(policy) - {"mode", "name"}:
         raise ValueError("Invalid RuntimeClass policy")
     if mode == "named":
-        if not isinstance(name, str) or len(name) > 253 or not all(
-            re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in name.split(".")
+        if (
+            not isinstance(name, str)
+            or len(name) > 253
+            or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in name.split("."))
         ):
             raise ValueError("RuntimeClass name must be a valid DNS subdomain")
     elif name is not None:
@@ -155,9 +157,13 @@ async def discover_runtime_classes(cluster_id: str) -> dict:
         try:
             response = await scoped_runner(cluster_id).run(["kubectl", "get", resource, "-o", "json"])
         except Exception as error:
-            raise ValueError(f"Unable to discover {resource} in the target cluster; check connectivity and read permissions") from error
+            raise ValueError(
+                f"Unable to discover {resource} in the target cluster; check connectivity and read permissions"
+            ) from error
         if response.returncode:
-            raise ValueError(f"Unable to discover {resource} in the target cluster; check connectivity and read permissions")
+            raise ValueError(
+                f"Unable to discover {resource} in the target cluster; check connectivity and read permissions"
+            )
         try:
             payload = json.loads(response.stdout)
             items = payload["items"]
@@ -234,18 +240,24 @@ def prepare_runtime_class_manifest(
                     pod["runtimeClassName"] = selected
                 else:
                     pod.pop("runtimeClassName", None)
-            report["workloads"].append({
-                "kind": document.get("kind"),
-                "name": document.get("metadata", {}).get("name"),
-                "runtimeClassName": selected,
-            })
+            report["workloads"].append(
+                {
+                    "kind": document.get("kind"),
+                    "name": document.get("metadata", {}).get("name"),
+                    "runtimeClassName": selected,
+                }
+            )
+
     for document in documents:
         visit(document)
     return (yaml.safe_dump_all(documents, sort_keys=False) if changed else manifest), report
 
 
 def apply_runtime_class(
-    pod_spec: dict, *, accelerator: str | None = None, access_mode: str | None = None,
+    pod_spec: dict,
+    *,
+    accelerator: str | None = None,
+    access_mode: str | None = None,
     runtime_classes: list[dict] | None = None,
 ) -> None:
     profile = active_profile(accelerator)
@@ -256,9 +268,7 @@ def apply_runtime_class(
         return
     resources = container.get("resources") or {}
     resource_keys = {key for section in ("limits", "requests") for key in resources.get(section, {})}
-    declared_resources = {
-        name for mode in profile.deployment.modes.values() for name in mode.get("resource_names", [])
-    }
+    declared_resources = {name for mode in profile.deployment.modes.values() for name in mode.get("resource_names", [])}
     if profile.deployment.resource_name:
         declared_resources.add(profile.deployment.resource_name)
     if resource_keys & declared_resources:

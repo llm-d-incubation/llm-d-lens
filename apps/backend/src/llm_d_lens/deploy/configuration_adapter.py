@@ -78,7 +78,8 @@ class GuideHelmConfigurationAdapter:
                             "placement": run_provenance.get("placement"),
                             "runtime_class": RuntimeClassPolicy.model_validate(
                                 run_provenance.get("runtime_class")
-                                or configuration.provenance.get("runtime_class") or {"mode": "auto"}
+                                or configuration.provenance.get("runtime_class")
+                                or {"mode": "auto"}
                             ).model_dump(exclude_none=True),
                             "model_secret": (
                                 (configuration.content.get("officialGuide") or {}).get("modelSecret")

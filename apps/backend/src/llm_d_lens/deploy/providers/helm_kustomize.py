@@ -366,13 +366,14 @@ class HelmKustomizeGuideAdapter:
         if self._descriptor.guide_id == "tiered-prefix-cache":
             cache = overrides.get("cache") or {}
             requested = str(overrides.get("guideVariant") or cache.get("variant") or "native/cpu")
-            variant = resolve_tiered_cache_variant(
-                self._descriptor.variants, requested, accelerator=self._accelerator
-            )
+            variant = resolve_tiered_cache_variant(self._descriptor.variants, requested, accelerator=self._accelerator)
         else:
-            variant = str(overrides.get("guideVariant") or default_guide_variant(
-                self._descriptor.variants, guide=self._descriptor.guide_id, accelerator=self._accelerator
-            ))
+            variant = str(
+                overrides.get("guideVariant")
+                or default_guide_variant(
+                    self._descriptor.variants, guide=self._descriptor.guide_id, accelerator=self._accelerator
+                )
+            )
         if variant not in self._descriptor.variants:
             raise ValueError(f"unsupported {self._descriptor.guide_id} variant: {variant}")
         if not isinstance(model.get("name"), str) or not model["name"]:
@@ -500,18 +501,19 @@ class HelmKustomizeGuideAdapter:
 
     @staticmethod
     def _set_shell_argument(command: str, name: str, value: object) -> str:
-        boolean = (
-            name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"}
-            and str(value).lower() in {"true", "false"}
-        )
+        boolean = name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"} and str(
+            value
+        ).lower() in {"true", "false"}
         pattern = (
             rf"--(?:no-)?{re.escape(name)}(?:=(?:true|false))?(?![\w-])"
             if boolean
             else rf"--{re.escape(name)}(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s]+)"
         )
         replacement = (
-            f"--{name}" if str(value).lower() == "true" else f"--no-{name}"
-        ) if boolean else f"--{name}={shlex.quote(str(value))}"
+            (f"--{name}" if str(value).lower() == "true" else f"--no-{name}")
+            if boolean
+            else f"--{name}={shlex.quote(str(value))}"
+        )
         if re.search(pattern, command):
             return re.sub(pattern, lambda _: replacement, command)
         return f"{command.rstrip()} \\\n                {replacement}"

@@ -218,9 +218,7 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
         ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], "a100"),
     ],
 )
-def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
-    monkeypatch, accelerators, expected_system
-):
+def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeypatch, accelerators, expected_system):
     captured = {"tool_args": []}
 
     class Tools:
@@ -839,9 +837,10 @@ def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(mo
             self.turns += 1
             exposed_tools.append([AICandidateGenerator._provider_tool_name(tool) for tool in kwargs["tools"]])
             if self.turns == 1:
-                assert "at most 4 MCP tool calls in one response and 8 across at most 4 tool rounds" in kwargs[
-                    "system_prompt"
-                ]
+                assert (
+                    "at most 4 MCP tool calls in one response and 8 across at most 4 tool rounds"
+                    in kwargs["system_prompt"]
+                )
                 return AIToolTurn(
                     tool_calls=[
                         AIToolCall(id="call-1", name="get_cluster_overview", arguments={"clusterId": "cluster-a"}),

@@ -790,15 +790,12 @@ class GuideAdapterDeploymentService:
             # briefly unreachable) says nothing about the workload itself --
             # leave the previously observed status (e.g. READY) untouched
             # instead of downgrading a healthy deployment.
-            if (
-                status == DeploymentStatus.FAILED
-                and (
-                    (
-                        "pending" in str(diagnostics.get("pods") or "").lower()
-                        and _resource_wait_reason([str(diagnostics.get("events") or "")])
-                    )
-                    or _pods_are_starting(diagnostics)
+            if status == DeploymentStatus.FAILED and (
+                (
+                    "pending" in str(diagnostics.get("pods") or "").lower()
+                    and _resource_wait_reason([str(diagnostics.get("events") or "")])
                 )
+                or _pods_are_starting(diagnostics)
             ):
                 status = DeploymentStatus.DEPLOYING
         elif execution.status not in {DeploymentStatus.CLEANED, DeploymentStatus.CLEANED_UP}:

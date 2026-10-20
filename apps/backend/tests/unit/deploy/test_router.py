@@ -29,10 +29,25 @@ async def test_runtime_classes_api_exposes_capabilities_without_claiming_runtime
 
     accesses = []
     monkeypatch.setattr(router, "require_cluster_access", lambda principal, cluster_id: accesses.append(cluster_id))
-    monkeypatch.setattr(router, "discover_runtime_classes", AsyncMock(return_value={
-        "items": [{"metadata": {"name": "nvidia"}, "handler": "gpu-handler", "scheduling": {"nodeSelector": {"pool": "gpu"}}}],
-        "nodes": [{"metadata": {"name": "gpu-node", "labels": {"pool": "gpu"}}}, {"metadata": {"name": "cpu-node"}}],
-    }))
+    monkeypatch.setattr(
+        router,
+        "discover_runtime_classes",
+        AsyncMock(
+            return_value={
+                "items": [
+                    {
+                        "metadata": {"name": "nvidia"},
+                        "handler": "gpu-handler",
+                        "scheduling": {"nodeSelector": {"pool": "gpu"}},
+                    }
+                ],
+                "nodes": [
+                    {"metadata": {"name": "gpu-node", "labels": {"pool": "gpu"}}},
+                    {"metadata": {"name": "cpu-node"}},
+                ],
+            }
+        ),
+    )
     result = await router.list_deployment_runtime_classes("cluster-a", accelerator="nvidia", access_mode="plugin")
     assert accesses == ["cluster-a"]
     assert result["available_suggestion"] == "nvidia"
@@ -292,6 +307,7 @@ def test_baseline_vllm_renders_boolean_arguments_as_cli_flags():
             "pvc_name": "",
             "model_source": "huggingface",
             "environment": {},
+            "serving_arguments": {},
             "custom_parameters": [
                 {"target": "decode", "kind": "argument", "name": "enable-auto-tool-choice", "value": "true"},
                 {"target": "decode", "kind": "argument", "name": "enable-prefix-caching", "value": "true"},
@@ -551,6 +567,7 @@ def test_baseline_vllm_renders_model_cache_pvc():
             "pvc_name": "shared-model-cache",
             "model_source": "auto-cache",
             "environment": {},
+            "serving_arguments": {},
             "custom_parameters": [],
         }
     )

@@ -3414,7 +3414,12 @@ async def _execute_owned(run_id: str) -> None:
                 workload_path = point_workspace / "workload.yaml"
                 workload_path.write_text(
                     _matrix_workload_yaml(
-                        point, stages, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key,
+                        point,
+                        stages,
+                        model_name,
+                        endpoint_url,
+                        run.get("sla_targets"),
+                        api_key=api_key,
                         tokenizer_model=tokenizer_model,
                     ),
                     encoding="utf-8",
@@ -3476,7 +3481,14 @@ async def _execute_owned(run_id: str) -> None:
             spec = SharedPrefixWorkloadSpec(**run["shared_prefix"])
             workload_path = output / "workload.yaml"
             workload_path.write_text(
-                _shared_prefix_workload_yaml(spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key, tokenizer_model=tokenizer_model),
+                _shared_prefix_workload_yaml(
+                    spec,
+                    model_name,
+                    endpoint_url,
+                    run.get("sla_targets"),
+                    api_key=api_key,
+                    tokenizer_model=tokenizer_model,
+                ),
                 encoding="utf-8",
             )
             command = _base_command(output) + ["--workload-file-path", str(workload_path)]
