@@ -6,10 +6,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.responses import JSONResponse
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from llm_d_lens.auth.records import GroupRecord, GroupRoleBindingRecord, RoleRecord, UserRecord, UserRoleBindingRecord
 from llm_d_lens.auth.service import default_service
+from llm_d_lens.db.dao.base import ConcurrentUpdateError
 from llm_d_lens.db.dao.cluster import ClusterDao
+from llm_d_lens.db.dao.deployment_batch import DeploymentBatchDao
 from llm_d_lens.db.dao.group import GroupDao
 from llm_d_lens.db.dao.role import RoleDao
 from llm_d_lens.db.dao.user import UserDao
@@ -101,6 +105,118 @@ def _execution(execution_id: str, status: DeploymentStatus, namespace: str) -> D
         configuration_artifacts=[_artifact()],
         provenance={"cluster_server_id": "cluster-1", "cluster_session_id": "session-1"},
     )
+
+
+@pytest.mark.parametrize("conflicts", [1, 2, 3])
+def test_execution_save_reloads_after_concurrent_metadata_update(tmp_path, conflicts: int) -> None:
+    """Retry rolled-back writes with fresh metadata, but bound persistent conflicts."""
+    store = JsonDeploymentRunStore(tmp_path)
+    execution = _execution("execution-race", DeploymentStatus.DEPLOYING, "serving")
+    store.save_execution(execution)
+    updates = []
+    updating = False
+
+    def concurrent_update(session: Session, row: object) -> None:
+        nonlocal updating
+        if updating or getattr(row, "__tablename__", None) != "deployment_evidences" or len(updates) >= conflicts:
+            return
+        updating = True
+        try:
+            name = f"Edited concurrently {len(updates) + 1}"
+            store.update_execution_metadata(execution.execution_id, DeploymentMetadataUpdateRequest(display_name=name))
+            updates.append(name)
+        finally:
+            updating = False
+
+    event.listen(Session, "loaded_as_persistent", concurrent_update)
+    try:
+        ready = _execution(execution.execution_id, DeploymentStatus.READY, "serving")
+        if conflicts == 3:
+            with pytest.raises(ConcurrentUpdateError):
+                store.save_execution(ready)
+        else:
+            saved = store.save_execution(ready)
+            assert saved.status == DeploymentStatus.READY
+            assert saved.metadata.display_name == updates[-1]
+    finally:
+        event.remove(Session, "loaded_as_persistent", concurrent_update)
+    persisted = store.get_execution(execution.execution_id)
+    assert len(updates) == conflicts
+    assert persisted.metadata.display_name == updates[-1]
+    assert persisted.status == (DeploymentStatus.DEPLOYING if conflicts == 3 else DeploymentStatus.READY)
+
+
+def test_execution_save_does_not_retry_other_persistence_errors(tmp_path) -> None:
+    """Do not disguise unrelated database failures as transient version conflicts."""
+    store = JsonDeploymentRunStore(tmp_path)
+    execution = _execution("execution-error", DeploymentStatus.DEPLOYING, "serving")
+    store.save_execution(execution)
+    attempts = []
+
+    def fail_read(session: Session, row: object) -> None:
+        if getattr(row, "__tablename__", None) == "deployment_evidences":
+            attempts.append(row)
+            raise RuntimeError("database unavailable")
+
+    event.listen(Session, "loaded_as_persistent", fail_read)
+    try:
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            store.save_execution(execution)
+    finally:
+        event.remove(Session, "loaded_as_persistent", fail_read)
+    assert len(attempts) == 1
+    assert store.get_execution(execution.execution_id).status == DeploymentStatus.DEPLOYING
+
+
+@pytest.mark.parametrize("conflicts", [1, 2, 3])
+def test_run_save_reloads_after_concurrent_owner_update(tmp_path, conflicts: int) -> None:
+    """Run/job writes retry as a unit without replacing concurrently assigned ownership."""
+    store = JsonDeploymentRunStore(tmp_path)
+    case = _case("run-race", 0, "execution-race", DeploymentCaseStatus.DEPLOYING)
+    run = store.create_run(
+        DeploymentRun(
+            id="run-race",
+            status=DeploymentRunStatus.RUNNING,
+            cases=[case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="hash"
+                )
+            ],
+        )
+    )
+    owners = [UserDao().create(UserRecord(username=f"owner-{index}")) for index in range(conflicts)]
+    updates = []
+    updating = False
+
+    def concurrent_update(session: Session, row: object) -> None:
+        nonlocal updating
+        if updating or getattr(row, "__tablename__", None) != "deployment_batches" or len(updates) >= conflicts:
+            return
+        updating = True
+        try:
+            owner = owners[len(updates)]
+            DeploymentBatchDao().set_owner(run.id, owner_user_id=owner.id)
+            updates.append(owner.id)
+        finally:
+            updating = False
+
+    run.status = DeploymentRunStatus.SUCCEEDED
+    run.cases[0].status = DeploymentCaseStatus.READY
+    event.listen(Session, "loaded_as_persistent", concurrent_update)
+    try:
+        if conflicts == 3:
+            with pytest.raises(ConcurrentUpdateError):
+                store.save_run(run)
+        else:
+            store.save_run(run)
+    finally:
+        event.remove(Session, "loaded_as_persistent", concurrent_update)
+    saved = store.get_run(run.id)
+    assert len(updates) == conflicts
+    assert DeploymentBatchDao().owner_map([run.id])[run.id][0] == owners[-1].id
+    assert saved.status == (DeploymentRunStatus.RUNNING if conflicts == 3 else DeploymentRunStatus.SUCCEEDED)
+    assert saved.cases[0].status == (DeploymentCaseStatus.DEPLOYING if conflicts == 3 else DeploymentCaseStatus.READY)
 
 
 @pytest.fixture

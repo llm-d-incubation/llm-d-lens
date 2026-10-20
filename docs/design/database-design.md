@@ -1140,6 +1140,16 @@ def mark_job_scheduled(self, job_id: str) -> DeploymentJob:
 
 `with_for_update()` locks this row against other transactions' `SELECT ... FOR UPDATE` / `UPDATE` until the current transaction commits (`SELECT` without locking is unaffected, consistent with `READ COMMITTED` semantics), ensuring that the composite operation of "check `status == 'queued'` and then change it to `'rendering'`" is strictly serialized for the same `job_id`. Use it in scenarios such as "multiple workers competing to claim the same schedulable work item," where duplicate scheduling must be avoided (corresponding to the state-transition entry points of `deployment_jobs` / `simulation_tasks`). Pessimistic locking is used only in such narrow on-demand scenarios, not as the general default (it increases lock waiting; the default remains the optimistic locking in §6.7.4).
 
+Deployment run/job saves and execution lifecycle, metadata, and deletion writes
+also lock the owning run or execution row within their short DAO transaction.
+This serializes scheduler/reconciliation writes and metadata updates without
+holding database locks during Kubernetes calls or monitoring setup. Run and
+execution saves retry only `ConcurrentUpdateError`, for at most three total
+attempts, each in a fresh transaction. Retries re-read database-owned ownership,
+user metadata, and monitoring state; they never repeat deployment side effects.
+Exhausted conflicts and unrelated database failures still propagate. Deployment
+worker failures retain a stack trace in the backend log.
+
 ##### 6.7.6 Differences in the SQLite test backend
 
 - Unit tests use SQLite (in-memory or temporary file) as the default backend for `session_factory`, replacing real PostgreSQL, but SQLite is a single-writer model (only one connection can write at a time), and `with_for_update()` is silently ignored under the SQLite dialect — behavior in pessimistic-lock paths from §6.7.5 therefore requires additional PostgreSQL integration test coverage (`pgserver` or test containers), while SQLite unit tests validate only the optimistic-lock branch.
