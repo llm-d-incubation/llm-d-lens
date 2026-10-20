@@ -1,7 +1,8 @@
 """Strict adapter for the five GLM C64 fixed-window JSON exports.
 
 The schema and file-family metadata were verified at ``_METADATA_REVISION``.
-Other revisions are rejected until their associated README is reviewed.
+Other revisions require explicit compatibility review of the associated README
+and hardcoded metadata against the exact commit.
 This is not a generic numeric-tree importer. New metrics require unit and
 semantic review; repeated source rows and derived aggregates remain distinct
 evidence, not additional independent trials. The publication service retains
@@ -18,7 +19,7 @@ from pydantic import JsonValue
 
 from llm_d_lens.benchmark_rag.contracts import RagItem, normalize_unit
 from llm_d_lens.benchmark_rag.publication_contracts import InventoryFile, PublicationError, item_id
-from llm_d_lens.benchmark_rag.sources import LLM_D_ORIGIN
+from llm_d_lens.benchmark_rag.sources import LLM_D_ORIGIN, validate_revision
 
 _DIRECTORY = "guides/p2p-kv-cache-sharing/benchmark-results/data/glm-5.2-c64/"
 _METADATA_REVISION = "080c14d957755da4cc363745638619fc748558f1"
@@ -417,17 +418,30 @@ class _Adapter:
                 )
 
 
-def parse_custom_json(file: InventoryFile, revision: str, data: bytes) -> tuple[RagItem, ...]:
+def parse_custom_json(
+    file: InventoryFile,
+    revision: str,
+    data: bytes,
+    *,
+    reviewed_metadata_revision: str | None = None,
+) -> tuple[RagItem, ...]:
     """Parse a reviewed fixed-window export, failing closed on revision/schema drift.
 
     Decimal values in context are strings; measurement values retain exact JSON
     precision. Null metric leaves are recorded as JSON pointers in their
     experiment's ``null_measurements`` instead of being invented as zero.
+    Noninitial revisions require an operator to review existing hardcoded
+    model/hardware/workload metadata against the exact commit and pass it as
+    ``reviewed_metadata_revision``. None retains the initial revision guard;
+    this attestation never relaxes schema checks or infers new metadata.
     """
-    if revision != _METADATA_REVISION:
+    if reviewed_metadata_revision is not None and reviewed_metadata_revision != revision:
+        raise PublicationError("reviewed metadata revision must match the exact source revision")
+    if revision != _METADATA_REVISION and reviewed_metadata_revision != revision:
         raise PublicationError(
             "unreviewed custom JSON revision; associated README metadata requires compatibility review"
         )
+    validate_revision(LLM_D_ORIGIN, revision)
     if file.format != "json" or hashlib.sha256(data).hexdigest() != file.sha256:
         raise PublicationError("custom JSON format or SHA-256 mismatch")
     if not file.path.startswith(_DIRECTORY):

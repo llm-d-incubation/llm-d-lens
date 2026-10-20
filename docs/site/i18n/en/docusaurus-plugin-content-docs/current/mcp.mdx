@@ -118,6 +118,19 @@ See the [request, filters and response contract](/api-reference/modules/lens-ass
 This integration has focused local automated coverage; a real deployment has
 **not yet been verified**.
 
+Evidence refresh is deliberately **not** an MCP write tool. Trusted
+administrators can use the shared target-local `admin refresh` command for
+manual Prism snapshots and reviewed commit/periodic repository jobs.
+Plans pin full inventories, hashes, counts and publication generations; failures
+preserve the current release, and old periodic plans cannot undo rollback or
+revocation. See [refresh administration](/api-reference/modules/lens-assistant#administer-reviewed-benchmark-refreshes).
+The [fixed evidence baseline](/api-reference/modules/lens-assistant#evaluate-the-fixed-evidence-baseline)
+replays known questions, exact values, refusals and authorized internal cases
+with independent citation checks. A passing baseline never auto-approves a new
+origin, external URL or paper.
+The optional internal branch and its owning-Evaluate permissions are unchanged;
+simulation/benchmark ingestion improvements are deferred.
+
 ### MCP Inspector
 
 1. Start the Lens dev stack (`scripts/lens-local.sh start`).

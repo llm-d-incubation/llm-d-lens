@@ -1,4 +1,4 @@
-"""Target-local RAG rebuild, backup, verification and incremental migration."""
+"""Target-local RAG refresh, status, rollback, rebuild and portable migration."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from llm_d_lens.benchmark_rag.prism import PrismSnapshotImporter
 from llm_d_lens.benchmark_rag.prism_initial import INITIAL_EXPERIMENTS, INITIAL_FILES, INITIAL_REVISION
 from llm_d_lens.benchmark_rag.publication import RagPublicationService
 from llm_d_lens.benchmark_rag.publication_contracts import PublicationError, SourceApproval
+from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
 from llm_d_lens.benchmark_rag.transfer import MAX_BACKUP_BYTES, RagBackupService
 from llm_d_lens.db.dao.rag_item import RagItemDaoError
 from llm_d_lens.db.dao.rag_transfer import transfer_database
@@ -45,6 +46,21 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--output", type=Path, required=True)
         else:
             command.add_argument("--bundle", type=Path, required=True)
+    for name in ("refresh", "status", "rollback"):
+        command = subcommands.add_parser(name)
+        command.add_argument("--database-url-env", default="LLM_D_BENCH_DATABASE_URL")
+        command.add_argument("--schema", default="public")
+        command.add_argument("--data-dir", type=Path, required=True)
+        if name == "refresh":
+            command.add_argument("--plan", type=Path, required=True)
+            command.add_argument("--source", type=Path, required=True)
+            command.add_argument("--trigger", choices=("manual", "commit", "periodic"), default="manual")
+            command.add_argument("--event-revision")
+        else:
+            command.add_argument("--origin", required=True)
+            if name == "rollback":
+                command.add_argument("--manifest-id", required=True)
+                command.add_argument("--expected-generation", type=int, required=True)
     return parser
 
 
@@ -76,6 +92,19 @@ def main(argv: list[str] | None = None) -> int:
                     expected_experiments=INITIAL_EXPERIMENTS,
                 )
                 print(result.model_dump_json())
+            elif args.command == "refresh":
+                plan = RefreshPlan.model_validate_json(args.plan.read_bytes())
+                result = RagRefreshService(RagPublicationService(dao=dao)).run(
+                    plan, args.source, trigger=args.trigger, event_revision=args.event_revision
+                )
+                print(result.model_dump_json())
+            elif args.command == "status":
+                print(dao.head(args.origin).model_dump_json())
+            elif args.command == "rollback":
+                result = RagPublicationService(dao=dao).rollback(
+                    args.origin, args.manifest_id, expected_generation=args.expected_generation
+                )
+                print(result.model_dump_json())
             elif args.command == "backup":
                 metadata = RagBackupService(dao).backup(args.output, max_bytes=args.max_bytes)
                 print(json.dumps({"backup_id": metadata.backup_id, **metadata.model_dump(mode="json")}, sort_keys=True))
@@ -85,7 +114,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except (PublicationError, RagItemDaoError, ValidationError, OSError) as error:
         message = "record validation failed" if isinstance(error, ValidationError) else str(error)
-        print(f"rag_admin_failed: {message}", file=sys.stderr)
+        if args.command == "refresh":
+            print(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "command": "refresh",
+                        "trigger": args.trigger,
+                        "error_type": type(error).__name__,
+                        "message": message,
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(f"rag_admin_failed: {message}", file=sys.stderr)
         return 1
 
 

@@ -328,6 +328,203 @@ inferred. A failure in the second origin does not undo an already published
 first origin. These administration APIs do not create a standalone query
 endpoint; public-only serving is described separately below.
 
+### Reviewed refresh jobs, status and rollback
+
+The target-local administrative CLI now has `refresh`, `status` and `rollback`.
+It does not fetch a branch, crawl URLs, poll APIs, install a scheduler or expose
+write operations through REST/MCP. It reuses the publication service and its
+per-origin atomic pointer, immutable archive, exact manifest membership and
+generation checks. Failed jobs do not replace the active release. Staged rows
+or retained blobs can remain after a failed job; they are not searchable.
+No new tables, dependencies or migration are required.
+
+Both repository triggers use the **same** `refresh` command and reviewed plan:
+
+- `manual`: an explicitly transferred Prism snapshot, or a pinned local Git
+  checkout. Prism accepts only this trigger.
+- `commit`: CI passes `--event-revision` equal to the plan's full commit;
+  branches, abbreviated commits and unrelated events are not accepted.
+- `periodic`: a cron/managed Job invokes the same pinned plan. This retries
+  the approved version; it does not discover or approve a newer commit.
+
+Prepare one JSON `RefreshPlan` per reviewed source version. Its schema is
+available through `RefreshPlan.model_json_schema()` in
+`llm_d_lens.benchmark_rag.refresh`. Required review inputs are:
+
+| Field | Review requirement |
+| --- | --- |
+| `contract` | `benchmark-rag.refresh.v1` (default). |
+| `review_reference` | Actual approval of this revision, complete inventory and counts; not a test approval. |
+| `approval` | Exact existing `SourceApproval` from the source registry, including parser version, public/license approval and allowed paths. Refresh never creates or re-enables a source or changes its approval. |
+| `inventory` | `origin_id`, full commit or Prism ISO date `revision`, `complete: true`, and sorted `files` with exact `path`, `sha256`, `format`. All approved files must be listed. |
+| `expected_counts` | Exact post-parse per-kind counts, including `source` equal to the number of files. Counts describe index representations, not distinct experiments. |
+| `base_generation`, `base_manifest_id` | Current source status reviewed before the job; use explicit JSON `null` only when no release is active. |
+| `triggers` | Explicit subset of `manual`, `commit`, `periodic`. Default is manual only; Prism must remain manual only. |
+| `figure_reviews` | Exact PNG-path mapping of coverage, reason and any verified report/table links. Empty when there are no figures. Never derive numbers from pixels. |
+| `metadata_review_reference` | Optional, explicit review that the existing guide table/JSON adapter's source-specific model/hardware/runtime/workload assumptions remain valid at this exact inventory/commit. Required for numeric guide extraction outside the initial reviewed revision. Not approval for new layouts or schemas. |
+| `allow_empty` | Defaults to false. Removing every repository file requires explicit true plus the reviewed empty inventory/counts; incomplete listings are never interpreted as deletion. |
+
+The plan binds the metadata review to the exact inventory digest before
+parsing. Unknown numeric layouts/JSON schemas still fail. If a model, condition
+or report structure changes incompatibly, review and update the adapter first;
+a matching path or explicit metadata review cannot repair wrong assumptions.
+No review bypass is enabled for existing parser callers by default.
+
+For example, an operator can assemble a plan in an offline review process,
+using the same archive/data directory as the target. `collect_git` reads the
+complete committed tree (not dirty worktree files); `parse_repository` and
+`repository_counts` can be used to inspect candidate counts. Inspect those
+outputs and original reports before approving and signing off the plan; never
+automatically accept generated counts or source-specific metadata. Securely
+transfer the approved JSON plus the full local repository or Prism snapshot.
+The CLI verifies the bytes again. Prism additionally verifies complete
+public/promoted indexes with terminal pagination and matching JSON/ZIP reports.
+
+Run from the repository root using the installed backend interpreter:
+
+```bash
+export PYTHONPATH=apps/backend/src
+# Set LLM_D_BENCH_DATABASE_URL securely; never put credentials in the plan/logs.
+python -m llm_d_lens.benchmark_rag.admin status \
+  --schema public --data-dir /srv/lens-data \
+  --origin https://github.com/llm-d/llm-d-benchmark.git
+
+python -m llm_d_lens.benchmark_rag.admin refresh \
+  --schema public --data-dir /srv/lens-data \
+  --plan /secure/rag/approved-plan.json --source /srv/sources/llm-d-benchmark \
+  --trigger commit --event-revision "$REVIEWED_COMMIT"
+
+# Same plan/source for a periodic run; use manual for an approved Prism snapshot.
+python -m llm_d_lens.benchmark_rag.admin refresh \
+  --schema public --data-dir /srv/lens-data \
+  --plan /secure/rag/approved-plan.json --source /srv/sources/llm-d-benchmark \
+  --trigger periodic
+```
+
+For CI, invoke only from the trusted, approval-controlled job, not arbitrary
+pull-request code with database credentials. For cron/managed Jobs, schedule
+the same periodic invocation with explicit interpreter/working directory,
+protected environment and read-only source/plan mounts. Append stdout to a
+durable JSONL job log and stderr to the operator's error log; alert on nonzero
+exit. Use the same database/schema **and** persistent evidence archive as the
+query instances. No real scheduled task, CI secret or cluster Job is installed
+by these code changes.
+
+Success emits one JSON report with `published`/`unchanged`, trigger, plan and
+inventory hashes, review reference, revision, file count, timestamps, exact
+per-kind counts, previous/current manifest and generation. Failures exit 1 and
+emit `status: failed`, error category and message on stderr, with no success
+report. Persist scheduler logs for failed-attempt history; `status` exposes the
+durable active registry/head/publication history, not a durable job queue.
+
+A direct repeat is a no-op, but an obsolete plan cannot undo newer publication,
+rollback or disable/enable cycles. Concurrent publication/access changes
+conflict; do not automatically rebase/reapprove the plan on conflict.
+Reinspect status and approve a new plan. Rollback is explicit, generation-
+checked, and limited to previously published manifests:
+
+```bash
+python -m llm_d_lens.benchmark_rag.admin rollback \
+  --schema public --data-dir /srv/lens-data \
+  --origin https://github.com/llm-d/llm-d-benchmark.git \
+  --manifest-id "$PREVIOUS_MANIFEST" --expected-generation "$CURRENT_GENERATION"
+```
+
+Old pinned evidence stays resolvable after edits, renames and deletions, but
+only current exact manifest members appear in new answers. Queries recheck
+publication/access generations before returning; disabled sources disappear
+without waiting for a refresh job. Internal opt-in and Evaluate authorization
+remain unchanged; step 6a ingestion work is explicitly deferred.
+
+### Fixed evidence evaluation and source-onboarding gate
+
+`llm_d_lens.benchmark_rag.evaluation` provides strict versioned
+`EvaluationSuite`/`EvaluationCase` inputs and a `run_evaluation` report. It is a
+read-only test/acceptance API, not an LLM judge, administrative writer, REST
+endpoint or source-discovery tool. The fixed suites live under
+`apps/backend/tests/fixtures/benchmark_rag/`; expected numbers and outcomes are
+reviewed fixtures, never generated from the current response.
+
+Every case runs through the existing query service with its resolved test
+actor. Execution and independent evidence verification are injected explicitly:
+
+```python
+from llm_d_lens.benchmark_rag.evaluation import EvaluationSuite, run_evaluation
+
+suite = EvaluationSuite.model_validate_json(cases_path.read_bytes())
+report = run_evaluation(
+    suite,
+    execute=execute_authorized_case,
+    verify_evidence=verify_retained_source_evidence,
+)
+assert report.passed, report.model_dump_json(indent=2)
+```
+
+`execute_authorized_case(case)` must return a validated `QueryResponse` or
+raise the actual domain error. Never invent an admin principal for production
+evaluation. `verify_retained_source_evidence(case, evidence)` must independently
+check all primary and corroborating citations against retained source bytes or
+authorized owning records, returning a tuple of issue codes (empty only when
+valid). This callback is mandatory: response self-consistency is not provenance
+proof. Unexpected implementation errors propagate; expected authorization
+denials pass only when the actual domain error code matches.
+
+The runner checks exact Decimal observations, answer/evidence measured-line
+agreement, required context and abstentions, origin/evidence-type restrictions,
+forbidden leakage fragments, match/returned counts, shared limits, duplicate
+identities and internal opt-in. It invokes the verifier for **every** evidence
+envelope. This is a deterministic evidence-response gate, not a proof about
+arbitrary free-form language-model answers or a semantic-deduplication metric.
+There is no tolerated failure percentage: every executed case must pass.
+
+The public suite replays the separately provisioned actual pinned Prism and
+two Git corpora, checks original values/conditions/pointers and does not count
+documentation examples or unreported pixels as measurements. The internal
+suite creates two live owners and real Evaluate-backed fixture rows in an
+isolated schema. It checks opt-in, ownership, feature denial, stale principals,
+hidden/missing ID equivalence, legacy/orphan exclusion and dual-source merging.
+Every emitted internal citation is checked against the persisted record hash,
+metric, resource and independently known owner scope. It observes no data
+writes and verifies benchmark records are unchanged. These are fixture-created
+Evaluate rows, not proof that deferred simulation ingestion (step 6a) is fixed.
+
+Run from the repository root:
+
+```bash
+LENS_RAG_BASELINE_REPORT_DIR=/secure/acceptance/rag-v1 \
+PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
+  apps/backend/tests/unit/db/test_rag_public_baseline.py \
+  apps/backend/tests/unit/db/test_rag_internal_baseline.py \
+  apps/backend/tests/unit/benchmark_rag/test_evaluation.py -q
+```
+
+The report directory is optional and explicitly operator-selected. Tests write
+`public-baseline.json` and `internal-baseline.json` after each completed replay;
+reports contain suite hashes, pinned source revisions/inventory hashes,
+timestamps, case/category counts, exact pass/fail
+outcomes and issue codes, not raw private answers/identifiers or credentials.
+`verified_citations` counts all verified citations (including both provenances
+of a merged envelope); `numeric_observations` counts returned numeric envelopes.
+Retain failures as well as successful reports and check `passed: true` and zero
+skips. Missing real corpora or PostgreSQL prerequisites must not be described as
+passing full acceptance; provision them independently using the pinned inputs
+and reviewed hashes.
+
+A passing baseline does not automatically approve another origin. For each
+additional dataset/repository, GCS/GIQ Prism source or paper collection:
+
+1. Review actual public visibility, license/permission, owner and scope.
+2. Approve exact origin, paths/formats, pinned revision and complete inventory.
+3. Review a source-specific adapter, units/denominators, provenance, schema
+   drift and any metadata assumptions; papers remain explanatory unless their
+   measurements are independently verified.
+4. Add original-byte fixtures, known answers/refusals, false-join and access/
+   withdrawal regressions before publication.
+5. Publish only through a complete manifest with rollback and revoke checks.
+
+The v1 source allowlist is unchanged. New URLs found in prose/images/links do
+not become searchable, and no additional source is onboarded by this step.
+
 For a target with reviewed migrations already applied, securely configure
 `LLM_D_BENCH_DATABASE_URL` and `LENS_DATA_DIR`, install this code and its backend
 dependencies, then use the API from the repository root:
@@ -702,9 +899,29 @@ The subsequent explicit step-6 request added opt-in authorized Agentic reads.
 The combined database/auth/query regression passed 630 cases; after final
 DAO filter simplification, the 69 focused authorization/service/merge cases
 passed again. The server suite passed 136 cases, and the independent generator
-tests passed three cases. Step 6 passed user review; the user explicitly
-paused further work. Its changes remain uncommitted and unpushed.
-Deployment and step 7 remain deferred.
+tests passed three cases. Step 6 passed user review and was subsequently
+committed locally as `3ab782d`, without pushing. The user then explicitly
+skipped supplemental step 6a and requested step 7 onward. The reviewed refresh
+entry point and manual/commit/periodic triggers are implemented. The affected
+import/publication/transfer/query/route/refresh regression passed **309 tests,
+zero skipped** (including 27 new refresh cases and the provisioned real public
+corpora). Ruff/format, English checks, documentation links and both locale builds
+passed; the existing `resources/OWNERS` link warning remains. IDE problems
+reported no errors, but Pylance still reports pydantic import resolution warnings;
+this is not a claim of a complete Python static typecheck.
+Step 7 passed user review, and the user authorized step-8 fixed evaluation.
+The final baseline/evaluator/authorization run passed **70 tests, zero skipped**
+(three existing deprecation warnings). This includes an actual pinned public
+suite with **20/20 cases, 27 verified citations and three numeric envelopes**,
+and an isolated authorized internal suite with **12/12 cases, seven verified
+citations and six numeric envelopes**. Evaluation mutation controls reject
+fabricated values/citations/contexts and preserve unset-filter planning
+semantics through replay and suite hashing. Steps 7/8 both passed user review;
+the user subsequently authorized their local commit followed by single-instance
+deployment acceptance. Nothing is pushed. Target infrastructure, source
+approval and credentials must be explicitly selected before live operations.
+No new source was onboarded.
+Real deployment remains deferred.
 No business database or real cluster was modified.
 All these tests use disposable PostgreSQL schemas and temporary evidence roots,
 not a remote machine or business database. Test schemas are dropped and servers
@@ -723,6 +940,8 @@ PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_repository_corpus.py \
   apps/backend/tests/unit/db/test_guide_tables.py \
   apps/backend/tests/unit/db/test_guide_json.py \
+  apps/backend/tests/unit/db/test_rag_refresh.py \
+  apps/backend/tests/unit/db/test_repository_refresh.py \
   apps/backend/tests/unit/db/test_rag_query.py \
   apps/backend/tests/unit/db/test_rag_agentic_query.py \
   apps/backend/tests/unit/db/test_rag_agentic_service.py \

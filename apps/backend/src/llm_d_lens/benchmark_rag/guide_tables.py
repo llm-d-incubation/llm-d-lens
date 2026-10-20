@@ -486,13 +486,23 @@ def _headers(layout: str, table: _Table) -> None:
         raise PublicationError(f"unreviewed published table layout {layout}: {h}")
 
 
-def parse_published_tables(file: InventoryFile, revision: str, data: bytes) -> tuple[RagItem, ...]:
-    """Extract reviewed observations only at REVIEWED_REVISION; audit exclusions.
+def parse_published_tables(
+    file: InventoryFile,
+    revision: str,
+    data: bytes,
+    *,
+    reviewed_metadata_revision: str | None = None,
+) -> tuple[RagItem, ...]:
+    """Extract reviewed observations with unchanged layout guards; audit exclusions.
 
-    Source-specific model/scenario metadata requires renewed review before any
-    other revision can produce measurements. Context-only guides carry no such
-    metadata and can use another valid pinned revision.
+    For noninitial numeric revisions, the operator must review the hardcoded
+    model/hardware/workload metadata against that exact commit and supply it as
+    ``reviewed_metadata_revision``. This attests compatibility, not new layouts
+    or inferred metadata. None retains the initial revision guard. Context-only
+    guides can use another valid pinned revision without metadata review.
     """
+    if reviewed_metadata_revision is not None and reviewed_metadata_revision != revision:
+        raise PublicationError("reviewed metadata revision must match the exact source revision")
     if hashlib.sha256(data).hexdigest() != file.sha256:
         raise PublicationError("published Markdown hash does not match inventory")
     path = file.path.removeprefix(_ROOT)
@@ -503,7 +513,11 @@ def parse_published_tables(file: InventoryFile, revision: str, data: bytes) -> t
     validate_revision(LLM_D_ORIGIN, revision)
     report = _REPORTS[path]
     context_layouts = {"context", "historical", "reference", "delta", "unsupported"}
-    if any(layout not in context_layouts for layout in report.layouts) and revision != REVIEWED_REVISION:
+    if (
+        any(layout not in context_layouts for layout in report.layouts)
+        and revision != REVIEWED_REVISION
+        and reviewed_metadata_revision != revision
+    ):
         raise PublicationError("published table metadata requires review before extracting a new source revision")
     try:
         text = data.decode("utf-8")

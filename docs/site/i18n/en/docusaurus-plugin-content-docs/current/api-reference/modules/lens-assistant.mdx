@@ -316,6 +316,127 @@ shared service with the real caller's resolved principal. Do not fabricate a
   </TabItem>
 </Tabs>
 
+### Administer reviewed benchmark refreshes
+
+Refreshing evidence is a target-local administration operation, **not** a
+REST endpoint or MCP tool. The query tool remains read-only and cannot approve
+sources, refresh them or roll back publication.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST / MCP">
+
+No write endpoint is exposed. A trusted operator/job runs:
+
+```bash
+export PYTHONPATH=apps/backend/src
+python -m llm_d_lens.benchmark_rag.admin refresh \
+  --schema public --data-dir /srv/lens-data \
+  --plan /secure/rag/approved-plan.json --source /srv/sources/llm-d-benchmark \
+  --trigger commit --event-revision "$REVIEWED_COMMIT"
+```
+
+Use `--trigger periodic` without `--event-revision` for cron/managed Jobs.
+Both triggers consume the same approved fixed-commit plan, never branch HEAD.
+Prism snapshot refreshes use `--trigger manual` only.
+Configure `LLM_D_BENCH_DATABASE_URL` securely; do not put credentials in
+arguments or reviewed plans. No scheduler or real cluster Job is installed
+automatically.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import os
+from pathlib import Path
+
+from llm_d_lens.benchmark_rag.publication import RagPublicationService
+from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.db.dao.rag_transfer import transfer_database
+
+# LENS_DATA_DIR must name the same persistent archive used by query instances.
+plan = RefreshPlan.model_validate_json(Path("/secure/rag/approved-plan.json").read_bytes())
+with transfer_database(os.environ["LLM_D_BENCH_DATABASE_URL"], schema="public") as dao:
+    dao.prepare()
+    report = RagRefreshService(RagPublicationService(dao=dao)).run(
+        plan, Path("/srv/sources/llm-d-benchmark"), trigger="periodic"
+    )
+    print(report.model_dump_json())
+```
+
+`RefreshPlan.model_json_schema()` describes the strict plan contract. Review
+the exact source approval, full inventory/path hashes, per-kind counts,
+base manifest/generation, allowed triggers and all figure coverage. New guide
+numeric revisions also require `metadata_review_reference` confirming that
+the existing adapter's model, hardware and workload assumptions remain valid;
+new schemas/layouts still require an adapter update. Empty inventories need
+explicit `allow_empty: true`. Plans never expand the source/path allowlist,
+re-enable a source or infer ownership from simulation IDs.
+
+  </TabItem>
+</Tabs>
+
+Success emits a `published` or `unchanged` JSON report containing plan/inventory
+hashes, review reference, revision, file and per-kind counts, timestamps and
+publication IDs/generation. Failure exits 1 with a failed JSON report on stderr,
+not a successful empty import. Persist job stdout/stderr for attempt history.
+`admin status --origin ...` reads the active source head/history; explicit
+`admin rollback --origin ... --manifest-id ... --expected-generation ...`
+restores a previously published manifest. Both require the same schema/data-dir
+arguments. Old citations remain backed by retained bytes; new answers use only
+current published members. Stale plans, concurrent changes, incomplete
+inventories or pagination, and parser/hash/count failures cannot replace the
+active release. A direct approved replay is a no-op; an old periodic job cannot
+undo a rollback or access-policy change.
+
+### Evaluate the fixed evidence baseline
+
+This is a read-only acceptance API, not a REST/MCP tool or an LLM judge.
+`llm_d_lens.benchmark_rag.evaluation` exposes versioned `EvaluationSuite`,
+`EvaluationCase`, `EvaluationReport` and:
+
+```python
+report = run_evaluation(
+    suite,
+    execute=execute_authorized_case,
+    verify_evidence=verify_retained_source_evidence,
+)
+```
+
+Execution must use the actual caller's permissions. The mandatory independent
+verifier checks every primary/corroborating citation against retained bytes or
+authorized owning records; it returns a tuple of issue codes, empty only for
+valid evidence. The runner checks exact Decimal observations, deterministic
+measured answer lines, context/refusals, origin/type restrictions, limits,
+counts and leakage expectations. Unexpected errors propagate; expected denial
+requires the actual domain error. Every case must pass, with no skipped source
+acceptance. This does not evaluate arbitrary free-form model output.
+
+Replay the fixed public and internal suites from the repository root:
+
+```bash
+LENS_RAG_BASELINE_REPORT_DIR=/secure/acceptance/rag-v1 \
+PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
+  apps/backend/tests/unit/db/test_rag_public_baseline.py \
+  apps/backend/tests/unit/db/test_rag_internal_baseline.py \
+  apps/backend/tests/unit/benchmark_rag/test_evaluation.py -q
+```
+
+The public suite needs the separately provisioned pinned three-source inputs.
+Internal cases create isolated live-owner/Evaluate fixtures; they do not fix
+or broaden legacy simulation ingestion. Optional reports contain pinned source
+versions/inventory hashes, suite hashes,
+timestamps, case outcomes and issue codes, not raw private responses.
+`verified_citations` includes corroborating provenance;
+`numeric_observations` counts numeric envelopes.
+
+Passing the baseline does **not** enable additional sources. Every new
+repository/dataset, GCS/GIQ source or paper collection still needs separate
+visibility/license/permission approval, exact origin/path/revision inventory,
+adapter and original-byte regressions, manifest publication, rollback and
+withdrawal tests. Papers remain explanatory unless measurements are
+independently verified. URLs discovered in evidence never approve themselves;
+the v1 allowlist is unchanged.
+
 Representative generated MCP tools forward straight into existing Python-backed REST modules:
 
 | MCP tool | Forwarded HTTP endpoint | Underlying module |

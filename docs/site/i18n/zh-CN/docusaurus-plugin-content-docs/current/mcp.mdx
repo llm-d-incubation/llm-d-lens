@@ -107,6 +107,15 @@ Decimal 字符串表示已存储 Float，而不是原始来源 token 的精确�
 参阅[请求、筛选及响应契约](/api-reference/modules/lens-assistant#query-public-benchmark-evidence)。
 本集成有针对性的本地自动化测试覆盖，但**尚未完成真实部署验证**。
 
+证据刷新明确**不提供** MCP 写工具。可信管理员使用共用的目标机器本地
+`admin refresh` 命令，执行手动 Prism 快照刷新或已审核 commit/周期仓库任务。
+计划固定完整清单、哈希、计数和发布 generation；失败保留当前发布，
+旧周期计划不能撤销回滚或访问撤销。参阅[刷新管理](/api-reference/modules/lens-assistant#administer-reviewed-benchmark-refreshes)。
+[固定证据基线](/api-reference/modules/lens-assistant#evaluate-the-fixed-evidence-baseline)
+回放已知问答、精确数值、拒答和已授权内部场景，并独立核验引用。
+基线通过不会自动批准新来源、外部 URL 或论文。
+可选内部分支及 Evaluate 所属权限保持不变；simulation/benchmark 入库完善暂缓。
+
 ### MCP Inspector
 
 1. 启动 Lens 开发技术栈（`scripts/lens-local.sh start`）。

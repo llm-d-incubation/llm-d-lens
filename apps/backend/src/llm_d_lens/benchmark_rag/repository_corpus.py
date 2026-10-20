@@ -321,22 +321,35 @@ def parse_repository(
     archive: SourceArchive,
     *,
     figure_reviews: Mapping[str, FigureReview],
+    reviewed_metadata_revision: str | None = None,
 ) -> tuple[ParsedFile, ...]:
+    """Parse pinned bytes, retaining mandatory figure reviews and schema guards.
+
+    ``reviewed_metadata_revision`` attests that an operator reviewed existing
+    hardcoded model/hardware/workload metadata against this exact inventory
+    commit. None keeps numeric adapters restricted to their initial revision.
+    """
     from llm_d_lens.benchmark_rag.guide_json import parse_custom_json
     from llm_d_lens.benchmark_rag.guide_tables import parse_published_tables
 
     if inventory.origin_id not in (LLM_D_ORIGIN, BENCHMARK_ORIGIN):
         raise PublicationError("repository parser only supports the two reviewed repository origins")
+    if reviewed_metadata_revision is not None and reviewed_metadata_revision != inventory.revision:
+        raise PublicationError("reviewed metadata revision must match the exact inventory revision")
     parsed: dict[str, tuple[RagItem, ...]] = {}
     for file in inventory.files:
         data = archive.read(file.sha256)
         if file.format == "markdown":
             items = parse_markdown(file, inventory, data)
             if inventory.origin_id == LLM_D_ORIGIN:
-                items += parse_published_tables(file, inventory.revision, data)
+                items += parse_published_tables(
+                    file, inventory.revision, data, reviewed_metadata_revision=reviewed_metadata_revision
+                )
             parsed[file.path] = items
         elif file.format == "json" and inventory.origin_id == LLM_D_ORIGIN:
-            parsed[file.path] = parse_custom_json(file, inventory.revision, data)
+            parsed[file.path] = parse_custom_json(
+                file, inventory.revision, data, reviewed_metadata_revision=reviewed_metadata_revision
+            )
         elif file.format == "png" and inventory.origin_id == LLM_D_ORIGIN:
             if not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise PublicationError("pinned figure is not a PNG")
@@ -367,14 +380,27 @@ class RepositoryCorpusImporter:
         expected_counts: dict[ItemKind, int],
         figure_reviews: Mapping[str, FigureReview],
         expected_inventory_digest: str | None = None,
+        reviewed_metadata_revision: str | None = None,
     ) -> RagItem:
+        """Stage only reviewed counts, bytes and metadata, without publishing.
+
+        ``reviewed_metadata_revision`` is the exact commit whose existing
+        hardcoded model/hardware/workload metadata the operator has reviewed.
+        None preserves the initial numeric revision guard; figure reviews and
+        layout/schema validation remain mandatory.
+        """
         if origin_id not in (LLM_D_ORIGIN, BENCHMARK_ORIGIN) or approval.parser_version != PARSER_VERSION:
             raise PublicationError("repository approval needs the supported origin and parser version")
         validate_approval(origin_id, approval)
         inventory = collect_git(origin_id, repo, revision, approval, self.publication.archive)
         if expected_inventory_digest is not None and inventory.digest != expected_inventory_digest:
             raise PublicationError("repository inventory differs from the reviewed pinned inventory")
-        parsed = parse_repository(inventory, self.publication.archive, figure_reviews=figure_reviews)
+        parsed = parse_repository(
+            inventory,
+            self.publication.archive,
+            figure_reviews=figure_reviews,
+            reviewed_metadata_revision=reviewed_metadata_revision,
+        )
         if repository_counts(parsed) != {kind: count for kind, count in expected_counts.items() if count}:
             raise PublicationError("repository extraction differs from reviewed per-kind counts")
         self.publication.register_source(origin_id, approval)
@@ -390,7 +416,15 @@ class RepositoryCorpusImporter:
         expected_counts: dict[ItemKind, int],
         figure_reviews: Mapping[str, FigureReview],
         expected_inventory_digest: str | None = None,
+        reviewed_metadata_revision: str | None = None,
     ) -> PublicationResult:
+        """Stage and activate a complete pinned repository.
+
+        Supply ``reviewed_metadata_revision`` only after operator review of
+        existing hardcoded model/hardware/workload metadata against that exact
+        commit. None preserves the initial numeric revision guard; this does
+        not replace figure reviews or relax layout/schema validation.
+        """
         manifest = self.stage_repository(
             repo,
             origin_id,
@@ -399,5 +433,6 @@ class RepositoryCorpusImporter:
             expected_counts=expected_counts,
             figure_reviews=figure_reviews,
             expected_inventory_digest=expected_inventory_digest,
+            reviewed_metadata_revision=reviewed_metadata_revision,
         )
         return self.publication.activate(origin_id, manifest.item_id)

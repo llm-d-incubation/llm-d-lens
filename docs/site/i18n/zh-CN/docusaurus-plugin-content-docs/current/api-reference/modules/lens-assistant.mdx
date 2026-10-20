@@ -299,6 +299,112 @@ DTO 验证不是授权：请使用已认证 REST 会话，或通过真实调用�
   </TabItem>
 </Tabs>
 
+### 管理已审核的基准刷新 {/* #administer-reviewed-benchmark-refreshes */}
+
+刷新证据是目标机器本地管理操作，**不是** REST 端点或 MCP 工具。
+查询工具保持只读，不能审批来源、刷新或回滚发布。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST / MCP">
+
+不开放写入端点。由可信管理员或管理任务执行：
+
+```bash
+export PYTHONPATH=apps/backend/src
+python -m llm_d_lens.benchmark_rag.admin refresh \
+  --schema public --data-dir /srv/lens-data \
+  --plan /secure/rag/approved-plan.json --source /srv/sources/llm-d-benchmark \
+  --trigger commit --event-revision "$REVIEWED_COMMIT"
+```
+
+cron/管理 Job 使用 `--trigger periodic`，不传 `--event-revision`。
+两种触发共用同一固定 commit 的审批计划，不追踪分支 HEAD。
+Prism 快照仅允许 `--trigger manual`。
+通过安全环境配置 `LLM_D_BENCH_DATABASE_URL`，不要将凭据写入参数或计划。
+代码不会自动安装定时任务或真实集群 Job。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import os
+from pathlib import Path
+
+from llm_d_lens.benchmark_rag.publication import RagPublicationService
+from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.db.dao.rag_transfer import transfer_database
+
+# LENS_DATA_DIR must name the same persistent archive used by query instances.
+plan = RefreshPlan.model_validate_json(Path("/secure/rag/approved-plan.json").read_bytes())
+with transfer_database(os.environ["LLM_D_BENCH_DATABASE_URL"], schema="public") as dao:
+    dao.prepare()
+    report = RagRefreshService(RagPublicationService(dao=dao)).run(
+        plan, Path("/srv/sources/llm-d-benchmark"), trigger="periodic"
+    )
+    print(report.model_dump_json())
+```
+
+`RefreshPlan.model_json_schema()` 提供严格计划契约。需审核来源审批、完整文件清单与
+哈希、逐类型计数、基础 manifest/generation、允许的触发方式以及全部图覆盖。
+新指南数值版本还需通过 `metadata_review_reference` 确认现有适配器的模型、
+硬件和工作负载等假设在该版本仍成立；新增 schema/表布局仍需更新适配器。
+空清单必须显式设置 `allow_empty: true`。计划不能扩大来源/路径白名单、
+重新启用来源，或从 simulation ID 猜测归属。
+
+  </TabItem>
+</Tabs>
+
+成功输出 `published` 或 `unchanged` JSON 报告，包含计划/清单哈希、审批引用、
+版本、文件及逐类型计数、时间戳、发布 ID 和 generation。
+失败返回退出码 1，并在 stderr 输出失败 JSON，不伪装为空导入成功。
+请持久保留任务 stdout/stderr 记录尝试历史。
+`admin status --origin ...` 读取当前来源 head/历史；
+`admin rollback --origin ... --manifest-id ... --expected-generation ...`
+显式恢复曾发布的 manifest，两者均需相同的 schema/data-dir 参数。
+旧引用仍由保留字节支撑，新回答仅查询当前发布成员。
+过期计划、并发修改、不完整清单或分页、解析/哈希/计数错误均不能替换当前发布。
+直接重复审核任务为 no-op；旧周期任务不能撤销回滚或访问策略变更。
+
+### 评估固定证据基线 {/* #evaluate-the-fixed-evidence-baseline */}
+
+这是只读验收 API，不是 REST/MCP 工具或 LLM 评委。
+`llm_d_lens.benchmark_rag.evaluation` 提供版本化的 `EvaluationSuite`、
+`EvaluationCase`、`EvaluationReport` 及：
+
+```python
+report = run_evaluation(
+    suite,
+    execute=execute_authorized_case,
+    verify_evidence=verify_retained_source_evidence,
+)
+```
+
+执行必须使用真实调用者权限。必传的独立 verifier 对每个主引用和佐证引用核验
+保留原始字节或已授权所属记录，返回问题码 tuple，仅有效证据返回空 tuple。
+runner 检查精确 Decimal 观测、确定性回答的测量行、条件/拒答、来源/类型、
+上限、计数及泄漏预期。非预期异常会抛出，预期拒绝必须实际产生相应领域错误。
+全部用例必须通过，不能用跳过真实来源验收代替通过；不评价任意自由文本模型输出。
+
+在仓库根目录回放固定公开及内部基线：
+
+```bash
+LENS_RAG_BASELINE_REPORT_DIR=/secure/acceptance/rag-v1 \
+PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
+  apps/backend/tests/unit/db/test_rag_public_baseline.py \
+  apps/backend/tests/unit/db/test_rag_internal_baseline.py \
+  apps/backend/tests/unit/benchmark_rag/test_evaluation.py -q
+```
+
+公开用例需要另行准备固定三来源输入；内部用例在隔离库创建真实 owner/Evaluate
+fixture，不修复或放宽历史 simulation 入库。可选报告包含固定来源版本/清单哈希、用例集哈希、时间戳、用例结果和问题码，
+不包含原始私有响应。`verified_citations` 包含双来源佐证引用，
+`numeric_observations` 统计数值封装。
+
+基线通过**不意味着**自动启用额外来源。新仓库/数据集、GCS/GIQ 来源或论文集合仍需独立
+可见性/许可/权限审批、固定 origin/path/revision 清单、适配器及原始字节回归、
+manifest 发布、回滚与撤回测试。论文默认仅作解释，除非测量得到独立验证。
+证据中发现的 URL 不会自行获准；v1 白名单保持不变。
+
 具有代表性的自动生成 MCP 工具会直接转发到已有的 Python 支撑的 REST 模块：
 
 | MCP 工具 | 转发的 HTTP 端点 | 底层模块 |

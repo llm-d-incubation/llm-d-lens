@@ -1,0 +1,272 @@
+{
+  "name": "public-baseline-v1",
+  "source_pins": {
+    "prism:public-snapshot": {"revision": "2026-10-13"},
+    "https://github.com/VincyZhang/llm-d": {
+      "revision": "080c14d957755da4cc363745638619fc748558f1",
+      "inventory_sha256": "6eed79d81434e6dc3f8396ba0fa6af5f9c7c836642558db68ff1c6159fba1fb9"
+    },
+    "https://github.com/llm-d/llm-d-benchmark.git": {
+      "revision": "6e081de16d2debc7b29436ad53f2c62e8d475f2e",
+      "inventory_sha256": "61bb48a103c2be43dba125cd9802dc5ea0333927f83a08cf6783131236a64c1e"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "prism-exact-original-throughput",
+      "category": "numeric",
+      "request": {"question": "What was the recorded throughput for Prism ID 02c8f038-1cad-4ee8-a72e-724affa923f4?"},
+      "expected_matched_items": 1,
+      "expected_returned": 1,
+      "expected_truncated": false,
+      "allowed_origins": ["prism:public-snapshot"],
+      "allowed_evidence_types": ["raw_json"],
+      "required_values": ["6131.06177725188"],
+      "answer_contains": ["output tokens/s", "Qwen3-0.6B"]
+    },
+    {
+      "case_id": "guide-h200-weight-load-conditions",
+      "category": "conditions",
+      "request": {"question": "Compare H200 gpt-oss-120b weight-load times", "limit": 50},
+      "minimum_evidence": 2,
+      "expected_truncated": false,
+      "allowed_origins": ["https://github.com/VincyZhang/llm-d"],
+      "allowed_evidence_types": ["published_table"],
+      "required_values": ["0.93", "30.3"],
+      "answer_contains": ["H200", "openai/gpt-oss-120b", "nfs", "warm", "node", " s;"]
+    },
+    {
+      "case_id": "guide-environment-is-context",
+      "category": "conditions",
+      "request": {
+        "question": "Describe warm NFS storage and cross-node environment conditions",
+        "intent": "definition",
+        "filters": {
+          "origins": ["https://github.com/VincyZhang/llm-d"],
+          "source_path": "guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md"
+        },
+        "limit": 50
+      },
+      "minimum_evidence": 1,
+      "allowed_origins": ["https://github.com/VincyZhang/llm-d"],
+      "allowed_evidence_types": ["prose_summary"],
+      "answer_contains": ["not a measured numeric observation", "NFS", "separate nodes"]
+    },
+    {
+      "case_id": "benchmark-report-definition",
+      "category": "definition",
+      "request": {
+        "question": "What is a benchmark report intended to capture?",
+        "filters": {
+          "origins": ["https://github.com/llm-d/llm-d-benchmark.git"],
+          "source_path": "docs/benchmark_report.md"
+        }
+      },
+      "minimum_evidence": 1,
+      "allowed_origins": ["https://github.com/llm-d/llm-d-benchmark.git"],
+      "allowed_evidence_types": ["prose_summary"],
+      "answer_contains": ["aggregate benchmark results", "capture performance statistics", "rather than detailed traces"]
+    },
+    {
+      "case_id": "benchmark-schema-examples-stay-context",
+      "category": "definition",
+      "request": {
+        "question": "Describe the dummy example report and schema format",
+        "intent": "definition",
+        "filters": {
+          "origins": ["https://github.com/llm-d/llm-d-benchmark.git"],
+          "source_path": "benchmark-report/README.md"
+        },
+        "limit": 50
+      },
+      "minimum_evidence": 1,
+      "allowed_origins": ["https://github.com/llm-d/llm-d-benchmark.git"],
+      "allowed_evidence_types": ["prose_summary"],
+      "answer_contains": ["not a measured numeric observation", "dummy example report", "non-sensical"]
+    },
+    {
+      "case_id": "benchmark-examples-are-not-throughput-observations",
+      "category": "numeric",
+      "request": {
+        "question": "Give measured throughput from benchmark report examples",
+        "intent": "numeric",
+        "filters": {
+          "origins": ["https://github.com/llm-d/llm-d-benchmark.git"],
+          "source_path": "benchmark-report/README.md",
+          "metric": "throughput"
+        }
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match"]
+    },
+    {
+      "case_id": "missing-qwen-tpu-plot-points-refused",
+      "category": "figure_gap",
+      "request": {"question": "Can the exact missing Qwen3 Coder TPU PNG latency-versus-throughput points be listed?"},
+      "expected_status": "abstained",
+      "expected_matched_items": 1,
+      "expected_returned": 1,
+      "allowed_origins": ["https://github.com/VincyZhang/llm-d"],
+      "allowed_evidence_types": ["image_trend"],
+      "answer_contains": ["summary_only", "cannot be reconstructed"],
+      "expected_abstentions": ["plot_points_not_reconstructed"]
+    },
+    {
+      "case_id": "linked-h100-figure-has-real-table-context",
+      "category": "provenance",
+      "request": {
+        "question": "Show explicitly linked H100 figures",
+        "intent": "figure",
+        "filters": {
+          "origins": ["https://github.com/VincyZhang/llm-d"],
+          "source_path": "guides/optimized-baseline/benchmark-results/vllm-qwen3-32b-h100/latency_vs_qps.png",
+          "hardware": "H100"
+        },
+        "limit": 50
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 1,
+      "expected_returned": 1,
+      "allowed_origins": ["https://github.com/VincyZhang/llm-d"],
+      "allowed_evidence_types": ["image_trend"],
+      "expected_abstentions": ["plot_points_not_reconstructed"]
+    },
+    {
+      "case_id": "prism-record-does-not-join-unrelated-hardware",
+      "category": "false_join",
+      "request": {
+        "question": "What was the throughput for Prism ID 02c8f038-1cad-4ee8-a72e-724affa923f4?",
+        "filters": {"hardware": "unreported baseline hardware"}
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match"]
+    },
+    {
+      "case_id": "prism-record-does-not-join-unrelated-model",
+      "category": "false_join",
+      "request": {
+        "question": "What was the throughput for Prism ID 02c8f038-1cad-4ee8-a72e-724affa923f4?",
+        "filters": {"model": "unrelated baseline model"}
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match"]
+    },
+    {
+      "case_id": "figure-does-not-inherit-unrelated-h200-context",
+      "category": "false_join",
+      "request": {
+        "question": "Show H200 figure context",
+        "intent": "figure",
+        "filters": {
+          "origins": ["https://github.com/VincyZhang/llm-d"],
+          "source_path": "guides/optimized-baseline/benchmark-results/vllm-qwen3-32b-h100/latency_vs_qps.png",
+          "hardware": "H200"
+        }
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match"]
+    },
+    {
+      "case_id": "guide-does-not-join-wrong-model",
+      "category": "false_join",
+      "request": {
+        "question": "Compare H200 weight-load times",
+        "filters": {
+          "origins": ["https://github.com/VincyZhang/llm-d"],
+          "source_path": "guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md",
+          "model": "Qwen3-0.6B"
+        }
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match", "comparison_incomplete"]
+    },
+    {
+      "case_id": "unsupported-multiple-id-comparison",
+      "category": "comparison",
+      "request": {
+        "question": "Compare throughput for 02c8f038-1cad-4ee8-a72e-724affa923f4 and 00000000-0000-4000-8000-000000000001"
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["comparison_requires_explicit_scope"]
+    },
+    {
+      "case_id": "unsupported-unscoped-comparison",
+      "category": "comparison",
+      "request": {"question": "Compare throughput"},
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["experiment_conditions_required"]
+    },
+    {
+      "case_id": "similar-model-names-do-not-prove-run-overlap",
+      "category": "overlap",
+      "request": {"question": "Are Prism and the guide the same experiment with identical model names?"},
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["unverified_experiment_identity"]
+    },
+    {
+      "case_id": "inactive-prism-source-no-evidence",
+      "category": "access",
+      "actor": "inactive_source",
+      "request": {"question": "What was the throughput for Prism ID 02c8f038-1cad-4ee8-a72e-724affa923f4?"},
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match"]
+    },
+    {
+      "case_id": "revoked-guide-source-no-evidence",
+      "category": "access",
+      "actor": "revoked_source",
+      "request": {"question": "Compare H200 gpt-oss-120b weight-load times", "limit": 50},
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match", "comparison_incomplete"]
+    },
+    {
+      "case_id": "reader-permission-revoked",
+      "category": "access",
+      "actor": "forbidden",
+      "request": {"question": "What is a benchmark report intended to capture?"},
+      "expected_status": null,
+      "expected_error": "forbidden"
+    },
+    {
+      "case_id": "unauthenticated-query-denied",
+      "category": "access",
+      "actor": "anonymous",
+      "request": {"question": "What is a benchmark report intended to capture?"},
+      "expected_status": null,
+      "expected_error": "unauthenticated"
+    },
+    {
+      "case_id": "new-unapproved-origin-cannot-enter-index",
+      "category": "provenance",
+      "actor": "reject_unapproved_source",
+      "request": {
+        "question": "Give throughput for an unregistered baseline record",
+        "filters": {"record_id": "unregistered-baseline-record", "metric": "throughput"}
+      },
+      "expected_status": "abstained",
+      "expected_matched_items": 0,
+      "expected_returned": 0,
+      "expected_abstentions": ["no_exact_match"]
+    }
+  ]
+}
