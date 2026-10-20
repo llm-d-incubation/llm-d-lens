@@ -262,6 +262,11 @@ contains `origin_id: "agentic:evaluate"`, `evidence_type: "agentic_measurement"`
 as Float values: their response Decimal strings represent the stored float,
 **not** the exact original source token. Public raw-byte precision is unchanged.
 
+Evidence text, source-pointer strings and experimental-context JSON preserve
+original whitespace, including JSON keys and table cells. Character offsets
+and numeric subvalue spans refer to those untrimmed strings. Request questions
+and filter strings continue to be trimmed independently.
+
 A public/internal merge requires a canonical `evaluate:<UUID>` identifier
 actually present in the pinned public raw JSON and a matching metric, statistic,
 unit and value. Model/workload similarity is not identity proof. A verified merge
@@ -286,7 +291,8 @@ its immutable source archive together; database records alone are insufficient.
 These are the public branch's sources. The opt-in internal branch retrieves only
 authorized stored evaluation measurements, not arbitrary private data. Neither
 branch uses an Agentic generation path.
-Real deployment behavior has not yet been verified.
+Local-instance acceptance does not certify production, multi-Pod or cross-cluster
+deployment; validate the selected runtime and shared evidence storage separately.
 
   </TabItem>
   <TabItem value="python-api" label="Python API">

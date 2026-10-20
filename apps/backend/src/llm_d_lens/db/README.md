@@ -629,6 +629,9 @@ responses preserve exact Decimal strings and experimental conditions.
 Source bytes and numeric tokens or passage offsets are verified on read.
 Publication generation is checked again before returning: a concurrent
 revocation/switch causes a conflict rather than a stale successful answer.
+Response evidence strings and context JSON retain original whitespace,
+including table-cell boundaries and JSON keys; source offsets must continue
+to address the original strings. Request question/filter trimming is separate.
 
 The answer mode is always deterministic and does not require an LLM.
 Examples and prose are labeled context, never promoted to measured values;
@@ -930,6 +933,30 @@ The prior PostgreSQL schema is created from metadata excluding `rag_items` and
 stamped at `42a3e9b47726`; this tests the new migration, not a replay of all
 historical migrations. Downgrade runs only in disposable schemas; dropping live
 evidence requires a reviewed retention/dependency decision.
+
+Subsequent dedicated persistent local-instance acceptance exercised the actual
+authenticated Node REST proxy and signed MCP caller path: the public fixed suite
+passed 20/20 cases with 27 independently verified citations. It also checked
+feature-grant revocation, CSRF, explicit failure for unavailable evidence,
+reviewed refresh failures, publication/query of an actual prior upstream docs
+commit, CAS rollback, verified RAG-only backup/restore into a separate schema and
+archive, and persistence across PostgreSQL/backend/Node restarts. No existing
+business service or cluster was changed. Internal historical ingestion remains
+deferred; fixture-only internal acceptance is not live-history acceptance.
+
+This live run exposed response-model whitespace stripping that changed original
+table cells without updating their numeric offsets. Evidence strings, JSON keys
+and context now remain untrimmed; request trimming is unchanged. Regression
+controls reject trimmed citations with original offsets. The affected contract,
+route/evaluator, SQL-query, public/internal baseline and internal-service
+selections passed 112 tests without skips.
+
+Fresh-install acceptance used the existing installer Step 0
+`apply_database_setup`, which creates the current schema from metadata.
+Direct historical `alembic upgrade head` on an empty database failed in
+`9c1f0a7b4d22` because the no-op baseline does not create `clusters`.
+No migration was edited or stamped to hide that limitation; this run does not
+certify a complete historical migration replay or production/shared deployment.
 
 ```bash
 PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \

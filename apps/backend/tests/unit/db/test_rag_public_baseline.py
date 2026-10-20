@@ -4,6 +4,7 @@ import hashlib
 import os
 import posixpath
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -154,7 +155,7 @@ class _PublicCitationVerifier:
             name: getattr(item, name)
             for name in ("item_id", "origin_id", "model", "hardware", "runtime", "workload", "configuration")
         } | {"source_pointer": item.source_pointer or {}}
-        assert context == ExperimentContext.model_validate(trusted_context)
+        assert context.model_dump() == trusted_context
         data = self._bytes(item)
         pointer = item.source_pointer or {}
         if "line" in pointer:
@@ -226,10 +227,9 @@ class _PublicCitationVerifier:
                 "heading_path": tuple(item.heading_path or ()),
                 "published_manifest_id": head.registry.published_manifest_id,
             }
-            # Public models strip display whitespace; raw offsets/cells are verified against bytes below.
-            assert citation == Citation.model_validate(trusted_citation)
+            assert citation.model_dump() == trusted_citation
             data = self._bytes(item)
-            assert evidence.text == ((item.passage_text or item.caption or "")[:2500].strip() or None)
+            assert evidence.text == ((item.passage_text or item.caption or "")[:2500] or None)
             for name in (
                 "metric",
                 "statistic",
@@ -251,6 +251,11 @@ class _PublicCitationVerifier:
                 ]
                 _verify_measurement(
                     QueryMatch(item, experiment, source, citation.published_manifest_id, head.state.generation),
+                    data,
+                )
+                cited_item = item.model_copy(update={"source_pointer": citation.source_pointer})
+                _verify_measurement(
+                    QueryMatch(cited_item, experiment, source, citation.published_manifest_id, head.state.generation),
                     data,
                 )
             elif item.kind == "passage":
@@ -353,3 +358,29 @@ def test_real_three_corpus_fixed_public_baseline(public_baseline_corpus: _Corpus
         assert verify(case, evidence.model_copy(update={"text": "fabricated source excerpt"}))
     case, figure = next(pair for pair in emitted if pair[1].related_experiments)
     assert verify(case, figure.model_copy(update={"related_experiments": ()}))
+
+    case, table = next(
+        pair for pair in emitted if pair[1].evidence_type == "published_table" and pair[1].value == Decimal("30.3")
+    )
+    assert isinstance(table.citation, Citation)
+    pointer = table.citation.source_pointer
+    assert pointer["cell"] == " 30.3 s "
+    assert pointer["subvalue"]["start"] == 1 and pointer["subvalue"]["end"] == 5
+    assert pointer["cell"][pointer["subvalue"]["start"] : pointer["subvalue"]["end"]] == "30.3"
+    trimmed_pointer = {**pointer, "cell": pointer["cell"].strip()}
+    assert trimmed_pointer["subvalue"] == pointer["subvalue"]
+    trimmed_citation = table.citation.model_copy(update={"source_pointer": trimmed_pointer})
+    assert verify(case, table.model_copy(update={"citation": trimmed_citation}))
+
+    assert table.experiment is not None and table.experiment.configuration is not None
+    configuration = table.experiment.configuration
+    report_text = configuration["published_report"]
+    assert isinstance(report_text, str) and report_text != report_text.strip()
+    trimmed_context = table.experiment.model_copy(
+        update={"configuration": {**configuration, "published_report": report_text.strip()}}
+    )
+    assert verify(case, table.model_copy(update={"experiment": trimmed_context}))
+
+    case, passage = next(pair for pair in emitted if pair[1].evidence_type == "prose_summary")
+    assert passage.text is not None and passage.text != passage.text.strip()
+    assert verify(case, passage.model_copy(update={"text": passage.text.strip()}))

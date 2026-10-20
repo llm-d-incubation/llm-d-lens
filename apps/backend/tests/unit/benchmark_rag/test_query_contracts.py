@@ -1,0 +1,87 @@
+from decimal import Decimal
+
+import pytest
+
+from llm_d_lens.benchmark_rag.query_contracts import (
+    Citation,
+    ExperimentContext,
+    QueryEvidence,
+    QueryFilters,
+    QueryRequest,
+    QueryResponse,
+)
+
+CELL = " 30.3 s "
+REPORT = "\nOriginal report with significant boundary whitespace.\n"
+POINTER = {
+    "cell": CELL,
+    "subvalue": {"start": 1, "end": 5, "text": "30.3"},
+    " raw key ": " raw value ",
+}
+
+
+def response() -> QueryResponse:
+    citation = Citation(
+        origin_id="https://github.com/VincyZhang/llm-d",
+        source_revision="a" * 40,
+        source_path="guides/example.md",
+        sha256="b" * 64,
+        artifact_uri=f"lens-artifact://benchmark-rag/{'b' * 64}/source",
+        source_pointer=POINTER,
+        published_manifest_id="c" * 64,
+    )
+    context = ExperimentContext(
+        item_id="d" * 64,
+        origin_id=citation.origin_id,
+        model="Example",
+        hardware=None,
+        runtime=None,
+        workload={" original key ": " original condition "},
+        configuration={"published_report": REPORT},
+        source_pointer=POINTER,
+    )
+    evidence = QueryEvidence(
+        item_id="e" * 64,
+        evidence_type="published_table",
+        citation=citation,
+        experiment=context,
+        metric="weight_load_time",
+        value=Decimal("30.3"),
+        unit="s",
+        text=REPORT,
+    )
+    return QueryResponse(
+        question="Example question",
+        intent="numeric",
+        filters=QueryFilters(),
+        status="answered",
+        answer="Example answer",
+        evidence=(evidence,),
+        matched_items=1,
+        truncated=False,
+        returned_observations=1,
+    )
+
+
+@pytest.mark.parametrize("round_trip", [False, True])
+def test_response_preserves_original_evidence_strings_and_offsets(round_trip: bool) -> None:
+    result = response()
+    if round_trip:
+        result = QueryResponse.model_validate_json(result.model_dump_json())
+    evidence = result.evidence[0]
+    assert isinstance(evidence.citation, Citation)
+    assert evidence.citation.source_pointer == POINTER
+    cell = evidence.citation.source_pointer["cell"]
+    assert isinstance(cell, str)
+    assert Decimal(cell[1:5]) == evidence.value
+    assert evidence.text == REPORT
+    assert evidence.experiment is not None
+    assert evidence.experiment.configuration == {"published_report": REPORT}
+    assert evidence.experiment.workload == {" original key ": " original condition "}
+    assert evidence.experiment.source_pointer == POINTER
+
+
+def test_request_still_trims_question_and_filter_strings() -> None:
+    request = QueryRequest.model_validate({"question": "  Find throughput  ", "filters": {"metric": " throughput "}})
+    assert request.question == "Find throughput"
+    assert request.filters.metric == "throughput"

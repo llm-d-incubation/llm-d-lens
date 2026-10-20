@@ -17,10 +17,12 @@ EvidenceType = Literal["raw_json", "published_table", "prose_summary", "image_tr
 
 
 class QueryModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False, str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False, str_strip_whitespace=False)
 
 
 class QueryFilters(QueryModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     origins: tuple[str, ...] = Field(default=PUBLIC_ORIGINS, min_length=1, max_length=3)
     source_revision: str | None = Field(default=None, min_length=1, max_length=64)
     source_path: str | None = Field(default=None, min_length=1, max_length=1024)
@@ -62,6 +64,8 @@ class QueryFilters(QueryModel):
 
 
 class QueryRequest(QueryModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     question: str = Field(min_length=1, max_length=2048)
     intent: QueryIntent = "auto"
     filters: QueryFilters = Field(default_factory=QueryFilters)
