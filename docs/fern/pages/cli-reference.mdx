@@ -1,0 +1,58 @@
+---
+title: CLI Reference
+description: Command-line tools for running, installing and managing Lens.
+---
+
+## `scripts/dev.sh` (local development)
+
+| Command | Purpose |
+| --- | --- |
+| `scripts/dev.sh check` | Validate the environment without starting anything. |
+| `scripts/dev.sh start` | Start the frontend, Node API and Python backend (background, logs in `.dev-logs/`). Regenerates and validates the reuse map first. |
+| `scripts/dev.sh stop` | Stop all services started by this script. |
+| `scripts/dev.sh restart` | Validate the reuse map, then stop and start. |
+| `scripts/dev.sh status` | Show which services are running and on which ports. |
+| `scripts/dev.sh clean [-y\|--yes]` | Stop services and delete the embedded database plus all local app data under `~/.llm-d-lens`. |
+| `scripts/dev.sh install-node` | Install a supported Node.js into `.dev-tools/` (used automatically if the system Node is missing or too old). |
+
+Ports are configurable via `FRONTEND_PORT`, `SERVER_PORT` and `BACKEND_PORT`
+environment variables; see [Environment Variables](/environment-variables).
+
+## `lensctl.sh` (installed deployments)
+
+Written into the install directory by the Ubuntu installer:
+
+| Command | Purpose |
+| --- | --- |
+| `lensctl.sh start` | Start the installed deployment's services. |
+| `lensctl.sh status` | Show whether services are running. |
+| `lensctl.sh stop` | Stop the installed deployment's services. |
+
+## `LensInstaller-Ubuntu-x86_64.sh`
+
+| Flag | Purpose |
+| --- | --- |
+| `--install-dir DIR` | Install location (default `$HOME/llm-d-lens`). |
+| `--app-port PORT` | Web app/API port (default `3000`). |
+| `--backend-port PORT` | Internal FastAPI backend port (default `8081`). |
+| `--silent` | Non-interactive install using defaults/flags only. |
+| `--no-https` | Serve plain HTTP instead of auto-HTTPS. |
+| `--no-start` | Install without starting services. |
+| `--db-mode embedded\|external` | Use the built-in database or an external one. |
+| `--uninstall` | Remove an installation (data kept by default). |
+| `--keep-data` / `--purge` | With `--uninstall`: keep or remove data non-interactively. |
+| `--keep-db` / `--purge-db` | With `--uninstall`: keep or remove the embedded database non-interactively. |
+| `-h`, `--help` | Show every option. |
+
+See [Installation](/installation) and [Upgrade](/upgrade) for full usage.
+
+## `node scripts/generate-mcp-tools.mjs`
+
+Regenerates the MCP tool catalog the web server exposes to
+[Lens Assistant](/user-guide/lens-assistant) from the backend's current API
+surface. Run it whenever backend routes change; `scripts/dev.sh
+start`/`restart` and Docker builds do this automatically.
+
+## `alembic`
+
+Applies or authors database schema migrations — see [Migration](/migration).

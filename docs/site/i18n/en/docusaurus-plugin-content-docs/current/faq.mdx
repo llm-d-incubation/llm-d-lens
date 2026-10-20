@@ -29,7 +29,7 @@ have access.
 
 ### Does Lens sit in the inference request path?
 
-No. The Lens UI/BFF/Python backend are the control plane only. Inference
+No. The Lens frontend, web server, and Python control plane manage the platform only. Inference
 traffic to a published model service goes directly from the caller to the
 cluster's shared Gateway, which routes through the model's HTTPRoute to its
 InferencePool/EPP and then to the backend pod — Lens is never on that

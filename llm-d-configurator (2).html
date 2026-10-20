@@ -1,0 +1,3877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>llm-d Configurator — Feature Surface</title>
+<style>
+*{box-sizing:border-box}
+:root{--bg:#f5f6fa;--panel:#fff;--ink:#0f172a;--mut:#64748b;--line:#e2e8f0;--accent:#4338ca;--code:#0f172a;--ok:#047857;--warn:#b45309;--bad:#b91c1c}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;font-size:13.5px;line-height:1.5}
+.app{display:grid;grid-template-columns:360px 1fr;grid-template-rows:auto 1fr;height:100vh}
+header.top{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:12px 20px;background:linear-gradient(120deg,#1e1b4b,#4338ca 55%,#0e7490);color:#fff;box-shadow:0 6px 20px rgba(30,27,75,.22);z-index:6}
+header.top h1{margin:0;font-size:17px;white-space:nowrap}
+header.top .sub{font-size:12px;color:#c7d2fe}
+header.top .spacer{flex:1}
+header.top .badge{font-size:11px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);padding:3px 10px;border-radius:999px;white-space:nowrap}
+aside.side{overflow:auto;background:var(--panel);border-right:1px solid var(--line);padding:12px 12px 70px}
+main.main{overflow:auto;padding:16px 20px 90px;display:flex;flex-direction:column;gap:15px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:11px;padding:9px 11px}
+.toolbar label{font-size:12px;color:var(--mut);font-weight:700}
+.group{border:1px solid var(--line);border-radius:11px;margin-bottom:10px;overflow:hidden;background:#fff}
+.group>summary{cursor:pointer;list-style:none;padding:9px 12px;font-weight:700;font-size:13px;background:#f8fafc;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;user-select:none}
+.group>summary::-webkit-details-marker{display:none}
+.group>summary .ico{color:var(--accent);font-weight:800}
+.group .body{padding:10px 12px 13px}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0}
+.row>label{flex:0 0 auto;min-width:90px;max-width:150px;font-size:12.4px;color:#334155}
+.row input[type=checkbox],.row input[type=radio]{accent-color:var(--accent);width:15px;height:15px;flex:none}
+select,input[type=text],input[type=number],textarea{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit;font-size:12.6px;color:var(--ink)}
+.row>select,.row>input[type=text],.row>input[type=number]{flex:1;min-width:0}
+textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;min-height:64px;resize:vertical}
+.subhead{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--mut);font-weight:800;margin:12px 0 5px}
+.subhead:first-child{margin-top:0}
+.checkline{display:flex;align-items:center;gap:8px;margin:5px 0}
+.checkline input{accent-color:var(--accent);width:15px;height:15px;flex:none}
+.checkline span{font-size:12.6px;color:#334155}
+.checkline .prov{margin-left:auto}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+.stab{font-size:9.5px;font-weight:800;padding:1px 6px;border-radius:999px;border:1px solid;text-transform:uppercase}
+.stab.beta{background:#ecfdf5;color:#047857;border-color:#a7f3d0}
+.stab.alpha{background:#fff7ed;color:#b45309;border-color:#fed7aa}
+.stab.stable{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.tab{font:inherit;font-size:12.3px;border:1px solid var(--line);border-bottom:none;background:#f8fafc;color:#475569;padding:6px 11px;border-radius:9px 9px 0 0;cursor:pointer;white-space:nowrap}
+.tab.active{background:var(--code);color:#fff;border-color:var(--code)}
+.tree{display:flex;flex-direction:column;gap:2px}
+.tree button{text-align:left;font:inherit;font-family:ui-monospace,Menlo,monospace;font-size:12.2px;background:none;border:none;color:#334155;padding:5px 8px;border-radius:7px;cursor:pointer;display:flex;gap:8px;align-items:center}
+.tree button:hover{background:#eef2ff}
+.tree button.active{background:#4338ca;color:#fff}
+.tree button .p{color:var(--mut);font-size:11px}
+.tree button.active .p{color:#c7d2fe}
+.codewrap{position:relative;background:var(--code);border-radius:0 11px 11px 11px;overflow:hidden;border:1px solid #1e293b}
+.codehead{display:flex;align-items:center;gap:10px;padding:7px 11px;background:#0b1220;border-bottom:1px solid #1e293b}
+.codehead .fname{font-family:ui-monospace,Menlo,monospace;font-size:11.8px;color:#93c5fd}
+.codehead .spacer{flex:1}
+.codehead button,.btn{font:inherit;font-size:11.5px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:7px;padding:4px 10px;cursor:pointer}
+.codehead button:hover,.btn:hover{background:#334155}
+pre{margin:0;padding:13px 15px;overflow:auto;max-height:640px;color:#e2e8f0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.2px;line-height:1.55;white-space:pre}
+pre.sh{max-height:none}
+.diagram{background:#fff;border:1px solid var(--line);border-radius:11px;padding:12px;overflow:auto}
+.diagram svg{display:block;width:100%;height:auto;min-width:720px}
+.two{display:grid;grid-template-columns:1fr 330px;gap:15px;align-items:start}
+.sect{font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px}
+.sect .k{color:var(--accent)}
+.note{font-size:12.3px;color:var(--mut)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11px;border-radius:999px;padding:2px 9px;font-weight:700;border:1px solid}
+.chip.on{background:#eef2ff;color:#3730a3;border-color:#c7d2fe}
+.chip.alpha{background:#fff7ed;color:#b45309;border-color:#fed7aa}
+.plist{display:flex;flex-direction:column;gap:8px}
+.pcard{border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fcfcfe}
+.pcard .h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pcard .type{font-family:ui-monospace,Menlo,monospace;font-size:12.3px;font-weight:700;color:#3730a3}
+.pcard .x{margin-left:auto;border:1px solid #fecdd3;background:#fff1f2;color:#b91c1c;border-radius:6px;padding:1px 7px;cursor:pointer;font-size:11px}
+.pcard .grow{flex:1}
+.pcard .prow{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+.pform{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+.noparams{font-size:11.5px;color:var(--mut);margin-top:6px}
+.param{display:flex;gap:8px;align-items:center;margin:4px 0}
+.param .pen{flex:0 0 auto;min-width:150px;max-width:220px;display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;font-family:ui-monospace,Menlo,monospace}
+.param .pen input{accent-color:var(--accent);width:14px;height:14px;flex:none}
+.param .pctl{flex:1;display:flex;gap:8px;align-items:center;min-width:0}
+.param .pctl input[type=text],.param .pctl input[type=number],.param .pctl select{max-width:300px}
+.param .ptype{font-size:10px;color:#94a3b8;white-space:nowrap}
+.param.grp{align-items:flex-start}
+.param.grp .pctl{flex-direction:column;align-items:stretch}
+.pgroup{width:100%;border-left:2px solid #eef2ff;padding-left:8px}
+.rostruct{font-size:11px;color:#94a3b8;background:#f8fafc;border:1px dashed var(--line);border-radius:6px;padding:2px 8px}
+.ptoggle{font-size:10.5px;border:1px solid var(--line);border-radius:999px;padding:2px 8px;cursor:pointer;background:#fff;color:#64748b}
+.ptoggle.on{background:#4338ca;color:#fff;border-color:#4338ca}
+.ptoggle input{display:none}
+.explorer{width:100%;border-collapse:collapse;font-size:12.4px}
+.explorer th,.explorer td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.explorer th{background:#f8fafc;color:#475569;position:sticky;top:0}
+.explorer tr:hover td{background:#f8fafc}
+.explorer .t{font-family:ui-monospace,Menlo,monospace;color:#3730a3;font-weight:600}
+.expbtn{border:1px solid var(--line);background:#fff;border-radius:6px;width:22px;height:22px;cursor:pointer;color:#4338ca;font-size:11px;line-height:1;padding:0}
+.expbtn:hover{background:#eef2ff}
+tr.exp td{background:#fbfcff;border-bottom:1px solid var(--line)}
+.expwrap{padding:6px 4px}
+.expact{margin-top:8px}
+.hint{font-size:11px;color:var(--mut)}
+.accelcard{background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin:8px 0}
+.accelcard .acrow{display:flex;gap:8px;align-items:baseline;margin:2px 0}
+.accelcard .acrow span{color:var(--mut);font-size:11.5px;min-width:132px;flex:0 0 auto}
+.accelcard .acrow b{font-size:12px;color:#334155;font-weight:600;word-break:break-word}
+.accelcard .acnote{margin-top:6px;font-size:11.5px;color:#64748b;border-top:1px dashed var(--line);padding-top:6px}
+.ekv{border:1px solid var(--line);border-radius:9px;padding:7px 9px;margin:6px 0;background:#fcfcfe}
+.ekvhead{font-size:11.5px;font-weight:700;color:#475569;margin-bottom:5px}
+.argrow{display:flex;gap:6px;margin:4px 0}
+.argrow .argflag{flex:0 0 46%;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.argrow .argval{flex:1;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.argrow .x{flex:none}
+.quickargs{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.roletabs{display:flex;gap:4px;margin:4px 0 8px}
+.warnbox{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:9px;padding:8px 11px;font-size:12px}
+.matrix{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:9px}
+.mcard{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.mcard .t{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);font-weight:800}
+.mcard .v{font-size:13px;font-weight:700;color:var(--accent);margin-top:2px;word-break:break-word}
+@media(max-width:1180px){.two{grid-template-columns:1fr}}
+@media(max-width:900px){.app{grid-template-columns:1fr;grid-template-rows:auto auto 1fr}aside.side{max-height:46vh;border-right:none;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1>llm-d Configurator</h1>
+    <span class="sub">Feature-surface mock · EPP plugin registry + composer · live config generation</span>
+    <span class="spacer"></span>
+    <span class="badge" id="countBadge">—</span>
+  </header>
+  <aside class="side" id="controls"></aside>
+  <main class="main">
+    <div class="toolbar">
+      <label>Guide Preset</label>
+      <select id="preset" style="max-width:420px"></select>
+      <button class="btn" id="clearBtn">Clear composition</button>
+      <span class="spacer" style="flex:1"></span>
+      <span class="hint" id="statusHint"></span>
+    </div>
+
+    <div class="two">
+      <div>
+        <div class="sect"><span class="k">01</span> Request path / topology</div>
+        <div class="note" style="margin:6px 0 8px">Rendered from the selected topology, profiles, and plugin composition.</div>
+        <div class="diagram" id="diagram"></div>
+      </div>
+      <div>
+        <div class="sect"><span class="k">02</span> Active features</div>
+        <div class="chips" id="chips" style="margin-top:8px"></div>
+        <div class="matrix" id="matrix" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sect"><span class="k">03</span> Selected plugin instances <span class="hint" id="instCount"></span></div>
+      <div class="note" style="margin:6px 0 8px">From domain toggles and Explorer; edit parameters, change profile membership, remove.</div>
+      <div class="plist" id="instances"></div>
+    </div>
+
+    <div class="sect"><span class="k">04</span> Generated files</div>
+    <div class="two">
+      <div class="codewrap">
+        <div class="codehead"><span class="fname" id="curFile">—</span><span class="spacer"></span><button id="copyBtn">Copy</button><button id="dlBtn">Download</button></div>
+        <pre id="codeOut"></pre>
+      </div>
+      <div class="tree" id="fileTree"></div>
+    </div>
+
+    <div>
+      <div class="sect"><span class="k">05</span> Plugin Registry browser <span class="hint">all 98 in-tree plugins</span></div>
+      <div class="note" style="margin:6px 0 8px">Search and add to the target profile (scheduling kinds) or just to the plugins list. Alpha plugins require <code>--allow-experimental-plugins</code>。</div>
+      <div class="toolbar" style="margin-bottom:8px">
+        <input type="text" id="search" placeholder="Search type / stage…" style="max-width:260px"/>
+        <select id="stageFilter" style="max-width:200px"></select>
+        <label class="hint">Target profile</label>
+        <select id="targetProfile" style="max-width:140px"></select>
+      </div>
+      <div style="overflow:auto;max-height:460px;border:1px solid var(--line);border-radius:10px"><table class="explorer" id="explorer"></table></div>
+    </div>
+
+    <div>
+      <div class="sect"><span class="k">06</span> Deploy commands</div>
+      <div class="codewrap">
+        <div class="codehead"><span class="fname">commands.sh</span><span class="spacer"></span><button id="copySh">Copy</button></div>
+        <pre class="sh" id="cmdOut"></pre>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+   REGISTRY: full in-tree EPP plugin surface, extracted from
+   llm-d-router cmd/epp/runner/runner.go registrations.
+   ============================================================ */
+const REGISTRY = [
+ {
+  "type": "latency-slo-admitter",
+  "stab": "beta",
+  "cat": "requestcontrol/admitter/latencyslo",
+  "stage": "admitter"
+ },
+ {
+  "type": "probabilistic-admitter",
+  "stab": "beta",
+  "cat": "requestcontrol/admitter/probabilisticadmitter",
+  "stage": "admitter"
+ },
+ {
+  "type": "dcgm-extractor",
+  "stab": "alpha",
+  "cat": "datalayer/attribute/gpu",
+  "stage": "attribute"
+ },
+ {
+  "type": "models-data-extractor",
+  "stab": "beta",
+  "cat": "datalayer/attribute/models",
+  "stage": "attribute"
+ },
+ {
+  "type": "topology-extractor",
+  "stab": "alpha",
+  "cat": "datalayer/attribute/topology",
+  "stage": "attribute"
+ },
+ {
+  "type": "approx-prefix-cache-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/approximateprefix",
+  "stage": "data-producer"
+ },
+ {
+  "type": "burst-prefix-cache-producer",
+  "stab": "alpha",
+  "cat": "requestcontrol/dataproducer/burstprefix",
+  "stage": "data-producer"
+ },
+ {
+  "type": "inflight-load-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/inflightload",
+  "stage": "data-producer"
+ },
+ {
+  "type": "latency-observer-producer-hub",
+  "stab": "alpha",
+  "cat": "requestcontrol/dataproducer/latencyobserver",
+  "stage": "data-producer"
+ },
+ {
+  "type": "mm-embeddings-cache-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/multimodal",
+  "stage": "data-producer"
+ },
+ {
+  "type": "multicluster-approx-prefix-cache-producer",
+  "stab": "alpha",
+  "cat": "requestcontrol/dataproducer/approximateprefix",
+  "stage": "data-producer"
+ },
+ {
+  "type": "p2p-source-producer",
+  "stab": "alpha",
+  "cat": "requestcontrol/dataproducer/p2psource",
+  "stage": "data-producer"
+ },
+ {
+  "type": "precise-prefix-cache-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/preciseprefixcache",
+  "stage": "data-producer"
+ },
+ {
+  "type": "predicted-latency-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/predictedlatency",
+  "stage": "data-producer"
+ },
+ {
+  "type": "session-id-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/sessionid",
+  "stage": "data-producer"
+ },
+ {
+  "type": "session-state-producer",
+  "stab": "alpha",
+  "cat": "requestcontrol/dataproducer/sessionstate",
+  "stage": "data-producer"
+ },
+ {
+  "type": "token-producer",
+  "stab": "beta",
+  "cat": "requestcontrol/dataproducer/tokenizer",
+  "stage": "data-producer"
+ },
+ {
+  "type": "file-discovery",
+  "stab": "beta",
+  "cat": "datalayer/discovery/file",
+  "stage": "discovery"
+ },
+ {
+  "type": "k8s-peer-discovery",
+  "stab": "alpha",
+  "cat": "datalayer/discovery/k8speer",
+  "stage": "discovery"
+ },
+ {
+  "type": "multicluster-file-discovery",
+  "stab": "alpha",
+  "cat": "datalayer/discovery/file",
+  "stage": "discovery"
+ },
+ {
+  "type": "priority-then-time-eviction-order-policy",
+  "stab": "alpha",
+  "cat": "flowcontrol/eviction/ordering",
+  "stage": "eviction"
+ },
+ {
+  "type": "sheddable-eviction-filter",
+  "stab": "alpha",
+  "cat": "flowcontrol/eviction/filtering",
+  "stage": "eviction"
+ },
+ {
+  "type": "core-metrics-extractor",
+  "stab": "beta",
+  "cat": "datalayer/extractor/metrics",
+  "stage": "extractor"
+ },
+ {
+  "type": "label-producer",
+  "stab": "alpha",
+  "cat": "datalayer/extractor/label",
+  "stage": "extractor"
+ },
+ {
+  "type": "multicluster-metrics-extractor",
+  "stab": "alpha",
+  "cat": "datalayer/extractor/metrics",
+  "stage": "extractor"
+ },
+ {
+  "type": "global-strict-fairness-policy",
+  "stab": "beta",
+  "cat": "flowcontrol/fairness/globalstrict",
+  "stage": "fairness"
+ },
+ {
+  "type": "program-aware-fairness",
+  "stab": "beta",
+  "cat": "flowcontrol/fairness/program-aware",
+  "stage": "fairness"
+ },
+ {
+  "type": "round-robin-fairness-policy",
+  "stab": "beta",
+  "cat": "flowcontrol/fairness/roundrobin",
+  "stage": "fairness"
+ },
+ {
+  "type": "decode-filter",
+  "stab": "beta",
+  "cat": "scheduling/filter/bylabel",
+  "stage": "filter"
+ },
+ {
+  "type": "encode-filter",
+  "stab": "beta",
+  "cat": "scheduling/filter/bylabel",
+  "stage": "filter"
+ },
+ {
+  "type": "endpoint-attribute-filter",
+  "stab": "alpha",
+  "cat": "scheduling/filter/endpointattribute",
+  "stage": "filter"
+ },
+ {
+  "type": "label-selector-filter",
+  "stab": "beta",
+  "cat": "scheduling/filter/bylabel",
+  "stage": "filter"
+ },
+ {
+  "type": "multicluster-session-affinity-filter",
+  "stab": "alpha",
+  "cat": "scheduling/filter/sessionaffinity",
+  "stage": "filter"
+ },
+ {
+  "type": "prefill-filter",
+  "stab": "beta",
+  "cat": "scheduling/filter/bylabel",
+  "stage": "filter"
+ },
+ {
+  "type": "prefix-cache-affinity-filter",
+  "stab": "beta",
+  "cat": "scheduling/filter/prefixcacheaffinity",
+  "stage": "filter"
+ },
+ {
+  "type": "session-affinity-filter",
+  "stab": "alpha",
+  "cat": "scheduling/filter/sessionaffinity",
+  "stage": "filter"
+ },
+ {
+  "type": "slo-headroom-tier-filter",
+  "stab": "beta",
+  "cat": "scheduling/filter/sloheadroomtier",
+  "stage": "filter"
+ },
+ {
+  "type": "topology-affinity-filter",
+  "stab": "alpha",
+  "cat": "scheduling/filter/topologyaffinity",
+  "stage": "filter"
+ },
+ {
+  "type": "utilization-filter",
+  "stab": "alpha",
+  "cat": "scheduling/filter/utilization",
+  "stage": "filter"
+ },
+ {
+  "type": "agent-identity",
+  "stab": "alpha",
+  "cat": "requestcontrol/requestheader/agentidentity",
+  "stage": "header-processor"
+ },
+ {
+  "type": "outlen-bucket",
+  "stab": "alpha",
+  "cat": "requestcontrol/requestheader/outlenbucket",
+  "stage": "header-processor"
+ },
+ {
+  "type": "edf-ordering-policy",
+  "stab": "beta",
+  "cat": "flowcontrol/ordering/edf",
+  "stage": "ordering"
+ },
+ {
+  "type": "fcfs-ordering-policy",
+  "stab": "beta",
+  "cat": "flowcontrol/ordering/fcfs",
+  "stage": "ordering"
+ },
+ {
+  "type": "slo-deadline-ordering-policy",
+  "stab": "beta",
+  "cat": "flowcontrol/ordering/slodeadline",
+  "stage": "ordering"
+ },
+ {
+  "type": "destination-endpoint-served-verifier",
+  "stab": "beta",
+  "cat": "requestcontrol/test/responsereceived",
+  "stage": "other"
+ },
+ {
+  "type": "header-based-testing-filter",
+  "stab": "beta",
+  "cat": "scheduling/test/filter",
+  "stage": "other"
+ },
+ {
+  "type": "anthropic-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/anthropic",
+  "stage": "parser"
+ },
+ {
+  "type": "openai-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/openai",
+  "stage": "parser"
+ },
+ {
+  "type": "passthrough-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/passthrough",
+  "stage": "parser"
+ },
+ {
+  "type": "sglanghttp-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/sglanghttp",
+  "stage": "parser"
+ },
+ {
+  "type": "vertexai-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/vertexai",
+  "stage": "parser"
+ },
+ {
+  "type": "vllmgrpc-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/vllmgrpc",
+  "stage": "parser"
+ },
+ {
+  "type": "vllmhttp-parser",
+  "stab": "beta",
+  "cat": "requesthandling/parsers/vllmhttp",
+  "stage": "parser"
+ },
+ {
+  "type": "max-score-picker",
+  "stab": "beta",
+  "cat": "scheduling/picker/maxscore",
+  "stage": "picker"
+ },
+ {
+  "type": "random-picker",
+  "stab": "beta",
+  "cat": "scheduling/picker/random",
+  "stage": "picker"
+ },
+ {
+  "type": "weighted-random-picker",
+  "stab": "beta",
+  "cat": "scheduling/picker/weightedrandom",
+  "stage": "picker"
+ },
+ {
+  "type": "always-disagg-multimodal-decider",
+  "stab": "beta",
+  "cat": "scheduling/profilehandler/disagg",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "always-disagg-pd-decider",
+  "stab": "beta",
+  "cat": "scheduling/profilehandler/disagg",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "data-parallel-profile-handler",
+  "stab": "beta",
+  "cat": "scheduling/profilehandler/dataparallel",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "disagg-profile-handler",
+  "stab": "beta",
+  "cat": "scheduling/profilehandler/disagg",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "header-profile-handler",
+  "stab": "alpha",
+  "cat": "scheduling/profilehandler/headerprofile",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "prefix-based-pd-decider",
+  "stab": "beta",
+  "cat": "scheduling/profilehandler/disagg",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "single-profile-handler",
+  "stab": "beta",
+  "cat": "scheduling/profilehandler/single",
+  "stage": "profile-handler"
+ },
+ {
+  "type": "request-attribute-reporter",
+  "stab": "beta",
+  "cat": "requestcontrol/requestattributereporter",
+  "stage": "reporter"
+ },
+ {
+  "type": "concurrency-detector",
+  "stab": "beta",
+  "cat": "flowcontrol/saturationdetector/concurrency",
+  "stage": "saturation"
+ },
+ {
+  "type": "max-saturation-detector",
+  "stab": "beta",
+  "cat": "flowcontrol/saturationdetector/composite",
+  "stage": "saturation"
+ },
+ {
+  "type": "utilization-detector",
+  "stab": "beta",
+  "cat": "flowcontrol/saturationdetector/utilization",
+  "stage": "saturation"
+ },
+ {
+  "type": "active-request-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/activerequest",
+  "stage": "scorer"
+ },
+ {
+  "type": "context-length-aware",
+  "stab": "beta",
+  "cat": "scheduling/scorer/contextlengthaware",
+  "stage": "scorer"
+ },
+ {
+  "type": "endpoint-attribute-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/endpointattribute",
+  "stage": "scorer"
+ },
+ {
+  "type": "endpoint-attribute-weight-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/attributeweight",
+  "stage": "scorer"
+ },
+ {
+  "type": "header-label-affinity-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/headerlabelaffinity",
+  "stage": "scorer"
+ },
+ {
+  "type": "kv-cache-utilization-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/kvcacheutilization",
+  "stage": "scorer"
+ },
+ {
+  "type": "latency-observation-scorer-hub",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/latencyobservation",
+  "stage": "scorer"
+ },
+ {
+  "type": "latency-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/latency",
+  "stage": "scorer"
+ },
+ {
+  "type": "load-aware-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/loadaware",
+  "stage": "scorer"
+ },
+ {
+  "type": "lora-affinity-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/loraaffinity",
+  "stage": "scorer"
+ },
+ {
+  "type": "mm-embeddings-cache-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/mmcacheaffinity",
+  "stage": "scorer"
+ },
+ {
+  "type": "multicluster-kv-cache-utilization-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/kvcacheutilization",
+  "stage": "scorer"
+ },
+ {
+  "type": "multicluster-prefix-cache-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/prefix",
+  "stage": "scorer"
+ },
+ {
+  "type": "multicluster-queue-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/queuedepth",
+  "stage": "scorer"
+ },
+ {
+  "type": "no-hit-lru-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/nohitlru",
+  "stage": "scorer"
+ },
+ {
+  "type": "prefix-cache-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/prefix",
+  "stage": "scorer"
+ },
+ {
+  "type": "queue-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/queuedepth",
+  "stage": "scorer"
+ },
+ {
+  "type": "running-requests-size-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/runningrequests",
+  "stage": "scorer"
+ },
+ {
+  "type": "session-affinity-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/sessionaffinity",
+  "stage": "scorer"
+ },
+ {
+  "type": "token-load-scorer",
+  "stab": "beta",
+  "cat": "scheduling/scorer/tokenload",
+  "stage": "scorer"
+ },
+ {
+  "type": "topology-affinity-scorer",
+  "stab": "alpha",
+  "cat": "scheduling/scorer/topologyaffinity",
+  "stage": "scorer"
+ },
+ {
+  "type": "disaggregatedset-rollout-screener",
+  "stab": "alpha",
+  "cat": "requestcontrol/screener/disaggregatedsetrollout",
+  "stage": "screener"
+ },
+ {
+  "type": "dcgm-data-source",
+  "stab": "alpha",
+  "cat": "datalayer/source/dcgm",
+  "stage": "source"
+ },
+ {
+  "type": "endpoint-notification-source",
+  "stab": "beta",
+  "cat": "datalayer/source/notifications",
+  "stage": "source"
+ },
+ {
+  "type": "k8s-notification-source",
+  "stab": "beta",
+  "cat": "datalayer/source/notifications",
+  "stage": "source"
+ },
+ {
+  "type": "metrics-data-source",
+  "stab": "beta",
+  "cat": "datalayer/source/metrics",
+  "stage": "source"
+ },
+ {
+  "type": "models-data-source",
+  "stab": "beta",
+  "cat": "datalayer/source/models",
+  "stage": "source"
+ },
+ {
+  "type": "multicluster-metrics-data-source",
+  "stab": "alpha",
+  "cat": "datalayer/source/metrics",
+  "stage": "source"
+ },
+ {
+  "type": "priority-holdback-policy",
+  "stab": "alpha",
+  "cat": "flowcontrol/usagelimits/priorityholdback",
+  "stage": "usage-limit"
+ },
+ {
+  "type": "soft-reflective-ceiling-policy",
+  "stab": "alpha",
+  "cat": "flowcontrol/usagelimits/softreflectiveceiling",
+  "stage": "usage-limit"
+ },
+ {
+  "type": "static-usage-limit-policy",
+  "stab": "beta",
+  "cat": "flowcontrol/usagelimits",
+  "stage": "usage-limit"
+ }
+];
+
+/* parameter schemas extracted from plugin Go structs (json tags + types) */
+const SCHEMA = {
+"disaggregatedset-rollout-screener": [
+{
+"name": "scope",
+"kind": "group",
+"type": "Scope",
+"fields": [
+{
+"name": "labelSelector",
+"kind": "text",
+"type": "string"
+}
+]
+},
+{
+"name": "revisionGating",
+"kind": "group",
+"type": "RevisionGating",
+"fields": [
+{
+"name": "revisionHeaderName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "revisionLabelKey",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "roleLabelKey",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "disableCoordination",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "mode",
+"kind": "json",
+"type": "GatingMode"
+},
+{
+"name": "requiredRoles",
+"kind": "list",
+"type": "[]string"
+}
+]
+}
+],
+"label-selector-filter": [],
+"encode-filter": [],
+"decode-filter": [],
+"prefill-filter": [],
+"session-affinity-filter": [],
+"endpoint-attribute-filter": [
+{
+"name": "attribute",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "producer",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "onMissing",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "fallbackOnEmpty",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "algorithm",
+"kind": "group",
+"type": "algorithmParameters",
+"fields": [
+{
+"name": "type",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "threshold",
+"kind": "group",
+"type": "thresholdParameters",
+"fields": [
+{
+"name": "operator",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "value",
+"kind": "number",
+"type": "float64"
+}
+]
+}
+]
+}
+],
+"topology-affinity-filter": [
+{
+"name": "minAffinity",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "topologyProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"utilization-filter": [
+{
+"name": "conditions",
+"kind": "group-list",
+"type": "[]condition",
+"fields": [
+{
+"name": "metric",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "maxValue",
+"kind": "number",
+"type": "float64"
+}
+]
+},
+{
+"name": "fallbackOnEmpty",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"data-parallel-profile-handler": [
+{
+"name": "primaryPort",
+"kind": "number",
+"type": "int"
+}
+],
+"load-aware-scorer": [
+{
+"name": "threshold",
+"kind": "number",
+"type": "int"
+}
+],
+"context-length-aware": [],
+"session-affinity-scorer": [],
+"header-label-affinity-scorer": [
+{
+"name": "headerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "labelKey",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "stampResponseHeader",
+"kind": "boolean",
+"type": "bool"
+}
+],
+"endpoint-attribute-weight-scorer": [
+{
+"name": "attributeKey",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "producer",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "weights",
+"kind": "json",
+"type": "map[string]float64"
+}
+],
+"models-data-source": [],
+"models-data-extractor": [],
+"label-producer": [
+{
+"name": "labels",
+"kind": "group-list",
+"type": "[]labelMapping",
+"fields": [
+{
+"name": "label",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "attributeKey",
+"kind": "text",
+"type": "string"
+}
+]
+}
+],
+"topology-extractor": [],
+"dcgm-data-source": [],
+"dcgm-extractor": [],
+"prefix-cache-scorer": [
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "matchLengthWeight",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "matchLengthScaleTokens",
+"kind": "number",
+"type": "int"
+}
+],
+"max-score-picker": [
+{
+"name": "maxNumOfEndpoints",
+"kind": "number",
+"type": "int"
+}
+],
+"random-picker": [
+{
+"name": "maxNumOfEndpoints",
+"kind": "number",
+"type": "int"
+}
+],
+"weighted-random-picker": [
+{
+"name": "maxNumOfEndpoints",
+"kind": "number",
+"type": "int"
+}
+],
+"single-profile-handler": [],
+"disagg-profile-handler": [
+{
+"name": "stageOrder",
+"kind": "json",
+"type": "StageOrder"
+},
+{
+"name": "profiles",
+"kind": "group",
+"type": "disaggProfilesParameters",
+"fields": [
+{
+"name": "decode",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "prefill",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "encode",
+"kind": "text",
+"type": "string"
+}
+]
+},
+{
+"name": "deciders",
+"kind": "group",
+"type": "disaggDecidersParameters",
+"fields": [
+{
+"name": "prefill",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "encode",
+"kind": "text",
+"type": "string"
+}
+]
+}
+],
+"always-disagg-pd-decider": [],
+"prefix-based-pd-decider": [
+{
+"name": "nonCachedTokens",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "promptTokens",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"always-disagg-multimodal-decider": [],
+"kv-cache-utilization-scorer": [],
+"queue-scorer": [],
+"running-requests-size-scorer": [],
+"lora-affinity-scorer": [],
+"token-load-scorer": [
+{
+"name": "queueThresholdTokens",
+"kind": "number",
+"type": "int64"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"no-hit-lru-scorer": [
+{
+"name": "prefixPluginType",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "prefixPluginName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "lruSize",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"active-request-scorer": [
+{
+"name": "requestTimeout",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "idleThreshold",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxBusyScore",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"mm-embeddings-cache-scorer": [
+{
+"name": "producerName",
+"kind": "text",
+"type": "string"
+}
+],
+"precise-prefix-cache-producer": [
+{
+"name": "tokenProcessorConfig",
+"kind": "group",
+"type": "kvblock.TokenProcessorConfig",
+"fields": [
+{
+"name": "blockSize",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "blockSizeTokens",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "hashSeed",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "hashAlgorithm",
+"kind": "text",
+"type": "string"
+}
+]
+},
+{
+"name": "indexerConfig",
+"kind": "group",
+"type": "kvcache.Config",
+"fields": [
+{
+"name": "kvBlockIndexConfig",
+"kind": "group",
+"type": "kvblock.IndexConfig",
+"fields": [
+{
+"name": "inMemoryConfig",
+"kind": "json",
+"type": "InMemoryIndexConfig"
+},
+{
+"name": "redisConfig",
+"kind": "json",
+"type": "RedisIndexConfig"
+},
+{
+"name": "costAwareMemoryConfig",
+"kind": "json",
+"type": "CostAwareMemoryIndexConfig"
+},
+{
+"name": "enableMetrics",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "metricsLoggingInterval",
+"kind": "json",
+"type": "time.Duration"
+}
+]
+},
+{
+"name": "kvCacheBackendConfigs",
+"kind": "group-list",
+"type": "[]KVCacheBackendConfig",
+"fields": [
+{
+"name": "name",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "weight",
+"kind": "number",
+"type": "float64"
+}
+]
+}
+]
+},
+{
+"name": "kvEventsConfig",
+"kind": "group",
+"type": "kvevents.Config",
+"fields": [
+{
+"name": "zmqEndpoint",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "topicFilter",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "concurrency",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "engineType",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "tracing",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "discoverPods",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "podDiscoveryConfig",
+"kind": "group",
+"type": "PodDiscoveryConfig",
+"fields": [
+{
+"name": "podLabelSelector",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "podNamespace",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "socketPort",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "replaySocketPort",
+"kind": "number",
+"type": "int"
+}
+]
+}
+]
+},
+{
+"name": "speculativeIndexing",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "speculativeTTL",
+"kind": "text",
+"type": "string"
+}
+],
+"header-profile-handler": [
+{
+"name": "headerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "defaultProfile",
+"kind": "text",
+"type": "string"
+}
+],
+"endpoint-attribute-scorer": [
+{
+"name": "attributeKey",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "producer",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "algorithm",
+"kind": "group",
+"type": "algorithmParameters",
+"fields": [
+{
+"name": "type",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "normalization",
+"kind": "group",
+"type": "normalizationParameters",
+"fields": [
+{
+"name": "fixedRange",
+"kind": "json",
+"type": "fixedRangeParameters"
+},
+{
+"name": "adaptiveRange",
+"kind": "json",
+"type": "adaptiveRangeParameters"
+}
+]
+}
+]
+}
+],
+"latency-observation-scorer-hub": [
+{
+"name": "explorationRate",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "minInflightGap",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "roundTTFTStep",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "ttftPercentilesProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"topology-affinity-scorer": [
+{
+"name": "topologyProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"burst-prefix-cache-producer": [
+{
+"name": "windowDurationMs",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxPerReplica",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "blockSizeTokens",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxPrefixTokensToMatch",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "minColocateBlocks",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxBatchSize",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "balanceBy",
+"kind": "json",
+"type": "balanceMode"
+}
+],
+"multicluster-session-affinity-filter": [],
+"multicluster-queue-scorer": [],
+"multicluster-kv-cache-utilization-scorer": [],
+"multicluster-prefix-cache-scorer": [],
+"multicluster-approx-prefix-cache-producer": [],
+"global-strict-fairness-policy": [],
+"round-robin-fairness-policy": [],
+"program-aware-fairness": [],
+"fcfs-ordering-policy": [],
+"edf-ordering-policy": [],
+"slo-deadline-ordering-policy": [],
+"static-usage-limit-policy": [
+{
+"name": "threshold",
+"kind": "number",
+"type": "float64"
+}
+],
+"sheddable-eviction-filter": [],
+"priority-then-time-eviction-order-policy": [],
+"priority-holdback-policy": [
+{
+"name": "shape",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "domain",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "minCeiling",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "maxCeiling",
+"kind": "number",
+"type": "float64"
+}
+],
+"soft-reflective-ceiling-policy": [],
+"approx-prefix-cache-producer": [
+{
+"name": "autoTune",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "blockSizeTokens",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "blockSize",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxPrefixBlocksToMatch",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxPrefixTokensToMatch",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "lruCapacityPerServer",
+"kind": "number",
+"type": "int"
+}
+],
+"inflight-load-producer": [],
+"predicted-latency-producer": [
+{
+"name": "samplingMean",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "maxDecodeTokenSamplesForPrediction",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "sloBufferFactor",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "contextTTL",
+"kind": "json",
+"type": "time.Duration"
+},
+{
+"name": "streamingMode",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "endpointRoleLabel",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "predictInProduce",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "useEncoderCacheFeatures",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "encoderCacheMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"mm-embeddings-cache-producer": [
+{
+"name": "cacheSizeInMBPerServer",
+"kind": "number",
+"type": "int"
+}
+],
+"token-producer": [
+{
+"name": "vllm",
+"kind": "group",
+"type": "vllmConfig",
+"fields": [
+{
+"name": "messagesRenderMode",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "url",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "prefillOnly",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "endpointDiscovery",
+"kind": "group",
+"type": "endpointDiscoveryConfig",
+"fields": [
+{
+"name": "discoverModelLimits",
+"kind": "boolean",
+"type": "bool"
+},
+{
+"name": "minModelLen",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "contextLimitLabel",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "loadBalancer",
+"kind": "json",
+"type": "loadBalancerConfig"
+},
+{
+"name": "attemptTimeout",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "portRules",
+"kind": "json",
+"type": "[]endpointPortRule"
+}
+]
+},
+{
+"name": "timeout",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "mmTimeout",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "caCertPath",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "clientCertPath",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "clientKeyPath",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "insecureSkipVerify",
+"kind": "boolean",
+"type": "bool"
+}
+]
+},
+{
+"name": "estimate",
+"kind": "group",
+"type": "estimateConfig",
+"fields": [
+{
+"name": "image",
+"kind": "group",
+"type": "imageEstimateConfig",
+"fields": [
+{
+"name": "mode",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "defaultResolution",
+"kind": "json",
+"type": "resolution"
+},
+{
+"name": "static",
+"kind": "json",
+"type": "staticImageConfig"
+},
+{
+"name": "dynamic",
+"kind": "json",
+"type": "dynamicImageConfig"
+}
+]
+},
+{
+"name": "video",
+"kind": "group",
+"type": "videoEstimateConfig",
+"fields": [
+{
+"name": "defaultResolution",
+"kind": "json",
+"type": "resolution"
+},
+{
+"name": "defaultDuration",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "tokensPerFrame",
+"kind": "json",
+"type": "tokensPerFrameConfig"
+},
+{
+"name": "frames",
+"kind": "json",
+"type": "framesConfig"
+},
+{
+"name": "maxVideoTokens",
+"kind": "number",
+"type": "int"
+}
+]
+},
+{
+"name": "audio",
+"kind": "group",
+"type": "audioEstimateConfig",
+"fields": [
+{
+"name": "mode",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "static",
+"kind": "json",
+"type": "staticAudioConfig"
+},
+{
+"name": "dynamic",
+"kind": "json",
+"type": "dynamicAudioConfig"
+}
+]
+}
+]
+},
+{
+"name": "modelName",
+"kind": "text",
+"type": "string"
+}
+],
+"session-id-producer": [
+{
+"name": "headerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "cookieName",
+"kind": "text",
+"type": "string"
+}
+],
+"session-state-producer": [
+{
+"name": "evictionTtlSeconds",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "evictionSweepSeconds",
+"kind": "number",
+"type": "float64"
+}
+],
+"latency-observer-producer-hub": [
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "intervalDuration",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "windowSize",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "maxObservationAge",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "maxRequests",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "minRequests",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "lowPercentile",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "typicalPercentile",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "bucketDuration",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "bucketHistorySize",
+"kind": "number",
+"type": "int"
+}
+],
+"latency-slo-admitter": [
+{
+"name": "latencyPredictionInfoProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"probabilistic-admitter": [
+{
+"name": "queueDepthThreshold",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "kvCacheUtilThreshold",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "power",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "k",
+"kind": "number",
+"type": "float64"
+}
+],
+"prefix-cache-affinity-filter": [
+{
+"name": "affinityThreshold",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "explorationProbability",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "maxTTFTPenaltyMs",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "ttftSource",
+"kind": "json",
+"type": "TTFTSource"
+},
+{
+"name": "peakPrefillThroughput",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "latencyPredictionInfoProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"slo-headroom-tier-filter": [
+{
+"name": "epsilonExploreNeg",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "latencyPredictionInfoProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"latency-scorer": [
+{
+"name": "ttftWeight",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "tpotWeight",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "headroomSelectionStrategy",
+"kind": "json",
+"type": "HeadroomSelectionStrategy"
+},
+{
+"name": "compositeKVWeight",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "compositeQueueWeight",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "compositePrefixWeight",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "latencyPredictionInfoProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"header-based-testing-filter": [],
+"destination-endpoint-served-verifier": [],
+"metrics-data-source": [],
+"multicluster-metrics-data-source": [],
+"multicluster-metrics-extractor": [],
+"k8s-notification-source": [
+{
+"name": "group",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "version",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "kind",
+"kind": "text",
+"type": "string"
+}
+],
+"endpoint-notification-source": [
+{
+"name": "group",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "version",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "kind",
+"kind": "text",
+"type": "string"
+}
+],
+"request-attribute-reporter": [
+{
+"name": "attributes",
+"kind": "group-list",
+"type": "[]Attribute",
+"fields": [
+{
+"name": "key",
+"kind": "group",
+"type": "AttributeKey",
+"fields": [
+{
+"name": "namespace",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "name",
+"kind": "text",
+"type": "string"
+}
+]
+},
+{
+"name": "expression",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "condition",
+"kind": "text",
+"type": "string"
+}
+]
+}
+],
+"openai-parser": [],
+"vllmgrpc-parser": [],
+"passthrough-parser": [],
+"anthropic-parser": [],
+"vllmhttp-parser": [],
+"sglanghttp-parser": [],
+"vertexai-parser": [],
+"concurrency-detector": [
+{
+"name": "maxConcurrency",
+"kind": "number",
+"type": "int64"
+},
+{
+"name": "headroom",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "concurrencyMode",
+"kind": "json",
+"type": "concurrencyMode"
+},
+{
+"name": "maxTokenConcurrency",
+"kind": "number",
+"type": "int64"
+},
+{
+"name": "inFlightLoadProducerName",
+"kind": "text",
+"type": "string"
+}
+],
+"utilization-detector": [
+{
+"name": "queueDepthThreshold",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "kvCacheUtilThreshold",
+"kind": "number",
+"type": "float64"
+},
+{
+"name": "metricsStalenessThreshold",
+"kind": "json",
+"type": "metav1.Duration"
+},
+{
+"name": "stalenessPolicy",
+"kind": "json",
+"type": "StalenessPolicy"
+},
+{
+"name": "headroom",
+"kind": "number",
+"type": "float64"
+}
+],
+"max-saturation-detector": [
+{
+"name": "detectors",
+"kind": "list",
+"type": "[]string"
+},
+{
+"name": "stages",
+"kind": "json",
+"type": "map[string][]string"
+}
+],
+"file-discovery": [],
+"multicluster-file-discovery": [],
+"k8s-peer-discovery": [],
+"agent-identity": [
+{
+"name": "additionalSessionHeaders",
+"kind": "list",
+"type": "[]string"
+}
+],
+"outlen-bucket": [],
+"p2p-source-producer": [
+{
+"name": "minCachedTokenDelta",
+"kind": "number",
+"type": "int"
+},
+{
+"name": "prefixMatchInfoProducerName",
+"kind": "text",
+"type": "string"
+},
+{
+"name": "prefillProfileName",
+"kind": "text",
+"type": "string"
+}
+],
+"core-metrics-extractor": []
+};
+const OPTIONS = { concurrencyMode:["requests","tokens","hybrid"] };
+
+/* accelerator profiles: drive engine, TP, peak prefill throughput, connector,
+   engine args/env and supported offload strategies.
+   peak values from guides/recipes/router/calibration/configuration-matrix.md */
+const ACCEL = {
+  gpu:{ label:"NVIDIA GPU", engines:["vllm","sglang","trtllm"], defEngine:"vllm", tp:2,
+    peak:{vllm:15928, sglang:30720, trtllm:15928}, connectors:["nixl","nixlv2","mooncake","mooncake-store","lmcache","ilunixl"], buffer:"cuda",
+    offload:["none","native-cpu","native-fs","lmcache-cpu","lmcache-fs","mooncake","p2p"],
+    env:{}, args:[], prefix:true, note:"Reference path. GKE A4X/A4X Max require kv_buffer_device=cuda and --no-disable-hybrid-kv-cache-manager." },
+  tpu:{ label:"Google TPU", engines:["vllm"], defEngine:"vllm", tp:8,
+    peak:{vllm:27336}, connectors:["tpu"], buffer:"",
+    offload:["none","tpu"],
+    env:{TPU_OFFLOAD_NUM_CPU_CHUNKS:"25000", TPU_OFFLOAD_NUM_STAGING_BLOCKS:"1000"}, args:["--block-size=64"], prefix:true,
+    note:"TPUOffloadConnector via tpu_inference; v6e peak 26290, v7x 27336. A single row per accelerator family." },
+  xpu:{ label:"Intel XPU", engines:["vllm"], defEngine:"vllm", tp:1,
+    peak:{vllm:1970}, connectors:["nixl"], buffer:"xpu",
+    offload:["none","native-cpu","native-fs","lmcache-cpu","lmcache-fs"],
+    env:{UCX_TLS:"tcp,ze_copy"}, args:[], prefix:true, note:"NixlConnector uses kv_buffer_device=xpu; LMCache CPU size is small (20)." },
+  amd:{ label:"AMD GPU", engines:["vllm","sglang"], defEngine:"vllm", tp:2,
+    peak:{vllm:15928, sglang:30720}, connectors:["nixl"], buffer:"cuda",
+    offload:["none","native-cpu","native-fs","lmcache-cpu","lmcache-fs"],
+    env:{}, args:[], prefix:true, note:"ROCm vLLM/SGLang; native offload patches the Triton threshold; LMCache FS uses buffered IO (use_odirect=false)." },
+  cpu:{ label:"CPU (AMX)", engines:["vllm"], defEngine:"vllm", tp:1,
+    peak:{vllm:1970}, connectors:[], buffer:"cpu",
+    offload:["none"],
+    env:{VLLM_CPU_KVCACHE_SPACE:"40"}, args:[], prefix:true, note:"Requires AMX or AVX512-BF16; calibrated at chunk size 2048." },
+  npu:{ label:"NPU (RBLN)", engines:["vllm"], defEngine:"vllm", tp:1,
+    peak:{vllm:12582}, connectors:[], buffer:"",
+    offload:["none"],
+    env:{}, args:["--no-enable-prefix-caching"], prefix:false, note:"RBLN runs prefix caching off, dp1, max-num-seqs=1, chunk 512." },
+  metax:{ label:"MetaX GPU", engines:["vllm"], defEngine:"vllm", tp:8,
+    peak:{vllm:5468}, connectors:["nixl"], buffer:"cuda",
+    offload:["none","native-cpu"], env:{}, args:[], prefix:true, note:"MACA 3.8; kv_load_failure_policy=fail." }
+};
+function accel(){ return ACCEL[S.meta.accelerator] || ACCEL.gpu; }
+function peakFor(acc, engine){ const a=ACCEL[acc]||ACCEL.gpu; return a.peak[engine]!==undefined?a.peak[engine]:a.peak[Object.keys(a.peak)[0]]; }
+
+/* engine profiles: launch command, EPP modelServers.type, metrics path,
+   supported offload/KV connectors, parser, kv-events shape. */
+const ENGINE = {
+  vllm:{ label:"vLLM", launch:"vllm serve <model>", type:"vllm", metricsPath:"/metrics",
+    offload:["none","native-cpu","native-fs","lmcache-cpu","lmcache-fs","mooncake","p2p"],
+    connectors:["nixl","nixlv2","mooncake","mooncake-store","lmcache","ilunixl"],
+    parsers:["vllmhttp-parser"], kvEvents:"vllm", pageSize:false, ec:"engine",
+    note:"--kv-transfer-config (Nixl/Offloading/LMCache/Mooncake), --enable-prefix-caching, --block-size, --kv-events-config with enable_kv_cache_events." },
+  sglang:{ label:"SGLang", launch:"python3 -m sglang.launch_server <model-path>", type:"sglang", metricsPath:"/metrics",
+    offload:["none","hicache"], connectors:["nixl"],
+    parsers:["sglanghttp-parser"], kvEvents:"sglang", pageSize:true, ec:"zmq",
+    note:"Radix cache on by default; HiCache (--enable-hierarchical-cache) for CPU/disk offload; P/D via --disaggregation-mode; --page-size; EC via zmq_to_scheduler." },
+  trtllm:{ label:"TRT-LLM", launch:"trtllm-serve <model>", type:"trtllm-serve", metricsPath:"/prometheus/metrics",
+    offload:["none"], connectors:["nixl"],
+    parsers:["openai-parser"], kvEvents:"none", pageSize:false, ec:"none",
+    note:"trtllm-serve; metrics scraped at /prometheus/metrics; prefix caching on by default; limited offload and encoder support." }
+};
+function eng(){ return ENGINE[S.meta.engine] || ENGINE.vllm; }
+function offloadOptions(){
+  const A=accel(), E=eng(), opts=["none"];
+  if(E.label==="vLLM") A.offload.forEach(function(o){ if(E.offload.indexOf(o)>=0 && opts.indexOf(o)<0) opts.push(o); });
+  else E.offload.forEach(function(o){ if(opts.indexOf(o)<0) opts.push(o); });
+  return opts;
+}
+function connOptions(){
+  const A=accel(), E=eng(); var set=[];
+  E.connectors.forEach(function(c){ if(A.connectors.indexOf(c)>=0) set.push(c); });
+  if(!set.length) set = A.connectors.length?A.connectors:["nixl"];
+  return set;
+}
+function applyAccelerator(acc){
+  const A=ACCEL[acc]; if(!A) return;
+  S.meta.accelerator=acc;
+  if(A.engines.indexOf(S.meta.engine)<0) S.meta.engine=A.defEngine;
+  S.disagg.tp=A.tp;
+  clampEngine();
+  if(!A.prefix){ removeType("prefix-cache-affinity-filter"); removeType("token-load-scorer"); }
+  updatePeak();
+}
+function clampEngine(){
+  const oo=offloadOptions(), cc=connOptions();
+  if(oo.indexOf(S.offload)<0) S.offload="none";
+  if(cc.indexOf(S.disagg.kvConnector)<0) S.disagg.kvConnector=cc[0];
+}
+function updatePeak(){
+  const p=peakFor(S.meta.accelerator, S.meta.engine);
+  S.instances.forEach(function(i){ if(i.type==="prefix-cache-affinity-filter"){ if(!i.params) i.params={}; i.params.peakPrefillThroughput=p; } });
+}
+function applyEngine(engine){
+  S.meta.engine=engine; clampEngine(); updatePeak();
+}
+
+/* default parameters for common plugins (from guides) */
+const DEFAULTS = {
+  "approx-prefix-cache-producer":{maxPrefixTokensToMatch:131072,lruCapacityPerServer:31250},
+  "precise-prefix-cache-producer":{tokenProcessorConfig:{blockSizeTokens:64},speculativeIndexing:true,indexerConfig:{kvBlockIndexConfig:{enableMetrics:true}},kvEventsConfig:{topicFilter:"kv@",concurrency:8,discoverPods:true,podDiscoveryConfig:{socketPort:5556,replaySocketPort:5559}}},
+  "burst-prefix-cache-producer":{maxPrefixTokensToMatch:131072},
+  "p2p-source-producer":{minCachedTokenDelta:2048},
+  "predicted-latency-producer":{},
+  "token-producer":{modelName:"__MODEL__",vllm:{url:"http://localhost:8000"}},
+  "inflight-load-producer":{},
+  "prefix-cache-affinity-filter":{peakPrefillThroughput:15928},
+  "prefix-cache-scorer":{},
+  "queue-scorer":{},
+  "kv-cache-utilization-scorer":{},
+  "token-load-scorer":{},
+  "active-request-scorer":{},
+  "no-hit-lru-scorer":{},
+  "load-aware-scorer":{},
+  "running-requests-size-scorer":{},
+  "context-length-aware":{},
+  "session-affinity-scorer":{},
+  "lora-affinity-scorer":{},
+  "mm-embeddings-cache-scorer":{},
+  "latency-scorer":{},
+  "latency-observation-scorer-hub":{},
+  "topology-affinity-scorer":{},
+  "endpoint-attribute-scorer":{},
+  "header-label-affinity-scorer":{},
+  "max-score-picker":{},
+  "random-picker":{},
+  "weighted-random-picker":{},
+  "single-profile-handler":{},
+  "disagg-profile-handler":{deciders:{prefill:"always-disagg-pd-decider"}},
+  "header-profile-handler":{},
+  "data-parallel-profile-handler":{primaryPort:8000},
+  "always-disagg-pd-decider":{},
+  "prefix-based-pd-decider":{nonCachedTokens:16},
+  "always-disagg-multimodal-decider":{},
+  "disagg-profile-handler ":{},
+  "decode-filter":{},
+  "prefill-filter":{},
+  "encode-filter":{},
+  "label-selector-filter":{},
+  "session-affinity-filter":{},
+  "topology-affinity-filter":{},
+  "utilization-filter":{},
+  "endpoint-attribute-filter":{},
+  "slo-headroom-tier-filter":{},
+  "prefix-cache-affinity-filter ":{},
+  "disaggregatedset-rollout-screener":{scope:{labelSelector:"disaggregatedset.x-k8s.io/name=__RELEASE__"},revisionGating:{mode:"max-role",requiredRoles:["prefill","decode"]}},
+  "disaggregatedset-rollout-pod-extractor":{},
+  "concurrency-detector":{maxConcurrency:132,concurrencyMode:"requests",headroom:0},
+  "utilization-detector":{queueDepthThreshold:5,kvCacheUtilThreshold:1.0,headroom:0},
+  "max-saturation-detector":{detectors:[]},
+  "round-robin-fairness-policy":{},
+  "global-strict-fairness-policy":{},
+  "program-aware-fairness":{},
+  "fcfs-ordering-policy":{},
+  "edf-ordering-policy":{},
+  "slo-deadline-ordering-policy":{},
+  "static-usage-limit-policy":{},
+  "priority-holdback-policy":{},
+  "soft-reflective-ceiling-policy":{},
+  "sheddable-eviction-filter":{},
+  "priority-then-time-eviction-order-policy":{},
+  "probabilistic-admitter":{},
+  "latency-slo-admitter":{},
+  "metrics-data-source":{scheme:"http",path:"/metrics"},
+  "core-metrics-extractor":{},
+  "models-data-source":{},
+  "models-data-extractor":{},
+  "dcgm-data-source":{},
+  "dcgm-extractor":{},
+  "endpoint-notification-source":{},
+  "k8s-notification-source":{},
+  "file-discovery":{},
+  "k8s-peer-discovery":{},
+  "multicluster-file-discovery":{},
+  "multicluster-metrics-data-source":{},
+  "multicluster-metrics-extractor":{},
+  "label-producer":{},
+  "topology-extractor":{},
+  "session-id-producer":{},
+  "session-state-producer":{},
+  "mm-embeddings-cache-producer":{cacheSizeInMB:2048},
+  "latency-observer-producer-hub":{},
+  "latency-predictor-client":{},
+  "tokenizer":{},
+  "openai-parser":{},
+  "anthropic-parser":{},
+  "vllmhttp-parser":{},
+  "vllmgrpc-parser":{},
+  "sglanghttp-parser":{},
+  "vertexai-parser":{},
+  "passthrough-parser":{},
+  "request-attribute-reporter":{},
+  "outlen-bucket":{},
+  "agent-identity":{}
+};
+/* source -> default extractors wiring */
+const SRC_EXTRACTORS = {
+  "metrics-data-source":["core-metrics-extractor"],
+  "models-data-source":["models-data-extractor"],
+  "dcgm-data-source":["dcgm-extractor"],
+  "endpoint-notification-source":["precise-prefix-cache-producer"],
+  "multicluster-metrics-data-source":["multicluster-metrics-extractor"]
+};
+const SCHED_STAGES=["filter","scorer","picker"];
+
+/* ============================================================
+   STATE
+   ============================================================ */
+const S = {
+  meta:{namespace:"llm-d-custom",release:"llm-d-custom",model:"Qwen/Qwen3-32B",accelerator:"gpu",engine:"vllm",provider:"base",proxyType:"envoy"},
+  topology:"aggregated",
+  runtime:{replicas:1,leaderElection:false,allowExperimental:false,tracing:false,secureServing:true,prometheus:true,monitoring:true,refreshMetrics:"50ms",drainTimeout:"30s",proxyType:"envoy",parsers:[]},
+  routingMode:"none",
+  fc:{enabled:false,fairness:"round-robin-fairness-policy",ordering:"fcfs-ordering-policy",saturation:"concurrency-detector",usageLimit:"static-usage-limit-policy",admitter:"none",maxBytes:"10Gi",maxRequests:"1k",defaultRequestTTL:"60s",bands:true,maxConcurrency:132},
+  engine:{args:[],env:[],byRole:{},role:"decode"},
+  offload:"none",offloadCpuGiB:100,
+  disagg:{kvConnector:"nixl",ecConnector:"ec-cpu",decodeChunkSize:0,p2pPull:false,prefillReplicas:8,decodeReplicas:2,encodeReplicas:2,tp:1},
+  autoscaling:"none",
+  ops:{podSnapshot:false,fma:false,modelexpress:false,objectives:false},
+  knobs:{blockSize:64,kvSocketPort:5556},
+  router:{tokenizer:{enabled:false,flavor:"python",modelName:""},latencyPredictor:{enabled:false,retrainInterval:10,minSamples:100,servers:1},extraServicePorts:false,clusterDomain:"cluster.local",imagePullSecrets:"",deploymentStrategy:"Recreate",runAsUser:"",podAnnotations:"",monitoringProvider:"",monitoringAuth:false,proxy:{enabled:true,replicas:1,failOpen:true,logLevel:"warn",concurrency:8},objectives:false,flags:{drainTimeout:"30s",grpcPort:9002,metricsPort:9090,grpcHealthPort:9003,pprof:true,metricsAuth:true,emitScores:false,disableSubsetFilter:false,pluginStaleness:"2s",fairnessLimit:0},gates:{haPopulateNonLeaderDatastore:true}},
+  engineFeat:{dpSize:0,ep:false,moeBackend:"",all2allBackend:"",mtp:false,mtpTokens:3,dbo:false,chunkedPrefill:false,prefixCaching:"default",sleepMode:false,gpuMemUtil:"",maxModelLen:"",maxNumSeqs:"",maxNumBatchedTokens:"",reasoningParser:"",toolParser:"",autoTool:false,ropeFactor:"",quantization:"",loadFormat:"",trustRemoteCode:false},
+  layout:{kind:"deployment",slices:1,placement:"",dpMultiPort:false,dpSupervisorPort:8208,kvEvents:false,kvEventsPort:5556,evictor:false,offloadCpu:false,offloadTiered:false,secondaryTier:"fs",nReadThreads:16,nWriteThreads:16,offloadPromptOnly:false,lazyOffload:false,storageBackend:"",multiHost:false},
+  components:{async:{enabled:false,transport:"redis",url:"redis://redis:6379",resultQueue:"result-list",pollMs:1000,batchSize:10,gate:"none"},batchGateway:{enabled:false,metadata:"postgresql",queue:"redis",files:"fs",modelGateways:"",pvc:"batch-gateway-pvc"},coordinator:{enabled:false,media:true,render:true,encode:true},diffusion:{enabled:false,images:true,audio:true},rollouts:{lora:false,alias:"small-segment-lora"},ipp:{enabled:false,baseModel:""},rl:{enabled:false},nok8s:{enabled:false,fileDiscovery:false},kueue:{enabled:false,cohort:"llm-d-gpu",quota:5},wva:{enabled:false},multiPool:{enabled:false,model:"model-b"},obs:{alerts:false,dashboards:false,inferencecost:false,tpuMonitor:false,otel:false}},
+  modelComp:{modelCache:false,gkeRdma:false,disableNcclTuner:false,monitoring:false,monitoringPd:false,gcsFuse:false},
+  fma:{maxInstances:2,runtimeClass:"nvidia",sleepOptions:"--enable-sleep-mode --gpu-memory-utilization 0.9"},
+  snapshot:{bucket:"gcs-bucket-placeholder",runtimeClass:"gvisor"},
+  modelexpress:{server:"modelexpress-server:8001",loadFormat:"mx",sharedCompileCache:false,istioMesh:false},
+  instances:[],
+  profiles:[],
+  drafts:{},
+  expanded:{},
+  targetProfile:"default"
+};
+let uid=0;
+
+/* ============================================================
+   composer
+   ============================================================ */
+function reg(type){ return REGISTRY.find(function(r){return r.type===type;}); }
+function stageOf(type){ const r=reg(type); return r?r.stage:"other"; }
+function defParams(type){
+  const d=DEFAULTS[type];
+  if(!d) return {};
+  return JSON.parse(JSON.stringify(d).replace(/__MODEL__/g,S.meta.model).replace(/__RELEASE__/g,S.meta.release));
+}
+function instanceByName(name){ return S.instances.find(function(i){return i.name===name;}); }
+function uniqueName(type){
+  if(!S.instances.some(function(i){return i.name===type;})) return type;
+  let n=2; while(S.instances.some(function(i){return i.name===type+"-"+n;})) n++; return type+"-"+n;
+}
+function addInstance(type, params, name, opts){
+  opts=opts||{};
+  const it={ id:++uid, type:type, stage:stageOf(type),
+    name:name||uniqueName(type),
+    params: params!==undefined?params:defParams(type) };
+  S.instances.push(it);
+  if(opts.profile && SCHED_STAGES.indexOf(it.stage)>=0) addToProfile(opts.profile, it.name, opts.weight);
+  return it;
+}
+function ensureIn(type, profile, weight){ const i=ensure(type); if(profile) addToProfile(profile, i.name, weight); return i; }
+function ensure(type, params){
+  const ex=S.instances.find(function(i){return i.type===type;});
+  if(ex){ if(params) ex.params=params; return ex; }
+  return addInstance(type, params);
+}
+function removeType(type){
+  S.instances.filter(function(i){return i.type===type;}).forEach(function(i){ removeInstance(i.id); });
+}
+function removeInstance(id){
+  const it=S.instances.find(function(i){return i.id===id;}); if(!it) return;
+  S.profiles.forEach(function(p){ p.members=p.members.filter(function(m){return m.ref!==it.name;}); });
+  S.instances=S.instances.filter(function(i){return i.id!==id;});
+}
+function hasType(type){ return S.instances.some(function(i){return i.type===type;}); }
+function setParam(type, params){ const i=S.instances.find(function(x){return x.type===type;}); if(i) i.params=params; }
+function ensureProfile(name){
+  let p=S.profiles.find(function(x){return x.name===name;});
+  if(!p){ p={name:name,members:[]}; S.profiles.push(p); }
+  return p;
+}
+function addToProfile(name, ref, weight){
+  const p=ensureProfile(name);
+  if(!p.members.some(function(m){return m.ref===ref;})) p.members.push(weight!==undefined?{ref:ref,weight:weight}:{ref:ref});
+}
+function removeFromProfile(name, ref){
+  const p=S.profiles.find(function(x){return x.name===name;}); if(!p) return;
+  p.members=p.members.filter(function(m){return m.ref!==ref;});
+}
+function inProfile(name, ref){
+  const p=S.profiles.find(function(x){return x.name===name;}); return !!(p && p.members.some(function(m){return m.ref===ref;}));
+}
+function requiredProfiles(){
+  switch(S.topology){
+    case "pd": return ["prefill","decode"];
+    case "e-pd": return ["encode","default"];
+    case "e-p-d": return ["encode","prefill","decode"];
+    case "wide-ep": return ["prefill","decode"];
+    default: return ["default"];
+  }
+}
+function syncProfiles(){
+  const req=requiredProfiles();
+  S.profiles=S.profiles.filter(function(p){ return req.indexOf(p.name)>=0; });
+  req.forEach(ensureProfile);
+  if(req.indexOf(S.targetProfile)<0) S.targetProfile=req[req.length-1];
+}
+
+/* ============================================================
+   feature shortcuts (operate on the composer)
+   ============================================================ */
+function clearComposition(){ S.instances=[]; S.profiles=[]; syncProfiles(); }
+function applyRoutingMode(mode){
+  S.routingMode=mode;
+  ["approx-prefix-cache-producer","precise-prefix-cache-producer","burst-prefix-cache-producer","predicted-latency-producer","token-producer","prefix-cache-affinity-filter","token-load-scorer","latency-scorer","weighted-random-picker","endpoint-notification-source","inflight-load-producer"].forEach(removeType);
+  ["default","prefill","decode","encode"].forEach(function(pn){
+    const p=S.profiles.find(function(x){return x.name===pn;});
+    if(p) p.members=p.members.filter(function(m){ return ["prefix-cache-affinity-filter","token-load-scorer","latency-scorer","weighted-random-picker"].indexOf(m.ref)<0 && !/prefix-cache-producer/.test(m.ref); });
+  });
+  const target=S.topology==="pd"||S.topology==="wide-ep"?"prefill":(S.topology==="e-p-d"?"prefill":"default");
+  if(mode==="none"){ return; }
+  if(mode==="approx"){
+    addInstance("approx-prefix-cache-producer"); addInstance("inflight-load-producer");
+    const f=addInstance("prefix-cache-affinity-filter"); const t=addInstance("token-load-scorer");
+    addToProfile(target,f.name); addToProfile(target,t.name);
+  } else if(mode==="precise"){
+    addInstance("token-producer"); addInstance("endpoint-notification-source");
+    const pp=addInstance("precise-prefix-cache-producer"); addInstance("inflight-load-producer");
+    const f=addInstance("prefix-cache-affinity-filter"); const t=addInstance("token-load-scorer");
+    addToProfile(target,f.name); addToProfile(target,t.name);
+  } else if(mode==="predicted"){
+    addInstance("predicted-latency-producer"); addInstance("approx-prefix-cache-producer");
+    const f=addInstance("prefix-cache-affinity-filter"); f.params={name:"loose-affinity-filter",affinityThreshold:0.8,ttftSource:"latencyPredictor",maxTTFTPenaltyMs:5000}; f.name="loose-affinity-filter";
+    const l=addInstance("latency-scorer"); addInstance("weighted-random-picker");
+    addToProfile(target,"loose-affinity-filter"); addToProfile(target,l.name);
+  }
+  S.routingMode=mode;
+}
+function applyTopology(t){
+  S.topology=t; syncProfiles();
+  const isPD=t==="pd"||t==="e-p-d";
+  const isE=t==="e-pd"||t==="e-p-d";
+  removeType("prefill-filter"); removeType("decode-filter"); removeType("encode-filter");
+  removeType("disagg-profile-handler"); removeType("always-disagg-pd-decider"); removeType("prefix-based-pd-decider"); removeType("always-disagg-multimodal-decider");
+  if(t==="aggregated"){ return; }
+  if(t==="wide-ep"){
+    const pf=addInstance("prefill-filter");
+    const df=addInstance("decode-filter");
+    const pc=ensure("prefix-cache-scorer"); const qs=ensure("queue-scorer"); const ar=ensure("active-request-scorer");
+    ensure("disaggregatedset-rollout-screener"); addInstance("disagg-profile-handler");
+    addToProfile("prefill",pf.name,1); addToProfile("prefill",pc.name,3); addToProfile("prefill",qs.name,2); addToProfile("prefill",ar.name,2);
+    addToProfile("decode",df.name); addToProfile("decode",ar.name,1);
+    return;
+  }
+  let ef=null,pf=null,df=null;
+  if(isE) ef=addInstance("encode-filter");
+  if(isPD) pf=addInstance("prefill-filter");
+  df=addInstance("decode-filter");
+  if(isE) addInstance("always-disagg-multimodal-decider");
+  if(isPD) addInstance("always-disagg-pd-decider");
+  addInstance("disagg-profile-handler", buildDeciders(isPD,isE));
+  const ar=ensure("active-request-scorer");
+  const decodeProfile=isPD?"decode":"default";
+  if(ef) addToProfile("encode",ef.name);
+  if(pf) addToProfile("prefill",pf.name);
+  if(df) addToProfile(decodeProfile,df.name);
+  if(ar) addToProfile(decodeProfile,ar.name,1);
+}
+function buildDeciders(isPD,isE){
+  const d={};
+  if(isE) d.encode="always-disagg-multimodal-decider";
+  if(isPD) d.prefill="always-disagg-pd-decider";
+  return {deciders:d};
+}
+function applyOffload(o){ S.offload=o; }
+
+/* ============================================================
+   YAML serializer
+   ============================================================ */
+function isObj(v){ return v!==null && typeof v==="object" && !Array.isArray(v); }
+function quote(v){
+  if(v===null) return "null"; if(typeof v==="number"||typeof v==="boolean") return String(v);
+  const s=String(v); if(s==="") return '""';
+  if(/^[A-Za-z0-9_./@:+*\-]+$/.test(s)) return s; return JSON.stringify(s);
+}
+function yaml(value, indent){
+  indent=indent||0; const pad="  ".repeat(indent);
+  if(Array.isArray(value)){
+    if(!value.length) return pad+"[]";
+    return value.map(function(it){
+      if(isObj(it)){ const c=yaml(it,indent+1); const l=c.split("\n"); return pad+"- "+l[0].trimStart()+(l.length>1?"\n"+l.slice(1).join("\n"):""); }
+      if(typeof it==="string"&&it.indexOf("\n")>=0) return pad+"- |\n"+it.split("\n").map(function(x){return pad+"    "+x;}).join("\n");
+      return pad+"- "+quote(it);
+    }).join("\n");
+  }
+  if(isObj(value)){
+    return Object.keys(value).filter(function(k){return value[k]!==undefined;}).map(function(k){
+      const v=value[k];
+      if(typeof v==="string"&&v.indexOf("\n")>=0) return pad+k+": |\n"+v.split("\n").map(function(x){return pad+"  "+x;}).join("\n");
+      if(Array.isArray(v)) return v.length? pad+k+":\n"+yaml(v,indent+1) : pad+k+": []";
+      if(isObj(v)) return Object.keys(v).length? pad+k+":\n"+yaml(v,indent+1) : pad+k+": {}";
+      return pad+k+": "+quote(v);
+    }).join("\n");
+  }
+  return pad+quote(value);
+}
+function eppDoc(obj){ return "apiVersion: llm-d.ai/v1\nkind: EndpointPickerConfig\n"+yaml(obj,0)+"\n"; }
+function indentBlock(s,n){ const pad="  ".repeat(n); return s.replace(/\n$/,"").split("\n").map(function(l){return pad+l;}).join("\n"); }
+const J=JSON.stringify;
+
+/* ============================================================
+   EPP config generation from composer
+   ============================================================ */
+function buildEpp(){
+  const fcGate=S.fc.enabled;
+  const doc={};
+  const fg=[];
+  if(fcGate) fg.push("flowControl");
+  if(!S.router.gates.haPopulateNonLeaderDatastore) fg.push("haPopulateNonLeaderDatastore=false");
+  if(fg.length) doc.featureGates=fg;
+
+  const plugins=S.instances.map(function(i){
+    const p={type:i.type};
+    const named = i.name!==i.type;
+    if(named) p.name=i.name;
+    if(i.params && Object.keys(i.params).length) p.parameters=i.params;
+    return p;
+  });
+  doc.plugins=plugins;
+
+  // dataLayer: discovery + sources
+  const sources=S.instances.filter(function(i){return i.stage==="source";});
+  const extractors=S.instances.filter(function(i){return i.stage==="extractor";});
+  const discoveries=S.instances.filter(function(i){return i.stage==="discovery";});
+  const dl={};
+  if(discoveries.length){ dl.discovery={endpoints:{pluginRef:discoveries[0].name}}; }
+  if(sources.length){
+    dl.sources=sources.map(function(s){
+      const defs=(SRC_EXTRACTORS[s.type]||[]).filter(function(t){return hasType(t);});
+      const ents={pluginRef:s.name};
+      if(defs.length){ ents.extractors=defs.map(function(t){ const ii=S.instances.find(function(x){return x.type===t;}); return {pluginRef:ii?ii.name:t}; }); }
+      return ents;
+    });
+  } else if(extractors.length){
+    dl.sources=[{pluginRef:extractors[0].name}];
+  }
+  if(Object.keys(dl).length) doc.dataLayer=dl;
+
+  // scheduling profiles
+  const profiles=S.profiles.filter(function(p){return p.members.length;});
+  doc.schedulingProfiles=profiles.map(function(p){
+    const members=p.members.filter(function(m){ return !!instanceByName(m.ref); });
+    return {name:p.name, plugins:members.map(function(m){
+      const mi=instanceByName(m.ref);
+      if(mi && mi.stage==="scorer") return {pluginRef:m.ref,weight:(m.weight!==undefined?m.weight:1)};
+      return {pluginRef:m.ref};
+    })};
+  }).filter(function(p){return p.plugins.length;});
+
+  if(fcGate){
+    const sat=S.instances.find(function(i){return i.stage==="saturation";});
+    const fair=S.instances.find(function(i){return i.stage==="fairness";});
+    const ord=S.instances.find(function(i){return i.stage==="ordering";});
+    const ul=S.instances.find(function(i){return i.stage==="usage-limit";});
+    const fc={maxBytes:S.fc.maxBytes,maxRequests:S.fc.maxRequests,defaultRequestTTL:S.fc.defaultRequestTTL};
+    if(sat) fc.saturationDetector={pluginRef:sat.name};
+    if(ul) fc.usageLimitPolicyPluginRef=ul.name;
+    if(S.fc.bands){
+      fc.priorityBands=[100,0,-10].map(function(pr){
+        const b={priority:pr,maxRequests:String(pr>0?500:pr===0?200:50)};
+        if(fair) b.fairnessPolicyRef=fair.name;
+        if(ord) b.orderingPolicyRef=ord.name;
+        return b;
+      });
+    }
+    doc.flowControl=fc;
+  }
+  return {
+    doc:doc,
+    parsers:S.runtime.parsers.slice(),
+    allowExperimental:S.instances.some(function(i){ const r=reg(i.type); return r && r.stab==="alpha"; })
+  };
+}
+
+/* ============================================================
+   KV / engine args
+   ============================================================ */
+function connectorName(c){ return {"mooncake":"MooncakeConnector","mooncake-store":"MooncakeStoreConnector","lmcache":"LMCacheConnectorV1","tpu":"TPUConnector","ilunixl":"IluNixlConnector","nixlv2":"NixlConnector"}[c]||"NixlConnector"; }
+function ecConnectorName(c){ return c==="ec-nixl"?"ECNixlConnector":"ECCPUConnector"; }
+function kvConfig(role){
+  const bytes=Math.round(S.offloadCpuGiB*1073741824), off=S.offload;
+  const isPD=S.topology==="pd"||S.topology==="e-p-d";
+  const pdRole=role==="prefill"?"kv_producer":"kv_consumer";
+  const buf=accel().buffer, conn=connectorName(S.disagg.kvConnector);
+  function withBuf(o){ if(buf) o.kv_buffer_device=buf; return o; }
+  let oc=null;
+  if(off==="native-cpu") oc={kv_connector:"OffloadingConnector",kv_role:"kv_both",kv_connector_extra_config:{cpu_bytes_to_use:bytes}};
+  else if(off==="native-fs") oc={kv_connector:"OffloadingConnector",kv_role:"kv_both",kv_connector_extra_config:{spec_name:"TieringOffloadingSpec",cpu_bytes_to_use:bytes,block_size:256,secondary_tiers:[{type:"fs",root_dir:"/mnt/files-storage",n_read_threads:16,n_write_threads:16}]}};
+  else if(off==="p2p") oc={kv_connector:"OffloadingConnector",kv_role:"kv_both",kv_connector_extra_config:{spec_name:"TieringOffloadingSpec",cpu_bytes_to_use:bytes,offload_prompt_only:false,secondary_tiers:[{type:"p2p",host:"$(POD_IP)",port:7777}]}};
+  if(isPD && role!=="encode" && oc) return {kv_connector:"MultiConnector",kv_role:"kv_both",kv_load_failure_policy:"fail",kv_connector_extra_config:{connectors:[withBuf({kv_connector:conn,kv_role:pdRole}),oc]}};
+  if(isPD && role!=="encode") return withBuf({kv_connector:conn,kv_role:pdRole,kv_load_failure_policy:"fail"});
+  return oc;
+}
+function engineArgs(role){
+  let a;
+  if(S.meta.engine==="sglang") a=sglangArgs(role);
+  else if(S.meta.engine==="trtllm") a=trtllmArgs(role);
+  else a=vllmArgs(role);
+  const add=function(list){ (list||[]).forEach(function(x){ if(x.k){ a.push(x.k); if(x.v!=="" && x.v!==undefined) a.push(x.v); } }); };
+  add(S.engine.args);
+  if(S.engine.byRole[role]) add(S.engine.byRole[role].args);
+  return a;
+}
+function engineFeatArgs(engine){
+  const f=S.engineFeat, a=[];
+  if(engine==="sglang"){
+    if(f.gpuMemUtil) a.push("--mem-fraction-static="+f.gpuMemUtil);
+    if(f.maxModelLen) a.push("--context-length="+f.maxModelLen);
+    if(f.maxNumSeqs) a.push("--max-running-requests="+f.maxNumSeqs);
+    if(f.chunkedPrefill) a.push("--chunked-prefill-size","8192");
+    if(f.mtp) a.push("--speculative-algorithm=NEXTN","--speculative-num-steps="+(Number(f.mtpTokens)||3));
+    if(f.quantization) a.push("--quantization="+f.quantization);
+    if(f.trustRemoteCode) a.push("--trust-remote-code");
+    if(f.reasoningParser) a.push("--reasoning-parser="+f.reasoningParser);
+    if(f.toolParser) a.push("--tool-call-parser="+f.toolParser);
+    return a;
+  }
+  if(engine==="trtllm"){
+    if(f.maxNumSeqs) a.push("--max_batch_size="+f.maxNumSeqs);
+    if(f.maxModelLen) a.push("--max_seq_len="+f.maxModelLen);
+    if(f.ep) a.push("--enable_attention_dp");
+    if(f.trustRemoteCode) a.push("--trust_remote_code");
+    return a;
+  }
+  if(f.dpSize>0) a.push("--data-parallel-size="+f.dpSize);
+  if(f.dpMultiPort) a.push("--data-parallel-multi-port-external-lb");
+  if(f.ep) a.push("--enable-expert-parallel");
+  if(f.moeBackend) a.push("--moe-backend="+f.moeBackend);
+  if(f.all2allBackend) a.push("--all2all-backend="+f.all2allBackend);
+  if(f.mtp) a.push("--speculative-config",J({method:"mtp",num_speculative_tokens:Number(f.mtpTokens)||3}));
+  if(f.dbo) a.push("--enable-dbo","--dbo-decode-token-threshold","32");
+  if(f.chunkedPrefill) a.push("--enable-chunked-prefill");
+  if(f.sleepMode) a.push("--enable-sleep-mode");
+  if(f.trustRemoteCode) a.push("--trust-remote-code");
+  if(f.gpuMemUtil) a.push("--gpu-memory-utilization="+f.gpuMemUtil);
+  if(f.maxModelLen) a.push("--max-model-len="+f.maxModelLen);
+  if(f.maxNumSeqs) a.push("--max-num-seqs="+f.maxNumSeqs);
+  if(f.maxNumBatchedTokens) a.push("--max-num-batched-tokens="+f.maxNumBatchedTokens);
+  if(f.prefixCaching==="on") a.push("--enable-prefix-caching"); else if(f.prefixCaching==="off") a.push("--no-enable-prefix-caching");
+  if(f.quantization) a.push("--quantization="+f.quantization);
+  if(f.loadFormat) a.push("--load-format="+f.loadFormat);
+  if(f.reasoningParser) a.push("--reasoning-parser="+f.reasoningParser);
+  if(f.toolParser) a.push("--tool-call-parser="+f.toolParser);
+  if(f.autoTool) a.push("--enable-auto-tool-choice");
+  if(f.ropeFactor) a.push("--hf-overrides",J({rope_scaling:{rope_type:"yarn",factor:Number(f.ropeFactor)}}));
+  return a;
+}
+function vllmArgs(role){
+  const A=accel();
+  const a=["vllm","serve",S.meta.model];
+  a.push("--tensor-parallel-size="+S.disagg.tp);
+  engineFeatArgs("vllm").forEach(function(x){ a.push(x); });
+  if(!A.prefix) a.push("--no-enable-prefix-caching");
+  if(S.layout.kvEvents) a.push("--kv-events-config",J({enable_kv_cache_events:true,publisher:"zmq",endpoint:"tcp://*:"+S.layout.kvEventsPort,topic:"kv@$(POD_IP):$(POD_PORT)@"+S.meta.model}));
+  A.args.forEach(function(x){ a.push(x); });
+  if(S.offload==="tpu") a.push("--kv-transfer-config",J({kv_connector:"TPUOffloadConnector",kv_connector_module_path:"tpu_inference.offload.tpu_offload_connector",kv_role:"kv_both"}));
+  else if(S.offload==="lmcache-cpu"||S.offload==="lmcache-fs") a.push("--kv-transfer-config",J({kv_connector:"LMCacheConnectorV1",kv_role:"kv_both"}));
+  else if(S.offload==="mooncake") a.push("--kv-transfer-config",J({kv_connector:"MooncakeStoreConnector",kv_role:"kv_both"}));
+  else { const kv=kvConfig(role); if(kv) a.push("--kv-transfer-config",J(kv)); }
+  if(S.offload!=="none" && ["tpu","lmcache-cpu","lmcache-fs","mooncake","hicache"].indexOf(S.offload)<0) a.push("--block-size="+S.knobs.blockSize);
+  if((S.routingMode==="precise"||hasType("precise-prefix-cache-producer")) && !S.layout.kvEvents) a.push("--kv-events-config",J({enable_kv_cache_events:true,publisher:"zmq",endpoint:"$(KV_EVENTS_ENDPOINT)",topic:"kv@$(POD_IP):$(POD_PORT)@"+S.meta.model}));
+  if(S.topology==="e-pd"||S.topology==="e-p-d"){
+    const ec=ecConnectorName(S.disagg.ecConnector);
+    if(role==="encode") a.push("--mm-encoder-only","--ec-transfer-config",J({ec_connector:ec,ec_role:"ec_producer"}));
+    else if(role==="prefill" && S.topology==="e-p-d") a.push("--ec-transfer-config",J({ec_connector:ec,ec_role:"ec_consumer"}));
+    else if(role==="decode" && S.topology==="e-pd") a.push("--ec-transfer-config",J({ec_connector:ec,ec_role:"ec_consumer"}));
+  }
+  return a;
+}
+function sglangArgs(role){
+  const a=["python3","-m","sglang.launch_server","--model-path="+S.meta.model,"--tp-size="+S.disagg.tp];
+  engineFeatArgs("sglang").forEach(function(x){ a.push(x); });
+  if(S.offload==="hicache") a.push("--enable-hierarchical-cache","--hicache-write-policy=write_through","--hicache-io-backend=kernel","--hicache-size=200");
+  a.push("--page-size="+S.knobs.blockSize);
+  if(S.topology==="pd"||S.topology==="e-p-d") a.push("--disaggregation-mode="+(role==="prefill"?"prefill":"decode"),"--disaggregation-transfer-backend=nixl");
+  if(S.routingMode==="precise"||hasType("precise-prefix-cache-producer")) a.push("--kv-events-config",J({publisher:"zmq",endpoint:"$(KV_EVENTS_ENDPOINT)",topic:"kv@$(POD_IP):$(POD_PORT)@"+S.meta.model}));
+  if(S.topology==="e-pd"||S.topology==="e-p-d") a.push("--encoder-transfer-backend=zmq_to_scheduler");
+  return a;
+}
+function trtllmArgs(role){
+  const a=["trtllm-serve",S.meta.model,"--tp_size="+S.disagg.tp];
+  engineFeatArgs("trtllm").forEach(function(x){ a.push(x); });
+  if(S.topology==="pd"||S.topology==="e-p-d") a.push("--kv_transfer_config",J({kv_connector:"NixlConnector",kv_role:role==="prefill"?"kv_producer":"kv_consumer"}));
+  return a;
+}
+function envFor(role){
+  const e=Object.assign({}, accel().env);   // accelerator-specific env
+  if(S.offload==="lmcache-cpu") e.LMCACHE_MAX_LOCAL_CPU_SIZE="100.0";
+  if(S.offload==="lmcache-fs"){e.LMCACHE_LOCAL_DISK="file:///mnt/files-storage/kv-cache/";e.LMCACHE_MAX_LOCAL_DISK_SIZE="1120.0";}
+  if(S.offload==="mooncake") e.MOONCAKE_CONFIG_PATH="/etc/mooncake/mooncake_config.json";
+  if(S.offload==="tpu"){e.TPU_OFFLOAD_NUM_CPU_CHUNKS="25000";e.TPU_OFFLOAD_NUM_STAGING_BLOCKS="1000";}
+  if(S.offload==="p2p"){e.VLLM_NIXL_SIDE_CHANNEL_HOST="$(POD_IP)";e.VLLM_P2P_SIDE_CHANNEL_HOST="$(POD_IP)";}
+  if(S.routingMode==="precise"){e.KV_EVENTS_ENDPOINT="tcp://*:"+S.knobs.kvSocketPort;e.KV_EVENTS_REPLAY_ENDPOINT="tcp://*:"+(S.knobs.kvSocketPort+3);}
+  const put=function(list){ (list||[]).forEach(function(x){ if(x.k) e[x.k]=x.v; }); };
+  put(S.engine.env);
+  if(S.engine.byRole[role]) put(S.engine.byRole[role].env);
+  if(S.ops.modelexpress){
+    e.VLLM_PLUGINS="modelexpress"; e.MX_SERVER_ADDRESS=S.modelexpress.server;
+    e.MX_METADATA_PORT="5555"; e.MX_WORKER_GRPC_PORT="6555"; e.MX_RDMA_NIC_PIN="auto";
+    e.HF_HUB_CACHE="/models"; e.VLLM_RPC_TIMEOUT="7200000";
+    if(S.modelexpress.loadFormat) S.engineFeat.loadFormat=S.modelexpress.loadFormat;
+  }
+  if(S.snapshot.runtimeClass==="gvisor" && S.ops.podSnapshot){ e.SNAPSHOT_PROVIDER="gke_gvisor"; e.MODEL_CACHE_DIR="~/.cache/huggingface/hub"; e.VLLM_HOST_IP="127.0.0.1"; }
+  if(S.components.rollouts.lora){ e.VLLM_ALLOW_RUNTIME_LORA_UPDATING="True"; if(!S.ops.modelexpress) e.VLLM_PLUGINS="lora_filesystem_resolver"; e.VLLM_LORA_RESOLVER_CACHE_DIR="/adapters"; }
+  return Object.keys(e).length?e:null;
+}
+function roles(){ if(S.topology==="pd")return["prefill","decode"]; if(S.topology==="e-pd")return["encode","decode"]; if(S.topology==="e-p-d")return["encode","prefill","decode"]; if(S.topology==="wide-ep")return["prefill","decode"]; return ["decode"]; }
+function replicas(role){ return role==="prefill"?S.disagg.prefillReplicas:role==="encode"?S.disagg.encodeReplicas:S.disagg.decodeReplicas; }
+function modelServerPatch(role){
+  const c={name:"modelserver",image:"REPLACE_MODEL_SERVER_IMAGE",args:engineArgs(role)};
+  const env=envFor(role); if(env) c.env=Object.keys(env).map(function(k){return{name:k,value:String(env[k])};});
+  return yaml({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:role},spec:{replicas:replicas(role),template:{metadata:{labels:{"llm-d.ai/role":role}},spec:{containers:[c]}}}},0)+"\n";
+}
+function routerValues(){
+  const e=buildEpp(); const eppYaml=eppDoc(e.doc); const L=[];
+  L.push("## generated by llm-d Configurator (feature-surface mock)");
+  L.push("router:");
+  L.push("  epp:");
+  L.push("    replicas: "+S.runtime.replicas);
+  L.push("    pluginsConfigFile: \""+S.meta.release+"-plugins.yaml\"");
+  L.push("    pluginsCustomConfig:");
+  L.push("      "+S.meta.release+"-plugins.yaml: |");
+  L.push(indentBlock(eppYaml,4));
+  if(e.parsers.length){ L.push("    parsers: ["+e.parsers.map(function(p){return '"'+p+'"';}).join(", ")+"]"); }
+  L.push("    flags:");
+  L.push("      v: 2");
+  if(S.runtime.leaderElection) L.push("      ha-enable-leader-election: true");
+  if(e.allowExperimental) L.push("      allow-experimental-plugins: true");
+  if(S.runtime.secureServing===false) L.push("      secure-serving: false");
+  L.push("      drain-timeout: \""+S.router.flags.drainTimeout+"\"");
+  L.push("      grpc-port: "+S.router.flags.grpcPort);
+  L.push("      metrics-port: "+S.router.flags.metricsPort);
+  L.push("      grpc-health-port: "+S.router.flags.grpcHealthPort);
+  L.push("      enable-pprof: "+S.router.flags.pprof);
+  L.push("      metrics-endpoint-auth: "+S.router.flags.metricsAuth);
+  if(S.router.flags.emitScores) L.push("      emit-endpoint-scores: true");
+  if(S.router.flags.disableSubsetFilter) L.push("      disable-endpoint-subset-filter: true");
+  L.push("      plugin-state-staleness-threshold: \""+S.router.flags.pluginStaleness+"\"");
+  L.push("      fairness-id-metric-label-limit: "+S.router.flags.fairnessLimit);
+  L.push("    metricsDataSource:");
+  L.push("      path: \""+eng().metricsPath+"\"");
+  L.push("    resources:");
+  L.push("      requests: {cpu: \"8\", memory: 8Gi}");
+  L.push("      limits: {memory: 16Gi}");
+  if(S.router.runAsUser) L.push("    podSecurityContext: {runAsUser: "+S.router.runAsUser+"}");
+  if(S.router.latencyPredictor.enabled||S.routingMode==="predicted"){
+    L.push("  latencyPredictor:");
+    L.push("    enabled: true");
+    L.push("    trainingServer:");
+    L.push("      config: {LATENCY_RETRAINING_INTERVAL_SEC: \""+S.router.latencyPredictor.retrainInterval+"\", LATENCY_MIN_SAMPLES_FOR_RETRAIN: \""+S.router.latencyPredictor.minSamples+"\"}");
+    L.push("    predictionServers:");
+    L.push("      count: "+S.router.latencyPredictor.servers);
+  }
+  if(S.router.tokenizer.enabled){
+    L.push("  tokenizer:");
+    L.push("    enabled: true");
+    L.push("    flavor: \""+S.router.tokenizer.flavor+"\"");
+    if(S.router.tokenizer.modelName) L.push("    modelName: \""+S.router.tokenizer.modelName+"\"");
+  }
+  L.push("  inferencePool:");
+  L.push("    failureMode: \"FailOpen\"");
+  if(S.router.extraServicePorts){
+    L.push("  extraServicePorts:");
+    L.push("    - name: http");
+    L.push("      port: 80");
+    L.push("      targetPort: 8081");
+  }
+  L.push("  monitoring:");
+  if(S.router.monitoringProvider) L.push("    provider: {name: \""+S.router.monitoringProvider+"\"}");
+  L.push("    prometheus:");
+  L.push("      enabled: "+(S.runtime.prometheus?"true":"false"));
+  L.push("      auth: {enabled: "+(S.router.monitoringAuth?"true":"false")+"}");
+  L.push("  tracing:");
+  L.push("    enabled: "+(S.runtime.tracing?"true":"false"));
+  if(S.runtime.tracing){ L.push("    otelExporterEndpoint: \"http://otel-collector:4317\""); L.push("    sampling: {sampler: parentbased_traceidratio, samplerArg: \"0.05\"}"); }
+  L.push("  proxy:");
+  L.push("    enabled: "+S.router.proxy.enabled);
+  L.push("    proxyType: "+S.runtime.proxyType);
+  L.push("    replicas: "+S.router.proxy.replicas);
+  L.push("    failOpen: "+S.router.proxy.failOpen);
+  L.push("  clusterDomain: \""+S.router.clusterDomain+"\"");
+  if(S.router.imagePullSecrets) L.push("  imagePullSecrets: [{name: \""+S.router.imagePullSecrets+"\"}]");
+  if(S.router.deploymentStrategy!=="Recreate") L.push("  # deploymentStrategy: {type: "+S.router.deploymentStrategy+"}");
+  if(S.router.podAnnotations) L.push("  # podAnnotations: "+S.router.podAnnotations);
+  if(S.router.objectives){
+    L.push("  inferenceObjectives:");
+    L.push("    - {name: high-priority, priority: 5}");
+    L.push("    - {name: low-priority, priority: 1}");
+  }
+  L.push("  modelServers:");
+  const ports=S.topology==="wide-ep"?[8000,8001,8002,8003,8004,8005,8006,8007]:[8000];
+  L.push("    type: "+eng().type);
+  L.push("    protocol: http");
+  L.push("    targetPorts:");
+  ports.forEach(function(p){L.push("      - number: "+p);});
+  L.push("    matchLabels:");
+  L.push("      llm-d.ai/guide: \""+S.meta.release+"\"");
+  return L.join("\n")+"\n";
+}
+function objectivesYaml(){
+  return [["premium-traffic",100],["standard-traffic",0],["best-effort-traffic",-10]].map(function(x){
+    return yaml({apiVersion:"llm-d.ai/v1alpha2",kind:"InferenceObjective",metadata:{name:x[0],namespace:S.meta.namespace,labels:{"llm-d.ai/guide":S.meta.release}},spec:{priority:x[1],poolRef:{name:S.meta.release}}},0);
+  }).join("---\n")+"\n";
+}
+function scaledObjectYaml(){
+  const ns=S.meta.namespace,rel=S.meta.release;
+  const q='sum(llm_d_epp_flow_control_queue_size{namespace="'+ns+'",service="'+rel+'-epp"})';
+  const sat='max(llm_d_epp_flow_control_pool_saturation{inference_pool="'+rel+'",namespace="'+ns+'"})';
+  const run='sum(llm_d_epp_request_running{namespace="'+ns+'",service="'+rel+'-epp"})';
+  const tok='(sum(llm_d_epp_inflight_tokens{namespace="'+ns+'"}) / '+15928+') or vector(0)';
+  const kv='sum(vllm:kv_cache_usage_perc{namespace="'+ns+'"}) or vector(0)';
+  const map={ "keda-queue":[["epp-queue-size",q,"1"],["epp-running-requests",run,"16"]],
+    "keda-saturation":[["pool-saturation",sat,"0.7"],["running-requests",run,"16"]],
+    "keda-token":[["prefill-backlog-seconds",tok,"1.5"],["decode-kv-utilization",kv,"0.8"]] };
+  const tr=map[S.autoscaling]||map["keda-queue"];
+  return yaml({apiVersion:"keda.sh/v1alpha1",kind:"ScaledObject",metadata:{name:rel+"-"+S.autoscaling,namespace:ns},
+    spec:{scaleTargetRef:{apiVersion:"apps/v1",kind:"Deployment",name:rel+"-decode"},pollingInterval:15,cooldownPeriod:300,minReplicaCount:1,maxReplicaCount:10,
+      triggers:tr.map(function(t){return{type:"prometheus",name:t[0],metricType:"AverageValue",metadata:{serverAddress:"https://llmd-kube-prometheus-stack-prometheus.llm-d-monitoring.svc.cluster.local:9090",query:t[1],threshold:t[2],unsafeSsl:"false"}};})}},0)+"\n";
+}
+function summaryMd(){
+  const L=["# llm-d deployment summary (feature-surface mock)",""];
+  L.push("namespace: "+S.meta.namespace); L.push("release:   "+S.meta.release); L.push("model:     "+S.meta.model);
+  L.push("accelerator/engine: "+S.meta.accelerator+"/"+S.meta.engine); L.push("provider:  "+S.meta.provider);
+  L.push("topology:  "+S.topology); L.push("routing:   "+(S.routingMode||"none")); L.push("kv offload: "+S.offload);
+  L.push("fc:        "+(S.fc.enabled?"on":"off")); L.push("autoscaling: "+S.autoscaling); L.push("");
+  L.push("layout:    "+S.layout.kind+(S.layout.kind==="disaggregatedset"?" slices="+S.layout.slices:""));
+  L.push("kv connector: "+S.disagg.kvConnector+"  ec connector: "+(S.disagg.ecConnector||"-")); L.push("");
+  const comp=[]; Object.keys(S.components).forEach(function(k){ var v=S.components[k]; if(v&&v.enabled) comp.push(k); if(k==="obs"){ if(v.alerts)comp.push("alerts"); if(v.dashboards)comp.push("dashboards"); if(v.inferencecost)comp.push("inferencecost"); if(v.tpuMonitor)comp.push("tpu-monitor"); if(v.otel)comp.push("otel"); } });
+  ["kueue","wva","multiPool"].forEach(function(k){ if(S.components[k]&&S.components[k].enabled) comp.push(k); });
+  if(S.modelComp.modelCache)comp.push("model-cache"); if(S.modelComp.gkeRdma)comp.push("gke-rdma"); if(S.modelComp.disableNcclTuner)comp.push("disable-nccl-tuner");
+  if(S.ops.podSnapshot)comp.push("pod-snapshot"); if(S.ops.fma)comp.push("fma"); if(S.ops.modelexpress)comp.push("modelexpress");
+  if(comp.length) L.push("add-ons:   "+comp.join(", "));
+  L.push("");
+  L.push("plugins ("+S.instances.length+"):");
+  S.instances.forEach(function(i){ L.push("  - "+i.type+(i.name!==i.type?" (name: "+i.name+")":"")+"  ["+i.stage+"]"); });
+  L.push(""); L.push("profiles:");
+  S.profiles.filter(function(p){return p.members.length;}).forEach(function(p){ L.push("  "+p.name+": "+p.members.map(function(m){return m.ref;}).join(", ")); });
+  return L.join("\n")+"\n";
+}
+function layoutYaml(){
+  const kind=S.layout.kind;
+  const rl=roles().map(function(r){return {name:r,replicas:replicas(r)};});
+  if(kind==="disaggregatedset"){
+    return yaml({apiVersion:"disaggregatedset.x-k8s.io/v1alpha1",kind:"DisaggregatedSet",
+      metadata:{name:S.meta.release},
+      spec:{slices:S.layout.slices, placementPolicy:(S.layout.placement?{type:S.layout.placement}:undefined),
+        roles:rl.map(function(r){return {name:r.name,replicas:r.replicas,leaderWorkerTemplate:{size:S.layout.multiHost?2:1}};})}},0)+"\n";
+  }
+  if(kind==="lws"){
+    return rl.map(function(r){return yaml({apiVersion:"leaderworkerset.x-k8s.io/v1",kind:"LeaderWorkerSet",
+      metadata:{name:S.meta.release+"-"+r.name,namespace:S.meta.namespace},
+      spec:{replicas:1,leaderWorkerTemplate:{size:S.layout.multiHost?2:1},template:{spec:{containers:[{name:"modelserver",image:"REPLACE_MODEL_SERVER_IMAGE",args:engineArgs(r.name)}]}}}},0);}).join("---\n")+"\n";
+  }
+  return "# layout: Deployment (default)\n";
+}
+function storageClassYaml(){
+  if(S.layout.storageBackend==="lustre") return yaml({apiVersion:"storage.k8s.io/v1",kind:"StorageClass",metadata:{name:"lustre-class"},provisioner:"lustre.csi.storage.gke.io",parameters:{perUnitStorageThroughput:"1000"},reclaimPolicy:"Retain"},0)+"\n";
+  if(S.layout.storageBackend==="efs") return yaml({apiVersion:"storage.k8s.io/v1",kind:"StorageClass",metadata:{name:"efs-sc"},provisioner:"efs.csi.aws.com",parameters:{provisioningMode:"efs-ap"},reclaimPolicy:"Retain"},0)+"\n";
+  return "";
+}
+function kueueYaml(){
+  const rf=yaml({apiVersion:"kueue.x-k8s.io/v1beta2",kind:"ResourceFlavor",metadata:{name:"llm-d-gpu-default"},spec:{}},0);
+  const cq=yaml({apiVersion:"kueue.x-k8s.io/v1beta2",kind:"ClusterQueue",metadata:{name:S.meta.release+"-cq"},
+    spec:{cohortName:S.components.kueue.cohort,resourceGroups:[{coveredResources:["nvidia.com/gpu"],flavors:[{name:"llm-d-gpu-default",resources:[{name:"nvidia.com/gpu",nominalQuota:S.components.kueue.quota},{name:"cpu",nominalQuota:200},{name:"memory",nominalQuota:"2000Gi"}]}]}],preemption:{reclaimWithinCohort:"Any",withinClusterQueue:"LowerOrNewerEqualPriority"}}},0);
+  const lq=yaml({apiVersion:"kueue.x-k8s.io/v1beta2",kind:"LocalQueue",metadata:{name:S.meta.release+"-lq",namespace:S.meta.namespace},spec:{clusterQueue:S.meta.release+"-cq"}},0);
+  return rf+"---\n"+cq+"---\n"+lq+"\n";
+}
+function wvaYaml(){
+  return yaml({apiVersion:"keda.sh/v1alpha1",kind:"ScaledObject",
+    metadata:{name:S.meta.release+"-wva",namespace:S.meta.namespace,annotations:{"llm-d.ai/managed":"true","llm-d.ai/model-id":S.meta.model,"llm-d.ai/variant-cost":"30.0"}},
+    spec:{scaleTargetRef:{name:S.meta.release+"-decode"},minReplicaCount:1,maxReplicaCount:10,pollingInterval:5,cooldownPeriod:30,
+      triggers:[{type:"prometheus",metadata:{serverAddress:"https://prometheus-operated.llm-d-monitoring.svc.cluster.local:9090",query:'wva_desired_replicas{namespace="'+S.meta.namespace+'"}',threshold:"1"}}]}},0)+"\n";
+}
+function multiPoolValues(){ return "router:\n  modelServers:\n    matchLabels:\n      llm-d.ai/model: \""+S.components.multiPool.model+"\"\n"; }
+function observabilityMd(){
+  const L=["# Observability add-ons (recipes/observability)"];
+  if(S.components.obs.alerts) L.push("- EPP alerts: kubectl apply -f recipes/observability/alerts/epp-alerting-rules.yaml");
+  if(S.components.obs.dashboards) L.push("- Grafana dashboards: recipes/observability/load-llm-d-dashboards.sh ${NAMESPACE}");
+  if(S.components.obs.inferencecost) L.push("- OpenCost inference cost: recipes/observability/inferencecost/install-opencost.sh --inference-cost-enabled");
+  if(S.components.obs.tpuMonitor) L.push("- TPU metrics: kubectl apply -k recipes/observability/tpu");
+  if(S.components.obs.otel) L.push("- OTel+Jaeger: recipes/observability/tracing/install-otel-collector-jaeger.sh");
+  return L.join("\n")+"\n";
+}
+function doc(o){ return yaml(o,0)+"\n"; }
+function multi(arr){ return arr.map(doc).join("---\n"); }
+function img(n){ return "ghcr.io/llm-d/"+n+":latest"; }
+
+/* ---- llm-d-async ---- */
+function asyncManifests(){
+  const c=S.components.async, tc={};
+  if(c.transport==="redis"){ tc.url=c.url; tc.result_queue_name=c.resultQueue; tc.poll_interval_ms=c.pollMs; tc.batch_size=c.batchSize;
+    tc.queues=[{queue_name:"request-sortedset",request_path_url:"/v1/completions",igw_base_url:"http://"+S.meta.release+":80"}]; }
+  else { tc.project_id="PROJECT_ID"; tc.result_topic_id=c.resultQueue;
+    tc.topics=[{subscriber_id:"request-sub",request_path_url:"/v1/completions",igw_base_url:"http://"+S.meta.release+":80"}]; }
+  if(c.gate!=="none") tc.gate_type=c.gate;
+  const docs=[];
+  docs.push({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"llm-d-async-config",namespace:S.meta.namespace},data:{"transport-config.yaml":yaml(tc,0)}});
+  if(c.transport==="redis") docs.push({apiVersion:"v1",kind:"Secret",metadata:{name:"llm-d-async-redis",namespace:S.meta.namespace},type:"Opaque",stringData:{"redis-url":c.url}});
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"llm-d-async",namespace:S.meta.namespace,labels:{app:"llm-d-async"}},
+    spec:{replicas:1,selector:{matchLabels:{app:"llm-d-async"}},template:{metadata:{labels:{app:"llm-d-async"}},
+      spec:{containers:[{name:"processor",image:img("llm-d-async"),
+        args:["--transport="+(c.transport==="redis"?"redis-sortedset":"gcp-pubsub"),"--transport-config-file=/etc/async/transport-config.yaml"],
+        ports:[{name:"http",containerPort:8080},{name:"metrics",containerPort:9090}],
+        env:[{name:"PROMETHEUS_URL",value:"http://prometheus.monitoring.svc:9090"},{name:"PROMETHEUS_CACHE_TTL",value:"5s"}],
+        volumeMounts:[{name:"cfg",mountPath:"/etc/async"}]}],
+        volumes:[{name:"cfg",configMap:{name:"llm-d-async-config"}}]}}}});
+  docs.push({apiVersion:"v1",kind:"Service",metadata:{name:"llm-d-async",namespace:S.meta.namespace},spec:{selector:{app:"llm-d-async"},ports:[{name:"http",port:8080,targetPort:8080}]}});
+  return multi(docs);
+}
+
+/* ---- batch-gateway ---- */
+function batchGatewayManifests(){
+  const b=S.components.batchGateway, docs=[];
+  docs.push({apiVersion:"v1",kind:"Secret",metadata:{name:"batch-gateway-storage",namespace:S.meta.namespace},type:"Opaque",
+    stringData:{"redis-url":"redis://redis:6379","postgresql-url":"postgresql://postgres:postgres@postgres:5432/batch"}});
+  if(b.files==="fs") docs.push({apiVersion:"v1",kind:"PersistentVolumeClaim",metadata:{name:b.pvc,namespace:S.meta.namespace},spec:{accessModes:["ReadWriteMany"],resources:{requests:{storage:"100Gi"}}}});
+  const env=[{name:"STORAGE_METADATA",value:b.metadata},{name:"STORAGE_QUEUE",value:b.queue},{name:"STORAGE_FILES",value:b.files}];
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"batch-gateway-apiserver",namespace:S.meta.namespace},
+    spec:{replicas:1,selector:{matchLabels:{app:"batch-gateway-apiserver"}},template:{metadata:{labels:{app:"batch-gateway-apiserver"}},
+      spec:{containers:[{name:"apiserver",image:img("llm-d-batch-gateway-apiserver"),ports:[{name:"http",containerPort:8000},{name:"metrics",containerPort:8081}],
+        env:env.concat([{name:"PASS_THROUGH_HEADERS",value:"Authorization"}]),envFrom:[{secretRef:{name:"batch-gateway-storage"}}],
+        volumeMounts:(b.files==="fs"?[{name:"files",mountPath:"/data"}]:[])}],
+        volumes:(b.files==="fs"?[{name:"files",persistentVolumeClaim:{claimName:b.pvc}}]:[])}}}});
+  docs.push({apiVersion:"v1",kind:"Service",metadata:{name:"batch-gateway-apiserver",namespace:S.meta.namespace},spec:{selector:{app:"batch-gateway-apiserver"},ports:[{name:"http",port:8000,targetPort:8000}]}});
+  const mg=(b.modelGateways?b.modelGateways.split(",").map(function(x){var q=x.split("=");return (q[0]||"").trim()+"="+(q[1]||"").trim();}):["default=http://"+S.meta.release+":80"]).join(",");
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"batch-gateway-processor",namespace:S.meta.namespace},
+    spec:{replicas:1,selector:{matchLabels:{app:"batch-gateway-processor"}},template:{metadata:{labels:{app:"batch-gateway-processor"}},
+      spec:{containers:[{name:"processor",image:img("llm-d-batch-gateway-processor"),args:["--global-igw-url=http://"+S.meta.release,"--model-gateways="+mg],
+        ports:[{name:"metrics",containerPort:8081}],env:env,envFrom:[{secretRef:{name:"batch-gateway-storage"}}]}]}}}});
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"batch-gateway-gc",namespace:S.meta.namespace},
+    spec:{replicas:1,selector:{matchLabels:{app:"batch-gateway-gc"}},template:{metadata:{labels:{app:"batch-gateway-gc"}},
+      spec:{containers:[{name:"gc",image:img("llm-d-batch-gateway-gc"),ports:[{name:"metrics",containerPort:8081}],env:env,envFrom:[{secretRef:{name:"batch-gateway-storage"}}]}]}}}});
+  return multi(docs);
+}
+
+/* ---- coordinator ---- */
+function coordinatorConfigMap(){
+  const c=S.components.coordinator, steps=[];
+  if(c.media) steps.push({type:"replace-media-urls",params:{download_timeout:"10s",max_concurrent_downloads:10}});
+  steps.push({type:"render",params:{address:"http://localhost:8000",timeout:"30s"}},{type:"conditional-decode"});
+  if(c.encode) steps.push({type:"encode",params:{max_parallel:8}});
+  steps.push({type:"prefill"},{type:"decode"});
+  const cfg={pipeline:{kv_connector:"kv-nixl",ec_connector:(c.encode?"ec-nixl":undefined),steps:steps},log_level:"info",server:{listen_addr:":8181"},gateway:{timeout:"300s"}};
+  return {apiVersion:"v1",kind:"ConfigMap",metadata:{name:"llm-d-coordinator-config",namespace:S.meta.namespace},data:{"config.yaml":yaml(cfg,0)}};
+}
+function coordinatorManifests(){
+  const docs=[coordinatorConfigMap()];
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"llm-d-coordinator",namespace:S.meta.namespace,labels:{app:"llm-d-coordinator"}},
+    spec:{replicas:1,selector:{matchLabels:{app:"llm-d-coordinator"}},template:{metadata:{labels:{app:"llm-d-coordinator"}},
+      spec:{containers:[{name:"coordinator",image:img("llm-d-router-coordinator"),args:["--config=/etc/coordinator/config.yaml"],
+        ports:[{name:"http",containerPort:8181}],env:[{name:"GOMAXPROCS",value:"4"},{name:"GOMEMLIMIT",value:"4Gi"}],
+        volumeMounts:[{name:"cfg",mountPath:"/etc/coordinator"}]}],
+        volumes:[{name:"cfg",configMap:{name:"llm-d-coordinator-config"}}]}}}});
+  docs.push({apiVersion:"v1",kind:"Service",metadata:{name:"llm-d-coordinator",namespace:S.meta.namespace},spec:{selector:{app:"llm-d-coordinator"},ports:[{name:"http",port:81,targetPort:8181}]}});
+  return multi(docs);
+}
+
+/* ---- LoRA rollout ---- */
+function inferenceModelRewrite(){
+  const a=S.components.rollouts.alias;
+  return yaml({apiVersion:"llm-d.ai/v1alpha1",kind:"InferenceModelRewrite",metadata:{name:S.meta.release+"-lora",namespace:S.meta.namespace},
+    spec:{poolRef:{group:"inference.networking.k8s.io",name:S.meta.release},
+      rules:[{matches:[{model:{type:"Exact",value:a}}],targets:[{modelRewrite:a+"-v1",weight:90},{modelRewrite:a+"-v2",weight:10}]}]}},0)+"\n";
+}
+function loraPatch(){
+  return doc({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"decode"},spec:{template:{spec:{containers:[{name:"modelserver",
+    env:[{name:"VLLM_ALLOW_RUNTIME_LORA_UPDATING",value:"True"},{name:"VLLM_PLUGINS",value:"lora_filesystem_resolver"},{name:"VLLM_LORA_RESOLVER_CACHE_DIR",value:"/adapters"}],
+    volumeMounts:[{name:"lora-adapters",mountPath:"/adapters"}]}],volumes:[{name:"lora-adapters",emptyDir:{}}]}}}});
+}
+
+/* ---- multi-model IPP ---- */
+function ippManifests(){
+  const docs=[];
+  docs.push({apiVersion:"v1",kind:"ConfigMap",metadata:{name:S.meta.release+"-models",namespace:S.meta.namespace,labels:{"inference.llm-d.ai/ipp-managed":"true"}},data:{baseModel:(S.components.ipp.baseModel||S.meta.model)}});
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"llm-d-inference-payload-processor",namespace:S.meta.namespace,labels:{app:"ipp"}},
+    spec:{replicas:1,selector:{matchLabels:{app:"ipp"}},template:{metadata:{labels:{app:"ipp"}},
+      spec:{containers:[{name:"ipp",image:img("llm-d-inference-payload-processor"),args:["--base-model-configs-namespace="+S.meta.namespace],
+        env:[{name:"PROVIDER_NAME",value:"istio"}],ports:[{name:"grpc",containerPort:9004}]}]}}}});
+  docs.push({apiVersion:"v1",kind:"Service",metadata:{name:"llm-d-inference-payload-processor",namespace:S.meta.namespace},spec:{selector:{app:"ipp"},ports:[{name:"grpc",port:9004,targetPort:9004}]}});
+  return multi(docs);
+}
+
+/* ---- observability ---- */
+function observabilityManifests(){
+  const docs=[];
+  docs.push({apiVersion:"monitoring.coreos.com/v1",kind:"PrometheusRule",metadata:{name:"epp-alerting-rules",namespace:S.meta.namespace},
+    spec:{groups:[{name:"epp.rules",rules:[
+      {alert:"EPPHighErrorRatio",expr:'sum(rate(llm_d_epp_request_errors_total[5m])) / sum(rate(llm_d_epp_requests_total[5m])) > 0.05',for:"10m",labels:{severity:"warning"}},
+      {alert:"EPPNoReadyEndpoints",expr:'sum(llm_d_epp_pool_ready_endpoints) == 0',for:"5m",labels:{severity:"critical"}},
+      {alert:"EPPMetricsAbsent",expr:'absent(llm_d_epp_requests_total)',for:"10m",labels:{severity:"warning"}}
+    ]}]}});
+  if(S.components.obs.tpuMonitor) docs.push({apiVersion:"monitoring.coreos.com/v1",kind:"PodMonitor",metadata:{name:"tpu-metrics-exporter",namespace:S.meta.namespace},
+    spec:{selector:{matchLabels:{"k8s-app":"tpu-device-plugin"}},podMetricsEndpoints:[{port:"metrics",path:"/metrics",interval:"15s"}]}});
+  if(S.components.obs.dashboards) docs.push({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"llm-d-dashboards",namespace:S.meta.namespace,labels:{grafana_dashboard:"1"}},data:{"README.txt":"Load dashboards with recipes/observability/load-llm-d-dashboards.sh\n"}});
+  if(S.components.obs.inferencecost) docs.push({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"opencost-inference-config",namespace:S.meta.namespace},data:{INFERENCE_COST_ENABLED:"true",INFERENCE_MODEL_LABEL:"llm-d.ai/model"}});
+  return multi(docs);
+}
+
+/* ---- FMA ---- */
+function fmaManifests(){
+  const docs=[];
+  docs.push({apiVersion:"fma.llm-d.ai/v1alpha1",kind:"InferenceServerConfig",metadata:{name:S.meta.release+"-isc",namespace:S.meta.namespace},
+    spec:{modelServerConfig:{port:8000,options:"--model "+S.meta.model+" "+S.fma.sleepOptions,env_vars:{VLLM_LOGGING_LEVEL:"INFO",HF_HOME:"/tmp/hf_cache"},labels:{"llm-d.ai/guide":"fast-model-actuation","llm-d.ai/model":S.meta.model}},launcherConfigName:S.meta.release+"-launcher"}});
+  docs.push({apiVersion:"fma.llm-d.ai/v1alpha1",kind:"LauncherConfig",metadata:{name:S.meta.release+"-launcher",namespace:S.meta.namespace},
+    spec:{maxInstances:S.fma.maxInstances,podTemplate:{spec:{serviceAccountName:"fma-launcher",runtimeClassName:S.fma.runtimeClass,containers:[{name:"inference-server",image:img("llm-d-fast-model-actuation-launcher"),command:["python3","launcher.py","--host","0.0.0.0","--port","8001"],env:[{name:"HOME",value:"/tmp"}]}]}}}});
+  docs.push({apiVersion:"fma.llm-d.ai/v1alpha1",kind:"LauncherPopulationPolicy",metadata:{name:S.meta.release+"-lpp",namespace:S.meta.namespace},
+    spec:{enhancedNodeSelector:{labelSelector:{matchLabels:{"nvidia.com/gpu.present":"true"}}},countForLauncher:[{launcherConfigName:S.meta.release+"-launcher",launcherCount:1}]}});
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"fma-requester",namespace:S.meta.namespace,labels:{"llm-d.ai/guide":"fast-model-actuation"}},
+    spec:{replicas:2,selector:{matchLabels:{app:"fma-requester"}},template:{metadata:{labels:{app:"fma-requester"},annotations:{"dual-pods.llm-d.ai/inference-server-config":S.meta.release+"-isc","dual-pods.llm-d.ai/admin-port":"8081"}},
+      spec:{containers:[{name:"requester",image:img("llm-d-fast-model-actuation-requester"),resources:{limits:{"nvidia.com/gpu":"1"},requests:{"nvidia.com/gpu":"1"}}}]}}}});
+  docs.push({apiVersion:"v1",kind:"ServiceAccount",metadata:{name:"fma-launcher",namespace:S.meta.namespace}});
+  docs.push({apiVersion:"rbac.authorization.k8s.io/v1",kind:"Role",metadata:{name:"fma-launcher-pod-state-writer",namespace:S.meta.namespace},rules:[{apiGroups:[""],resources:["pods"],verbs:["get","patch"]}]});
+  return multi(docs);
+}
+
+/* ---- Pod snapshot ---- */
+function snapshotManifests(){
+  const docs=[];
+  docs.push({apiVersion:"podsnapshot.gke.io/v1alpha1",kind:"PodSnapshotPolicy",metadata:{name:S.meta.release+"-storage-policy",namespace:S.meta.namespace},
+    spec:{storageConfigName:S.meta.release+"-storage-config",selector:{matchLabels:{"llm-d.ai/guide":S.meta.release}},triggerConfig:{type:"workload",postCheckpoint:"resume"}}});
+  docs.push({apiVersion:"podsnapshot.gke.io/v1alpha1",kind:"PodSnapshotStorageConfig",metadata:{name:S.meta.release+"-storage-config",namespace:S.meta.namespace},
+    spec:{snapshotStorageConfig:{gcs:{bucket:S.snapshot.bucket,path:"/",tokenSource:"podKSA"}}}});
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"decode"},spec:{template:{spec:{runtimeClassName:(S.snapshot.runtimeClass||undefined),nodeSelector:(S.snapshot.runtimeClass==="gvisor"?{"sandbox.gke.io/runtime":"gvisor"}:undefined),
+    containers:[{name:"modelserver",args:["--enable-sleep-mode","--gpu-memory-utilization","0.90"],
+      env:[{name:"SNAPSHOT_PROVIDER",value:"gke_gvisor"},{name:"MODEL_CACHE_DIR",value:"~/.cache/huggingface/hub"},{name:"VLLM_HOST_IP",value:"127.0.0.1"}],
+      startupProbe:{httpGet:{path:"/v1/models",port:8000},failureThreshold:1800,periodSeconds:2}}]}}}});
+  return multi(docs);
+}
+
+/* ---- ModelExpress ---- */
+function modelexpressManifests(){
+  const docs=[];
+  docs.push({apiVersion:"v1",kind:"ServiceAccount",metadata:{name:"modelexpress",namespace:S.meta.namespace}});
+  docs.push({apiVersion:"rbac.authorization.k8s.io/v1",kind:"ClusterRole",metadata:{name:S.meta.release+"-modelexpress"},rules:[{apiGroups:["modelexpress.nvidia.com"],resources:["*"],verbs:["get","list","watch"]},{apiGroups:[""],resources:["configmaps"],verbs:["get","list","watch"]}]});
+  docs.push({apiVersion:"rbac.authorization.k8s.io/v1",kind:"ClusterRoleBinding",metadata:{name:S.meta.release+"-modelexpress"},roleRef:{apiGroup:"rbac.authorization.k8s.io",kind:"ClusterRole",name:S.meta.release+"-modelexpress"},subjects:[{kind:"ServiceAccount",name:"modelexpress",namespace:S.meta.namespace}]});
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"modelexpress-server",namespace:S.meta.namespace,labels:{app:"modelexpress-server"}},
+    spec:{replicas:1,selector:{matchLabels:{app:"modelexpress-server"}},template:{metadata:{labels:{app:"modelexpress-server"}},
+      spec:{serviceAccountName:"modelexpress",containers:[{name:"server",image:"nvcr.io/nvidia/ai-dynamo/modelexpress-server:0.5.0",
+        ports:[{name:"grpc",containerPort:8001},{name:"meta",containerPort:5555},{name:"worker",containerPort:6555}],
+        env:[{name:"MX_METADATA_BACKEND",value:"kubernetes"},{name:"MX_METADATA_NAMESPACE",valueFrom:{fieldRef:{fieldPath:"metadata.namespace"}}},{name:"MODEL_EXPRESS_SERVER_PORT",value:"8001"}],
+        livenessProbe:{grpc:{port:8001}},readinessProbe:{grpc:{port:8001}}}]}}}});
+  docs.push({apiVersion:"v1",kind:"Service",metadata:{name:"modelexpress-server",namespace:S.meta.namespace},spec:{selector:{app:"modelexpress-server"},ports:[{name:"grpc",port:8001,targetPort:8001},{name:"meta",port:5555,targetPort:5555},{name:"worker",port:6555,targetPort:6555}]}});
+  if(S.modelexpress.sharedCompileCache) docs.push({apiVersion:"v1",kind:"PersistentVolumeClaim",metadata:{name:"vllm-compile-cache",namespace:S.meta.namespace},spec:{accessModes:["ReadWriteMany"],resources:{requests:{storage:"50Gi"}}}});
+  if(S.modelexpress.istioMesh){
+    docs.push({apiVersion:"security.istio.io/v1",kind:"PeerAuthentication",metadata:{name:"modelexpress-strict",namespace:S.meta.namespace},spec:{selector:{matchLabels:{app:"modelexpress-server"}},mtls:{mode:"STRICT"}}});
+    docs.push({apiVersion:"security.istio.io/v1",kind:"AuthorizationPolicy",metadata:{name:"modelexpress-allow",namespace:S.meta.namespace},spec:{selector:{matchLabels:{app:"modelexpress-server"}},action:"ALLOW",rules:[{to:[{operation:{ports:["8001"]}}]}]}});
+  }
+  return multi(docs);
+}
+
+/* ---- diffusion ---- */
+function diffusionManifests(){
+  const d=S.components.diffusion, docs=[];
+  docs.push({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"decode"},spec:{template:{spec:{containers:[{name:"modelserver",
+    image:"docker.io/vllm/vllm-omni:v0.26.0",command:["vllm","serve"],args:[S.meta.model,"--omni","--disable-access-log-for-endpoints=/health,/metrics,/v1/models","--trust-remote-code"]}]}}}});
+  if(d.images) docs.push({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"diffusion-endpoints",namespace:S.meta.namespace},data:{images:"/v1/images/generations, /v1/images/edits"}});
+  if(d.audio) docs.push({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"diffusion-audio",namespace:S.meta.namespace},data:{audio:"/v1/audio/speech, /v1/audio/transcriptions"}});
+  return multi(docs);
+}
+
+/* ---- RL ---- */
+function rlManifests(){
+  return doc({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"py-inference-scheduler",namespace:S.meta.namespace},
+    data:{"scheduler.yaml":yaml({epp:{endpoint:"llm-d-router-epp:9002"},rollout:{agent_loop_manager_class:"integration.verl.verl_hook.PyInferenceAgentLoopManager",disable_log_stats:false},backends:[S.meta.engine]},0)}});
+}
+
+/* ---- no-Kubernetes ---- */
+function noK8sManifests(){
+  const out=[];
+  if(S.components.nok8s.fileDiscovery){
+    out.push(doc({apiVersion:"v1",kind:"ConfigMap",metadata:{name:"file-discovery-endpoints",namespace:S.meta.namespace},
+      data:{"endpoints.yaml":yaml({endpoints:[{name:"vllm-0",address:"127.0.0.1",port:"8000",labels:{model:S.meta.model,"llm-d.ai/role":"decode"}}]},0)}}));
+  }
+  out.push("# no-Kubernetes mode: run as plain processes\n# epp --config-file=config.yaml --pool-name=file-discovery --pool-namespace=default --grpc-port=9002 --grpc-health-port=9003 --metrics-port=9090 --secure-serving=false --v=2\n# vllm docker: --gpus device=0,1 --shm-size=20g -p 8000:8000 --tensor-parallel-size="+S.disagg.tp+"\n# envoy: --service-node envoy-sidecar --log-level warn --concurrency 8 --drain-strategy immediate --drain-time-s 60\n");
+  return out.join("---\n");
+}
+
+function modelComponentsYaml(){
+  const L=["# components to add under modelserver/.../kustomization.yaml:"];
+  if(S.modelComp.modelCache) L.push("- ../../../../recipes/modelserver/components/model-cache");
+  if(S.modelComp.gkeRdma) L.push("- ../../../../recipes/modelserver/components/gke-rdma");
+  if(S.modelComp.disableNcclTuner) L.push("- ../../../../recipes/modelserver/components/disable-gke-nccl-tuner-patch");
+  if(S.modelComp.monitoring) L.push("- ../../../../recipes/modelserver/components/monitoring");
+  if(S.modelComp.monitoringPd) L.push("- ../../../../recipes/modelserver/components/monitoring-pd");
+  if(S.modelComp.gcsFuse) L.push("# + gke-gcsfuse/volumes annotation and gcsfuse CSI volume (bucket llm-models)");
+  return L.join("\n")+"\n";
+}
+
+function buildFiles(){
+  const f=[];
+  f.push(["router/values.yaml","router",routerValues()]);
+  const e=buildEpp(); f.push(["router/"+S.meta.release+"-plugins.yaml","router",eppDoc(e.doc)]);
+  roles().forEach(function(r){ f.push(["modelserver/patch-"+r+".yaml","model server",modelServerPatch(r)]); });
+  if(S.layout.kind!=="deployment") f.push(["modelserver/layout.yaml","model server",layoutYaml()]);
+  if(S.offload==="native-fs"||S.offload==="p2p"||S.offload==="lmcache-fs"||S.layout.storageBackend) f.push(["manifests/pvc.yaml","manifest",pvcYaml()]);
+  if(S.layout.storageBackend) f.push(["manifests/storageclass.yaml","manifest",storageClassYaml()]);
+  if(S.fc.enabled&&S.fc.bands) f.push(["flow-control/objectives.yaml","flow control",objectivesYaml()]);
+  if(S.autoscaling!=="none") f.push(["autoscaling/scaledobject.yaml","autoscaling",scaledObjectYaml()]);
+  if(S.components.kueue.enabled) f.push(["autoscaling/kueue.yaml","autoscaling",kueueYaml()]);
+  if(S.components.wva.enabled) f.push(["autoscaling/wva.yaml","autoscaling",wvaYaml()]);
+  if(S.components.multiPool.enabled) f.push(["router/multi-pool.values.yaml","router",multiPoolValues()]);
+  if(S.components.obs.alerts||S.components.obs.dashboards||S.components.obs.inferencecost||S.components.obs.tpuMonitor||S.components.obs.otel) f.push(["observability/addons.yaml","observability",observabilityManifests()]);
+  if(S.components.async.enabled) f.push(["components/async.yaml","add-on",asyncManifests()]);
+  if(S.components.batchGateway.enabled) f.push(["components/batch-gateway.yaml","add-on",batchGatewayManifests()]);
+  if(S.components.coordinator.enabled) f.push(["components/coordinator.yaml","add-on",coordinatorManifests()]);
+  if(S.components.rollouts.lora) f.push(["components/rollouts.yaml","add-on",inferenceModelRewrite()+"---\n"+loraPatch()]);
+  if(S.components.ipp.enabled) f.push(["components/ipp.yaml","add-on",ippManifests()]);
+  if(S.components.diffusion.enabled) f.push(["components/diffusion.yaml","add-on",diffusionManifests()]);
+  if(S.components.rl.enabled) f.push(["components/rl.yaml","add-on",rlManifests()]);
+  if(S.components.nok8s.enabled) f.push(["components/no-kubernetes.yaml","add-on",noK8sManifests()]);
+  if(S.ops.podSnapshot) f.push(["modelserver/podsnapshot.yaml","pod-snapshot",snapshotManifests()]);
+  if(S.ops.fma) f.push(["modelserver/fma.yaml","fast-model-actuation",fmaManifests()]);
+  if(S.ops.modelexpress) f.push(["modelserver/modelexpress.yaml","modelexpress-p2p",modelexpressManifests()+"---\n"+modelexpressYaml()]);
+  if(S.modelComp.modelCache||S.modelComp.gkeRdma||S.modelComp.disableNcclTuner||S.modelComp.monitoring||S.modelComp.monitoringPd||S.modelComp.gcsFuse) f.push(["modelserver/components.yaml","model server",modelComponentsYaml()]);
+  f.push(["SUMMARY.md","overview",summaryMd()]);
+  return f;
+}
+function podSnapshotYaml(){
+  const pol={apiVersion:"podsnapshot.gke.io/v1alpha1",kind:"PodSnapshotPolicy",
+    metadata:{name:S.meta.release+"-storage-policy",namespace:S.meta.namespace},
+    spec:{storageConfigName:S.meta.release+"-storage-config",selector:{matchLabels:{"llm-d.ai/guide":S.meta.release}},triggerConfig:{type:"workload",postCheckpoint:"resume"}}};
+  const store={apiVersion:"podsnapshot.gke.io/v1alpha1",kind:"PodSnapshotStorageConfig",
+    metadata:{name:S.meta.release+"-storage-config",namespace:S.meta.namespace},
+    spec:{snapshotStorageConfig:{gcs:{bucket:S.snapshot.bucket,path:"/",tokenSource:"podKSA"}}}};
+  return yaml(pol,0)+"\n---\n"+yaml(store,0)+"\n";
+}
+function fmaYaml(){
+  return yaml({apiVersion:"fma.llm-d.ai/v1alpha1",kind:"InferenceServerConfig",
+    metadata:{name:S.meta.release+"-isc",namespace:S.meta.namespace},
+    spec:{modelServerConfig:{port:8000,options:"--model "+S.meta.model+" "+S.fma.sleepOptions,
+      env_vars:{VLLM_LOGGING_LEVEL:"INFO",HF_HOME:"/tmp/hf_cache"},
+      labels:{"llm-d.ai/guide":"fast-model-actuation","llm-d.ai/model":S.meta.model}},
+      launcherConfigName:S.meta.release+"-launcher"}},0)+"\n";
+}
+function modelexpressYaml(){
+  return "# ModelExpress P2P: --load-format=mx + MX_* env\n"+
+    yaml({apiVersion:"apps/v1",kind:"Deployment",metadata:{name:"decode",namespace:S.meta.namespace},
+      spec:{template:{spec:{containers:[{name:"modelserver",args:["vllm","serve",S.meta.model,"--tensor-parallel-size="+S.disagg.tp,"--gpu-memory-utilization=0.95","--load-format="+S.modelexpress.loadFormat],
+        env:[{name:"VLLM_PLUGINS",value:"modelexpress"},{name:"MX_SERVER_ADDRESS",value:S.modelexpress.server},
+             {name:"MX_METADATA_PORT",value:"5555"},{name:"MX_WORKER_GRPC_PORT",value:"6555"},{name:"MX_RDMA_NIC_PIN",value:"auto"},
+             {name:"HF_HUB_CACHE",value:"/models"},{name:"VLLM_RPC_TIMEOUT",value:"7200000"}],
+        securityContext:{capabilities:{add:["IPC_LOCK"]}}}]}}}},0)+"\n";
+}
+function pvcYaml(){ return yaml({apiVersion:"v1",kind:"PersistentVolumeClaim",metadata:{name:"llm-d-kv-cache-storage",namespace:S.meta.namespace},spec:{accessModes:["ReadWriteMany"],resources:{requests:{storage:"9000Gi"}},storageClassName:"${STORAGE_CLASS}"}},0)+"\n"; }
+function buildCommands(){
+  const L=["#!/usr/bin/env bash","set -euo pipefail","export REPO_ROOT=$(git rev-parse --show-toplevel)","source ${REPO_ROOT}/guides/env.sh","export NAMESPACE="+S.meta.namespace,"export GUIDE_NAME="+S.meta.release,""];
+  L.push("kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -","");
+  const e=buildEpp();
+  L.push("helm upgrade --install ${GUIDE_NAME} \\","  ${ROUTER_STANDALONE_CHART} \\","  -f ${REPO_ROOT}/guides/recipes/router/base.values.yaml \\");
+  if(S.runtime.monitoring) L.push("  -f ${REPO_ROOT}/guides/recipes/router/features/monitoring.values.yaml \\");
+  if(S.runtime.tracing) L.push("  -f ${REPO_ROOT}/guides/recipes/router/features/tracing.values.yaml \\");
+  if(S.runtime.proxyType==="agentgateway") L.push("  -f ${REPO_ROOT}/guides/recipes/router/features/agentgateway-proxy.values.yaml \\","  --set router.inferencePool.create=false --set router.epp.flags.secure-serving=false \\");
+  L.push("  -f ./router/values.yaml \\","  -n ${NAMESPACE} --version ${ROUTER_CHART_VERSION}");
+  L.push("","# model server ("+roles().join(" + ")+")");
+  L.push("kubectl apply -n ${NAMESPACE} -k ${REPO_ROOT}/guides/<your-guide>/modelserver/"+S.meta.accelerator+"/"+S.meta.engine+"/"+S.meta.provider+"/","");
+  if(e.allowExperimental) L.push("# NOTE: Alpha plugins present -> --allow-experimental-plugins is set in router values flags.","");
+  if(S.components.multiPool.enabled) L.push("# second pool","helm upgrade --install "+S.components.multiPool.model+" ${ROUTER_STANDALONE_CHART} -f ${REPO_ROOT}/guides/recipes/router/base.values.yaml -f ./router/multi-pool.values.yaml -n ${NAMESPACE}","");
+  if(S.fc.enabled&&S.fc.bands) L.push("kubectl apply -n ${NAMESPACE} -f flow-control/objectives.yaml","");
+  if(S.autoscaling!=="none") L.push("# autoscaling ("+S.autoscaling+")","kubectl apply -k autoscaling/ -n ${NAMESPACE}","");
+  if(S.components.kueue.enabled) L.push("# Kueue","kubectl apply -f autoscaling/kueue.yaml","");
+  if(S.components.wva.enabled) L.push("# WVA","kubectl apply -f autoscaling/wva.yaml","");
+  if(S.components.async.enabled) L.push("# async processor","helm install llm-d-async oci://ghcr.io/llm-d/charts/llm-d-async -f components/async-values.yaml -n ${NAMESPACE} --version ${ASYNC_VERSION:-v0.10.0}","");
+  if(S.components.batchGateway.enabled) L.push("# batch gateway","helm install batch-gateway oci://ghcr.io/llm-d/charts/batch-gateway -f components/batch-gateway-values.yaml -n ${NAMESPACE}","");
+  if(S.components.coordinator.enabled) L.push("# coordinator","kubectl apply -n ${NAMESPACE} -f components/coordinator-config.yaml","");
+  if(S.components.rollouts.lora) L.push("# LoRA rollout","kubectl apply -n ${NAMESPACE} -f components/inference-model-rewrite.yaml","");
+  if(S.components.ipp.enabled) L.push("# multi-model IPP","kubectl apply -n ${NAMESPACE} -f components/ipp-configmap.yaml","");
+  if(S.components.obs.alerts||S.components.obs.dashboards||S.components.obs.inferencecost||S.components.obs.tpuMonitor||S.components.obs.otel) L.push("# observability add-ons: see observability/addons.md","");
+  if(S.components.nok8s.enabled) L.push("# no-Kubernetes mode: see components/no-kubernetes.md","");
+  return L.join("\n")+"\n";
+}
+
+/* ============================================================
+   diagram
+   ============================================================ */
+function renderDiagram(){
+  const isPD=S.topology==="pd"||S.topology==="e-p-d"; const isE=S.topology==="e-pd"||S.topology==="e-p-d"; const isWide=S.topology==="wide-ep";
+  const r=[]; if(isE) r.push(["encode",S.disagg.encodeReplicas,"#7c3aed"]); if(isPD||isWide) r.push(["prefill",S.disagg.prefillReplicas,"#0891b2"]); r.push(["decode",S.disagg.decodeReplicas,"#059669"]);
+  const W=880,bw=200,gap=16, sx=(W-r.length*bw-(r.length-1)*gap)/2;
+  let s='<svg viewBox="0 0 '+W+' 360" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui">';
+  s+='<defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#64748b"/></marker></defs>';
+  s+='<rect x="'+(W/2-65)+'" y="12" width="130" height="36" rx="9" fill="#eef2ff" stroke="#c7d2fe"/><text x="'+W/2+'" y="35" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3730a3">Client</text>';
+  let y=64;
+  s+='<line x1="'+W/2+'" y1="48" x2="'+W/2+'" y2="'+y+'" stroke="#64748b" marker-end="url(#a)"/>';
+  const lbl=(isPD||isE)?"llm-d Router (EPP) · disagg-profile-handler":(isWide?"llm-d Router (EPP) · DP/EP":"llm-d Router (EPP) · single-profile");
+  s+='<rect x="'+(W/2-200)+'" y="'+y+'" width="400" height="44" rx="10" fill="#1e1b4b"/><text x="'+W/2+'" y="'+(y+20)+'" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">'+lbl+'</text><text x="'+W/2+'" y="'+(y+35)+'" text-anchor="middle" font-size="10.5" fill="#c7d2fe">'+S.instances.length+' plugin instances · '+S.profiles.filter(function(p){return p.members.length;}).map(function(p){return p.name;}).join("/")+'</text>';
+  y+=72;
+  r.forEach(function(x,i){ const px=sx+i*(bw+gap);
+    s+='<line x1="'+W/2+'" y1="'+(y-28)+'" x2="'+(px+bw/2)+'" y2="'+(y-8)+'" stroke="#94a3b8" marker-end="url(#a)"/>';
+    s+='<rect x="'+px+'" y="'+y+'" width="'+bw+'" height="80" rx="11" fill="#fff" stroke="'+x[2]+'" stroke-width="2"/>';
+    s+='<text x="'+(px+bw/2)+'" y="'+(y+23)+'" text-anchor="middle" font-size="13" font-weight="800" fill="'+x[2]+'">'+x[0]+'</text>';
+    s+='<text x="'+(px+bw/2)+'" y="'+(y+42)+'" text-anchor="middle" font-size="11.3" fill="#334155">'+S.meta.engine+' ×'+x[1]+' · TP='+S.disagg.tp+'</text>';
+    s+='<text x="'+(px+bw/2)+'" y="'+(y+60)+'" text-anchor="middle" font-size="10.3" fill="#64748b">'+roleKV(x[0])+'</text>';
+    s+='<text x="'+(px+bw/2)+'" y="'+(y+74)+'" text-anchor="middle" font-size="10.3" fill="'+x[2]+'">'+offLabel()+'</text>';
+  });
+  if(isPD||isWide){ const pi=r.findIndex(function(x){return x[0]==="prefill";}),di=r.findIndex(function(x){return x[0]==="decode";}); if(pi>=0&&di>=0){ const x1=sx+pi*(bw+gap)+bw/2,x2=sx+di*(bw+gap)+bw/2;
+    s+='<line x1="'+x1+'" y1="'+(y+80)+'" x2="'+x2+'" y2="'+(y+80)+'" stroke="#0891b2" stroke-dasharray="5 4" marker-end="url(#a)"/><text x="'+((x1+x2)/2)+'" y="'+(y+95)+'" text-anchor="middle" font-size="10.3" fill="#0e7490">'+connectorName(S.disagg.kvConnector)+' KV transfer</text>'; } }
+  s+='</svg>'; return s;
+}
+function roleKV(role){ if(role==="encode")return "--ec-transfer-config ec_producer"; const isPD=S.topology==="pd"||S.topology==="e-p-d"||S.topology==="wide-ep"; if(!isPD)return S.offload==="none"?"prefix caching":"kv_role: kv_both"; if(role==="prefill")return "kv_role: kv_producer"; if(S.topology==="e-pd")return "combined P/D"; return "kv_role: kv_consumer"; }
+function offLabel(){ return {none:"no offload","native-cpu":"CPU offload","native-fs":"CPU + FS tier","lmcache-cpu":"LMCache CPU","lmcache-fs":"LMCache disk",mooncake:"MooncakeStore",tpu:"TPU offload",hicache:"SGLang HiCache",p2p:"P2P + CPU tier"}[S.offload]||""; }
+
+/* ============================================================
+   controls
+   ============================================================ */
+function opt(v,l,cur){ return '<option value="'+v+'"'+(cur===v?" selected":"")+'>'+l+'</option>'; }
+function rowSel(path,label,options,cur){ return '<div class="row"><label>'+label+'</label><select data-set="'+path+'">'+options.map(function(o){return opt(o[0],o[1],cur);}).join("")+'</select></div>'; }
+function rowTxt(path,label,cur){ return '<div class="row"><label>'+label+'</label><input type="text" data-set="'+path+'" value="'+String(cur).replace(/"/g,"&quot;")+'"/></div>'; }
+function rowNum(path,label,cur){ return '<div class="row"><label>'+label+'</label><input type="number" data-set="'+path+'" value="'+cur+'"/></div>'; }
+function chk(path,label,cur){ return '<label class="checkline"><input type="checkbox" data-set="'+path+'"'+(cur?" checked":"")+'/><span>'+label+'</span></label>'; }
+function radio(group,val,label,cur,path){ return '<label class="checkline"><input type="radio" name="'+group+'" value="'+val+'"'+(cur===val?" checked":"")+' data-radio="'+path+'"/><span>'+label+'</span></label>'; }
+function accelProfileCard(){
+  const A=accel();
+  const peaks=Object.keys(A.peak).map(function(e){return e+"="+A.peak[e];}).join(", ");
+  return '<div class="accelcard">'+
+    '<div class="acrow"><span>engines</span><b>'+A.engines.join(", ")+'</b></div>'+
+    '<div class="acrow"><span>default TP</span><b>'+A.tp+'</b></div>'+
+    '<div class="acrow"><span>peakPrefillThroughput</span><b>'+peaks+'</b></div>'+
+    '<div class="acrow"><span>KV connectors</span><b>'+(A.connectors.length?A.connectors.join(", "):"(none)")+'</b></div>'+
+    '<div class="acrow"><span>supported offload</span><b>'+A.offload.join(", ")+'</b></div>'+
+    '<div class="acnote">'+A.note+'</div></div>';
+}
+const OFFLOAD_LABEL={"none":"Off","native-cpu":"vLLM native CPU","native-fs":"vLLM CPU+FS tier","lmcache-cpu":"LMCache CPU","lmcache-fs":"LMCache disk","mooncake":"MooncakeStore","tpu":"TPUOffloadConnector","hicache":"SGLang HiCache","p2p":"P2P KV sharing"};
+const CONN_LABEL={nixl:"NixlConnector",nixlv2:"nixlv2 (PD sidecar)",mooncake:"MooncakeConnector","mooncake-store":"MooncakeStoreConnector",lmcache:"LMCacheConnectorV1",tpu:"TPUConnector",ilunixl:"IluNixlConnector"};
+const EC_LABEL={"ec-cpu":"ECCPUConnector","ec-nixl":"ECNixlConnector"};
+function engineProfileCard(){
+  const E=eng();
+  return '<div class="accelcard enginecard">'+
+    '<div class="acrow"><span>launch</span><b>'+E.launch+'</b></div>'+
+    '<div class="acrow"><span>modelServers.type</span><b>'+E.type+'</b></div>'+
+    '<div class="acrow"><span>metrics path</span><b>'+E.metricsPath+'</b></div>'+
+    '<div class="acrow"><span>offload</span><b>'+offloadOptions().join(", ")+'</b></div>'+
+    '<div class="acrow"><span>KV connectors</span><b>'+connOptions().join(", ")+'</b></div>'+
+    '<div class="acrow"><span>default parser</span><b>'+E.parsers.join(", ")+'</b></div>'+
+    '<div class="acnote">'+E.note+'</div></div>';
+}
+const QUICK_ARGS=["--gpu-memory-utilization","--max-model-len","--max-num-seqs","--max-num-batched-tokens","--enable-chunked-prefill","--enable-sleep-mode","--data-parallel-size","--enable-expert-parallel","--speculative-config","--quantization","--load-format"];
+const QUICK_ENV=["HF_HOME","HF_HUB_DOWNLOAD_TIMEOUT","HF_HUB_DISABLE_XET","VLLM_LOGGING_LEVEL","PYTHONHASHSEED","NCCL_DEBUG","VLLM_CPU_KVCACHE_SPACE","UCX_TLS"];
+function engList(kind, scope){
+  if(scope==="shared"){ if(!S.engine[kind]) S.engine[kind]=[]; return S.engine[kind]; }
+  if(!S.engine.byRole[scope]) S.engine.byRole[scope]={args:[],env:[]};
+  if(!S.engine.byRole[scope][kind]) S.engine.byRole[scope][kind]=[];
+  return S.engine.byRole[scope][kind];
+}
+function ekvRows(kind, scope){
+  const list=engList(kind,scope);
+  const p = kind==="args" ? ["--flag","value"] : ["NAME","value"];
+  return list.map(function(x,i){
+    return '<div class="argrow"><input type="text" class="argflag" data-ekind="'+kind+'" data-escope="'+scope+'" data-ei="'+i+'" data-ekey="1" value="'+esc(x.k||"")+'" placeholder="'+p[0]+'"/><input type="text" class="argval" data-ekind="'+kind+'" data-escope="'+scope+'" data-ei="'+i+'" value="'+esc(x.v===undefined?"":x.v)+'" placeholder="'+p[1]+'"/><button class="x" data-erm="'+kind+'|'+scope+'|'+i+'">x</button></div>';
+  }).join("");
+}
+function ekvBlock(kind, scope, title){
+  const quick = kind==="args"?QUICK_ARGS:QUICK_ENV;
+  return '<div class="ekv"><div class="ekvhead">'+title+'</div>'+
+    (ekvRows(kind,scope)||'<div class="hint">none</div>')+
+    '<div class="quickargs">'+quick.map(function(f){return '<button class="ptoggle" data-equick="'+kind+'|'+scope+'|'+f+'">+ '+f+'</button>';}).join("")+'</div>'+
+    '<button class="btn" data-eadd="'+kind+'|'+scope+'">+ Add</button></div>';
+}
+function engineArgsEditor(){
+  const rl=roles();
+  let h='<div class="hint" style="margin-bottom:6px">Configured for <b>'+S.meta.engine+'</b> '+'('+eng().label+') · appended after the generated base args.</div>';
+  h+=ekvBlock("args","shared","Arguments · all roles");
+  h+=ekvBlock("env","shared","Environment variables · all roles");
+  if(rl.length>1){
+    if(rl.indexOf(S.engine.role)<0) S.engine.role=rl[rl.length-1];
+    h+='<div class="subhead">Per-role overrides ('+rl.join(" / ")+')</div>';
+    h+='<div class="roletabs">'+rl.map(function(r){return '<button class="ptoggle'+(S.engine.role===r?" on":"")+'" data-erole="'+r+'">'+r+'</button>';}).join("")+'</div>';
+    h+=ekvBlock("args",S.engine.role,"Arguments · "+S.engine.role);
+    h+=ekvBlock("env",S.engine.role,"Environment variables · "+S.engine.role);
+  }
+  return h;
+}
+
+function buildControls(){
+  const h=[]; const s=S;
+  h.push('<details class="group" open><summary><span class="ico">A</span> Deployment / ingress</summary><div class="body">');
+  h.push(rowTxt("meta.namespace","Namespace",s.meta.namespace));
+  h.push(rowTxt("meta.model","Model",s.meta.model));
+  h.push(rowSel("meta.accelerator","Accelerator",Object.keys(ACCEL).map(function(k){return [k,ACCEL[k].label];}),s.meta.accelerator));
+  h.push(rowSel("meta.engine","Inference engine",accel().engines.map(function(e){ return [e, e==="vllm"?"vLLM":(e==="sglang"?"SGLang":(e==="trtllm"?"TRT-LLM":e))]; }),s.meta.engine));
+  h.push(rowSel("meta.provider","Platform / provider",[["base","base"],["gke","gke"],["coreweave","coreweave"],["aws","aws"]],s.meta.provider));
+  h.push(rowSel("runtime.proxyType","Proxy",[["envoy","Envoy"],["agentgateway","agentgateway"]],s.runtime.proxyType));
+  h.push('<div class="subhead">Topology</div>');
+  [["aggregated","Aggregated"],["pd","P/D"],["e-pd","E/PD"],["e-p-d","E/P/D"],["wide-ep","Wide-EP"]].forEach(function(t){ h.push(radio("topo",t[0],t[1],s.topology,"@topology")); });
+  h.push('</div></details>');
+
+  h.push('<details class="group" open><summary><span class="ico">B</span> Router Runtime / EPP</summary><div class="body">');
+  h.push(rowNum("runtime.replicas","EPP replicas",s.runtime.replicas));
+  h.push(chk("runtime.leaderElection","HA leader election",s.runtime.leaderElection));
+  h.push(chk("runtime.secureServing","secure-serving (TLS)",s.runtime.secureServing));
+  h.push(chk("runtime.tracing","tracing (OTel)",s.runtime.tracing));
+  h.push(chk("runtime.monitoring","Prometheus ServiceMonitor",s.runtime.monitoring));
+  h.push(chk("runtime.prometheus","EPP /metrics scrape",s.runtime.prometheus));
+  h.push(rowSel("runtime.refreshMetrics","refresh-metrics-interval",[["50ms","50ms"],["100ms","100ms"],["1s","1s"]],s.runtime.refreshMetrics));
+  h.push('<div class="subhead">Feature gates</div>');
+  h.push(chk("fc.enabled","flowControl",s.fc.enabled));
+  h.push(chk("router.gates.haPopulateNonLeaderDatastore","haPopulateNonLeaderDatastore",s.router.gates.haPopulateNonLeaderDatastore));
+  h.push('<div class="subhead">Parsers</div>');
+  ["openai-parser","anthropic-parser","vllmhttp-parser","vllmgrpc-parser","sglanghttp-parser","vertexai-parser","passthrough-parser"].forEach(function(p){
+    h.push(chk("parser."+p,p,s.runtime.parsers.indexOf(p)>=0));
+  });
+  h.push('<div class="subhead">EPP flags</div>');
+  h.push(rowTxt("router.flags.drainTimeout","drain-timeout",s.router.flags.drainTimeout));
+  h.push(rowNum("router.flags.grpcPort","grpc-port",s.router.flags.grpcPort));
+  h.push(rowNum("router.flags.metricsPort","metrics-port",s.router.flags.metricsPort));
+  h.push(rowNum("router.flags.grpcHealthPort","grpc-health-port",s.router.flags.grpcHealthPort));
+  h.push(chk("router.flags.pprof","enable-pprof",s.router.flags.pprof));
+  h.push(chk("router.flags.metricsAuth","metrics-endpoint-auth",s.router.flags.metricsAuth));
+  h.push(chk("router.flags.emitScores","emit-endpoint-scores",s.router.flags.emitScores));
+  h.push(chk("router.flags.disableSubsetFilter","disable-endpoint-subset-filter",s.router.flags.disableSubsetFilter));
+  h.push(rowTxt("router.flags.pluginStaleness","plugin-state-staleness-threshold",s.router.flags.pluginStaleness));
+  h.push(rowNum("router.flags.fairnessLimit","fairness-id-metric-label-limit",s.router.flags.fairnessLimit));
+  h.push('<div class="subhead">Monitoring / tracing</div>');
+  h.push(rowSel("router.monitoringProvider","monitoring provider",[["","prometheusoperator"],["gmp","gmp (Google Managed)"]],s.router.monitoringProvider));
+  h.push(chk("router.monitoringAuth","metrics auth (bearer)",s.router.monitoringAuth));
+  h.push('<div class="subhead">Proxy</div>');
+  h.push(chk("router.proxy.enabled","proxy enabled",s.router.proxy.enabled));
+  h.push(rowNum("router.proxy.replicas","proxy replicas",s.router.proxy.replicas));
+  h.push(chk("router.proxy.failOpen","proxy fail-open",s.router.proxy.failOpen));
+  h.push(rowSel("router.proxy.logLevel","proxy log level",[["warn","warn"],["info","info"],["error","error"]],s.router.proxy.logLevel));
+  h.push(rowNum("router.proxy.concurrency","proxy concurrency",s.router.proxy.concurrency));
+  h.push('<div class="subhead">Tokenizers / predictors</div>');
+  h.push(chk("router.tokenizer.enabled","tokenizer sidecar",s.router.tokenizer.enabled));
+  h.push(rowSel("router.tokenizer.flavor","tokenizer flavor",[["python","python (vllm launch render)"],["rust","rust (vllm-rs)"]],s.router.tokenizer.flavor));
+  h.push(rowTxt("router.tokenizer.modelName","tokenizer modelName",s.router.tokenizer.modelName));
+  h.push(chk("router.latencyPredictor.enabled","latencyPredictor",s.router.latencyPredictor.enabled||S.routingMode==="predicted"));
+  h.push(rowNum("router.latencyPredictor.retrainInterval","retrain interval (s)",s.router.latencyPredictor.retrainInterval));
+  h.push(rowNum("router.latencyPredictor.minSamples","min samples for retrain",s.router.latencyPredictor.minSamples));
+  h.push(rowNum("router.latencyPredictor.servers","prediction servers",s.router.latencyPredictor.servers));
+  h.push('<div class="subhead">Service / chart</div>');
+  h.push(chk("router.extraServicePorts","extraServicePorts (http:80->8081)",s.router.extraServicePorts));
+  h.push(rowTxt("router.clusterDomain","clusterDomain",s.router.clusterDomain));
+  h.push(rowTxt("router.imagePullSecrets","imagePullSecrets",s.router.imagePullSecrets));
+  h.push(rowSel("router.deploymentStrategy","deploymentStrategy",[["Recreate","Recreate"],["RollingUpdate","RollingUpdate"]],s.router.deploymentStrategy));
+  h.push(rowTxt("router.runAsUser","runAsUser",s.router.runAsUser));
+  h.push(rowTxt("router.podAnnotations","podAnnotations (k=v,...)",s.router.podAnnotations));
+  h.push(chk("router.objectives","inferenceObjectives (chart)",s.router.objectives));
+  h.push('</div></details>');
+
+h.push('<details class="group" open><summary><span class="ico">C</span> Replicas &amp; KV transfer</summary><div class="body">');
+  const rl=roles(), hasE=rl.indexOf("encode")>=0, hasP=rl.indexOf("prefill")>=0, hasD=rl.indexOf("decode")>=0;
+  h.push(rowNum("disagg.tp","tensor-parallel (all roles)",s.disagg.tp));
+  if(hasE) h.push(rowNum("disagg.encodeReplicas","encode replicas",s.disagg.encodeReplicas));
+  if(hasP) h.push(rowNum("disagg.prefillReplicas","prefill replicas",s.disagg.prefillReplicas));
+  if(hasD) h.push(rowNum("disagg.decodeReplicas","decode replicas",s.disagg.decodeReplicas));
+  if(s.topology==="aggregated"){
+    h.push('<div class="warnbox">Aggregated topology: a single decode pool, no prefill/decode transfer. Pick P/D, E/PD or E/P/D to configure KV transfer.</div>');
+  } else {
+    h.push('<div class="subhead">KV transfer</div>');
+    h.push(rowSel("disagg.kvConnector","PD KV connector",connOptions().map(function(c){return [c,CONN_LABEL[c]||c];}),s.disagg.kvConnector));
+    if(hasE) h.push(rowSel("disagg.ecConnector","Encode EC connector",[["ec-cpu","ECCPUConnector"],["ec-nixl","ECNixlConnector"]],s.disagg.ecConnector||"ec-cpu"));
+    h.push('<div class="subhead">Routing sidecar</div>');
+    h.push(rowNum("disagg.decodeChunkSize","decode-chunk-size",s.disagg.decodeChunkSize));
+    h.push(chk("disagg.p2pPull","--enable-p2p-pull",s.disagg.p2pPull));
+    if(hasP&&!hasD) h.push('<div class="hint">E/PD: the decode role runs the combined P/D pool.</div>');
+  }
+  h.push('<div class="subhead">Parallelism</div>');
+  h.push(rowNum("engineFeat.dpSize","data-parallel-size",s.engineFeat.dpSize));
+  h.push(chk("engineFeat.dpMultiPort","data-parallel-multi-port-external-lb",s.engineFeat.dpMultiPort));
+  h.push(chk("engineFeat.ep","enable-expert-parallel",s.engineFeat.ep));
+  h.push(rowSel("engineFeat.moeBackend","moe-backend",[["","(default)"],["deep_gemm","deep_gemm"],["deep_gemm_mega_moe","deep_gemm_mega_moe"]],s.engineFeat.moeBackend));
+  h.push(rowSel("engineFeat.all2allBackend","all2all-backend",[["","(default)"],["deepep_high_throughput","deepep_high_throughput"],["deepep_low_latency","deepep_low_latency"],["allgather_reducescatter","allgather_reducescatter"]],s.engineFeat.all2allBackend));
+  h.push('<div class="subhead">Serving layout</div>');
+  h.push(rowSel("layout.kind","workload kind",[["deployment","Deployment"],["disaggregatedset","DisaggregatedSet"],["lws","LeaderWorkerSet"]],s.layout.kind));
+  h.push(rowNum("layout.slices","DisaggregatedSet slices",s.layout.slices));
+  h.push(rowSel("layout.placement","placementPolicy",[["","none"],["ExclusiveSlice","ExclusiveSlice"],["ExclusiveTopology","ExclusiveTopology"]],s.layout.placement));
+  h.push(chk("layout.multiHost","multi-host (leaderWorkerTemplate.size=2)",s.layout.multiHost));
+  h.push('<div class="subhead">KV events</div>');
+  h.push(chk("layout.kvEvents","publish KV events (zmq)",s.layout.kvEvents));
+  h.push(rowNum("layout.kvEventsPort","KV events port",s.layout.kvEventsPort));
+  h.push('<div class="subhead">Offload components (wide-ep)</div>');
+  h.push(chk("layout.offloadCpu","offloading-tiered-cpu component",s.layout.offloadCpu));
+  h.push(chk("layout.evictor","kv-cache-evictor DaemonSet",s.layout.evictor));
+  h.push('</div></details>');
+
+  h.push('<details class="group"><summary><span class="ico">D</span> Engine parameters</summary><div class="body">');
+  h.push('<div class="subhead">Structured flags</div>');
+  h.push(rowTxt("engineFeat.gpuMemUtil","gpu-memory-utilization",s.engineFeat.gpuMemUtil));
+  h.push(rowTxt("engineFeat.maxModelLen","max-model-len",s.engineFeat.maxModelLen));
+  h.push(rowTxt("engineFeat.maxNumSeqs","max-num-seqs",s.engineFeat.maxNumSeqs));
+  h.push(rowTxt("engineFeat.maxNumBatchedTokens","max-num-batched-tokens",s.engineFeat.maxNumBatchedTokens));
+  h.push(rowSel("engineFeat.prefixCaching","prefix caching",[["default","engine default"],["on","--enable-prefix-caching"],["off","--no-enable-prefix-caching"]],s.engineFeat.prefixCaching));
+  h.push(chk("engineFeat.chunkedPrefill","--enable-chunked-prefill",s.engineFeat.chunkedPrefill));
+  h.push(chk("engineFeat.sleepMode","--enable-sleep-mode",s.engineFeat.sleepMode));
+  h.push(chk("engineFeat.trustRemoteCode","--trust-remote-code",s.engineFeat.trustRemoteCode));
+  h.push(chk("engineFeat.dbo","--enable-dbo (dual-batch overlap)",s.engineFeat.dbo));
+  h.push(rowSel("engineFeat.quantization","--quantization",[["","(none)"],["fp8","fp8"],["awq","awq"],["gptq","gptq"],["mxfp4","mxfp4"]],s.engineFeat.quantization));
+  h.push(rowSel("engineFeat.loadFormat","--load-format",[["","(default)"],["mx","mx (ModelExpress)"],["fastsafetensors","fastsafetensors"],["safetensors","safetensors"]],s.engineFeat.loadFormat));
+  h.push(rowTxt("engineFeat.reasoningParser","--reasoning-parser",s.engineFeat.reasoningParser));
+  h.push(rowTxt("engineFeat.toolParser","--tool-call-parser",s.engineFeat.toolParser));
+  h.push(chk("engineFeat.autoTool","--enable-auto-tool-choice",s.engineFeat.autoTool));
+  h.push('<div class="subhead">Speculative / MTP</div>');
+  h.push(chk("engineFeat.mtp","--speculative-config method=mtp",s.engineFeat.mtp));
+  h.push(rowNum("engineFeat.mtpTokens","num_speculative_tokens",s.engineFeat.mtpTokens));
+  h.push(rowTxt("engineFeat.ropeFactor","rope_scaling yarn factor",s.engineFeat.ropeFactor));
+  h.push('<div class="subhead">Custom arguments / env</div>');
+  h.push(engineArgsEditor());
+  h.push('</div></details>');
+
+  h.push('<details class="group" open><summary><span class="ico">E</span> Routing / KV awareness</summary><div class="body">');
+  [["none","Load-only"],["approx","Approximate prefix"],["precise","Precise KV-events"],["predicted","Predicted latency"]].forEach(function(m){ h.push(radio("rout",m[0],m[1],s.routingMode,"@routing")); });
+  h.push('<div class="subhead">Extra scorers</div>');
+  [["queue-scorer","queue-scorer"],["kv-cache-utilization-scorer","kv-cache-utilization-scorer"],["token-load-scorer","token-load-scorer"],["active-request-scorer","active-request-scorer"],["no-hit-lru-scorer","no-hit-lru-scorer"],["load-aware-scorer","load-aware-scorer"],["running-requests-size-scorer","running-requests-size-scorer"],["context-length-aware","context-length-aware"],["session-affinity-scorer","session-affinity-scorer"],["lora-affinity-scorer","lora-affinity-scorer"],["mm-embeddings-cache-scorer","mm-embeddings-cache-scorer"]].forEach(function(x){ h.push(chk("sc."+x[0],x[1],hasType(x[0]))); });
+  h.push('<div class="subhead">Filter</div>');
+  [["prefix-cache-affinity-filter","prefix-cache-affinity-filter"],["topology-affinity-filter","topology-affinity-filter (+scorer+extractor)"],["session-affinity-filter","session-affinity-filter"],["utilization-filter","utilization-filter"],["slo-headroom-tier-filter","slo-headroom-tier-filter"],["endpoint-attribute-filter","endpoint-attribute-filter"],["label-selector-filter","label-selector-filter"]].forEach(function(x){ h.push(chk("fl."+x[0],x[1],hasType(x[0]))); });
+  h.push('</div></details>');
+
+  h.push('<details class="group" open><summary><span class="ico">F</span> KV Offloading</summary><div class="body">');
+  var offOpts=offloadOptions();
+  h.push(rowSel("offload","Strategy",offOpts.map(function(o){return [o,OFFLOAD_LABEL[o]];}),s.offload));
+  if(offOpts.indexOf(s.offload)<0 && s.offload!=="none") h.push('<div class="warnbox">'+OFFLOAD_LABEL[s.offload]+' is not supported by '+eng().label+' on '+accel().label+'. Supported: '+offOpts.join(", ")+'.</div>');
+  h.push(rowNum("offloadCpuGiB","CPU tier (GiB)",s.offloadCpuGiB));
+  h.push(rowNum("knobs.blockSize","block-size / blockSizeTokens",s.knobs.blockSize));
+  h.push(rowNum("knobs.kvSocketPort","KV-events ZMQ port",s.knobs.kvSocketPort));
+  h.push('<div class="subhead">Tiering</div>');
+  h.push(rowSel("layout.secondaryTier","secondary tier",[["fs","filesystem"],["p2p","p2p"]],s.layout.secondaryTier));
+  h.push(rowNum("layout.nReadThreads","n_read_threads",s.layout.nReadThreads));
+  h.push(rowNum("layout.nWriteThreads","n_write_threads",s.layout.nWriteThreads));
+  h.push(chk("layout.offloadPromptOnly","offload_prompt_only",s.layout.offloadPromptOnly));
+  h.push(chk("layout.lazyOffload","lazy_offload",s.layout.lazyOffload));
+  h.push('<div class="subhead">Storage backend</div>');
+  h.push(rowSel("layout.storageBackend","StorageClass",[["","(none / default)"],["lustre","GCP Lustre"],["efs","AWS EFS"]],s.layout.storageBackend));
+  h.push('</div></details>');
+
+  h.push('<details class="group"><summary><span class="ico">G</span> Flow Control Components</summary><div class="body">');
+  h.push(rowSel("fc.fairness","Fairness policy",[["none","None"],["round-robin-fairness-policy","round-robin"],["global-strict-fairness-policy","global-strict"],["program-aware-fairness","program-aware"]],s.fc.fairness||"round-robin-fairness-policy"));
+  h.push(rowSel("fc.ordering","Ordering policy",[["none","None"],["fcfs-ordering-policy","fcfs"],["edf-ordering-policy","edf"],["slo-deadline-ordering-policy","slo-deadline"]],s.fc.ordering||"fcfs-ordering-policy"));
+  h.push(rowSel("fc.saturation","Saturation detector",[["none","None"],["concurrency-detector","concurrency"],["utilization-detector","utilization"],["max-saturation-detector","max (composite)"]],s.fc.saturation||"concurrency-detector"));
+  h.push(rowSel("fc.usageLimit","Usage limit",[["none","None"],["static-usage-limit-policy","static"],["priority-holdback-policy","priority-holdback"],["soft-reflective-ceiling-policy","soft-reflective-ceiling"]],s.fc.usageLimit||"static-usage-limit-policy"));
+  h.push(rowSel("fc.admitter","Admitter",[["none","None"],["probabilistic-admitter","probabilistic"],["latency-slo-admitter","latency-slo"]],s.fc.admitter||"none"));
+  h.push(rowNum("fc.maxConcurrency","maxConcurrency",s.fc.maxConcurrency));
+  h.push(chk("fc.bands","priorityBands + InferenceObjective",s.fc.bands));
+  h.push('</div></details>');
+
+  h.push('<details class="group"><summary><span class="ico">H</span> Data layer</summary><div class="body">');
+  h.push('<div class="subhead">sources (auto-wired extractors)</div>');
+  ["metrics-data-source","models-data-source","dcgm-data-source","endpoint-notification-source","k8s-notification-source"].forEach(function(x){ h.push(chk("src."+x,x,hasType(x))); });
+  h.push('<div class="subhead">extractors</div>');
+  ["core-metrics-extractor","models-data-extractor","dcgm-extractor","topology-extractor","label-producer"].forEach(function(x){ h.push(chk("ext."+x,x,hasType(x))); });
+  h.push('<div class="subhead">discovery</div>');
+  ["file-discovery","k8s-peer-discovery","multicluster-file-discovery"].forEach(function(x){ h.push(chk("disc."+x,x,hasType(x))); });
+  h.push('</div></details>');
+
+    h.push('<details class="group"><summary><span class="ico">I</span> Scaling / operations</summary><div class="body">');
+  h.push(rowSel("autoscaling","Autoscaling",[["none","Off"],["keda-queue","KEDA queue"],["keda-saturation","KEDA saturation"],["keda-token","KEDA token-aware"],["slo","SLO-aware"]],s.autoscaling));
+  h.push(chk("ops.objectives","InferenceObjective (priority bands)",s.ops.objectives));
+  h.push(chk("components.kueue.enabled","Kueue GPU-budget rebalancing",s.components.kueue.enabled));
+  h.push(rowTxt("components.kueue.cohort","Kueue cohort",s.components.kueue.cohort));
+  h.push(rowNum("components.kueue.quota","nominalQuota (nvidia.com/gpu)",s.components.kueue.quota));
+  h.push(chk("components.wva.enabled","WVA (Workload Variant Autoscaler)",s.components.wva.enabled));
+  h.push(chk("components.multiPool.enabled","multi-inference-pool",s.components.multiPool.enabled));
+  h.push(rowTxt("components.multiPool.model","second pool model",s.components.multiPool.model));
+  h.push('<div class="subhead">Observability</div>');
+  h.push(chk("components.obs.alerts","PrometheusRule alerts",s.components.obs.alerts));
+  h.push(chk("components.obs.dashboards","Grafana dashboards",s.components.obs.dashboards));
+  h.push(chk("components.obs.inferencecost","OpenCost inference cost",s.components.obs.inferencecost));
+  h.push(chk("components.obs.tpuMonitor","TPU metrics PodMonitor",s.components.obs.tpuMonitor));
+  h.push(chk("components.obs.otel","OTel collector + Jaeger",s.components.obs.otel));
+  h.push('<div class="subhead">Fast Model Actuation</div>');
+  h.push(chk("ops.fma","enable FMA (dual-pod)",s.ops.fma));
+  h.push(rowNum("fma.maxInstances","launcher maxInstances",s.fma.maxInstances));
+  h.push(rowSel("fma.runtimeClass","launcher runtimeClass",[["nvidia","nvidia"],["gvisor","gvisor"]],s.fma.runtimeClass));
+  h.push(rowTxt("fma.sleepOptions","ISC options",s.fma.sleepOptions));
+  h.push('<div class="subhead">Pod Snapshot</div>');
+  h.push(chk("ops.podSnapshot","enable Pod Snapshot",s.ops.podSnapshot));
+  h.push(rowTxt("snapshot.bucket","GCS bucket",s.snapshot.bucket));
+  h.push(rowSel("snapshot.runtimeClass","runtimeClass",[["gvisor","gvisor (GKE Sandbox)"],["","(default)"]],s.snapshot.runtimeClass));
+  h.push('<div class="subhead">ModelExpress P2P</div>');
+  h.push(chk("ops.modelexpress","enable ModelExpress",s.ops.modelexpress));
+  h.push(rowTxt("modelexpress.server","MX server address",s.modelexpress.server));
+  h.push(chk("modelexpress.sharedCompileCache","shared compile cache (PVC)",s.modelexpress.sharedCompileCache));
+  h.push(chk("modelexpress.istioMesh","istio mesh + mTLS",s.modelexpress.istioMesh));
+  h.push('</div></details>');
+
+  h.push('<details class="group"><summary><span class="ico">J</span> Add-on components</summary><div class="body">');
+  h.push('<div class="subhead">Batch / async</div>');
+  h.push(chk("components.async.enabled","llm-d-async processor",s.components.async.enabled));
+  h.push(rowSel("components.async.transport","transport",[["redis","redis-sortedset"],["gcp-pubsub","gcp-pubsub"]],s.components.async.transport));
+  h.push(rowTxt("components.async.url","queue url",s.components.async.url));
+  h.push(rowTxt("components.async.resultQueue","result queue/topic",s.components.async.resultQueue));
+  h.push(rowNum("components.async.batchSize","batch size",s.components.async.batchSize));
+  h.push(rowNum("components.async.pollMs","poll interval (ms)",s.components.async.pollMs));
+  h.push(rowSel("components.async.gate","dispatch gate",[["none","none"],["redis-quota","redis-quota"],["wait-on-refuse","wait-on-refuse (saturation)"],["tier-priority-admission","tier-priority-admission"]],s.components.async.gate));
+  h.push(chk("components.batchGateway.enabled","batch-gateway (OpenAI /v1/batches)",s.components.batchGateway.enabled));
+  h.push(rowSel("components.batchGateway.metadata","metadata storage",[["postgresql","PostgreSQL"],["redis","Redis/Valkey"]],s.components.batchGateway.metadata));
+  h.push(rowSel("components.batchGateway.queue","queue storage",[["redis","Redis/Valkey"],["postgresql","PostgreSQL"]],s.components.batchGateway.queue));
+  h.push(rowSel("components.batchGateway.files","file storage",[["fs","Filesystem (PVC)"],["s3","S3"]],s.components.batchGateway.files));
+  h.push(rowTxt("components.batchGateway.modelGateways","modelGateways (name=url,...)",s.components.batchGateway.modelGateways));
+  h.push('<div class="subhead">Multi-model / rollouts</div>');
+  h.push(chk("components.ipp.enabled","Inference Payload Processor (multi-model)",s.components.ipp.enabled));
+  h.push(rowTxt("components.ipp.baseModel","IPP baseModel",s.components.ipp.baseModel));
+  h.push(chk("components.rollouts.lora","LoRA adapter rollout (InferenceModelRewrite)",s.components.rollouts.lora));
+  h.push(rowTxt("components.rollouts.alias","adapter alias",s.components.rollouts.alias));
+  h.push('<div class="subhead">Coordinator / diffusion / RL / no-k8s</div>');
+  h.push(chk("components.coordinator.enabled","Coordinator (E/P/D pipeline)",s.components.coordinator.enabled));
+  h.push(chk("components.coordinator.media","step: replace-media-urls",s.components.coordinator.media));
+  h.push(chk("components.coordinator.render","step: render",s.components.coordinator.render));
+  h.push(chk("components.coordinator.encode","step: encode",s.components.coordinator.encode));
+  h.push(chk("components.diffusion.enabled","diffusion (vLLM-Omni)",s.components.diffusion.enabled));
+  h.push(chk("components.diffusion.images","endpoints: images",s.components.diffusion.images));
+  h.push(chk("components.diffusion.audio","endpoints: audio",s.components.diffusion.audio));
+  h.push(chk("components.rl.enabled","RL rollout (verl)",s.components.rl.enabled));
+  h.push(chk("components.nok8s.enabled","no-Kubernetes (standalone) mode",s.components.nok8s.enabled));
+  h.push(chk("components.nok8s.fileDiscovery","file-discovery endpoints.yaml",s.components.nok8s.fileDiscovery));
+  h.push('</div></details>');
+
+  h.push('<details class="group"><summary><span class="ico">K</span> Model-server components</summary><div class="body">');
+  h.push(chk("modelComp.modelCache","model-cache (RWX HF_HOME)",s.modelComp.modelCache));
+  h.push(chk("modelComp.gkeRdma","gke-rdma (DRA ResourceClaimTemplate)",s.modelComp.gkeRdma));
+  h.push(chk("modelComp.disableNcclTuner","disable-gke-nccl-tuner-patch",s.modelComp.disableNcclTuner));
+  h.push(chk("modelComp.monitoring","PodMonitor (decode)",s.modelComp.monitoring));
+  h.push(chk("modelComp.monitoringPd","PodMonitor (prefill/decode)",s.modelComp.monitoringPd));
+  h.push(chk("modelComp.gcsFuse","GCS FUSE weights volume",s.modelComp.gcsFuse));
+  h.push('</div></details>');
+  return h.join("");
+}
+
+/* ---- selected instance list ---- */
+function buildInstanceCards(){
+  if(!S.instances.length) return '<div class="note">No plugins selected yet. Use the domain toggles above or add from the Explorer below.</div>';
+  const groups={};
+  S.instances.forEach(function(i){ (groups[i.stage]=groups[i.stage]||[]).push(i); });
+  return Object.keys(groups).map(function(st){
+    return '<div class="subhead" style="margin-top:10px">'+st+'</div><div class="plist">'+groups[st].map(function(i){
+      const r=reg(i.type)||{stab:"beta"};
+      const sched=SCHED_STAGES.indexOf(i.stage)>=0;
+      const profToggles=sched?S.profiles.map(function(p){ return '<label class="ptoggle'+(inProfile(p.name,i.name)?" on":"")+'"><input type="checkbox" data-prof="'+p.name+'|'+i.id+'"'+(inProfile(p.name,i.name)?" checked":"")+'/>'+p.name+'</label>'; }).join(""):"";
+      const w = (sched && i.stage==="scorer") ? '<span class="hint">weight</span><input type="number" step="0.1" style="width:70px" data-weight="'+i.id+'" value="'+weightOf(i.name)+'"/>':"";
+      return '<div class="pcard"><div class="h"><span class="type">'+i.type+'</span><span class="stab '+r.stab+'">'+r.stab+'</span><input type="text" style="max-width:190px" data-name="'+i.id+'" value="'+i.name.replace(/"/g,"&quot;")+'" title="instance name"/><button class="x" data-remove="'+i.id+'">Remove</button></div>'+
+        '<div class="prow">'+profToggles+w+'</div>'+
+        renderParamsForm(i)+'</div>';
+    }).join("")+'</div>';
+  }).join("");
+}
+function weightOf(ref){ for(const p of S.profiles){ const m=p.members.find(function(x){return x.ref===ref;}); if(m&&m.weight!==undefined) return m.weight; } return 1; }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+/* ---- parameter forms (no hand-written yaml/json) ---- */
+function getDeep(o,p){ return p.split(".").reduce(function(a,k){ return a===undefined?undefined:a[k]; },o); }
+function setDeep(o,p,v){ const k=p.split("."),l=k.pop(); const t=k.reduce(function(a,x){ if(a[x]===undefined)a[x]={}; return a[x]; },o); t[l]=v; }
+function delDeep(o,p){ const k=p.split("."),l=k.pop(); const t=k.reduce(function(a,x){ return a===undefined?undefined:a[x]; },o); if(t) delete t[l]; }
+function normField(f){ if(f.kind==="json" && f.type && !/[\[\]]|map|interface/.test(f.type)) f.kind="text"; if(f.fields) f.fields.forEach(normField); return f; }
+function inferField(name,val){
+  if(val!==null && typeof val==="object" && !Array.isArray(val)) return {name:name,kind:"group",type:"object",fields:Object.keys(val).map(function(k){return inferField(k,val[k]);})};
+  if(Array.isArray(val)) return {name:name,kind:"text",type:"array",list:true};
+  if(typeof val==="boolean") return {name:name,kind:"boolean",type:"bool"};
+  if(typeof val==="number") return {name:name,kind:"number",type:"number"};
+  return {name:name,kind:"text",type:"string"};
+}
+function paramFields(it){
+  const seen={}, out=[];
+  (SCHEMA[it.type]||[]).forEach(function(f){ normField(f); if(!seen[f.name]){seen[f.name]=1;out.push(f);} });
+  const d=DEFAULTS[it.type]||{};
+  Object.keys(d).forEach(function(k){ if(!seen[k]){seen[k]=1;out.push(inferField(k,d[k]));} });
+  Object.keys(it.params||{}).forEach(function(k){ if(!seen[k]){seen[k]=1;out.push(inferField(k,it.params[k]));} });
+  return out;
+}
+function renderParamsForm(it){
+  const fields=paramFields(it);
+  if(!fields.length) return '<div class="noparams">This plugin has no configurable parameters (uses built-in defaults).</div>';
+  return '<div class="pform">'+fields.map(function(f){ return fieldControl(it,f,"",0); }).join("")+'</div>';
+}
+function fieldControl(it,f,prefix,depth){
+  const path=prefix?prefix+"."+f.name:f.name;
+  const val=getDeep(it.params,path);
+  const enabled=val!==undefined;
+  const id=it.id;
+  let ctrl="";
+  if(f.kind==="group") ctrl=renderGroup(it,f,path,depth);
+  else if(f.kind==="json"||f.kind==="group-list") ctrl='<span class="rostruct">structured default · uses built-in default</span>';
+  else if(f.kind==="boolean") ctrl='<input type="checkbox" data-pfield="'+id+'" data-pkind="boolean" data-ppath="'+path+'"'+(val?" checked":"")+'/>';
+  else if(f.kind==="number") ctrl='<input type="number" step="any" data-pfield="'+id+'" data-pkind="number" data-ppath="'+path+'" value="'+(enabled?val:"")+'"'+(f.list?' placeholder="comma-separated"':'')+'/>';
+  else {
+    const opts=OPTIONS[f.type];
+    if(opts) ctrl='<select data-pfield="'+id+'" data-pkind="text" data-ppath="'+path+'">'+opts.map(function(o){return '<option'+((String(val)===o)?" selected":"")+'>'+o+'</option>';}).join("")+'</select>';
+    else ctrl='<input type="text" data-pfield="'+id+'" data-pkind="text" data-ppath="'+path+'" value="'+(enabled?esc(val):"")+'"'+(f.list?' placeholder="comma-separated"':'')+'/>';
+  }
+  const pfx=(depth?('<span class="pind"></span>'):"");
+  return '<div class="param'+(f.kind==="group"?" grp":"")+'">'+pfx+'<label class="pen"><input type="checkbox" data-penable="'+id+'" data-ppath="'+path+'"'+(enabled?" checked":"")+'/>'+f.name+'</label><div class="pctl">'+ctrl+'<span class="ptype">'+(f.type||f.kind)+'</span></div></div>';
+}
+function renderGroup(it,f,path,depth){
+  return '<div class="pgroup">'+f.fields.map(function(c){ return fieldControl(it,c,path,depth+1); }).join("")+'</div>';
+}
+
+/* ============================================================
+   explorer
+   ============================================================ */
+function buildExplorer(){
+  const q=(document.getElementById("search").value||"").toLowerCase();
+  const sf=document.getElementById("stageFilter").value;
+  const rows=REGISTRY.filter(function(r){ return (!sf||r.stage===sf) && (!q || r.type.indexOf(q)>=0 || r.stage.indexOf(q)>=0); });
+  return '<thead><tr><th style="width:34px"></th><th>type</th><th>stage</th><th>stab</th><th>Parameters</th><th>category</th><th></th></tr></thead><tbody>'+
+    rows.map(function(r){
+      const added=hasType(r.type);
+      const fields=(SCHEMA[r.type]||[]).map(function(f){return f.name;});
+      const defKeys=Object.keys(DEFAULTS[r.type]||{});
+      const n=Math.max(fields.length,defKeys.length);
+      const exp=!!S.expanded[r.type];
+      const main='<tr><td><button class="expbtn" data-expand="'+r.type+'" title="Expand config">'+(exp?"▾":"▸")+'</button></td>'+
+        '<td class="t">'+r.type+'</td><td>'+r.stage+'</td><td><span class="stab '+r.stab+'">'+r.stab+'</span></td>'+
+        '<td>'+(n?('<span class="hint">'+n+'  fields</span>'):'<span class="hint">—</span>')+'</td><td class="hint">'+r.cat+'</td>'+
+        '<td>'+(added?'<span class="hint">Added</span>':'<button class="btn" data-add="'+r.type+'">+ Add</button>')+'</td></tr>';
+      const detail=exp?('<tr class="exp"><td></td><td colspan="6"><div class="expwrap">'+draftForm(r.type)+'<div class="expact"><button class="btn" data-add="'+r.type+'">+ Add with this config</button></div></div></td></tr>'):"";
+      return main+detail;
+    }).join("")+'</tbody>';
+}
+function draftForm(type){
+  if(!S.drafts[type]) S.drafts[type]={ id:"d:"+type, type:type, stage:stageOf(type), params:defParams(type) };
+  return renderParamsForm(S.drafts[type]);
+}
+function fillStageFilter(){
+  const stages={}; REGISTRY.forEach(function(r){stages[r.stage]=1;});
+  const sel=document.getElementById("stageFilter");
+  sel.innerHTML='<option value="">All stages</option>'+Object.keys(stages).sort().map(function(s){return '<option value="'+s+'">'+s+'</option>';}).join("");
+}
+
+/* ============================================================
+   presets
+   ============================================================ */
+const PRESETS={
+  "optimized-baseline":function(){ applyTopology("aggregated"); applyRoutingMode("approx"); ensureIn("queue-scorer","default",1); ensureIn("kv-cache-utilization-scorer","default",1); },
+  "precise-prefix-cache-routing":function(){ applyTopology("aggregated"); applyRoutingMode("precise"); ensureIn("queue-scorer","default",1); },
+  "predicted-latency-routing":function(){ applyTopology("aggregated"); applyRoutingMode("predicted"); },
+  "tiered-prefix-cache":function(){ applyTopology("aggregated"); applyRoutingMode("approx"); ensureIn("queue-scorer","default",1); ensureIn("kv-cache-utilization-scorer","default",1); ensureIn("no-hit-lru-scorer","default",1); applyOffload("native-fs"); S.knobs.blockSize=256; },
+  "p2p-kv-cache-sharing":function(){ applyTopology("aggregated"); applyRoutingMode("precise"); ensure("p2p-source-producer"); ensureIn("queue-scorer","default",1); ensureIn("kv-cache-utilization-scorer","default",1); ensureIn("no-hit-lru-scorer","default",1); applyOffload("p2p"); },
+  "pd-disaggregation":function(){ applyTopology("pd"); applyRoutingMode("approx"); ensureIn("queue-scorer","prefill",1); S.disagg.kvConnector="nixl"; },
+  "flow-control":function(){ applyTopology("aggregated"); S.fc.enabled=true; ensure("round-robin-fairness-policy"); ensure("fcfs-ordering-policy"); ensure("concurrency-detector"); ensure("static-usage-limit-policy"); ensureIn("queue-scorer","default",2); ensureIn("kv-cache-utilization-scorer","default",2); ensureIn("prefix-cache-scorer","default",3); },
+  "wide-ep":function(){ applyTopology("wide-ep"); },
+  "multimodal-e-disaggregation":function(){ applyTopology("e-p-d"); applyRoutingMode("approx"); ensure("token-producer"); ensureIn("queue-scorer","decode",1); },
+  "agentic-serving":function(){ applyTopology("pd"); applyRoutingMode("approx"); S.offload="native-cpu"; }
+};
+function loadPreset(name){
+  if(name==="__custom__") return;
+  clearComposition(); S.routingMode="none";
+  Object.keys(PRESETS).forEach(function(k){});
+  PRESETS[name]();
+  S.selectedPreset=name;
+}
+
+/* ============================================================
+   render
+   ============================================================ */
+let currentIdx=0, filesCache=[];
+function render(keep){
+  syncProfiles();
+  // controls rebuild (state-dependent checkboxes) unless keep==true (preserve input focus)
+  if(!keep) document.getElementById("controls").innerHTML=buildControls();
+  // target profile select
+  const tp=document.getElementById("targetProfile");
+  tp.innerHTML=S.profiles.map(function(p){return opt(p.name,p.name,S.targetProfile);}).join("");
+  // instances
+  document.getElementById("instances").innerHTML=buildInstanceCards();
+  document.getElementById("instCount").textContent="("+S.instances.length+" plugins)";
+  // chips/matrix
+  const e=buildEpp();
+  const alpha=S.instances.filter(function(i){ var r=reg(i.type); return r&&r.stab==="alpha";});
+  document.getElementById("chips").innerHTML=
+    chip(S.topology!=="aggregated",topologyLabel())+
+    chip(!!S.routingMode&&S.routingMode!=="none","routing: "+(S.routingMode||"none"))+
+    chip(S.offload!=="none","offload: "+S.offload)+
+    chip(S.fc.enabled,"flowControl")+
+    chip(S.autoscaling!=="none","autoscaling: "+S.autoscaling)+
+    (alpha.length?('<span class="chip alpha">alpha plugins: '+alpha.length+'</span>'):"")+
+    (e.allowExperimental?'<span class="chip alpha">--allow-experimental-plugins</span>':"");
+  const m=[["Engine",eng().label+" · "+S.meta.engine+" · type="+eng().type],["Accelerator",accel().label+" · TP="+S.disagg.tp],["peakPrefillThroughput",String(peakFor(S.meta.accelerator,S.meta.engine))],["metrics path",eng().metricsPath],["KV connector",CONN_LABEL[S.disagg.kvConnector]||"—"],["Offload",OFFLOAD_LABEL[S.offload]||S.offload],["Plugins",S.instances.length+" plugins"],["Profiles",S.profiles.filter(function(p){return p.members.length;}).map(function(p){return p.name;}).join(", ")||"—"],["DataLayer sources",S.instances.filter(function(i){return i.stage==="source";}).length],["Parsers",e.parsers.length?"custom: "+e.parsers.join(", "):("default ("+eng().parsers.join(", ")+")")],["Alpha plugins",alpha.length],["featureGates",e.doc.featureGates?e.doc.featureGates.join(", "):"—"]];
+  document.getElementById("matrix").innerHTML=m.map(function(x){return '<div class="mcard"><div class="t">'+x[0]+'</div><div class="v">'+x[1]+'</div></div>';}).join("");
+  document.getElementById("diagram").innerHTML=renderDiagram();
+  // files
+  filesCache=buildFiles();
+  if(currentIdx>=filesCache.length) currentIdx=0;
+  document.getElementById("fileTree").innerHTML=filesCache.map(function(f,i){ return '<button data-idx="'+i+'" class="'+(i===currentIdx?"active":"")+'"><span class="p">›</span> '+f[0]+'<span style="flex:1"></span><span class="p">'+f[1]+'</span></button>'; }).join("");
+  renderCode();
+  document.getElementById("cmdOut").textContent=buildCommands();
+  document.getElementById("explorer").innerHTML=buildExplorer();
+  document.getElementById("countBadge").textContent=REGISTRY.length+" plugins · "+REGISTRY.filter(function(r){return r.stab==="alpha";}).length+" alpha · "+S.instances.length+" selected";
+}
+function chip(on,label){ return '<span class="chip '+(on?"on":"")+'" style="'+(on?"":"background:#f1f5f9;color:#94a3b8;border-color:#e2e8f0")+'">'+label+'</span>'; }
+function topologyLabel(){ return {aggregated:"Aggregated",pd:"P/D","e-pd":"E/PD","e-p-d":"E/P/D","wide-ep":"Wide-Ep"}[S.topology]; }
+function renderCode(){ const f=filesCache[currentIdx]; if(!f)return; document.getElementById("curFile").textContent=f[0]; document.getElementById("codeOut").textContent=f[2]; }
+
+/* ============================================================
+   events
+   ============================================================ */
+function getPath(p){ return p.split(".").reduce(function(o,k){return o[k];},S); }
+function setPath(p,v){ const k=p.split("."),l=k.pop(); k.reduce(function(o,x){return o[x];},S)[l]=v; }
+
+document.getElementById("controls").addEventListener("change",function(ev){
+  const t=ev.target;
+  if(t.getAttribute("data-radio")){ const p=t.getAttribute("data-radio"); if(p==="@topology"){ applyTopology(t.value); } else if(p==="@routing"){ applyRoutingMode(t.value); } render(); return; }
+  if(t.getAttribute("data-set")){
+    const p=t.getAttribute("data-set"); let v=t.type==="checkbox"?t.checked:(t.type==="number"?Number(t.value):t.value);
+    const isShortcut = /^(parser|sc|fl|src|ext|disc)\./.test(p);
+    if(!isShortcut) setPath(p,v);
+    handleShortcut(p,v); render(); return;
+  }
+});
+document.getElementById("controls").addEventListener("input",function(ev){
+  const t=ev.target;
+  if(t.getAttribute("data-ekind")){
+    const list=engList(t.getAttribute("data-ekind"), t.getAttribute("data-escope"));
+    const i=Number(t.getAttribute("data-ei"));
+    if(!list[i]) list[i]={k:"",v:""};
+    if(t.getAttribute("data-ekey")) list[i].k=t.value; else list[i].v=t.value;
+    render(true); return;
+  }
+  if(t.getAttribute("data-set")&&(t.type==="text"||t.type==="number")){ setPath(t.getAttribute("data-set"),t.type==="number"?Number(t.value):t.value); render(true); }
+});
+document.getElementById("controls").addEventListener("click",function(ev){
+  const t=ev.target;
+  if(t.getAttribute("data-eadd")){ const p=t.getAttribute("data-eadd").split("|"); engList(p[0],p[1]).push({k:"",v:""}); render(); return; }
+  if(t.getAttribute("data-erm")){ const p=t.getAttribute("data-erm").split("|"); engList(p[0],p[1]).splice(Number(p[2]),1); render(); return; }
+  if(t.getAttribute("data-equick")){ const p=t.getAttribute("data-equick").split("|"); engList(p[0],p[1]).push({k:p[2],v:""}); render(); return; }
+  if(t.getAttribute("data-erole")){ S.engine.role=t.getAttribute("data-erole"); render(); return; }
+});
+function handleShortcut(path,v){
+  if(path==="meta.namespace"){ S.meta.release=deriveRelease(v); }
+  else if(path==="meta.accelerator"){ applyAccelerator(v); }
+  else if(path==="meta.engine"){ applyEngine(v); }
+  else if(path.indexOf("parser.")===0){ const p=path.slice(7); S.runtime.parsers=v?S.runtime.parsers.concat([p]).filter(uniq):S.runtime.parsers.filter(function(x){return x!==p;}); }
+  else if(path.indexOf("sc.")===0){ toggleType(path.slice(3), v, "scorer"); }
+  else if(path.indexOf("fl.")===0){ toggleType(path.slice(3), v, "filter"); }
+  else if(path.indexOf("src.")===0){ toggleType(path.slice(4), v, "source"); }
+  else if(path.indexOf("ext.")===0){ toggleType(path.slice(4), v, "extractor"); }
+  else if(path.indexOf("disc.")===0){ toggleType(path.slice(5), v, "discovery"); }
+  else if(path==="offload"){ applyOffload(v); }
+  else if(path==="fc.enabled"){ if(v){ ensure("round-robin-fairness-policy"); ensure("fcfs-ordering-policy"); ensure("concurrency-detector"); ensure("static-usage-limit-policy"); } }
+  else if(path==="fc.fairness"||path==="fc.ordering"||path==="fc.saturation"||path==="fc.usageLimit"||path==="fc.admitter"){
+    const stageMap={"fc.fairness":"fairness","fc.ordering":"ordering","fc.saturation":"saturation","fc.usageLimit":"usage-limit","fc.admitter":"admitter"};
+    const stage=stageMap[path];
+    S.instances.filter(function(i){return i.stage===stage;}).forEach(function(i){ removeInstance(i.id); });
+    if(v!=="none") addInstance(v);
+  }
+  else if(path==="ops.objectives"){ S.ops.objectives=v; }
+}
+function uniq(x,i,a){ return a.indexOf(x)===i; }
+function toggleType(type, on, stage){
+  if(on){
+    const it=addInstance(type);
+    if(SCHED_STAGES.indexOf(it.stage)>=0) addToProfile(S.targetProfile, it.name);
+    if(type==="topology-affinity-filter"){ ensure("topology-affinity-scorer"); ensure("topology-extractor"); }
+    if(type==="slo-headroom-tier-filter" && !S.fc.enabled) S.fc.enabled=true;
+    if(stage==="source" && SRC_EXTRACTORS[type]) SRC_EXTRACTORS[type].forEach(function(e){ ensure(e); });
+  } else removeType(type);
+}
+document.getElementById("instances").addEventListener("change",function(ev){
+  const t=ev.target;
+  if(t.getAttribute("data-remove")){ removeInstance(Number(t.getAttribute("data-remove"))); render(); return; }
+  if(t.getAttribute("data-prof")){ const parts=t.getAttribute("data-prof").split("|"); if(t.checked) addToProfile(parts[0], instanceById(Number(parts[1])).name); else removeFromProfile(parts[0], instanceById(Number(parts[1])).name); render(true); return; }
+  if(t.getAttribute("data-name")){ instanceById(Number(t.getAttribute("data-name"))).name=t.value; render(true); return; }
+  if(t.getAttribute("data-weight")){ const id=Number(t.getAttribute("data-weight")); const it=instanceById(id); S.profiles.forEach(function(p){ p.members.forEach(function(m){ if(m.ref===it.name) m.weight=Number(t.value); }); }); render(true); return; }
+  if(t.getAttribute("data-penable")){ const it=resolveTarget(t.getAttribute("data-penable")); const p=t.getAttribute("data-ppath");
+    if(t.checked){ if(getDeep(it.params,p)===undefined){ const d=paramDefault(it.type,p); setDeep(it.params,p,d); } }
+    else delDeep(it.params,p);
+    render(true); return; }
+  if(t.getAttribute("data-pfield")){ const it=resolveTarget(t.getAttribute("data-pfield")); const p=t.getAttribute("data-ppath"); const k=t.getAttribute("data-pkind");
+    let v = k==="boolean"?t.checked : k==="number"?Number(t.value) : t.value;
+    setDeep(it.params,p,v); render(true); return; }
+});
+function resolveTarget(attr){ const s=String(attr);
+  if(s.indexOf("d:")===0){ const ty=s.slice(2); if(!S.drafts[ty]) S.drafts[ty]={id:s,type:ty,stage:stageOf(ty),params:defParams(ty)}; return S.drafts[ty]; }
+  return instanceById(Number(s));
+}
+function instanceById(id){ return S.instances.find(function(i){return i.id===id;}); }
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
+function paramDefault(type,p){
+  const d=DEFAULTS[type]||{}; const cur=getDeep(d,p); if(cur!==undefined) return cur;
+  const parts=p.split("."); let fields=SCHEMA[type]||[], f=null;
+  for(let i=0;i<parts.length;i++){ f=(fields||[]).find(function(x){return x.name===parts[i];}); if(!f) break; fields=f.fields; }
+  if(f){ if(f.kind==="boolean") return false; if(f.kind==="number") return 0; if(f.kind==="group") return {}; if(f.kind==="list"||f.kind==="number-list") return []; return ""; }
+  return "";
+}
+document.getElementById("fileTree").addEventListener("click",function(ev){ const b=ev.target.closest("button[data-idx]"); if(!b)return; currentIdx=Number(b.getAttribute("data-idx")); render(true); });
+document.getElementById("explorer").addEventListener("click",function(ev){
+  const e=ev.target.closest("button[data-expand]");
+  if(e){ const ty=e.getAttribute("data-expand"); S.expanded[ty]=!S.expanded[ty]; if(S.expanded[ty]&&!S.drafts[ty]) S.drafts[ty]={id:"d:"+ty,type:ty,stage:stageOf(ty),params:defParams(ty)}; render(true); return; }
+  const b=ev.target.closest("button[data-add]");
+  if(!b)return; const type=b.getAttribute("data-add");
+  const params = S.drafts[type]? clone(S.drafts[type].params) : undefined;
+  delete S.drafts[type]; delete S.expanded[type];
+  const it=addInstance(type, params);
+  if(SCHED_STAGES.indexOf(it.stage)>=0) addToProfile(S.targetProfile,it.name);
+  if(type==="topology-affinity-filter"){ensure("topology-affinity-scorer");ensure("topology-extractor");}
+  var r=reg(type); if(r&&r.stage==="source"&&SRC_EXTRACTORS[type]) SRC_EXTRACTORS[type].forEach(function(x){ensure(x);});
+  render();
+});
+document.getElementById("search").addEventListener("input",function(){ render(true); });
+document.getElementById("stageFilter").addEventListener("change",function(){ render(true); });
+document.getElementById("targetProfile").addEventListener("change",function(ev){ S.targetProfile=ev.target.value; });
+document.getElementById("preset").addEventListener("change",function(ev){ loadPreset(ev.target.value); render(); });
+document.getElementById("clearBtn").addEventListener("click",function(){ clearComposition(); S.routingMode="none"; S.fc.enabled=false; S.offload="none"; S.autoscaling="none"; render(); });
+document.getElementById("copyBtn").addEventListener("click",function(){ navigator.clipboard&&navigator.clipboard.writeText(document.getElementById("codeOut").textContent); flash(this); });
+document.getElementById("copySh").addEventListener("click",function(){ navigator.clipboard&&navigator.clipboard.writeText(document.getElementById("cmdOut").textContent); flash(this); });
+document.getElementById("dlBtn").addEventListener("click",function(){ const f=filesCache[currentIdx]; const b=new Blob([f[2]],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download=f[0].split("/").pop(); a.click(); URL.revokeObjectURL(a.href); });
+function flash(el){ const o=el.textContent; el.textContent="Copied"; setTimeout(function(){el.textContent=o;},1100); }
+
+/* init */
+document.getElementById("preset").innerHTML='<option value="__custom__">— Custom (do not load) —</option>'+Object.keys(PRESETS).map(function(k){return '<option value="'+k+'">'+k+'</option>';}).join("");
+function deriveRelease(ns){ return String(ns||"").replace(/^llm-d-/,"") || "llm-d-custom"; }
+fillStageFilter(); syncProfiles(); applyTopology("aggregated"); applyAccelerator(S.meta.accelerator); S.meta.release=deriveRelease(S.meta.namespace);
+(function(){ var m=location.hash.match(/preset=([\w-]+)/); if(m&&PRESETS[m[1]]){ loadPreset(m[1]); document.getElementById("preset").value=m[1]; } var x=location.hash.match(/expand=([\w-]+)/); if(x&&reg(x[1])) S.expanded[x[1]]=true; })();
+render();
+</script>
+</body>
+</html>
