@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shlex
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,7 +20,13 @@ from llm_d_lens.deploy.providers.deployment_bundle import (
     install_deployment_bundle,
     subprocess_bundle_runner,
 )
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.hardware_profile import (
     active_profile,
     apply_runtime_class,
@@ -383,7 +390,7 @@ class HelmKustomizeGuideAdapter:
             "mount_path": runtime.get("mountPath") or "",
             "replicas": replicas,
             "tensor_parallel_size": tensor_parallel,
-            "max_model_len": decode.get("maxModelLen") or model.get("maxModelLen"),
+            "serving_arguments": serving_arguments(model, decode),
             "environment": runtime.get("environment") if isinstance(runtime.get("environment"), dict) else {},
             "custom_parameters": overrides.get("customParameters") or [],
         }
@@ -415,24 +422,38 @@ class HelmKustomizeGuideAdapter:
             item for item in deployment["spec"]["template"]["spec"]["containers"] if item["name"] == "modelserver"
         )
         container["image"] = parameters["image"]
-        command = container.get("args", [""])[0]
+        args = list(container.get("args") or [])
+        shell = bool(args and "vllm serve" in args[0])
         resolved_mount = parameters.get("resolved_mount")
         model_source = resolved_mount["model_source"] if resolved_mount else "shared-path"
         cache_mounted = bool(resolved_mount or parameters["mount_path"])
         model = "/model-cache" if cache_mounted and model_source == "shared-path" else parameters["model"]
-        command = re.sub(r"(?m)(exec vllm serve\s+\\?\n?\s*)(\S+)", rf"\g<1>{model}", command, count=1)
-        command = HelmKustomizeGuideAdapter._set_shell_argument(
-            command, "tensor-parallel-size", parameters["tensor_parallel_size"]
-        )
-        if parameters["max_model_len"]:
-            command = HelmKustomizeGuideAdapter._set_shell_argument(
-                command, "max-model-len", parameters["max_model_len"]
+        if shell:
+            args[0] = re.sub(
+                r"(?m)(exec vllm serve\s+\\?\n?\s*)(\S+)",
+                lambda match: match[1] + shlex.quote(model),
+                args[0],
+                count=1,
             )
+        elif args:
+            args[0] = model
+        else:
+            args = [model]
+        options = {"tensor-parallel-size": parameters["tensor_parallel_size"]}
+        options.update(parameters["serving_arguments"])
+        for name, value in options.items():
+            if shell:
+                args[0] = self._set_shell_argument(args[0], name, value)
+            else:
+                args = set_vllm_argument(args, name, value)
         for custom in parameters["custom_parameters"]:
             if custom.get("target") not in {"decode", "both"}:
                 continue
             if custom.get("kind") == "argument":
-                command = HelmKustomizeGuideAdapter._set_shell_argument(command, custom["name"], custom["value"])
+                if shell:
+                    args[0] = self._set_shell_argument(args[0], custom["name"], custom["value"])
+                else:
+                    args = set_vllm_argument(args, custom["name"], custom["value"])
             else:
                 environment = container.setdefault("env", [])
                 existing = next((item for item in environment if item.get("name") == custom["name"]), None)
@@ -458,7 +479,7 @@ class HelmKustomizeGuideAdapter:
                 existing.update({"name": name, "value": value})
             else:
                 environment.append({"name": name, "value": value})
-        container["args"] = [command]
+        container["args"] = args
         set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
         apply_runtime_class(deployment["spec"]["template"]["spec"], accelerator=self._accelerator)
         if cache_mounted:
@@ -479,10 +500,20 @@ class HelmKustomizeGuideAdapter:
 
     @staticmethod
     def _set_shell_argument(command: str, name: str, value: object) -> str:
-        pattern = rf"--{re.escape(name)}(?:=|\s+)\S+"
-        replacement = f"--{name}={value}"
+        boolean = (
+            name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"}
+            and str(value).lower() in {"true", "false"}
+        )
+        pattern = (
+            rf"--(?:no-)?{re.escape(name)}(?:=(?:true|false))?(?![\w-])"
+            if boolean
+            else rf"--{re.escape(name)}(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s]+)"
+        )
+        replacement = (
+            f"--{name}" if str(value).lower() == "true" else f"--no-{name}"
+        ) if boolean else f"--{name}={shlex.quote(str(value))}"
         if re.search(pattern, command):
-            return re.sub(pattern, replacement, command, count=1)
+            return re.sub(pattern, lambda _: replacement, command)
         return f"{command.rstrip()} \\\n                {replacement}"
 
     def _namespace(self, context: dict[str, Any]) -> str:

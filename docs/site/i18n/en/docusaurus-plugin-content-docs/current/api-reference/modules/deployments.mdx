@@ -54,6 +54,19 @@ change accelerator resource requests or rewrite saved deployment artifacts.
 
 ### Execution, observation and evidence
 
+Ordinary provider rendering maps `maxModelLen`, `maxNumSeqs`,
+`gpuMemoryUtilization`, `blockSize` and `maxNumBatchedTokens` from each role
+to the corresponding vLLM arguments. P/D uses separate `prefill` and `decode`
+values; other providers use `decode` (`precise-prefix-cache-routing` also accepts
+`serving`). `model.maxModelLen` supplies a fallback for missing role lengths.
+Explicit integer controls must be positive integers; `gpuMemoryUtilization`
+must be finite and greater than zero and at most one. Invalid values fail
+validation/rendering instead of silently falling back. Applicable
+`customParameters` override structured controls. Ordinary rendering replaces both
+`--name=value` and `--name value` forms; omitted controls preserve Guide defaults.
+Exact published `officialGuide` manifests remain on their existing validated
+manifest path rather than being rewritten by ordinary provider parameter mapping.
+
 `DeploymentExecution` carries `execution_id`, `request_id`, `status`, `artifact`,
 `configuration_artifacts`, optional `endpoint`/`namespace`/`resource_snapshot`,
 `provenance`, `evidence_refs`, optional versioned `diagnostics` and timestamps.
@@ -65,6 +78,16 @@ The complete run/case/execution state enums are listed below. A `ready` executio
 must contain `DeploymentEndpoint`: `url`, `protocol="http"` and optional
 `service_ref`, `model_ref`, `baseline_url`. Endpoint metadata must not carry
 credentials, kubeconfig or authorization values.
+
+Shared-memory preparation is recorded under
+`artifact.rendered_payload.value.deployment_contract.sharedMemory` and copied to
+`diagnostics.value.snapshot.shared_memory`. The report contains `defaultSizeLimit`
+(`4Gi`), `addedMounts`, per-container `mounts`, `warnings`, and `manifestChecksum`
+for the shared-memory preparation stage (before later placement or tracing).
+Ordinary renders complete missing model-server `/dev/shm` mounts; existing mounts
+and host IPC are retained. Published `officialGuide` manifests are checked without
+shared-memory mutation. Warnings are also logged; invalid or duplicate mount
+bindings fail rendering. This does not change the supplied Configuration artifact.
 
 `get(execution_id)` returns `DeploymentExecution`, not another status DTO.
 The concrete service looks up its in-memory execution state and raises `KeyError`
@@ -1491,6 +1514,14 @@ Returns `200` with the same `case`, `execution`, and `deployment` envelope as
 Get case, refreshed from provider diagnostics. Stopped or cleaned records are
 preserved rather than made ready again. Missing case/execution or refresh
 `ValueError` returns `404`. Response excerpt:
+
+Progress-deadline errors remain `deploying` while current Pod diagnostics confirm
+normal container startup within probe budgets, counted from container start
+rather than time spent Pending. A recoverable `failed` record returns to
+`deploying`; the case failure is cleared. `diagnostics.value.snapshot.pod_statuses`
+contains Pod status and probe timing fields, not container environment values.
+Running alone does not set `ready`, and current workload failures or expired
+startup budgets are not treated as normal startup.
 
 ```json
 {

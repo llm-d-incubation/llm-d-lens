@@ -1181,7 +1181,10 @@ await GatewayOpsService().reconcile_cluster("cluster-a")
 
 - **HTTPRoute:** one per model service in Gateway namespace, named with a
   DNS-safe model slug. `parentRefs` points to the cluster Gateway; matches use
-  IPP-injected `X-Gateway-Base-Model-Name = base_model`. `backendRefs` contains
+  IPP-injected `X-Gateway-Base-Model-Name = base_model`. When `served_name`
+  differs from the public name, Lens also renders one
+  `InferenceModelRewrite` per pool in the pool namespace so the EPP rewrites the
+  request-body `model` to the engine name. `backendRefs` contains
   up to 16 entries for enabled positive-weight members. Each entry contains
   `group: inference.networking.k8s.io`, `kind: InferencePool`, `name`,
   `weight`, and an optional `namespace`. **Do not set `port`:**

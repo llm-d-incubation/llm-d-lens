@@ -227,3 +227,18 @@ test('Agentic SSE responses bypass compression and preserve streamed events', as
     const second = await reader.read();
     assert.match(new TextDecoder().decode(second.value), /event: complete/);
 });
+
+
+test('proxy preserves upstream redirects', async () => {
+    calls = [];
+    respond = (_req, res) => {
+        res.writeHead(302, { location: 'https://example.com/login' });
+        res.end();
+    };
+
+    const response = await fetch(`${proxyUrl}/api/v1/auth/session`, { redirect: 'manual' });
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), 'https://example.com/login');
+    assert.equal(calls.length, 1);
+});

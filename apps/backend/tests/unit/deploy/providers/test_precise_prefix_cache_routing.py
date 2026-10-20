@@ -83,8 +83,7 @@ def test_parameters_defaults_router_fields_to_none():
 
     assert parameters["peak_prefill_throughput"] is None
     assert parameters["router_values_override"] is None
-    assert parameters["max_model_len"] is None
-    assert parameters["gpu_memory_utilization"] is None
+    assert parameters["serving_arguments"] == {}
 
 
 def test_decode_deployment_follows_contract_and_manifest(tmp_path: Path):
@@ -192,7 +191,15 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
     documents = _upstream_deployment_documents()
     parameters = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)._parameters(
         _valid_overrides(
-            decode={"replicaCount": 8, "tensorParallelSize": 4, "maxModelLen": 6000, "gpuMemoryUtilization": 0.9}
+            decode={
+                "replicaCount": 8,
+                "tensorParallelSize": 4,
+                "maxModelLen": 6000,
+                "gpuMemoryUtilization": 0.9,
+                "maxNumSeqs": 128,
+                "blockSize": 32,
+                "maxNumBatchedTokens": 8192,
+            }
         )
     )
 
@@ -202,6 +209,9 @@ def test_patch_modelserver_sets_model_replicas_tp_and_claim_count():
 
     deployment = next(item for item in documents if item["kind"] == "Deployment")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert "--max-num-seqs=128" in container["args"]
+    assert "--block-size=32" in container["args"]
+    assert "--max-num-batched-tokens=8192" in container["args"]
     assert deployment["spec"]["replicas"] == 8
     assert container["args"][0] == "Qwen/Qwen3-30B-A3B"
     assert "--tensor-parallel-size=4" in container["args"]

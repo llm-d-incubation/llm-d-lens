@@ -280,3 +280,26 @@ test('a 401 tool result stops the turn with a re-login message', async () => {
     assert.equal((denied!.data as { kind: string }).kind, 'unauthenticated');
     assert.match((denied!.data as { message: string }).message, /session has expired/i);
 });
+
+
+test('an aborted turn stops before running any further tool calls', async () => {
+    const controller = new AbortController();
+    const calledTools: string[] = [];
+    const client = fakeClient((name) => {
+        calledTools.push(name);
+        controller.abort();
+    });
+    const { res } = fakeRes();
+
+    const outcome = await processPendingToolCalls(
+        [toolCall('call-1', READ_TOOL), toolCall('call-2', READ_TOOL)],
+        [],
+        client,
+        res,
+        false,
+        controller.signal,
+    );
+
+    assert.equal(outcome, 'stopped');
+    assert.deepEqual(calledTools, [READ_TOOL]);
+});

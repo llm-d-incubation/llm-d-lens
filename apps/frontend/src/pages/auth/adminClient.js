@@ -137,6 +137,12 @@ export function listAuditLogs(params = {}) {
     if (params.eventType) query.set('event_type', params.eventType);
     if (params.actorUserId) query.set('actor_user_id', params.actorUserId);
     if (params.result) query.set('result', params.result);
+    if (params.action) query.set('action', params.action);
+    if (params.source) query.set('source', params.source);
+    if (params.targetType) query.set('target_type', params.targetType);
+    if (params.targetId) query.set('target_id', params.targetId);
+    if (params.clusterId) query.set('cluster_id', params.clusterId);
+    if (params.requestId) query.set('request_id', params.requestId);
     if (params.since) query.set('since', params.since);
     if (params.until) query.set('until', params.until);
     query.set('limit', String(params.limit ?? 100));

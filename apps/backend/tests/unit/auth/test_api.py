@@ -501,3 +501,73 @@ def test_master_key_status_rotate_and_clear():
         cleared = client.delete("/api/v1/system/secret-key/old", headers=_csrf_headers(client))
         assert cleared.status_code == 200, cleared.text
         assert cleared.json()["oldKeyCount"] == 0
+
+
+def test_audit_pipeline_records_request_correlation_and_redacts_secrets():
+    with _client() as client:
+        _bootstrap_and_login(client)
+        request_id = "audit-pipeline-test"
+        created = client.post(
+            "/api/v1/users",
+            json={"username": "audited-user", "password": STRONG},
+            headers={**_csrf_headers(client), "x-request-id": request_id},
+        )
+        assert created.status_code == 201, created.text
+
+        page = client.get(f"/api/v1/audit-logs?request_id={request_id}&limit=50").json()
+        events = {item["event_type"]: item for item in page["items"]}
+        assert "users.create" in events
+        event = events["users.create"]
+        assert event["action"] == "create"
+        assert event["target_type"] == "users"
+        assert event["target_name"] == "audited-user"
+        assert event["source"] == "browser"
+        assert event["request_id"] == request_id
+        assert event["detail"]["after"]["password_hash"] == "[REDACTED]"  # noqa: S105
+
+        filtered = client.get("/api/v1/audit-logs?action=create&target_type=users&limit=50").json()
+        assert any(item["id"] == event["id"] for item in filtered["items"])
+
+
+def test_audit_pipeline_tracks_create_update_and_delete_actions():
+    with _client() as client:
+        _bootstrap_and_login(client)
+        created = client.post(
+            "/api/v1/groups",
+            json={"name": "audit-actions", "description": ""},
+            headers=_csrf_headers(client),
+        )
+        assert created.status_code == 201, created.text
+        group_id = created.json()["id"]
+        updated = client.patch(
+            f"/api/v1/groups/{group_id}",
+            json={"description": "changed"},
+            headers=_csrf_headers(client),
+        )
+        assert updated.status_code == 200, updated.text
+        deleted = client.delete(f"/api/v1/groups/{group_id}", headers=_csrf_headers(client))
+        assert deleted.status_code == 204, deleted.text
+
+        page = client.get(f"/api/v1/audit-logs?target_type=groups&target_id={group_id}&limit=50").json()
+        assert {"create", "update", "delete"} <= {item["action"] for item in page["items"]}
+
+
+def test_login_bookkeeping_audit_uses_the_signed_in_user_as_actor():
+    with _client() as client:
+        _bootstrap_and_login(client)
+
+        page = client.get("/api/v1/audit-logs?event_type=users.update&limit=50").json()
+
+        assert page["items"]
+        assert all(item["actor_username"] == "root" for item in page["items"])
+
+
+def test_audit_update_events_are_suppressed_for_high_frequency_workloads():
+    from llm_d_lens.db.base import audit_tracks_write
+
+    for table in ("simulation_tasks", "evaluate_runs", "evaluate_workflows", "evaluate_workflow_cases"):
+        assert audit_tracks_write(table, "create")
+        assert not audit_tracks_write(table, "update")
+        assert audit_tracks_write(table, "delete")
+
+    assert audit_tracks_write("clusters", "update")

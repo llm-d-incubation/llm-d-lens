@@ -52,8 +52,17 @@ export function currentInternalPrincipalId(): string | undefined {
     return storage.getStore()?.principalId;
 }
 
+function normalizedInternalPath(urlOrPath: string): string {
+    const path = new URL(urlOrPath, 'http://localhost').pathname;
+    try {
+        return decodeURIComponent(path);
+    } catch {
+        return path;
+    }
+}
+
 function internalMessage(timestamp: number, method: string, path: string, principalId: string): string {
-    return `${timestamp}\n${method.toUpperCase()}\n${path}\n${principalId}`;
+    return `${timestamp}\n${method.toUpperCase()}\n${normalizedInternalPath(path)}\n${principalId}`;
 }
 
 /** Headers asserting `principalId` for one concrete method+path. */
@@ -79,8 +88,7 @@ export function signInternalHeaders(method: string, path: string, principalId: s
 export function internalHeadersFor(method: string, urlOrPath: string): Record<string, string> {
     const principalId = currentInternalPrincipalId();
     if (!principalId || !internalAuthEnabled()) return {};
-    const path = new URL(urlOrPath, 'http://localhost').pathname;
-    return signInternalHeaders(method, path, principalId);
+    return signInternalHeaders(method, urlOrPath, principalId);
 }
 
 export type IncomingInternalHeaders = {

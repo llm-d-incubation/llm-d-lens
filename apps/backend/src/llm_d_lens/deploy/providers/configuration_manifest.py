@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -17,6 +19,7 @@ from llm_d_lens.deploy.providers.guide_adapter import (
     ValidationResult,
 )
 from llm_d_lens.deploy.providers.hardware_profile import accelerator_supported
+from llm_d_lens.deploy.providers.shared_memory import prepare_shared_memory
 from llm_d_lens.deploy.providers.target_node import apply_placement, configured_target_node, write_pinned_manifest
 from llm_d_lens.infrastructure.artifacts.manifests import (
     DEPLOYMENT_MANIFEST_DIR,
@@ -26,6 +29,8 @@ from llm_d_lens.infrastructure.artifacts.manifests import (
 from llm_d_lens.infrastructure.artifacts.store import register_artifacts
 from llm_d_lens.monitoring.kv_trace.manifest import instrument_manifest
 from llm_d_lens.storage.service import ensure_mount_in_namespace, get_ready_volume
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigurationManifestAdapter:
@@ -131,6 +136,7 @@ class ConfigurationManifestAdapter:
                 deployment_contract=deployment_contract,
             )
 
+        artifact = prepare_shared_memory(artifact, self._output_root, exact=self._is_exact(overrides))
         if "_model_cache_dependencies" in overrides:
             from llm_d_lens.deploy.providers.storage_mount import validate_cached_model_arguments
 
@@ -336,24 +342,63 @@ class ConfigurationManifestAdapter:
 
     async def diagnostics(self, execution: dict[str, Any]) -> dict[str, Any]:
         artifact = execution.get("_artifact")
-        if not isinstance(artifact, GuideDeploymentArtifact) or not artifact.deployment_contract:
-            return await self._delegate.diagnostics(execution)
-        if self._uses_delegate_lifecycle(artifact):
-            return await self._delegate.diagnostics(execution)
-        namespace = self._namespace(execution)
+        if (
+            not isinstance(artifact, GuideDeploymentArtifact)
+            or not artifact.deployment_contract
+            or self._uses_delegate_lifecycle(artifact)
+        ):
+            diagnostics = await self._delegate.diagnostics(execution)
+        else:
+            namespace = self._namespace(execution)
 
-        async def capture(arguments: list[str]) -> str:
-            status, stdout, stderr = await self._runner(arguments)
-            return (stdout if status == 0 else stderr).strip()
+            async def capture(arguments: list[str]) -> str:
+                status, stdout, stderr = await self._runner(arguments)
+                return (stdout if status == 0 else stderr).strip()
 
-        return {
-            "namespace": namespace,
-            "pods": await capture(["kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"]),
-            "events": await capture(["kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]),
-            "resource_claims": await capture(
-                ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
-            ),
-        }
+            diagnostics = {
+                "namespace": namespace,
+                "pods": await capture(["kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"]),
+                "events": await capture(
+                    ["kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]
+                ),
+                "resource_claims": await capture(
+                    ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
+                ),
+            }
+        if "running" in str(diagnostics.get("pods") or "").lower():
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "get", "pods", "--namespace", self._namespace(execution), "-o", "json"]
+            )
+            if status != 0:
+                diagnostics["pod_statuses_error"] = (stderr or stdout or "Pod status query failed").strip()
+                logger.warning("Pod startup diagnostics failed: %s", diagnostics["pod_statuses_error"])
+            else:
+                pods = json.loads(stdout)["items"]
+                timing_fields = ("initialDelaySeconds", "periodSeconds", "timeoutSeconds", "failureThreshold")
+                diagnostics["pod_statuses"] = [
+                    {
+                        "name": pod["metadata"]["name"],
+                        "deleting": bool(pod["metadata"].get("deletionTimestamp")),
+                        "status": pod.get("status") or {},
+                        "containers": [
+                            {
+                                "name": container["name"],
+                                **{
+                                    probe: {
+                                        key: container[probe][key] for key in timing_fields if key in container[probe]
+                                    }
+                                    for probe in ("startupProbe", "readinessProbe")
+                                    if probe in container
+                                },
+                            }
+                            for container in pod.get("spec", {}).get("containers") or []
+                        ],
+                    }
+                    for pod in pods
+                ]
+        if isinstance(artifact, GuideDeploymentArtifact) and "sharedMemory" in artifact.deployment_contract:
+            diagnostics = {**diagnostics, "shared_memory": artifact.deployment_contract["sharedMemory"]}
+        return diagnostics
 
     async def stop(self, execution, artifact):
         if not artifact.deployment_contract:

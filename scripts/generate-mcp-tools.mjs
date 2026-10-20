@@ -82,8 +82,115 @@ const RISK_TIER_OVERRIDES = {
     // selected candidate) -- must pause for human confirmation like any
     // other "start a deployment" action, not auto-run as a plain write.
     approve_agentic_plan: 'approve',
+    // Read-only probes issued as POST because they take a JSON cluster target.
+    probe_model_gateway: 'read',
+    preflight_model_gateway: 'read',
 };
 const JSON_BODY_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
+// Exact routes that are deliberately not exposed as MCP tools. Keep this list
+// current when adding UI-only, internal, streaming, secret-bearing or otherwise
+// unsuitable endpoints: any skip not listed here fails catalog generation.
+const INTENTIONAL_SKIPS = new Set([
+    'DELETE /api/cluster/port-forwards/{forward_id}',
+    'DELETE /api/cluster/sessions/{session_id}/port-forwards',
+
+    'DELETE /api/v1/clusters/{cluster_id}/access/{binding_id}',
+
+    'DELETE /api/v1/groups/{group_id}',
+    'DELETE /api/v1/groups/{group_id}/role-bindings/{binding_id}',
+
+    'DELETE /api/v1/identity-providers/{provider_id}',
+    'DELETE /api/v1/roles/{role_id}',
+
+    'DELETE /api/v1/sessions/{session_id}',
+
+    'DELETE /api/v1/system/secret-key/old',
+    'DELETE /api/v1/users/{user_id}',
+    'DELETE /api/v1/users/{user_id}/role-bindings/{binding_id}',
+    'GET /api/cluster/endpoints',
+    'GET /api/cluster-overview/sessions/{session_id}',
+    'GET /api/cluster/sessions/{session_id}',
+
+    'GET /api/health',
+
+    'GET /api/v1/audit-logs',
+
+    'GET /api/v1/auth/permissions',
+    'GET /api/v1/auth/providers',
+    'GET /api/v1/auth/session',
+    'GET /api/v1/auth/sessions',
+    'GET /api/v1/clusters/{cluster_id}/access',
+    'GET /api/v1/groups',
+    'GET /api/v1/groups/{group_id}',
+    'GET /api/v1/groups/{group_id}/members',
+    'GET /api/v1/groups/{group_id}/role-bindings',
+    'GET /api/v1/identity-providers',
+    'GET /api/v1/identity-providers/{provider_id}',
+
+    'GET /api/v1/internal/model-gateway/models',
+    'GET /api/v1/roles',
+    'GET /api/v1/roles/{role_id}',
+    'GET /api/v1/sessions',
+
+    'GET /api/v1/storage/volume-resource-status',
+    'GET /api/v1/system/database',
+    'GET /api/v1/system/secret-key',
+    'GET /api/v1/users',
+    'GET /api/v1/users/{user_id}',
+    'GET /api/v1/users/{user_id}/groups',
+    'GET /api/v1/users/{user_id}/role-bindings',
+
+    'GET /api/v1/welcome/issues',
+    'GET /api/v1/welcome/overview',
+
+    'GET /v1/models',
+    'PATCH /api/v1/groups/{group_id}',
+    'PATCH /api/v1/identity-providers/{provider_id}',
+    'PATCH /api/v1/roles/{role_id}',
+    'PATCH /api/v1/users/{user_id}',
+
+    'POST /api/agentic-deployments/{run_id}/refine/stream',
+    'POST /api/agentic-deployments/stream',
+    'POST /api/cluster-overview/sessions/{session_id}/disconnect',
+    'POST /api/cluster/port-forward',
+    'POST /api/v1/auth/bootstrap',
+    'POST /api/v1/auth/login',
+    'POST /api/v1/auth/logout',
+    'POST /api/v1/auth/password',
+
+    'POST /api/v1/capacity/estimate',
+    'POST /api/v1/clusters/{cluster_id}/access',
+
+    'POST /api/v1/configurations/render',
+    'POST /api/v1/configurations/resolve',
+    'POST /api/v1/configurations/save',
+    'POST /api/v1/groups',
+    'POST /api/v1/groups/{group_id}/role-bindings',
+    'POST /api/v1/identity-providers',
+    'POST /api/v1/identity-providers/{provider_id}/sync',
+    'POST /api/v1/identity-providers/{provider_id}/test',
+    'POST /api/v1/internal/model-gateway/authorize',
+    'POST /api/v1/internal/model-gateway/record-usage',
+
+    'POST /api/v1/model-service/admin/gateway/logs',
+
+    'POST /api/v1/model-service/admin/gateway/reconcile/stream',
+    'POST /api/v1/model-service/admin/gateway/stream',
+
+    'POST /api/v1/model-service/tokens',
+    'POST /api/v1/model-service/tokens/regenerate',
+    'POST /api/v1/roles',
+    'POST /api/v1/system/database',
+    'POST /api/v1/system/secret-key/rotate',
+    'POST /api/v1/users',
+    'POST /api/v1/users/{user_id}/password',
+    'POST /api/v1/users/{user_id}/role-bindings',
+    'PUT /api/v1/groups/{group_id}/members',
+    'PUT /api/v1/roles/{role_id}/permissions',
+    'PUT /api/v1/users/{user_id}/groups',
+]);
+
 
 function dumpOpenApiSchema() {
     const output = execFileSync(
@@ -286,14 +393,24 @@ function generateToolsRegion() {
     const specialToolNames = readSpecialToolNames();
     const generatedNames = new Set();
     const toolSources = [];
-    const warnings = [];
+    const skippedIntentional = [];
+    const unexpectedSkips = [];
+
+    const recordSkip = (method, apiPath, reason) => {
+        const key = `${method.toUpperCase()} ${apiPath}`;
+        if (INTENTIONAL_SKIPS.has(key)) {
+            skippedIntentional.push(`${key}: ${reason}`);
+            return;
+        }
+        unexpectedSkips.push(`${key}: ${reason}`);
+    };
 
     for (const [apiPath, methods] of Object.entries(schema.paths || {})) {
         for (const [method, operation] of Object.entries(methods)) {
             if (!(method in METHOD_TO_RISK_TIER)) continue; // skip trace/options/etc.
             const { summary, description, operationId } = operation;
             if (!operationId) {
-                warnings.push(`SKIP ${method.toUpperCase()} ${apiPath}: no operationId set (add operation_id=... to the route decorator)`);
+                recordSkip(method, apiPath, 'no operationId set (add operation_id=... to the route decorator)');
                 continue;
             }
             // FastAPI auto-fills an operationId (and often summary/description from the
@@ -302,19 +419,31 @@ function generateToolsRegion() {
             // explicitly exposed as an MCP tool" and skip it, per the same rule as a
             // missing operationId.
             if (new RegExp(`_${method}$`).test(operationId)) {
-                warnings.push(`SKIP ${method.toUpperCase()} ${apiPath} (${operationId}): operationId looks auto-generated (add operation_id=... to the route decorator to opt in)`);
+                recordSkip(method, apiPath, `operationId looks auto-generated (${operationId}; add operation_id=... to the route decorator to opt in)`);
                 continue;
             }
             if (!summary || !description) {
-                warnings.push(`SKIP ${method.toUpperCase()} ${apiPath} (${operationId}): missing ${!summary ? 'summary' : ''}${!summary && !description ? ' and ' : ''}${!description ? 'description' : ''} on the route decorator`);
+                recordSkip(
+                    method,
+                    apiPath,
+                    `missing ${!summary ? 'summary' : ''}${!summary && !description ? ' and ' : ''}${!description ? 'description' : ''} on the route decorator`,
+                );
                 continue;
             }
             if (specialToolNames.has(operationId)) {
-                warnings.push(`SKIP ${method.toUpperCase()} ${apiPath} (${operationId}): operation_id collides with a hand-written special tool of the same name -- rename the operation_id`);
+                recordSkip(
+                    method,
+                    apiPath,
+                    `operation_id ${operationId} is covered by a hand-written special tool`,
+                );
                 continue;
             }
             if (generatedNames.has(operationId)) {
-                warnings.push(`SKIP ${method.toUpperCase()} ${apiPath} (${operationId}): operation_id collides with another generated tool of the same name -- rename one of the operation_ids`);
+                recordSkip(
+                    method,
+                    apiPath,
+                    `operation_id ${operationId} collides with another generated tool -- rename one of the operation_ids`,
+                );
                 continue;
             }
             generatedNames.add(operationId);
@@ -322,17 +451,20 @@ function generateToolsRegion() {
         }
     }
 
-    return { toolSources, warnings };
+    return { toolSources, skippedIntentional, unexpectedSkips };
 }
 
 function main() {
     const checkOnly = process.argv.includes('--check');
-    const { toolSources, warnings } = generateToolsRegion();
+    const { toolSources, skippedIntentional, unexpectedSkips } = generateToolsRegion();
 
-    for (const warning of warnings) {
-        console.warn(`[generate-mcp-tools] ${warning}`);
+    for (const warning of unexpectedSkips) {
+        console.error(`[generate-mcp-tools] UNEXPECTED SKIP ${warning}`);
     }
-    console.log(`[generate-mcp-tools] generated ${toolSources.length} tool(s), skipped ${warnings.length}`);
+    console.log(
+        `[generate-mcp-tools] generated ${toolSources.length} tool(s), ` +
+        `skipped ${skippedIntentional.length} intentionally, ${unexpectedSkips.length} unexpected`,
+    );
 
     const updated = [
         '// Copyright 2026 Google LLC',
@@ -391,8 +523,10 @@ function main() {
     })();
 
     if (checkOnly) {
-        if (updated !== original) {
-            console.error('[generate-mcp-tools] tools.ts is out of date -- run `node scripts/generate-mcp-tools.mjs` and commit the result.');
+        if (updated !== original || unexpectedSkips.length > 0) {
+            if (updated !== original) {
+                console.error('[generate-mcp-tools] tools.ts is out of date -- run `node scripts/generate-mcp-tools.mjs` and commit the result.');
+            }
             process.exit(1);
         }
         console.log('[generate-mcp-tools] up to date.');
@@ -401,6 +535,7 @@ function main() {
 
     writeFileSync(TOOLS_TS_PATH, updated);
     console.log(`[generate-mcp-tools] wrote ${TOOLS_TS_PATH}`);
+    if (unexpectedSkips.length > 0) process.exitCode = 1;
 }
 
 main();

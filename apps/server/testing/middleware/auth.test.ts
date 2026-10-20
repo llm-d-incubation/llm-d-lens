@@ -20,7 +20,7 @@ import rateLimit from 'express-rate-limit';
 
 import { authMiddleware } from '../../src/middleware/auth.ts';
 import { backendApiProxyRouter } from '../../src/proxy/backend-api-proxy.ts';
-import { signInternalHeaders } from '../../src/middleware/internalAuth.ts';
+import { signInternalHeaders, verifyInternalHeaders } from '../../src/middleware/internalAuth.ts';
 
 const INTERNAL_SECRET = 'test-internal-secret';
 
@@ -224,4 +224,21 @@ test('disabled auth mode bypasses authentication', async () => {
     process.env.PRISM_AUTH_MODE = 'disabled';
     const response = await fetch(`${gatewayUrl}/api/v1/users`);
     assert.equal(response.status, 200);
+});
+
+
+test('internal signatures use the decoded path uvicorn validates', () => {
+    const headers = signInternalHeaders(
+        'GET',
+        '/api/v1/model-cache/huggingface/models/Qwen%2FQwen3-0.6B',
+        'u2',
+    );
+    assert.equal(
+        verifyInternalHeaders('GET', '/api/v1/model-cache/huggingface/models/Qwen/Qwen3-0.6B', {
+            principalId: headers['x-prism-principal-id'],
+            timestamp: headers['x-prism-internal-ts'],
+            signature: headers['x-prism-internal-sig'],
+        }),
+        'u2',
+    );
 });

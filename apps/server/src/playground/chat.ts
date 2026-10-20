@@ -318,6 +318,7 @@ interface PendingResume {
 }
 
 function sseWrite(res: import('express').Response, event: string, data: unknown) {
+    if (res.writableEnded || res.destroyed) return;
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
     // The server enables gzip compression globally (see server.js), which by
@@ -365,7 +366,7 @@ async function callToolSafely(client: Client, name: string, args: Record<string,
 // tool_calls message". Used both for a fresh batch of tool_calls and (after
 // resolving the one the user just approved/rejected) for any siblings a
 // prior pause left unresolved -- see the `pendingResume` handling below.
-export type ToolBatchOutcome = 'continue' | 'paused' | 'denied';
+export type ToolBatchOutcome = 'continue' | 'paused' | 'denied' | 'stopped';
 
 type PermissionFailure = {
     kind: 'forbidden' | 'unauthenticated' | 'password_change_required' | 'cluster_not_accessible';
@@ -439,8 +440,10 @@ export async function processPendingToolCalls(
     client: Client,
     res: import('express').Response,
     readOnly: boolean,
+    signal?: AbortSignal,
 ): Promise<ToolBatchOutcome> {
     for (let index = 0; index < toolCalls.length; index += 1) {
+        if (signal?.aborted) return 'stopped';
         const toolCall = toolCalls[index];
         const toolName = toolCall.function.name;
         const definition = findTool(toolName);
@@ -501,6 +504,7 @@ export async function processPendingToolCalls(
 
         sseWrite(res, 'tool_call', { id: toolCall.id, name: toolName, arguments: args });
         const { result, isError } = await callToolSafely(client, toolName, args);
+        if (signal?.aborted) return 'stopped';
         sseWrite(res, 'tool_result', { id: toolCall.id, name: toolName, result, isError });
         conversation.push({
             role: 'tool',
@@ -574,6 +578,7 @@ async function callDeployment(
     apiKey: string | undefined,
     messages: OpenAiMessage[],
     tools: unknown[],
+    signal?: AbortSignal,
 ) {
     const body = { model, messages, tools: tools.length ? tools : undefined, tool_choice: tools.length ? 'auto' : undefined };
 
@@ -581,6 +586,7 @@ async function callDeployment(
         const result = await internalRequest(`/api/v1/ai-providers/${encodeURIComponent(target.providerId)}/chat/completions`, {
             method: 'POST',
             body: JSON.stringify(body),
+            signal,
         });
         if (!result.ok) {
             const text = typeof result.body === 'string' ? result.body : JSON.stringify(result.body);
@@ -592,7 +598,7 @@ async function callDeployment(
     const url = `${(target.endpoint as string).replace(/\/$/, '')}/v1/chat/completions`;
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
     if (!response.ok) {
         const text = await response.text().catch(() => '');
         // vLLM serves OpenAI's tool-calling API but only accepts tool_choice
@@ -633,6 +639,11 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
         || (deployment.executionId && deployment.providerId)) {
         return res.status(400).json({
             error: 'Exactly one of deployment.executionId or deployment.providerId (plus deployment.model) is required',
+        });
+    }
+    if (deployment.executionId) {
+        return res.status(400).json({
+            error: 'Lens Assistant does not support internal deployments yet. Use an External AI provider.',
         });
     }
     if (pendingResume) {
@@ -686,6 +697,12 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
+
+    const abortController = new AbortController();
+    const abortOnClose = () => {
+        if (!res.writableEnded) abortController.abort();
+    };
+    res.on('close', abortOnClose);
 
     let client: Client | undefined;
     try {
@@ -773,9 +790,16 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
                 (entry) => !conversation.some((msg) => msg.role === 'tool' && msg.tool_call_id === entry.id),
             );
             if (unresolved.length) {
-                const outcome = await processPendingToolCalls(unresolved, conversation, client, res, readOnly);
+                const outcome = await processPendingToolCalls(
+                    unresolved,
+                    conversation,
+                    client,
+                    res,
+                    readOnly,
+                    abortController.signal,
+                );
                 if (outcome === 'paused') pausedForConfirmation = true;
-                if (outcome === 'denied') turnStopped = true;
+                if (outcome === 'denied' || outcome === 'stopped') turnStopped = true;
             }
         }
 
@@ -810,6 +834,11 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
                 usedTokens: toolsTokens + estimateConversationTokens(conversation),
             });
 
+            if (abortController.signal.aborted) {
+                turnStopped = true;
+                break outerLoop;
+            }
+
             let completion;
             try {
                 completion = await callDeployment(
@@ -818,6 +847,7 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
                     deployment.apiKey,
                     conversation,
                     toolsEnabled ? openAiTools : [],
+                    abortController.signal,
                 );
             } catch (error) {
                 if (error instanceof ToolCallingUnsupportedError && toolsEnabled) {
@@ -861,12 +891,19 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
             }
 
             conversation.push(message);
-            const outcome = await processPendingToolCalls(message.tool_calls, conversation, client, res, readOnly);
+            const outcome = await processPendingToolCalls(
+                message.tool_calls,
+                conversation,
+                client,
+                res,
+                readOnly,
+                abortController.signal,
+            );
             if (outcome === 'paused') {
                 pausedForConfirmation = true;
                 break outerLoop;
             }
-            if (outcome === 'denied') {
+            if (outcome === 'denied' || outcome === 'stopped') {
                 turnStopped = true;
                 break outerLoop;
             }
@@ -894,6 +931,7 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
                     deployment.apiKey,
                     conversation,
                     [],
+                    abortController.signal,
                 );
                 const wrapUpMessage = wrapUp.choices?.[0]?.message;
                 if (wrapUpMessage?.reasoning_content) {
@@ -946,14 +984,17 @@ playgroundRouter.post('/api/playground/chat', async (req, res) => {
 
         sseWrite(res, 'done', {});
     } catch (error) {
-        sseWrite(res, 'error', { message: error instanceof Error ? error.message : String(error) });
+        if (!abortController.signal.aborted) {
+            sseWrite(res, 'error', { message: error instanceof Error ? error.message : String(error) });
+        }
     } finally {
+        res.off('close', abortOnClose);
         try {
             await client?.close();
         } catch {
             // ignore
         }
-        res.end();
+        if (!res.writableEnded && !res.destroyed) res.end();
     }
 });
 

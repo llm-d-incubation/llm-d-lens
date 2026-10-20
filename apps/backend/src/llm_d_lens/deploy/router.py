@@ -212,6 +212,8 @@ async def create_run(request: DeploymentRunCreateRequest, http_request: Request 
 @router.get(
     "/node-labels",
     summary="List available node labels for deployment placement.",
+    description="Return distinct node labels and values from the selected accessible cluster so callers can "
+    "choose a placement label for a deployment.",
     operation_id="list_deployment_node_labels",
 )
 async def list_deployment_node_labels(cluster_id: str = Query(..., min_length=1), request: Request = None) -> dict:

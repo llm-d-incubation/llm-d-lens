@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, ChevronLeft, Plug, Plus, RefreshCw, Send, Server, Sparkles } from 'lucide-react';
+import { AlertCircle, BookOpen, CheckCircle2, ChevronLeft, Plug, Plus, RefreshCw, Send, Server, Slack, Sparkles, Star } from 'lucide-react';
 import { usePolling } from '../../../shared/lib/usePolling';
 import { errorMessage } from '../../../shared/lib/errorMessage';
 import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
@@ -20,6 +20,9 @@ import { ProviderSelect } from './ProviderSelect';
 import { QuickActions } from './QuickActions';
 import { WELCOME_CARD } from './welcomeStyles';
 import { visibleWelcomeActions } from '../model/quickActions';
+
+const LENS_DOCUMENTATION_URL = 'https://llm-d-incubation.github.io/llm-d-lens/';
+const LENS_SLACK_URL = 'https://llm-d.slack.com/';
 
 function scopeOptions(scope) {
     return [
@@ -140,7 +143,7 @@ export default function WelcomePage({
         onNavigate('clusters', { action: 'create' });
     };
 
-    usePolling(() => loadIssues({ quiet: true }), { intervalMs: 60000 });
+    usePolling(() => loadIssues({ quiet: true }), { intervalMs: 15000 });
 
     const filteredIssues = useMemo(() => {
         const all = overview?.issues?.data || [];
@@ -304,6 +307,37 @@ export default function WelcomePage({
                     title={`Welcome, ${principal?.username || 'operator'}`}
                     description="Review the latest cluster and service status, and take action when needed."
                     onToggleMobileNav={onToggleMobileNav}
+                    actions={(
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => window.open('https://github.com/login?return_to=%2Fllm-d-incubation%2Fllm-d-lens', '_blank', 'noopener,noreferrer')}
+                                title="Star llm-d-lens on GitHub"
+                            >
+                                <Star size={14} aria-hidden="true" />
+                                Star on GitHub
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => window.open(LENS_SLACK_URL, '_blank', 'noopener,noreferrer')}
+                                title="Join the llm-d Slack"
+                            >
+                                <Slack size={14} aria-hidden="true" />
+                                Join Slack
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => window.open(LENS_DOCUMENTATION_URL, '_blank', 'noopener,noreferrer')}
+                                title="Open Lens documentation"
+                            >
+                                <BookOpen size={14} aria-hidden="true" />
+                                Documentation
+                            </Button>
+                        </div>
+                    )}
                 />
                 <div className={cn('mt-4 grid gap-4', quickActions.length > 0 && (quickActionsCollapsed ? 'lg:min-h-[calc(100vh-9.5rem)] lg:grid-cols-[minmax(0,1fr)_2.5rem]' : 'lg:min-h-[calc(100vh-9.5rem)] lg:grid-cols-[minmax(0,1fr)_24rem]'))}>
                     <div className={cn('flex min-h-0 flex-col gap-4')}>
@@ -395,11 +429,11 @@ export default function WelcomePage({
                                         limit={8}
                                         emptyTitle={severity
                                             ? `No ${severity} issues`
-                                            : overview?.scope?.clusters?.length ? 'No detected issues' : 'Cluster access needed'}
+                                            : overview?.scope?.clusters?.length ? 'All systems operational' : 'Cluster access needed'}
                                         emptyMessage={severity
                                             ? 'Adjust the severity filter to see other findings.'
                                             : overview?.scope?.clusters?.length
-                                                ? 'No issues were found in the available data.'
+                                                ? 'Health checks and telemetry across monitored clusters are reporting normally. No action is required.'
                                                 : 'Your account does not have access to a registered cluster.'}
                                     />
                                 </div>

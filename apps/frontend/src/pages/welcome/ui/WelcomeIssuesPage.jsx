@@ -50,6 +50,7 @@ export default function WelcomeIssuesPage({
     const [searchInput, setSearchInput] = useState(search);
     const [expandedIds, setExpandedIds] = useState(() => new Set());
     const generation = useRef(0);
+    const hasFilters = Boolean(clusterId || severity || category || search);
 
     useEffect(() => {
         let cancelled = false;
@@ -96,7 +97,7 @@ export default function WelcomeIssuesPage({
         loadFirst();
     }, [loadFirst]);
 
-    usePolling(() => loadFirst({ quiet: true }), { intervalMs: 60000, enabled: !nextCursor });
+    usePolling(() => loadFirst({ quiet: true }), { intervalMs: 15000, enabled: !nextCursor });
 
     const loadMore = async () => {
         if (!nextCursor || loadingMore) return;
@@ -232,8 +233,12 @@ export default function WelcomeIssuesPage({
                         expandable
                         expandedIds={expandedIds}
                         onToggle={toggleIssue}
-                        emptyTitle="No issues detected"
-                        emptyMessage="No issues match these filters in the available data."
+                        emptyTitle={hasFilters ? 'No matching findings' : 'All systems operational'}
+                        emptyMessage={
+                            hasFilters
+                                ? 'Adjust the filters to review other findings.'
+                                : 'Health checks and telemetry across monitored clusters are reporting normally. No action is required.'
+                        }
                     />
                 )}
                 {nextCursor && (

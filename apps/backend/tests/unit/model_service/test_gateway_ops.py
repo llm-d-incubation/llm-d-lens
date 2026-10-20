@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -14,6 +14,7 @@ from llm_d_lens.db.dao.model_service_group import ModelServiceGroupDao
 from llm_d_lens.db.dao.model_service_member import ModelServiceMemberDao
 from llm_d_lens.model_service import gateway_ops as gateway_ops_module
 from llm_d_lens.model_service.contracts import ModelServiceGroup, ModelServiceMember
+from llm_d_lens.model_service.gateway_contracts import GatewayOperation
 from llm_d_lens.model_service.gateway_ops import GatewayOpsService
 from llm_d_lens.model_service.targets import ExecutionMissingError
 
@@ -94,7 +95,7 @@ async def test_remove_model_route_treats_sdk_empty_list_as_absent(monkeypatch):
     monkeypatch.setattr(ops, "_kubectl", kubectl)
     await ops.remove_model_route(group)
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert all(call[0] == "get" for call in calls)
 
 
@@ -974,10 +975,21 @@ class _ComponentRunner(_FakeRunner):
             return _Result(
                 stdout=json.dumps({"spec": {"selector": {"matchLabels": {"llm-d.ai/guide": "pool"}}}, "status": status})
             )
-        if list(argv[:3]) == ["kubectl", "get", "endpointslices"]:
-            ready = "true" if self._model_server_ready else "false"
+        if list(argv[:3]) == ["kubectl", "get", "pods"]:
+            ready = "True" if self._model_server_ready else "False"
             return _Result(
-                stdout='{"items":[{"endpoints":[{"addresses":["1.2.3.4"],"conditions":{"ready":' + ready + "}}]}]}"
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "status": {
+                                    "phase": "Running",
+                                    "conditions": [{"type": "Ready", "status": ready}],
+                                }
+                            }
+                        ]
+                    }
+                )
             )
         return await super().run(argv, cwd=cwd, env=env, input=input, timeout=timeout)
 
@@ -1261,3 +1273,101 @@ def test_resolve_authz_endpoint_uses_live_serving_port(monkeypatch):
 def test_resolve_authz_endpoint_falls_back_before_first_request(monkeypatch):
     monkeypatch.setattr(gateway_ops_module.hostinfo, "current_serving_port", lambda: None)
     assert gateway_ops_module.resolve_authz_endpoint("10.0.0.5") == ("10.0.0.5", 8081)
+
+
+@pytest.mark.asyncio
+async def test_model_server_health_checks_pods_selected_by_the_inference_pool():
+    calls: list[list[str]] = []
+    service = GatewayOpsService(operations=GatewayOperationDao())
+
+    async def kubectl(_cluster_id, argv, **_kwargs):
+        calls.append(argv)
+        return _Result(
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "status": {
+                                "phase": "Running",
+                                "conditions": [{"type": "Ready", "status": "True"}],
+                            }
+                        }
+                    ]
+                }
+            )
+        )
+
+    service._kubectl = kubectl
+
+    assert await service._model_server_state("cluster-a", "ns", "llm-d.ai/guide=pool") == "ready"
+    assert calls == [["get", "pods", "-n", "ns", "-l", "llm-d.ai/guide=pool", "-o", "json"]]
+
+
+def test_automatic_gateway_operations_do_not_write_audit_events():
+    service = GatewayOpsService(operations=GatewayOperationDao())
+    audit = Mock()
+    service._auth = SimpleNamespace(audit=audit)
+
+    operation = service._record(GatewayOperation(kind="install-gateway", cluster_id="cluster-a"))
+    service._finish(operation, ok=True, message="reconciled")
+
+    audit.assert_not_called()
+
+
+class _ModelRewriteRunner(_FakeRunner):
+    async def run(self, argv, *, cwd=None, env=None, input=None, timeout=10):  # noqa: A002
+        self.calls.append((argv, input))
+        if list(argv[:3]) == ["kubectl", "get", "crd"]:
+            return _Result(stdout="inferencemodelrewrites.llm-d.ai\n")
+        if list(argv[:3]) == ["kubectl", "get", "inferencemodelrewrite"]:
+            return _Result(stdout='{"items": []}')
+        return await super().run(argv, cwd=cwd, env=env, input=input, timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_maps_public_model_name_to_served_model_name(monkeypatch):
+    group = ModelServiceGroupDao().create(
+        ModelServiceGroup(
+            name="qwen3-0.6b",
+            model_ref="Qwen/Qwen3-0.6B",
+            cluster_id="cluster-a",
+            served_name="Qwen/Qwen3-0.6B",
+            base_model="qwen3-0.6b",
+        )
+    )
+    ModelServiceMemberDao().create(
+        ModelServiceMember(
+            group_id=group.id,
+            execution_id="exec-alias",
+            cluster_id="cluster-a",
+            target_namespace="ns",
+            target_service="qwen-epp",
+            target_port=80,
+            pool_name="ns/qwen-pool",
+            epp_ref="qwen-epp",
+            endpoint_kind="llm-d-epp",
+        )
+    )
+    calls: list = []
+    service = _service(calls=calls, runner_cls=_ModelRewriteRunner)
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _cid: SimpleNamespace(
+            gateway_provider="istio", gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"
+        ),
+    )
+
+    operation = await service.reconcile_cluster_gateway("cluster-a")
+
+    assert operation.status == "succeeded"
+    rewrites = [
+        item[1]
+        for item in calls
+        if list(item[0][:3]) == ["kubectl", "apply", "-f"] and "kind: InferenceModelRewrite" in (item[1] or "")
+    ]
+    assert rewrites
+    manifest = rewrites[-1]
+    assert "value: qwen3-0.6b" in manifest
+    assert "modelRewrite: Qwen/Qwen3-0.6B" in manifest
+    assert "name: qwen-pool" in manifest

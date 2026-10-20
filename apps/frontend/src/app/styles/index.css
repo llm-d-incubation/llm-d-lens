@@ -400,6 +400,20 @@ main span:has(> :only-child) + p.text-slate-600 {
   margin: 0.8em 0;
 }
 
+@keyframes status-glow-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(0.92); }
+  50% { opacity: 0.95; transform: scale(1.14); }
+}
+
+.status-glow-pulse {
+  animation: status-glow-pulse 3.2s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-glow-pulse { animation: none; }
+}
+
 @keyframes benchmark-progress {
   from { transform: translateX(-100%); }
   to { transform: translateX(300%); }

@@ -61,7 +61,10 @@ def install_problem_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_problem(request: Request, error: Exception) -> JSONResponse:
-        request_id = uuid.uuid4().hex
+        from llm_d_lens.auth.context import current_audit_context  # noqa: PLC0415
+
+        context = current_audit_context()
+        request_id = context.request_id if context is not None else uuid.uuid4().hex
         logger.exception(
             "unhandled_error request_id=%s method=%s path=%s",
             request_id,

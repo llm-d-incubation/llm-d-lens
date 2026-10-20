@@ -44,13 +44,17 @@ from llm_d_lens.model_service.gateway_contracts import (
 )
 from llm_d_lens.model_service.gateway_providers import (
     DEFAULT_PROVIDER,
+    INFERENCE_MODEL_REWRITE_CRD,
     MANAGED_LABEL,
     MANAGED_VALUE,
+    MODEL_SERVICE_LABEL,
     PoolBinding,
     default_pool_name,
     ensure_istioctl,
+    model_rewrite_name,
     provider_spec,
     render_inference_gateway,
+    render_model_rewrites,
     render_model_route,
     render_node_inotify_daemonset,
     resource_name,
@@ -240,9 +244,11 @@ class GatewayOpsService:
         operation.detail_json = detail
         operation.finished_at = utcnow()
         saved = self.operations.save(operation)
-        # Automatic reconcile runs on a background loop with no actor; those runs
-        # are noise for the audit trail, so only user-initiated operations log.
-        is_automatic = operation.kind == "reconcile-gateway" and operation.created_by_user_id is None
+        # Automatic reconcile runs on a background loop with no actor. Its nested
+        # operations (install-gateway, component-scale, ...) also have no actor;
+        # all of them are noise for the audit trail, so only user-initiated
+        # operations log.
+        is_automatic = operation.created_by_user_id is None
         if not is_automatic:
             self._auth.audit(
                 "model_gateway_operation",
@@ -415,6 +421,92 @@ class GatewayOpsService:
         except (FileNotFoundError, TimeoutError, OSError):
             return None
         return (result.stdout or "").strip() or None if result.returncode == 0 else None
+
+    async def _model_rewrite_available(self, cluster_id: str) -> bool:
+        try:
+            result = await self._kubectl(
+                cluster_id, ["get", "crd", INFERENCE_MODEL_REWRITE_CRD, "-o", "name"], timeout=15
+            )
+        except (FileNotFoundError, TimeoutError, OSError):
+            return False
+        return result.returncode == 0 and INFERENCE_MODEL_REWRITE_CRD in (result.stdout or "")
+
+    async def _managed_model_rewrites(self, cluster_id: str) -> set[tuple[str, str]]:
+        try:
+            result = await self._kubectl(
+                cluster_id,
+                [
+                    "get",
+                    "inferencemodelrewrite",
+                    "-A",
+                    "-l",
+                    f"{MANAGED_LABEL}={MANAGED_VALUE}",
+                    "-o",
+                    "json",
+                ],
+                timeout=30,
+            )
+        except (FileNotFoundError, TimeoutError, OSError) as error:
+            raise GatewayOpsError("could not list managed model rewrites") from error
+        if result.returncode != 0:
+            raise GatewayOpsError((result.stderr or "could not list managed model rewrites").strip())
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return set()
+        return {
+            ((item.get("metadata") or {}).get("namespace", ""), (item.get("metadata") or {}).get("name", ""))
+            for item in payload.get("items") or []
+            if (item.get("metadata") or {}).get("name")
+        }
+
+    async def _delete_model_rewrites_for_group(self, cluster_id: str, group_id: str) -> None:
+        if not await self._model_rewrite_available(cluster_id):
+            return
+        try:
+            result = await self._kubectl(
+                cluster_id,
+                [
+                    "get",
+                    "inferencemodelrewrite",
+                    "-A",
+                    "-l",
+                    f"{MODEL_SERVICE_LABEL}={group_id}",
+                    "-o",
+                    "json",
+                ],
+                timeout=30,
+            )
+        except (FileNotFoundError, TimeoutError, OSError) as error:
+            raise GatewayOpsError("could not list model rewrites for removal") from error
+        if result.returncode != 0:
+            raise GatewayOpsError((result.stderr or "could not list model rewrites for removal").strip())
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return
+        for item in payload.get("items") or []:
+            metadata = item.get("metadata") or {}
+            name = metadata.get("name")
+            rewrite_namespace = metadata.get("namespace")
+            if not name or not rewrite_namespace:
+                continue
+            deleted = await self._kubectl(
+                cluster_id,
+                [
+                    "delete",
+                    "inferencemodelrewrite",
+                    name,
+                    "-n",
+                    rewrite_namespace,
+                    "--ignore-not-found=true",
+                    "--wait=true",
+                    "--timeout=60s",
+                ],
+                timeout=70,
+            )
+            if deleted.returncode != 0:
+                raise GatewayOpsError(deleted.stderr or f"cannot remove model rewrite {name}")
 
     async def _managed_route_names(self, cluster_id: str, namespace: str) -> set[str]:
         """HTTPRoute names Lens manages in a cluster's Gateway namespace."""
@@ -1398,6 +1490,8 @@ class GatewayOpsService:
                 healed.add(key)
                 await self._ensure_epp_plaintext(cluster_id, member.target_namespace, epp_name, on_log=on_log)
         applied_names: set[str] = set()
+        rewrite_documents: list[str] = []
+        applied_rewrites: set[tuple[str, str]] = set()
         for group_id, cluster_members in by_group.items():
             group = groups.get(group_id)
             if group is None or group.status == "disabled":
@@ -1423,19 +1517,35 @@ class GatewayOpsService:
                 return self._finish(
                     operation, ok=False, message=f"model {group.name}: requires at most 16 distinct pools"
                 )
-            applied_names.add(resource_name(f"{group.name}-{group.id}"))
+            route_name = resource_name(f"{group.name}-{group.id}")
+            public_model = group.base_model or group.model_ref
+            applied_names.add(route_name)
             documents.append(
                 render_model_route(
                     namespace=namespace,
                     # The same public model name can exist per cluster, so the route /
                     # ConfigMap names must be unique per group.
                     model_name=f"{group.name}-{group.id}",
-                    base_model=group.base_model or group.model_ref,
+                    base_model=public_model,
                     pools=bindings,
                     gateway_name=name,
                     gateway_namespace=namespace,
                 )
             )
+            rewrites = render_model_rewrites(
+                namespace=namespace,
+                model_service_id=group.id,
+                model_name=f"{group.name}-{group.id}",
+                public_model=public_model,
+                served_model=group.served_name,
+                pools=bindings,
+            )
+            if rewrites:
+                rewrite_documents.append(rewrites)
+                for binding in bindings:
+                    applied_rewrites.add(
+                        (binding.namespace or namespace, model_rewrite_name(route_name, binding.pool_name))
+                    )
         if documents:
             try:
                 applied = await self._kubectl(
@@ -1445,6 +1555,46 @@ class GatewayOpsService:
                 return self._finish(operation, ok=False, message=f"kubectl unavailable: {error}")
             if applied.returncode != 0:
                 return self._finish(operation, ok=False, message=(applied.stderr or "route apply failed").strip())
+        rewrite_available = await self._model_rewrite_available(cluster_id)
+        if rewrite_documents and not rewrite_available:
+            return self._finish(
+                operation,
+                ok=False,
+                message="InferenceModelRewrite CRD is required to map a public model name to its served name",
+            )
+        if rewrite_documents:
+            try:
+                applied = await self._kubectl(
+                    cluster_id, ["apply", "-f", "-"], input="---\n".join(rewrite_documents), timeout=120
+                )
+            except (FileNotFoundError, TimeoutError, OSError) as error:
+                return self._finish(operation, ok=False, message=f"kubectl unavailable: {error}")
+            if applied.returncode != 0:
+                return self._finish(
+                    operation, ok=False, message=(applied.stderr or "model rewrite apply failed").strip()
+                )
+        if rewrite_available:
+            try:
+                stale_rewrites = await self._managed_model_rewrites(cluster_id) - applied_rewrites
+            except GatewayOpsError as error:
+                return self._finish(operation, ok=False, message=str(error))
+            for rewrite_namespace, rewrite_name in sorted(stale_rewrites):
+                deleted = await self._kubectl(
+                    cluster_id,
+                    [
+                        "delete",
+                        "inferencemodelrewrite",
+                        rewrite_name,
+                        "-n",
+                        rewrite_namespace,
+                        "--ignore-not-found=true",
+                    ],
+                    timeout=60,
+                )
+                if deleted.returncode != 0:
+                    return self._finish(
+                        operation, ok=False, message=(deleted.stderr or "stale model rewrite removal failed").strip()
+                    )
         # Remove routes this cluster no longer serves (member deleted/moved away).
         try:
             stale = sorted(await self._managed_route_names(cluster_id, namespace) - applied_names)
@@ -1551,6 +1701,7 @@ class GatewayOpsService:
             )
             if remaining.returncode != 0 or _kubectl_object(remaining.stdout) is not None:
                 raise GatewayOpsError(f"cannot confirm removal of {kind}/{name}; retry model removal")
+        await self._delete_model_rewrites_for_group(group.cluster_id, group.id)
 
     async def scale_component(
         self,
@@ -1835,12 +1986,18 @@ class GatewayOpsService:
         return state, selector
 
     async def _model_server_state(self, cluster_id: str, namespace: str, selector: str | None) -> str:
-        """``ready`` when the InferencePool's selector has a ready endpoint."""
+        """``ready`` when the InferencePool's selector has a ready Pod.
+
+        Query Pods rather than EndpointSlices: the InferencePool controller
+        creates a headless Service/EndpointSlice that does not retain the
+        InferencePool selector as EndpointSlice labels, so filtering
+        EndpointSlices by that selector always returns nothing.
+        """
         if not selector:
             return "missing"
         try:
             result = await self._kubectl(
-                cluster_id, ["get", "endpointslices", "-n", namespace, "-l", selector, "-o", "json"], timeout=15
+                cluster_id, ["get", "pods", "-n", namespace, "-l", selector, "-o", "json"], timeout=15
             )
         except (FileNotFoundError, TimeoutError, OSError):
             return "unknown"
@@ -1851,9 +2008,14 @@ class GatewayOpsService:
         except json.JSONDecodeError:
             return "unknown"
         for item in payload.get("items") or []:
-            for endpoint in item.get("endpoints") or []:
-                if endpoint.get("addresses") and (endpoint.get("conditions") or {}).get("ready", True):
-                    return "ready"
+            status = item.get("status") or {}
+            if status.get("phase") != "Running":
+                continue
+            if any(
+                condition.get("type") == "Ready" and condition.get("status") == "True"
+                for condition in status.get("conditions") or []
+            ):
+                return "ready"
         return "missing"
 
     # --- status --------------------------------------------------------------

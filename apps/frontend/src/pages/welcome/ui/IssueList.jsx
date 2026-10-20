@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Info, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Clock, Info, ShieldAlert } from 'lucide-react';
 import { Badge } from '../../../shared/ui/Badge';
 import { Button } from '../../../shared/ui/Button';
 import { EmptyState } from '../../../shared/ui/EmptyState';
@@ -34,6 +34,7 @@ function IssueActions({ issue, onNavigate, canView, can }) {
                     key={`${action.view}:${action.intent}`}
                     variant={action === issue.primaryAction ? 'secondary' : 'ghost'}
                     size="xs"
+                    className="w-20"
                     onClick={() => onNavigate?.(action.view, {
                         ...(issue.clusterId ? { clusterId: issue.clusterId } : {}),
                         ...action.params,
@@ -48,7 +49,7 @@ function IssueActions({ issue, onNavigate, canView, can }) {
 
 export function IssueRow({ issue, onNavigate, expandable = false, expanded = false, onToggle }) {
     const { canView, can } = useAuth();
-    const Icon = SEVERITY_ICON[issue.severity] || Info;
+    const SeverityIcon = SEVERITY_ICON[issue.severity] || Info;
     const rows = evidenceRows(issue, expandable && expanded ? 8 : 2);
     const scope = issue.code === 'cluster.none_available'
         ? 'No clusters'
@@ -57,20 +58,27 @@ export function IssueRow({ issue, onNavigate, expandable = false, expanded = fal
             : issue.clusterName || issue.clusterId || 'All clusters';
     const scopeLabel = issue.clusterId || issue.clusterName ? 'Cluster' : 'Scope';
     return (
-        <article className="rounded-lg border border-sky-500/10 bg-white/60 px-3 py-2.5 dark:border-sky-500/15 dark:bg-slate-900/40">
+        <article className="rounded-lg border border-sky-500/15 bg-gradient-to-br from-white/85 via-sky-50/35 to-cyan-50/25 px-3 py-2.5 shadow-sm shadow-sky-500/5 backdrop-blur-sm transition-colors hover:border-sky-500/25 hover:from-white/95 hover:via-sky-50/45 hover:to-cyan-50/30 dark:border-sky-500/20 dark:from-slate-900/80 dark:via-slate-900/50 dark:to-sky-950/25 dark:hover:from-slate-900/90 dark:hover:via-slate-900/60 dark:hover:to-sky-950/35">
             <div className="flex items-start gap-2.5">
-                <Badge tone={severityTone(issue.severity)} size="xs" className="mt-0.5 shrink-0 gap-1">
-                    <Icon size={11} aria-hidden="true" />
-                    {issue.severity}
-                </Badge>
+                <div className="flex shrink-0 items-start gap-2.5">
+                    <Badge
+                        tone={severityTone(issue.severity)}
+                        size="xs"
+                        className="mt-0.5 w-20 shrink-0 justify-center gap-1"
+                    >
+                        <SeverityIcon size={11} aria-hidden="true" />
+                        {issue.severity}
+                    </Badge>
+                    <span className="mt-1 h-8 w-px bg-theme-border/70" aria-hidden="true" />
+                </div>
                 <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-3">
-                        <h4 className="truncate text-[13px] font-semibold leading-snug text-theme-text" title={issue.title}>
+                        <h4 className="truncate text-[13px] font-semibold leading-snug tracking-[-0.01em] text-theme-text" title={issue.title}>
                             {issue.title}
                         </h4>
                         {(issue.firstSeenAt || issue.observedAt) && (
-                            <span className="shrink-0 text-[10px] text-theme-muted">
-                                First seen{' '}
+                            <span className="inline-flex shrink-0 items-center gap-1 text-[9px] font-medium text-theme-muted">
+                                <Clock size={10} className="opacity-70" aria-hidden="true" />
                                 <span className="font-semibold text-theme-text">
                                     {formatAge(issue.firstSeenAt || issue.observedAt)}
                                 </span>
@@ -134,8 +142,8 @@ export function IssueRow({ issue, onNavigate, expandable = false, expanded = fal
 export function IssueList({
     issues,
     onNavigate,
-    emptyTitle = 'No detected issues',
-    emptyMessage = 'No issues were found in the available data.',
+    emptyTitle = 'All systems operational',
+    emptyMessage = 'Health checks and telemetry across monitored clusters are reporting normally. No action is required.',
     expandable = false,
     expandedIds = new Set(),
     onToggle,
@@ -143,7 +151,15 @@ export function IssueList({
 }) {
     const visible = limit ? issues.slice(0, limit) : issues;
     if (!visible.length) {
-        return <EmptyState icon={<Info size={22} />} title={emptyTitle} message={emptyMessage} />;
+        return (
+            <EmptyState
+                icon={<CheckCircle2 size={48} strokeWidth={1.6} />}
+                title={emptyTitle}
+                message={emptyMessage}
+                tone="success"
+                variant="status"
+            />
+        );
     }
     return (
         <div className="space-y-2">

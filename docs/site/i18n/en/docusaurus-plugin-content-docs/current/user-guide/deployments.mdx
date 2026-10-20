@@ -103,7 +103,56 @@ serve again, so leave the deployment in place rather than recreating it
 immediately. If the namespace is gone, the deployment is corrected to **Cleaned**
 instead.
 
+Pending Pods waiting for accelerator resources, including DRA scheduler reports
+such as `cannot allocate all claims`, keep the deployment **In progress** even
+after the rollout progress deadline. Refreshing a deployment previously marked
+**Failed** returns it to **In progress** when current diagnostics confirm this
+resource wait. The scheduler reason remains available in diagnostics. This does
+not release devices held by other deployments; stop or remove an unused deployment
+to free them. Container crashes and image-pull failures still count as failures;
+Pending alone is not enough to classify a deployment as waiting for resources.
+
+After scheduling, a Running Pod can still be loading the model and not yet Ready.
+If rollout reports an exceeded progress deadline, Lens preserves **In progress**
+without automatic cleanup while current containers remain within their
+`startupProbe` budget (or `readinessProbe` budget when no startup probe exists),
+measured from each container's actual start time. Time spent Pending does not
+consume this budget. Current crashes, image-pull failures, container restarts and
+expired probe budgets are not covered by this grace period. Running alone is not
+proof of readiness; the provider's readiness checks must still pass.
+
 ## View pods and stream logs
+
+For newly rendered deployments, all providers forward explicit maximum model
+length, maximum sequence count, GPU memory utilization, block size and maximum
+batched tokens to vLLM. P/D applies Prefill and Decode settings independently.
+Role settings override Guide defaults; model-level maximum length is a fallback
+when the role does not specify one. Targeted custom arguments take precedence.
+Omitted settings retain upstream defaults. These changes do not rewrite existing
+Pods or exact published manifests: create a new deployment to apply changed settings.
+Check the model-server command and logs when diagnosing KV-cache capacity errors.
+
+Lens checks `/dev/shm` in rendered model-server Pods across all deployment
+providers. Ordinary rendering adds a per-Pod, memory-backed `emptyDir` with a
+**4 GiB** limit when the mount is missing and host IPC is not enabled.
+`baseline-vllm` also defaults to 4 GiB. This avoids the container runtime's
+default 64 MiB shared-memory limit without enabling host IPC or changing
+the upstream Guide checkout.
+
+Existing mounts and their limits are preserved, including mounts with no explicit
+limit and alternative volume sources. Missing limits, alternative sources,
+read-only/subpath mounts and existing host IPC produce warnings in service logs
+and deployment diagnostics (`snapshot.shared_memory`). An omitted `sizeLimit`
+on a memory-backed volume does not mean a 64 MiB limit or unlimited usable memory.
+Duplicate `/dev/shm` mounts and invalid volume bindings are rejected.
+
+Exact published manifests (`officialGuide`) are checked but never receive an
+automatic shared-memory mount; missing mounts produce warnings instead.
+The report is also retained in the deployment artifact's
+`rendered_payload.value.deployment_contract.sharedMemory`.
+Volumes consume memory as used, not their full limit up front; account for
+shared memory when sizing Pod memory. Existing deployments retain their original
+manifests; recreate them to receive the new default or missing-mount completion.
 
 1. To see pod status inline, click the row toggle with tooltip **Show pods**.
 2. In the expanded row, review the pod table columns **Pod**, **Status**, **Restarts**, **Node**, and **Pod IP**.

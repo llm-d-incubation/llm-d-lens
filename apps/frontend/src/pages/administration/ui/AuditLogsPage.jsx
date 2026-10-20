@@ -34,6 +34,8 @@ const EVENT_TONES = {
 
 // ``result`` values the audit writers use (success/failure/deny).
 const RESULT_OPTIONS = ['success', 'failure', 'deny'];
+const ACTION_OPTIONS = ['create', 'update', 'delete', 'execute', 'approve', 'deny', 'login', 'logout'];
+const SOURCE_OPTIONS = ['browser', 'api', 'assistant', 'background', 'system'];
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 
 function toIso(value) {
@@ -50,6 +52,8 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
     const [error, setError] = useState('');
     const [eventType, setEventType] = useState('');
     const [result, setResult] = useState('');
+    const [action, setAction] = useState('');
+    const [source, setSource] = useState('');
     const [actorText, setActorText] = useState('');
     const [actorUserId, setActorUserId] = useState('');
     const [since, setSince] = useState('');
@@ -65,6 +69,8 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
             const payload = await listAuditLogs({
                 eventType: eventType || undefined,
                 result: result || undefined,
+                action: action || undefined,
+                source: source || undefined,
                 actorUserId: actorUserId || undefined,
                 since: toIso(since),
                 until: toIso(until),
@@ -81,7 +87,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [eventType, result, actorUserId, since, until, page, pageSize]);
+    }, [eventType, result, action, source, actorUserId, since, until, page, pageSize]);
 
     useEffect(() => {
         load();
@@ -100,7 +106,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
         [logs]
     );
 
-    const hasFilters = Boolean(eventType || result || actorUserId || since || until);
+    const hasFilters = Boolean(eventType || result || action || source || actorUserId || since || until);
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
     const pageStart = total === 0 ? 0 : page * pageSize + 1;
     const pageEnd = Math.min(total, page * pageSize + logs.length);
@@ -120,6 +126,8 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
     const clearFilters = () => {
         setEventType('');
         setResult('');
+        setAction('');
+        setSource('');
         setActorText('');
         setActorUserId('');
         setSince('');
@@ -173,6 +181,22 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         ))}
                                     </Select>
                                 </div>
+                                <div className="w-36 shrink-0">
+                                    <Select value={action} onChange={(event) => update(setAction)(event.target.value)} aria-label="Action filter">
+                                        <option value="">All actions</option>
+                                        {ACTION_OPTIONS.map((value) => (
+                                            <option key={value} value={value}>{value}</option>
+                                        ))}
+                                    </Select>
+                                </div>
+                                <div className="w-36 shrink-0">
+                                    <Select value={source} onChange={(event) => update(setSource)(event.target.value)} aria-label="Source filter">
+                                        <option value="">All sources</option>
+                                        {SOURCE_OPTIONS.map((value) => (
+                                            <option key={value} value={value}>{value}</option>
+                                        ))}
+                                    </Select>
+                                </div>
                                 <div className="w-56 shrink-0">
                                     <Input
                                         list="audit-actor-options"
@@ -217,14 +241,16 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                             <EmptyState title="No matching events" />
                         ) : (
                             <div className="overflow-x-auto">
-                                <table className="w-full min-w-[48rem] text-left text-sm">
+                                <table className="w-full min-w-[64rem] text-left text-sm">
                                     <thead className="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-500">
                                         <tr>
                                             <th className="px-4 py-3">Time</th>
                                             <th className="px-4 py-3">Event</th>
+                                            <th className="px-4 py-3">Action</th>
                                             <th className="px-4 py-3">Actor</th>
+                                            <th className="px-4 py-3">Source</th>
                                             <th className="px-4 py-3">Result</th>
-                                            <th className="px-4 py-3">Detail</th>
+                                            <th className="px-4 py-3">Target</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -234,10 +260,12 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                                 <td className="px-4 py-3">
                                                     <Badge tone={EVENT_TONES[log.event_type] || 'neutral'}>{log.event_type}</Badge>
                                                 </td>
+                                                <td className="px-4 py-3 text-slate-400">{log.action || '—'}</td>
                                                 <td className="px-4 py-3 text-slate-300">{log.actor_username || '—'}</td>
+                                                <td className="px-4 py-3 text-slate-400">{log.source || '—'}</td>
                                                 <td className="px-4 py-3 text-slate-400">{log.result}</td>
                                                 <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                                                    {log.permission || log.path || log.target_id || '—'}
+                                                    {log.target_name || log.target_id || log.permission || log.path || '—'}
                                                 </td>
                                             </tr>
                                         ))}

@@ -48,6 +48,12 @@ Update those clients with the replacement key.
 7. Click **Add**. A new public name creates the model service and its model server together. An existing public name in the same cluster adds the deployment to that model and reuses its HTTPRoute; it does not create another service. Click **Cancel** to discard the form.
 8. Check the service's status in **Service flow**, then open **My services** and send a copied **cURL** request.
 
+When the public name differs from the provider model name, Lens creates an
+`InferenceModelRewrite` for the service's InferencePool. The shared Gateway uses
+it to rewrite the request body's `model` field before the request reaches the
+model server, so clients use the public name while the engine keeps its own
+model name.
+
 Each field label has a question-mark icon. Hover over it or focus it with the
 keyboard to learn what the field does.
 Changing the cluster clears the selected provider and provider model name.

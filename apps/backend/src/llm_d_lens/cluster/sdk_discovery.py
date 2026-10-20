@@ -23,6 +23,8 @@ _READS = {
 @router.get(
     "/sessions/{session_id}/planning-discovery/{resource}",
     summary="Read one planning discovery resource for an active cluster session.",
+    description="Read Kubernetes version, nodes, device classes, resource slices or runtime classes for an "
+    "active cluster session without exposing kubeconfig material.",
     operation_id="read_cluster_planning_discovery",
 )
 async def planning_discovery(

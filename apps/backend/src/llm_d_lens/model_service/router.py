@@ -160,7 +160,12 @@ async def _apply_publication_change(cluster_ids: list[str], *, actor: str | None
 # --- user: tokens ------------------------------------------------------------
 
 
-@router.get("/tokens", summary="List the caller's active model access tokens (never plaintext).")
+@router.get(
+    "/tokens",
+    summary="List the caller's active model access tokens (never plaintext).",
+    description="List the caller's active model access tokens. Plaintext token values are never returned.",
+    operation_id="list_model_service_tokens",
+)
 async def list_tokens(request: Request) -> dict:
     user_id = _user_id(request)
     return {"items": [token.api_payload() for token in _service.tokens.list_for_user(user_id, include_revoked=False)]}
@@ -187,7 +192,13 @@ async def regenerate_token(request: Request, body: TokenCreateRequest | None = N
     return payload
 
 
-@router.delete("/tokens/{token_id}", status_code=204, summary="Revoke a model access token.")
+@router.delete(
+    "/tokens/{token_id}",
+    status_code=204,
+    summary="Revoke a model access token.",
+    description="Revoke one model access token owned by the caller. Missing or foreign tokens return 404.",
+    operation_id="revoke_model_service_token",
+)
 async def revoke_token(token_id: str, request: Request) -> Response:
     user_id = _user_id(request)
     if not _service.tokens.revoke(user_id, token_id):
@@ -206,13 +217,18 @@ async def revoke_token(token_id: str, request: Request) -> Response:
     "in the model's cluster and a user/group grant on the model service. Operators retain non-self-scoped inference "
     "access in their binding's cluster scope. Deployment grants do not confer access. "
     "Includes the cluster display name.",
+    operation_id="list_model_service_models",
 )
 async def list_models(request: Request) -> dict:
     user_id = _user_id(request)
     return {"items": _service.list_model_entries_for_user(user_id)}
 
 
-@router.get("/connection", summary="Gateway connection info for clients (per cluster).")
+@router.get(
+    "/connection",
+    summary="Gateway connection info for clients (per cluster).",
+    operation_id="get_model_service_connection",
+)
 async def model_service_connection(request: Request) -> dict:
     """Per-cluster Gateway base URLs a client copies into its OpenAI client.
 
@@ -281,14 +297,24 @@ async def public_list_models(request: Request) -> Response:
     return JSONResponse({"object": "list", "data": data})
 
 
-@router.get("/usage/records", summary="List the caller's recent usage records.")
+@router.get(
+    "/usage/records",
+    summary="List the caller's recent usage records.",
+    description="List the caller's recent model inference usage records, newest first, with limit and offset.",
+    operation_id="list_model_service_usage_records",
+)
 async def usage_records(request: Request, limit: int = 100, offset: int = 0) -> dict:
     user_id = _user_id(request)
     records = _service.usage.list_for_user(user_id, limit=min(max(limit, 1), 500), offset=max(offset, 0))
     return {"items": [record.api_payload() for record in records]}
 
 
-@router.get("/usage/timeseries", summary="Daily token totals for the caller.")
+@router.get(
+    "/usage/timeseries",
+    summary="Daily token totals for the caller.",
+    description="Return daily token totals for the caller over the requested number of days.",
+    operation_id="get_model_service_usage_timeseries",
+)
 async def usage_timeseries(request: Request, days: int = 30) -> dict:
     user_id = _user_id(request)
     since = datetime.now(tz=None) - timedelta(days=max(1, min(days, 365)))
@@ -322,7 +348,12 @@ def _daily_totals(records) -> list[dict]:
 # --- admin: groups / members / usage -----------------------------------------
 
 
-@admin_router.get("/groups", summary="List model routing groups in the caller's cluster scope.")
+@admin_router.get(
+    "/groups",
+    summary="List model routing groups in the caller's cluster scope.",
+    description="List model services visible in the caller's cluster scope.",
+    operation_id="list_model_service_groups",
+)
 async def admin_list_groups(request: Request) -> dict:
     principal = current_principal(request)
     groups = [
@@ -349,6 +380,7 @@ async def admin_list_groups(request: Request) -> dict:
     "Returns the created group (201); inaccessible clusters or missing permissions return 403, "
     "missing deployment targets return 404, and duplicate names, non-ready providers or cluster mismatch return 409. "
     "Without executionId, retains standalone group creation.",
+    operation_id="create_model_service_group",
 )
 async def admin_create_group(request: Request, body: GroupCreateRequest, background: BackgroundTasks) -> dict:
     try:
@@ -373,6 +405,7 @@ async def admin_create_group(request: Request, body: GroupCreateRequest, backgro
         "selection policy remain admin-managed. Returns 409 for duplicate names, non-ready "
         "providers or cluster mismatch."
     ),
+    operation_id="publish_model_service",
 )
 async def admin_publish_group(request: Request, body: GroupPublishRequest, background: BackgroundTasks) -> dict:
     try:
@@ -386,7 +419,12 @@ async def admin_publish_group(request: Request, body: GroupPublishRequest, backg
     return group.api_payload()
 
 
-@admin_router.get("/groups/{group_id}", summary="Get a model routing group with cluster-scoped read permission.")
+@admin_router.get(
+    "/groups/{group_id}",
+    summary="Get a model routing group with cluster-scoped read permission.",
+    description="Return one model service's configuration when the caller can read it and its cluster.",
+    operation_id="get_model_service_group",
+)
 async def admin_get_group(group_id: str, request: Request) -> dict:
     group = _service.require_group_access(group_id, current_principal(request), "model-service:group:read")
     return group.api_payload()
@@ -397,6 +435,7 @@ async def admin_get_group(group_id: str, request: Request) -> dict:
     summary="List a model service's inference grants.",
     description="Requires model-service:group:share in the model's cluster. Returns user/group grants with display "
     "names, binding IDs and inference permission. A missing model returns 404; insufficient scope returns 403.",
+    operation_id="list_model_service_access",
 )
 async def list_model_access(group_id: str, request: Request) -> dict:
     return {"items": _service.list_access(group_id, principal=current_principal(request))}
@@ -408,6 +447,7 @@ async def list_model_access(group_id: str, request: Request) -> dict:
     description="Requires scoped model-service:group:share. Returns only user IDs/usernames and group IDs/names "
     "for recipients with inference permission in this model's cluster; does not expose the full identity directory. "
     "Only active, non-protected users are selectable. Model grants do not establish cluster scope.",
+    operation_id="list_model_service_access_options",
 )
 async def model_access_options(group_id: str, request: Request) -> dict:
     return _service.access_options(group_id, principal=current_principal(request))
@@ -422,6 +462,7 @@ async def model_access_options(group_id: str, request: Request) -> dict:
     "access or onward sharing is granted. Recipient must already have inference cluster scope. Returns the grant "
     "ID and recipient (201), 403 for insufficient scope, 404 for missing resources, or 409 for duplicate grants. "
     "The grant covers all providers of this model without changing HTTPRoute weights.",
+    operation_id="grant_model_service_access",
 )
 async def grant_model_access(group_id: str, body: ModelGrantRequest, request: Request) -> dict:
     return _service.grant_access(group_id, body, principal=current_principal(request))
@@ -434,6 +475,7 @@ async def grant_model_access(group_id: str, body: ModelGrantRequest, request: Re
     description="Requires scoped model-service:group:share. Deletes only the specified model's grant and invalidates "
     "recipient authorization. New inference requests re-evaluate access; existing streams are not interrupted. "
     "A missing or mismatched binding returns 404. Other grants and HTTPRoute weights are unchanged.",
+    operation_id="revoke_model_service_access",
 )
 async def revoke_model_access(group_id: str, binding_id: str, request: Request) -> Response:
     _service.revoke_access(group_id, binding_id, principal=current_principal(request))
@@ -451,6 +493,7 @@ async def revoke_model_access(group_id: str, binding_id: str, request: Request) 
     "After commit, reconciles the cluster Gateway and returns members and the operation result. A failed operation "
     "does not roll back saved weights: configuration remains saved and can be retried with Reconcile. "
     "Known reconciliation exceptions return 502 model_traffic_apply_failed, explicitly indicating saved configuration.",
+    operation_id="update_model_service_traffic",
 )
 async def admin_update_traffic(group_id: str, body: TrafficUpdateRequest, request: Request) -> dict:
     principal = current_principal(request)
@@ -480,6 +523,7 @@ async def admin_update_traffic(group_id: str, body: TrafficUpdateRequest, reques
     "Status disabled stops this public model; active restores routing to enabled positive-weight providers. "
     "Provider states, weights and running Pods are preserved. A 502 model_publication_apply_failed means "
     "configuration was saved but routing could not be applied; use Reconcile to retry.",
+    operation_id="update_model_service_group",
 )
 async def admin_update_group(group_id: str, body: GroupUpdateRequest, request: Request) -> dict:
     principal = current_principal(request)
@@ -509,6 +553,7 @@ async def admin_update_group(group_id: str, body: GroupUpdateRequest, request: R
         "Requires model-service:group:toggle in the model's cluster; provider and metadata edits keep "
         "their existing permissions."
     ),
+    operation_id="set_model_service_status",
 )
 async def admin_set_group_status(group_id: str, body: GroupStatusRequest, request: Request) -> dict:
     principal = current_principal(request)
@@ -544,6 +589,7 @@ async def admin_set_group_status(group_id: str, body: GroupStatusRequest, reques
     "and IPP mapping and confirms deletion before deleting the record. Returns 404 for a missing model; "
     "502 model_removal_failed preserves the record for retry when cleanup fails. Deployments, Pods, "
     "other models and shared Gateway resources are not deleted. Associated model inference grants are revoked.",
+    operation_id="delete_model_service_group",
 )
 async def admin_delete_group(group_id: str, request: Request) -> Response:
     principal = current_principal(request)
@@ -580,6 +626,7 @@ async def admin_delete_group(group_id: str, request: Request) -> Response:
     "every deployment to be ready in its registered cluster. Empty models, unready deployments or concurrent "
     "provider changes return 409 model_member_conflict without partial status updates; a missing model returns "
     "404. A 502 model_publication_apply_failed means statuses were saved but routing failed; use Reconcile.",
+    operation_id="set_model_service_providers_status",
 )
 async def admin_set_providers_status(group_id: str, body: ProvidersStatusRequest, request: Request) -> dict:
     principal = current_principal(request)
@@ -597,7 +644,12 @@ async def admin_set_providers_status(group_id: str, body: ProvidersStatusRequest
     return {"items": [member.api_payload() for member in members]}
 
 
-@admin_router.get("/members", summary="List published model service members.")
+@admin_router.get(
+    "/members",
+    summary="List published model service members.",
+    description="List published model service members, optionally filtered by group, within cluster scope.",
+    operation_id="list_model_service_members",
+)
 async def admin_list_members(request: Request, group_id: str | None = None) -> dict:
     principal = current_principal(request)
     members = filter_by_cluster(_service.list_members(group_id), lambda member: member.cluster_id, principal)
@@ -609,7 +661,12 @@ async def admin_list_members(request: Request, group_id: str | None = None) -> d
     return {"items": items}
 
 
-@admin_router.get("/deployments", summary="Ready deployments that can be published as members.")
+@admin_router.get(
+    "/deployments",
+    summary="Ready deployments that can be published as members.",
+    description="List ready deployments the caller can publish as model service members.",
+    operation_id="list_publishable_deployments",
+)
 async def admin_publishable_deployments(request: Request) -> dict:
     items = _service.list_publishable_deployments(current_principal(request))
     return {"items": [item.api_payload() for item in items]}
@@ -621,6 +678,7 @@ async def admin_publishable_deployments(request: Request) -> dict:
     summary="Publish a deployment as a group member.",
     description="Publish a deployment in the group's cluster with default weight 1, preserving existing provider "
     "weights. Schedules Gateway reconciliation; use traffic distribution to change the allocation.",
+    operation_id="create_model_service_member",
 )
 async def admin_create_member(request: Request, body: MemberCreateRequest, background: BackgroundTasks) -> dict:
     principal = current_principal(request)
@@ -642,6 +700,7 @@ async def admin_create_member(request: Request, body: MemberCreateRequest, backg
     "requires a ready deployment; weight 0 remains standby, and a stopped parent model remains stopped. "
     "All providers may be offline. A 409 rejects an unready deployment; a 502 model_publication_apply_failed "
     "means state was saved but routing could not be applied.",
+    operation_id="update_model_service_member",
 )
 async def admin_update_member(member_id: str, body: MemberUpdateRequest, request: Request) -> dict:
     principal = current_principal(request)
@@ -657,7 +716,13 @@ async def admin_update_member(member_id: str, body: MemberUpdateRequest, request
     return member.api_payload()
 
 
-@admin_router.delete("/members/{member_id}", status_code=204, summary="Remove a member.")
+@admin_router.delete(
+    "/members/{member_id}",
+    status_code=204,
+    summary="Remove a member.",
+    description="Remove a model service member and reconcile its cluster routing. Missing members return 404.",
+    operation_id="delete_model_service_member",
+)
 async def admin_delete_member(member_id: str, background: BackgroundTasks, request: Request) -> Response:
     member = _service.members.get(member_id)
     _service.delete_member(member_id, principal=current_principal(request))
@@ -675,7 +740,12 @@ def _parse_dt(value: str | None):
         return None
 
 
-@admin_router.get("/usage/analytics", summary="Aggregated usage analytics (totals, series, per-dimension).")
+@admin_router.get(
+    "/usage/analytics",
+    summary="Aggregated usage analytics (totals, series, per-dimension).",
+    description="Return aggregated model usage totals, time series and per-dimension breakdowns with optional filters.",
+    operation_id="get_model_service_usage_analytics",
+)
 async def admin_usage_analytics(
     request: Request,
     since: str | None = None,
@@ -698,7 +768,13 @@ async def admin_usage_analytics(
     )
 
 
-@admin_router.get("/usage", summary="Recent usage records across users/models/clusters.")
+@admin_router.get(
+    "/usage",
+    summary="Recent usage records across users/models/clusters.",
+    description="List recent model usage records across visible users, models and clusters, "
+    "with optional group and cluster filters.",
+    operation_id="list_model_service_usage",
+)
 async def admin_usage(
     request: Request,
     group_id: Annotated[list[str] | None, Query()] = None,
@@ -715,7 +791,12 @@ async def admin_usage(
 # --- admin: gateway operations ----------------------------------------------
 
 
-@admin_router.get("/gateway/status", summary="Gateway data-plane status across clusters.")
+@admin_router.get(
+    "/gateway/status",
+    summary="Gateway data-plane status across clusters.",
+    description="Return shared Gateway, IPP, route and last-operation status for clusters visible to the caller.",
+    operation_id="get_model_gateway_status",
+)
 async def admin_gateway_status(request: Request) -> dict:
     status = await _gateway_ops.status()
     status.clusters = filter_by_cluster(status.clusters, lambda cluster: cluster.cluster_id, current_principal(request))
@@ -728,6 +809,7 @@ async def admin_gateway_status(request: Request) -> dict:
     description="Schedule Gateway and HTTPRoute reconciliation. Each enabled positive-weight provider contributes "
     "a weighted InferencePool backendRef; zero-weight providers remain stored but are omitted. Returns the scheduled "
     "cluster IDs, not proof of controller acceptance or observed traffic ratios.",
+    operation_id="reconcile_model_gateway",
 )
 async def admin_gateway_reconcile(background: BackgroundTasks) -> dict:
     cluster_ids = sorted({member.cluster_id for member in _service.members.list_all() if member.status == "active"})
@@ -742,6 +824,7 @@ async def admin_gateway_reconcile(background: BackgroundTasks) -> dict:
     "and offline providers are skipped, and health writes cannot re-enable an offline provider. A zero-weight "
     "InferencePool without Gateway parent status is standby, not degraded; that alone does not trigger "
     "Gateway/IPP auto-healing. Missing resources and endpoint failures still mark the provider unhealthy.",
+    operation_id="probe_model_gateway",
 )
 async def admin_gateway_probe() -> dict:
     updated = await _gateway_ops.probe_members()
@@ -751,6 +834,8 @@ async def admin_gateway_probe() -> dict:
 @admin_router.get(
     "/gateway/ipp-config",
     summary="Read a cluster's live Inference Payload Processor config.",
+    description="Read the live Inference Payload Processor config for one accessible cluster.",
+    operation_id="get_model_gateway_ipp_config",
 )
 async def admin_gateway_get_ipp_config(request: Request, cluster_id: str = Query(alias="clusterId")) -> dict:
     require_cluster_access(current_principal(request), cluster_id)
@@ -760,6 +845,8 @@ async def admin_gateway_get_ipp_config(request: Request, cluster_id: str = Query
 @admin_router.post(
     "/gateway/ipp-config",
     summary="Set a cluster's Inference Payload Processor config and reinstall it.",
+    description="Replace a cluster's Inference Payload Processor config and reinstall the IPP.",
+    operation_id="set_model_gateway_ipp_config",
 )
 async def admin_gateway_ipp_config(body: IppConfigRequest, request: Request) -> dict:
     require_cluster_access(current_principal(request), body.cluster_id)
@@ -772,6 +859,8 @@ async def admin_gateway_ipp_config(body: IppConfigRequest, request: Request) -> 
 @admin_router.post(
     "/gateway/usage/sync",
     summary="Scrape EPP token counters and record usage deltas (per user/API key).",
+    description="Scrape EPP token counters and record usage deltas for all visible model services.",
+    operation_id="sync_model_gateway_usage",
 )
 async def admin_gateway_usage_sync() -> dict:
     sync = GatewayUsageSync(service=_service)
@@ -779,7 +868,12 @@ async def admin_gateway_usage_sync() -> dict:
     return {"written": written}
 
 
-@admin_router.post("/gateway/preflight", summary="Preflight a cluster (kubectl reachable, active members).")
+@admin_router.post(
+    "/gateway/preflight",
+    summary="Preflight a cluster (kubectl reachable, active members).",
+    description="Check kubectl reachability and active members before installing a shared Gateway in a cluster.",
+    operation_id="preflight_model_gateway",
+)
 async def admin_gateway_preflight(body: ClusterGatewayRequest, request: Request) -> dict:
     require_cluster_access(current_principal(request), body.cluster_id)
     operation = await _gateway_ops.preflight(body.cluster_id, actor=owner_for_create(current_principal(request)))
@@ -792,6 +886,7 @@ async def admin_gateway_preflight(body: ClusterGatewayRequest, request: Request)
     description="Install in a namespace suffixed with the stable Lens cluster-registration short ID. "
     "Gateway, IPP and authentication resources are isolated from other registrations. Existing unsuffixed "
     "resources are not adopted or deleted. A NodePort still used by another Gateway is reported as a conflict.",
+    operation_id="install_model_gateway",
 )
 async def admin_gateway_install(body: ClusterGatewayRequest, request: Request) -> dict:
     require_cluster_access(current_principal(request), body.cluster_id)
@@ -804,6 +899,8 @@ async def admin_gateway_install(body: ClusterGatewayRequest, request: Request) -
 @admin_router.post(
     "/gateway/scale",
     summary="Scale a data-plane component Deployment (Gateway data plane / EPP / model server).",
+    description="Scale a Gateway data-plane, EPP or model-server Deployment to the requested replica count.",
+    operation_id="scale_model_gateway",
 )
 async def admin_gateway_scale(body: ComponentScaleRequest, request: Request) -> dict:
     require_cluster_access(current_principal(request), body.cluster_id)

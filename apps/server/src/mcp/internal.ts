@@ -74,6 +74,7 @@ export async function internalRequest(path: string, init?: RequestInit): Promise
         // of a browser cookie (design sections 8.3/9.2).
         const headers: Record<string, string> = {
             accept: 'application/json',
+            'x-prism-source': 'assistant',
             ...internalHeadersFor(method, path),
         };
         if (init?.body) headers['content-type'] = 'application/json';

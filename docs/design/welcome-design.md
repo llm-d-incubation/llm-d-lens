@@ -33,11 +33,11 @@ consumption stay on their owning pages.
 | +------------------------------------------------------+ |                     |
 | | CRITICAL  prod-a / model-alpha unavailable           | |                     |
 | | 0 of 2 eligible providers ready                      | |                     |
-| | [Inspect providers]                                  | |                     |
+| | [To check]                                           | |                     |
 | |                                                      | |                     |
 | | WARNING   prod-b / model-beta pressure               | |                     |
 | | Decode waiting persisted over 5 min                  | |                     |
-| | [Inspect bottleneck] [Manage providers]              | |                     |
+| | [To check] [To fix]                                  | |                     |
 | +------------------------------------------------------+ |                     |
 | View all issues (6)                                      |                     |
 +----------------------------------------------------------+---------------------+
@@ -52,6 +52,8 @@ consumption stay on their owning pages.
 - The page uses the shared page shell, `PageHeader`/`ModuleHeader`, `Panel`,
   `Button`, `Select`, `Badge`/`StatusChip`, `EmptyState` and form primitives.
   No page-specific visual system is introduced.
+- The header includes **Star on GitHub**. It opens GitHub sign-in and returns
+  to the `llm-d-incubation/llm-d-lens` repository; the user clicks Star there.
 
 ## 2. Navigation and naming
 
@@ -225,7 +227,7 @@ Behavior:
   the tie-breaker.
 - Show at most eight issues on Welcome. When more exist, show
   **View all issues (N)** and open `welcome/issues`.
-- Zero issues means **No detected issues in available data**, with coverage.
+- Zero issues means **All systems operational** with normal health and telemetry coverage.
   Permission omissions are not data failures.
 - Missing telemetry is a data-gap indicator, not a healthy result.
 - A backend background task composes current issues for every cluster every 60
@@ -233,7 +235,7 @@ Behavior:
 - Request handlers read that snapshot and filter its issues again for the
   caller's cluster access and category permission; they do not compose on the
   request path when a snapshot exists.
-- Poll the persisted snapshot every 60 seconds with `usePolling`; keep the
+- Poll the persisted snapshot every 15 seconds with `usePolling`; keep the
   current rows during quiet refresh. Switching pages does not trigger another
   check.
 - If an issue fetch fails, retain the last observed rows and mark them stale with
@@ -347,7 +349,7 @@ Response:
 | Provider request failed | Inline retry; do not claim that no provider exists. |
 | No assistant permission | Replace composer with a permission note; issues and shortcuts remain. |
 | Issues loading | Show a small section skeleton. |
-| No issues | `No detected issues in available data` plus coverage. |
+| No issues | `All systems operational` with normal health and telemetry coverage. |
 | Issue fetch failed | Retain last issues, mark stale, show retry. |
 | No accessible clusters | Greeting and composer remain; issues explain that cluster access is needed. Show only shortcuts whose creation actions do not require an existing cluster and are authorized. |
 | Scope lost | Clear the issue scope and offer a return to all accessible clusters; do not silently widen. |
@@ -362,7 +364,7 @@ Response:
 - `Ctrl/Cmd+Enter` sends; `Enter` inserts a newline.
 - Focus moves to the assistant composer after a successful handoff.
 - Every issue action is a button/link with an intent-specific label
-  (`Inspect providers`, `Inspect bottleneck`, `View deployment`, `Open storage`).
+  (`To check`, `To fix`, `To resolve`).
 - Stale, partial and unknown states use text, not color alone.
 - Keyboard focus is preserved during quiet issue refresh.
 

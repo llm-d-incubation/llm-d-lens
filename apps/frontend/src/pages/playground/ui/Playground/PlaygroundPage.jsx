@@ -351,11 +351,13 @@ function createDefaultChatSession() {
 }
 let chatSession = createDefaultChatSession();
 
+const INTERNAL_PROVIDER_ENABLED = false;
+
 export default function PlaygroundPage({ onToggleMobileNav }) {
     // "AI provider" mode: Internal (pick a Cluster, then a Deployment already
     // running on it) or External (pick a saved External AI provider — see
     // Resources → External providers). Only one is active at a time.
-    const [providerMode, setProviderMode] = useState(() => chatSession.providerMode);
+    const [providerMode, setProviderMode] = useState(() => (INTERNAL_PROVIDER_ENABLED ? chatSession.providerMode : 'external'));
 
     const [clusters, setClusters] = useState([]);
     const [loadingClusters, setLoadingClusters] = useState(true);
@@ -384,6 +386,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     const [sending, setSending] = useState(false);
     const [chatError, setChatError] = useState('');
     const abortRef = useRef(null);
+    const turnGenerationRef = useRef(0);
     // Resume data for tool calls currently paused on a `confirm_required`
     // event, keyed by tool_call id: the exact resume conversation blob plus
     // the shared thinkChunks/toolEntries arrays for that turn, so approving
@@ -633,6 +636,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     // confirm_required event) against a shared thinkChunks/toolEntries pair,
     // so both call sites funnel through identical event handling.
     const driveChatStream = useCallback(async (requestBody, thinkChunks, toolEntries) => {
+        const generation = ++turnGenerationRef.current;
         setChatError('');
         setSending(true);
         const controller = new AbortController();
@@ -642,6 +646,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
             await streamPlaygroundChat(
                 requestBody,
                 (type, data) => {
+                    if (generation !== turnGenerationRef.current) return;
                     if (type === 'think') {
                         thinkChunks.push(data.content);
                         setMessages((prev) => withInterstitial(prev, thinkChunks, toolEntries));
@@ -755,21 +760,57 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                 controller.signal,
             );
         } catch (failure) {
+            if (generation !== turnGenerationRef.current) return;
+            if (controller.signal.aborted || (failure instanceof Error && failure.name === 'AbortError')) return;
             setChatError(failure instanceof Error ? failure.message : 'Playground chat failed');
             setMessages((prev) => replacePendingAssistant(prev, null));
         } finally {
-            setSending(false);
-            abortRef.current = null;
+            if (generation === turnGenerationRef.current) {
+                setSending(false);
+                abortRef.current = null;
+            }
         }
     }, []);
 
+    const stopCurrentTurn = useCallback(({ announce = true } = {}) => {
+        const controller = abortRef.current;
+        if (!controller) return;
+        abortRef.current = null;
+        turnGenerationRef.current += 1;
+        controller.abort();
+        setSending(false);
+        setCompacting(false);
+        setMessages((prev) => {
+            const finalized = finalizePendingTurn(prev);
+            return announce ? [...finalized, { role: 'system-note', content: 'Stopped current response.' }] : finalized;
+        });
+    }, []);
+
+    useEffect(() => {
+        const onKeyDown = (event) => {
+            if (event.key !== 'Escape' || !abortRef.current) return;
+            event.preventDefault();
+            stopCurrentTurn();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [stopCurrentTurn]);
+
     const sendMessage = useCallback(async (overrideText, { readOnly = false } = {}) => {
         const text = (overrideText ?? input).trim();
-        if (!text || !activeService || sending || pendingConfirmCount > 0 || compacting) return;
+        if (!text || !activeService || pendingConfirmCount > 0 || compacting) return;
+        if (abortRef.current) stopCurrentTurn({ announce: false });
         setInput('');
 
-        const history = [...messages, { role: 'user', content: text }];
-        setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', pending: true }]);
+        const history = [
+            ...messages.filter((message) => !(message.role === 'assistant' && message.pending)),
+            { role: 'user', content: text },
+        ];
+        setMessages((prev) => [
+            ...prev.filter((message) => !(message.role === 'assistant' && message.pending)),
+            { role: 'user', content: text },
+            { role: 'assistant', content: '', pending: true },
+        ]);
 
         const openAiMessages = history
             .filter((message) => message.role === 'user' || message.role === 'assistant')
@@ -780,7 +821,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
         // turn to read-only Lens MCP tools so a misheard word can never
         // even reach a write/approve-tier tool, confirmation dialog or not.
         await driveChatStream({ deployment: activeService.deploymentPayload, messages: openAiMessages, readOnly }, [], []);
-    }, [input, messages, activeService, sending, pendingConfirmCount, compacting, driveChatStream]);
+    }, [input, messages, activeService, pendingConfirmCount, compacting, driveChatStream, stopCurrentTurn]);
 
     // A prompt staged from Welcome is submitted once the selected provider and
     // its service are ready. The draft is consumed exactly once.
@@ -1007,11 +1048,11 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                                         : recording
                                             ? 'Listening… click the mic again to stop'
                                             : activeService
-                                                ? 'Message Lens…'
+                                                ? (sending ? 'Message Lens… (Esc to stop)' : 'Message Lens…')
                                                 : 'Select an AI provider on the right first'
                                 }
                                 value={input}
-                                disabled={!activeService || sending || recording || transcribing || pendingConfirmCount > 0 || compacting}
+                                disabled={!activeService || recording || transcribing || pendingConfirmCount > 0 || compacting}
                                 onChange={(event) => setInput(event.target.value)}
                                 onKeyDown={(event) => {
                                     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1074,6 +1115,11 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                             </div>
                         </div>
                     </div>
+                    {sending && (
+                        <p className="px-3 pb-1 text-center text-[10px] text-slate-500">
+                            Type to interject or press Esc to stop.
+                        </p>
+                    )}
                     <p className="px-3 pb-2 pt-1 text-center text-[10px] text-slate-500">
                         llm-d Lens assistant is AI and can make mistakes.
                     </p>
@@ -1093,28 +1139,30 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                             </Button>
                         </div>
 
-                        <div className="mb-3 flex gap-1 rounded-lg border border-slate-700 bg-slate-950 p-0.5 text-xs font-semibold">
-                            <button
-                                type="button"
-                                onClick={() => setProviderMode('internal')}
-                                className={
-                                    'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
-                                    (providerMode === 'internal' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
-                                }
-                            >
-                                Internal
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setProviderMode('external')}
-                                className={
-                                    'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
-                                    (providerMode === 'external' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
-                                }
-                            >
-                                External
-                            </button>
-                        </div>
+                        {INTERNAL_PROVIDER_ENABLED && (
+                            <div className="mb-3 flex gap-1 rounded-lg border border-slate-700 bg-slate-950 p-0.5 text-xs font-semibold">
+                                <button
+                                    type="button"
+                                    onClick={() => setProviderMode('internal')}
+                                    className={
+                                        'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
+                                        (providerMode === 'internal' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
+                                    }
+                                >
+                                    Internal
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setProviderMode('external')}
+                                    className={
+                                        'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
+                                        (providerMode === 'external' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
+                                    }
+                                >
+                                    External
+                                </button>
+                            </div>
+                        )}
 
                         <p className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-200/90">
                             Pick a model with a <span className="font-semibold">max context window of at least 32K tokens</span> (64K+

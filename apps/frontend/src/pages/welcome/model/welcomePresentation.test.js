@@ -43,7 +43,9 @@ test('evidence formatting preserves units and omits object payloads', () => {
     assert.equal(rows[3].value, '2.30%');
 });
 
-test('action labels stay readable', () => {
-    assert.equal(actionLabel('inspect_bottleneck'), 'Inspect bottleneck');
-    assert.equal(actionLabel('create_storage'), 'New storage volume');
+test('action labels stay concise', () => {
+    assert.equal(actionLabel('inspect_bottleneck'), 'To check');
+    assert.equal(actionLabel('create_storage'), 'To fix');
+    assert.equal(actionLabel('open_storage'), 'To resolve');
+    assert.equal(actionLabel('unknown'), 'To check');
 });

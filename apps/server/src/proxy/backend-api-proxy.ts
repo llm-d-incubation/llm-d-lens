@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Response, Router } from 'express';
@@ -74,6 +75,20 @@ backendApiProxyRouter.use([
     const configuredTimeout = Number(process.env.BACKEND_PROXY_TIMEOUT_MS || 3_600_000);
     const timeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 3_600_000;
     const headers = new Headers({ accept: req.header('accept') || 'application/json' });
+    const requestId = req.header('x-request-id') || randomUUID();
+    headers.set('x-request-id', requestId);
+    const declaredSource = req.header('x-prism-source');
+    if (declaredSource) headers.set('x-prism-source', declaredSource);
+    const traceparent = req.header('traceparent');
+    if (traceparent) headers.set('traceparent', traceparent);
+    const userAgent = req.header('user-agent');
+    if (userAgent) headers.set('user-agent', userAgent);
+    const forwardedFor = req.ip || req.socket.remoteAddress;
+    if (forwardedFor) headers.set('x-forwarded-for', forwardedFor);
+    const origin = req.header('origin');
+    if (origin) headers.set('origin', origin);
+    const referer = req.header('referer');
+    if (referer) headers.set('referer', referer);
     // Authentication context must reach the Python API so it can enforce
     // independently of Node (design sections 9.3/8.3).
     if (req.headers.cookie) headers.set('cookie', req.headers.cookie);
@@ -118,6 +133,9 @@ backendApiProxyRouter.use([
             signal: AbortSignal.timeout(timeout),
         } as RequestInit);
         res.status(upstream.status);
+        res.setHeader('x-request-id', upstream.headers.get('x-request-id') || requestId);
+        const location = upstream.headers.get('location');
+        if (location) res.setHeader('location', location);
         const contentType = upstream.headers.get('content-type');
         if (contentType) res.setHeader('content-type', contentType);
         // Forward Set-Cookie (login/logout) so the browser stores the session.

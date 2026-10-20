@@ -3,22 +3,22 @@ const numberFormat = new Intl.NumberFormat();
 export const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 
 export const ACTION_LABELS = {
-    open_cluster: 'Open cluster',
-    inspect_providers: 'Inspect providers',
-    manage_providers: 'Manage providers',
-    inspect_bottleneck: 'Inspect bottleneck',
-    view_deployment: 'View deployment',
-    open_storage: 'Open storage',
-    create_storage: 'New storage volume',
-    open_cache: 'Open model cache',
-    open_observability: 'Open observability',
-    open_model_services: 'Open model services',
-    create_cluster: 'Create cluster',
-    edit_cluster: 'Edit cluster',
-    open_external_providers: 'Open External providers',
-    manage_user_roles: 'Assign role',
-    open_groups: 'Review groups',
-    open_usage: 'Open usage reports',
+    open_cluster: 'To check',
+    inspect_providers: 'To check',
+    manage_providers: 'To fix',
+    inspect_bottleneck: 'To check',
+    view_deployment: 'To check',
+    open_storage: 'To resolve',
+    create_storage: 'To fix',
+    open_cache: 'To resolve',
+    open_observability: 'To check',
+    open_model_services: 'To check',
+    create_cluster: 'To fix',
+    edit_cluster: 'To resolve',
+    open_external_providers: 'To fix',
+    manage_user_roles: 'To fix',
+    open_groups: 'To check',
+    open_usage: 'To check',
 };
 
 export const CATEGORY_LABELS = {
@@ -65,7 +65,7 @@ export function pressureTone(value) {
 }
 
 export function actionLabel(intent) {
-    return ACTION_LABELS[intent] || 'Open';
+    return ACTION_LABELS[intent] || 'To check';
 }
 
 export function formatNumber(value) {

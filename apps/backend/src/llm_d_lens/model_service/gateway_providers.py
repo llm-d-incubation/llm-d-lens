@@ -36,6 +36,9 @@ INFERENCE_POOL_API_GROUP = "inference.networking.k8s.io"
 BASE_MODEL_HEADER = "X-Gateway-Base-Model-Name"
 MANAGED_LABEL = "app.kubernetes.io/part-of"
 MANAGED_VALUE = "lens-inference-gateway"
+MODEL_SERVICE_LABEL = "lens.llm-d.ai/model-service-id"
+INFERENCE_MODEL_REWRITE_CRD = "inferencemodelrewrites.llm-d.ai"
+INFERENCE_MODEL_REWRITE_API = "llm-d.ai/v1alpha2"
 #: Records which Gateway provider (istio / gke / agentgateway / envoy-ai-gateway) a
 #: resource belongs to, so the chosen implementation is visible on the cluster.
 GATEWAY_PROVIDER_LABEL = "lens.ai/gateway-provider"
@@ -673,6 +676,58 @@ def render_model_route(
         },
     }
     return yaml.safe_dump_all([http_route, *grants, model_map], sort_keys=False)
+
+
+def model_rewrite_name(model_name: str, pool_name: str) -> str:
+    """Deterministic InferenceModelRewrite name for one model/pool pair."""
+    return resource_name(f"{model_name}-{pool_name}")
+
+
+def render_model_rewrites(
+    *,
+    namespace: str,
+    model_service_id: str,
+    model_name: str,
+    public_model: str,
+    served_model: str | None,
+    pools: Sequence[PoolBinding],
+) -> str:
+    """Map a public model name to the engine-served name per InferencePool.
+
+    The EPP rewrites the request-body ``model`` field before forwarding, so
+    users can address a public alias even when the model server only knows the
+    deployment's model name.
+    """
+    if not served_model or served_model == public_model:
+        return ""
+    documents = []
+    for binding in pools:
+        pool_namespace = binding.namespace or namespace
+        documents.append(
+            {
+                "apiVersion": INFERENCE_MODEL_REWRITE_API,
+                "kind": "InferenceModelRewrite",
+                "metadata": {
+                    "name": model_rewrite_name(model_name, binding.pool_name),
+                    "namespace": pool_namespace,
+                    "labels": {MANAGED_LABEL: MANAGED_VALUE, MODEL_SERVICE_LABEL: model_service_id},
+                },
+                "spec": {
+                    "poolRef": {
+                        "group": INFERENCE_POOL_API_GROUP,
+                        "kind": "InferencePool",
+                        "name": binding.pool_name,
+                    },
+                    "rules": [
+                        {
+                            "matches": [{"model": {"type": "Exact", "value": public_model}}],
+                            "targets": [{"modelRewrite": served_model}],
+                        }
+                    ],
+                },
+            }
+        )
+    return yaml.safe_dump_all(documents, sort_keys=False) if documents else ""
 
 
 #: DaemonSet that raises the per-uid inotify instance limit on every node.

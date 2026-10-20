@@ -16,6 +16,22 @@ The page always filters issues and actions to the clusters and permissions your
 account can use. If no cluster is accessible and your role can create clusters,
 Welcome offers to open the create-cluster wizard.
 
+## Join Slack
+
+Click **Join Slack** in the Welcome header to open the llm-d Slack
+workspace in a new tab.
+
+## Open the documentation
+
+Click **Documentation** in the Welcome header to open the Lens documentation
+in a new tab.
+
+## Star the project
+
+Click **Star on GitHub** in the Welcome header. Lens opens GitHub sign-in and
+returns to the `llm-d-incubation/llm-d-lens` repository after you sign in. Click
+**Star** on GitHub to finish.
+
 ## Ask Lens Assistant
 
 1. Type a message in **Ask Lens Assistant**.
@@ -51,13 +67,12 @@ available.
 - No compatible External AI provider (info).
 
 Each row shows severity, resource identity, evidence, the first time the issue was seen and a diagnostic
-link such as **Inspect providers**, **Inspect bottleneck**, **View deployment**,
-**Open storage** or **Open model cache**. A finding without sufficient telemetry
+link labeled **To check**, **To fix**, or **To resolve**. A finding without sufficient telemetry
 is shown as unknown or stale, not as healthy.
 
 Use the cluster selector in the section header to narrow the list. **View all
 issues** opens the full, filterable issue page. The page refreshes current issues
-every 60 seconds and keeps the existing rows during a quiet refresh.
+every 15 seconds and keeps the existing rows during a quiet refresh.
 
 ## Quick actions
 
@@ -82,7 +97,7 @@ perform are not shown.
 
 | What you see | Meaning |
 | --- | --- |
-| No detected issues | No rule matched the available data; check the coverage or stale note. |
+| All systems operational | Health checks and telemetry across monitored clusters are reporting normally. No action is required. |
 | Cluster access needed | Your account has no accessible cluster. Ask for a cluster-scoped role. |
 | Some checks unavailable | One or more telemetry or Kubernetes sources did not answer. |
 | No compatible provider | Add an OpenAI-compatible provider under External providers. |

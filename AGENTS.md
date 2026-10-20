@@ -70,6 +70,16 @@ the repository; PR titles/bodies must also pass `--text-file` checks. Fix findin
 without hiding content or weakening checks. All repository text is English except
 published translations under `docs/site/i18n/zh-CN/`.
 
+## MCP tool catalog
+
+A FastAPI route intended for Lens Assistant or MCP must declare an explicit
+`operation_id`, `summary` and `description` on its decorator. After changing
+backend routes, run `node scripts/generate-mcp-tools.mjs`; it fails on any
+unexpected skipped operation. Add UI-only, internal, streaming, secret-bearing
+or otherwise unsuitable routes to `INTENTIONAL_SKIPS` in the generator with a
+clear reason. Do not hand-edit the generated
+`apps/server/src/mcp/tools.ts`; fix the route metadata or the exclusion list.
+
 ## Keep the docs site in sync
 
 When updating published documentation, update every supported language version

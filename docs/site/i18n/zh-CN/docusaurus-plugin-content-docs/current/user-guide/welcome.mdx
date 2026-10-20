@@ -12,6 +12,19 @@ description: 发起 Lens Assistant 对话、查看当前集群问题并打开常
 仅面向模型消费者的角色保留原有落地页。页面中的问题和操作始终按当前账号可访问的集群和权限过滤。
 如果当前账号没有可访问集群且拥有创建集群权限，欢迎页会提示打开创建集群向导。
 
+## 加入 Slack
+
+点击欢迎页右上角的 **Join Slack** 在新标签页中打开 llm-d Slack 工作区。
+
+## 打开文档
+
+点击欢迎页右上角的 **Documentation** 在新标签页中打开 Lens 文档。
+
+## 为项目点亮 Star
+
+点击欢迎页右上角的 **Star on GitHub**。Lens 会打开 GitHub 登录页，登录后进入
+`llm-d-incubation/llm-d-lens` 仓库。在 GitHub 页面上点击 **Star** 即可。
+
 ## 使用 Lens Assistant
 
 1. 在 **Ask Lens Assistant** 中输入消息。
@@ -44,12 +57,11 @@ session storage 传递，不会写入 URL。
 - 没有兼容的 External AI provider（info 级别）。
 
 每条问题包含严重程度、资源标识、证据、首次发现时间和诊断链接，例如
-**Inspect providers**、**Inspect bottleneck**、**View deployment**、
-**Open storage** 或 **Open model cache**。遥测不足时会显示未知或过期，
+标有 **To check**、**To fix** 或 **To resolve** 的按钮。遥测不足时会显示未知或过期，
 不会当成健康状态。
 
 使用区块标题旁的严重程度和集群选择器缩小范围。**View all issues** 打开完整的可筛选问题页面，并带上相同筛选条件。
-Lens 每 60 秒在后台检查当前问题并保存最新快照；页面每 60 秒读取该快照，静默刷新期间保留已有内容。
+Lens 每 60 秒在后台检查当前问题并保存最新快照；页面每 15 秒读取该快照，静默刷新期间保留已有内容。
 切换页面不会重复触发检查。结果还会再次按你的集群访问范围和权限过滤。
 
 ## 快捷操作
@@ -74,7 +86,7 @@ Lens 每 60 秒在后台检查当前问题并保存最新快照；页面每 60 �
 
 | 页面显示 | 含义 |
 | --- | --- |
-| No detected issues | 可用数据中没有规则命中；请查看覆盖率或过期提示。 |
+| All systems operational | 所有受监控集群的健康检查和遥测数据均正常，无需执行操作。 |
 | Cluster access needed | 当前账号没有可访问的集群，请联系管理员分配集群范围角色。 |
 | Some checks unavailable | 部分遥测或 Kubernetes 数据源没有返回结果。 |
 | No compatible provider | 请到 External providers 添加兼容的 OpenAI 类型 provider。 |

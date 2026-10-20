@@ -302,7 +302,7 @@ def cluster_issues(row: ClusterRow, *, has_services: bool) -> list[DashboardIssu
         issues.append(
             _issue(
                 code="cluster.capacity_fully_allocated",
-                severity="info",
+                severity="warning",
                 category="cluster",
                 title=f"{row.name}: no unallocated accelerator capacity",
                 message=(

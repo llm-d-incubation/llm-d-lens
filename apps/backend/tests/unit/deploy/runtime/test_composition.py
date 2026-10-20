@@ -398,6 +398,13 @@ def test_restricted_kubectl_allows_pd_diagnostic_logs(tmp_path: Path, command_ta
     )
 
 
+def test_structured_startup_diagnostics_remain_namespace_scoped(tmp_path: Path):
+    runner = RestrictedKubectlRunner(tmp_path / "kubectl", "llm-d-bench-")
+    runner._validate(["kubectl", "get", "pods", "--namespace", "llm-d-bench-pd-test", "-o", "json"])
+    with pytest.raises(RuntimeConfigurationError, match="outside the configured allowlist"):
+        runner._validate(["kubectl", "get", "pods", "--namespace", "default", "-o", "json"])
+
+
 @pytest.mark.asyncio
 async def test_published_deployment_names_scope_commands_and_smoke_test(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
