@@ -168,3 +168,66 @@ def test_explicit_measurement_scope_disambiguates_a_short_question():
     plan = plan_query(QueryRequest(question="What is TTFT?", filters=QueryFilters(model="Qwen3-0.6B")))
     assert plan.intent == "numeric"
     assert plan.filters.metric == "ttft"
+
+
+def test_explicit_metric_filter_preserves_numeric_intent():
+    plan = plan_query(QueryRequest(question="What is TTFT?", filters=QueryFilters(metric="ttft")))
+    assert plan.intent == "numeric"
+    assert plan.filters.metric == "ttft"
+    assert plan.precondition is not None
+    assert plan.precondition.code == "experiment_conditions_required"
+
+
+@pytest.mark.parametrize("quote", ['"', "`"])
+@pytest.mark.parametrize("model", ["Custom Model-8B", "Custom org/Model-8B"])
+def test_quoted_model_is_one_identifier_not_its_embedded_tokens(quote, model):
+    plan = plan_query(QueryRequest(question=f"Show throughput on H100 for model {quote}{model}{quote}."))
+    assert plan.filters.model == model
+    assert plan.precondition is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Show throughput for model on H100",
+        "Show throughput on H100 for model",
+        "Show throughput for model: on H100",
+        'Show throughput for model="" on H100',
+        'Show throughput for model " " on H100',
+    ],
+)
+def test_missing_labeled_model_abstains_instead_of_using_a_placeholder(question):
+    plan = plan_query(QueryRequest(question=question))
+    assert plan.precondition is not None
+    assert plan.precondition.code == "model_scope_required"
+    assert plan.filters.model is None
+
+
+def test_model_identifier_containing_model_is_not_a_label():
+    plan = plan_query(QueryRequest(question="Show throughput for model-8B on H100"))
+    assert plan.filters.model == "model-8B"
+    assert plan.precondition is None
+
+
+def test_record_description_is_not_an_ambiguous_model_subject():
+    plan = plan_query(
+        QueryRequest(
+            question="Give throughput for an unregistered baseline record",
+            filters=QueryFilters(record_id="unregistered-baseline-record", metric="throughput"),
+        )
+    )
+    assert plan.filters.record_id == "unregistered-baseline-record"
+    assert plan.filters.model is None
+    assert plan.precondition is None
+
+
+def test_record_filter_does_not_discard_a_named_model_condition():
+    plan = plan_query(
+        QueryRequest(
+            question="Give throughput for Llama-3.1-70B on H100",
+            filters=QueryFilters(record_id="record-a"),
+        )
+    )
+    assert plan.filters.record_id == "record-a"
+    assert plan.filters.model == "Llama-3.1-70B"
+    assert plan.precondition is None

@@ -5,11 +5,14 @@
 The user authorized fixing the two P1 and three P2 findings from the review of
 `c6f4796` and recording execution. This is a code-and-isolated-test change, not
 approval to refresh a business database, deploy to the migration target, change
-schemas, implement deferred Agentic ingestion work, or commit/push.
+schemas, implement deferred Agentic ingestion work, or push. The initial
+implementation request did not authorize a commit; after pausing execution,
+the user explicitly requested a checkpoint commit before resuming fixes and validation.
 
-This execution record is outside the ignored `docs/design/` area so it can be
-versioned with the fixes. The existing local RAG design links to this record;
-its historical acceptance and deployment checkpoints are unchanged.
+This execution record was explicitly added to Git despite the default
+`docs/*` ignore rule, without changing that rule. The existing ignored local
+RAG design links to this versioned record; its historical acceptance and
+deployment checkpoints are unchanged.
 
 ## Fixes in priority order
 
@@ -36,12 +39,71 @@ its historical acceptance and deployment checkpoints are unchanged.
    Its initial selection had **4 failures and 3 passes**, then **7 passes**.
    The scoped Prism/repository/publication/repository-refresh suite passed
    **83 tests**, including provisioned pinned-source acceptance.
-4. Final combined regression is in progress. Intermediate passing runs do not
-   certify subsequent edits. Final commands and results are recorded below.
+4. The first combined regression run was stopped at the user's request before
+   a final pytest result; it is not counted as a successful run. MCP tests
+   passed **4/4**, Ruff/format and documentation links passed, and both locale
+   builds succeeded with the existing OWNERS broken-link and missing-blog warnings.
+5. On resumption, the repository-wide English check and staged whitespace check
+   passed. Commit **`9ae2183`** preserves the five fixes, regressions and this
+   execution record as an explicitly incomplete-validation checkpoint. The
+   pre-existing untracked `server/` directory was excluded. No push was made.
+6. Added regressions for three observed query edge cases: an explicit metric
+   filter lost numeric intent, quoted model names containing structured tokens
+   were counted twice, and a missing model name became a placeholder filter.
+   The selection initially had **10 failures and 3 passes**. After treating
+   labeled names atomically, rejecting empty labels and retaining explicit metric
+   scope, all **13 passed**. The tests also verify abstention before either
+   public or opt-in internal retrieval and preserve ordinary `model-8B` identifiers.
+7. The resumed combined run completed with **337 passed and 1 failed** in
+   375.96 seconds. The existing public baseline caught a compatibility regression:
+   "an unregistered baseline record" was misclassified as an ambiguous model
+   subject, changing `no_exact_match` into `model_scope_required`. The baseline's
+   expected outcome was not weakened or edited. A focused regression reproduced
+   the error (**1 failed, 1 passed**); bounded record-description grammar now
+   distinguishes that subject while retaining model constraints alongside record IDs.
+8. After that correction, the final query/authorization/refresh/public-and-internal-
+   baseline selection passed **257 tests, zero skips**, in **252.07 seconds**.
+   Ingestion/publication code and its **83 passing tests** are unchanged; their
+   completed results were reused rather than rerunning unrelated imports.
+   All five original findings and the follow-up parser regressions now have
+   passing affected checks. No fixed-baseline expected outcome was changed.
 
 ## Validation
 
-Pending the final combined run.
+Final query regression command (repository root):
+
+```bash
+PYTHONPATH=apps/backend/src .venv/bin/python -m pytest -q --tb=short \
+  --show-capture=no --durations=5 \
+  apps/backend/tests/unit/benchmark_rag \
+  apps/backend/tests/unit/db/test_rag_query.py \
+  apps/backend/tests/unit/db/test_rag_agentic_query.py \
+  apps/backend/tests/unit/db/test_rag_agentic_service.py \
+  apps/backend/tests/unit/db/test_rag_refresh.py \
+  apps/backend/tests/unit/db/test_rag_public_baseline.py \
+  apps/backend/tests/unit/db/test_rag_internal_baseline.py
+```
+
+Result: **257 passed, 10 pre-existing deprecation warnings, zero skips**
+(252.07 seconds). This includes the provisioned three-corpus **20/20 public
+fixed cases** and the **12/12 authorized internal fixed cases**, plus real-source
+answer acceptance, provenance verification, negative-condition queries, caller
+isolation, REST behavior and refresh/query regressions.
+
+Additional checks:
+
+- MCP adapter: **4 passed** using
+  `node --import tsx --test apps/server/testing/mcp/benchmarkRag.test.ts`.
+  Adapter code and inputs have not changed since that run.
+- Ruff lint/format and Pylance diagnostics on the final query implementation
+  passed; IDE problems reported no errors in the changed Python files.
+- `npm run docs:check`, `npm run docs:build` (English and Simplified Chinese)
+  and `npm run check:english` passed after the resumed API-documentation edits.
+  The existing `resources/OWNERS` broken-link and missing-blog warnings remain;
+  these unrelated warnings were not suppressed or fixed.
+- Whitespace checks passed. After validation, the user explicitly authorized a
+  separate follow-up commit containing the post-checkpoint fixes and this final
+  record. The original checkpoint is preserved; no push is authorized or performed.
 
 ## Compatibility and operational boundaries
 

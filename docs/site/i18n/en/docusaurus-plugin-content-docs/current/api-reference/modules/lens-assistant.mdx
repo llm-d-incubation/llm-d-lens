@@ -232,6 +232,8 @@ LLM inference. Numeric questions extract explicit statistics such as `p99`,
 `99th percentile`, `mean`/`average`/`avg` and `median` (`p50`), and model
 identifiers such as `Llama-3.1-70B` or `org/model`. Bare names can use
 `for Falcon on H100`; multiword names need a label such as `model "Custom Model"`.
+Quoted names are treated as one identifier, including embedded version numbers
+or repository-like tokens. An empty/missing model label abstains before retrieval.
 Recognized model/statistic conditions must agree with explicit filters;
 conflicts are validation errors, not overrides. Multiple statistics/models or
 an ambiguous model subject produce `statistic_scope_required` or
@@ -242,6 +244,8 @@ Other conditions still need explicit structured filters; these bounded rules
 are not a guarantee that arbitrary free-form constraints are understood.
 With `intent: "auto"` and no explicit measurement scope, `What is TTFT?`,
 `Define request latency` and metric-definition comparisons search passages.
+An explicit `filters.metric` is a measurement scope: a short question with only
+that filter stays numeric and requests experiment conditions rather than searching prose.
 Measurement questions recognize both `TTFT`/`time to first token` and
 `TPOT`/`time per output token`. An explicit `intent` is never overridden.
 Automatic keyword rules are English-only. Questions in other languages are

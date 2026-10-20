@@ -255,6 +255,22 @@ def test_service_authorization_precedes_every_read(principal):
         service.query(numeric(), principal)
 
 
+@pytest.mark.parametrize("include_internal", [False, True])
+def test_missing_model_abstains_before_either_branch_reads(include_internal):
+    class NeverRead:
+        def search(self, *args, **kwargs):
+            pytest.fail("ambiguous model reached retrieval")
+
+    service = PublicRagQueryService(dao=NeverRead(), agentic_dao=NeverRead())
+    result = service.query(
+        QueryRequest(question="Show throughput for model on H100", include_internal=include_internal), reader()
+    )
+    assert result.status == "abstained"
+    assert result.matched_items == 0
+    assert not result.evidence
+    assert [item.code for item in result.abstentions] == ["model_scope_required"]
+
+
 @pytest.mark.parametrize(
     "payload",
     [

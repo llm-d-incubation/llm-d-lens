@@ -124,20 +124,41 @@ def _query_statistic(value: str) -> str:
 
 
 def _question_models(question: str, hardware: str | None) -> tuple[tuple[str, ...], bool]:
-    models = [match[0] for match in _MODEL_IDENTIFIER.finditer(question) if not _UUID.fullmatch(match[0])]
+    named = tuple(
+        re.finditer(
+            r'(?<![\w./-])model(?![\w./-])(?:(?:\s*[:=]\s*|\s+)(?:"([^"]*)"|`([^`]*)`|([\w./-]+)))?',
+            question,
+            re.IGNORECASE,
+        )
+    )
+    models = [
+        match[0]
+        for match in _MODEL_IDENTIFIER.finditer(question)
+        if not _UUID.fullmatch(match[0]) and not any(label.start() <= match.start() < label.end() for label in named)
+    ]
     ambiguous = False
     # Bare or multiword names need a model label or a "for ... on ..." subject;
     # structured identifiers do not depend on a hardcoded model-family catalog.
-    named = re.findall(r'\bmodel\s*[:=]?\s+(?:"([^"]+)"|`([^`]+)`|([\w./-]+))', question, re.IGNORECASE)
-    for groups in named:
-        value = next(group for group in groups if group)
-        if value.casefold() not in _STOP_WORDS:
+    for label in named:
+        value = next((group for group in label.groups() if group is not None), "").strip()
+        if not value or value.casefold() in _STOP_WORDS or value.casefold() in {"under", "using", "model"}:
+            ambiguous = True
+        else:
             models.append(value.rstrip("."))
     for match in re.finditer(r"\bfor\s+(.+?)(?=\s+(?:on|with|at|under|in|using)\b|[?;!]|$)", question, re.IGNORECASE):
         subject = match[1].strip().rstrip(".")
-        if re.match(r"(?:prism|record|run|benchmark|evaluate)\b", subject, re.IGNORECASE) or _UUID.fullmatch(subject):
+        if (
+            re.match(r"(?:prism|record|run|benchmark|evaluate)\b", subject, re.IGNORECASE)
+            or _UUID.fullmatch(subject)
+            or re.fullmatch(
+                r"(?:an?|the)\s+(?:(?:unregistered|registered|baseline|benchmark|reported|recorded|internal|public)"
+                r"\s+)*(?:record|run)",
+                subject,
+                re.IGNORECASE,
+            )
+        ):
             continue
-        if subject.casefold().startswith("model "):
+        if re.match(r"model(?:\s|[:=]|$)", subject, re.IGNORECASE):
             continue
         if re.fullmatch(r"[\w./-]+", subject) and subject.casefold() not in _STOP_WORDS:
             models.append(subject)
@@ -157,6 +178,7 @@ def _metric_definition(question: str, filters: QueryFilters) -> bool:
             filters.model,
             filters.hardware,
             filters.runtime,
+            filters.metric,
             filters.statistic,
             filters.unit,
             filters.workload,

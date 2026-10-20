@@ -228,6 +228,8 @@ Node 使用内部 HMAC 签名转发真实调用者，不使用服务身份或参
 `mean`/`average`/`avg` 和 `median`（`p50`），以及 `Llama-3.1-70B`、
 `org/model` 等模型标识。单词名称可以使用 `for Falcon on H100`；
 多词名称需要 `model "Custom Model"` 这样的标签。
+引号中的名称按单个标识处理，包括其中的版本数字或类似仓库路径的片段。
+模型标签为空或缺少名称时会在检索前拒答。
 识别出的模型和统计量必须与显式筛选条件一致；冲突会返回验证错误，而不是覆盖。
 多个统计量、多个模型或含糊的模型描述会在检索前以 `statistic_scope_required`
 或 `model_scope_required` 拒答。此类比较应分别提交精确查询。
@@ -235,6 +237,8 @@ Node 使用内部 HMAC 签名转发真实调用者，不使用服务身份或参
 其他条件仍需显式结构化筛选；这些有界规则不保证理解任意自由文本约束。
 使用 `intent: "auto"` 且未指定测量范围时，`What is TTFT?`、
 `Define request latency` 和指标定义比较会检索文档段落。
+显式 `filters.metric` 属于测量范围：仅带此筛选条件的简短问题保持数值意图，
+要求补充实验条件，而不是转去检索文档。
 测量问题同时识别 `TTFT`/`time to first token` 和
 `TPOT`/`time per output token`。显式 `intent` 不会被自动规则覆盖。
 自动关键词规则仅支持英语。其他语言的问题通过显式 `intent` 和结构化
