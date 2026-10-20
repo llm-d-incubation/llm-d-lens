@@ -49,6 +49,39 @@ an endpoint reachable from the Lens backend and benchmark runtime.
 Missing measurements are not zero. If a metric is unavailable, check **Task Log**
 for a failed run or collection problem before drawing conclusions.
 
+## Reuse results as Agentic evidence
+
+Before traffic, Lens saves the test's deployment configuration, workload and
+target identity, and obtains model, accelerator and runtime facts using bounded
+read-only Kubernetes queries and serving-container introspection. After traffic,
+it checks that serving containers and any Model Service route/pool are unchanged.
+Eligible terminal results are stored once as `simulation:<task-id>` benchmark
+records, never relabeled as Evaluate runs or filled with current planning facts.
+
+Automatic enrichment currently supports attributable vLLM deployments with
+identifiable serving arguments and local safetensors metadata (cached Hub sources
+need an immutable serving revision). A Model Service must route to one deployment
+in the selected cluster; mixed targets, ambiguous layouts, packed quantized weights,
+or external endpoints without verifiable environment metadata are explicitly skipped.
+The Simulation itself still retains its result if evidence is unavailable.
+
+Normalization requires complete request artifacts and matching measured counts.
+P95 latency is calculated from observations, concurrency from measured request-time
+overlap, and missing metrics are not invented. Unknown shared-prefix ratios stay
+null and receive no similarity credit. The task API's `benchmark_evidence` contains
+the saved context, collection errors and `ingestion` report. Rerun collects a fresh
+snapshot rather than reusing the previous test environment.
+
+Administrators can preview historical eligibility from the configured backend environment:
+
+```bash
+python -m llm_d_lens.simulation.benchmark_evidence
+python -m llm_d_lens.simulation.benchmark_evidence --task-id abcdef12 --apply
+```
+
+Without `--apply`, nothing is written. Missing historical snapshots are reported,
+not reconstructed from today's cluster.
+
 ## Stop, rerun or delete a task
 
 | Goal | Action |

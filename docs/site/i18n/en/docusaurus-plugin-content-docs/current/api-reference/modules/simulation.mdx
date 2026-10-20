@@ -12,6 +12,47 @@ Local and Pod execution share request progress reporting through `llm_d_lens.sim
 
 Simulation routes live in `llm_d_lens/simulation/router.py` under the `/api/simulation` prefix.
 
+### Test-time evidence and historical ingestion
+
+Task create/get/list/rerun responses include optional `benchmark_evidence`:
+the saved task/deployment configuration, API-enriched `benchmark_context`,
+optional Model Service `routing`, `benchmark_context_error` when collection or
+verification fails, and terminal `ingestion` diagnostics. No new request metadata
+is required. These facts are captured before traffic and verified after completion.
+Reruns collect their own snapshot.
+
+The ingestion report has `schema_version`, `status`, `record_ids`, `existing_ids`,
+`inserted_ids` and `issues`. Status is `stored`, `partial`, `skipped` or `error`;
+read-only preview uses `eligible` and `eligible_ids` for pending valid evidence.
+Each record uses `simulation:<task-id>` and the original measurement time.
+Source results are saved before evidence insertion, and existing evidence is
+never overwritten. Missing required context or incomplete artifacts produce
+explicit issues instead of current-environment substitutions.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    Read `benchmark_evidence` from **`GET /api/simulation/tasks/{task_id}`**.
+    Multi-deployment Model Service traffic and unverifiable external environments
+    are not attributed to a guessed deployment.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.simulation.benchmark_evidence import normalize_simulation_task, ingest_simulation_task
+
+records, issues = normalize_simulation_task(saved_task)  # saved facts/artifacts only
+preview = ingest_simulation_task(saved_task, apply=False)  # no writes
+```
+
+  </TabItem>
+</Tabs>
+
+From the configured backend environment, run
+`python -m llm_d_lens.simulation.benchmark_evidence` for preview. Repeat
+`--task-id <id>` to select tasks; add `--apply` to insert eligible records and
+persist source reports. Backfill never recollects today's cluster state.
+Unknown shared-prefix ratios remain null and receive no matching credit.
+
 ### List simulation backends
 
 List Simulation backends Lens knows about and whether each backend is available in the current environment.

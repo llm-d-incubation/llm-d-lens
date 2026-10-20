@@ -162,9 +162,15 @@ async def save_task(task: SimulationTask) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         _set_artifact_references(task)
         task.artifact_error = None
+        if task.benchmark_evidence is None and task.model_service_group_id:
+            task.benchmark_evidence = {"model_service_group_id": task.model_service_group_id}
         if task.status not in {"completed", "failed", "cancelled"}:
             await asyncio.to_thread(_persist_task, task)
             return
+        await asyncio.to_thread(_persist_task, task)
+        from .benchmark_evidence import ingest_simulation_task
+
+        await asyncio.to_thread(ingest_simulation_task, task)
         await asyncio.to_thread(_persist_task, task)
         try:
             dataset = trace_registry.get_variant(task.prompt.dataset.name) if task.prompt.dataset.name else None
@@ -916,6 +922,7 @@ async def rerun_task(
                 "backend_version": None,
                 "backend_version_inferred": False,
                 "configuration_ids": list(resolved_endpoint.configuration_ids),
+                "benchmark_evidence": None,
                 "result": None,
                 "error_message": None,
                 "created_at": _now(),
@@ -943,6 +950,8 @@ async def rerun_task(
 
 
 async def _run_task(task: SimulationTask) -> None:
+    from .benchmark_evidence import capture_simulation_context, verify_simulation_context
+
     cancel_event = asyncio.Event()
     controllers[task.id] = cancel_event
 
@@ -987,8 +996,12 @@ async def _run_task(task: SimulationTask) -> None:
             force_gateway=bool(task.model_service_group_id),
         )
         task.endpoint_url = resolved_endpoint.url
-        await save_task(task)
+        task.endpoint_deployment_execution_id = _task_execution_id(task)
+        task.endpoint_cluster_id = resolved_endpoint.cluster_id or task.endpoint_cluster_id
+        task.endpoint_namespace = resolved_endpoint.namespace or task.endpoint_namespace
         task.configuration_ids = list(resolved_endpoint.configuration_ids)
+        await capture_simulation_context(task)
+        await save_task(task)
         backend = get_backend(task.simulation.backend)
         task.backend_version = backend.descriptor().version
         task.result = await backend.run(task, context)
@@ -1009,6 +1022,7 @@ async def _run_task(task: SimulationTask) -> None:
     finally:
         task.completed_at = _now()
         task.artifacts_incomplete = context.artifacts_incomplete
+        await verify_simulation_context(task)
         controllers.pop(task.id, None)
         await _await_saves(task.id)
         await save_task(task)

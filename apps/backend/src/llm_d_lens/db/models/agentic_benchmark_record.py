@@ -98,7 +98,7 @@ class BenchmarkRecordRow(Base, DeclarativeDtoMixin):
     workload_mean_output_tokens: Mapped[float] = mapped_column(Float, nullable=False)
     workload_concurrency: Mapped[float] = mapped_column(Float, nullable=False)
     workload_request_rate: Mapped[float] = mapped_column(Float, nullable=False)
-    workload_shared_prefix_ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    workload_shared_prefix_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     workload_prefill_fraction: Mapped[float] = mapped_column(Float, nullable=False)
     configuration_topology: Mapped[str] = mapped_column(String(64), nullable=False)
     configuration_decode_tp: Mapped[int] = mapped_column(Integer, nullable=False)

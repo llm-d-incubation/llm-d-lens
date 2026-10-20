@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+from llm_d_lens.agentic import benchmark_context
 from llm_d_lens.db.dao.agentic_benchmark_record import BenchmarkRecordDao, BenchmarkRecordDaoError
 from llm_d_lens.db.dao.evaluate_run import EvaluateRunDao
 from llm_d_lens.db.evaluate_persistence_models import EvaluateRunRecord
@@ -304,8 +305,8 @@ def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it
         calls.append(argv)
         return SimpleNamespace(returncode=0, stdout=json.dumps({"items": [pod]} if "get" in argv else probe))
 
-    monkeypatch.setattr(evidence, "scoped_runner", lambda cluster: SimpleNamespace(run=execute))
-    monkeypatch.setattr(evidence, "resolve_by_resource", lambda key: True)
+    monkeypatch.setattr(benchmark_context, "scoped_runner", lambda cluster: SimpleNamespace(run=execute))
+    monkeypatch.setattr(benchmark_context, "resolve_by_resource", lambda key: True)
     asyncio.run(evidence.capture_benchmark_context(run))
     assert run["benchmark_context"]["model"] == probe["model"]
     assert run["benchmark_context"]["hardware"] == probe["hardware"]
@@ -324,14 +325,14 @@ def test_metadata_api_failure_does_not_replace_missing_metadata_with_defaults(ru
     async def unavailable(_):
         raise ValueError("Selected cluster is unavailable")
 
-    monkeypatch.setattr(evidence, "_model_pods", unavailable)
+    monkeypatch.setattr(benchmark_context, "_model_pods", unavailable)
     asyncio.run(evidence.capture_benchmark_context(run))
     assert "benchmark_context" not in run
     assert run["benchmark_context_error"] == "Selected cluster is unavailable"
 
 
 def test_probe_is_valid_python():
-    compile(evidence._MODEL_PROBE, "<model-probe>", "exec")
+    compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec")
 
 
 def test_probe_never_substitutes_latest_cached_revision_for_unpinned_serving_model(monkeypatch):
@@ -344,7 +345,7 @@ def test_probe_never_substitutes_latest_cached_revision_for_unpinned_serving_mod
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=unexpected_download))
     monkeypatch.setattr(sys, "argv", ["probe", "org/model", "org/model", "", ""])
     with pytest.raises(ValueError, match="immutable serving revision"):
-        exec(compile(evidence._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+        exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
 
 
 def test_batch_failure_rolls_back_every_new_record(run):
@@ -421,9 +422,9 @@ def test_live_probe_reads_actual_metadata_and_refuses_packed_or_duplicate_weight
     monkeypatch.setattr(sys, "argv", ["probe", str(root), "org/model", "pinned-revision", ""])
     if quantization != "none" or duplicate:
         with pytest.raises(ValueError, match="Packed|Duplicate"):
-            exec(compile(evidence._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+            exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
     else:
-        exec(compile(evidence._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+        exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
         result = json.loads(capsys.readouterr().out)
         assert result["model"]["parameter_count_b"] == 0.008
         assert result["model"]["architecture"] == "moe"

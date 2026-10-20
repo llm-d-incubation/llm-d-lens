@@ -41,7 +41,7 @@ class WorkloadProfile(BaseModel):
     mean_output_tokens: float = Field(gt=0)
     concurrency: float = Field(gt=0)
     request_rate: float = Field(gt=0)
-    shared_prefix_ratio: float = Field(ge=0, le=1)
+    shared_prefix_ratio: float | None = Field(default=None, ge=0, le=1)
     prefill_fraction: float = Field(ge=0, le=1)
 
 
@@ -261,7 +261,9 @@ class BenchmarkEvidenceRetriever:
             exp(-abs(log(record.mean_output_tokens / query.mean_output_tokens))),
             exp(-abs(log(record.concurrency / query.concurrency))),
             exp(-abs(log(record.request_rate / query.request_rate))),
-            1 - abs(record.shared_prefix_ratio - query.shared_prefix_ratio),
+            1 - abs(record.shared_prefix_ratio - query.shared_prefix_ratio)
+            if record.shared_prefix_ratio is not None and query.shared_prefix_ratio is not None
+            else 0.0,
             1 - abs(record.prefill_fraction - query.prefill_fraction),
         ]
         return sum(ratio_scores) / len(ratio_scores)

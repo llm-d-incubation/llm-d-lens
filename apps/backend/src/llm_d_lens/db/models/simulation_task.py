@@ -83,6 +83,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
         "backend_version_inferred": "backend_version_inferred",
         "backend_version": "backend_version",
         "configuration_ids": "configuration_ids",
+        "benchmark_evidence": "benchmark_evidence",
         "progress_percent": "progress_percent",
         "progress_message": "progress_message",
         "logs": "logs",
@@ -138,6 +139,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
     )
     backend_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     configuration_ids: Mapped[list[str] | None] = mapped_column(ArrayVariant, nullable=True, default=list)
+    benchmark_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONVariant, nullable=True)
     progress_percent: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     progress_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     logs: Mapped[list[str]] = mapped_column(ArrayVariant, nullable=False, default=list)
@@ -222,6 +224,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
             "endpoint_namespace": self.endpoint_namespace,
             "endpoint_service": self.endpoint_service,
             "endpoint_deployment_execution_id": self.endpoint_deployment_evidence_id,
+            "model_service_group_id": (self.benchmark_evidence or {}).get("model_service_group_id"),
             "endpoint_deployment_run_id": self.endpoint_deployment_batch_id,
             "endpoint_deployment_case_id": self.endpoint_deployment_job_id,
             "endpoint_cluster_id": self.endpoint_cluster_id,
@@ -263,6 +266,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
             "backend_version_inferred": self.backend_version_inferred,
             "backend_version": self.backend_version,
             "configuration_ids": list(self.configuration_ids or []),
+            "benchmark_evidence": self.benchmark_evidence,
             "progress_percent": self.progress_percent,
             "progress_message": self.progress_message,
             "logs": list(self.logs),

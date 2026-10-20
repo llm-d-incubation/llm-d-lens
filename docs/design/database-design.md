@@ -542,7 +542,11 @@ points and load stages have separate deterministic IDs (`evaluate:<uuid>:matrix:
 or `evaluate:<uuid>:stage:<j>`); `evaluate_run_id` retains only the source UUID.
 Repeated ingestion never updates an existing record. Missing evidence is reported in
 the source Evaluate record's `benchmark_evidence`, not replaced with planning-time facts.
-Simulation history collection no longer writes mislabeled Evaluate evidence.
+Simulation terminal persistence uses `simulation.benchmark_evidence.ingest_simulation_task`
+with the same context collector/validator and atomic append-only DAO. Its IDs are
+`simulation:<task-id>`, never `evaluate:` IDs; its Evaluate soft reference remains null.
+Planning-time history normalization consumes only these verified saved snapshots,
+not a freshly queried deployment topology or the current planning workload.
 
 Metadata enrichment uses bounded, read-only Kubernetes queries and serving-container
 introspection before traffic. Local model config and safetensors headers establish model
@@ -550,8 +554,9 @@ identity/architecture and serialized parameter count; accelerator properties and
 runtime metadata establish device memory and version. Pod UID, container image identity
 and restart count must remain stable through completion. Packed quantized weights,
 ambiguous model sources, heterogeneous replicas and unsupported topologies are not
-silently approximated. No schema migration is required: diagnostic snapshots live in
-`evaluate_runs.extra`, while normalized evidence uses the existing columns.
+silently approximated. Evaluate diagnostics live in `evaluate_runs.extra`;
+Simulation snapshots live in the nullable `simulation_tasks.benchmark_evidence` column.
+The Simulation snapshot and unknown-prefix changes require migration `4e241d008b19`.
 
 For generated random workloads, the configured shared-prefix ratio is zero; generated
 single-turn shared-prefix workloads use system-prompt length divided by total input
@@ -561,6 +566,9 @@ lengths come from lifecycle token distributions. Concurrency is the closed-loop 
 setting or measured request-time overlap divided by the measurement duration; request
 rate is measured request throughput. P95 latency is never replaced by the median, and
 error rate is a fraction derived from explicit success/failure counts, not a percentage.
+Simulation uses complete per-request artifacts, exact request/outcome parity and
+measured request-time overlap. Unknown shared-prefix ratios remain null rather than
+defaulting to zero, and earn no similarity credit even against another unknown ratio.
 
 Historical ingestion uses exactly the same normalizer, without querying the current
 cluster to invent historical state. From the configured backend environment, run
@@ -597,7 +605,7 @@ or metadata probes as part of this backfill.
 | `workload_mean_output_tokens` | Float | NOT NULL |  |  | - | `workload.mean_output_tokens` |
 | `workload_concurrency` | Float | NOT NULL |  |  | - | `workload.concurrency` |
 | `workload_request_rate` | Float | NOT NULL |  |  | - | `workload.request_rate` |
-| `workload_shared_prefix_ratio` | Float | NOT NULL |  |  | - | `workload.shared_prefix_ratio` |
+| `workload_shared_prefix_ratio` | Float | NULL |  |  | - | `workload.shared_prefix_ratio`; unknown earns no matching credit |
 | `workload_prefill_fraction` | Float | NOT NULL |  |  | - | `workload.prefill_fraction` |
 | `configuration_topology` | String(64) | NOT NULL |  |  | - | `configuration.topology` |
 | `configuration_decode_tp` | Integer | NOT NULL |  |  | - | `configuration.decode_tp` |
@@ -675,6 +683,20 @@ Corresponds to `llm_d_lens.simulation.models.SimulationTask` (the module itself 
 
 `result.per_request: list[SimulationRequestResult]` contains **one detail row per load-test request** (reaching tens of thousands under high concurrency), so it does not meet the Rule-6 assumption of a "bounded-size snapshot array" — putting the whole thing into one JSONVariant array column would make the row too large, and even reads that only need `summary` would have to move the entire detail payload. Therefore it is handled separately: **stored in an independent file, with only a path reference stored in the database** (`result_per_request_ref`), using the same strategy as "Evaluate harness raw artifacts are not stored in the database, only their paths" (see §9); `task.result.summary` (the aggregate metrics actually read by the frontend) is still stored as a Rule-3 JSONVariant column and is unaffected.
 
+`benchmark_evidence` is a bounded, versioned provenance snapshot persisted before
+benchmark traffic, even when `result` is null. It freezes the deployment source
+configuration/checksum, task workload, target identity and API-enriched serving facts.
+For a Model Service, one positive-weight deployment must be attributable in the selected
+cluster: the live HTTPRoute must reference exactly its InferencePool, whose selector
+scopes serving-pod collection. Route/pool specs and pod identities are rechecked after
+traffic. Multi-target or unverified external routing is not guessed. The Model Service
+group binding is also retained here for queued-task recovery. Reruns clear prior
+measurements and recollect their own context. Terminal persistence commits the source
+result first, then saves append-only evidence and explicit ingestion diagnostics.
+`python -m llm_d_lens.simulation.benchmark_evidence` previews historical eligibility;
+`--task-id <id>` selects tasks and `--apply` writes eligible records/reports. Backfill
+never queries today's cluster to complete an unverified historical snapshot.
+
 The `live_summary` field is a transient progress snapshot of a running task (the code already explicitly excludes it via `model_dump(..., exclude={"live_summary"})` inside `save_task()`), and **is not persisted**; semantically it belongs in the same category as the pure in-memory runtime state in `cluster/bootstrap` and `monitoring` (see §9).
 
 `endpoint_deployment_run_id` / `endpoint_deployment_case_id` are legacy field names kept in the DTO for compatibility with old records (created before the rename to `deployment_batches` / `deployment_jobs`); the persisted column names are correspondingly updated to `endpoint_deployment_batch_id` / `endpoint_deployment_job_id` to match the new table names.
@@ -713,6 +735,7 @@ The `live_summary` field is a transient progress snapshot of a running task (the
 | `prompt_trace_start_seconds` | Float | NOT NULL |  |  | `0` | `prompt.trace.start_seconds` |
 | `prompt_trace_end_seconds` | Float | NULL |  |  | - | `prompt.trace.end_seconds` |
 | `task_dir` | Text | NOT NULL |  |  | - | `task_dir` |
+| `benchmark_evidence` | JSONVariant | NULL |  |  | - | Test-time context, routing/group binding and ingestion diagnostics |
 | `progress_percent` | Float | NOT NULL |  |  | `0` | `progress_percent`; `CHECK (0 <= x <= 100)` |
 | `progress_message` | Text | NOT NULL |  |  | `''` | `progress_message` |
 | `logs` | ARRAY(Text) | NOT NULL |  |  | `'{}'` | `logs` (Rule 4) |

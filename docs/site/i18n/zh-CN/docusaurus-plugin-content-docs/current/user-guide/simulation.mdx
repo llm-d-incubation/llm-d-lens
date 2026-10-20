@@ -45,6 +45,32 @@ description: 向模型重放请求流量，检查延迟、吞吐量和错误。
 
 缺失指标不是零。指标不可用时，先检查 **Task Log（任务日志）**，确认运行或采集是否失败。
 
+## 将结果复用为 Agentic 证据
+
+流量开始前，Lens 保存本次部署配置、负载和目标标识，并通过有超时限制的只读
+Kubernetes 查询与服务容器元数据探测，获取模型、加速器和运行时事实。流量结束后，
+检查服务容器以及 Model Service 的路由、推理池是否保持不变。符合条件的终态结果
+以 `simulation:<task-id>` 标识幂等入库，不冒充 Evaluate，也不填入当前规划参数。
+
+自动补全目前支持可明确归属、具有明确启动参数和本地 safetensors 元数据的 vLLM
+部署；Hub 缓存模型必须指定不可变的服务版本。Model Service 在所选集群中必须只路由到
+一个部署。混合目标、无法识别的拓扑、打包量化权重，或无法验证环境的外部端点会明确跳过。
+证据不可用不会丢弃 Simulation 自身的测试结果。
+
+标准化要求逐请求工件完整，且与实测请求数一致。P95 由观测值计算，并发度来自实测请求
+时间重叠；不补造缺失指标。未知共享前缀比例保持 null，相似度计算不给该维度加分。
+任务 API 的 `benchmark_evidence` 包含快照、采集错误和 `ingestion` 入库报告。
+重跑会重新采集快照，不沿用上次的测试环境。
+
+管理员可在已配置的后端环境中预览历史资格：
+
+```bash
+python -m llm_d_lens.simulation.benchmark_evidence
+python -m llm_d_lens.simulation.benchmark_evidence --task-id abcdef12 --apply
+```
+
+不加 `--apply` 不会写入。缺少历史快照时明确报告，不使用当前集群反推历史状态。
+
 ## 停止、重跑或删除任务
 
 | 目标 | 操作 |

@@ -262,6 +262,7 @@ class SimulationTask(BaseModel):
     backend_version_inferred: bool = False
     backend_version: str | None = None
     configuration_ids: list[str] = Field(default_factory=list)
+    benchmark_evidence: dict[str, Any] | None = None
     progress_percent: float = Field(ge=0, le=100)
     progress_message: str
     logs: list[str]
@@ -405,6 +406,7 @@ class ArtifactRecord:
     latency_ms: float | None = None
     ttft_ms: float | None = None
     tpot_ms: float | None = None
+    tpot_is_measured: bool = True
     latency_arrived: float | None = None
     latency_completed: float | None = None
     rate_completed: float | None = None

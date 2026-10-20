@@ -285,6 +285,7 @@ async def _supplementary_evidence(
         evidence.append(PlanningEvidence(id="deploy-history", source="deploy-history", status="unavailable"))
     try:
         simulations = await list_tasks(status="completed", model=model_name, limit=20)
+        observations = await _similar_historical_observations(simulations.tasks, facts, {})
         evidence.append(
             PlanningEvidence(
                 id="simulation-history",
@@ -293,6 +294,7 @@ async def _supplementary_evidence(
                 details={
                     "total": simulations.total,
                     "benchmark_record_count": len(JsonBenchmarkRecordStore().list()),
+                    **({"observations": observations} if observations else {}),
                 },
             )
         )
@@ -401,32 +403,39 @@ async def _similar_historical_observations(
     facts: PlanningFacts,
     topology_by_execution: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    from llm_d_lens.simulation.benchmark_evidence import normalize_simulation_task
+
+    del topology_by_execution
     observations: list[dict[str, Any]] = []
     for task in tasks:
-        result = task.result
-        if result is None:
-            continue
-        requests = [request for request in result.per_request if request.successful is not False]
-        ttft_values = sorted(request.ttft_ms for request in requests if request.ttft_ms and request.ttft_ms > 0)
-        tpot_values = sorted(request.tpot_ms for request in requests if request.tpot_ms and request.tpot_ms > 0)
-        throughput = _positive_float(result.summary.get("throughput_tps"))
-        if not ttft_values and not tpot_values and throughput is None:
-            continue
-        observed_input = _mean(request.input_tokens for request in requests)
-        observed_output = _mean(request.output_tokens for request in requests)
-        similarity = _workload_similarity(facts, task.scenario, observed_input, observed_output)
-        topology = topology_by_execution.get(getattr(task, "endpoint_deployment_execution_id", None) or "", {})
-        observations.append(
-            {
-                **topology,
-                "task_id": task.id,
-                "scenario": task.scenario,
-                "similarity": similarity,
-                "ttft_p95_ms": _p95(ttft_values),
-                "tpot_p95_ms": _p95(tpot_values),
-                "throughput_tokens_per_sec": throughput,
-            }
-        )
+        records, issues = normalize_simulation_task(task)
+        if issues:
+            logger.warning("Simulation %s is not reusable evidence: %s", task.id, issues)
+        for record in records:
+            configuration = record.configuration
+            observations.append(
+                {
+                    "provider_ref": configuration.topology,
+                    "replicas": configuration.decode_replicas,
+                    "tensor_parallel_size": configuration.decode_tp,
+                    "prefill_replicas": configuration.prefill_replicas,
+                    "prefill_tensor_parallel_size": configuration.prefill_tp,
+                    "required_gpus": record.hardware.gpu_count,
+                    "task_id": task.id,
+                    "benchmark_id": record.benchmark_id,
+                    "measured_at": record.timestamp.isoformat(),
+                    "model": record.model.model_dump(),
+                    "hardware": record.hardware.model_dump(),
+                    "runtime": record.runtime.model_dump(),
+                    "scenario": task.scenario,
+                    "similarity": _workload_similarity(
+                        facts, task.scenario, record.workload.mean_input_tokens, record.workload.mean_output_tokens
+                    ),
+                    "ttft_p95_ms": record.metrics.ttft_p95_ms,
+                    "tpot_p95_ms": record.metrics.tpot_p95_ms,
+                    "throughput_tokens_per_sec": record.metrics.throughput_tokens_per_s,
+                }
+            )
     return sorted(observations, key=lambda item: (-item["similarity"], item["task_id"]))[:3]
 
 
