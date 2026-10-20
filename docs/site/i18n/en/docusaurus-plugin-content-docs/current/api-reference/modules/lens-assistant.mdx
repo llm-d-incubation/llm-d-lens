@@ -302,6 +302,11 @@ An abstention is an explicit domain result; upstream
 authorization, transport or corrupt-response failures are MCP `isError: true`
 results without evidence, not successful empty responses.
 
+Missing or corrupt pinned evidence, including malformed archive manifests,
+returns REST HTTP 503 with code `rag_evidence_unavailable`, not an abstention
+or a partial answer. Restoring the unchanged valid manifest and source bytes
+allows subsequent queries to recover without reindexing.
+
 Only approved published public sources are eligible: `prism:public-snapshot`,
 `https://github.com/VincyZhang/llm-d`, and
 `https://github.com/llm-d/llm-d-benchmark.git`. Restore the published corpus and

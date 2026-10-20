@@ -18,6 +18,7 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     InventoryFile,
     ParsedFile,
     PinnedInventory,
+    PublicationError,
     SourceApproval,
     item_id,
 )
@@ -481,6 +482,81 @@ def test_missing_or_corrupt_bytes_are_errors_not_empty_success(query_service):
     (root / "source").write_bytes(b"corrupt")
     with pytest.raises(EvidenceUnavailableError):
         query_service.query(numeric(), reader())
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "empty_object",
+        "non_object",
+        "invalid_json",
+        "invalid_utf8",
+        "wrong_owner",
+        "invalid_owner",
+        "missing_files",
+        "invalid_files",
+        "invalid_entry",
+        "missing_uri",
+        "missing_path",
+        "unregistered_source",
+        "mismatched_path",
+    ],
+)
+def test_corrupt_evidence_manifest_returns_503_and_recovers(query_service, monkeypatch, corruption):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from llm_d_lens.api.problems import install_problem_handlers
+    from llm_d_lens.benchmark_rag import router
+
+    request = numeric()
+    expected = query_service.query(request, reader()).model_dump(mode="json")
+    digest = hashlib.sha256(_RAW).hexdigest()
+    manifest_path = query_service.archive._root(digest) / "manifest.json"
+    original = manifest_path.read_bytes()
+    manifest = json.loads(original)
+    broken = {
+        "empty_object": {},
+        "non_object": [],
+        "wrong_owner": {**manifest, "owner_id": "different-owner"},
+        "invalid_owner": {**manifest, "owner_type": None},
+        "missing_files": {key: value for key, value in manifest.items() if key != "files"},
+        "invalid_files": {**manifest, "files": None},
+        "invalid_entry": {**manifest, "files": [None]},
+        "missing_uri": {**manifest, "files": [{"path": "source"}]},
+        "missing_path": {**manifest, "files": [{"uri": manifest["files"][0]["uri"]}]},
+        "unregistered_source": {**manifest, "files": []},
+        "mismatched_path": {**manifest, "files": [{**manifest["files"][0], "path": "different"}]},
+    }
+    payload = (
+        b"\xff"
+        if corruption == "invalid_utf8"
+        else b"{"
+        if corruption == "invalid_json"
+        else json.dumps(broken[corruption]).encode()
+    )
+    manifest_path.write_bytes(payload)
+    with pytest.raises(PublicationError, match="manifest"):
+        query_service.archive.read(digest)
+    with pytest.raises(EvidenceUnavailableError, match="missing or corrupt"):
+        query_service.query(request, reader())
+
+    monkeypatch.setattr(router, "get_service", lambda: query_service)
+    monkeypatch.setattr(router, "current_principal", lambda _request: reader())
+    app = FastAPI()
+    install_problem_handlers(app)
+    app.include_router(router.router)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/benchmark-rag/query", json=request.model_dump(mode="json", exclude_unset=True))
+        assert response.status_code == 503
+        assert response.headers["content-type"] == "application/problem+json"
+        assert response.json()["code"] == "rag_evidence_unavailable"
+        assert response.json()["detail"] == "An unexpected error occurred."
+        assert "evidence" not in response.json()
+        manifest_path.write_bytes(original)
+        recovered = client.post("/api/v1/benchmark-rag/query", json=request.model_dump(mode="json", exclude_unset=True))
+        assert recovered.status_code == 200
+        assert recovered.json() == expected
 
 
 def test_manifest_membership_not_per_row_published_flag(query_service):

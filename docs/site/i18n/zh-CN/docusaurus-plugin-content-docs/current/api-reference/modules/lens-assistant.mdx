@@ -283,6 +283,10 @@ Decimal 字符串表示已存储浮点数，**不是**原始来源数值 token �
 拒答是明确的领域结果；上游授权、传输或响应损坏则返回 MCP `isError: true`，
 不包含证据，也不会伪装为成功的空响应。
 
+固定版本证据缺失或损坏（包括格式错误的归档清单）时，REST 返回 HTTP 503，
+错误码为 `rag_evidence_unavailable`，而不是拒答或部分回答。
+恢复未经改动的有效清单与来源字节后，后续查询即可恢复，无需重新索引。
+
 仅允许已批准并发布的公开来源：`prism:public-snapshot`、
 `https://github.com/VincyZhang/llm-d` 和
 `https://github.com/llm-d/llm-d-benchmark.git`。必须同时恢复已发布语料及其不可变

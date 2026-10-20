@@ -151,9 +151,28 @@ class SourceArchive:
 
     def read(self, digest: str) -> bytes:
         root = self._root(digest)
-        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        try:
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise PublicationError("pinned source manifest is not valid UTF-8 JSON") from error
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("owner_type") != "benchmark-rag"
+            or manifest.get("owner_id") != digest
+            or not isinstance(manifest.get("files"), list)
+            or any(
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("uri"), str)
+                or not isinstance(entry.get("path"), str)
+                for entry in manifest["files"]
+            )
+        ):
+            raise PublicationError("pinned source manifest has invalid ownership or file entries")
         uri = artifact_uri("benchmark-rag", digest, "source")
-        target = resolve_artifact(root, manifest, uri)
+        try:
+            target = resolve_artifact(root, manifest, uri)
+        except ValueError as error:
+            raise PublicationError("pinned source manifest cannot resolve its source") from error
         data = target.read_bytes()
         if hashlib.sha256(data).hexdigest() != digest:
             raise PublicationError("pinned source bytes failed hash verification")
