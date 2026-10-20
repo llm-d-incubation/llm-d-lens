@@ -128,7 +128,7 @@ print(sorted(variants))
 
 ## Backend API
 
-### Prepare Guide source (Node)
+### Prepare Guide source
 
 `POST /api/guide-planning/prepare` accepts `guide`, `accelerator`, `modelServer`,
 `guideVariant` and the selected `clusterId`. It prepares the official source
@@ -140,7 +140,8 @@ without deploying and returns its commit plus manifest-derived controls:
 
 The booleans describe supported CPU-cache mutation and a matching profile NIC
 claim. They do not depend on variant names. This endpoint is owned by
-`apps/server/src/routes/guidePlanning.ts`; there is no Python callable for this Node operation.
+`llm_d_lens.deploy.guide_planning.prepare`; source loading is implemented in
+`llm_d_lens.deploy.guide_sources`.
 Python deployment providers use `guide_overlays` (above) and
 `llm_d_lens.hardware.resolver.deployment_mode(profile, access_mode)` for the
 corresponding source and hardware contracts.
@@ -1574,8 +1575,8 @@ asyncio.run(main())
 
 ## Remote SSH deployment
 
-These legacy endpoints are implemented by the Node BFF in
-`apps/server/src/routes/remoteDeploy.ts`, not the Python Deploy service. They
+These legacy endpoints are implemented in the Python module
+`llm_d_lens.deploy.remote_deploy`. They
 execute commands over SSH rather than create v1 deployment runs. Their current
 single-node Intel Data Center GPU/XPU restriction is specific to this legacy
 implementation, not the capability limit of the profile-driven v1 API.

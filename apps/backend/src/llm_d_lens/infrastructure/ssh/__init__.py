@@ -25,6 +25,7 @@ class SshTarget:
     key_filename: str | None = None
     password: str | None = None
     host_key_fingerprint: str | None = None
+    allow_agent: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,7 @@ def remote_exec(target: SshTarget, command: str, timeout: float | None = None) -
         timeout=15,
         banner_timeout=15,
         auth_timeout=15,
-        allow_agent=False,
+        allow_agent=target.allow_agent,
         look_for_keys=False,
     )
     try:

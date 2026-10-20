@@ -6,15 +6,15 @@ description: 将一个 MCP 客户端（MCP Inspector、某个 IDE 智能体，�
 Lens 将其平台能力以 **Model Context Protocol (MCP)** 服务器的形式暴露出来，
 这样任何支持 MCP 的客户端都可以像内置的
 [Lens Assistant](/user-guide/lens-assistant) 一样检查和操作 Lens。MCP 层是一个**瘦适配层**：
-每一个工具都是通过环回地址调用 Lens 自身的 REST API——MCP 服务器中没有重新实现
+每一个工具都是通过进程内 ASGI 客户端调用 Lens 自身的 REST API；MCP 服务器中没有重新实现
 任何集群、认证或领域逻辑。
 
 ## 端点与传输方式
 
 | 属性 | 值 |
 | --- | --- |
-| 方法 / 路径 | `POST /api/mcp`（位于 Lens 的 BFF/Node 服务器上） |
-| 默认端口 | `SERVER_PORT` / `PORT`（3000；如果 3000 已被占用，`scripts/lens-local.sh` 会选取其上方下一个空闲端口） |
+| 方法 / 路径 | `POST /api/mcp`（位于统一 Python 服务上） |
+| 默认端口 | `BACKEND_PORT`，后备值为 `SERVER_PORT` / `PORT`（默认 3000；本地启动器会选择空闲端口） |
 | 传输方式 | MCP **Streamable HTTP**，JSON-RPC 2.0 |
 | 会话 | **无状态**——每个请求使用一个临时的 MCP 服务器，没有 `Mcp-Session-Id` |
 | 其他方法 | `GET` / `DELETE /api/mcp` 返回 `405`（无状态模式下没有服务器到客户端的流） |
@@ -36,8 +36,8 @@ Authorization: ******
 ```
 
 `<session-token>` 是登录时颁发的 `prism_session` Cookie 的值（可以在登录状态下从
-浏览器开发者工具中读取）。请求会通过
-`GET /api/v1/auth/session` 进行内省；未认证的调用会得到 `401 unauthenticated`，
+浏览器开发者工具中读取）。Python 认证服务直接校验会话；
+未认证的调用会得到 `401 unauthenticated`，
 而没有上述权限的会话会得到 `403`。
 
 :::note
@@ -92,16 +92,16 @@ BASE=http://<lens-host>:3000/api/mcp
 H="Authorization: ******"
 
 # 1) 握手
-curl -s $BASE -H "$H" -H 'content-type: application/json' -d '{
+curl -s "$BASE" -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{
   "jsonrpc":"2.0","id":1,"method":"initialize",
   "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
 # 2) 列出工具
-curl -s $BASE -H "$H" -H 'content-type: application/json' -d '{
+curl -s "$BASE" -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{
   "jsonrpc":"2.0","id":2,"method":"tools/list"}'
 
 # 3) 调用一个只读工具
-curl -s $BASE -H "$H" -H 'content-type: application/json' -d '{
+curl -s "$BASE" -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{
   "jsonrpc":"2.0","id":3,"method":"tools/call",
   "params":{"name":"list_clusters","arguments":{}}}'
 ```

@@ -5,6 +5,79 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+test('installer legacy backend port selects the unified port and resolves collisions once', t => {
+  const { root } = setup(t);
+  const result = spawnSync('bash', ['-c', `
+    source "$1"
+    parse_args --app-port 3000 --backend-port 4100
+    port_in_use() { [[ "$1" == 4100 ]]; }
+    describe_port_owner() { echo test-process; }
+    find_free_port() { echo 4101; }
+    resolve_ports_silently
+    printf '%s:%s\\n' "$APP_PORT" "$BACKEND_PORT"
+  `, 'test', resolve('scripts/LensInstaller-Ubuntu-x86_64-online.sh')], {
+    cwd: root, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '4101:4101');
+  assert.equal((result.stderr.match(/switched/g) || []).length, 1);
+});
+
+test('installed controller refuses startup when the Python MCP catalog fails', t => {
+  const { root, put } = setup(t);
+  execFileSync('bash', ['-c', 'source "$1"; INSTALL_DIR="$2"; write_control_script',
+    'test', resolve('scripts/LensInstaller-Ubuntu-x86_64-online.sh'), root]);
+  execFileSync('bash', ['-n', join(root, 'lensctl.sh')]);
+  put('.lens-install.env', 'APP_PORT=49191\nBACKEND_PORT=8081\nENABLE_HTTPS=0\n');
+  put('.venv/bin/python', '#!/usr/bin/env bash\nexit 1\n');
+  chmodSync(join(root, '.venv/bin/python'), 0o755);
+  const result = spawnSync('bash', [join(root, 'lensctl.sh'), 'start'], {
+    encoding: 'utf8',
+    env: { ...process.env, LENS_DATA_DIR: join(root, 'data'), LENS_CACHE_DIR: join(root, 'cache'),
+      LENS_LOG_DIR: join(root, 'logs'), LENS_SCRATCH_DIR: join(root, 'scratch') },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /MCP tool catalog validation failed/);
+  assert.equal(existsSync(join(root, '.prism-pids/app.pid')), false);
+  assert.equal(existsSync(join(root, '.prism-pids/backend.pid')), false);
+  const config = readFileSync(join(root, '.lens-install.env'), 'utf8');
+  assert.equal(config.match(/^APP_PORT=(\d+)$/m)[1], config.match(/^BACKEND_PORT=(\d+)$/m)[1]);
+});
+
+test('unified HTTPS launcher defaults the MCP trust certificate and preserves explicit overrides', t => {
+  const { root, put } = setup(t);
+  copyFileSync('scripts/run-backend.sh', join(root, 'scripts/run-backend.sh'));
+  put('bin/python', `#!/usr/bin/env bash
+if [[ "$1" == -c ]]; then exit 0; fi
+if [[ "$2" == llm_d_lens.db.bootstrap_cli ]]; then exit "\${LENS_TEST_BOOTSTRAP_EXIT:-0}"; fi
+printf '%s\\n' "$PRISM_MCP_URL" "$PRISM_MCP_CA_FILE" "$@"
+`);
+  chmodSync(join(root, 'bin/python'), 0o755);
+  for (const customCa of ['', '/custom/ca.pem']) {
+    const result = spawnSync('bash', [join(root, 'scripts/run-backend.sh')], {
+      encoding: 'utf8',
+      env: { ...process.env, PYTHON_BIN: join(root, 'bin/python'), BACKEND_PORT: '4100',
+        TLS_CERT_FILE: '/cert with spaces.pem', TLS_KEY_FILE: '/key.pem', TLS_CA_FILE: '',
+        PRISM_MCP_URL: '', PRISM_MCP_CA_FILE: customCa,
+        LENS_DATA_DIR: join(root, 'data'), LENS_CACHE_DIR: join(root, 'cache'),
+        LENS_LOG_DIR: join(root, 'logs'), LENS_SCRATCH_DIR: join(root, 'scratch') },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout.trim().split('\n');
+    assert.deepEqual(lines.slice(0, 2), ['https://127.0.0.1:4100/api/mcp', customCa || '/cert with spaces.pem']);
+    assert.equal(lines[lines.indexOf('--ssl-certfile') + 1], '/cert with spaces.pem');
+    assert.equal(lines[lines.indexOf('--port') + 1], '4100');
+  }
+  const failed = spawnSync('bash', [join(root, 'scripts/run-backend.sh')], {
+    encoding: 'utf8',
+    env: { ...process.env, PYTHON_BIN: join(root, 'bin/python'), LENS_TEST_BOOTSTRAP_EXIT: '42',
+      LENS_DATA_DIR: join(root, 'data'), LENS_CACHE_DIR: join(root, 'cache'),
+      LENS_LOG_DIR: join(root, 'logs'), LENS_SCRATCH_DIR: join(root, 'scratch') },
+  });
+  assert.equal(failed.status, 42);
+  assert.equal(failed.stdout, '');
+});
+
 function setup(t) {
   const root = mkdtempSync(join(tmpdir(), 'reuse-dev-start-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -210,13 +283,22 @@ for (const target of ['frontend', 'server', 'backend', 'all']) test(`targeted re
   `, 'test', target], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const lines = result.stdout.split('\n');
-  assert.ok(lines.includes(`stop ${target}`));
+  const effectiveTarget = target === 'server' ? 'backend' : target;
+  assert.ok(lines.includes(`stop ${effectiveTarget}`));
   for (const service of ['frontend', 'server', 'backend']) {
-    assert.equal(lines.includes(`start ${service}`), target === 'all' || target === service);
-    assert.equal(lines.includes(`wait ${service}`), target === 'all' || target === service);
+    const selected = service !== 'server' && (effectiveTarget === 'all' || effectiveTarget === service);
+    assert.equal(lines.includes(`start ${service}`), selected);
+    assert.equal(lines.includes(`wait ${service}`), selected);
   }
-  assert.equal(lines.includes('database'), target === 'all' || target === 'backend');
-  assert.equal(lines.includes('catalog'), target === 'all' || target === 'server');
+  assert.equal(lines.includes('database'), effectiveTarget === 'all' || effectiveTarget === 'backend');
+  assert.equal(lines.includes('catalog'), false);
+});
+
+test('MCP catalog failure prevents stopping existing services', t => {
+  const { root, run } = setup(t);
+  const result = run('restart', { overrides: 'regenerate_mcp_tools() { return 1; }' });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.ok(!existsSync(join(root, 'events')));
 });
 
 test('unknown restart target fails before touching the environment', t => {
@@ -293,7 +375,7 @@ test('targeted restart composes with upstream target-node and kubeconfig options
     overrides: 'cmd_stop() { echo "stop:$1" >> "$ROOT_DIR/events"; }; start_services() { echo "start:$1" >> "$ROOT_DIR/events"; }',
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.equal(readFileSync(join(root, 'events'), 'utf8'), 'stop:server\nstart:server\n');
+  assert.equal(readFileSync(join(root, 'events'), 'utf8'), 'stop:backend\nstart:backend\n');
   assert.match(readFileSync(join(root, 'kubectl-calls'), 'utf8'), /get node node-a/);
   assert.equal(run('restart', { args: ['frontend', 'backend'] }).status, 2);
   assert.equal(run('start', { args: ['frontend'] }).status, 2);

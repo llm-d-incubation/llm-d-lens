@@ -100,6 +100,20 @@ def simulation_projection(execution: DeploymentExecution) -> SimulationDeploymen
 
 ## 后端 API
 
+### 准备 Guide 源码
+
+`POST /api/guide-planning/prepare` 接受 `guide`、`accelerator`、`modelServer`、
+`guideVariant` 和选定的 `clusterId`。它准备官方源码但不部署，返回提交标识及从清单解析的能力：
+
+```json
+{"ready": true, "commit": "selected-source-commit", "capabilities": {"cacheCpuGiB": false, "rdmaNicCount": true}}
+```
+
+布尔值表示是否支持 CPU 缓存修改以及是否存在匹配硬件 profile 的 NIC 声明，
+不依赖变体名称。处理函数为 `llm_d_lens.deploy.guide_planning.prepare`，
+源码加载位于 `llm_d_lens.deploy.guide_sources`。部署提供方复用 `guide_overlays`
+和 `llm_d_lens.hardware.resolver.deployment_mode(profile, access_mode)`。
+
 当前单仓库启动和 Lens 存储根目录参见[安装](/installation)及
 [存储环境设置](/environment-variables)。旧 `.llm-d-bench/deploy` 和主机专属的
 `/root/.llm_d_lens/run_store` 不再是当前存储契约。
@@ -1443,7 +1457,7 @@ asyncio.run(main())
 
 ## Remote SSH 部署
 
-这些旧版端点由 Node BFF 的 `apps/server/src/routes/remoteDeploy.ts` 实现，不属于 Python Deploy 服务。
+这些旧版端点由 Python 模块 `llm_d_lens.deploy.remote_deploy` 实现。
 它们通过 SSH 执行命令，不创建 v1 部署运行。当前仅支持单节点 Intel Data Center GPU/XPU，
 这是旧实现的限制，不代表由硬件 profile 驱动的 v1 API 的能力范围。
 

@@ -170,15 +170,14 @@ Source downloads preserve the existing repository, version, and deployment-scena
 | External resource locations | Source code and tools use a unified cache root; model weights use the selected storage volume | Repository download, Guide, Model Cache |
 | Offline management tools | Historical file copying, manifest reconstruction, expiration-candidate statistics; preview by default, copy requires explicit execution | `infrastructure/storage/admin.py` |
 
-Python infrastructure entry points are under `apps/backend/src/llm_d_lens/`;
-Node infrastructure is under `apps/server/src/`.
+Service infrastructure entry points are under `apps/backend/src/llm_d_lens/`.
+Guide planning and cluster sessions use the same Python storage helpers.
 
 ### Shared Entry Points and Integration Code
 
 | Capability | File path | Integration scope |
 | --- | --- | --- |
 | Python path selection | [storage/paths.py](../../apps/backend/src/llm_d_lens/infrastructure/storage/paths.py) | Persistent directories, cache, and temporary directories for Python business modules |
-| Node path selection | [storagePaths.ts](../../apps/server/src/infrastructure/storagePaths.ts) | Cluster sessions, Guide planning cache |
 | Startup environment | [scripts/storage-env.sh](../../scripts/storage-env.sh) | Root-directory configuration for development and installation startup scripts |
 | File manifests and identifiers | [artifacts/store.py](../../apps/backend/src/llm_d_lens/infrastructure/artifacts/store.py) | Configuration, deployment, evaluation, simulation, dataset, and monitoring results |
 | Migration and retention checks | [storage/admin.py](../../apps/backend/src/llm_d_lens/infrastructure/storage/admin.py) | Offline copying, manifest reconstruction, cleanup-candidate statistics |

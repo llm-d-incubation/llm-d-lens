@@ -42,16 +42,16 @@
         "compatible_router_values"
       ],
       "purpose": "Adapt legacy P/D plugin configurations to Router 0.11 while preserving source snapshots and disaggregation decisions.",
-      "boundaries": "Only known Router 0.11 endpoint-picker runtimes are adapted. The profile handler owns former header handling; deciderPluginName maps to deciders.prefill. Conflicting decisions and custom legacy header parameters are rejected. Node planning mirrors this contract; Python validation and bundle installation share this implementation. Original asset checksums are retained and installed derived values are recorded separately.",
+      "boundaries": "Only known Router 0.11 endpoint-picker runtimes are adapted. The profile handler owns former header handling; deciderPluginName maps to deciders.prefill. Conflicting decisions and custom legacy header parameters are rejected. Python planning, validation and bundle installation share this implementation. Original asset checksums are retained and installed derived values are recorded separately.",
       "examples": [
-        "apps/server/src/services/guideDeploymentBundle.ts",
+        "apps/backend/src/llm_d_lens/deploy/guide_bundle.py",
         "apps/backend/src/llm_d_lens/configuration/guide_settings.py",
         "apps/backend/src/llm_d_lens/deploy/providers/deployment_bundle.py",
         "apps/backend/src/llm_d_lens/deploy/providers/pd_disaggregation.py"
       ],
       "tests": [
         "apps/backend/tests/unit/configuration/test_router_compatibility.py",
-        "apps/server/testing/services/guideDeploymentBundle.test.ts",
+        "apps/backend/tests/contract/test_guide_planning.py",
         "apps/backend/tests/unit/deploy/providers/test_pd_disaggregation.py"
       ]
     },
@@ -123,24 +123,6 @@
       "tests": [
         "apps/backend/tests/unit/deploy/providers/test_hardware_profile.py",
         "apps/backend/tests/unit/hardware/test_deployment_telemetry_contract.py"
-      ]
-    },
-    {
-      "id": "node-hardware-profiles",
-      "path": "apps/server/src/services/hardwareProfiles.ts",
-      "symbols": [
-        "loadHardwareProfiles",
-        "aicAcceleratorForSystem",
-        "isKnownDeviceClass",
-        "hardwareProfileSnapshot"
-      ],
-      "purpose": "Node client for the hardware profile registry plus pure helpers that resolve the AIC accelerator and known DRA device classes from registered profiles.",
-      "boundaries": "Read-only cached registry client; consumers use shared profile matching and remain neutral when hardware is unresolved.",
-      "examples": [
-        "apps/server/src/routes/candidateSearch.ts"
-      ],
-      "tests": [
-        "apps/server/testing/services/hardwareProfiles.test.ts"
       ]
     },
     {
@@ -715,7 +697,7 @@
         "paginate"
       ],
       "purpose": "Page count, clamping, visible range and slicing for filtered collections.",
-      "boundaries": "Expects nonnegative integer page and positive integer pageSize; filtering and reset conditions belong to callers. Empty collections have one page and range 0\u20130.",
+      "boundaries": "Expects nonnegative integer page and positive integer pageSize; filtering and reset conditions belong to callers. Empty collections have one page and range 0–0.",
       "examples": [
         "apps/frontend/src/pages/storage/ui/StorageManagement/StorageManagementPage.jsx",
         "apps/frontend/src/pages/model-cache/ui/ModelCache/ModelCachePage.jsx",
@@ -813,22 +795,6 @@
         "apps/backend/tests/unit/cluster/test_service.py"
       ],
       "testNote": "Covered indirectly through the delete_cluster tests, which assert the deleted namespace and secret coordinates via a fake kubectl runner; there is no dedicated unit test for the two one-line wrappers."
-    },
-    {
-      "id": "upstream-json-transport",
-      "path": "apps/server/src/infrastructure/http.ts",
-      "symbols": [
-        "fetchJsonWithTimeout"
-      ],
-      "purpose": "Node upstream JSON fetch with timeout through body consumption.",
-      "boundaries": "Returns Response and payload, including non-2xx responses; empty body becomes {}, malformed text becomes detail. Caller retains status/error mapping. Cleans timer and respects caller abort signal; not for streaming.",
-      "examples": [
-        "apps/server/src/routes/configuration.ts",
-        "apps/server/src/routes/candidateSearch.ts"
-      ],
-      "tests": [
-        "apps/server/testing/infrastructure/http.test.ts"
-      ]
     },
     {
       "id": "binary-byte-scaling",
@@ -1035,23 +1001,6 @@
       ]
     },
     {
-      "id": "node-storage-paths",
-      "path": "apps/server/src/infrastructure/storagePaths.ts",
-      "symbols": [
-        "storagePath"
-      ],
-      "purpose": "Node storage path selection matching the Python LENS/XDG contract.",
-      "boundaries": "No IO, migration, or cleanup. Legacy domain directory variables are ignored. Browser download paths and remote host environments remain separate.",
-      "examples": [
-        "apps/server/src/services/clusterSession.ts",
-        "apps/server/src/routes/guidePlanning.ts"
-      ],
-      "tests": [
-        "apps/server/testing/infrastructure/storagePaths.test.ts",
-        "apps/server/testing/services/clusterSession.test.ts"
-      ]
-    },
-    {
       "id": "configuration-persistence",
       "path": "apps/backend/src/llm_d_lens/configuration/service.py",
       "symbols": [
@@ -1203,17 +1152,17 @@
     },
     {
       "id": "remote-repository-preparation",
-      "path": "apps/server/src/routes/remoteDeploy.ts",
+      "path": "apps/backend/src/llm_d_lens/deploy/remote_deploy.py",
       "symbols": [
-        "prepareRepositoryCommand"
+        "prepare_repository_command"
       ],
       "purpose": "Prepare a validated deployment repository on the remote host using its Lens/XDG cache layout.",
-      "boundaries": "Builds shell command only; remote execution/lifecycle remains in remoteDeploy. Preserve explicit absolute or home paths; GitHub clones isolate owner/repository. Expand only trusted remote HOME/LENS/XDG variables, quote user path/ref as literal.",
+      "boundaries": "Builds shell command only; remote execution/lifecycle remains in remote_deploy. Preserve explicit absolute or home paths; GitHub clones isolate owner/repository. Expand only trusted remote HOME/LENS/XDG variables, quote user path/ref as literal.",
       "examples": [
-        "apps/server/src/routes/remoteDeploy.ts"
+        "apps/backend/src/llm_d_lens/deploy/remote_deploy.py"
       ],
       "tests": [
-        "apps/server/testing/routes/remoteDeploy.test.ts"
+        "apps/backend/tests/contract/test_remote_deploy.py"
       ]
     },
     {
@@ -1318,7 +1267,7 @@
       "boundaries": "Validate GPU count against TP and replicas, reject unverified PP and non-matching SDK results; without explicit latency targets use direct fixed-topology SDK estimation, while explicit targets retain the manual experiment path. Multi-replica aggregate throughput is unknown without measurement. Expose typed POST /api/v1/aic/estimate and generated MCP estimate_aic_configuration. AIC failures are not predictions.",
       "examples": [
         "apps/backend/src/llm_d_lens/agentic/service.py",
-        "apps/server/src/routes/candidateSearch.ts"
+        "apps/backend/src/llm_d_lens/simulation/candidate_search.py"
       ],
       "tests": [
         "apps/backend/tests/unit/aic/test_service.py",
@@ -1349,11 +1298,11 @@
       "purpose": "Expose exact-topology AIC estimation through the HTTP and generated MCP contracts.",
       "boundaries": "POST /api/v1/aic/estimate accepts AICEstimateRequest and delegates to the AIC service; generated MCP tooling follows the OpenAPI request schema.",
       "examples": [
-        "apps/server/src/routes/candidateSearch.ts",
+        "apps/backend/src/llm_d_lens/simulation/candidate_search.py",
         "apps/backend/src/llm_d_lens/agentic/service.py"
       ],
       "tests": [
-        "apps/server/testing/infrastructure/http.test.ts",
+        "apps/backend/tests/contract/test_candidate_search.py",
         "apps/backend/tests/unit/aic/test_service.py"
       ]
     },
@@ -1369,31 +1318,31 @@
       "boundaries": "The AI path starts with deployment intent and requests get_cluster_overview before submitting proposals. The server runs cluster overview before AIC search and overrides the AI-supplied GPU budget with live capacity in the selected mode. An AIC no-feasible-configurations 400 is treated as an empty candidate result, retaining its error detail, so search_aic_with_relaxation can use cluster-derived GPU capacity and invoke the bounded AIC search API; its anchor is not SLO proof. A valid relaxed anchor is preserved as a separate bounded proposal when not already submitted; the same resource validator checks it before exact-topology estimation. Other AIC errors do not trigger relaxation. AI proposals are untrusted and cannot score, select, approve, render, or deploy. Only allowlisted planning MCP tools are exposed and executed. Explicit numeric ISL, OSL, TTFT and TPOT constraints in operator preference take precedence over the corresponding structured fields for AI generation, AIC search and SLO filtering; otherwise AIC search uses server-normalized structured inputs. Concurrency is a planning workload signal, not an AIC search input. Generator tool traces retain the effective AIC search arguments and result. Partial valid output is accepted; deterministic fallback resolves facts through internal domain services. Run planning_trace records facts, validation, ranking and selection.",
       "examples": [
         "apps/backend/src/llm_d_lens/agentic/service.py",
-        "apps/server/src/mcp/specialTools.ts",
-        "apps/server/src/routes/candidateSearch.ts"
+        "apps/backend/src/llm_d_lens/mcp/tools.py",
+        "apps/backend/src/llm_d_lens/simulation/candidate_search.py"
       ],
       "tests": [
         "apps/backend/tests/unit/agentic/test_generator.py",
         "apps/backend/tests/unit/agentic/test_service.py",
-        "apps/server/testing/infrastructure/http.test.ts",
-        "apps/server/testing/mcp/specialTools.test.ts"
+        "apps/backend/tests/contract/test_candidate_search.py",
+        "apps/backend/tests/contract/test_mcp.py"
       ]
     },
     {
       "id": "agentic-aic-relaxed-mcp-search",
-      "path": "apps/server/src/mcp/specialTools.ts",
+      "path": "apps/backend/src/llm_d_lens/mcp/tools.py",
       "symbols": [
-        "specialTools"
+        "invoke_tool"
       ],
       "purpose": "Expose a bounded AIC latency-relaxation search to Agentic via an audited MCP tool and cluster-derived GPU budget.",
-      "boundaries": "The MCP tool calls the read-only Node candidate-search API and cluster overview; it returns attempts and a complete closest anchor using at most the available GPU budget, never a verified SLO for scaled proposals. Other MCP tools retain their existing contracts.",
+      "boundaries": "The MCP tool calls the read-only Python candidate-search API and cluster overview; it returns attempts and a complete closest anchor using at most the available GPU budget, never a verified SLO for scaled proposals. Other MCP tools retain their existing contracts.",
       "examples": [
         "apps/backend/src/llm_d_lens/agentic/generator.py",
-        "apps/server/src/routes/candidateSearch.ts"
+        "apps/backend/src/llm_d_lens/simulation/candidate_search.py"
       ],
       "tests": [
-        "apps/server/testing/mcp/specialTools.test.ts",
-        "apps/server/testing/infrastructure/http.test.ts",
+        "apps/backend/tests/contract/test_mcp.py",
+        "apps/backend/tests/contract/test_candidate_search.py",
         "apps/backend/tests/unit/agentic/test_generator.py"
       ]
     },
@@ -1467,15 +1416,15 @@
       "symbols": [
         "planning_discovery"
       ],
-      "purpose": "Allowlisted selected-session planning discovery reused by Node.",
-      "boundaries": "Require active session; four read-only queries. Never accept arbitrary kubeconfig paths. Node-host ambient context remains Node-local.",
+      "purpose": "Allowlisted selected-session planning discovery reused by Guide planning.",
+      "boundaries": "Require active session; four read-only queries. Never accept arbitrary kubeconfig paths. Host ambient context remains local to the backend.",
       "examples": [
-        "apps/server/src/services/planningDiscovery.ts",
+        "apps/backend/src/llm_d_lens/deploy/guide_sources.py",
         "apps/backend/src/llm_d_lens/cluster/router.py"
       ],
       "tests": [
         "apps/backend/tests/unit/cluster/test_sdk_discovery.py",
-        "apps/server/testing/services/planningDiscovery.test.ts"
+        "apps/backend/tests/contract/test_guide_planning.py"
       ]
     },
     {
@@ -1559,7 +1508,7 @@
         "localEmbedder"
       ],
       "purpose": "Local multilingual capability retrieval with configurable distinct-file recall.",
-      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1\u2013100. Lexical mode is separate; offline mode requires cached model. Lexical search is the default. Semantic detail caches retain unchanged files across queries and remove changed/deleted source entries.",
+      "boundaries": "Scores are similarity, not equivalence; chunk ranking only sees selected files. Default six, configurable 1–100. Lexical mode is separate; offline mode requires cached model. Lexical search is the default. Semantic detail caches retain unchanged files across queries and remove changed/deleted source entries.",
       "examples": [
         "tools/reuse/cli.mjs"
       ],
@@ -1767,27 +1716,6 @@
       ]
     },
     {
-      "id": "node-auth-gateway",
-      "path": "apps/server/src/middleware/auth.ts",
-      "symbols": [
-        "authMiddleware",
-        "fetchPrincipal",
-        "permissionForNodeRoute",
-        "permissionGranted",
-        "isPublicApiPath",
-        "permissionAnyGranted"
-      ],
-      "purpose": "Browser-facing authentication/authorization gateway that resolves sessions, protects native Node routes, and strips forged internal headers.",
-      "boundaries": "Node is the primary policy enforcement point; proxied routes are still enforced by Python. Public paths and disabled-auth mode pass through. Never trust client x-prism-principal-* headers (they are stripped). Signed x-prism-internal-* assertions from internalAuth are accepted only when their HMAC matches the exact method+path; unsigned client headers are still stripped. Node-native route rules may require an any-of permission list (string | string[]): authMiddleware accepts the caller when they hold any listed code (e.g. /api/mcp accepts mcp:tool:invoke or playground:chat:use for the Playground assistant loopback). Each tool action is still enforced by its own target route permission.",
-      "examples": [
-        "apps/server/src/server.js",
-        "apps/server/src/proxy/backend-api-proxy.ts"
-      ],
-      "tests": [
-        "apps/server/testing/middleware/auth.test.ts"
-      ]
-    },
-    {
       "id": "frontend-auth-permissions",
       "path": "apps/frontend/src/pages/auth/permissions.js",
       "symbols": [
@@ -1837,30 +1765,6 @@
       "testNote": "Presentation-only; covered indirectly by the admin pages and permissions tests."
     },
     {
-      "id": "node-internal-auth",
-      "path": "apps/server/src/middleware/internalAuth.ts",
-      "symbols": [
-        "signInternalHeaders",
-        "verifyInternalHeaders",
-        "internalHeadersFor",
-        "runWithInternalAuth",
-        "currentInternalPrincipalId",
-        "internalAuthEnabled"
-      ],
-      "purpose": "Signed Node-to-Python/loopback internal identity (\u00a78.3): HMAC(ts\nMETHOD\npath\nprincipal_id), with AsyncLocalStorage propagating authenticated callers to deeper internal reads.",
-      "boundaries": "Only the principal id is claimed; Python recomputes permissions/scope from the DB. Requires a shared LENS_INTERNAL_AUTH_SECRET on both sides; empty secret disables signing (cookie fallback). Signatures bind method+path and expire after 60s, so they cannot be replayed or used for a rewritten path.",
-      "examples": [
-        "apps/server/src/middleware/auth.ts",
-        "apps/server/src/proxy/backend-api-proxy.ts",
-        "apps/server/src/services/clusterSources.ts",
-        "apps/server/src/services/planningDiscovery.ts",
-        "apps/server/src/mcp/internal.ts"
-      ],
-      "tests": [
-        "apps/server/testing/middleware/auth.test.ts"
-      ]
-    },
-    {
       "id": "model-service-resource-sharing",
       "path": "apps/backend/src/llm_d_lens/auth/service.py",
       "symbols": [
@@ -1888,7 +1792,7 @@
         "usePolling"
       ],
       "purpose": "Shared periodic page-data refresh hook with quiet refreshes, unmount cleanup, hidden-tab suspension, immediate refresh on visibility, and overlap prevention.",
-      "boundaries": "Use this for server-state freshness instead of a full page reload or an ad-hoc setInterval. Default interval is 5s; gate with enabled when there is nothing to watch (e.g. only while a download is in flight). Callbacks should refresh quietly \u2014 keep existing rows and reuse the page's load({ quiet: true }) instead of a full-page loading state \u2014 and must not disturb filters, form input, selected rows or open dialogs. Specialized loops with cancellation/streaming semantics (port-forward, logs, clocks) may keep their own timer but must still pause when hidden and clean up on unmount.",
+      "boundaries": "Use this for server-state freshness instead of a full page reload or an ad-hoc setInterval. Default interval is 5s; gate with enabled when there is nothing to watch (e.g. only while a download is in flight). Callbacks should refresh quietly — keep existing rows and reuse the page's load({ quiet: true }) instead of a full-page loading state — and must not disturb filters, form input, selected rows or open dialogs. Specialized loops with cancellation/streaming semantics (port-forward, logs, clocks) may keep their own timer but must still pause when hidden and clean up on unmount.",
       "examples": [
         "apps/frontend/src/pages/administration/ui/UsersPage.jsx",
         "apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx",
@@ -2026,7 +1930,7 @@
       "symbols": [
         "DataPlaneTopology"
       ],
-      "purpose": "Model-service data-plane topology: one Gateway and one IPP per cluster; one HTTPRoute \u2192 InferencePool \u2192 EPP \u2192 model server per (cluster, model service), with one pool per llm-d EPP. Includes status indicators and installation/start/stop/reconciliation menus.",
+      "purpose": "Model-service data-plane topology: one Gateway and one IPP per cluster; one HTTPRoute → InferencePool → EPP → model server per (cluster, model service), with one pool per llm-d EPP. Includes status indicators and installation/start/stop/reconciliation menus.",
       "boundaries": "Presentation only: consumes GatewayStatus (per-cluster gateway/ipp status and members) and model-service summaries, delegating operations to the management page through callbacks without issuing requests. Uses horizontally scrollable cluster sections and top-level Portal menus. Reuses Button, Badge, PermissionGate, and page status-color mappings.",
       "examples": [
         "apps/frontend/src/pages/model-service/ui/ModelService/ModelServiceAdminPage.jsx"
@@ -2115,7 +2019,7 @@
         "split_pool_name",
         "render_node_inotify_daemonset"
       ],
-      "purpose": "Render llm-d Gateway Mode resources: cluster-shared Gateway (istio/gke/agentgateway/envoy-ai-gateway providers) and per-model HTTPRoute \u2192 InferencePool plus IPP model mapping. Also render provider-specific ext_authz resources (SecurityPolicy/AuthorizationPolicy/AgentgatewayPolicy and lens-authz Service/Endpoints) to inject caller identity headers.",
+      "purpose": "Render llm-d Gateway Mode resources: cluster-shared Gateway (istio/gke/agentgateway/envoy-ai-gateway providers) and per-model HTTPRoute → InferencePool plus IPP model mapping. Also render provider-specific ext_authz resources (SecurityPolicy/AuthorizationPolicy/AgentgatewayPolicy and lens-authz Service/Endpoints) to inject caller identity headers.",
       "boundaries": "Pure YAML rendering only; applying/waiting is gateway_ops' responsibility. Pools/EPP are owned by deployments; this module never selects endpoints or splits traffic (weight is passed through to HTTPRoute.backendRefs). Provider install commands mirror the official llm-d gateway recipes. ext_authz rendering is opt-in (authz_host) and HTTP-only; gke has no Gateway-API ext_authz hook. Pool defaults are stored namespace-qualified (qualified_pool_name/split_pool_name) so members in different namespaces stay unique.",
       "examples": [
         "apps/backend/src/llm_d_lens/model_service/gateway_ops.py"
@@ -2954,11 +2858,19 @@
     {
       "id": "deployment-model-cache-preflight",
       "path": "apps/backend/src/llm_d_lens/deploy/providers/storage_mount.py",
-      "symbols": ["require_cached_model", "validate_cached_model_arguments"],
+      "symbols": [
+        "require_cached_model",
+        "validate_cached_model_arguments"
+      ],
       "purpose": "Require ready registered Model Cache models before any deployment provider renders resources.",
       "boundaries": "Deployment creation only. Resolves model and tokenizer dependencies per active provider role, requires exact ready repository/revision pairs and synchronized nodes, and rejects conflicting or unsupported overrides. Reuses Storage readiness, Model Cache listing, managed environment checks and manifest argument parsing. Compares final ordinary and published manifest loading arguments with checked dependencies. Requires an explicit cluster and a model-cache-purpose non-dynamic volume. Ordinary provider rendering uses read-only serving mounts; published-manifest offline flags and storage binding remain outside this check. Does not download, delete or repair models.",
-      "examples": ["apps/backend/src/llm_d_lens/deploy/service.py"],
-      "tests": ["apps/backend/tests/unit/deploy/providers/test_storage_mount.py", "apps/backend/tests/unit/deploy/test_creation_refresh.py"]
+      "examples": [
+        "apps/backend/src/llm_d_lens/deploy/service.py"
+      ],
+      "tests": [
+        "apps/backend/tests/unit/deploy/providers/test_storage_mount.py",
+        "apps/backend/tests/unit/deploy/test_creation_refresh.py"
+      ]
     },
     {
       "id": "admin-managed-hugging-face-environment",
@@ -2969,18 +2881,18 @@
         "admin_managed_environment_error"
       ],
       "purpose": "Reject user-supplied Hugging Face environment variables in deployment runtime overrides because the platform administrator manages them.",
-      "boundaries": "Deployment configuration policy. Matches HF_, HUGGING and TRANSFORMERS_ prefixes case-insensitively for customParameters environment entries and runtime bindings. Does not constrain administrator-injected runtime.environment values such as the cluster proxy's HF_ENDPOINT. Mirrored for the browser and Node planning API in src/features/evaluation/managedEnvironment.js.",
+      "boundaries": "Deployment configuration policy. Matches HF_, HUGGING and TRANSFORMERS_ prefixes case-insensitively for customParameters environment entries and runtime bindings. Does not constrain administrator-injected runtime.environment values such as the cluster proxy's HF_ENDPOINT. Mirrored for the browser in packages/shared/src/evaluation/managedEnvironment.js; Python Guide planning reuses this policy directly.",
       "examples": [
         "apps/backend/src/llm_d_lens/configuration/validators.py",
         "apps/backend/src/llm_d_lens/configuration/manifest_facts.py",
         "apps/backend/src/llm_d_lens/deploy/plan_service.py",
         "packages/shared/src/evaluation/managedEnvironment.js",
-        "apps/server/src/services/configurationOverrides.ts"
+        "apps/backend/src/llm_d_lens/deploy/guide_runtime.py"
       ],
       "tests": [
         "apps/backend/tests/unit/configuration/test_managed_environment.py",
         "apps/frontend/src/pages/evaluation/model/configurationValidation.test.js",
-        "apps/server/testing/services/configurationOverrides.test.ts"
+        "apps/backend/tests/contract/test_guide_planning.py"
       ]
     },
     {
@@ -2991,15 +2903,15 @@
         "adminManagedEnvironmentMessage",
         "ADMIN_MANAGED_ENVIRONMENT_PREFIXES"
       ],
-      "purpose": "Browser and Node copy of the administrator-managed Hugging Face environment policy used by the deployment editor and the guide-planning API.",
-      "boundaries": "Mirrors llm_d_lens/configuration/managed_environment.py: matches HF_, HUGGING and TRANSFORMERS_ prefixes case-insensitively. Presentation-safe and React-free so both the browser validator and server/configurationOverrides.ts can import it.",
+      "purpose": "Browser copy of the administrator-managed Hugging Face environment policy used by the deployment editor.",
+      "boundaries": "Mirrors llm_d_lens/configuration/managed_environment.py: matches HF_, HUGGING and TRANSFORMERS_ prefixes case-insensitively. Presentation-safe and React-free for browser validation; Python Guide planning uses the canonical Python policy.",
       "examples": [
         "apps/frontend/src/pages/evaluation/model/configurationValidation.js",
-        "apps/server/src/services/configurationOverrides.ts"
+        "apps/backend/src/llm_d_lens/deploy/guide_runtime.py"
       ],
       "tests": [
         "apps/frontend/src/pages/evaluation/model/configurationValidation.test.js",
-        "apps/server/testing/services/configurationOverrides.test.ts"
+        "apps/backend/tests/contract/test_guide_planning.py"
       ]
     },
     {
@@ -3009,7 +2921,7 @@
         "resolve_model_service_target"
       ],
       "purpose": "Resolve a Model Service group id to the deployment execution id and published model name of its currently active (health-probed) member, so callers benchmark/simulate an already-published, continuously liveness-checked endpoint instead of a raw deployment execution with no live health signal.",
-      "boundaries": "Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself \u2014 callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.",
+      "boundaries": "Model Service domain only; raises on missing/unauthorized groups or groups with no active member. Does not perform HTTP routing itself — callers (Evaluation, Simulation) still resolve the execution through their own existing deployment-mode endpoint logic using the returned execution id.",
       "examples": [
         "apps/backend/src/llm_d_lens/evaluation/router.py",
         "apps/backend/src/llm_d_lens/simulation/service.py"
@@ -3032,14 +2944,14 @@
         "overlayRoot",
         "matchOverlayPath"
       ],
-      "purpose": "Shared profile identity, managed image and source overlay matching for Node and browser deployment consumers, plus extended-resource accelerator counting that avoids double counting a profile's derived/oversubscribed resource names (e.g. NVIDIA GPU time-slicing's nvidia.com/gpu.shared, which multiplexes the same physical cards already counted under nvidia.com/gpu).",
+      "purpose": "Shared profile identity, managed image and source overlay matching for browser deployment consumers, plus extended-resource accelerator counting that avoids double counting a profile's derived/oversubscribed resource names (e.g. NVIDIA GPU time-slicing's nvidia.com/gpu.shared, which multiplexes the same physical cards already counted under nvidia.com/gpu).",
       "boundaries": "Pure data helpers. No vendor tables or network access. Source variants remain discovered from actual Kustomization files. acceleratorTotal prefers each profile's canonical deployment.modes.plugin.resource_names (or deployment.resource_name) over a broad prefix sweep; the prefix sweep remains a fallback only for resources not covered by any profile's canonical name.",
       "examples": [
-        "apps/server/src/routes/guidePlanning.ts",
+        "apps/backend/src/llm_d_lens/deploy/guide_planning.py",
         "apps/frontend/src/pages/evaluation/ui/benchmark-results/acceleratorDisplay.js"
       ],
       "tests": [
-        "apps/server/testing/services/guideCatalog.test.ts",
+        "apps/backend/tests/contract/test_guide_planning.py",
         "apps/frontend/src/pages/evaluation/ui/benchmark-results/acceleratorDisplay.test.js"
       ]
     },
@@ -3079,24 +2991,21 @@
     },
     {
       "id": "source-guide-planning",
-      "path": "apps/server/src/routes/guidePlanning.ts",
+      "path": "apps/backend/src/llm_d_lens/deploy/guide_planning.py",
       "symbols": [
-        "catalogFromPaths",
-        "selectManifestPaths",
-        "planDocuments",
-        "runtimeClassForAccelerator",
-        "isAcceleratorDeviceClass",
-        "resolveAcceleratorVariant",
-        "validateManifestCapacity"
+        "select_manifest_paths",
+        "plan_documents",
+        "runtime_class_for_accelerator",
+        "resolve_accelerator_variant",
+        "validate_manifest_capacity"
       ],
       "purpose": "Discover upstream guide entry points and render hardware-aware deployment plans.",
       "boundaries": "Profiles own hardware settings; selected source owns variants; cluster state supplies actual resource availability.",
       "examples": [
-        "apps/server/testing/routes/guideConfiguration.test.ts"
+        "apps/backend/tests/contract/test_guide_planning.py"
       ],
       "tests": [
-        "apps/server/testing/services/guideCatalog.test.ts",
-        "apps/server/testing/routes/guidePlanning.test.ts"
+        "apps/backend/tests/contract/test_guide_planning.py"
       ]
     },
     {
@@ -3132,18 +3041,18 @@
     },
     {
       "id": "guide-manifest-settings",
-      "path": "apps/server/src/services/modelServerConfiguration.ts",
+      "path": "apps/backend/src/llm_d_lens/deploy/guide_runtime.py",
       "symbols": [
-        "configureCpuCache",
-        "guideSettingsCapabilities"
+        "configure_cpu_cache",
+        "guide_settings_capabilities"
       ],
       "purpose": "Derive cache and NIC controls from rendered Guide connectors and profile-declared NIC classes.",
       "boundaries": "Guide planning only. Source manifests determine support; directory names and vendor tables do not.",
       "examples": [
-        "apps/server/src/routes/guidePlanning.ts"
+        "apps/backend/src/llm_d_lens/deploy/guide_planning.py"
       ],
       "tests": [
-        "apps/server/testing/services/guideCatalog.test.ts"
+        "apps/backend/tests/contract/test_guide_planning.py"
       ]
     },
     {

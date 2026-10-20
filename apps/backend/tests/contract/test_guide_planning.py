@@ -1,0 +1,333 @@
+from copy import deepcopy
+
+import pytest
+
+from llm_d_lens.deploy import guide_planning as guide
+from llm_d_lens.deploy import guide_runtime as runtime
+from llm_d_lens.deploy import guide_sources as sources
+
+
+def deployment(name="model", replicas=1, count=1):
+    return {
+        "kind": "Deployment",
+        "metadata": {"name": name},
+        "spec": {
+            "replicas": replicas,
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "modelserver",
+                            "args": ["example/model", f"--tensor-parallel-size={count}"],
+                            "resources": {"limits": {"nvidia.com/gpu": count}},
+                        }
+                    ],
+                }
+            },
+        },
+    }
+
+
+def test_variant_normalization_and_parent_rejection():
+    paths = [
+        "guides/guide/modelserver/gpu/vllm/base/kustomization.yaml",
+        "guides/guide/modelserver/gpu/vllm/base/deployment.yaml",
+    ]
+    selected = guide.select_manifest_paths(paths, "guide", "gpu", "vllm", "/" * 10000 + "base" + "/" * 10000)
+    assert selected["selected"] == paths
+    assert selected["variant"] == "base"
+    with pytest.raises(guide.GuideError, match="invalid"):
+        guide.select_manifest_paths(paths, "guide", "gpu", "vllm", "../other")
+
+
+def test_patch_matches_by_name_without_mutating_source():
+    original = deployment()
+    documents = [deepcopy(original)]
+    errors, warnings = [], []
+    applied = guide.apply_custom_patches(
+        documents,
+        [{"path": "replicas.yaml", "content": "kind: Deployment\nmetadata:\n  name: model\nspec:\n  replicas: 3\n"}],
+        errors,
+        warnings,
+    )
+    assert documents[0]["spec"]["replicas"] == 3
+    assert original["spec"]["replicas"] == 1
+    assert applied == [{"path": "replicas.yaml", "kind": "Deployment", "name": "model", "action": "merged"}]
+    assert not errors
+
+
+def test_ambiguous_patch_does_not_modify_documents():
+    documents = [deployment("first"), deployment("second")]
+    original = deepcopy(documents)
+    errors = []
+    assert (
+        guide.apply_custom_patches(documents, [{"content": "kind: Deployment\nspec: {replicas: 3}"}], errors, []) == []
+    )
+    assert "Add metadata.name to disambiguate" in errors[0]
+    assert documents == original
+
+
+def test_capacity_counts_replicas_and_replaces_stale_errors():
+    errors = ["Insufficient resources: stale", "other validation"]
+    assert guide.validate_manifest_capacity([deployment(replicas=3, count=2)], 4, "available", errors) == 6
+    assert len(errors) == 2
+    assert "requires 6 accelerators" in errors[1]
+    assert "currently available budget is 4" in errors[1]
+
+
+def test_capacity_includes_restartable_init_and_init_peak():
+    document = deployment(count=1)
+    document["spec"]["template"]["spec"]["initContainers"] = [
+        {"name": "sidecar", "restartPolicy": "Always", "resources": {"limits": {"nvidia.com/gpu": 1}}},
+        {"name": "init", "resources": {"limits": {"nvidia.com/gpu": 4}}},
+    ]
+    errors = []
+    assert guide.validate_manifest_capacity([document], 4, "total", errors) == 5
+    assert errors
+
+
+def test_hardware_variant_and_runtime_use_registered_profiles():
+    cluster = {
+        "allocatable": {"accelerators": {"nvidia.com/gpu": 4}},
+        "runtimeClasses": [{"name": "nvidia", "handler": "nvidia"}],
+    }
+    assert guide.resolve_accelerator_variant("xpu", cluster) == "gpu"
+    assert guide.runtime_class_for_accelerator(cluster, "gpu") == "nvidia"
+    assert guide.runtime_class_for_accelerator(cluster, "xpu") is None
+    assert guide.resolve_accelerator_variant("xpu", {"allocatable": {"accelerators": {"unknown/gpu": 4}}}) == "xpu"
+
+
+def test_shell_model_rewrite_preserves_unmodified_expansions():
+    container = {
+        "command": ["bash", "-lc"],
+        "args": [
+            'vllm serve old/model --host "$HOST_IP" --tensor-parallel-size=1 --max-num-seqs=32',
+        ],
+    }
+    runtime.configure_model_server(container, "/model-cache", 4, "new/model", False)
+    assert '--host "$HOST_IP"' in container["args"][0]
+    assert runtime.runtime_argument(container, "tensor-parallel-size") == "4"
+    assert runtime.runtime_argument(container, "served-model-name") == "new/model"
+
+
+@pytest.mark.parametrize("script", ["vllm serve model; touch /tmp/file", "vllm serve model\necho second"])
+def test_compound_shell_commands_are_not_rewritten(script):
+    container = {"command": ["bash", "-c"], "args": [script]}
+    with pytest.raises(ValueError):
+        runtime.configure_model_server(container, "new/model", 2, "new/model", False)
+
+
+def test_runtime_overrides_preserve_admin_managed_environment():
+    with pytest.raises(ValueError, match="must be an array"):
+        runtime.runtime_overrides({"customParameters": {}})
+    with pytest.raises(ValueError, match="managed by the platform administrator"):
+        runtime.runtime_overrides(
+            {
+                "customParameters": [
+                    {"kind": "environment", "target": "both", "name": "HF_TOKEN", "value": "not-a-real-token"},
+                ]
+            }
+        )
+    with pytest.raises(ValueError, match="Overlapping"):
+        runtime.runtime_overrides(
+            {
+                "maxModelLen": 4096,
+                "customParameters": [
+                    {"kind": "argument", "target": "decode", "name": "max-model-len", "value": 8192},
+                ],
+            }
+        )
+
+
+def test_cpu_cache_connector_and_precise_event_identity():
+    import json
+
+    container = {
+        "args": [
+            "old/model",
+            '--kv-transfer-config={"kv_connector":"OffloadingConnector"}',
+            '--kv-events-config={"topic":"kv@host:5557@old/model"}',
+        ]
+    }
+    runtime.configure_model_server(container, "new/model", 1, "new/model", True)
+    runtime.configure_cpu_cache(container, 2)
+    assert json.loads(runtime.runtime_argument(container, "kv-transfer-config"))["kv_connector_extra_config"] == {
+        "cpu_bytes_to_use": 2 * 1024**3,
+    }
+    assert json.loads(runtime.runtime_argument(container, "kv-events-config"))["topic"] == "kv@host:5557@new/model"
+
+
+def test_full_plan_preserves_explicit_topology_and_validates_budget(monkeypatch):
+    monkeypatch.delenv("PRISM_GPU_PCI_ALLOWLIST", raising=False)
+    monkeypatch.delenv("PRISM_K8S_TARGET_NODE", raising=False)
+    machine = {"cpu": {"logicalCores": 64}, "memoryGiB": 512, "accelerator": {"count": 2}}
+    result = guide.plan_documents(
+        [deployment()],
+        "example/model",
+        machine,
+        None,
+        {
+            "guide": "optimized-baseline",
+            "accelerator": "gpu",
+            "replicas": 2,
+            "tensorParallelSize": 2,
+        },
+    )
+    assert result["summary"]["requestedAccelerators"] == 4
+    assert result["summary"]["plannedReplicas"] == 2
+    assert result["validation"]["status"] == "invalid"
+    assert any("Insufficient resources:" in error for error in result["validation"]["errors"])
+
+
+def test_full_plan_mounts_cached_pvc_and_keeps_hub_offline(monkeypatch):
+    monkeypatch.delenv("PRISM_GPU_PCI_ALLOWLIST", raising=False)
+    machine = {"cpu": {"logicalCores": 64}, "memoryGiB": 512, "accelerator": {"count": 2}}
+    result = guide.plan_documents(
+        [deployment()],
+        "example/model",
+        machine,
+        None,
+        {
+            "guide": "optimized-baseline",
+            "accelerator": "gpu",
+            "replicas": 1,
+            "tensorParallelSize": 1,
+            "modelSource": "auto-cache",
+            "modelPvcClaimName": "cache-pvc",
+        },
+    )
+    pod = result["documents"][0]["spec"]["template"]["spec"]
+    assert pod["volumes"] == [{"name": "model-cache", "persistentVolumeClaim": {"claimName": "cache-pvc"}}]
+    environment = {entry["name"]: entry.get("value") for entry in pod["containers"][0]["env"]}
+    assert environment["HF_HUB_OFFLINE"] == "1"
+    assert environment["HF_HOME"] == "/model-cache"
+    assert result["validation"]["errors"] == []
+
+
+def test_catalog_uses_hardware_overlay_templates():
+    catalog = sources.catalog_from_paths(
+        [
+            "guides/optimized-baseline/modelserver/gpu/vllm/base/kustomization.yaml",
+            "guides/optimized-baseline/modelserver/gpu/vllm/custom/kustomization.yaml",
+            "guides/optimized-baseline/modelserver/unknown/vllm/base/kustomization.yaml",
+        ]
+    )
+    assert catalog == [
+        {
+            "id": "optimized-baseline",
+            "label": "Optimized Baseline",
+            "accelerators": [
+                {"id": "gpu", "modelServers": [{"id": "vllm", "variants": ["base", "custom"]}]},
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_source_cannot_escape_allowed_root(monkeypatch, tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("kind: Deployment")
+    (allowed / "link.yaml").symlink_to(outside)
+    monkeypatch.setenv("PRISM_GUIDE_LOCAL_ROOTS", str(allowed))
+    with pytest.raises(guide.GuideError, match="allowed root"):
+        await sources.load_selected_manifests(None, {"source": {"mode": "local", "path": str(allowed / "link.yaml")}})
+
+
+def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    import yaml
+    from fastapi.testclient import TestClient
+
+    from llm_d_lens.api.main import app
+    from llm_d_lens.deploy.providers.deployment_bundle import validate_deployment_bundle
+
+    monkeypatch.delenv("PRISM_GPU_PCI_ALLOWLIST", raising=False)
+    manifest_path = tmp_path / "model.yaml"
+    manifest_path.write_text(yaml.safe_dump(deployment()))
+    router_root = tmp_path / "guides/optimized-baseline/router"
+    router_root.mkdir(parents=True)
+    (router_root / "optimized-baseline.values.yaml").write_text("router: {epp: {replicas: 1}}")
+    base_root = tmp_path / "guides/recipes/router"
+    base_root.mkdir(parents=True)
+    (base_root / "base.values.yaml").write_text("router: {}")
+    monkeypatch.setenv("PRISM_GUIDE_LOCAL_ROOTS", str(tmp_path))
+    monkeypatch.setattr(sources, "command_output", AsyncMock(return_value=""))
+    monkeypatch.setattr(
+        sources,
+        "machine_profile",
+        AsyncMock(
+            return_value={
+                "cpu": {"logicalCores": 64},
+                "memoryGiB": 512,
+                "accelerator": {"count": 4},
+            }
+        ),
+    )
+    response = TestClient(app).post(
+        "/api/guide-planning/plan",
+        json={
+            "guide": "optimized-baseline",
+            "accelerator": "gpu",
+            "modelServer": "vllm",
+            "model": "example/model",
+            "environment": {"kubernetesMode": "disabled"},
+            "replicas": 1,
+            "tensorParallelSize": 1,
+            "source": {"mode": "local", "path": str(manifest_path)},
+        },
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "PLANNED"
+    assert result["validation"]["errors"] == []
+    assert result["plannedDeployment"]["format"] == "yaml"
+    assert "total;dur=" in response.headers["server-timing"]
+    validate_deployment_bundle(result["deploymentBundle"], "optimized-baseline", result["source"]["commit"])
+
+
+def test_plan_rejects_expired_explicit_session_with_discovery_disabled(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from llm_d_lens.api.main import app
+
+    def expired(_session_id):
+        raise ValueError("expired")
+
+    monkeypatch.setattr(sources, "require_active_session", expired)
+    response = TestClient(app).post(
+        "/api/guide-planning/plan",
+        json={
+            "guide": "optimized-baseline",
+            "accelerator": "gpu",
+            "modelServer": "vllm",
+            "model": "model",
+            "clusterSessionId": "expired",
+            "environment": {"kubernetesMode": "disabled"},
+        },
+    )
+    assert response.status_code == 409, response.text
+
+
+@pytest.mark.asyncio
+async def test_remote_bundle_falls_back_to_flat_router_path(monkeypatch):
+    import httpx
+
+    from llm_d_lens.deploy import guide_bundle
+
+    fetched = []
+
+    async def fetch(url, _accept):
+        fetched.append(url)
+        if "/single-host/" in url:
+            response = httpx.Response(404, request=httpx.Request("GET", url))
+            response.raise_for_status()
+        return "router: {}"
+
+    monkeypatch.setattr(guide_bundle, "fetch_source", fetch)
+    manifest = {"source": {"repository": "example/repository", "commit": "a" * 40}}
+    bundle = await guide_bundle.build_guide_deployment_bundle("optimized-baseline", manifest, "model", "gpu")
+    assert bundle["sourceCommit"] == "a" * 40
+    assert any("/router/optimized-baseline.values.yaml" in url for url in fetched)

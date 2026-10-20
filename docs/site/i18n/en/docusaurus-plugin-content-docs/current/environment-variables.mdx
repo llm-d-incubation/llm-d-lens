@@ -76,7 +76,7 @@ and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `TARGET_NODE` | Optional node constraint for `scripts/lens-local.sh check/start/restart`; overridden by `--target-node`. Exported to backend/Node as `PRISM_K8S_TARGET_NODE`. | unset; falls back to `PRISM_K8S_TARGET_NODE` |
+| `TARGET_NODE` | Optional node constraint for `scripts/lens-local.sh check/start/restart`; overridden by `--target-node`. Exported to the backend as `PRISM_K8S_TARGET_NODE`. | unset; falls back to `PRISM_K8S_TARGET_NODE` |
 | `KUBECONFIG` | Fallback kubeconfig when a cluster-specific one isn't registered. The local launcher accepts `--kubeconfig FILE` as an override. | Kubernetes configuration lookup, normally `$HOME/.kube/config` |
 | `PRISM_GPU_PCI_ALLOWLIST` | Optional explicit comma-separated PCI restriction. The local launcher preserves it; hardware discovery remains in the backend. | unset |
 | `PRISM_KUBERNETES_BACKEND` / `PRISM_KUBERNETES_READ_BACKEND` | Selects which Kubernetes client implementation serves writes/reads. | `PRISM_KUBERNETES_BACKEND`: `sdk`<br />`PRISM_KUBERNETES_READ_BACKEND`: `sdk` |

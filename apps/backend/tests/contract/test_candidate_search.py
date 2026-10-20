@@ -1,0 +1,99 @@
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from llm_d_lens.api.main import app
+from llm_d_lens.simulation import candidate_search as candidates
+
+
+def test_grid_candidates_preserve_order_budget_and_names():
+    response = TestClient(app).post(
+        "/api/candidate-search",
+        json={
+            "sourceIds": ["baseline", "baseline", "tiered-cache", "pd", "epd", "unknown"],
+            "searchConfig": {"totalGpus": 4, "maxCandidatesPerMode": 2},
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["backend"] == "local-aic"
+    assert len(result["candidates"]) == 8
+    assert result["candidates"][0]["id"] == "baseline-baseline-tp1-rep4-0"
+    assert result["candidates"][2]["id"] == "tiered-cache-tpc-tp1-rep4-0"
+    assert all(candidate["totalGpus"] <= 4 for candidate in result["candidates"])
+    assert all(not candidate["deployable"] for candidate in result["candidates"][-2:])
+
+
+@pytest.mark.parametrize("budget", [0, 65, "4", True, 1.5])
+def test_relaxed_requires_explicit_valid_budget(budget):
+    response = TestClient(app).post(
+        "/api/candidate-search/relaxed",
+        json={
+            "workload": {"model": "example/model"},
+            "searchConfig": {"totalGpus": budget},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json() == {"error": "Model and explicit totalGpus (1-64) are required"}
+
+
+def test_relaxed_retries_no_feasible_and_rejects_over_budget(monkeypatch):
+    search = AsyncMock(
+        side_effect=[
+            candidates.aic_service.AICError(candidates.NO_FEASIBLE),
+            {
+                "configs": [
+                    {"mode": "agg", "tp": 8, "replicas": 1, "ttft_ms": 100, "tpot_ms": 10},
+                    {"mode": "agg", "tp": 2, "replicas": 2, "ttft_ms": 120, "tpot_ms": 10},
+                ]
+            },
+        ]
+    )
+    monkeypatch.setattr(candidates.aic_service, "check_support", AsyncMock(return_value={"supported": True}))
+    monkeypatch.setattr(candidates.aic_service, "search", search)
+    response = TestClient(app).post(
+        "/api/candidate-search/relaxed",
+        json={
+            "workload": {"model": "example/model", "ttftMs": 100},
+            "searchConfig": {"totalGpus": 4, "aicSystemName": "test-system"},
+        },
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert [attempt["factor"] for attempt in result["attempts"]] == [1, 1.25]
+    assert result["anchor"]["totalGpus"] == 4
+    assert result["anchor"]["aicRank"] == 2
+    assert result["sloSatisfied"] is False
+    assert search.call_args_list[1].args[0].ttft_target_ms == 125
+
+
+def test_manual_yaml_preserves_chosen_and_replica_inference(monkeypatch):
+    monkeypatch.setattr(
+        candidates.aic_service,
+        "experiments",
+        AsyncMock(
+            return_value={
+                "experiments": [
+                    {"mode": "agg", "tp": 2, "pp": 2, "num_total_gpus": 8, "is_chosen": True, "name": "chosen config"},
+                ]
+            }
+        ),
+    )
+    response = TestClient(app).post(
+        "/api/candidate-search",
+        json={
+            "sourceIds": ["manual"],
+            "manualConfig": {"inputMode": "yaml", "yamlText": "experiments: []"},
+        },
+    )
+    assert response.status_code == 200
+    candidate = response.json()["candidates"][0]
+    assert candidate["decodeReplicas"] == 2
+    assert candidate["pipelineParallel"] == 2
+    assert candidate["isChosenExperiment"] is True
+    assert candidate["id"] == "manual-chosen-config-0"
+
+
+def test_unknown_sources_are_ignored():
+    assert TestClient(app).post("/api/candidate-search", json={"sourceIds": ["unknown"]}).json() == {"candidates": []}

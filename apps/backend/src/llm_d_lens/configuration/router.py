@@ -18,7 +18,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.routing import APIRoute
 
 from llm_d_lens.auth.access import current_principal, filter_by_cluster, require_cluster_access
 from llm_d_lens.core.exceptions import DomainError
@@ -45,6 +47,38 @@ from .service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/configurations", tags=["configuration"])
+
+
+class LegacyConfigurationRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def legacy_handler(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except (HTTPException, RequestValidationError, DomainError) as error:
+                for error_type in type(error).__mro__:
+                    exception_handler = request.app.exception_handlers.get(error_type)
+                    if exception_handler is not None:
+                        response = await exception_handler(request, error)
+                        payload = json.loads(response.body)
+                        detail = payload.get("detail")
+                        payload["error"] = (
+                            detail
+                            if isinstance(detail, str)
+                            else f"Configuration service returned HTTP {response.status_code}"
+                        )
+                        return JSONResponse(payload, status_code=response.status_code)
+                raise
+
+        return legacy_handler
+
+
+legacy_router = APIRouter(
+    prefix="/api/configurations",
+    route_class=LegacyConfigurationRoute,
+    include_in_schema=False,
+)
 
 
 @contextmanager
@@ -123,6 +157,11 @@ async def render(request: RenderRequest) -> RenderResponse:
 async def save(request: SaveRequest) -> SaveResponse:
     with _configuration_errors("Unable to save configuration", (ConfigurationError, OSError, ValueError)):
         return save_configuration(request)
+
+
+legacy_router.add_api_route("/resolve", resolve, methods=["POST"], response_model=ResolveResponse)
+legacy_router.add_api_route("/render", render, methods=["POST"], response_model=RenderResponse)
+legacy_router.add_api_route("/save", save, methods=["POST"], response_model=SaveResponse)
 
 
 def _artifact_cluster_id(artifact: ConfigurationArtifactRecord) -> str | None:

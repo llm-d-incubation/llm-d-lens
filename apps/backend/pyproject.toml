@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.27",
     "jsonschema>=4",
     "kubernetes==36.0.3",
+    "limits>=5,<6",
     "mcp>=1.13,<2",
     "paramiko>=3.4",
     "psycopg[binary]>=3",
@@ -83,6 +84,7 @@ include = ["llm_d_lens*"]
 [tool.setuptools.package-data]
 "llm_d_lens.hardware" = ["schema.json", "profiles/*.json"]
 "llm_d_lens.versions" = ["*.yaml"]
+"llm_d_lens.mcp" = ["definitions.json"]
 "llm_d_lens.db.migrations" = ["README.md", "script.py.mako"]
 
 [tool.pytest.ini_options]

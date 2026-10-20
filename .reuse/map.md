@@ -36,11 +36,6 @@ Entry: [apps/backend/src/llm_d_lens/deploy/providers/target_node.py](../apps/bac
 Resolve deployment hardware identity, model-server runtime images, source Kustomization variants and profile-owned router topology, defaulting to single-host when unset.
 Entry: [apps/backend/src/llm_d_lens/deploy/providers/hardware_profile.py](../apps/backend/src/llm_d_lens/deploy/providers/hardware_profile.py) — `active_profile`, `device_class`, `claim_request_name`, `overlay_variant`, `accelerator_supported`, `request_model`, `requires_dra_claim`, `resource_name`, `runtime_image`, `pin_runtime_image`, `set_accelerator_request`, `guide_overlays`, `default_guide_variant`, `router_topology`
 
-## node-hardware-profiles
-
-Node client for the hardware profile registry plus pure helpers that resolve the AIC accelerator and known DRA device classes from registered profiles.
-Entry: [apps/server/src/services/hardwareProfiles.ts](../apps/server/src/services/hardwareProfiles.ts) — `loadHardwareProfiles`, `aicAcceleratorForSystem`, `isKnownDeviceClass`, `hardwareProfileSnapshot`
-
 ## frontend-hardware-profiles
 
 Browser client for GET /api/v1/hardware/capabilities and a pure mapper from registered profiles to accelerator vendor tabs.
@@ -221,11 +216,6 @@ Entry: [apps/backend/src/llm_d_lens/infrastructure/kubernetes/__init__.py](../ap
 Idempotent cluster-scoped deletion of a Kubernetes namespace or Secret.
 Entry: [apps/backend/src/llm_d_lens/infrastructure/kubernetes/__init__.py](../apps/backend/src/llm_d_lens/infrastructure/kubernetes/__init__.py) — `delete_namespace`, `delete_secret`
 
-## upstream-json-transport
-
-Node upstream JSON fetch with timeout through body consumption.
-Entry: [apps/server/src/infrastructure/http.ts](../apps/server/src/infrastructure/http.ts) — `fetchJsonWithTimeout`
-
 ## binary-byte-scaling
 
 Binary byte scaling with configurable maximum unit.
@@ -286,11 +276,6 @@ Entry: [apps/backend/src/llm_d_lens/infrastructure/storage/admin.py](../apps/bac
 Shared node progress initialization and Job submission for download, deletion and incremental synchronization.
 Entry: [apps/backend/src/llm_d_lens/model_cache/jobs.py](../apps/backend/src/llm_d_lens/model_cache/jobs.py) — `launch_cache_jobs`
 
-## node-storage-paths
-
-Node storage path selection matching the Python LENS/XDG contract.
-Entry: [apps/server/src/infrastructure/storagePaths.ts](../apps/server/src/infrastructure/storagePaths.ts) — `storagePath`
-
 ## configuration-persistence
 
 Publish immutable UUID-scoped configuration YAML, saved configuration record and portable artifact inventory.
@@ -339,7 +324,7 @@ Entry: [apps/frontend/src/pages/evaluation/model/benchmarkSettings.js](../apps/f
 ## remote-repository-preparation
 
 Prepare a validated deployment repository on the remote host using its Lens/XDG cache layout.
-Entry: [apps/server/src/routes/remoteDeploy.ts](../apps/server/src/routes/remoteDeploy.ts) — `prepareRepositoryCommand`
+Entry: [apps/backend/src/llm_d_lens/deploy/remote_deploy.py](../apps/backend/src/llm_d_lens/deploy/remote_deploy.py) — `prepare_repository_command`
 
 ## kubernetes-raw-api
 
@@ -389,7 +374,7 @@ Entry: [apps/backend/src/llm_d_lens/agentic/generator.py](../apps/backend/src/ll
 ## agentic-aic-relaxed-mcp-search
 
 Expose a bounded AIC latency-relaxation search to Agentic via an audited MCP tool and cluster-derived GPU budget.
-Entry: [apps/server/src/mcp/specialTools.ts](../apps/server/src/mcp/specialTools.ts) — `specialTools`
+Entry: [apps/backend/src/llm_d_lens/mcp/tools.py](../apps/backend/src/llm_d_lens/mcp/tools.py) — `invoke_tool`
 
 ## agentic-deterministic-ranking
 
@@ -413,7 +398,7 @@ Entry: [apps/backend/src/llm_d_lens/agentic/models.py](../apps/backend/src/llm_d
 
 ## cluster-planning-discovery
 
-Allowlisted selected-session planning discovery reused by Node.
+Allowlisted selected-session planning discovery reused by Guide planning.
 Entry: [apps/backend/src/llm_d_lens/cluster/sdk_discovery.py](../apps/backend/src/llm_d_lens/cluster/sdk_discovery.py) — `planning_discovery`
 
 ## kubernetes-command-adapter
@@ -491,11 +476,6 @@ Entry: [apps/backend/src/llm_d_lens/auth/cli.py](../apps/backend/src/llm_d_lens/
 Request-scope helpers for domain routers that filter lists by the caller's accessible clusters and validate individual resource access.
 Entry: [apps/backend/src/llm_d_lens/auth/access.py](../apps/backend/src/llm_d_lens/auth/access.py) — `current_principal`, `visible_cluster_ids`, `cluster_allowed`, `require_cluster_access`, `filter_by_cluster`, `owner_for_create`, `resource_readable`
 
-## node-auth-gateway
-
-Browser-facing authentication/authorization gateway that resolves sessions, protects native Node routes, and strips forged internal headers.
-Entry: [apps/server/src/middleware/auth.ts](../apps/server/src/middleware/auth.ts) — `authMiddleware`, `fetchPrincipal`, `permissionForNodeRoute`, `permissionGranted`, `isPublicApiPath`, `permissionAnyGranted`
-
 ## frontend-auth-permissions
 
 Frontend permission matching and a view-to-permission catalog for route guards and navigation filtering.
@@ -510,14 +490,6 @@ Entry: [apps/frontend/src/pages/auth/AuthProvider.jsx](../apps/frontend/src/page
 
 Shared gate that renders children only when the required permission is present.
 Entry: [apps/frontend/src/pages/auth/PermissionGate.jsx](../apps/frontend/src/pages/auth/PermissionGate.jsx) — `PermissionGate`
-
-## node-internal-auth
-
-Signed Node-to-Python/loopback internal identity (§8.3): HMAC(ts
-METHOD
-path
-principal_id), with AsyncLocalStorage propagating authenticated callers to deeper internal reads.
-Entry: [apps/server/src/middleware/internalAuth.ts](../apps/server/src/middleware/internalAuth.ts) — `signInternalHeaders`, `verifyInternalHeaders`, `internalHeadersFor`, `runWithInternalAuth`, `currentInternalPrincipalId`, `internalAuthEnabled`
 
 ## model-service-resource-sharing
 
@@ -836,7 +808,7 @@ Entry: [apps/backend/src/llm_d_lens/configuration/managed_environment.py](../app
 
 ## admin-managed-hugging-face-environment-browser
 
-Browser and Node copy of the administrator-managed Hugging Face environment policy used by the deployment editor and the guide-planning API.
+Browser copy of the administrator-managed Hugging Face environment policy used by the deployment editor.
 Entry: [packages/shared/src/evaluation/managedEnvironment.js](../packages/shared/src/evaluation/managedEnvironment.js) — `isAdminManagedEnvironmentVariable`, `adminManagedEnvironmentMessage`, `ADMIN_MANAGED_ENVIRONMENT_PREFIXES`
 
 ## model-service-target-resolution
@@ -846,7 +818,7 @@ Entry: [apps/backend/src/llm_d_lens/model_service/resolution.py](../apps/backend
 
 ## hardware-profile-matching
 
-Shared profile identity, managed image and source overlay matching for Node and browser deployment consumers, plus extended-resource accelerator counting that avoids double counting a profile's derived/oversubscribed resource names (e.g. NVIDIA GPU time-slicing's nvidia.com/gpu.shared, which multiplexes the same physical cards already counted under nvidia.com/gpu).
+Shared profile identity, managed image and source overlay matching for browser deployment consumers, plus extended-resource accelerator counting that avoids double counting a profile's derived/oversubscribed resource names (e.g. NVIDIA GPU time-slicing's nvidia.com/gpu.shared, which multiplexes the same physical cards already counted under nvidia.com/gpu).
 Entry: [packages/shared/src/hardware/profiles.js](../packages/shared/src/hardware/profiles.js) — `profileForKey`, `profileForHardware`, `profileForResource`, `acceleratorResourceNames`, `acceleratorTotal`, `imageRepository`, `managedImageProfile`, `overlayRoot`, `matchOverlayPath`
 
 ## hardware-profile-hook
@@ -862,7 +834,7 @@ Entry: [apps/backend/src/llm_d_lens/monitoring/profiling/xpu_metrics.py](../apps
 ## source-guide-planning
 
 Discover upstream guide entry points and render hardware-aware deployment plans.
-Entry: [apps/server/src/routes/guidePlanning.ts](../apps/server/src/routes/guidePlanning.ts) — `catalogFromPaths`, `selectManifestPaths`, `planDocuments`, `runtimeClassForAccelerator`, `isAcceleratorDeviceClass`, `resolveAcceleratorVariant`, `validateManifestCapacity`
+Entry: [apps/backend/src/llm_d_lens/deploy/guide_planning.py](../apps/backend/src/llm_d_lens/deploy/guide_planning.py) — `select_manifest_paths`, `plan_documents`, `runtime_class_for_accelerator`, `resolve_accelerator_variant`, `validate_manifest_capacity`
 
 ## profile-pci-selectors
 
@@ -877,7 +849,7 @@ Entry: [apps/frontend/src/pages/evaluation/model/capabilities.js](../apps/fronte
 ## guide-manifest-settings
 
 Derive cache and NIC controls from rendered Guide connectors and profile-declared NIC classes.
-Entry: [apps/server/src/services/modelServerConfiguration.ts](../apps/server/src/services/modelServerConfiguration.ts) — `configureCpuCache`, `guideSettingsCapabilities`
+Entry: [apps/backend/src/llm_d_lens/deploy/guide_runtime.py](../apps/backend/src/llm_d_lens/deploy/guide_runtime.py) — `configure_cpu_cache`, `guide_settings_capabilities`
 
 ## evaluation-harness-watch
 

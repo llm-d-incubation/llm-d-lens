@@ -265,6 +265,7 @@ class DeploymentContribution:
     # multi-chip TPU pods); unset means "single-host", the topology every
     # currently registered profile uses.
     router_topology: str | None = None
+    legacy_cli: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> DeploymentContribution:
@@ -283,6 +284,7 @@ class DeploymentContribution:
             supports_pci_allowlist=bool(data.get("supports_pci_allowlist", False)),
             runtime_image=data.get("runtime_image"),
             router_topology=data.get("router_topology"),
+            legacy_cli=_str_map(data.get("legacy_cli")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -301,6 +303,7 @@ class DeploymentContribution:
             "supports_pci_allowlist": self.supports_pci_allowlist,
             "runtime_image": self.runtime_image,
             "router_topology": self.router_topology,
+            "legacy_cli": dict(self.legacy_cli),
         }
 
 

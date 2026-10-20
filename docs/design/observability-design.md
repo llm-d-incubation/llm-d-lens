@@ -65,9 +65,8 @@ and validates at startup or during preflight that the file exists, is within the
 
 ```mermaid
 flowchart LR
-    UI[Cluster Monitoring page] -->|GET status, every 5 seconds| BFF[Express API proxy]
-    UI -->|POST install / GET operation| BFF
-    BFF --> API[FastAPI monitoring.cluster_stack]
+    UI[Cluster Monitoring page] -->|GET status, every 5 seconds| API[FastAPI monitoring.cluster_stack]
+    UI -->|POST install / GET operation| API
     API --> SR[Status Reader]
     API --> OR[Operation Runner]
     SR --> K[kubectl / helm, read-only commands]
@@ -112,7 +111,8 @@ The API namespace is fixed by layer:
 /api/monitoring/deployments/...     # future: llm-d guide instances in a single namespace
 ```
 
-Express adds a common `server/monitoring.ts`, proxying `/api/monitoring/*` to the FastAPI service. Authentication has now been unified under the Lens login session: see
+The browser calls the FastAPI monitoring routes directly; Vite proxies `/api/*`
+to that same service in development. Authentication is unified under the Lens login session: see
 [`auth-rbac-design.md`](auth-rbac-design.md) (session cookie + roles/scopes; `monitoring:*` permission codes). Local development can allow access with `PRISM_AUTH_MODE=disabled` / `PRISM_ALLOW_UNAUTHENTICATED=true`. The earlier `X-Prism-Github-Token` header and `SIMULATION_ALLOW_UNAUTHENTICATED` have both been deprecated/removed.
 
 #### 3.1 Responsibility Boundaries Between the Two Monitoring Services
@@ -1174,13 +1174,11 @@ getAcceleratorOperation(accelerator, operationId, { signal })
 
 #### 7.4 Local development ports
 
-- FastAPI / uvicorn (shared by simulation + monitoring): **8182**
-  (`package.json` `simulation` script; the default upstream for both
-  `server/simulation-proxy.ts` and `server/monitoring.ts` is
-  `http://127.0.0.1:8182`).
-- Express backend (`server/server.js`, default `PORT`): **3010**.
-- Vite frontend (`vite.config.js` `server.port` / `--port`): **5174**,
-  with `/api` proxy target defaulting to `http://localhost:3010`.
+- FastAPI / uvicorn (UI, API and MCP): **3000**, configurable with `BACKEND_PORT`
+  (`SERVER_PORT` remains a compatibility alias).
+- Vite frontend (`apps/frontend/vite.config.js` `server.port` / `--port`): **5173**,
+  with `/api` proxy target defaulting to `http://localhost:3000`.
+- `scripts/lens-local.sh` propagates the selected backend port to Vite.
 
 ---
 
@@ -1189,25 +1187,21 @@ getAcceleratorOperation(accelerator, operationId, { signal })
 ```mermaid
 sequenceDiagram
     participant UI as AcceleratorObservabilityPanel
-    participant Proxy as server/monitoring.ts
     participant API as FastAPI (accelerator router)
     participant K8s as kubectl / helm (CommandRunner)
 
-    UI->>Proxy: GET /api/v1/monitoring/accelerators
-    Proxy->>API: forward (prism_session cookie)
+    UI->>API: GET /api/v1/monitoring/accelerators (prism_session cookie)
     API-->>UI: AcceleratorCapabilitiesResponse (tabs)
 
-    UI->>Proxy: GET /api/v1/monitoring/accelerators/intel_gpu/status
-    Proxy->>API: forward
+    UI->>API: GET /api/v1/monitoring/accelerators/intel_gpu/status
     API->>K8s: kubectl/helm discovery (async)
     K8s-->>API: JSON
     API-->>UI: AcceleratorStatusResponse
 
-    UI->>Proxy: POST /api/v1/monitoring/accelerators/intel_gpu/installations
-    Proxy->>API: forward
+    UI->>API: POST /api/v1/monitoring/accelerators/intel_gpu/installations
     API->>K8s: helm upgrade --install xpumd --set gpuAccess=...
     API-->>UI: 202 AcceleratorOperationResponse
-    UI->>API: poll GET .../operations/{id} (via proxy)
+    UI->>API: poll GET .../operations/{id}
 ```
 
 ---
@@ -1223,8 +1217,7 @@ sequenceDiagram
   infrastructure state", shows the Intel GPU tab, and fully supports end-to-end
   `dra` and `plugin` installation flows; when `degraded` (stack incomplete), it
   can "Repair / reinstall" to reconcile the missing pieces.
-- `server/monitoring.ts` requires no changes; authorization is inherited
-  automatically.
+- Authorization is enforced by the Python auth middleware and route registry.
 - The new package has corresponding `pytest` tests (mirroring the `cluster_stack`
   `test_*` files), and `npm run lint` and `npm run build` pass.
 

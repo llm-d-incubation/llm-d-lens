@@ -35,7 +35,7 @@ export default tseslint.config(
   },
   // Configuration for Node.js server files
   {
-    files: ['apps/server/**/*.js', 'apps/frontend/vite.config.js'],
+    files: ['apps/frontend/vite.config.js'],
     languageOptions: {
       globals: {
         ...globals.node,

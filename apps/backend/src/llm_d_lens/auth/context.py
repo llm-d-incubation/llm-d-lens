@@ -209,7 +209,7 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
             path=request.url.path,
             ip=_client_ip(request),
             user_agent=request.headers.get("user-agent"),
-            permission=permission if found else None,
+            permission=(" | ".join(permission) if isinstance(permission, tuple) else permission) if found else None,
             parent_request_id=request.headers.get("x-audit-parent-request-id"),
         )
         token = _audit_context.set(context)
@@ -239,12 +239,13 @@ async def require_route_permission(request: Request) -> None:
         raise PasswordChangeRequiredError("password change required before continuing")
     if permission == "":
         return
-    if not authorize(principal, permission).allowed:
+    permissions = permission if isinstance(permission, tuple) else (permission,)
+    if not any(authorize(principal, candidate).allowed for candidate in permissions):
         default_service().audit(
             "access_denied",
             result="deny",
             actor_username=principal.username,
-            permission=permission,
+            permission=" | ".join(permissions),
             method=request.method,
             path=request.url.path,
             ip=_client_ip(request),
