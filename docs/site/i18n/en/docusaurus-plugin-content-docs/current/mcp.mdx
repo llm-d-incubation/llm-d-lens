@@ -92,6 +92,11 @@ The endpoint, operation ID, read tier and planner exclusion remain unchanged.
 Answers use `generation_mode: "deterministic"`, not an LLM generation path.
 Question planning uses bounded deterministic keyword rules,
 not general NLP or LLM inference; explicit structured filters are authoritative.
+Recognized model/statistic conditions in the question must agree with those
+filters; conflicts fail validation. Ambiguous model subjects or multiple
+models/statistics abstain before retrieval instead of broadening the search.
+Metric definitions such as `What is TTFT?` search prose, while scoped
+TTFT/TPOT questions search measurements. Explicit `intent` still takes precedence.
 Automatic keyword rules are English-only. For questions in other languages,
 provide explicit `intent` and structured `filters`; language is not inferred.
 Figure evidence can include `related_experiments` for explicitly linked

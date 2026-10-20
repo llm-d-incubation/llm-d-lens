@@ -267,6 +267,55 @@ def test_activation_hash_failure_keeps_old_release(importer, repo: Path):
     assert head.state.generation == original.generation
 
 
+@pytest.mark.parametrize(
+    "table_indices,second_value,rejected",
+    [
+        ((0,), "2 s", False),
+        ((0, 1), "2 s", False),
+        ((0, 99), "2 s", True),
+        ((99,), "2 s", True),
+        ((0, 1), "~2 s", True),
+    ],
+)
+def test_figure_review_requires_experiments_for_every_selected_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table_indices: tuple[int, ...], second_value: str, rejected: bool
+):
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "evidence"))
+    archive = SourceArchive()
+    report_path = "guides/modelexpress-p2p/benchmark-results/coreweave-h200-llama-3.3-70b.md"
+    image_path = "guides/modelexpress-p2p/benchmark-results/chart.png"
+    text = (
+        "# Reviewed report\n![Measured curve](chart.png)\n"
+        "| Path | Weight-load time | Notes |\n| --- | --- | --- |\n| First | 1 s | exact |\n\n"
+        f"| Path | Weight-load time | Notes |\n| --- | --- | --- |\n| Second | {second_value} | reviewed |\n"
+    )
+    inventory = PinnedInventory(
+        origin_id=LLM_D_ORIGIN,
+        revision="a" * 40,
+        complete=True,
+        files=(
+            InventoryFile(path=image_path, sha256=archive.put(b"\x89PNG\r\n\x1a\n"), format="png"),
+            InventoryFile(path=report_path, sha256=archive.put(text.encode()), format="markdown"),
+        ),
+    )
+    reviews = {
+        image_path: FigureReview(
+            coverage="complete", reason="verified table selection", report_path=report_path, table_indices=table_indices
+        )
+    }
+    if rejected:
+        with pytest.raises(PublicationError, match="reviewed figure tables"):
+            parse_repository(inventory, archive, figure_reviews=reviews, reviewed_metadata_revision=inventory.revision)
+    else:
+        parsed = parse_repository(
+            inventory, archive, figure_reviews=reviews, reviewed_metadata_revision=inventory.revision
+        )
+        figure_items = next(file.items for file in parsed if file.path == image_path)
+        assert next(item for item in figure_items if item.kind == "figure").coverage == "complete"
+        links = [item for item in figure_items if item.kind == "figure_link"]
+        assert {item.source_pointer["table_index"] for item in links} == set(table_indices)
+
+
 @pytest.mark.parametrize("origin,checkout", [(LLM_D_ORIGIN, "llm-d"), (BENCHMARK_ORIGIN, "llm-d-benchmark")])
 def test_initial_repository_postgres_acceptance(
     origin: str, checkout: str, importer, postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

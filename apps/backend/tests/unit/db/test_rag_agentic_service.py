@@ -200,6 +200,23 @@ def test_actual_service_principals_get_only_their_own_records(branch):
     assert runs[1] not in first.model_dump_json() and runs[0] not in second.model_dump_json()
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What was the p99 throughput for Qwen3-0.6B on H100?",
+        "What was the throughput for Llama-3.1-70B on H100?",
+    ],
+)
+def test_question_constraints_also_apply_to_internal_measurements(branch, question):
+    service, owner, _factory, _runs, _users = branch
+    result = service.query(QueryRequest(question=question, include_internal=True), owner)
+    assert result.internal_branch_enabled
+    assert result.status == "abstained"
+    assert result.matched_items == 0
+    assert not result.evidence
+    assert [item.code for item in result.abstentions] == ["no_exact_match"]
+
+
 def test_hidden_exact_ids_do_not_leak_match_or_count(branch):
     service, owner, _factory, runs, _users = branch
     hidden = service.query(request(record_id=f"evaluate:{runs[1]}"), owner)

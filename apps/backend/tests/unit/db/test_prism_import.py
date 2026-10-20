@@ -183,6 +183,72 @@ def test_snapshot_preserves_exact_values_context_and_timestamp_semantics(
     assert not repeat.changed and repeat.manifest_id == first.manifest_id and repeat.generation == 1
 
 
+@pytest.mark.parametrize("dependency", ["merged-metadata", "original-zip"])
+def test_snapshot_refresh_reparses_unchanged_payload_dependencies(
+    importer: PrismSnapshotImporter, snapshot: Path, postgres_engine: Engine, dependency: str
+):
+    original_hashes = _hashes(snapshot)
+    first = importer.import_snapshot(snapshot, INITIAL_REVISION, original_hashes, _approval(), expected_experiments=2)
+    old_items = importer.service.dao.list_published(PRISM_ORIGIN)
+    old_experiment = next(item for item in old_items if item.kind == "experiment" and item.source_path == _BUNDLE)
+    old_measurement = next(
+        item for item in old_items if item.kind == "measurement" and item.experiment_id == old_experiment.item_id
+    )
+    old_payload = (snapshot / _BUNDLE).read_bytes()
+    zip_path = "results/zip/test-run.zip"
+    if dependency == "merged-metadata":
+        merged = _read(snapshot, _MERGED)
+        merged[1]["metadata"] = {"hardware": "corrected-hardware", "backend": "corrected-runtime"}
+        _write(snapshot, _MERGED, merged)
+    else:
+        with zipfile.ZipFile(snapshot / zip_path) as archive:
+            members = {name: archive.read(name) for name in archive.namelist()}
+        with zipfile.ZipFile(snapshot / zip_path, "w") as archive:
+            for name, data in members.items():
+                archive.writestr(name.replace("export/", "corrected-export/"), data)
+    hashes = _hashes(snapshot)
+    assert hashes[_BUNDLE] == original_hashes[_BUNDLE]
+    assert (snapshot / _BUNDLE).read_bytes() == old_payload
+    staged = importer.stage(snapshot, "2026-10-14", hashes, _approval(), expected_experiments=2)
+    assert importer.service.dao.head(PRISM_ORIGIN).registry.published_manifest_id == first.manifest_id
+    assert importer.service.dao.list_published(PRISM_ORIGIN) == old_items
+    refreshed = importer.service.activate(PRISM_ORIGIN, staged.item_id)
+    assert refreshed.counts == first.counts and refreshed.generation == first.generation + 1
+    current = importer.service.dao.list_published(PRISM_ORIGIN)
+    experiment = next(item for item in current if item.kind == "experiment" and item.source_path == _BUNDLE)
+    assert experiment.item_id != old_experiment.item_id
+    assert experiment.source_revision == "2026-10-14"
+    assert experiment.content_sha256 == old_experiment.content_sha256
+    assert experiment.source_pointer["merged_sha256"] == hashes[_MERGED]
+    assert experiment.source_pointer["original_zip_sha256"] == hashes[zip_path]
+    if dependency == "merged-metadata":
+        assert experiment.hardware == "corrected-hardware"
+        assert experiment.runtime == "corrected-runtime"
+        assert experiment.configuration["metadata"] == merged[1]["metadata"]
+    else:
+        assert experiment.source_pointer["original_zip_member"].startswith("corrected-export/")
+    measurements = [item for item in current if item.kind == "measurement" and item.experiment_id == experiment.item_id]
+    assert measurements
+    assert all(item.source_revision == experiment.source_revision for item in measurements)
+    assert all(item.source_pointer["merged_sha256"] == hashes[_MERGED] for item in measurements)
+    assert all(item.source_pointer["original_zip_sha256"] == hashes[zip_path] for item in measurements)
+    assert importer.service.dao.get(old_experiment.item_id) == old_experiment
+    assert importer.service.dao.get(old_measurement.item_id) == old_measurement
+    assert importer.service.archive.read(old_experiment.content_sha256) == old_payload
+    for path in (_MERGED, zip_path):
+        retained = importer.service.archive.read(original_hashes[path])
+        assert hashlib.sha256(retained).hexdigest() == original_hashes[path]
+    with postgres_engine.connect() as connection:
+        count = connection.scalar(select(func.count()).select_from(RagItemRow))
+    repeated = importer.import_snapshot(snapshot, "2026-10-14", hashes, _approval(), expected_experiments=2)
+    assert not repeated.changed
+    assert repeated.manifest_id == refreshed.manifest_id and repeated.generation == refreshed.generation
+    with postgres_engine.connect() as connection:
+        assert connection.scalar(select(func.count()).select_from(RagItemRow)) == count
+    importer.import_snapshot(snapshot, "2026-10-15", hashes, _approval(), expected_experiments=2)
+    assert importer.service.dao.list_published(PRISM_ORIGIN) == current
+
+
 @pytest.mark.parametrize(
     "failure",
     [

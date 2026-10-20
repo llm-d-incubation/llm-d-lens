@@ -225,9 +225,20 @@ class PrismSnapshotImporter:
         self.service.register_source(PRISM_ORIGIN, approval)
         head = self.service.dao.head(PRISM_ORIGIN)
         previous = ReleaseManifest.model_validate(head.manifest.source_details) if head.manifest else None
-        unchanged = {file.file.path: file.file for file in previous.files} if previous else {}
-        changed = tuple(file for file in parsed if unchanged.get(file.path) != parser.files[file.path])
-        return self.service.stage(inventory, changed, expected_counts=counts)
+        previous_files = {file.file.path: file.file for file in previous.files} if previous else {}
+        changed_paths = {path for path, file in parser.files.items() if previous_files.get(path) != file}
+        changed = []
+        for file in parsed:
+            # Unchanged payload bytes may still acquire new metadata or ZIP provenance.
+            dependencies = {file.path} | {
+                value
+                for item in file.items
+                for key, value in (item.source_pointer or {}).items()
+                if key in ("merged_path", "original_zip_path") and isinstance(value, str)
+            }
+            if dependencies & changed_paths:
+                changed.append(file)
+        return self.service.stage(inventory, tuple(changed), expected_counts=counts)
 
 
 class _SnapshotParser:

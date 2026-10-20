@@ -308,6 +308,29 @@ def test_required_unknown_condition_and_denominators_do_not_match(query_service)
     assert result.status == "abstained" and not result.evidence
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What was the p99 latency for Qwen3-0.6B on H100?",
+        "What was the throughput for Llama-3.1-70B on H100?",
+    ],
+)
+def test_question_conditions_cannot_return_a_different_statistic_or_model(query_service, question):
+    result = query_service.query(QueryRequest(question=question), reader())
+    assert result.status == "abstained"
+    assert result.matched_items == 0
+    assert not result.evidence
+    assert [item.code for item in result.abstentions] == ["no_exact_match"]
+
+
+def test_question_mean_statistic_still_returns_matching_measurement(query_service):
+    result = query_service.query(QueryRequest(question="What was the mean latency for Qwen3-0.6B on H100?"), reader())
+    assert result.status == "answered"
+    assert result.filters.statistic == "mean"
+    assert result.evidence[0].statistic == "mean"
+    assert result.evidence[0].value == Decimal("1.234567890123456789")
+
+
 def test_numeric_normalization_range_and_statistic_alias(query_service):
     result = query_service.query(
         QueryRequest(
@@ -347,6 +370,27 @@ def test_fulltext_definition_is_not_example_measurement(query_service):
         reader(),
     )
     assert no_measurement.matched_items == 0
+
+
+def test_metric_definition_retrieves_pinned_prose_instead_of_requiring_experiment(query_service):
+    publication = RagPublicationService(dao=query_service.dao, archive=query_service.archive)
+    data = b"# TTFT\nTTFT is time to first token, the delay before the first output token.\n"
+    path = "docs/benchmark_report.md"
+    file = InventoryFile(path=path, sha256=publication.archive.put(data), format="markdown")
+    inventory = PinnedInventory(origin_id=BENCHMARK_ORIGIN, revision="b" * 40, complete=True, files=(file,))
+    manifest = publication.stage(
+        inventory,
+        (ParsedFile(path=path, items=parse_markdown(file, inventory, data)),),
+        expected_counts={"source": 1, "passage": 1},
+    )
+    publication.activate(BENCHMARK_ORIGIN, manifest.item_id)
+    result = query_service.query(QueryRequest(question="What is TTFT?"), reader())
+    assert result.intent == "definition"
+    assert result.status == "answered"
+    assert result.matched_items == 1
+    assert result.evidence[0].evidence_type == "prose_summary"
+    assert result.evidence[0].value is None
+    assert "time to first token" in result.answer
 
 
 def test_exact_plot_points_abstain_with_image_context(query_service):

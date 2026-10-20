@@ -293,7 +293,10 @@ def _figures(
                 for item in parsed[review.report_path]
                 if item.kind == "experiment" and (item.source_pointer or {}).get("table_index") in review.table_indices
             ]
-            if review.table_indices and not experiments:
+            if any(
+                not any((item.source_pointer or {}).get("table_index") == index for item in experiments)
+                for index in review.table_indices
+            ):
                 raise PublicationError("reviewed figure tables have no verified experiments")
             for experiment in experiments:
                 items.append(

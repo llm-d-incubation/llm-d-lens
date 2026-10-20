@@ -34,6 +34,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+_STATISTIC = re.compile(
+    r"\b(?:p\d{1,3}(?:\.\d+)?|\d{1,3}(?:\.\d+)?(?:st|nd|rd|th)?\s+percentile"
+    r"|mean|average|avg|median|minimum|maximum|min|max)\b",
+    re.IGNORECASE,
+)
+_MODEL_IDENTIFIER = re.compile(
+    r"(?<![\w./-])(?:[a-zA-Z][\w.-]*/[\w.-]+|(?=[\w.-]*\d)[a-zA-Z]\w*(?:[.-]\w+)+)(?![\w./-])"
+)
+_METRIC_TERMS = (
+    (("weight-load", "weight load", "weight loading"), "weight_load"),
+    (("throughput", "token throughput"), "throughput"),
+    (("ttft", "time to first token"), "ttft"),
+    (("tpot", "time per output token"), "tpot"),
+    (("latency", "request latency"), "latency"),
+)
 _STOP_WORDS = frozenset(
     [
         "a",
@@ -100,12 +115,78 @@ class QueryPlan:
     precondition: Abstention | None = None
 
 
+def _query_statistic(value: str) -> str:
+    value = value.casefold()
+    if "percentile" in value:
+        return "p" + re.split(r"(?:st|nd|rd|th)?\s+", value, maxsplit=1)[0]
+    value = {"average": "avg", "minimum": "min", "maximum": "max"}.get(value, value)
+    return normalize_statistic(value) or value
+
+
+def _question_models(question: str, hardware: str | None) -> tuple[tuple[str, ...], bool]:
+    models = [match[0] for match in _MODEL_IDENTIFIER.finditer(question) if not _UUID.fullmatch(match[0])]
+    ambiguous = False
+    # Bare or multiword names need a model label or a "for ... on ..." subject;
+    # structured identifiers do not depend on a hardcoded model-family catalog.
+    named = re.findall(r'\bmodel\s*[:=]?\s+(?:"([^"]+)"|`([^`]+)`|([\w./-]+))', question, re.IGNORECASE)
+    for groups in named:
+        value = next(group for group in groups if group)
+        if value.casefold() not in _STOP_WORDS:
+            models.append(value.rstrip("."))
+    for match in re.finditer(r"\bfor\s+(.+?)(?=\s+(?:on|with|at|under|in|using)\b|[?;!]|$)", question, re.IGNORECASE):
+        subject = match[1].strip().rstrip(".")
+        if re.match(r"(?:prism|record|run|benchmark|evaluate)\b", subject, re.IGNORECASE) or _UUID.fullmatch(subject):
+            continue
+        if subject.casefold().startswith("model "):
+            continue
+        if re.fullmatch(r"[\w./-]+", subject) and subject.casefold() not in _STOP_WORDS:
+            models.append(subject)
+        else:
+            ambiguous = True
+    unique = {
+        model.casefold(): model for model in models if hardware is None or model.casefold() != hardware.casefold()
+    }
+    return tuple(unique.values()), ambiguous
+
+
+def _metric_definition(question: str, filters: QueryFilters) -> bool:
+    if any(
+        (
+            filters.record_id,
+            filters.experiment_id,
+            filters.model,
+            filters.hardware,
+            filters.runtime,
+            filters.statistic,
+            filters.unit,
+            filters.workload,
+            filters.series,
+        )
+    ):
+        return False
+    if re.search(r"\b(?:define|definitions?|meaning)\b|\bwhat (?:does|do)\b.*\b(?:mean|stand for)\b", question):
+        return True
+    subject = re.sub(r"^(?:what (?:is|are)|explain|describe)\s+(?:(?:the|a|an)\s+)?", "", question)
+    subject = re.sub(r"\s+(?:metric|term)$", "", subject.rstrip("?!. "))
+    return subject != question and any(subject in words for words, _ in _METRIC_TERMS)
+
+
 def plan_query(request: QueryRequest) -> QueryPlan:
     question = request.question.casefold()
     ids = tuple(dict.fromkeys(value.lower() for value in _UUID.findall(question)))
+    metric = next(
+        (
+            metric
+            for words, metric in _METRIC_TERMS
+            if any(re.search(r"\b" + re.escape(word) + r"\b", question) for word in words)
+        ),
+        None,
+    )
     intent = request.intent
     if intent == "auto":
-        if re.search(r"\bpng\b", question) or any(
+        if metric is not None and not ids and _metric_definition(question, request.filters):
+            intent = "definition"
+        elif re.search(r"\bpng\b", question) or any(
             word in question for word in ("plot", "figure", "chart", ".png", "curve", "diagram", "plotted series")
         ):
             intent = "figure"
@@ -113,22 +194,7 @@ def plan_query(request: QueryRequest) -> QueryPlan:
             word in question for word in (" versus ", " vs ", "compare", "comparison", "compared with", "comparison of")
         ):
             intent = "comparison"
-        elif (
-            ids
-            or request.filters.metric
-            or any(
-                word in question
-                for word in (
-                    "throughput",
-                    "ttft",
-                    "latency",
-                    "weight-load",
-                    "weight load",
-                    "token throughput",
-                    "request latency",
-                )
-            )
-        ):
+        elif ids or request.filters.metric or metric is not None:
             intent = "numeric"
         else:
             intent = "definition"
@@ -147,20 +213,22 @@ def plan_query(request: QueryRequest) -> QueryPlan:
             updates["record_id"] = record_id
         if not request.include_internal and "origins" not in request.filters.model_fields_set:
             updates["origins"] = (PRISM_ORIGIN,)
+    condition_precondition = None
     if request.filters.statistic is not None:
-        updates["statistic"] = normalize_statistic(request.filters.statistic)
+        updates["statistic"] = _query_statistic(request.filters.statistic)
     if intent in ("numeric", "comparison"):
-        if request.filters.metric is None:
-            for words, metric in (
-                (("weight-load", "weight load", "weight loading"), "weight_load"),
-                (("throughput", "token throughput"), "throughput"),
-                (("ttft",), "ttft"),
-                (("tpot",), "tpot"),
-                (("latency", "request latency"), "latency"),
-            ):
-                if any(word in question for word in words):
-                    updates["metric"] = metric
-                    break
+        statistics = tuple(dict.fromkeys(_query_statistic(match[0]) for match in _STATISTIC.finditer(question)))
+        if len(statistics) > 1:
+            condition_precondition = Abstention(
+                code="statistic_scope_required",
+                message="Use separate exact queries for different statistics; no statistic was discarded.",
+            )
+        elif statistics:
+            if request.filters.statistic is not None and updates["statistic"] != statistics[0]:
+                raise DomainValidationError("the question's statistic conflicts with the explicit filter")
+            updates["statistic"] = statistics[0]
+        if request.filters.metric is None and metric is not None:
+            updates["metric"] = metric
         if (
             any(word in question for word in ("weight-load", "weight load", "weight loading"))
             and "gpt-oss-120b" in question
@@ -187,15 +255,27 @@ def plan_query(request: QueryRequest) -> QueryPlan:
         hardware = re.search(r"\b(?:H100|H200|A100|B200|B300|B60|MI300X|MI325X)\b", request.question, re.IGNORECASE)
         if hardware is not None and request.filters.hardware is None:
             updates["hardware"] = hardware[0]
-        model = re.search(
-            r"\b(?:Qwen[\w./-]+|(?:openai/)?gpt-oss-[\w.-]+|(?:zai-org/)?GLM-[\w.-]+)\b",
-            request.question,
-            re.IGNORECASE,
-        )
-        if model is not None and request.filters.model is None:
-            updates["model"] = model[0]
-            if updates.get("source_path") == "guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md":
-                updates["model"] = "openai/gpt-oss-120b"
+        models, ambiguous_model = _question_models(request.question, hardware[0] if hardware is not None else None)
+        if len(models) > 1 or ambiguous_model:
+            condition_precondition = condition_precondition or Abstention(
+                code="model_scope_required",
+                message=(
+                    "Use one exact model identifier per query, or an explicit model filter with an unambiguous "
+                    "question; no model condition was discarded."
+                ),
+            )
+        elif models:
+            model = models[0]
+            if (
+                model.casefold() == "gpt-oss-120b"
+                and updates.get("source_path", request.filters.source_path)
+                == "guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md"
+            ):
+                model = "openai/gpt-oss-120b"
+            if request.filters.model is not None and request.filters.model.casefold() != model.casefold():
+                raise DomainValidationError("the question's model conflicts with the explicit filter")
+            if request.filters.model is None:
+                updates["model"] = model
         concurrency = re.search(r"(?:concurrency|concurrent)\s*[:=]?\s*(\d+)", question)
         if concurrency is not None:
             workload = dict(request.filters.workload)
@@ -237,6 +317,8 @@ def plan_query(request: QueryRequest) -> QueryPlan:
             code="unverified_experiment_identity",
             message="Similar model/hardware names do not prove run identity or an independent-experiment count.",
         )
+    elif condition_precondition is not None:
+        precondition = condition_precondition
     elif intent in ("numeric", "comparison") and not any(
         (
             filters.record_id,
