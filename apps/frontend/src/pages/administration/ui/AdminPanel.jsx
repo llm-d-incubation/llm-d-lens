@@ -9,8 +9,8 @@ export function AdminPanel({ icon: Icon, title, count, toolbar, children }) {
             {toolbar}
             <div className="flex min-h-[52px] items-center justify-between border-b border-slate-800/60 px-1 py-2.5">
                 <div className="flex items-center gap-2">
-                    {Icon && <Icon className="h-4 w-4 text-cyan-400" />}
-                    <h2 className="text-sm font-bold text-slate-300">{title}</h2>
+                    {Icon && <Icon className="h-4 w-4 text-[#037ffc] dark:text-cyan-400" />}
+                    <h2 className="text-sm font-bold text-slate-900 dark:text-slate-300">{title}</h2>
                     {typeof count === 'number' && (
                         <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[9px] text-slate-500">{count} shown</span>
                     )}

@@ -12,7 +12,7 @@ export function QuickActions({ onNavigate, onCollapse }) {
     return (
         <Panel
             title="Quick actions"
-            className="flex flex-col bg-transparent shadow-none backdrop-blur-none"
+            className="flex flex-col bg-transparent shadow-none backdrop-blur-none not-dark:border-[#cbd5e1]"
             actions={onCollapse ? (
                 <Button
                     variant="ghost"
@@ -34,9 +34,9 @@ export function QuickActions({ onNavigate, onCollapse }) {
                             variant="secondary"
                             size="md"
                             onClick={() => onNavigate(action.view, action.params || {})}
-                            className="h-auto w-full items-start justify-start gap-3 whitespace-normal border-sky-500/15 bg-white/50 py-3 text-left hover:border-sky-500/35 hover:bg-sky-500/10 dark:border-sky-500/20 dark:bg-slate-900/35 dark:hover:bg-sky-500/10"
+                            className="h-auto w-full items-start justify-start gap-3 whitespace-normal border-[#cbd5e1] bg-white/50 py-3 text-left hover:border-[#94a3b8] hover:bg-sky-500/10 dark:border-sky-500/20 dark:bg-slate-900/35 dark:hover:bg-sky-500/10"
                         >
-                            <span className="mt-0.5 rounded-lg bg-sky-500/10 p-1.5 text-sky-600 dark:bg-sky-500/15 dark:text-sky-300">
+                            <span className="mt-0.5 rounded-lg bg-[#037ffc1a] p-1.5 text-[#037ffc] dark:bg-sky-500/15 dark:text-sky-300">
                                 <Icon size={16} aria-hidden="true" />
                             </span>
                             <span className="min-w-0 flex-1">

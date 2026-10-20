@@ -545,7 +545,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     const selectedClusterStatusLabel = selectedCluster ? getClusterStatusLabel(selectedCluster) : 'Ready';
 
     return (
-        <ModulePage>
+        <ModulePage className="cluster-page">
                 <ModuleHeader
                     icon={Network}
                     title="Clusters"
@@ -578,7 +578,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                 <div className={`grid gap-6 ${sidebarCollapsed ? 'lg:grid-cols-1' : 'lg:grid-cols-[260px_1fr]'}`}>
                     {!sidebarCollapsed && <aside className="space-y-6">
                         <section className="relative overflow-hidden border border-slate-800/80 rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
-                            <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs mb-3">
+                            <div className="flex items-center gap-2 text-[#037ffc] font-semibold text-xs mb-3 dark:text-cyan-400">
                                 <Upload size={16} />
                                 <span className="tracking-wide">Target cluster</span>
                             </div>
@@ -625,7 +625,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
 
                 <section className="relative overflow-hidden border border-slate-800/80 rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl">
                     <div className="relative p-6">
-                        <SectionLabel>{`Clusters (${clusters.length})`}</SectionLabel>
+                        <SectionLabel className="text-[#037ffc]">{`Clusters (${clusters.length})`}</SectionLabel>
                         <div className="mt-3 flex items-center gap-2">
                             <Input
                                 value={clusterSearch}
@@ -761,7 +761,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                     <section className="relative overflow-hidden border border-slate-800/80 rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl">
                         <div className="relative p-6">
                             <div className="flex flex-wrap items-center justify-between gap-3">
-                                <SectionLabel>{`Workers (${nodesTotal})`}</SectionLabel>
+                                <SectionLabel className="text-[#037ffc]">{`Workers (${nodesTotal})`}</SectionLabel>
                                 {selectedWorkerNodes.length > 0 && (
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-xs text-slate-400">{selectedWorkerNodes.length} selected</span>

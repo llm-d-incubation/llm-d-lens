@@ -109,7 +109,7 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
             closeOnEscape={!saving}
             footer={
                 <>
-                    <Button variant="secondary" onClick={onCancel} disabled={saving}>Cancel</Button>
+                    <Button variant="secondary" onClick={onCancel} disabled={saving} className="providers-secondary-button">Cancel</Button>
                     <Button type="submit" form={FORM_ID} variant="primary" isLoading={saving}>
                         {isEdit ? 'Save changes' : 'Add provider'}
                     </Button>
@@ -192,6 +192,7 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
                             type="button"
                             variant="secondary"
                             size="xs"
+                            className="providers-secondary-button"
                             onClick={runTest}
                             isLoading={testing}
                             disabled={!form.baseUrl.trim() || !form.model.trim()}

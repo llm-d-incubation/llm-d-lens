@@ -284,7 +284,7 @@ export function DeploymentPodsLogsModal({ deployment, clusterNameById = {}, onCl
                                         title={`Pod: ${pod.name}\nStatus: ${pod.status_reason || pod.phase || 'Unknown'}${pod.ready ? ' (Ready)' : ''}\nNode: ${pod.node_name || '—'}\nIP: ${pod.pod_ip || '—'}${pod.restarts ? `\nRestarts: ${pod.restarts}` : ''}`}
                                         className={`cursor-pointer rounded-lg border px-2.5 py-1.5 min-h-[44px] transition-all text-xs flex items-center justify-between gap-2 min-w-0 ${
                                             isSelected
-                                                ? 'border-cyan-500 bg-cyan-950/40 text-white font-medium ring-1 ring-cyan-500/50 shadow-sm'
+                                                ? 'border-cyan-500 bg-cyan-950/40 text-white font-medium ring-1 ring-cyan-500/50 dark:shadow-sm'
                                                 : 'border-slate-800/80 bg-slate-950/60 text-slate-300 hover:border-slate-700 hover:bg-slate-800/50'
                                         }`}
                                     >

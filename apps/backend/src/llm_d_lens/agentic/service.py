@@ -1150,7 +1150,7 @@ class AgenticDeploymentService:
         deployment = await deployment_run_manager.start_run(
             DeploymentRunCreateRequest(
                 configurations=[configuration],
-                runtime_binding=RuntimeBinding(placement=placement),
+                runtime_binding=RuntimeBinding(placement=placement, runtime_class=run.request.runtime_class),
                 provenance={
                     "deployment_source": {"kind": "agentic-deployment"},
                     "cluster_session_id": session.id,

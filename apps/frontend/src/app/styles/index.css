@@ -206,19 +206,19 @@ main span:has(> :only-child) + p.text-slate-600 {
 
 @layer base {
   :root {
-    --bg-primary: #f8fafc;
+    --bg-primary: #f8f9fb;
     --bg-secondary: #ffffff;
     --bg-card: #ffffff;
-    --border-color: #e2e8f0;
+    --border-color: #b7d4e6;
     --text-primary: #0f172a;
-    --text-secondary: #475569;
-    --text-muted: #94a3b8;
+    --text-secondary: #33475b;
+    --text-muted: #475569;
 
-    --brand-accent: #059669;
-    --brand-accent-hover: #047857;
-    --brand-accent-bg: rgba(16, 185, 129, 0.1);
+    --brand-accent: #037ffc;
+    --brand-accent-hover: #6ccffc;
+    --brand-accent-bg: rgba(75, 42, 245, 0.1);
 
-    --chart-grid: #cbd5e1;
+    --chart-grid: #cfe9f7;
     --chart-axis: #475569;
   }
 
@@ -243,6 +243,10 @@ main span:has(> :only-child) + p.text-slate-600 {
     background-color: var(--bg-primary);
     color: var(--text-primary);
     transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  html:not(.dark) body {
+    background-color: #ffffff;
   }
 
   button, a, select, [role="button"] {
@@ -486,4 +490,1482 @@ main span:has(> :only-child) + p.text-slate-600 {
   animation-iteration-count: infinite;
   opacity: 0;
   visibility: hidden;
+}
+
+/* McKinsey-inspired light mode shim for legacy dark-only utility classes. */
+html:not(.dark) {
+  color-scheme: light;
+  --bg-hover: #cbdce9;
+}
+html:not(.dark) [class~="bg-slate-100"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-200"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-200/70"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-400/10"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-500"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-500/5"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-500/55"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-600"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-700"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-700/20"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-700/70"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-800"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-800/30"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-800/40"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-800/60"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-800/70"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-800/80"] { background-color: var(--bg-secondary) !important; }
+html:not(.dark) [class~="bg-slate-900"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/25"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/30"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/40"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/45"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/50"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/60"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/65"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/70"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/80"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-900/90"] { background-color: var(--bg-card) !important; }
+html:not(.dark) [class~="bg-slate-950"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/20"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/25"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/30"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/35"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/40"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/45"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/50"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/55"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/60"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/70"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/80"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/90"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="bg-slate-950/95"] { background-color: var(--bg-primary) !important; }
+html:not(.dark) [class~="border-slate-200"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-200/80"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-300"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-400/30"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-500"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-500/35"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-600"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-600/40"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-600/60"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-700"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-700/40"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-700/50"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-700/60"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-700/70"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-700/80"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-800"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-800/40"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-800/50"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-800/60"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-800/70"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-800/80"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-900"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-900/60"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-900/65"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-900/80"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="border-slate-900/90"] { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="from-slate-100/70"] { --tw-gradient-from: var(--bg-card) !important; }
+html:not(.dark) [class~="from-slate-100/80"] { --tw-gradient-from: var(--bg-card) !important; }
+html:not(.dark) [class~="from-slate-900"] { --tw-gradient-from: var(--bg-card) !important; }
+html:not(.dark) [class~="from-slate-900/80"] { --tw-gradient-from: var(--bg-card) !important; }
+html:not(.dark) [class~="from-slate-900/90"] { --tw-gradient-from: var(--bg-card) !important; }
+html:not(.dark) [class~="from-slate-950/70"] { --tw-gradient-from: var(--bg-card) !important; }
+html:not(.dark) [class~="hover:bg-slate-100"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-200"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-200/50"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-200/60"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-600"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-700/50"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/20"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/30"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/40"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/50"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/60"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/70"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-800/80"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-900"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-900/10"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-900/40"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-900/5"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-900/50"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:bg-slate-900/80"]:hover { background-color: var(--bg-hover) !important; }
+html:not(.dark) [class~="hover:border-slate-400"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:border-slate-500"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:border-slate-600"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:border-slate-700"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:border-slate-700/45"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:border-slate-700/60"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:border-slate-800/60"]:hover { border-color: var(--border-color) !important; }
+html:not(.dark) [class~="hover:text-slate-100"]:hover { color: var(--text-primary) !important; }
+html:not(.dark) [class~="hover:text-slate-200"]:hover { color: var(--text-primary) !important; }
+html:not(.dark) [class~="hover:text-slate-300"]:hover { color: var(--text-secondary) !important; }
+html:not(.dark) [class~="hover:text-slate-700"]:hover { color: var(--text-secondary) !important; }
+html:not(.dark) [class~="hover:text-slate-900"]:hover { color: var(--text-primary) !important; }
+html:not(.dark) [class~="text-slate-100"] { color: var(--text-primary) !important; }
+html:not(.dark) [class~="text-slate-200"] { color: var(--text-primary) !important; }
+html:not(.dark) [class~="text-slate-300"] { color: var(--text-secondary) !important; }
+html:not(.dark) [class~="text-slate-400"] { color: var(--text-muted) !important; }
+html:not(.dark) [class~="text-slate-400/90"] { color: var(--text-muted) !important; }
+html:not(.dark) [class~="text-slate-500"] { color: var(--text-muted) !important; }
+html:not(.dark) [class~="text-slate-600"] { color: var(--text-secondary) !important; }
+html:not(.dark) [class~="text-slate-700"] { color: var(--text-secondary) !important; }
+html:not(.dark) [class~="text-slate-800"] { color: var(--text-primary) !important; }
+html:not(.dark) [class~="text-slate-900"] { color: var(--text-primary) !important; }
+html:not(.dark) [class~="text-slate-950"] { color: var(--text-primary) !important; }
+html:not(.dark) [class~="to-slate-950"] { --tw-gradient-to: var(--bg-secondary) !important; }
+html:not(.dark) [class~="to-slate-950/40"] { --tw-gradient-to: var(--bg-secondary) !important; }
+html:not(.dark) [class~="to-slate-950/60"] { --tw-gradient-to: var(--bg-secondary) !important; }
+html:not(.dark) [class~="to-slate-950/90"] { --tw-gradient-to: var(--bg-secondary) !important; }
+html:not(.dark) [class~="via-slate-900/40"] { --tw-gradient-via: var(--bg-secondary) !important; }
+html:not(.dark) [class~="via-slate-900/50"] { --tw-gradient-via: var(--bg-secondary) !important; }
+html:not(.dark) [class~="via-slate-900/80"] { --tw-gradient-via: var(--bg-secondary) !important; }
+html:not(.dark) [class~="via-slate-950/70"] { --tw-gradient-via: var(--bg-secondary) !important; }
+html:not(.dark) [class~="via-slate-950/80"] { --tw-gradient-via: var(--bg-secondary) !important; }
+html:not(.dark) [class~="text-white"]:not(.benchmark-blue-button):not([class*="bg-cyan"]):not([class*="bg-sky"]):not([class*="bg-blue"]):not([class*="bg-emerald"]):not([class*="bg-teal"]):not([class*="bg-violet"]):not([class*="bg-fuchsia"]):not([class*="bg-purple"]):not([class*="bg-amber"]):not([class*="bg-orange"]):not([class*="bg-red"]):not([class*="bg-rose"]):not([class*="bg-gradient"]) { color: var(--text-primary) !important; }
+
+/* Light mode: legacy arbitrary dark-hex surfaces become light surfaces. */
+html:not(.dark) [class~="bg-[#0b0f17]"],
+html:not(.dark) [class~="bg-[#0b0f17]/95"],
+html:not(.dark) [class~="bg-[#101622]"],
+html:not(.dark) [class~="bg-[#0b1423]"],
+html:not(.dark) [class~="bg-[#090e18]"],
+html:not(.dark) [class~="bg-[#0a0f1b]"],
+html:not(.dark) [class~="bg-[#070b13]"],
+html:not(.dark) [class~="bg-[#0b1220]"],
+html:not(.dark) [class~="bg-[#0a0f1d]"],
+html:not(.dark) [class~="bg-[#080d17]"],
+html:not(.dark) [class~="bg-[#0b0b0f]"] {
+  background-color: var(--bg-card) !important;
+}
+
+html:not(.dark) [class~="hover:bg-[#101622]"]:hover {
+  background-color: var(--bg-hover) !important;
+}
+
+/* Light navigation uses blue-gray surfaces and navy ink, including collapsed
+   tooltips and the account menu. */
+html:not(.dark) .lens-navigation {
+  --bg-primary: #ffffff;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #e6f6fe;
+  --border-color: #b7d4e6;
+  --text-primary: #0f172a;
+  --text-secondary: #33475b;
+  --text-muted: #475569;
+  --brand-accent-bg: #e6f6fe;
+  --nav-on-accent: #ffffff;
+  background-color: #ffffff;
+  border: 1px solid #d1d5db;
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+html:not(.dark) .lens-navigation [class~="bg-white"],
+html:not(.dark) .lens-navigation-footer {
+  background-color: var(--bg-card);
+}
+
+html:not(.dark) .lens-navigation-active {
+  background: var(--brand-accent);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: none;
+}
+
+html:not(.dark) .lens-navigation-icon {
+  color: var(--text-muted);
+}
+
+.lens-navigation-active .lens-navigation-active-label {
+  color: #ffffff;
+}
+
+html:not(.dark) .lens-navigation-active .lens-navigation-active-label {
+  color: #ffffff !important;
+}
+
+html:not(.dark) .lens-navigation-active .lens-navigation-icon {
+  background: transparent;
+  color: var(--nav-on-accent) !important;
+  box-shadow: none;
+}
+
+html:not(.dark) .lens-navigation-indicator {
+  background: #ffffff;
+  opacity: 0.75;
+  box-shadow: none;
+}
+
+/* Additional legacy dark-hex surfaces in light mode. */
+html:not(.dark) [class~="bg-[#070b13]/65"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#080d17]/95"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#080f1c]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#090e18]/95"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0a0f1b]/80"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0a101c]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0b1120]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0b1324]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0b1422]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0c1422]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0e1628]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#0f1829]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#101827]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#101a2b]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#131e31]"] { background-color: #ffffff !important; }
+html:not(.dark) [class~="bg-[#211d38]"] { background-color: #ffffff !important; }
+
+/* Light mode: stronger control and surface shadows. */
+html:not(.dark) .shadow-sm:not([class~="shadow-none"]) {
+  box-shadow: 0 1px 3px rgb(5 28 44 / 0.12), 0 1px 2px rgb(5 28 44 / 0.08) !important;
+}
+html:not(.dark) .shadow:not([class~="shadow-none"]) {
+  box-shadow: 0 3px 8px rgb(5 28 44 / 0.12) !important;
+}
+html:not(.dark) .shadow-md:not([class~="shadow-none"]) {
+  box-shadow: 0 8px 20px rgb(5 28 44 / 0.12) !important;
+}
+html:not(.dark) .shadow-lg:not([class~="shadow-none"]) {
+  box-shadow: 0 12px 28px rgb(5 28 44 / 0.13) !important;
+}
+html:not(.dark) .shadow-xl:not([class~="shadow-none"]) {
+  box-shadow: 0 18px 40px rgb(5 28 44 / 0.15) !important;
+}
+html:not(.dark) .shadow-2xl:not([class~="shadow-none"]) {
+  box-shadow: 0 24px 60px rgb(5 28 44 / 0.18) !important;
+}
+
+/* Light mode: deepen pale status colors used by dark-first components. */
+html:not(.dark) [class~="hover:text-amber-300"]:hover { color: #92400e !important; }
+html:not(.dark) [class~="hover:text-cyan-100"]:hover { color: #0369a1 !important; }
+html:not(.dark) [class~="hover:text-cyan-200"]:hover { color: #0369a1 !important; }
+html:not(.dark) [class~="hover:text-cyan-300"]:hover { color: #0369a1 !important; }
+html:not(.dark) [class~="hover:text-emerald-200"]:hover { color: #047857 !important; }
+html:not(.dark) [class~="hover:text-emerald-300"]:hover { color: #047857 !important; }
+html:not(.dark) [class~="hover:text-orange-300"]:hover { color: #92400e !important; }
+html:not(.dark) [class~="hover:text-red-300"]:hover { color: #be123c !important; }
+html:not(.dark) [class~="hover:text-rose-300"]:hover { color: #be123c !important; }
+html:not(.dark) [class~="hover:text-sky-200"]:hover { color: #0369a1 !important; }
+html:not(.dark) [class~="hover:text-violet-100"]:hover { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-amber-100"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-100/70"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-100/80"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-200"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-200/80"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-200/90"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-300"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-300/90"] { color: #92400e !important; }
+html:not(.dark) [class~="text-amber-400"] { color: #92400e !important; }
+html:not(.dark) [class~="text-blue-100"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-blue-100/80"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-blue-200"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-blue-300"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-blue-400"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-100"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-100/70"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-100/80"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-200"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-300"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-300/75"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-300/90"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-400"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-400/20"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-emerald-100"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-200"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-200/70"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-300"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-300/60"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-300/80"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-400"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-400/70"] { color: #047857 !important; }
+html:not(.dark) [class~="text-emerald-400/80"] { color: #047857 !important; }
+html:not(.dark) [class~="text-orange-100"] { color: #92400e !important; }
+html:not(.dark) [class~="text-orange-200"] { color: #92400e !important; }
+html:not(.dark) [class~="text-orange-300"] { color: #92400e !important; }
+html:not(.dark) [class~="text-purple-300"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-purple-400"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-red-200"] { color: #be123c !important; }
+html:not(.dark) [class~="text-red-200/75"] { color: #be123c !important; }
+html:not(.dark) [class~="text-red-300"] { color: #be123c !important; }
+html:not(.dark) [class~="text-red-300/90"] { color: #be123c !important; }
+html:not(.dark) [class~="text-red-400"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-100"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-200"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-200/70"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-200/80"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-200/90"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-300"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-300/80"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-400"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-400/80"] { color: #be123c !important; }
+html:not(.dark) [class~="text-sky-200"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-sky-300"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-sky-400"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-sky-400/90"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-violet-100"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-violet-100/80"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-violet-200"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-violet-200/70"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-violet-300"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-violet-400"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="text-violet-400/90"] { color: #6d28d9 !important; }
+html:not(.dark) [class~="bg-amber-400/10"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-400/20"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-500/10"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-500/15"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-500/5"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-500/55"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-900/20"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-950/30"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-amber-950/40"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-blue-400/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-blue-400/20"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-blue-500/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-blue-500/20"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-blue-500/5"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-blue-500/55"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-300/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-300/15"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-400/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-400/20"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-500/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-500/15"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-500/20"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-500/30"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-500/5"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-900/70"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-950/25"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-cyan-950/40"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-emerald-400/10"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-400/15"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-400/20"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-400/80"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/10"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/15"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/20"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/40"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/5"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/55"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-500/8"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-600/80"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-950/30"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-emerald-950/50"] { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="bg-orange-400/10"] { background-color: #fff7ed !important; }
+html:not(.dark) [class~="bg-red-500/10"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-red-500/15"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-red-500/5"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-red-500/55"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-red-950/60"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-rose-400/10"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-rose-400/20"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-rose-500/10"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-rose-500/15"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-rose-500/5"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-rose-950/40"] { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="bg-sky-400/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-sky-500/10"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-sky-500/15"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-sky-500/20"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-sky-500/5"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-sky-950/30"] { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="bg-violet-400/10"] { background-color: #ede9fe !important; }
+html:not(.dark) [class~="bg-violet-400/15"] { background-color: #ede9fe !important; }
+html:not(.dark) [class~="bg-violet-500/10"] { background-color: #ede9fe !important; }
+html:not(.dark) [class~="bg-violet-500/15"] { background-color: #ede9fe !important; }
+html:not(.dark) [class~="bg-violet-500/5"] { background-color: #ede9fe !important; }
+html:not(.dark) [class~="hover:bg-amber-500/20"]:hover { background-color: #fff7ed !important; }
+html:not(.dark) [class~="hover:bg-cyan-500/10"]:hover { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="hover:bg-cyan-500/15"]:hover { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="hover:bg-cyan-500/5"]:hover { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="hover:bg-emerald-500/10"]:hover { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="hover:bg-emerald-500/20"]:hover { background-color: #ecfdf5 !important; }
+html:not(.dark) [class~="hover:bg-orange-400/10"]:hover { background-color: #fff7ed !important; }
+html:not(.dark) [class~="hover:bg-orange-400/20"]:hover { background-color: #fff7ed !important; }
+html:not(.dark) [class~="hover:bg-orange-500/10"]:hover { background-color: #fff7ed !important; }
+html:not(.dark) [class~="hover:bg-red-500/10"]:hover { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="hover:bg-red-500/20"]:hover { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="hover:bg-rose-500/10"]:hover { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="hover:bg-rose-500/5"]:hover { background-color: #ffe4e6 !important; }
+html:not(.dark) [class~="hover:bg-sky-500/10"]:hover { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="hover:bg-sky-500/20"]:hover { background-color: #e0f2fe !important; }
+html:not(.dark) [class~="hover:bg-violet-400/20"]:hover { background-color: #ede9fe !important; }
+html:not(.dark) [class~="border-amber-300"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-400"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-400/20"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-400/30"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-400/40"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/15"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/20"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/25"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/30"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/35"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/40"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-500/50"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-700/60"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-800/50"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-amber-900/50"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-blue-400"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-blue-400/20"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-blue-500/20"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-blue-500/35"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-blue-500/50"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-300"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-300/50"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-300/60"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/20"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/25"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/30"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/40"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/50"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/60"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-400/70"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/15"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/20"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/25"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/30"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/35"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/40"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-500/50"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-cyan-800/40"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-emerald-200"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-300/60"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-400"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-400/20"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-400/25"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-400/30"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-400/70"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500/20"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500/25"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500/30"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500/35"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500/40"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-emerald-500/50"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-lime-300/40"] { border-color: #059669 !important; }
+html:not(.dark) [class~="border-orange-400/30"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-orange-400/40"] { border-color: #d97706 !important; }
+html:not(.dark) [class~="border-red-300"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-red-500"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-red-500/25"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-red-500/30"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-red-500/35"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-red-500/40"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-red-500/45"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-300"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-400"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-400/30"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-500/20"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-500/25"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-500/30"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-rose-500/40"] { border-color: #e11d48 !important; }
+html:not(.dark) [class~="border-sky-400/30"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-400/60"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-500/15"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-500/20"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-500/25"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-500/30"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-500/40"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-sky-500/70"] { border-color: #0284c7 !important; }
+html:not(.dark) [class~="border-violet-300/60"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-400"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-400/20"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-400/30"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-400/40"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500/15"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500/20"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500/25"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500/30"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500/35"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="border-violet-500/40"] { border-color: #7c3aed !important; }
+html:not(.dark) [class~="hover:border-amber-400"]:hover { border-color: #d97706 !important; }
+html:not(.dark) [class~="hover:border-cyan-300"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-cyan-400"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-cyan-400/50"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-cyan-400/60"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-cyan-500"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-cyan-500/40"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-cyan-500/50"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-emerald-400"]:hover { border-color: #059669 !important; }
+html:not(.dark) [class~="hover:border-emerald-400/50"]:hover { border-color: #059669 !important; }
+html:not(.dark) [class~="hover:border-emerald-500/30"]:hover { border-color: #059669 !important; }
+html:not(.dark) [class~="hover:border-emerald-500/40"]:hover { border-color: #059669 !important; }
+html:not(.dark) [class~="hover:border-emerald-500/50"]:hover { border-color: #059669 !important; }
+html:not(.dark) [class~="hover:border-rose-500/50"]:hover { border-color: #e11d48 !important; }
+html:not(.dark) [class~="hover:border-sky-500/35"]:hover { border-color: #0284c7 !important; }
+html:not(.dark) [class~="hover:border-violet-400/45"]:hover { border-color: #7c3aed !important; }
+html:not(.dark) [class~="hover:border-violet-400/60"]:hover { border-color: #7c3aed !important; }
+
+/* Light mode: darken mid-tone text as well. */
+html:not(.dark) [class~="hover:text-sky-500"]:hover { color: #0369a1 !important; }
+html:not(.dark) [class~="text-cyan-500"] { color: #0369a1 !important; }
+html:not(.dark) [class~="text-emerald-500"] { color: #047857 !important; }
+html:not(.dark) [class~="text-red-500"] { color: #be123c !important; }
+html:not(.dark) [class~="text-rose-500"] { color: #be123c !important; }
+html:not(.dark) [class~="text-sky-500"] { color: #0369a1 !important; }
+
+/* Light mode: deployment controls and surfaces use no shadows. */
+html:not(.dark) .deployment-page .shadow-sm,
+html:not(.dark) .deployment-page .shadow,
+html:not(.dark) .deployment-page .shadow-md,
+html:not(.dark) .deployment-page .shadow-lg,
+html:not(.dark) .deployment-page .shadow-xl,
+html:not(.dark) .deployment-page .shadow-2xl {
+  box-shadow: none !important;
+}
+
+/* Light mode: vivid, solid severity badges with white ink. */
+html:not(.dark) .severity-badge.severity-badge-critical {
+  background-color: #e11d48 !important;
+  border-color: #e11d48 !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .severity-badge.severity-badge-warning {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .severity-badge.severity-badge-info {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Welcome uses dark gray as its deepest text color. */
+html:not(.dark) .welcome-page {
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+
+/* Light mode: vivid solid Exp badge with white ink. */
+html:not(.dark) .nav-exp-badge {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: deployment page title uses dark gray ink. */
+html:not(.dark) .deployment-page h1 {
+  color: #374151 !important;
+}
+
+/* Light mode: New Benchmark Task uses gray structural borders. */
+html:not(.dark) .benchmark-task-page * {
+  border-color: #d1d5db !important;
+}
+html:not(.dark) .benchmark-task-page .benchmark-blue-button {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  gap: 0.5rem;
+}
+
+/* Light mode: Configuration source panel on New Benchmark Task is solid white. */
+html:not(.dark) .benchmark-task-page .configuration-editor .configuration-source {
+  background: #ffffff;
+}
+
+/* Light mode: no shadows anywhere on New Benchmark Task. */
+html:not(.dark) .benchmark-task-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+
+/* Light mode: AIC recommendation box uses gray text, except its action and error. */
+html:not(.dark) .aic-recommendation-box * {
+  color: #4b5563 !important;
+}
+html:not(.dark) .aic-recommendation-box h3 {
+  color: #037ffc !important;
+}
+html:not(.dark) .aic-recommendation-box .benchmark-blue-button,
+html:not(.dark) .aic-recommendation-box .benchmark-blue-button * {
+  color: #ffffff !important;
+}
+html:not(.dark) .aic-recommendation-box .aic-error,
+html:not(.dark) .aic-recommendation-box .aic-error * {
+  color: #b91c1c !important;
+}
+
+/* Light mode: Guide template bar uses the brand blue. */
+html:not(.dark) .guide-template-bar {
+  background-color: #037ffc1a !important;
+  border-left-color: #037ffc !important;
+}
+html:not(.dark) .guide-template-bar h3 {
+  color: #037ffc !important;
+}
+
+/* Light mode: comparison and Advanced settings panels match the page palette. */
+html:not(.dark) .benchmark-task-page .configuration-editor .configuration-comparison,
+html:not(.dark) .benchmark-task-page .configuration-editor .configuration-disclosure {
+  background: #ffffff;
+  border-color: #d1d5db;
+}
+html:not(.dark) .benchmark-task-page .configuration-disclosure > summary {
+  color: #037ffc !important;
+}
+html:not(.dark) .benchmark-task-page .configuration-disclosure > summary svg {
+  color: #037ffc !important;
+}
+html:not(.dark) .benchmark-task-page .configuration-disclosure > summary span {
+  color: #6b7280 !important;
+}
+html:not(.dark) .benchmark-task-page .configuration-disclosure h3 {
+  color: #374151 !important;
+}
+
+/* Light mode: Model services follows the shared white surface, gray border,
+   no-shadow palette used by the newer task pages. */
+html:not(.dark) .model-services-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .model-services-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .model-services-page .model-services-card {
+  background: #ffffff !important;
+}
+
+/* Light mode: model-service topology boxes use white surfaces and gray borders. */
+html:not(.dark) .model-services-page .model-service-node {
+  background: #ffffff !important;
+  border-color: #d1d5db !important;
+}
+
+/* Shared dialog backdrops stay semi-transparent in both themes. */
+.modal-overlay {
+  background-color: rgb(2 6 23 / 0.6);
+}
+html:not(.dark) .modal-overlay {
+  background-color: rgb(15 23 42 / 0.4);
+}
+.side-drawer-overlay {
+  background-color: rgb(2 6 23 / 0.2);
+}
+html:not(.dark) .side-drawer-overlay {
+  background-color: rgb(15 23 42 / 0.35);
+}
+
+/* Light mode: no shadows inside the Add model dialog. */
+html:not(.dark) .add-model-dialog,
+html:not(.dark) .add-model-dialog * {
+  box-shadow: none !important;
+}
+
+/* Light mode: Usage reports uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .usage-reports-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .usage-reports-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .usage-reports-page .usage-card {
+  background: #ffffff !important;
+}
+
+/* Light mode: selected Usage report toggles use brand blue with white text. */
+html:not(.dark) .usage-toggle-active {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+  height: 100%;
+}
+
+/* Light mode: no shadows anywhere on the Evaluation dashboard. */
+html:not(.dark) .evaluation-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .evaluation-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+
+/* Light mode: Continue uses the brand blue with white ink. */
+html:not(.dark) .benchmark-continue-button {
+  background-color: #037ffc !important;
+  border: 1px solid #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .benchmark-continue-button * {
+  color: #ffffff !important;
+}
+
+/* Light mode: selected benchmark target choices use brand blue with white ink. */
+html:not(.dark) .benchmark-choice-selected {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .benchmark-choice-selected * {
+  color: #ffffff !important;
+}
+
+/* Light mode: Start Evaluation uses the brand blue without a gradient. */
+html:not(.dark) .benchmark-start-button {
+  background-color: #037ffc !important;
+  background-image: none !important;
+  border: 1px solid #037ffc !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+html:not(.dark) .benchmark-start-button * {
+  color: #ffffff !important;
+}
+
+/* Light mode: selected Benchmark settings tab keeps its blue underline. */
+html:not(.dark) .benchmark-task-page .benchmark-workload-tab-active {
+  border-bottom-color: #037ffc !important;
+  color: #037ffc !important;
+}
+
+/* Light mode: evaluation record icons and labels are solid with white ink. */
+html:not(.dark) .evaluation-task-card[data-tone="success"] .eval-status-badge {
+  background-color: #22c55e !important;
+  border-color: #22c55e !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-task-card[data-tone="danger"] .eval-status-badge {
+  background-color: #e11d48 !important;
+  border-color: #e11d48 !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-task-card[data-tone="active"] .eval-status-badge {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-task-card[data-tone="neutral"] .eval-status-badge {
+  background-color: #6b7280 !important;
+  border-color: #6b7280 !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-task-card .eval-status-badge,
+html:not(.dark) .evaluation-task-card .eval-status-badge *,
+html:not(.dark) .evaluation-task-card .eval-guide-chip,
+html:not(.dark) .evaluation-task-card .eval-workload-chip,
+html:not(.dark) .evaluation-task-card .eval-action,
+html:not(.dark) .evaluation-task-card .eval-action * {
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-task-card .eval-guide-chip {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+}
+html:not(.dark) .evaluation-task-card .eval-workload-chip {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #4b5563 !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-results {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-retry {
+  background-color: #059669 !important;
+  border-color: #059669 !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-cancel {
+  background-color: #d97706 !important;
+  border-color: #d97706 !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-delete {
+  background-color: #e11d48 !important;
+  border-color: #e11d48 !important;
+}
+
+/* Light mode: completed evaluation progress segments use a stronger green. */
+html:not(.dark) .evaluation-task-card .eval-progress-complete {
+  background-color: #22c55e !important;
+}
+
+/* Light mode: evaluation delete action is neutral until hovered. */
+html:not(.dark) .evaluation-task-card .eval-action-delete {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #6b7280 !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-delete * {
+  color: #6b7280 !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-delete:hover {
+  background-color: #e11d48 !important;
+  border-color: #e11d48 !important;
+}
+html:not(.dark) .evaluation-task-card .eval-action-delete:hover * {
+  color: #ffffff !important;
+}
+
+/* Light mode: evaluation details matches the shared white/gray/blue palette. */
+html:not(.dark) .evaluation-details-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .evaluation-details-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .evaluation-details-page nav[aria-label="Benchmark detail sections"] {
+  background-color: #ffffff !important;
+}
+html:not(.dark) .evaluation-details-page nav[aria-label="Benchmark detail sections"] [aria-current="page"] {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+html:not(.dark) .evaluation-details-page nav[aria-label="Benchmark detail sections"] [aria-current="page"] * {
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-details-page article {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+
+/* Light mode: selected deployment mode uses brand blue with white ink. */
+html:not(.dark) .mode-option-selected {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .mode-option-selected * {
+  color: #ffffff !important;
+}
+html:not(.dark) .experimental-chip {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: evaluation details status labels and filters use solid tones. */
+html:not(.dark) .evaluation-details-page .evaluation-status-label {
+  background-color: #6b7280 !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="succeeded"],
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="ready"] {
+  background-color: #22c55e !important;
+  border-color: #22c55e !important;
+}
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="failed"],
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="cancelled"] {
+  background-color: #e11d48 !important;
+  border-color: #e11d48 !important;
+}
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="running"],
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="deploying"],
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="benchmarking"],
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="rendering"] {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+}
+html:not(.dark) .evaluation-details-page .evaluation-status-label[data-status="queued"] {
+  background-color: #d97706 !important;
+  border-color: #d97706 !important;
+}
+html:not(.dark) .evaluation-details-page .case-filter-chip {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #4b5563 !important;
+}
+html:not(.dark) .evaluation-details-page .case-filter-chip span {
+  background-color: #f3f4f6 !important;
+  color: #4b5563 !important;
+}
+html:not(.dark) .evaluation-details-page .case-filter-chip-active {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-details-page .case-filter-chip-active span {
+  background-color: #ffffff26 !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: selected percentile toggles in evaluation details use brand blue. */
+html:not(.dark) .evaluation-details-page .details-percentile-active {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .evaluation-details-page .details-percentile-active * {
+  color: #ffffff !important;
+}
+
+/* Light mode: selected X/Y axis controls in evaluation details use brand blue. */
+html:not(.dark) .evaluation-details-page .details-axis-active {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: evaluation details header actions use the neutral outline style. */
+html:not(.dark) .evaluation-details-page .details-header-action {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #33475b !important;
+}
+html:not(.dark) .evaluation-details-page .details-header-action:hover {
+  background-color: #e6f6fe !important;
+  border-color: #9ca3af !important;
+}
+html:not(.dark) .evaluation-details-page .details-header-action * {
+  color: #33475b !important;
+}
+
+/* Light mode: Simulation matches the shared white/gray/blue palette. */
+html:not(.dark) .simulation-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .simulation-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .simulation-page section {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+html:not(.dark) .simulation-page [class*="bg-[#0a0f1d]"],
+html:not(.dark) .simulation-page [class*="bg-[#070b13]"] {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+
+/* Light mode: New Simulation Task dialog follows the shared palette. */
+html:not(.dark) .simulation-task-dialog {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .simulation-task-dialog [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .simulation-task-dialog [class*="rounded-lg"][class*="bg-violet-"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-xl"][class*="bg-violet-"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-lg"][class*="bg-cyan-"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-xl"][class*="bg-cyan-"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-lg"][class*="bg-emerald-"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-xl"][class*="bg-emerald-"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-lg"][class*="bg-slate-950"],
+html:not(.dark) .simulation-task-dialog [class*="rounded-xl"][class*="bg-slate-950"] {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+html:not(.dark) .simulation-task-dialog .wizard-step-fill {
+  background-color: #037ffc !important;
+}
+html:not(.dark) .simulation-task-dialog .wizard-step-label-active {
+  color: #037ffc !important;
+}
+
+/* Light mode: New Simulation Task card borders use the shared gray. */
+html:not(.dark) .simulation-task-dialog [class*="border-violet"],
+html:not(.dark) .simulation-task-dialog [class*="border-cyan"],
+html:not(.dark) .simulation-task-dialog [class*="border-emerald"],
+html:not(.dark) .simulation-task-dialog [class*="border-slate"] {
+  border-color: #d1d5db !important;
+}
+
+/* Light mode: selected scenario uses brand blue with white ink. */
+html:not(.dark) .simulation-task-dialog .simulation-choice-active {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+/* Light mode: Request Timeline line and scrubber use brand blue / light gray. */
+html:not(.dark) .simulation-timeline .recharts-area-curve {
+  stroke: #037ffc !important;
+}
+html:not(.dark) .simulation-timeline .recharts-brush > rect {
+  fill: #e5e7eb !important;
+  stroke: #d1d5db !important;
+}
+html:not(.dark) .simulation-timeline .recharts-brush-slide {
+  fill: #d1d5db !important;
+  fill-opacity: 0.8 !important;
+}
+html:not(.dark) .simulation-timeline .recharts-brush-traveller rect {
+  fill: #037ffc !important;
+  stroke: #037ffc !important;
+}
+html:not(.dark) .simulation-timeline .recharts-brush-traveller line {
+  stroke: #ffffff !important;
+}
+html:not(.dark) .simulation-rate-range {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: #e5e7eb;
+}
+html:not(.dark) .simulation-rate-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #037ffc;
+}
+html:not(.dark) .simulation-rate-range::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: #e5e7eb;
+}
+html:not(.dark) .simulation-rate-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 9999px;
+  background: #037ffc;
+}
+
+/* Light mode: Load & Backend cards use white surfaces and gray borders. */
+html:not(.dark) .simulation-task-dialog .simulation-load-card {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+}
+
+/* Light mode: selected Simulation detail tab uses brand blue with white ink. */
+html:not(.dark) .simulation-detail-tab-active {
+  background-color: transparent !important;
+  color: #037ffc !important;
+}
+html:not(.dark) .simulation-detail-tab-active * {
+  color: #037ffc !important;
+}
+html:not(.dark) .simulation-detail-tab-active .simulation-detail-tab-indicator {
+  background-color: #037ffc !important;
+}
+
+/* Light mode: Simulation details back button uses the neutral outline style. */
+html:not(.dark) .simulation-back-button {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #6b7280 !important;
+}
+html:not(.dark) .simulation-back-button:hover {
+  background-color: #e6f6fe !important;
+  border-color: #9ca3af !important;
+  color: #374151 !important;
+}
+
+/* Light mode: Simulation details controls have no shadows. */
+html:not(.dark) .simulation-details-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .simulation-details-page .simulation-rerun-button {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #33475b !important;
+}
+html:not(.dark) .simulation-details-page .simulation-rerun-button:hover {
+  background-color: #e6f6fe !important;
+  border-color: #9ca3af !important;
+}
+
+/* Light mode: module header badges match the solid Exp badge. */
+html:not(.dark) .module-header-badge {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Lens Assistant bot badge uses the brand blue. */
+html:not(.dark) .assistant-bot-badge {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Lens Assistant answers use a pale green dialog surface. */
+html:not(.dark) .assistant-message-bubble {
+  background-color: #f0fdf4 !important;
+}
+
+/* Light mode: API keys uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .api-keys-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .api-keys-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .api-keys-page .api-keys-card {
+  background: #ffffff !important;
+}
+
+/* Light mode: API key status labels use solid tones with white ink. */
+html:not(.dark) .api-keys-page .api-key-status {
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+html:not(.dark) .api-keys-page .api-key-status[data-status="active"] {
+  background-color: #22c55e !important;
+  border-color: #22c55e !important;
+}
+html:not(.dark) .api-keys-page .api-key-status[data-status="revoked"] {
+  background-color: #6b7280 !important;
+  border-color: #6b7280 !important;
+}
+
+/* Light mode: My services uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .my-services-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .my-services-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .my-services-page .my-services-card {
+  background: #ffffff !important;
+}
+
+/* Light mode: service-flow connectors use slightly deeper strokes. */
+html:not(.dark) .model-services-page .stroke-blue-500 {
+  stroke: #037ffc !important;
+}
+html:not(.dark) .model-services-page .stroke-sky-500 {
+  stroke: #38bdf8 !important;
+}
+html:not(.dark) .model-services-page .stroke-sky-600 {
+  stroke: #0ea5e9 !important;
+}
+html:not(.dark) .model-services-page .stroke-emerald-500 {
+  stroke: #22c55e !important;
+}
+html:not(.dark) .model-services-page .stroke-emerald-600 {
+  stroke: #16a34a !important;
+}
+html:not(.dark) .model-services-page .stroke-slate-600 {
+  stroke: #64748b !important;
+}
+
+/* Light mode: secondary Gateway connection details are lighter. */
+html:not(.dark) .my-services-page .gateway-meta {
+  color: #6b7280 !important;
+}
+
+/* Light mode: no shadows on Cluster page controls. */
+html:not(.dark) .cluster-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+
+/* Light mode: Storage uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .storage-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .storage-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .storage-page .storage-card {
+  background: #ffffff !important;
+  background-image: none !important;
+}
+
+/* Light mode: Storage labels use solid tones with white ink. */
+html:not(.dark) .storage-page .storage-purpose-tag {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .storage-page .storage-capacity-tag {
+  background-color: transparent !important;
+  border-color: #d1d5db !important;
+  color: #4b5563 !important;
+}
+html:not(.dark) .storage-page .storage-inuse-tag {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .storage-page .storage-capacity-tag * {
+  color: #4b5563 !important;
+}
+html:not(.dark) .storage-page .storage-inuse-tag * {
+  color: #ffffff !important;
+}
+
+/* Light mode: Model cache uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .model-cache-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .model-cache-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .model-cache-page .model-cache-card {
+  background: #ffffff !important;
+  background-image: none !important;
+}
+
+/* Light mode: selected model type filters use solid brand blue. */
+html:not(.dark) .model-cache-page .type-filter-selected {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: model type tags are solid, white ink. */
+html:not(.dark) .model-cache-page .model-type-tag {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .model-cache-page .model-type-tag-unlabeled {
+  background-color: #6b7280 !important;
+  border-color: #6b7280 !important;
+}
+
+/* Light mode: Model cache cards change to a blue tint on hover. */
+html:not(.dark) .model-cache-page .model-cache-model-card:hover {
+  background-color: #037ffc0d !important;
+  border-color: #037ffc99 !important;
+}
+
+/* Light mode: Deploy button uses the brand blue with white ink. */
+html:not(.dark) .benchmark-task-page .benchmark-deploy-button {
+  background-color: #037ffc !important;
+  border: 1px solid #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .benchmark-task-page .benchmark-deploy-button * {
+  color: #ffffff !important;
+}
+
+/* Light mode: External providers uses the shared white surface, gray border,
+   no-shadow palette. Secondary controls are light gray. */
+html:not(.dark) .external-providers-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .external-providers-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .external-providers-page .external-providers-card {
+  background: #ffffff !important;
+  background-image: none !important;
+}
+html:not(.dark) .providers-secondary-button {
+  background-color: #f3f4f6 !important;
+  border-color: #cbd5e1 !important;
+  color: #4b5563 !important;
+}
+html:not(.dark) .providers-secondary-button:hover {
+  background-color: #e5e7eb !important;
+  border-color: #9ca3af !important;
+  color: #374151 !important;
+}
+
+/* Light mode: provider type tags use vivid solid colors. */
+html:not(.dark) .external-providers-page .provider-type-tag {
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+html:not(.dark) .external-providers-page .provider-type-openai {
+  background-color: #22c55e !important;
+  border-color: #22c55e !important;
+}
+html:not(.dark) .external-providers-page .provider-type-anthropic {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+}
+
+/* Light mode: Observability uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .observability-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .observability-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .observability-page section {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+/* Light mode: Observability control panels have no white fill. */
+html:not(.dark) .observability-page .observability-control-panel {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+/* Light mode: selected accelerator tabs use solid brand blue. */
+html:not(.dark) .observability-page .accelerator-tab-active {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+/* Light mode: selected Observability service tabs are solid brand blue. */
+html:not(.dark) .observability-page .observability-service-tab-active {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+html:not(.dark) .observability-page .observability-service-tab-active svg {
+  color: #ffffff !important;
+}
+
+/* Light mode: Namespace control panel is white with a light-gray input. */
+html:not(.dark) .observability-page .namespace-panel {
+  background-color: #ffffff !important;
+}
+
+/* Light mode: GUIs control panel is white. */
+html:not(.dark) .observability-page .guis-panel {
+  background-color: #ffffff !important;
+}
+
+/* Light mode: Stack component type tags use solid colors. */
+html:not(.dark) .observability-page .component-type-tag {
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+html:not(.dark) .observability-page .component-type-workload {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+}
+html:not(.dark) .observability-page .component-type-configmap {
+  background-color: #7c3aed !important;
+  border-color: #7c3aed !important;
+}
+html:not(.dark) .observability-page .component-type-crd {
+  background-color: #ea580c !important;
+  border-color: #ea580c !important;
+}
+html:not(.dark) .observability-page .component-type-unknown {
+  background-color: #6b7280 !important;
+  border-color: #6b7280 !important;
+}
+
+/* Light mode: accelerator Observability UI panel is white. */
+html:not(.dark) .observability-page .accelerator-observability-ui {
+  background-color: #ffffff !important;
+}
+
+/* Light mode: accelerator not-installed state uses neutral surface and blue icon. */
+html:not(.dark) .observability-page .accelerator-empty-panel {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+}
+html:not(.dark) .accelerator-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: no-ready-deployments icon uses brand blue with white ink. */
+html:not(.dark) .observability-page .deployment-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Administration uses the shared white surface, gray border,
+   no-shadow palette. */
+html:not(.dark) .administration-page {
+  --border-color: #d1d5db;
+  --color-theme-border: #d1d5db;
+  --text-primary: #374151;
+  --color-theme-text: #374151;
+}
+html:not(.dark) .administration-page [class*="shadow-"] {
+  box-shadow: none !important;
+}
+html:not(.dark) .administration-page section {
+  background-color: #ffffff !important;
+  background-image: none !important;
+}
+html:not(.dark) .administration-page [class*="bg-[#0a0f1d]"] {
+  background-color: #ffffff !important;
+}
+html:not(.dark) .administration-page h1,
+html:not(.dark) .administration-page h2 {
+  color: #374151 !important;
+}
+
+/* Light mode: Users role tags use solid colors with white ink. */
+html:not(.dark) .administration-page .direct-role-tag {
+  background-color: #7c3aed !important;
+  border-color: #7c3aed !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .administration-page .inherited-role-tag {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Groups role tags use solid violet with white ink. */
+html:not(.dark) .administration-page .group-role-tag {
+  background-color: #7c3aed !important;
+  border-color: #7c3aed !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Roles type tags use solid colors with white ink. */
+html:not(.dark) .administration-page .role-type-tag {
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+html:not(.dark) .administration-page .role-type-builtin {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+}
+html:not(.dark) .administration-page .role-type-custom {
+  background-color: #6b7280 !important;
+  border-color: #6b7280 !important;
+}
+
+/* Light mode: Identity providers empty icon and type tags use brand blue. */
+html:not(.dark) .administration-page .identity-empty-icon,
+html:not(.dark) .administration-page .identity-type-tag {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: sidebar account avatar uses brand blue with white ink. */
+html:not(.dark) .sidebar-account-avatar {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
 }

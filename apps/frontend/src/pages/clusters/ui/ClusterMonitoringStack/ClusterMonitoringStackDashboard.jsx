@@ -11,10 +11,8 @@ import { openMonitoringLink } from './monitoringLinks';
 import { requestMonitoringJson } from '../../../../shared/api/monitoringClient';
 import React, { useEffect, useState } from 'react';
 import {
-    Activity,
     AlertTriangle,
     AlertOctagon,
-    BarChart3,
     Boxes,
     CheckCircle2,
     CloudCog,
@@ -22,14 +20,13 @@ import {
     RefreshCw,
     Rocket,
     ShieldCheck,
-    Sparkles,
     Upload,
     Webcam,
     X,
 } from 'lucide-react';
 import { Badge, Button, EmptyState, Input, LoadingState, SectionLabel, Select, ModuleHeader, ModulePage } from '../../../../shared/ui';
 import { cn } from '../../../../shared/lib/cn';
-import { AcceleratorObservabilityPanel } from './AcceleratorObservabilityPanel';
+import { AcceleratorObservabilityPanel, GrafanaLogo, PrometheusLogo } from './AcceleratorObservabilityPanel';
 import { DeploymentObservabilityPanel } from './DeploymentObservabilityPanel';
 import { DeploymentProfilingPanel } from './DeploymentProfilingPanel';
 import { ClusterStackComponentTable } from './ClusterStackComponentTable';
@@ -172,7 +169,7 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
         .filter(Boolean) || [];
 
     return (
-        <ModulePage contentClassName="flex flex-col space-y-6">
+        <ModulePage className="observability-page" contentClassName="flex flex-col space-y-6">
                 <ModuleHeader
                     icon={Webcam}
                     title="Observability"
@@ -210,11 +207,11 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
                                         className={cn(
                                             'inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50',
                                             active
-                                                ? 'bg-sky-500/20 text-white shadow-[0_0_18px_rgba(56,189,248,0.18)] ring-1 ring-sky-400/30'
+                                                ? 'observability-service-tab-active bg-sky-500/20 text-white shadow-[0_0_18px_rgba(56,189,248,0.18)] ring-1 ring-sky-400/30'
                                                 : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-100'
                                         )}
                                     >
-                                        <Icon className={cn('h-4 w-4', active ? 'text-white' : 'text-slate-500')} />
+                                        <Icon className={cn('h-4 w-4', active ? 'not-dark:text-white dark:text-white' : 'text-slate-500')} />
                                         {tab.label}
                                     </button>
                                 );
@@ -223,7 +220,7 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
 
                         <div className="flex min-w-0 flex-col items-stretch gap-1 sm:items-end">
                             <div className="flex items-center gap-2.5 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-1.5 pl-3 backdrop-blur-xl transition-colors hover:border-cyan-500/40">
-                                <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-cyan-400">
+                                <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-[#037ffc] dark:text-cyan-400">
                                     <Upload size={14} />
                                     <span className="hidden sm:inline">Target cluster</span>
                                 </span>
@@ -258,7 +255,7 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
                         <section className="relative overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/80 via-slate-900/40 to-slate-950/90 p-5 shadow-xl backdrop-blur-xl">
                             <div className="relative">
                                 <div className="mb-4">
-                                    <SectionLabel tone="sky">Cluster infrastructure</SectionLabel>
+                                    <SectionLabel tone="sky" className="text-[#037ffc]">Cluster infrastructure</SectionLabel>
                                 </div>
                                 <EmptyState
                                     icon={<Boxes className="h-10 w-10" />}
@@ -270,24 +267,21 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
                     ) : (
                     <>
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                        <form onSubmit={applyNamespace} className="relative rounded-xl border border-slate-800/80 bg-slate-950/55 p-4 shadow-inner">
-                            <div className="absolute right-3 top-3 text-cyan-400/20">
-                                <Sparkles className="h-5 w-5" />
-                            </div>
-                            <SectionLabel tone="sky">Namespace</SectionLabel>
+                        <form onSubmit={applyNamespace} className="namespace-panel observability-control-panel relative rounded-xl border border-slate-800/80 bg-slate-950/55 p-4 shadow-inner">
+                            <SectionLabel tone="sky" className="text-[#037ffc]">Namespace</SectionLabel>
                             <div className="mt-3 flex items-center gap-3">
                                 <Input
                                     id="monitoring-namespace"
                                     value={namespaceInput}
                                     onChange={(event) => setNamespaceInput(event.target.value)}
                                     placeholder={DEFAULT_NAMESPACE}
-                                    className="flex-1"
+                                    className="flex-1 not-dark:bg-[#f9fafb]"
                                 />
                                 <Button type="submit" variant="secondary" size="sm">Inspect</Button>
                             </div>
                         </form>
-                        <div className="relative rounded-xl border border-slate-800/80 bg-slate-950/55 p-4 shadow-inner">
-                            <SectionLabel tone="sky">GUIs</SectionLabel>
+                        <div className="guis-panel observability-control-panel relative rounded-xl border border-slate-800/80 bg-slate-950/55 p-4 shadow-inner">
+                            <SectionLabel tone="sky" className="text-[#037ffc]">GUIs</SectionLabel>
                             <div className="mt-3 flex flex-wrap items-center gap-2">
                                 <Button
                                     variant="outline"
@@ -296,7 +290,7 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
                                     isLoading={openingLink === 'prometheus'}
                                     disabled={openingLink !== null}
                                 >
-                                    <Activity className="h-3.5 w-3.5 text-orange-300" /> Prometheus
+                                    <PrometheusLogo className="h-3.5 w-3.5 text-[#E6522C]" /> Prometheus
                                 </Button>
                                 <Button
                                     variant="outline"
@@ -305,7 +299,7 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
                                     isLoading={openingLink === 'grafana'}
                                     disabled={openingLink !== null}
                                 >
-                                    <BarChart3 className="h-3.5 w-3.5 text-blue-300" /> Grafana
+                                    <GrafanaLogo className="h-3.5 w-3.5 text-[#F46800]" /> Grafana
                                 </Button>
                                 {linksError && (
                                     <span className="flex items-center gap-1.5 text-[11px] text-red-300/90">

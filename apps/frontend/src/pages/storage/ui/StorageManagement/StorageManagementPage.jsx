@@ -228,7 +228,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
     };
 
     return (
-        <ModulePage contentClassName="flex flex-col gap-4">
+        <ModulePage className="storage-page" contentClassName="flex flex-col gap-4">
             <ModuleHeader
                 icon={HardDrive}
                 title="Storage"
@@ -272,7 +272,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                 <div className="flex shrink-0 items-center gap-2">
                     {sidebarOpen && (
                         <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-1.5 pl-3 backdrop-blur-xl transition-colors hover:border-cyan-500/40">
-                            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-cyan-400">
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-[#037ffc] dark:text-cyan-400">
                                 <Server size={14} />
                                 <span className="hidden sm:inline">Cluster</span>
                             </span>
@@ -304,7 +304,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
             {sidebarOpen && (
             <section
                 aria-busy={loading || refreshing}
-                className="relative flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
+                className="storage-card relative flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
             >
               <div className="flex min-h-0 flex-1 flex-col p-4">
                 <div className="mt-3 flex shrink-0 flex-col gap-2">
@@ -407,8 +407,8 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
             )}
             </div>
 
-            <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
-                <SectionLabel className="shrink-0">Status</SectionLabel>
+            <section className="storage-card flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
+                <SectionLabel className="shrink-0 text-[#037ffc]">Status</SectionLabel>
                 <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
                     <StorageResourceDetailPanel
                         item={selectedResourceItem}

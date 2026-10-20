@@ -21,6 +21,12 @@ Agentic 的分层前缀缓存表达 native CPU 缓存需求，不固定源码目
 Lens 会根据所选源码解析 `native/cpu` 或 `native/cpu/base`，并兼容旧路径。
 缺少对应入口时会报错，不会替换为其他缓存实现、存储层或平台专用配置。
 
+## RuntimeClass 策略
+
+RuntimeClass 发现与策略覆盖仅通过后端 API 提供，Manual 和 Agentic 表单不提供
+RuntimeClass 输入项。发现接口、策略模式和请求示例请参阅
+[部署 API 参考](../api-reference/modules/deployments.mdx)。
+
 ## 在列表中查找部署
 
 1. 查看页面顶部的汇总卡片：**总计**、**就绪**、**进行中**、**失败**和**已清理**。

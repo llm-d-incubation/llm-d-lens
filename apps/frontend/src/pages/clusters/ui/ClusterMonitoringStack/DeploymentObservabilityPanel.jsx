@@ -168,7 +168,7 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
             <section className="relative overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/80 via-slate-900/40 to-slate-950/90 p-5 shadow-xl backdrop-blur-xl">
                 <div className="relative">
                     <div className="mb-4">
-                        <SectionLabel tone="sky">Deployment monitoring</SectionLabel>
+                        <SectionLabel tone="sky" className="text-[#037ffc]">Deployment monitoring</SectionLabel>
                     </div>
                     <EmptyState
                         icon={<Boxes className="h-10 w-10" />}
@@ -185,7 +185,7 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
             <section className="relative overflow-hidden rounded-2xl border border-red-500/40 bg-gradient-to-br from-red-950/70 via-red-950/40 to-slate-950 p-5 shadow-xl backdrop-blur-xl">
                 <div className="relative">
                     <div className="mb-4">
-                        <SectionLabel tone="sky">Deployment monitoring</SectionLabel>
+                        <SectionLabel tone="sky" className="text-[#037ffc]">Deployment monitoring</SectionLabel>
                     </div>
                     <div className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
                         <AlertTriangle className="h-5 w-5 shrink-0 text-red-300" />
@@ -205,7 +205,7 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
             <div className="relative">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div>
-                        <SectionLabel tone="sky">Deployment monitoring</SectionLabel>
+                        <SectionLabel tone="sky" className="text-[#037ffc]">Deployment monitoring</SectionLabel>
                         <p className="mt-1 text-xs text-slate-500">
                             Per-namespace ServiceMonitors and PodMonitors feed the central Prometheus stack.
                         </p>
@@ -243,7 +243,7 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
                     <EmptyState
                         className="bg-slate-900/40 border border-slate-800/80 rounded-2xl backdrop-blur-sm mt-2"
                         icon={
-                            <div className="p-3 bg-sky-500/10 border border-sky-500/20 text-sky-400 rounded-full">
+                            <div className="deployment-empty-icon p-3 bg-sky-500/10 border border-sky-500/20 text-sky-400 rounded-full">
                                 <Rocket className="w-8 h-8" />
                             </div>
                         }

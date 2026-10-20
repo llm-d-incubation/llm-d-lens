@@ -88,7 +88,7 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={Users}
@@ -192,6 +192,7 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
                                                                 <Badge
                                                                     key={`role-${role.name}-${index}`}
                                                                     tone="violet"
+                                                                    className="direct-role-tag"
                                                                     title={`Direct · ${roleScopeTitle(role)}`}
                                                                 >
                                                                     {role.name}
@@ -201,6 +202,7 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
                                                                 <Badge
                                                                     key={`inherited-${role.groupId}-${role.name}-${index}`}
                                                                     tone="info"
+                                                                    className="inherited-role-tag"
                                                                     title={`Via group ${role.groupName} · ${roleScopeTitle(role)}`}
                                                                 >
                                                                     {role.name}

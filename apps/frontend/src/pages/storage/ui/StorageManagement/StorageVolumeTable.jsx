@@ -28,7 +28,7 @@ function KindIcon({ kind }) {
 
 function CapacityBadge({ item }) {
     return (
-        <span className="inline-flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-800/40 px-1.5 py-0.5 text-[10px] text-slate-300">
+        <span className="storage-capacity-tag inline-flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-800/40 px-1.5 py-0.5 text-[10px] text-slate-300">
             {capacityLabel(item)}
             {isCapacityDeclaredOnly(item) && (
                 <span
@@ -52,7 +52,7 @@ function InUseBadge({ item }) {
     if (!blocked) return null;
     return (
         <span
-            className="inline-flex items-center gap-1 rounded-full border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-[10px] text-amber-300"
+            className="storage-inuse-tag inline-flex items-center gap-1 rounded-full border border-amber-700/60 bg-amber-900/20 px-1.5 py-0.5 text-[10px] text-amber-300"
             title={blocked}
         >
             <Info size={11} className="shrink-0" aria-hidden="true" />
@@ -81,19 +81,20 @@ function PurposeBadges({ item, purposes, inline = false }) {
             {hasPurposes && purposes.map((purpose) => (
                 <span
                     key={purpose}
-                    className="inline-flex items-center rounded-full border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-200"
+                    className="storage-purpose-tag inline-flex items-center rounded-full border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-200"
                 >
                     {purposeLabel(purpose)}
                 </span>
             ))}
+            {item && <InUseBadge item={item} />}
         </div>
     );
 }
 
 function ResourceDetail({ resource }) {
-    if (!resource) return <span className="text-slate-600">Not found</span>;
+    if (!resource) return <span className="text-[#1f2937] dark:text-slate-600">Not found</span>;
     return (
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-slate-400">
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-[#1f2937] dark:text-slate-400">
             <span
                 className={`h-1.5 w-1.5 shrink-0 rounded-full motion-safe:animate-pulse [animation-duration:2.4s] ${resourcePhaseDotClass(resource.phase)}`}
                 title={resource.phase}
@@ -187,7 +188,6 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                                             </span>
                                         </div>
                                         <PurposeBadges item={item} purposes={item.purposes} inline />
-                                        <InUseBadge item={item} />
                                         {item.status === 'failed' && item.failureDetail && (
                                             <div className="mt-0.5 line-clamp-2 text-[11px] text-rose-300" title={item.failureDetail}>
                                                 {item.failureDetail}
@@ -224,19 +224,18 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                                     </div>
                                     <div className="mt-0.5 text-[11px] text-slate-500">{kindLabel(item.kind)}</div>
                                     <PurposeBadges item={item} purposes={item.purposes} />
-                                    <div className="mt-1"><InUseBadge item={item} /></div>
                                 </div>
                             </div>
                             <dl className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-                                <div><dt className="text-slate-600">Cluster</dt><dd className="truncate text-slate-300">{clusterNameById[item.clusterId] || item.clusterId || '—'}</dd></div>
-                                <div className="col-span-2"><dt className="text-slate-600">Location</dt><dd className="truncate font-mono text-slate-300">{volumeLocation(item)}</dd></div>
+                                <div><dt className="text-[#9ca3af] dark:text-slate-600">Cluster</dt><dd className="truncate text-[#1f2937] dark:text-slate-300">{clusterNameById[item.clusterId] || item.clusterId || '—'}</dd></div>
+                                <div className="col-span-2"><dt className="text-[#9ca3af] dark:text-slate-600">Location</dt><dd className="truncate font-mono text-[#1f2937] dark:text-slate-300">{volumeLocation(item)}</dd></div>
                             </dl>
                             <dl className="mt-3 space-y-2 border-t border-slate-800/60 pt-3 text-[11px]">
                                 <div>
-                                    <dt className="font-semibold text-slate-400">PVC</dt>
+                                    <dt className="font-semibold text-[#9ca3af] dark:text-slate-400">PVC</dt>
                                     <dd className="mt-1"><ResourceDetail resource={pvc} /></dd>
                                     <div className="mt-2 pl-3">
-                                        <dt className="font-semibold text-slate-500">↳ PV</dt>
+                                        <dt className="font-semibold text-[#9ca3af] dark:text-slate-500">↳ PV</dt>
                                         <dd className="mt-1"><ResourceDetail resource={pv} /></dd>
                                     </div>
                                 </div>

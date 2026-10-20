@@ -88,7 +88,7 @@ export function ApiKeysPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="api-keys-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={KeyRound}
@@ -104,11 +104,11 @@ export function ApiKeysPage({ onToggleMobileNav }) {
                 )}
 
                 <PermissionGate permission="model-service:token:manage">
-                    <section className={cn(CARD, 'p-6')}>
+                    <section className={cn(CARD, 'api-keys-card p-6')}>
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                            <SectionLabel>{`API keys (${tokens.length})`}</SectionLabel>
+                            <SectionLabel className="text-[#037ffc]">{`API keys (${tokens.length})`}</SectionLabel>
                             <div className="flex items-center gap-2">
-                                <Button variant="secondary" size="sm" onClick={handleRegenerate} isLoading={regenerateSubmission.pending} disabled={tokens.length === 0}>
+                                <Button variant="secondary" size="sm" onClick={handleRegenerate} isLoading={regenerateSubmission.pending} disabled={tokens.length === 0} className="not-dark:bg-[#f3f4f6] not-dark:hover:bg-[#e5e7eb]">
                                     <RefreshCw size={14} /> Reset
                                 </Button>
                                 <Button variant="sky" size="sm" onClick={() => setCreateOpen(true)}>
@@ -143,8 +143,8 @@ export function ApiKeysPage({ onToggleMobileNav }) {
                                                     <td className={cn(CELL, 'font-mono text-xs text-slate-400')}>{maskedKeyHint(token.tokenHint)}</td>
                                                     <td className={CELL}>
                                                         {token.status === 'active'
-                                                            ? <Badge tone="success">active</Badge>
-                                                            : <Badge tone="neutral">revoked</Badge>}
+                                                            ? <Badge tone="success" className="api-key-status" data-status="active">active</Badge>
+                                                            : <Badge tone="neutral" className="api-key-status" data-status="revoked">revoked</Badge>}
                                                     </td>
                                                     <td className={CELL_MUTED}>
                                                         {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : 'never'}

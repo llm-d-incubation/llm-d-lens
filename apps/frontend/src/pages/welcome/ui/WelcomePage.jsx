@@ -185,7 +185,7 @@ export default function WelcomePage({
         <Panel
             title={(
                 <span className="inline-flex items-center gap-2">
-                    <AnimatedBotIcon className="h-5 w-5 text-sky-500 dark:text-sky-400" />
+                    <AnimatedBotIcon className="h-5 w-5 text-[#037ffc] dark:text-sky-400" />
                     Ask Lens Assistant
                     <HelpTooltip
                         label="How Ask Lens Assistant works"
@@ -296,8 +296,8 @@ export default function WelcomePage({
     );
 
     return (
-        <div className="relative min-h-full bg-theme-bg">
-            <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+        <div className="welcome-page relative min-h-full bg-theme-bg">
+            <div className="pointer-events-none absolute inset-0 hidden overflow-hidden dark:block" aria-hidden="true">
                 <div className="absolute -top-40 left-1/4 h-96 w-[42rem] rounded-full bg-sky-400/10 blur-3xl dark:bg-sky-500/10" />
                 <div className="absolute -bottom-48 right-0 h-80 w-[32rem] rounded-full bg-cyan-400/10 blur-3xl dark:bg-cyan-400/5" />
             </div>

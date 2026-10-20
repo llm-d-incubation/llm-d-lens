@@ -172,11 +172,13 @@ async def test_wrapper_prepares_the_manifest_consumed_by_provider(monkeypatch, t
     assert "sizeLimit: 4Gi" in rendered
     assert artifact.deployment_contract["sharedMemory"]["addedMounts"] == 1
     assert artifact.deployment_contract["sharedMemory"]["manifestChecksum"] == text_checksum(rendered)
+    assert manifest.read_text() == original
     if directory:
-        assert reference == source
+        assert reference != source
+        assert reference.parent == source.parent
+        assert (reference / "kustomization.yaml").read_text() == "resources:\n- manifest.yaml\n"
         assert artifact.manifest_checksum == "source-checksum"
     else:
-        assert manifest.read_text() == original
         assert artifact.manifest_checksum == text_checksum(rendered)
     context = {"namespace": "llmd-test", "_artifact": artifact}
     await wrapper.deploy(artifact, context)

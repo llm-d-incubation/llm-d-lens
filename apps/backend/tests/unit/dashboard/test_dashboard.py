@@ -505,6 +505,25 @@ def test_dashboard_only_monitoring_degradation_is_informational():
     assert "does not affect metric collection" in issue.message
 
 
+def test_model_without_provider_only_offers_fix_action():
+    from llm_d_lens.dashboard.contracts import ProviderCounts, ServiceRow
+    from llm_d_lens.dashboard.rules import service_issues
+
+    row = ServiceRow(
+        group_id="ga",
+        name="qwen3-0.6b",
+        cluster_id="a",
+        cluster_name="Cluster A",
+        providers=ProviderCounts(),
+    )
+
+    issue = next(issue for issue in service_issues(row) if issue.code == "model.no_provider")
+
+    assert issue.primary_action.intent == "manage_providers"
+    assert issue.primary_action.permission == "model-service:member:manage"
+    assert issue.secondary_action is None
+
+
 def test_unhealthy_provider_issue_names_the_provider():
     from llm_d_lens.dashboard.contracts import ProviderCounts, ProviderHealth, ServiceRow
     from llm_d_lens.dashboard.rules import service_issues

@@ -136,7 +136,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={ScrollText}

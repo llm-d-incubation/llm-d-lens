@@ -378,7 +378,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
         const dimensionLabel = groupBy === 'user' ? 'user' : groupBy === 'cluster' ? 'cluster' : 'model';
 
         return (
-            <ModulePage>
+            <ModulePage className="usage-reports-page">
                 <div className="flex w-full flex-col gap-6">
                     <ModuleHeader
                         icon={Activity}
@@ -391,11 +391,11 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                         <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{error}</p>
                     )}
 
-                    <section className={cn(CARD, 'overflow-visible p-6')}>
-                        <div className="flex flex-wrap items-end gap-3">
+                    <section className={cn(CARD, 'usage-card overflow-visible p-6')}>
+                        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
                             <label className="text-xs text-slate-400">
                                 Time range
-                                <Select value={range} onChange={(event) => setRange(event.target.value)} className="mt-1">
+                                <Select value={range} onChange={(event) => setRange(event.target.value)} className="mt-1 h-9">
                                     {RANGE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                                 </Select>
                             </label>
@@ -403,18 +403,18 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                 <>
                                     <label className="text-xs text-slate-400">
                                         Start date
-                                        <Input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1" />
+                                        <Input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 h-9" />
                                     </label>
                                     <label className="text-xs text-slate-400">
                                         End date
-                                        <Input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} className="mt-1" />
+                                        <Input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 h-9" />
                                     </label>
                                 </>
                             )}
                             <div className="text-xs text-slate-400">
                                 Group by
                                 <ToggleGroup
-                                    className="mt-1"
+                                    className="mt-3 h-9 gap-2"
                                     options={[
                                         { value: 'model', label: 'Model' },
                                         { value: 'user', label: 'User' },
@@ -422,10 +422,11 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                     ]}
                                     value={groupBy}
                                     onChange={setGroupBy}
+                                    activeClassName="usage-toggle-active"
                                 />
                             </div>
                             <MultiSelectDropdown
-                                className="w-44"
+                                className="h-9 w-44"
                                 label="User"
                                 emptyLabel="All users"
                                 clearLabel="All users"
@@ -437,7 +438,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                 onChange={(value) => toggleDim('user', value)}
                             />
                             <MultiSelectDropdown
-                                className="w-44"
+                                className="h-9 w-44"
                                 label="Model"
                                 emptyLabel="All models"
                                 clearLabel="All models"
@@ -449,7 +450,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                 onChange={(value) => toggleDim('model', value)}
                             />
                             <MultiSelectDropdown
-                                className="w-44"
+                                className="h-9 w-44"
                                 label="Cluster"
                                 emptyLabel="All clusters"
                                 clearLabel="All clusters"
@@ -463,7 +464,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                             <Button
                                 variant="secondary"
                                 size="sm"
-                                className="ml-auto"
+                                className="ml-auto h-9 not-dark:bg-[#f3f4f6] not-dark:hover:bg-[#e5e7eb]"
                                 onClick={() => { setRange('today'); setCustomFrom(''); setCustomTo(''); setGroupBy('model'); setDimFilters({ user: new Set(), model: new Set(), cluster: new Set() }); setMetric('tokens'); }}
                             >
                                 Clear filters
@@ -486,7 +487,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                 <PieCard title={`Tokens by ${dimensionLabel}`} data={dimensionPie} />
                             </div>
 
-                            <ChartContainer title="Tokens over time" actions={<ToggleGroup options={METRICS} value={metric} onChange={setMetric} />}>
+                            <ChartContainer title="Tokens over time" actions={<ToggleGroup options={METRICS} value={metric} onChange={setMetric} activeClassName="usage-toggle-active" />}>
                                 {series.length === 0 ? (
                                     <EmptyState icon={<Activity size={22} />} title="No usage" message="No usage in the selected range." />
                                 ) : (
@@ -504,7 +505,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
 
                             {groups.map((group) => (
                                 <div key={group.key} className="flex flex-col gap-4">
-                                    <SectionLabel>{group.label}</SectionLabel>
+                                    <SectionLabel className="text-[#037ffc]">{group.label}</SectionLabel>
                                     <div className="grid gap-4 lg:grid-cols-2">
                                         <TokensBar title={`${group.label} · tokens`} data={group.series} byHour={byHour} />
                                         <RequestsTrend title={`${group.label} · API requests`} data={group.series} byHour={byHour} />
@@ -540,7 +541,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
     const modelNames = modelEntries.map(([name]) => name);
 
     return (
-        <ModulePage>
+        <ModulePage className="usage-reports-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={Activity}
@@ -553,11 +554,11 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                     <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{error}</p>
                 )}
 
-                <section className={cn(CARD, 'p-6')}>
-                    <div className="flex flex-wrap items-end gap-3">
+                <section className={cn(CARD, 'usage-card p-6')}>
+                    <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
                         <label className="text-xs text-slate-400">
                             Time range
-                            <Select value={range} onChange={(event) => setRange(event.target.value)} className="mt-1">
+                            <Select value={range} onChange={(event) => setRange(event.target.value)} className="mt-1 h-9">
                                 {RANGE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                             </Select>
                         </label>
@@ -565,17 +566,17 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                             <>
                                 <label className="text-xs text-slate-400">
                                     Start date
-                                    <Input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1" />
+                                    <Input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} className="mt-1 h-9" />
                                 </label>
                                 <label className="text-xs text-slate-400">
                                     End date
-                                    <Input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} className="mt-1" />
+                                    <Input type="date" value={customTo} onChange={(event) => setCustomTo(event.target.value)} className="mt-1 h-9" />
                                 </label>
                             </>
                         )}
                         <label className="text-xs text-slate-400">
                             API key
-                            <Select value={keyFilter} onChange={(event) => setKeyFilter(event.target.value)} className="mt-1">
+                            <Select value={keyFilter} onChange={(event) => setKeyFilter(event.target.value)} className="mt-1 h-9">
                                 <option value="all">All keys</option>
                                 {tokens.map((token) => (
                                     <option key={token.id} value={token.id}>{token.name} ({maskedKeyHint(token.tokenHint)})</option>
@@ -585,7 +586,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                         <Button
                             variant="secondary"
                             size="sm"
-                            className="ml-auto"
+                            className="ml-auto h-9 not-dark:bg-[#f3f4f6] not-dark:hover:bg-[#e5e7eb]"
                             onClick={() => { setRange('today'); setCustomFrom(''); setCustomTo(''); setKeyFilter('all'); setMetric('tokens'); }}
                         >
                             Clear filters
@@ -604,7 +605,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
 
                 <ChartContainer
                     title="Tokens over time"
-                    actions={<ToggleGroup options={METRICS} value={metric} onChange={setMetric} />}
+                    actions={<ToggleGroup options={METRICS} value={metric} onChange={setMetric} activeClassName="usage-toggle-active" />}
                 >
                     {overallDaily.length === 0 ? (
                         <EmptyState icon={<Activity size={22} />} title="No usage yet" message="Usage appears here after your first model call." />
@@ -632,7 +633,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                     const modelDaily = bucketSeries(filtered.filter((record) => (record.groupName || record.modelRef || 'unknown') === model), byHour);
                     return (
                         <div key={model} className="flex flex-col gap-4">
-                            <SectionLabel>{model}</SectionLabel>
+                            <SectionLabel className="text-[#037ffc]">{model}</SectionLabel>
                             <div className="grid gap-4 lg:grid-cols-2">
                                 <TokensBar title={`${model} · tokens`} data={modelDaily} byHour={byHour} />
                                 <RequestsTrend title={`${model} · API requests`} data={modelDaily} byHour={byHour} />

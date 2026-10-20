@@ -2360,6 +2360,7 @@ def _matrix_workload_yaml(
     endpoint_url: str,
     targets: dict | None = None,
     api_key: str | None = None,
+    tokenizer_model: str | None = None,
 ) -> str:
     """Build an exact-length, closed-loop inference-perf workload for one ISL/OSL matrix point.
 
@@ -2377,7 +2378,7 @@ def _matrix_workload_yaml(
         },
         "api": {"type": "completion", "streaming": True},
         "server": _inference_server_config(model, endpoint_url, api_key),
-        "tokenizer": {"pretrained_model_name_or_path": model},
+        "tokenizer": {"pretrained_model_name_or_path": tokenizer_model or model},
         "data": {
             "type": "random",
             "input_distribution": {"min": point.isl, "max": point.isl, "mean": point.isl, "std_dev": 0},
@@ -2396,6 +2397,7 @@ def _shared_prefix_workload_yaml(
     endpoint_url: str,
     targets: dict | None = None,
     api_key: str | None = None,
+    tokenizer_model: str | None = None,
 ) -> str:
     """Build an open-loop, shared-system-prompt inference-perf workload.
 
@@ -2420,7 +2422,7 @@ def _shared_prefix_workload_yaml(
         },
         "api": {"type": "completion", "streaming": True},
         "server": _inference_server_config(model, endpoint_url, api_key),
-        "tokenizer": {"pretrained_model_name_or_path": model},
+        "tokenizer": {"pretrained_model_name_or_path": tokenizer_model or model},
         "data": {
             "type": "shared_prefix",
             "shared_prefix": {
@@ -3158,6 +3160,7 @@ async def _execute_owned(run_id: str) -> None:
         # execution's underlying model_ref: the Gateway's HTTPRoute only matches
         # the BASE_MODEL_HEADER that ext_authz injects after validating that name.
         model_name = run.get("model_service_published_name") or _execution_model(execution)
+        tokenizer_model = _execution_model(execution) or model_name
         run.update(endpoint_used=endpoint_url, namespace=execution.namespace, model=model_name)
         session_id = execution.provenance.get("cluster_session_id")
         environment = {**os.environ, **deployment_runtime_overrides(session_id)} if session_id else dict(os.environ)
@@ -3346,6 +3349,7 @@ async def _execute_owned(run_id: str) -> None:
                         model_name,
                         endpoint_url,
                         api_key=api_key,
+                        tokenizer_model=tokenizer_model,
                     ),
                     encoding="utf-8",
                 )
@@ -3374,7 +3378,8 @@ async def _execute_owned(run_id: str) -> None:
                 workload_path = point_workspace / "workload.yaml"
                 workload_path.write_text(
                     _matrix_workload_yaml(
-                        point, stages, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key
+                        point, stages, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key,
+                        tokenizer_model=tokenizer_model,
                     ),
                     encoding="utf-8",
                 )
@@ -3435,7 +3440,7 @@ async def _execute_owned(run_id: str) -> None:
             spec = SharedPrefixWorkloadSpec(**run["shared_prefix"])
             workload_path = output / "workload.yaml"
             workload_path.write_text(
-                _shared_prefix_workload_yaml(spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key),
+                _shared_prefix_workload_yaml(spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key, tokenizer_model=tokenizer_model),
                 encoding="utf-8",
             )
             command = _base_command(output) + ["--workload-file-path", str(workload_path)]

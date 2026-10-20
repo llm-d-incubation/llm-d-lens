@@ -46,6 +46,10 @@ class DeploymentPlanService:
             provenance={
                 **request.provenance,
                 **(
+                    {"runtime_class": request.runtime_binding.runtime_class.model_dump(exclude_none=True)}
+                    if request.runtime_binding and request.runtime_binding.runtime_class is not None else {}
+                ),
+                **(
                     {"runtime_binding": request.runtime_binding.model_dump(mode="json")}
                     if request.runtime_binding
                     else {}

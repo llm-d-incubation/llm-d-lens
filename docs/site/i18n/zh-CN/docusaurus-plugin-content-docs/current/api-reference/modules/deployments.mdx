@@ -40,12 +40,42 @@ Simulation 不负责部署生命周期。
 `kill(request, execution)` 在清理前验证执行 ID、可选的预期命名空间，以及该服务
 所管理的提供方状态，不接受任意资源选择器。
 
-baseline、optimized baseline、P/D 分离、分层前缀缓存和精确前缀缓存路由的模型服务渲染器
-共用 RuntimeClass 选择逻辑：按模型容器的设备请求解析硬件访问模式，并仅在 Pod 未显式指定
-RuntimeClass 时，将该模式中可选的 `runtime_class_name` 写入 `runtimeClassName`。
-NVIDIA plugin 模式声明 `nvidia`，目标集群必须已注册该 RuntimeClass；未声明此设置的模式
-继续使用集群默认运行时。仅路由或仅 CPU 的 Pod 不受影响。此设置不改变加速器资源请求，
-也不会改写已保存的部署产物。
+### RuntimeClass 发现与策略
+
+`GET /api/v1/deployments/runtime-classes?cluster_id=CLUSTER_ID` 要求部署读取权限和目标
+集群访问权限。可选的 `accelerator`、`access_mode` 用于查询已注册 profile 的建议值。
+返回 `items`（`name`、`handler`、`scheduling`、`overhead`、`matching_nodes`）、
+`profile_suggestion`、`available_suggestion`、`requirement="unknown"`、
+`node_runtime_readiness="unknown"` 和 `warnings`。Kubernetes 连接或读取权限失败返回
+HTTP 503，不会伪装成空列表；未知硬件或访问模式返回 422，Lens 授权失败返回 403。
+
+在 `POST /api/v1/deployments/runs` 中指定 `runtime_binding.runtime_class`：
+
+```json
+{"runtime_binding": {"runtime_class": {"mode": "named", "name": "custom-runtime"}}}
+```
+
+Python 对应 `llm_d_lens.deploy.contracts` 中的
+`RuntimeBinding(runtime_class=RuntimeClassPolicy(...))`。Standard 和 Agentic 创建请求
+通过顶层 `runtime_class` 接受同一策略。
+
+- `auto`：保留并校验清单已有的显式类；否则仅在目标集群提供 profile 访问模式建议的类时
+  使用它，没有可用建议时省略 `runtimeClassName`。
+- `node-default`：明确移除 `runtimeClassName`，使用节点默认运行时；此模式不依赖
+  RuntimeClass 发现权限，也不验证设备注入是否可用。
+- `named`：必须提供合法 DNS 子域格式的 `name`，并校验目标集群是否提供该类。
+  类缺失或与 Pod 节点选择器、节点名称冲突时，在修改集群前失败。
+
+省略运行时覆盖时沿用配置的 `provenance.runtime_class`，未保存偏好时默认 `auto`。
+显式 `auto` 会覆盖已保存偏好。选择保存在部署 Case policy 中，供重试和恢复沿用。
+五种模型 provider 共用部署适配器，生成新的部署产物，不改写原始 Configuration 或已有
+执行；仅路由的 Pod 不受影响。离线渲染不再注入未经集群验证的 profile 默认类。
+报告位于 `artifact.rendered_payload.value.deployment_contract.runtimeClass`。
+
+类存在、节点选择器匹配，不代表必须使用该类，也不能证明各节点的 handler、CDI、驱动
+或完整调度约束已就绪。不能仅凭 device-plugin 或 DRA 判断是否需要 RuntimeClass。
+只有确认集群默认运行时已经提供设备访问时，才应选择节点默认模式。自动和指定名称模式
+在部署时依赖可解析的显式目标集群；离线 provider 渲染不构成集群验证。
 
 ### 执行、观察与证据
 

@@ -17,13 +17,13 @@ import { ChevronDown, CircleHelp } from 'lucide-react';
 import { cn } from '../lib/cn';
 
 const fieldBase =
-    'w-full rounded-lg border bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 ' +
-    'px-3 py-2 text-sm text-theme-text placeholder:text-theme-muted transition-colors ' +
-    'focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 ' +
+    'w-full rounded-lg border bg-white dark:bg-slate-900 border-[#cbd5e1] dark:border-slate-700 hover:border-[#94a3b8] dark:hover:border-slate-600 ' +
+    'px-3 py-2 text-sm text-theme-text placeholder:text-theme-muted transition-colors focus:bg-white dark:focus:bg-slate-900 ' +
+    'focus:outline-none focus:ring-2 focus:ring-[#037ffc]/30 focus:border-[#037ffc] dark:focus:ring-emerald-500/40 dark:focus:border-emerald-500 ' +
     'disabled:opacity-50 disabled:cursor-not-allowed';
 
 const fieldVariants = {
-    toolbar: 'h-8 rounded-lg border-transparent bg-transparent py-1.5 text-xs dark:border-transparent dark:bg-transparent hover:bg-theme-bg/70 focus:bg-theme-bg focus:ring-1 focus:ring-sky-500/30 focus:border-sky-500/40',
+    toolbar: 'h-8 rounded-lg border-[#cbd5e1] bg-transparent py-1.5 text-xs dark:border-transparent dark:bg-transparent hover:bg-theme-bg/70 focus:bg-theme-bg focus:ring-1 focus:ring-sky-500/30 focus:border-sky-500/40',
 };
 
 export function Label({ className, children, help, ...props }) {

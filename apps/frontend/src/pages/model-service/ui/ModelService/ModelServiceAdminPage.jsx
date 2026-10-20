@@ -614,8 +614,8 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
     ].find((item) => item.message);
 
     return (
-        <ModulePage>
-            <div className="flex w-full flex-col gap-6">
+        <ModulePage className="model-services-page" contentClassName="flex h-screen flex-col pb-4">
+            <div className="flex w-full flex-1 flex-col gap-6">
                 <ModuleHeader
                     className="[&>div:first-child]:flex-1"
                     icon={Boxes}
@@ -630,7 +630,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                                 </Button>
                             </PermissionGate>
                             <PermissionGate permission="model-service:gateway:reconcile">
-                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending}>
+                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">
                                     <Repeat size={14} /> Reconcile
                                 </Button>
                             </PermissionGate>
@@ -638,9 +638,9 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                     }
                 />
 
-                <section className={cn(CARD, 'flex flex-col p-4 lg:min-h-[calc(100vh-13rem)]')}>
+                <section className={cn(CARD, 'model-services-card flex min-h-0 flex-1 flex-col p-4')}>
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                        <SectionLabel className="mb-0">service flow</SectionLabel>
+                        <SectionLabel className="mb-0 text-[#037ffc]">service flow</SectionLabel>
                         <Panel padding="none" tone="subtle"
                             className="flex w-full flex-wrap items-center gap-1 p-1 shadow-none sm:w-auto"
                             role="search" aria-label="Filter service flow">
@@ -687,7 +687,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                             </Button>
                         </Panel>
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-3 flex min-h-0 flex-1 flex-col">
                         {hasFlowFilters && filteredFlow.clusters.length === 0 ? (
                             <EmptyState title="No matching service flow"
                                 message="Try another cluster, model service status or public model name, or clear the filters." />
@@ -735,7 +735,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                 closeOnBackdrop={!trafficSubmission.pending} closeOnEscape={!trafficSubmission.pending}
                 footer={
                     <>
-                        <Button variant="secondary" disabled={trafficSubmission.pending} onClick={() => setTrafficDraft(null)}>Cancel</Button>
+                        <Button variant="secondary" disabled={trafficSubmission.pending} onClick={() => setTrafficDraft(null)} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">Cancel</Button>
                         <Button variant="sky" isLoading={trafficSubmission.pending} onClick={submitTrafficDistribution}
                             disabled={!trafficDraft || Boolean(trafficDistributionError(trafficDraft.rows))}>Save and apply</Button>
                     </>
@@ -752,12 +752,13 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                 variant="drawer"
                 subtitle="Choose a provider, then define the model name users will call."
                 size="md"
+                className="add-model-dialog"
                 closeOnBackdrop={!modelSubmission.pending}
                 closeOnEscape={!modelSubmission.pending}
                 footer={
                     <>
                         <Button variant="secondary" size="sm" disabled={modelSubmission.pending}
-                            onClick={() => setModelOpen(false)}>Cancel</Button>
+                            onClick={() => setModelOpen(false)} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">Cancel</Button>
                         <Button variant="primary" size="sm" onClick={submitModel} isLoading={modelSubmission.pending}
                             disabled={!modelForm.name.trim() || !selectedDeployment?.model}>Add</Button>
                     </>
@@ -1233,7 +1234,7 @@ export function AddModelForm({ form, onChange, clusters, deployments, models = [
                     </p>
                 )}
             </div>
-            <Panel title="Model name mapping" padding="sm">
+            <Panel title="Model name mapping" padding="sm" className="shadow-none dark:shadow-lg">
                 <div>
                     <Label htmlFor="add-model-provider-name"
                         help="The model name reported by the selected provider. It is filled automatically and cannot be changed here.">
@@ -1292,7 +1293,7 @@ export function TrafficDistributionForm({ draft, onChange, deployments, pending,
                 Weight and configured traffic share
             </Label>
             {draft.rows.map((row, index) => (
-                <Panel key={row.executionId} padding="sm">
+                <Panel key={row.executionId} padding="sm" className="shadow-none dark:shadow-lg">
                     <div className="mb-3 flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-2">
                             <p className="min-w-0 break-words text-sm font-semibold text-theme-text">{row.name}</p>

@@ -108,7 +108,7 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={Fingerprint}
@@ -141,6 +141,7 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                     emptyContent={
                         <EmptyState
                             icon={<Fingerprint size={22} />}
+                            iconClassName="identity-empty-icon"
                             title="No external identity providers"
                             message="Lens manages local accounts by default. Add an LDAP provider to authenticate directory users."
                             action={<PermissionGate permission="idp:provider:configure"><Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}><Plus size={14} /> Add provider</Button></PermissionGate>}
@@ -167,7 +168,7 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                                         return (
                                             <tr key={provider.id} className="border-t border-slate-800">
                                                 <td className="px-4 py-3 font-medium text-slate-100">{provider.name}</td>
-                                                <td className="px-4 py-3"><Badge tone="info">{provider.type}</Badge></td>
+                                                <td className="px-4 py-3"><Badge tone="info" className="identity-type-tag">{provider.type}</Badge></td>
                                                 <td className="px-4 py-3 text-slate-300">{provider.enabled ? 'Yes' : 'No'}</td>
                                                 <td className="px-4 py-3 text-slate-300">{provider.is_default ? 'Yes' : '—'}</td>
                                                 <td className="px-4 py-3">

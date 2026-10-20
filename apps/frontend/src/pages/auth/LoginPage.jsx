@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { KeyRound, User } from 'lucide-react';
+import { KeyRound, Moon, Sun, User } from 'lucide-react';
 import { Button, Checkbox, Input } from '../../shared/ui';
 import { FormError } from '../../shared/ui/FormError';
 import { errorMessage } from '../../shared/lib/errorMessage';
 import { fetchAuthProviders } from './authClient';
 import { useAuth } from './useAuth';
 
-export default function LoginPage({ onSignedIn } = {}) {
+export default function LoginPage({ onSignedIn, theme = 'dark', onToggleTheme } = {}) {
     const { login } = useAuth();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
@@ -44,7 +44,20 @@ export default function LoginPage({ onSignedIn } = {}) {
     const externalProviders = providers.filter((provider) => provider.type !== 'local');
 
     return (
-        <div className="flex min-h-screen w-full items-center justify-center bg-slate-950 p-6 font-sans text-slate-100 antialiased">
+        <div className="relative flex min-h-screen w-full items-center justify-center bg-theme-bg p-6 font-sans text-theme-text antialiased">
+            {onToggleTheme && (
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={onToggleTheme}
+                    aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                    title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+                    className="absolute right-4 top-4"
+                >
+                    {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                </Button>
+            )}
             <div className="w-full max-w-sm">
                 <div className="mb-10 flex items-center justify-center gap-3">
                     <a href="https://llm-d.ai" target="_blank" rel="noopener noreferrer" aria-label="llm-d">

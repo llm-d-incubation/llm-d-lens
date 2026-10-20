@@ -18,17 +18,17 @@ import { cn } from '../lib/cn';
 
 const VARIANTS = {
     primary:
-        'bg-emerald-600 hover:bg-emerald-500 text-white border border-transparent shadow-sm',
+        'bg-emerald-600 hover:bg-emerald-500 not-dark:bg-[var(--brand-accent)] not-dark:hover:bg-[var(--brand-accent-hover)] text-white border border-transparent shadow-sm',
     sky:
-        'bg-sky-500 hover:bg-sky-400 text-white border border-transparent shadow-sm',
+        'bg-sky-500 hover:bg-sky-400 not-dark:bg-[var(--brand-accent)] not-dark:hover:bg-[var(--brand-accent-hover)] text-white border border-transparent shadow-sm',
     secondary:
-        'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700',
+        'bg-[#f3f4f6] dark:bg-slate-800 hover:bg-[#e5e7eb] dark:hover:bg-slate-700 text-[#4b5563] dark:text-slate-300 border border-[#cbd5e1] dark:border-slate-700',
     ghost:
-        'bg-transparent hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white border border-transparent',
+        'bg-transparent hover:bg-[var(--bg-secondary)] dark:hover:bg-slate-800 text-[var(--text-muted)] dark:text-slate-400 hover:text-[var(--text-primary)] dark:hover:text-white border border-transparent',
     danger:
         'bg-red-600 hover:bg-red-500 text-white border border-transparent shadow-sm',
     outline:
-        'bg-transparent hover:bg-slate-100 dark:hover:bg-slate-800/60 text-slate-600 dark:text-slate-300 border border-slate-300 dark:border-slate-600',
+        'bg-transparent hover:bg-[#e6f6fe] dark:hover:bg-slate-800/60 text-[#33475b] dark:text-slate-300 border border-[#cbd5e1] dark:border-slate-600',
     dangerOutline:
         'bg-transparent text-red-600 dark:text-rose-400 border border-red-300 dark:border-rose-500/40 hover:bg-red-50 dark:hover:bg-rose-500/10',
     link:
@@ -52,7 +52,7 @@ export const Button = React.forwardRef(function Button(
             disabled={disabled || isLoading}
             className={cn(
                 'inline-flex items-center justify-center font-medium transition-colors whitespace-nowrap',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 not-dark:focus-visible:ring-[var(--brand-accent)]',
                 'disabled:opacity-50 disabled:pointer-events-none',
                 VARIANTS[variant],
                 SIZES[size],

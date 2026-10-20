@@ -6,6 +6,7 @@ import asyncio
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -586,11 +587,10 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
                 "runtime": runtime,
             }
         )
-        rendered_overlay = self._policy.rendered_overlay_root / f"llm-d-bench-{overlay_hash}"
-        if rendered_overlay.exists():
-            shutil.rmtree(rendered_overlay)
-        rendered_overlay.parent.mkdir(parents=True, exist_ok=True)
-        rendered_overlay.mkdir(parents=True, exist_ok=True)
+        self._policy.rendered_overlay_root.mkdir(parents=True, exist_ok=True)
+        rendered_overlay = Path(tempfile.mkdtemp(
+            prefix=f"llm-d-bench-{overlay_hash}-", dir=self._policy.rendered_overlay_root
+        ))
         result = subprocess.run(
             [
                 str(getattr(self._command_runner, "_kubectl_path", "kubectl")),

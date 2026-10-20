@@ -2,6 +2,7 @@ import React from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Clock, Info, ShieldAlert } from 'lucide-react';
 import { Badge } from '../../../shared/ui/Badge';
 import { Button } from '../../../shared/ui/Button';
+import { cn } from '../../../shared/lib/cn';
 import { EmptyState } from '../../../shared/ui/EmptyState';
 import { useAuth } from '../../auth';
 import {
@@ -34,7 +35,7 @@ function IssueActions({ issue, onNavigate, canView, can }) {
                     key={`${action.view}:${action.intent}`}
                     variant={action === issue.primaryAction ? 'secondary' : 'ghost'}
                     size="xs"
-                    className="w-20"
+                    className="w-20 not-dark:border-[#d1d5db] not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:border-[#9ca3af] not-dark:hover:bg-[#e5e7eb] not-dark:hover:text-[#374151]"
                     onClick={() => onNavigate?.(action.view, {
                         ...(issue.clusterId ? { clusterId: issue.clusterId } : {}),
                         ...action.params,
@@ -58,13 +59,13 @@ export function IssueRow({ issue, onNavigate, expandable = false, expanded = fal
             : issue.clusterName || issue.clusterId || 'All clusters';
     const scopeLabel = issue.clusterId || issue.clusterName ? 'Cluster' : 'Scope';
     return (
-        <article className="rounded-lg border border-sky-500/15 bg-gradient-to-br from-white/85 via-sky-50/35 to-cyan-50/25 px-3 py-2.5 shadow-sm shadow-sky-500/5 backdrop-blur-sm transition-colors hover:border-sky-500/25 hover:from-white/95 hover:via-sky-50/45 hover:to-cyan-50/30 dark:border-sky-500/20 dark:from-slate-900/80 dark:via-slate-900/50 dark:to-sky-950/25 dark:hover:from-slate-900/90 dark:hover:via-slate-900/60 dark:hover:to-sky-950/35">
+        <article className="rounded-lg border border-[#b7d4e6] bg-white px-3 py-2.5 shadow-sky-500/5 backdrop-blur-sm transition-colors hover:border-[#9fc0d6] dark:border-sky-500/20 dark:shadow-sm dark:bg-transparent dark:bg-gradient-to-br dark:from-slate-900/80 dark:via-slate-900/50 dark:to-sky-950/25 dark:hover:border-sky-500/25 dark:hover:from-slate-900/90 dark:hover:via-slate-900/60 dark:hover:to-sky-950/35">
             <div className="flex items-start gap-2.5">
                 <div className="flex shrink-0 items-start gap-2.5">
                     <Badge
                         tone={severityTone(issue.severity)}
                         size="xs"
-                        className="mt-0.5 w-20 shrink-0 justify-center gap-1"
+                        className={cn('severity-badge mt-0.5 w-20 shrink-0 justify-center gap-1', `severity-badge-${issue.severity}`)}
                     >
                         <SeverityIcon size={11} aria-hidden="true" />
                         {issue.severity}
