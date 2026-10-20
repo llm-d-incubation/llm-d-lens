@@ -122,7 +122,7 @@ def test_patch_documents_applies_hardware_runtime_class(tmp_path, existing):
 
     adapter._patch_documents(documents, parameters)
 
-    assert pod["runtimeClassName"] == (existing or "nvidia")
+    assert pod.get("runtimeClassName") == existing
     assert pod["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "2"
 
 

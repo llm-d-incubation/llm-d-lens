@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution, testRemoteTarget } from './remoteDeployBackend.js';
+import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, listDeploymentRuntimeClasses, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution, testRemoteTarget } from './remoteDeployBackend.js';
+
+test('RuntimeClass discovery and explicit node-default binding use the public API', async (t) => {
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        calls.push([url, options]);
+        return Response.json({ items: [] });
+    });
+    assert.deepEqual(await listDeploymentRuntimeClasses('cluster/a'), { items: [] });
+    assert.match(calls[0][0], /runtime-classes\?cluster_id=cluster%2Fa/);
+    await startLocalDeployment([], { cluster_server_id: 'cluster/a' }, undefined, { mode: 'node-default' });
+    assert.deepEqual(JSON.parse(calls[1][1].body).runtime_binding, { runtime_class: { mode: 'node-default' } });
+});
 
 test('Advanced deployment binds placement and loads labels for the selected cluster', async (t) => {
     const calls = [];

@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import re
+import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,11 @@ from llm_d_lens.deploy.providers.guide_adapter import (
     GuideDeploymentArtifact,
     ValidationResult,
 )
-from llm_d_lens.deploy.providers.hardware_profile import accelerator_supported
+from llm_d_lens.deploy.providers.hardware_profile import (
+    accelerator_supported,
+    discover_runtime_classes,
+    prepare_runtime_class_manifest,
+)
 from llm_d_lens.deploy.providers.shared_memory import prepare_shared_memory
 from llm_d_lens.deploy.providers.target_node import apply_placement, configured_target_node, write_pinned_manifest
 from llm_d_lens.infrastructure.artifacts.manifests import (
@@ -136,6 +142,15 @@ class ConfigurationManifestAdapter:
                 deployment_contract=deployment_contract,
             )
 
+        if artifact.manifest_ref and Path(artifact.manifest_ref).is_dir():
+            reference = Path(artifact.manifest_ref)
+            isolated = Path(tempfile.mkdtemp(prefix=f"{reference.name}-", dir=reference.parent))
+            shutil.copytree(reference, isolated, dirs_exist_ok=True)
+            artifact = replace(
+                artifact,
+                manifest_ref=str(isolated),
+                artifact_hash=stable_hash({"provider_artifact": artifact.artifact_hash, "overlay": str(isolated)}),
+            )
         artifact = prepare_shared_memory(artifact, self._output_root, exact=self._is_exact(overrides))
         if "_model_cache_dependencies" in overrides:
             from llm_d_lens.deploy.providers.storage_mount import validate_cached_model_arguments
@@ -172,6 +187,42 @@ class ConfigurationManifestAdapter:
                 artifact_hash=stable_hash(
                     {"provider_artifact": artifact.artifact_hash, "placement": placement, "workloads": changed}
                 ),
+            )
+        runtime_policy = overrides.get("_runtime_class_policy")
+        cluster_id = overrides.get("_cluster_id")
+        if runtime_policy is not None:
+            capabilities = (
+                {"items": [], "nodes": []}
+                if runtime_policy.get("mode") == "node-default"
+                else await discover_runtime_classes(str(cluster_id or ""))
+            )
+            reference = Path(artifact.manifest_ref or "")
+            path = reference / "manifest.yaml" if reference.is_dir() else reference
+            manifest = path.read_text(encoding="utf-8")
+            source = (overrides.get("officialGuide") or {}).get("source") or {}
+            rendered, report = prepare_runtime_class_manifest(
+                manifest, runtime_policy, capabilities,
+                accelerator=overrides.get("hardware_profile") or source.get("accelerator")
+                or getattr(self._delegate, "_accelerator", None)
+                or getattr(getattr(self._delegate, "_policy", None), "accelerator", None),
+            )
+            checksum = text_checksum(rendered)
+            if rendered != manifest:
+                if reference.is_dir():
+                    path.write_text(rendered, encoding="utf-8")
+                else:
+                    directory = self._output_root / checksum.removeprefix("sha256:")
+                    directory.mkdir(parents=True, exist_ok=True)
+                    path = directory / "manifest.yaml"
+                    if path.is_file() and path.read_text(encoding="utf-8") != rendered:
+                        raise ValueError("checksum-addressed RuntimeClass manifest drift detected")
+                    path.write_text(rendered, encoding="utf-8")
+            artifact = replace(
+                artifact,
+                manifest_ref=str(reference if reference.is_dir() else path),
+                manifest_checksum=artifact.manifest_checksum if reference.is_dir() else checksum,
+                artifact_hash=stable_hash({"provider_artifact": artifact.artifact_hash, "runtimeClass": report}),
+                deployment_contract={**artifact.deployment_contract, "runtimeClass": report},
             )
         if artifact.manifest_ref and artifact.manifest_checksum:
             saved_path = Path(artifact.manifest_ref)

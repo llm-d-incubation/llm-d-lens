@@ -10,6 +10,7 @@ an explicit accelerator is omitted; unresolved hardware stays neutral.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from llm_d_lens.hardware.models import HardwareProfile
@@ -112,9 +113,143 @@ def runtime_image(fallback: str | None = None, *, accelerator: str | None = None
     return (profile.deployment.runtime_image if profile else None) or fallback or ""
 
 
-def apply_runtime_class(pod_spec: dict, *, accelerator: str | None = None, access_mode: str | None = None) -> None:
+def validate_runtime_class_policy(policy: dict) -> None:
+    mode = policy.get("mode", "auto")
+    name = policy.get("name")
+    if mode not in {"auto", "node-default", "named"} or set(policy) - {"mode", "name"}:
+        raise ValueError("Invalid RuntimeClass policy")
+    if mode == "named":
+        if not isinstance(name, str) or len(name) > 253 or not all(
+            re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in name.split(".")
+        ):
+            raise ValueError("RuntimeClass name must be a valid DNS subdomain")
+    elif name is not None:
+        raise ValueError("RuntimeClass name is only allowed in named mode")
+
+
+def select_runtime_class(policy: dict, classes: list[dict], *, suggested: str | None = None) -> str | None:
+    validate_runtime_class_policy(policy)
+    mode = policy.get("mode", "auto")
+    name = policy.get("name")
+    available = {item.get("metadata", {}).get("name") for item in classes}
+    if mode == "named":
+        if name not in available:
+            raise ValueError(f"RuntimeClass {name!r} is not available in the target cluster")
+        return name
+    return suggested if mode == "auto" and suggested in available else None
+
+
+async def discover_runtime_classes(cluster_id: str) -> dict:
+    import json
+
+    from llm_d_lens.infrastructure.kubernetes import kubeconfig_environment, scoped_runner
+
+    if not cluster_id:
+        raise ValueError("RuntimeClass discovery requires an explicit target cluster")
+    try:
+        kubeconfig_environment(cluster_id, strict=True)
+    except Exception as error:
+        raise ValueError("RuntimeClass discovery requires a resolvable target cluster") from error
+    result = {}
+    for key, resource in (("items", "runtimeclasses.node.k8s.io"), ("nodes", "nodes")):
+        try:
+            response = await scoped_runner(cluster_id).run(["kubectl", "get", resource, "-o", "json"])
+        except Exception as error:
+            raise ValueError(f"Unable to discover {resource} in the target cluster; check connectivity and read permissions") from error
+        if response.returncode:
+            raise ValueError(f"Unable to discover {resource} in the target cluster; check connectivity and read permissions")
+        try:
+            payload = json.loads(response.stdout)
+            items = payload["items"]
+            if not isinstance(items, list):
+                raise ValueError("items is not a list")
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Invalid discovery response for {resource}") from error
+        result[key] = items
+    return result
+
+
+def prepare_runtime_class_manifest(
+    manifest: str, policy: dict, capabilities: dict, *, accelerator: str | None = None
+) -> tuple[str, dict]:
+    import yaml
+
+    from llm_d_lens.deploy.providers.shared_memory import _model_container, _pod_specs
+    from llm_d_lens.deploy.providers.target_node import configured_target_node
+
+    validate_runtime_class_policy(policy)
+    classes = capabilities.get("items", [])
+    nodes = capabilities.get("nodes", [])
+    report = {
+        "policy": policy,
+        "workloads": [],
+        "warnings": [
+            "RuntimeClass availability does not establish whether it is required or whether node handlers, "
+            "CDI, drivers and device injection are ready. Node default runtime readiness is unknown. "
+            "Placement validation checks node selectors and names, not complete scheduler feasibility."
+        ],
+    }
+    documents = list(yaml.safe_load_all(manifest))
+    changed = False
+
+    def visit(document):
+        nonlocal changed
+        if not isinstance(document, dict):
+            return
+        if document.get("kind") == "List":
+            for item in document.get("items") or []:
+                visit(item)
+            return
+        for pod in _pod_specs(document):
+            if not any(_model_container(container) for container in pod.get("containers", [])):
+                continue
+            existing = pod.get("runtimeClassName")
+            suggested = None
+            selection = policy
+            if policy.get("mode", "auto") == "auto":
+                if existing:
+                    selection = {"mode": "named", "name": existing}
+                else:
+                    suggested_pod = {**pod}
+                    apply_runtime_class(suggested_pod, accelerator=accelerator, runtime_classes=classes)
+                    suggested = suggested_pod.get("runtimeClassName")
+            selected = select_runtime_class(selection, classes, suggested=suggested)
+            if selected:
+                runtime = next(item for item in classes if item.get("metadata", {}).get("name") == selected)
+                selector = (runtime.get("scheduling") or {}).get("nodeSelector") or {}
+                pod_selector = pod.get("nodeSelector") or {}
+                if any(key in pod_selector and pod_selector[key] != value for key, value in selector.items()):
+                    raise ValueError(f"RuntimeClass {selected!r} conflicts with the workload node selector")
+                combined = {**pod_selector, **selector}
+                target_node = pod.get("nodeName") or configured_target_node()
+                if not any(
+                    all(node.get("metadata", {}).get("labels", {}).get(key) == value for key, value in combined.items())
+                    and (not target_node or node.get("metadata", {}).get("name") == target_node)
+                    for node in nodes
+                ):
+                    raise ValueError(f"RuntimeClass {selected!r} has no nodes matching the workload placement")
+            if selected != existing:
+                changed = True
+                if selected:
+                    pod["runtimeClassName"] = selected
+                else:
+                    pod.pop("runtimeClassName", None)
+            report["workloads"].append({
+                "kind": document.get("kind"),
+                "name": document.get("metadata", {}).get("name"),
+                "runtimeClassName": selected,
+            })
+    for document in documents:
+        visit(document)
+    return (yaml.safe_dump_all(documents, sort_keys=False) if changed else manifest), report
+
+
+def apply_runtime_class(
+    pod_spec: dict, *, accelerator: str | None = None, access_mode: str | None = None,
+    runtime_classes: list[dict] | None = None,
+) -> None:
     profile = active_profile(accelerator)
-    if profile is None or pod_spec.get("runtimeClassName"):
+    if profile is None or pod_spec.get("runtimeClassName") or runtime_classes is None:
         return
     container = next((item for item in pod_spec.get("containers", []) if item.get("name") == "modelserver"), None)
     if container is None:
@@ -133,7 +268,9 @@ def apply_runtime_class(pod_spec: dict, *, accelerator: str | None = None, acces
     else:
         return
     mode = deployment_mode(profile, access_mode, request_model=model)
-    if mode.get("runtime_class_name"):
+    if mode.get("runtime_class_name") and any(
+        item.get("metadata", {}).get("name") == mode["runtime_class_name"] for item in runtime_classes
+    ):
         pod_spec["runtimeClassName"] = mode["runtime_class_name"]
 
 

@@ -11,6 +11,7 @@ from llm_d_lens.deploy.contracts import (
     DeployableConfiguration,
     DeploymentCase,
     DeploymentCreateRequest,
+    RuntimeClassPolicy,
     VersionedPayload,
 )
 from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum, deployment_manifest
@@ -75,6 +76,10 @@ class GuideHelmConfigurationAdapter:
                             or configuration.content["model"]["name"],
                             "namespace_policy": configuration.provenance.get("namespace_policy"),
                             "placement": run_provenance.get("placement"),
+                            "runtime_class": RuntimeClassPolicy.model_validate(
+                                run_provenance.get("runtime_class")
+                                or configuration.provenance.get("runtime_class") or {"mode": "auto"}
+                            ).model_dump(exclude_none=True),
                             "model_secret": (
                                 (configuration.content.get("officialGuide") or {}).get("modelSecret")
                                 or configuration.content.get("modelSecret")

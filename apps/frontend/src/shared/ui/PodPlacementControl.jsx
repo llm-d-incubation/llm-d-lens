@@ -3,6 +3,37 @@ import { ChevronDown } from 'lucide-react';
 import { Select } from './FormControls';
 import { cn } from '../lib/cn';
 
+export function RuntimeClassControl({ value, onChange, clusterId, listRuntimeClasses }) {
+    const [discovery, setDiscovery] = useState({ clusterId: null, items: [], error: '' });
+    useEffect(() => {
+        if (!clusterId) return undefined;
+        const controller = new AbortController();
+        listRuntimeClasses(clusterId, controller.signal).then((result) => {
+            if (!controller.signal.aborted) setDiscovery({ clusterId, items: result.items, error: '' });
+        }).catch((error) => {
+            if (!controller.signal.aborted) setDiscovery({ clusterId, items: [], error: error.message });
+        });
+        return () => controller.abort();
+    }, [clusterId, listRuntimeClasses]);
+    const items = discovery.clusterId === clusterId ? discovery.items : [];
+    const selected = value?.mode === 'named' ? `named:${value.name}` : value?.mode || 'auto';
+    return <div className="grid gap-2 text-theme-text">
+        <label className="text-xs">RuntimeClass
+            <Select className="mt-1" value={selected} onChange={(event) => {
+                const selection = event.target.value;
+                onChange(selection.startsWith('named:') ? { mode: 'named', name: selection.slice(6) } : { mode: selection });
+            }}>
+                <option value="auto">Automatic</option>
+                <option value="node-default">Node default runtime</option>
+                {value?.mode === 'named' && !items.some((item) => item.name === value.name) && <option value={selected}>{value.name} (not verified)</option>}
+                {items.map((item) => <option key={item.name} value={`named:${item.name}`}>{item.name}</option>)}
+            </Select>
+        </label>
+        {clusterId && discovery.clusterId !== clusterId && <span role="status" className="text-xs text-theme-muted">Loading RuntimeClasses...</span>}
+        {discovery.clusterId === clusterId && discovery.error && <span role="alert" className="text-xs text-theme-muted">RuntimeClass discovery failed: {discovery.error}</span>}
+    </div>;
+}
+
 const descriptions = {
     'prefer-same-node': 'Prefer co-locating replicas, but allow other nodes when needed.',
     'same-node': 'Require all replicas on one eligible node. Replicas may remain Pending if it cannot fit them.',

@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import PodPlacementControl from './PodPlacementControl';
+import PodPlacementControl, { RuntimeClassControl } from './PodPlacementControl';
+
+test('RuntimeClass selection preserves an explicit unverified choice and offers node default', () => {
+    const markup = renderToStaticMarkup(<RuntimeClassControl value={{ mode: 'named', name: 'custom-runtime' }} onChange={() => {}} clusterId="cluster-a" />);
+    assert.match(markup, /Automatic/);
+    assert.match(markup, /Node default runtime/);
+    assert.match(markup, /value="named:custom-runtime" selected=""/);
+    assert.match(markup, /custom-runtime \(not verified\)/);
+});
 
 test('Standard placement uses the same collapsed button layout as neighboring sections', () => {
     const markup = renderToStaticMarkup(<PodPlacementControl value="prefer-same-node" onChange={() => {}} />);

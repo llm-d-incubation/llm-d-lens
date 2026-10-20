@@ -7,8 +7,8 @@ import { EmptyState } from '../../../shared/ui/EmptyState';
 import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../shared/ui/ModulePage';
 import { Select } from '../../../shared/ui/FormControls';
-import PodPlacementControl from '../../../shared/ui/PodPlacementControl';
-import { listDeploymentNodeLabels } from '../../optimization';
+import PodPlacementControl, { RuntimeClassControl } from '../../../shared/ui/PodPlacementControl';
+import { listDeploymentNodeLabels, listDeploymentRuntimeClasses } from '../../optimization';
 import { listAIProviders } from '../../ai-providers';
 import { streamAgenticRecommendation, streamAgenticRefinement } from '../api/agenticDeploymentBackend';
 import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, relaxedAicCandidates } from '../lib/agenticPresentation';
@@ -160,6 +160,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
     const [error, setError] = useState('');
     const [requirements, setRequirements] = useState(DEFAULT_REQUIREMENTS);
     const [placementReplicas, setPlacementReplicas] = useState('prefer-same-node');
+    const [runtimeClass, setRuntimeClass] = useState({ mode: 'auto' });
     const [placementNodeName, setPlacementNodeName] = useState('');
     const [plannerPrompt, setPlannerPrompt] = useState('');
     const [aiProviders, setAiProviders] = useState([]);
@@ -209,6 +210,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                 max_num_seqs: draft.maxNumSeqs, max_num_batched_tokens: draft.maxNumBatchedTokens,
                 vllm_arguments: draft.vllmArguments || [],
                 placement_replicas: placementReplicas,
+                runtime_class: runtimeClass,
                 placement_node_label: placementReplicas === 'same-node' && placementNodeName ? { key: 'kubernetes.io/hostname', value: placementNodeName } : null,
                 planning_facts: {
                     model_weight_gib: draft.modelWeightGiB, vram_per_gpu_gib: 1, free_gpu_count: 0,
@@ -363,6 +365,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                         </div>
                     </details>
                     <PodPlacementControl compact className="mt-4 border-t border-slate-800 pt-3" value={placementReplicas} onChange={setPlacementReplicas} clusterId={draft?.clusterId} nodeName={placementNodeName} onNodeChange={setPlacementNodeName} listNodeLabels={listDeploymentNodeLabels} />
+                    <RuntimeClassControl value={runtimeClass} onChange={setRuntimeClass} clusterId={draft?.clusterId} listRuntimeClasses={listDeploymentRuntimeClasses} />
                     {creating && <GenerationProgress events={generationEvents} />}
                     <div className="mt-5 flex justify-end"><Button onClick={createPlan} isLoading={creating}><Sparkles size={16} />Generate recommendation</Button></div>
                 </div>

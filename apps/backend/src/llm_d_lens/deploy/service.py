@@ -441,6 +441,7 @@ class GuideAdapterDeploymentService:
             overrides["_deployment_namespace"] = namespace
             overrides["_cluster_id"] = request.provenance.get("cluster_server_id")
             overrides["_placement"] = request.deployment_policy.value.get("placement")
+            overrides["_runtime_class_policy"] = request.deployment_policy.value.get("runtime_class", {"mode": "auto"})
             await require_cached_model(
                 overrides, cluster_id=overrides["_cluster_id"], provider_id=artifact_input.provider_ref
             )

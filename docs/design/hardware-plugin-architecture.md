@@ -428,25 +428,35 @@ require_accelerator(key: str) -> HardwareProfile                     # Unregiste
 
 ### 4.8 TODO: Cluster-aware, user-configurable RuntimeClass selection
 
-- [ ] Discover target-cluster RuntimeClasses and their scheduling constraints.
-    Validate an automatic profile suggestion against cluster capabilities instead
-    of treating a hardware vendor or device-plugin/DRA mode as proof that a named
-    RuntimeClass is required or available. Class existence alone does not prove
-    node handler or CDI readiness; surface unknown prerequisites explicitly.
-- [ ] Provide per-resource UI controls for automatic selection, explicit use of
-    the node default runtime (omit `runtimeClassName`), and an explicitly named
-    RuntimeClass. Preserve user choices, validate explicit names, and report
-    missing or incompatible selections before deployment without silently
-    overriding them.
-- [ ] Persist the selection policy and apply it consistently across manual
-    planning, Agentic planning, API/MCP inputs, and every model provider. Keep
-    hardware-specific defaults profile-driven and saved/published manifests
-    immutable; policy changes require a newly generated configuration.
-- [ ] Cover default-runtime/CDI clusters without a vendor-named RuntimeClass,
-    device-plugin and DRA access, custom RuntimeClasses, discovery permission
-    failures, and heterogeneous-node compatibility. Do not equate device-plugin
-    access with a mandatory RuntimeClass or DRA access with no RuntimeClass
-    requirement.
+Implemented the initial cluster-aware API and deployment binding:
+
+- `GET /api/v1/deployments/runtime-classes` reports available classes, handlers,
+    scheduling constraints, overhead and matching nodes under cluster access checks.
+- `RuntimeClassPolicy` supports `auto`, `node-default` and `named`. Run-time
+    overrides take precedence over saved per-configuration provenance preferences.
+    Standard and Agentic requests accept the same policy; MCP reuses these APIs.
+- Manual create/edit and Agentic forms expose the selection. Offline providers
+    do not inject unverified defaults. The common deployment adapter validates
+    class availability and node selectors/names before writes, records policy and
+    warnings, and derives deployment output without modifying published sources.
+- Tests cover unavailable suggestions, explicit overrides, discovery failures,
+    published choices, selector conflicts and preference persistence.
+- Directory artifacts are copied into per-render sibling directories before
+    shared-memory or RuntimeClass processing. Optimized-baseline also allocates
+    an independent source work directory for every render, even for identical
+    inputs. Copies retain the provider's path allowlist and Kustomize files;
+    rendering or cleaning one deployment does not modify another deployment.
+
+Remaining work and limits:
+
+- [ ] Add trustworthy, opt-in node-level runtime/CDI readiness evidence; do not
+    infer necessity or readiness solely from class presence, vendor or access mode.
+- [ ] Extend scheduling compatibility beyond node selectors/names to affinity,
+    taints, resource availability and heterogeneous per-node handler readiness.
+- [ ] Align pre-deployment planning previews with the final runtime policy and
+    show the resolved class and warnings alongside deployment execution details.
+- [ ] Add live-cluster acceptance coverage for default-runtime/CDI clusters,
+    plugin/DRA combinations and heterogeneous node runtime configurations.
 
 ---
 

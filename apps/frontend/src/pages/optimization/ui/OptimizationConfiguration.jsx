@@ -31,7 +31,8 @@ import { ConfigurationValidationContext, focusConfigurationError } from '../../e
 import { validateConfigurationInputs, configurationServerErrors } from '../../evaluation';
 import { TopologyPreview, YamlPreview } from '../../evaluation';
 import { StorageVolumeSelect } from '../../../shared/ui/StorageVolumeSelect';
-import { listDeploymentNodeLabels } from './OptimizationWorkspace/remoteDeployBackend';
+import { listDeploymentNodeLabels, listDeploymentRuntimeClasses } from './OptimizationWorkspace/remoteDeployBackend';
+import { RuntimeClassControl } from '../../../shared/ui/PodPlacementControl';
 import { acceleratorVariantForHardware, aicSystemNameForHardware, DEFAULT_RUNTIME_IMAGES, isDefaultRuntimeImage } from '../../evaluation';
 
 const PREFILL_KEY = 'prism_evaluate_prefill_workloads';
@@ -226,6 +227,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [customRows, setCustomRows] = useState([]);
     const [guideSettings, setGuideSettings] = useState({});
     const [placementReplicas, setPlacementReplicas] = useState(() => initialArtifact?.deployable_configuration?.provenance?.placement?.replicas || 'prefer-same-node');
+    const [runtimeClass, setRuntimeClass] = useState(() => initialArtifact?.deployable_configuration?.provenance?.runtime_class || { mode: 'auto' });
     const [placementNodeLabel, setPlacementNodeLabel] = useState(() => {
         const label = initialArtifact?.deployable_configuration?.provenance?.placement?.nodeLabel;
         return label ? JSON.stringify(label) : '';
@@ -309,6 +311,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         const content = initialArtifact?.deployable_configuration?.content;
         if (!content) return;
         const placement = initialArtifact.deployable_configuration.provenance?.placement;
+        setRuntimeClass(initialArtifact.deployable_configuration.provenance?.runtime_class || { mode: 'auto' });
         setPlacementReplicas(placement?.replicas || 'prefer-same-node');
         setPlacementNodeLabel(placement?.nodeLabel ? JSON.stringify(placement.nodeLabel) : '');
         const editorSource = initialArtifact.deployable_configuration.provenance?.editor_source;
@@ -972,6 +975,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     { ...rendered.deployable_configuration, provenance: {
                         ...rendered.deployable_configuration.provenance,
                         editor_source: { guideSourceMode, localGuidePath, remoteGuideRepository, remoteGuideRef, remoteGuidePath },
+                        runtime_class: runtimeClass,
                         placement: { replicas: placementReplicas, ...(placementReplicas === 'same-node' && placementNodeLabel ? { nodeLabel: JSON.parse(placementNodeLabel) } : {}) },
                         configuration_validation: variantPlan.validation,
                     } },
@@ -1485,6 +1489,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                                 {placementReplicas === 'spread' && <p className="text-xs text-amber-300 md:col-span-2">Requires one eligible node per replica. Extra replicas stay Pending if there are not enough nodes.</p>}
                                 {placementReplicas === 'same-node' && <label className="block"><span className={labelClass}>Node label (optional)</span><select className={inputClass} value={placementNodeLabel} onChange={(event) => setPlacementNodeLabel(event.target.value)}><option value="">Any eligible node</option>{nodeLabels.map((label) => <option key={JSON.stringify(label)} value={JSON.stringify(label)}>{label.key}={label.value}</option>)}</select>{nodeLabelError && <span role="alert" className="mt-1 block text-xs text-red-300">Unable to load node labels: {nodeLabelError}</span>}</label>}
                             </div></section>
+                            <RuntimeClassControl value={runtimeClass} onChange={setRuntimeClass} clusterId={selectedClusterId} listRuntimeClasses={listDeploymentRuntimeClasses} />
                             {selection.modelServer === 'vllm' && <>
                                 <section><h3 className="text-xs font-semibold uppercase tracking-wide text-violet-300">Runtime batching</h3><p className="mt-2 text-xs text-slate-400">Batching controls for the generated model-server YAML. Leave blank to use Guide defaults.</p><div className="mt-4 grid gap-4 md:grid-cols-2"><ConfigurationField field="blockSize"><span className={labelClass}>Block size (tokens)</span><input type="number" min="1" className={inputClass} value={blockSize} placeholder="Guide default" onChange={(event) => setBlockSize(event.target.value)} /><FieldHelp>vLLM --block-size. Use a value supported by the selected runtime image and accelerator.</FieldHelp></ConfigurationField>
 <ConfigurationField field="maxNumBatchedTokens"><span className={labelClass}>Max batched tokens</span><input type="number" min="1" className={inputClass} value={maxNumBatchedTokens} placeholder="Guide default" onChange={(event) => setMaxNumBatchedTokens(event.target.value)} /><FieldHelp>vLLM --max-num-batched-tokens. Leave blank to keep the Guide batching configuration.</FieldHelp></ConfigurationField></div></section>

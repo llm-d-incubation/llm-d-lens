@@ -77,6 +77,22 @@ not a network isolation boundary.
 
 In **Manual**, open **Advanced settings** in the configuration editor and select **Replica placement**. The default prefers one node but can use others when necessary. The presets group all model-server Pods in the same rendered deployment manifest, including separate Prefill and Decode Deployments; router Pods are excluded. **Require one node** keeps the group on the same node; optionally select a live Node label to restrict eligible nodes. **Distribute evenly across nodes** balances the group across eligible nodes using hostname topology spread (up to one Pod of skew); Pods may remain Pending if the balance cannot be maintained with available capacity. **Require separate nodes** needs one eligible node per Pod in the group and leaves extra Pods Pending if there are not enough nodes. Neither distribution preset supports LeaderWorkerSet workloads. The label list comes from the selected cluster. Agentic deployments use the soft same-node replica preference without an affinity selector in their forms. Tensor-parallel devices are requested by each model-server Pod, so TP stays within that Pod; multi-Pod LeaderWorkerSet workers prefer the same node but can spread when necessary.
 
+## Select a RuntimeClass
+
+In the Manual configuration editor's **Advanced settings**, or the Agentic
+requirements form, select **RuntimeClass**. **Automatic** validates profile
+suggestions against the target cluster and preserves existing explicit manifest
+choices. **Node default runtime** omits `runtimeClassName`; select it only when
+the node default runtime already provides device access. A named class is an
+explicit override and must be available on the target cluster.
+
+The editor retains the preference when saving and reopening a configuration.
+Unavailable discovery is shown as an error, not a successful empty list. Changing
+the cluster does not silently overwrite the choice; deployment checks it again.
+Discovery verifies names and node selector compatibility, not handler, CDI or
+driver readiness. Changing a choice creates a new deployment artifact; existing
+deployments and published source manifests are not modified.
+
 ## Find a deployment in the list
 
 1. Review the summary cards at the top of the page: **Total**, **Ready**, **In progress**, **Failed**, and **Cleaned**.
