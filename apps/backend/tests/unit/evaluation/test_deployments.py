@@ -440,6 +440,9 @@ async def test_benchmark_runtime_uses_cluster_checkout(tmp_path):
     executable = tmp_path / ".venv" / "bin" / "llmdbenchmark"
     executable.parent.mkdir(parents=True)
     executable.write_text("#!/bin/sh\n")
+    template = tmp_path / "config/templates/jinja/20_harness_pod.yaml.j2"
+    template.parent.mkdir(parents=True)
+    template.write_text("{{ harness_command }}\n", encoding="utf-8")
     assert await router._prepare_benchmark_runtime({"resolved_repository": str(tmp_path)}) == (
         str(executable),
         tmp_path,

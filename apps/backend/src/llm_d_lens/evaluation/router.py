@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -2644,6 +2645,7 @@ async def _prepare_benchmark_runtime(source: dict | None = None) -> tuple[str, P
         # fresh install) so checkouts installed before this patch existed --
         # or reinstalled/upgraded later -- still get it applied.
         await asyncio.to_thread(_patch_kubernetes_client_no_proxy_bug, root / ".venv")
+        await asyncio.to_thread(_patch_harness_kubernetes_no_proxy, root)
         return str(root / ".venv" / "bin" / "llmdbenchmark"), root
     raise ValueError(
         "Cluster llm-d-benchmark source is required. Configure and download its Software Versions before benchmarking."
@@ -2742,6 +2744,40 @@ def _patch_kubernetes_client_no_proxy_bug(venv: Path) -> None:
                 text.replace(_KUBERNETES_NO_PROXY_BUG_PATTERN, _KUBERNETES_NO_PROXY_BUG_REPLACEMENT, 1),
                 encoding="utf-8",
             )
+
+
+def _harness_kubernetes_no_proxy_command() -> str:
+    """Repair the affected image's client before any harness/report process imports it."""
+    script = (
+        "import sys; from pathlib import Path; "
+        "from kubernetes.client import configuration; "
+        "path = Path(configuration.__file__); "
+        "text = path.read_text(encoding='utf-8'); "
+        f"pattern = {_KUBERNETES_NO_PROXY_BUG_PATTERN!r}; "
+        f"replacement = {_KUBERNETES_NO_PROXY_BUG_REPLACEMENT!r}; "
+        "path.write_text(text.replace(pattern, replacement, 1), encoding='utf-8') if pattern in text else None; "
+        "print('[Lens] Kubernetes NO_PROXY compatibility patch: ' + "
+        "('applied' if pattern in text else 'pattern absent; client unchanged'), file=sys.stderr)"
+    )
+    return f"python -c {shlex.quote(script)} || exit $?;"
+
+
+def _patch_harness_kubernetes_no_proxy(root: Path) -> None:
+    """Carry the SDK compatibility fix into newly rendered harness Pods."""
+    template = root / "config/templates/jinja/20_harness_pod.yaml.j2"
+    anchor = "{{ harness_command }}"
+    marker = "{# Lens: preserve Kubernetes client NO_PROXY in the harness image. #}\n"
+    with template.open("r+", encoding="utf-8") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        text = stream.read()
+        if marker in text:
+            return
+        if text.count(anchor) != 1:
+            raise ValueError("Benchmark harness template has no unique harness_command; cannot install proxy fix")
+        patched = marker + text.replace(anchor, f"{_harness_kubernetes_no_proxy_command()} {anchor}", 1)
+        stream.seek(0)
+        stream.write(patched)
+        stream.truncate()
 
 
 def _harness_proxy_environment(run: dict, *, kubeconfig_path: str | None = None) -> dict[str, str]:
