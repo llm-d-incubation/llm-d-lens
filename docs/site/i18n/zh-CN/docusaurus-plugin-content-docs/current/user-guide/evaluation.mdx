@@ -73,6 +73,33 @@ description: 压测模型服务或比较部署配置，查看并导出结果。
 没有比值表示可比较的数据不足，或基线为零。稳定请求速率只覆盖本次测试的负载范围；
 需要验证更高容量时，新建任务并增加负载阶段。
 
+## 将测量结果用作 Agentic 历史证据
+
+Evaluate 会先校验进入终态的基准测试结果，再将符合条件的样本写入
+`agentic_benchmark_records`。矩阵点和负载阶段分别入库；不会用中位数替代缺失的
+P95 延迟，也不会补造指标。
+
+开始流量前，Lens 通过只读 Kubernetes 查询和实际服务容器中的元数据，采集模型、
+每卡显存及运行时版本。这需要读取 Pod 和在服务容器中执行只读 Python 元数据探测的权限；
+不会加载模型权重、下载另一个模型、修改或重启部署。元数据采集限时 60 秒。
+不支持或无法获取元数据不会使压测失败，保存的 `benchmark_evidence` 报告会说明跳过原因。
+服务 Pod 变化或重启会使快照失效。目前自动采集要求单 worker 的 inference-perf、能够明确识别的 vLLM 容器以及
+无歧义的本地、未压缩 safetensors 元数据；打包量化模型、同 Pod 基线流量、
+异构副本和无法确定负载归属的结果会跳过。
+Hub 缓存来源必须明确测试服务使用的不可变 revision，
+不会将未固定版本的当前缓存分支当作历史证据。
+
+管理员可在后端已配置的环境中预览历史回填：
+
+```bash
+python -m llm_d_lens.evaluation.benchmark_evidence
+python -m llm_d_lens.evaluation.benchmark_evidence --run-id <evaluate-run-uuid> --apply
+```
+
+不加 `--apply` 不会写入数据。回填只使用已保存的测试时证据，
+不会用当前集群状态替代缺失的历史元数据。重复执行具有幂等性。
+证据不符合条件或入库失败时，原始 Evaluate 结果仍会保留。
+
 ## 排查失败或长时间未完成的任务
 
 1. 打开 **Results → Benchmark logs（基准测试日志）**，检查输出和诊断。

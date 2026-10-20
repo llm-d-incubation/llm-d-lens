@@ -55,6 +55,11 @@ from llm_d_lens.evaluation.api_models import (
     EvaluationWorkflowResponse,
     evaluation_problem_responses,
 )
+from llm_d_lens.evaluation.benchmark_evidence import (
+    capture_benchmark_context,
+    ingest_evaluate_run,
+    verify_benchmark_context,
+)
 from llm_d_lens.evaluation.comparison import (
     matrix_comparison as _matrix_comparison,
 )
@@ -1958,6 +1963,10 @@ def _save(record: dict) -> None:
     payload = dict(record, id=record_id)
     if kind == "benchmark":
         _benchmark_records.save(EvaluateRunRecord.model_validate(payload))
+        if record.get("status") in _TERMINAL_EVALUATE_STATUSES:
+            report = ingest_evaluate_run(payload)
+            record["benchmark_evidence"] = report
+            _benchmark_records.save(EvaluateRunRecord.model_validate(dict(record, id=record_id)))
         return
     if kind == "workflow":
         _workflow_records.save(EvaluateWorkflowRecord.model_validate(payload))
@@ -3205,6 +3214,8 @@ async def _execute_owned(run_id: str) -> None:
         selected_hardware = resolve_by_accelerator_key(accelerator_profile) if accelerator_profile else None
         if selected_hardware:
             run["hardware_profile"] = selected_hardware.to_dict()
+        await capture_benchmark_context(run)
+        _save(run)
         observability_started_at = _now()
 
         def _base_command(workspace: Path) -> list[str]:
@@ -3839,6 +3850,7 @@ async def _execute_owned(run_id: str) -> None:
             except Exception as snapshot_error:
                 run["resource_snapshot_error"] = str(snapshot_error) or "Resource snapshot timed out"
         _enrich_benchmark_result(run)
+        await verify_benchmark_context(run)
         _save(run)
         if benchmark_namespace and environment:
             await _cleanup_benchmark_storage(benchmark_namespace, benchmark_volume, environment)

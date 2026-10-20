@@ -9,7 +9,8 @@ deliberately no update/delete method. The six nested one-to-one sub-models
 
 ``evaluate_run_id`` is a *soft reference* (not a real foreign key) per the
 design doc section 5.3: it's derived by parsing the ``"evaluate:<uuid>"``
-convention out of ``benchmark_id`` (see ``llm_d_lens/agentic/facts.py``),
+convention (optionally followed by a matrix/stage suffix) out of ``benchmark_id``
+(see ``llm_d_lens/evaluation/benchmark_evidence.py``),
 and evaluate runs may be deleted/pruned independently of this permanent
 audit trail, so it must never cascade or block on a live ``evaluate_runs``
 row.
@@ -153,5 +154,5 @@ def _dset(root: dict[str, object], path: str, value: object) -> None:
 
 def _evaluate_run_id(benchmark_id: str) -> str | None:
     if benchmark_id.startswith(_EVALUATE_BENCHMARK_ID_PREFIX):
-        return benchmark_id[len(_EVALUATE_BENCHMARK_ID_PREFIX) :]
+        return benchmark_id[len(_EVALUATE_BENCHMARK_ID_PREFIX) :].split(":", 1)[0]
     return None

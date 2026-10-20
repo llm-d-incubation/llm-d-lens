@@ -130,6 +130,37 @@ metrics exist. Plugin device attribution needs kubelet-reported, profile-recogni
 device identities. Collection corrects for the Prometheus clock offset when
 querying the saved window; older results are not recollected.
 
+## Reuse measurements as Agentic evidence
+
+Evaluate automatically validates terminal benchmark results before adding eligible
+samples to `agentic_benchmark_records`. Matrix points and load stages remain separate;
+missing P95 latency is not replaced with a median, and missing metrics are not invented.
+
+Before traffic, Lens uses read-only Kubernetes queries and serving-container metadata
+to capture the actual model, accelerator memory and runtime version. This requires
+permission to read Pods and execute a read-only Python metadata probe in the serving
+container. It does not load model weights, download another model, change the deployment
+or restart it. Metadata collection has a 60-second budget. Unsupported or unavailable
+metadata does not fail the benchmark: the saved `benchmark_evidence` report explains
+why evidence was skipped. Serving Pod changes/restarts invalidate the snapshot.
+Current automatic enrichment requires single-worker inference-perf and identifiable vLLM containers with unambiguous
+local, uncompressed safetensors metadata. Packed quantized models, same-pod baseline
+traffic, heterogeneous replicas and unsupported workload attribution are skipped.
+Hub-cache sources must identify the immutable serving revision; an unpinned current
+cache branch is not historical proof.
+
+Administrators can preview historical ingestion in the backend's configured environment:
+
+```bash
+python -m llm_d_lens.evaluation.benchmark_evidence
+python -m llm_d_lens.evaluation.benchmark_evidence --run-id <evaluate-run-uuid> --apply
+```
+
+Without `--apply`, nothing is written. Backfill uses only saved test-time evidence;
+it does not substitute the current cluster state for missing historical metadata.
+Repeated application is idempotent. Original Evaluate results are retained even when
+evidence is ineligible or evidence persistence fails.
+
 ## Investigate a failed or slow task
 
 1. Open **Results → Benchmark logs** to inspect benchmark output and diagnostics.

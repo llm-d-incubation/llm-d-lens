@@ -10,18 +10,70 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from llm_d_lens.agentic.benchmark_evidence import BenchmarkRecord
 from llm_d_lens.db.dao.base import BaseDao
 from llm_d_lens.db.models.agentic_benchmark_record import BenchmarkRecordRow
 
 
+class BenchmarkRecordDaoError(Exception):
+    """Raised when benchmark evidence cannot be durably persisted."""
+
+
 class BenchmarkRecordDao(BaseDao):
+    def get(self, benchmark_id: str) -> BenchmarkRecord | None:
+        try:
+            with self._read_only() as session:
+                row = session.get(BenchmarkRecordRow, benchmark_id)
+                return row.to_dto() if row else None
+        except SQLAlchemyError as error:
+            raise BenchmarkRecordDaoError("Unable to read benchmark evidence") from error
+
+    def save_many(self, records: list[BenchmarkRecord]) -> list[str]:
+        """Atomically append a batch, tolerating concurrent inserts of the same IDs."""
+        inserted = []
+        try:
+            with self._transaction() as session:
+                dialect = session.get_bind().dialect.name
+                for record in records:
+                    if dialect in ("postgresql", "sqlite"):
+                        row = BenchmarkRecordRow.from_dto(record)
+                        values = {
+                            column.key: getattr(row, column.key) for column in BenchmarkRecordRow.__table__.columns
+                        }
+                        insert = postgres_insert if dialect == "postgresql" else sqlite_insert
+                        statement = (
+                            insert(BenchmarkRecordRow)
+                            .values(**values)
+                            .on_conflict_do_nothing(index_elements=["benchmark_id"])
+                            .returning(BenchmarkRecordRow.benchmark_id)
+                        )
+                        if session.scalar(statement) is not None:
+                            inserted.append(record.benchmark_id)
+                        continue
+                    if session.get(BenchmarkRecordRow, record.benchmark_id) is not None:
+                        continue
+                    try:
+                        with session.begin_nested():
+                            session.add(BenchmarkRecordRow.from_dto(record))
+                            session.flush()
+                    except IntegrityError:
+                        if session.get(BenchmarkRecordRow, record.benchmark_id) is None:
+                            raise
+                    else:
+                        inserted.append(record.benchmark_id)
+        except SQLAlchemyError as error:
+            raise BenchmarkRecordDaoError("Unable to persist benchmark evidence") from error
+        return inserted
+
     def save(self, record: BenchmarkRecord) -> BenchmarkRecord:
         with self._transaction() as session:
             existing = session.get(BenchmarkRecordRow, record.benchmark_id)
             if existing is not None:
-                return record
+                return existing.to_dto()
             row = BenchmarkRecordRow.from_dto(record)
             session.add(row)
             session.flush()

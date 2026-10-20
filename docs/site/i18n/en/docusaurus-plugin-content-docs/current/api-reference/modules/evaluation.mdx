@@ -44,6 +44,40 @@ Run, workflow, case, and detail responses preserve additional stored fields. Opt
 
 Errors use the application's `application/problem+json` response with `type`, `status`, `title`, `detail`, `code`, and an optional `requestId`. Client-error `detail` can contain structured validation errors; server-error `detail` is generic to avoid exposing internal exceptions. Authentication and resource permissions still apply; declaring a response model does not grant access.
 
+### Agentic benchmark evidence
+
+Existing run/detail REST responses and Python route dictionaries may include:
+
+- `benchmark_context`: versioned test-time model, hardware and runtime metadata,
+  source configuration checksum, capture/verification times and serving Pod identities.
+- `benchmark_context_error`: why collection or topology verification was unavailable.
+- `benchmark_evidence`: ingestion status (`stored`, `partial`, `skipped`, `error`),
+  eligible `record_ids`, `inserted_ids`, `existing_ids` and per-sample `issues`.
+  Missing/invalid evidence is not reported as stored. An evidence-storage error does
+  not change the original benchmark outcome.
+
+No request fields are added. Both standalone and workflow benchmarks use the same
+terminal ingestion path. Cancelled/setup-only runs are ineligible. Failed samples
+require measured metrics, a valid test-time context and an explicit failure reason.
+Each matrix point/stage has its own stable evidence ID. Missing optional performance
+metrics remain null; P95 values are read only from measured P95 distributions.
+
+Python normalization and ingestion use the same saved run dictionary:
+
+```python
+from llm_d_lens.evaluation.benchmark_evidence import ingest_evaluate_run, normalize_evaluate_run
+
+records, issues = normalize_evaluate_run(saved_run)
+preview = ingest_evaluate_run(saved_run, apply=False)
+```
+
+Neither call fetches current metadata or substitutes planning estimates. Only
+`ingest_evaluate_run(saved_run, apply=True)` appends eligible records. The administrator
+CLI `python -m llm_d_lens.evaluation.benchmark_evidence` defaults to preview, supports
+repeated `--run-id <uuid>` filters and requires `--apply` for writes. Preview reports
+`eligible` rather than `stored` for new valid records and uses `eligible_ids` instead
+of `inserted_ids`.
+
 ### Get benchmark defaults
 
 Get llm-d-benchmark default repository and runtime settings Lens Evaluate will use.

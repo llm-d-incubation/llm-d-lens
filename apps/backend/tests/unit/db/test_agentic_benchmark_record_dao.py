@@ -9,6 +9,15 @@ from llm_d_lens.agentic.benchmark_evidence import (
     WorkloadProfile,
 )
 from llm_d_lens.db.dao.agentic_benchmark_record import BenchmarkRecordDao
+from llm_d_lens.db.models.agentic_benchmark_record import _evaluate_run_id
+
+
+def test_stage_evidence_soft_reference_retains_only_the_source_run_id():
+    run_id = "00000000-0000-4000-8000-000000000001"
+    assert _evaluate_run_id(f"evaluate:{run_id}:matrix:0:stage:1") == run_id
+    assert _evaluate_run_id(f"evaluate:{run_id}:stage:0") == run_id
+    assert _evaluate_run_id(f"evaluate:{run_id}") == run_id
+    assert _evaluate_run_id("simulation:abcd1234") is None
 
 
 def _record(benchmark_id: str, *, outcome: str = "succeeded", **overrides) -> BenchmarkRecord:

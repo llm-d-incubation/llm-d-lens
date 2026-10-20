@@ -14,6 +14,38 @@ import TabItem from '@theme/TabItem';
 
 错误使用应用的 `application/problem+json` 响应格式，包含 `type`、`status`、`title`、`detail`、`code` 以及可选的 `requestId`。`detail` 字段可以包含结构化的校验错误。认证和资源权限仍然适用；声明一个响应模型并不会授予访问权限。
 
+### Agentic 基准测试证据
+
+现有运行/详情 REST 响应和 Python 路由返回的字典可能包含：
+
+- `benchmark_context`：带版本号的测试时模型、硬件及运行时元数据，
+  以及配置校验和、采集/验证时间和服务 Pod 身份。
+- `benchmark_context_error`：元数据采集或拓扑验证不可用的原因。
+- `benchmark_evidence`：入库状态（`stored`、`partial`、`skipped`、`error`），
+  符合条件的 `record_ids`、`inserted_ids`、`existing_ids`，以及逐样本的 `issues`。
+  缺失或无效证据不会报告为已入库。证据存储错误不会改变原始压测结果状态。
+
+不增加请求字段。独立运行与工作流基准测试共用同一终态入库路径。
+取消或只完成准备阶段的运行不符合条件。失败样本需要实测指标、
+有效的测试时上下文和明确失败原因。每个矩阵点/阶段都有独立的稳定证据 ID。
+缺失的可选性能指标保持 null，P95 值只取实测 P95 分布。
+
+Python 标准化和入库函数使用同一份已保存的运行字典：
+
+```python
+from llm_d_lens.evaluation.benchmark_evidence import ingest_evaluate_run, normalize_evaluate_run
+
+records, issues = normalize_evaluate_run(saved_run)
+preview = ingest_evaluate_run(saved_run, apply=False)
+```
+
+两个函数均不会查询当前元数据，也不会使用规划估算替代历史事实。
+只有 `ingest_evaluate_run(saved_run, apply=True)` 才会追加符合条件的记录。
+管理员命令 `python -m llm_d_lens.evaluation.benchmark_evidence` 默认只预览，
+可重复传入 `--run-id <uuid>` 筛选记录，写入需要显式添加 `--apply`。
+预览时，新符合条件的记录报告为 `eligible` 而非 `stored`，
+并使用 `eligible_ids` 而非 `inserted_ids`。
+
 ### 获取基准测试默认值
 
 获取 Lens Evaluate 将使用的 llm-d-benchmark 默认仓库和运行时设置。

@@ -210,7 +210,7 @@ Other common conventions:
 Before expanding each table, clarify two easy-to-confuse points that will appear in the field tables below:
 
 1. **Two different things both named `ConfigurationArtifact`**: `llm_d_lens.deploy.contracts.ConfigurationArtifact` (a **temporary reference** embedded in `DeploymentCreateRequest` / `DeploymentExecution`, with only a few fields such as `artifact_id`, matching Rule 6 and stored as `JSONVariant`) and `llm_d_lens.configuration.models.ConfigurationArtifactRecord` (a **saved configuration-artifact catalog entry**, corresponding to the standalone `configuration_artifacts` table, whose primary key is also `artifact_id`). The foreign key `evaluate_runs.configuration_artifact_id` points to the **latter** (the saved catalog entry), not the former.
-2. **`agentic_benchmark_records.evaluate_run_id` is a best-effort derived column, not a strict `FOREIGN KEY`**: in the current code, `benchmark_id = f"evaluate:{task_id}"` (`agentic/facts.py`), meaning the namespace of `benchmark_id` currently has only one source (evaluate tasks), but the `BenchmarkRecord` DTO itself does not declare any field pointing to evaluate — future prefixes are entirely possible (for example, manually submitted benchmark tests). Therefore, this column is derived in the application layer by parsing whether `benchmark_id` looks like `evaluate:<id>`, and **does not create a database-level foreign-key constraint** (no `ON DELETE` semantics; it is purely a nullable auxiliary indexed column). In the field table it is marked as "(soft reference, not FK)".
+2. **`agentic_benchmark_records.evaluate_run_id` is a best-effort derived column, not a strict `FOREIGN KEY`**: `evaluation/benchmark_evidence.py` emits IDs beginning with `evaluate:<uuid>`, optionally followed by matrix/stage suffixes. The column retains only that UUID. The `BenchmarkRecord` DTO itself does not require an Evaluate reference; future prefixes may identify other benchmark sources. This is **not a database-level foreign-key constraint**: deleting Evaluate history does not delete permanent benchmark evidence. In the field table it is marked as "(soft reference, not FK)".
 3. **`monitoring_*_operations.cluster_id` is likewise a best-effort derived column**: `AcceleratorStatusResponse.context` / `namespace` is only a kubeconfig context-name string. The application layer must match it against the kubeconfig of registered clusters in the `clusters` table to reverse-lookup a `cluster_id`; if no match is found, it remains null. This is the Rule-2 case of "cross-module reference where the source has no direct ID": it becomes a nullable real foreign key (`SET NULL`), but the write timing is "after the application layer completes the matching," rather than being expanded directly from the DTO.
 
 #### 5.4 Per-table field design
@@ -534,6 +534,41 @@ Indexes: `(workflow_id)`, `(status)`.
 **Function**: append-only storage of a complete snapshot of model/hardware/runtime/load/configuration/metrics for each benchmark test, for later retrieval of historical benchmark data (such as Agentic intelligent configuration recommendations).
 
 Corresponds to `llm_d_lens.agentic.benchmark_evidence.BenchmarkRecord`. All 6 nested submodels (`model` / `hardware` / `runtime` / `workload` / `configuration` / `metrics`) are expanded according to Rule 2, making this one of the 15 tables with many fields (the table with the most columns is the newly added `simulation_tasks`; see §5.4.15).
+
+Evaluate terminal persistence calls `evaluation.benchmark_evidence.ingest_evaluate_run`.
+It validates the saved configuration checksum, test-time model/device/runtime snapshot,
+measurement window, workload and measured metrics before appending evidence. Matrix
+points and load stages have separate deterministic IDs (`evaluate:<uuid>:matrix:<i>:stage:<j>`
+or `evaluate:<uuid>:stage:<j>`); `evaluate_run_id` retains only the source UUID.
+Repeated ingestion never updates an existing record. Missing evidence is reported in
+the source Evaluate record's `benchmark_evidence`, not replaced with planning-time facts.
+Simulation history collection no longer writes mislabeled Evaluate evidence.
+
+Metadata enrichment uses bounded, read-only Kubernetes queries and serving-container
+introspection before traffic. Local model config and safetensors headers establish model
+identity/architecture and serialized parameter count; accelerator properties and installed
+runtime metadata establish device memory and version. Pod UID, container image identity
+and restart count must remain stable through completion. Packed quantized weights,
+ambiguous model sources, heterogeneous replicas and unsupported topologies are not
+silently approximated. No schema migration is required: diagnostic snapshots live in
+`evaluate_runs.extra`, while normalized evidence uses the existing columns.
+
+For generated random workloads, the configured shared-prefix ratio is zero; generated
+single-turn shared-prefix workloads use system-prompt length divided by total input
+length. `prefill_fraction` records the measured input-token share of input plus output
+tokens, not a fabricated compute-time measurement. Mean/P95 input lengths and mean output
+lengths come from lifecycle token distributions. Concurrency is the closed-loop stage
+setting or measured request-time overlap divided by the measurement duration; request
+rate is measured request throughput. P95 latency is never replaced by the median, and
+error rate is a fraction derived from explicit success/failure counts, not a percentage.
+
+Historical ingestion uses exactly the same normalizer, without querying the current
+cluster to invent historical state. From the configured backend environment, run
+`python -m llm_d_lens.evaluation.benchmark_evidence` for a read-only preview; optionally
+select source records with repeated `--run-id <uuid>`. Add `--apply` to append eligible
+records and save the per-run ingestion report. Missing snapshots/artifacts produce
+explicit skip reasons; infrastructure errors produce a nonzero exit. Never run migrations
+or metadata probes as part of this backfill.
 
 | Column name | SQLAlchemy type | Nullable | PK | FK | Default | Description |
 |---|---|---|---|---|---|---|

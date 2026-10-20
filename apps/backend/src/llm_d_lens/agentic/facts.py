@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import asdict
-from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -19,17 +18,6 @@ from llm_d_lens.deploy.application import deployment_run_manager
 from llm_d_lens.hardware.registry import all_profiles
 from llm_d_lens.simulation.service import list_tasks
 
-from .benchmark_evidence import (
-    BenchmarkMetrics,
-    BenchmarkRecord,
-    CandidateConfiguration,
-    HardwareDescriptor,
-    ModelDescriptor,
-    RuntimeFingerprint,
-)
-from .benchmark_evidence import (
-    WorkloadProfile as BenchmarkWorkloadProfile,
-)
 from .benchmark_store import JsonBenchmarkRecordStore
 from .planner import AICCandidatePrediction, PlanningFacts, resolve_workload_signals
 
@@ -297,9 +285,6 @@ async def _supplementary_evidence(
         evidence.append(PlanningEvidence(id="deploy-history", source="deploy-history", status="unavailable"))
     try:
         simulations = await list_tasks(status="completed", model=model_name, limit=20)
-        topology_by_execution = _historical_topology_by_execution()
-        observations = await _similar_historical_observations(simulations.tasks, facts, topology_by_execution)
-        _persist_benchmark_records(model_name, facts, observations)
         evidence.append(
             PlanningEvidence(
                 id="simulation-history",
@@ -443,58 +428,6 @@ async def _similar_historical_observations(
             }
         )
     return sorted(observations, key=lambda item: (-item["similarity"], item["task_id"]))[:3]
-
-
-def _persist_benchmark_records(model_name: str, facts: PlanningFacts, observations: list[dict[str, Any]]) -> None:
-    """Normalize completed Evaluate observations into versioned, reusable benchmark evidence."""
-    profile = facts.workload_profile
-    if profile is None:
-        return
-    store = JsonBenchmarkRecordStore()
-    for observation in observations:
-        if not observation.get("tensor_parallel_size") or not observation.get("replicas"):
-            continue
-        store.save(
-            BenchmarkRecord(
-                benchmark_id=f"evaluate:{observation['task_id']}",
-                timestamp=datetime.now(UTC),
-                outcome="succeeded",
-                model=ModelDescriptor(
-                    model_id=model_name,
-                    family=model_name.split("/")[0],
-                    architecture="dense",
-                    parameter_count_b=max(facts.model_weight_gib / 2, 0.1),
-                    quantization="unknown",
-                    tokenizer_id=model_name,
-                ),
-                hardware=HardwareDescriptor(
-                    accelerator="cluster",
-                    vram_per_gpu_gib=facts.vram_per_gpu_gib,
-                    gpu_count=max(observation.get("required_gpus") or 1, 1),
-                ),
-                runtime=RuntimeFingerprint(backend="vllm", backend_version="unknown", accelerator_runtime="unknown"),
-                workload=BenchmarkWorkloadProfile(
-                    mean_input_tokens=profile.mean_input_tokens or facts.context_length,
-                    p95_input_tokens=profile.p95_input_tokens or profile.mean_input_tokens or facts.context_length,
-                    mean_output_tokens=profile.mean_output_tokens or 256,
-                    concurrency=profile.concurrency or 1,
-                    request_rate=profile.request_rate or 1,
-                    shared_prefix_ratio=profile.shared_prefix_ratio or 0,
-                    prefill_fraction=1.0 if facts.prefill_heavy else 0.0,
-                ),
-                configuration=CandidateConfiguration(
-                    topology=observation.get("provider_ref") or "baseline-vllm",
-                    decode_tp=observation["tensor_parallel_size"],
-                    decode_replicas=observation["replicas"],
-                    optimizations=(observation.get("guide_variant") or "",),
-                ),
-                metrics=BenchmarkMetrics(
-                    ttft_p95_ms=observation.get("ttft_p95_ms"),
-                    tpot_p95_ms=observation.get("tpot_p95_ms"),
-                    throughput_tokens_per_s=observation.get("throughput_tokens_per_sec"),
-                ),
-            )
-        )
 
 
 def _mean(values) -> float | None:

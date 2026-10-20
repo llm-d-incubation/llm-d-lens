@@ -63,6 +63,9 @@ class BenchmarkRunResponse(EvaluationResponse):
     rate_stage_results: list[dict[str, Any]] | None = None
     deployment_cases: list[dict[str, Any]] | None = None
     resource_snapshot: dict[str, Any] | None = None
+    benchmark_context: dict[str, Any] | None = None
+    benchmark_context_error: str | None = None
+    benchmark_evidence: dict[str, Any] | None = None
     error: str | None = None
 
 
