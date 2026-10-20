@@ -435,8 +435,9 @@ Implemented the initial cluster-aware API and deployment binding:
 - `RuntimeClassPolicy` supports `auto`, `node-default` and `named`. Run-time
     overrides take precedence over saved per-configuration provenance preferences.
     Standard and Agentic requests accept the same policy; MCP reuses these APIs.
-- Manual create/edit and Agentic forms expose the selection. Offline providers
-    do not inject unverified defaults. The common deployment adapter validates
+- RuntimeClass overrides are available through backend APIs only; Manual
+    create/edit and Agentic forms do not expose a RuntimeClass input. Offline
+    providers do not inject unverified defaults. The common deployment adapter validates
     class availability and node selectors/names before writes, records policy and
     warnings, and derives deployment output without modifying published sources.
 - Tests cover unavailable suggestions, explicit overrides, discovery failures,

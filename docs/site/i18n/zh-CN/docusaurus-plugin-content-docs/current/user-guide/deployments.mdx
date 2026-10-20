@@ -21,17 +21,11 @@ Agentic 的分层前缀缓存表达 native CPU 缓存需求，不固定源码目
 Lens 会根据所选源码解析 `native/cpu` 或 `native/cpu/base`，并兼容旧路径。
 缺少对应入口时会报错，不会替换为其他缓存实现、存储层或平台专用配置。
 
-## 选择 RuntimeClass
+## RuntimeClass 策略
 
-在 Manual 配置编辑器的 **Advanced settings** 或 Agentic 需求表单中选择
-**RuntimeClass**。**Automatic** 按目标集群校验 profile 建议，并保留清单已有的显式类。
-**Node default runtime** 省略 `runtimeClassName`，仅适用于默认运行时已提供设备访问的
-集群。选择具体名称表示显式覆盖，该类必须存在于目标集群。
-
-编辑器会在保存和重新打开配置时保留偏好。发现失败会显示错误，不会伪装成空列表。
-切换集群不会静默重置选择，部署时会重新校验。发现能检查类名称和节点选择器兼容性，
-不能证明 handler、CDI 或驱动已就绪。修改选择会生成新的部署产物，不修改已有部署
-或已发布的源清单。
+RuntimeClass 发现与策略覆盖仅通过后端 API 提供，Manual 和 Agentic 表单不提供
+RuntimeClass 输入项。发现接口、策略模式和请求示例请参阅
+[部署 API 参考](../api-reference/modules/deployments.mdx)。
 
 ## 在列表中查找部署
 

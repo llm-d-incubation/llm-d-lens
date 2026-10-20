@@ -21,20 +21,11 @@ export async function listDeploymentNodeLabels(clusterId, signal) {
     return payload.items || [];
 }
 
-export async function listDeploymentRuntimeClasses(clusterId, signal) {
-    const payload = await requestJson(`/api/v1/deployments/runtime-classes?cluster_id=${encodeURIComponent(clusterId)}`, { signal });
-    if (!Array.isArray(payload.items)) throw new Error('RuntimeClass discovery response is invalid');
-    return payload;
-}
-
-export async function startLocalDeployment(configurations, provenance, placement, runtimeClass) {
+export async function startLocalDeployment(configurations, provenance, placement) {
     return post('/api/v1/deployments/runs', {
         configurations,
         provenance,
-        ...(placement || runtimeClass ? { runtime_binding: {
-            ...(placement ? { placement } : {}),
-            ...(runtimeClass ? { runtime_class: runtimeClass } : {}),
-        } } : {}),
+        ...(placement ? { runtime_binding: { placement } } : {}),
     });
 }
 
