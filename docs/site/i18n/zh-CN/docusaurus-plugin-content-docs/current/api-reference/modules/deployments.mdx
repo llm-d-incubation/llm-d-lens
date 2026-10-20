@@ -42,6 +42,17 @@ Simulation 不负责部署生命周期。
 
 ### 执行、观察与证据
 
+普通 provider 渲染会把各角色的 `maxModelLen`、`maxNumSeqs`、
+`gpuMemoryUtilization`、`blockSize` 和 `maxNumBatchedTokens` 映射为对应的 vLLM 参数。
+P/D 分别使用 `prefill` 和 `decode`；其他 provider 使用 `decode`
+（`precise-prefix-cache-routing` 也接受 `serving`）。角色未指定长度时，
+使用 `model.maxModelLen`。显式整数控制项必须为正整数；
+`gpuMemoryUtilization` 必须为有限数，且大于零、不超过一。
+非法值会使验证或渲染失败，不会静默回退。匹配目标角色的 `customParameters`
+覆盖结构化控制项。普通渲染会替换 `--name=value` 和 `--name value` 两种形式；
+省略的字段保留 Guide 默认值。精确发布的 `officialGuide` 清单继续走现有清单验证路径，
+不会由普通 provider 参数映射重写。
+
 `DeploymentExecution` 包含 `execution_id`、`request_id`、`status`、`artifact`、
 `configuration_artifacts`、可选 `endpoint`/`namespace`/`resource_snapshot`、
 `provenance`、`evidence_refs`、可选版本化 `diagnostics` 和时间戳。

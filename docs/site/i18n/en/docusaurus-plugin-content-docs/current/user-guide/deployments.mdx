@@ -113,6 +113,15 @@ proof of readiness; the provider's readiness checks must still pass.
 
 ## View pods and stream logs
 
+For newly rendered deployments, all providers forward explicit maximum model
+length, maximum sequence count, GPU memory utilization, block size and maximum
+batched tokens to vLLM. P/D applies Prefill and Decode settings independently.
+Role settings override Guide defaults; model-level maximum length is a fallback
+when the role does not specify one. Targeted custom arguments take precedence.
+Omitted settings retain upstream defaults. These changes do not rewrite existing
+Pods or exact published manifests: create a new deployment to apply changed settings.
+Check the model-server command and logs when diagnosing KV-cache capacity errors.
+
 Lens checks `/dev/shm` in rendered model-server Pods across all deployment
 providers. Ordinary rendering adds a per-Pod, memory-backed `emptyDir` with a
 **4 GiB** limit when the mount is missing and host IPC is not enabled.

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -48,6 +49,53 @@ def _asset(name: str, content: str) -> dict[str, str]:
         "content": content,
         "checksum": f"sha256:{hashlib.sha256(content.encode('utf-8')).hexdigest()}",
     }
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["baseline-vllm", "pd-disaggregation", "tiered-prefix-cache", "precise-prefix-cache-routing", "optimized-baseline"],
+)
+@pytest.mark.parametrize("invalid", [False, True])
+def test_provider_serving_controls_validate_explicit_values_and_fall_back_to_model(tmp_path, provider, invalid):
+    from llm_d_lens.deploy.providers.baseline_vllm import BaselineVllmAdapter
+    from llm_d_lens.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter
+    from llm_d_lens.deploy.providers.optimized_baseline import OptimizedBaselineGuideAdapter
+    from llm_d_lens.deploy.providers.pd_disaggregation import PdDisaggregationAdapter
+    from llm_d_lens.deploy.providers.precise_prefix_cache_routing import PrecisePrefixCacheRoutingAdapter
+
+    overrides = {
+        "model": {"name": "org/model", "maxModelLen": 4096},
+        "runtime": {"image": "example/vllm:1", "imageMode": "use-upstream-image"},
+        "prefill": {"replicaCount": 1, "tensorParallelSize": 1},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+    }
+    if invalid:
+        overrides["decode"]["maxModelLen"] = 0
+
+    def parameters():
+        if provider == "optimized-baseline":
+            adapter = OptimizedBaselineGuideAdapter.__new__(OptimizedBaselineGuideAdapter)
+            return adapter._deployment_parameters(overrides)[2]["serving_arguments"]
+        if provider == "baseline-vllm":
+            return BaselineVllmAdapter._parameters(overrides)["serving_arguments"]
+        if provider == "pd-disaggregation":
+            adapter = PdDisaggregationAdapter.__new__(PdDisaggregationAdapter)
+            adapter._sources = {"vllm": tmp_path}
+            parsed = adapter._parameters(overrides)
+            assert parsed["prefill"]["serving_arguments"] == {"max-model-len": 4096}
+            return parsed["decode"]["serving_arguments"]
+        if provider == "tiered-prefix-cache":
+            adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+            adapter._descriptor = SimpleNamespace(variants={"base": tmp_path}, guide_id=provider)
+        else:
+            adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+        return adapter._parameters(overrides)["serving_arguments"]
+
+    if invalid:
+        with pytest.raises(ValueError, match="maxModelLen"):
+            parameters()
+    else:
+        assert parameters() == {"max-model-len": 4096}
 
 
 def test_same_node_placement_adds_required_pod_affinity():

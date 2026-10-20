@@ -3,7 +3,61 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any, Protocol
+
+
+def serving_arguments(model: dict[str, Any], component: dict[str, Any]) -> dict[str, int | float]:
+    """Translate explicit serving controls; omitted fields retain Guide defaults."""
+    result: dict[str, int | float] = {}
+    for field_name, argument in (
+        ("maxModelLen", "max-model-len"),
+        ("maxNumSeqs", "max-num-seqs"),
+        ("gpuMemoryUtilization", "gpu-memory-utilization"),
+        ("blockSize", "block-size"),
+        ("maxNumBatchedTokens", "max-num-batched-tokens"),
+    ):
+        value = component.get(field_name)
+        if value is None and field_name == "maxModelLen":
+            value = model.get(field_name)
+        if value is None:
+            continue
+        if field_name == "gpuMemoryUtilization":
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(value)
+                or not 0 < value <= 1
+            ):
+                raise ValueError(f"{field_name} must be a number greater than 0 and at most 1")
+        elif isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{field_name} must be a positive integer")
+        result[argument] = value
+    return result
+
+
+def set_vllm_argument(args: list[str], name: str, value: object) -> list[str]:
+    """Replace all occurrences, including the two-token form used by Guides."""
+    boolean = name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"} and str(value).lower() in {
+        "true",
+        "false",
+    }
+    flags = {f"--{name}", f"--no-{name}"} if boolean else {f"--{name}"}
+    result = []
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item in flags:
+            index += 1 if boolean else 2
+        else:
+            if not any(item.startswith(f"{flag}=") for flag in flags):
+                result.append(item)
+            index += 1
+    if boolean:
+        result.append(f"--{name}" if str(value).lower() == "true" else f"--no-{name}")
+    else:
+        result.append(f"--{name}={value}")
+    return result
 
 
 @dataclass(frozen=True)

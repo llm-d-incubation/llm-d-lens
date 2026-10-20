@@ -38,7 +38,13 @@ from llm_d_lens.deploy.providers.deployment_bundle import (
     subprocess_bundle_runner,
     text_checksum,
 )
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.hardware_profile import (
     guide_overlays,
     overlay_variant,
@@ -767,8 +773,7 @@ class PrecisePrefixCacheRoutingAdapter:
             "mount_path": mount_path,
             "replicas": replicas,
             "tensor_parallel_size": tensor_parallel,
-            "max_model_len": decode.get("maxModelLen"),
-            "gpu_memory_utilization": decode.get("gpuMemoryUtilization"),
+            "serving_arguments": serving_arguments(model, decode),
             "environment": runtime.get("environment") if isinstance(runtime.get("environment"), dict) else {},
             "custom_parameters": overrides.get("customParameters") or [],
             "peak_prefill_throughput": (int(peak_prefill_throughput) if peak_prefill_throughput is not None else None),
@@ -813,10 +818,8 @@ class PrecisePrefixCacheRoutingAdapter:
                     serialized if argument == "--kv-events-config" else f"--kv-events-config={serialized}"
                 )
         args = _set_argument(args, "tensor-parallel-size", parameters["tensor_parallel_size"])
-        if parameters["max_model_len"]:
-            args = _set_argument(args, "max-model-len", parameters["max_model_len"])
-        if parameters["gpu_memory_utilization"]:
-            args = _set_argument(args, "gpu-memory-utilization", parameters["gpu_memory_utilization"])
+        for name, value in parameters["serving_arguments"].items():
+            args = _set_argument(args, name, value)
         environment = list(container.get("env") or [])
         for custom in parameters["custom_parameters"]:
             if custom.get("target") not in {"decode", "both"}:
@@ -858,10 +861,7 @@ class PrecisePrefixCacheRoutingAdapter:
 
 
 def _set_argument(args: list[str], name: str, value: object) -> list[str]:
-    prefix = f"--{name}="
-    if any(item.startswith(prefix) for item in args):
-        return [f"{prefix}{value}" if item.startswith(prefix) else item for item in args]
-    return [*args, f"{prefix}{value}"]
+    return set_vllm_argument(args, name, value)
 
 
 def _set_environment(items: list[dict[str, Any]], name: str, value: object) -> list[dict[str, Any]]:

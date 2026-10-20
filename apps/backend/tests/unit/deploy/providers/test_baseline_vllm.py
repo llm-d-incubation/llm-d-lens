@@ -32,6 +32,33 @@ def _environment(container):
     return {item["name"]: item.get("value") for item in container["env"]}
 
 
+def test_structured_serving_parameters_reach_vllm():
+    overrides = _base_overrides()
+    overrides["decode"].update(
+        maxModelLen=4096, maxNumSeqs=128, gpuMemoryUtilization=0.85, blockSize=32, maxNumBatchedTokens=8192
+    )
+    args = _container(overrides)["args"]
+    for argument in (
+        "--max-model-len=4096",
+        "--max-num-seqs=128",
+        "--gpu-memory-utilization=0.85",
+        "--block-size=32",
+        "--max-num-batched-tokens=8192",
+    ):
+        assert argument in args
+
+
+def test_global_model_length_fallback_and_custom_override():
+    overrides = _base_overrides()
+    overrides["model"]["maxModelLen"] = 4096
+    assert "--max-model-len=4096" in _container(overrides)["args"]
+    overrides["customParameters"] = [
+        {"target": "decode", "kind": "argument", "name": "max-model-len", "value": "2048"}
+    ]
+    args = _container(overrides)["args"]
+    assert [arg for arg in args if arg.startswith("--max-model-len")] == ["--max-model-len=2048"]
+
+
 def test_cluster_accelerator_requires_one_resolved_profile():
     with pytest.raises(ValueError, match="exactly one accelerator profile"):
         cluster_accelerator({"accelerators": []})

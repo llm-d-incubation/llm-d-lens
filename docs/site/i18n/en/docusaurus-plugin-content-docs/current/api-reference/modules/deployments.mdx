@@ -45,6 +45,19 @@ does not accept arbitrary resource selectors.
 
 ### Execution, observation and evidence
 
+Ordinary provider rendering maps `maxModelLen`, `maxNumSeqs`,
+`gpuMemoryUtilization`, `blockSize` and `maxNumBatchedTokens` from each role
+to the corresponding vLLM arguments. P/D uses separate `prefill` and `decode`
+values; other providers use `decode` (`precise-prefix-cache-routing` also accepts
+`serving`). `model.maxModelLen` supplies a fallback for missing role lengths.
+Explicit integer controls must be positive integers; `gpuMemoryUtilization`
+must be finite and greater than zero and at most one. Invalid values fail
+validation/rendering instead of silently falling back. Applicable
+`customParameters` override structured controls. Ordinary rendering replaces both
+`--name=value` and `--name value` forms; omitted controls preserve Guide defaults.
+Exact published `officialGuide` manifests remain on their existing validated
+manifest path rather than being rewritten by ordinary provider parameter mapping.
+
 `DeploymentExecution` carries `execution_id`, `request_id`, `status`, `artifact`,
 `configuration_artifacts`, optional `endpoint`/`namespace`/`resource_snapshot`,
 `provenance`, `evidence_refs`, optional versioned `diagnostics` and timestamps.

@@ -13,7 +13,13 @@ import yaml
 
 from llm_d_lens.core.hashing import stable_hash
 from llm_d_lens.deploy.providers.gpu_selection import gpu_device_selectors
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.hardware_profile import (
     active_profile,
     claim_request_name,
@@ -277,7 +283,7 @@ class BaselineVllmAdapter:
             or ("shared-path" if runtime.get("mountPath") else "huggingface"),
             "environment": runtime.get("environment") or {},
             "custom_parameters": overrides.get("customParameters") or [],
-            "max_model_len": decode.get("maxModelLen"),
+            "serving_arguments": serving_arguments(model, decode),
         }
 
     @staticmethod
@@ -324,8 +330,8 @@ class BaselineVllmAdapter:
         mount_active = bool(resolved_mount) or bool(parameters["mount_path"]) or bool(parameters["pvc_name"])
         served_model = "/model-cache" if active_model_source == "shared-path" and mount_active else parameters["model"]
         args = [served_model, "--port=8000", f"--tensor-parallel-size={parameters['tensor_parallel_size']}"]
-        if isinstance(parameters.get("max_model_len"), int) and parameters["max_model_len"] > 0:
-            args.append(f"--max-model-len={parameters['max_model_len']}")
+        for name, value in parameters["serving_arguments"].items():
+            args = set_vllm_argument(args, name, value)
         environment = [
             {"name": name, "value": str(value)} for name, value in sorted(parameters["environment"].items()) if value
         ]
@@ -346,15 +352,7 @@ class BaselineVllmAdapter:
             if item.get("target") not in {"decode", "both"}:
                 continue
             if item.get("kind") == "argument":
-                name = item["name"]
-                value = str(item["value"]).lower()
-                if name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"} and value in {
-                    "true",
-                    "false",
-                }:
-                    args.append(f"--{name}" if value == "true" else f"--no-{name}")
-                else:
-                    args.append(f"--{name}={item['value']}")
+                args = set_vllm_argument(args, item["name"], item["value"])
             elif item.get("kind") == "environment":
                 environment.append({"name": item["name"], "value": item["value"]})
         managed_environment = model_cache_environment(active_model_source, cache_mounted=mount_active)
