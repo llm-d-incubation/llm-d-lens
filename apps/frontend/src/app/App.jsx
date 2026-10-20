@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, useRef, useEffect } from 'react';
+import { lazy, Suspense, useState, useRef, useEffect } from 'react';
 import ErrorBoundary from './providers/ErrorBoundary';
 import { firstAccessibleView, resolveView } from './routes/views';
 import { ClusterMonitoringStackDashboard, OptimizationClusterOverview } from '../pages/clusters';
@@ -32,6 +32,7 @@ import {
 } from '../pages/optimization';
 import { EvaluationDashboardEntry, EvaluationTaskWizard, OptimizationEvaluationDetails } from '../pages/evaluation';
 import { SimulationDashboard, SimulationTaskDetails } from '../pages/simulation';
+const InferenceDesigner = lazy(() => import('../components/InferenceDesigner/InferenceDesigner').then((module) => ({ default: module.InferenceDesigner })));
 
 import LeftNavigation from './ui/LeftNavigation';
 import { EmptyState, LoadingState } from '../shared/ui';
@@ -297,6 +298,7 @@ function AuthenticatedApp({ initialView = null }) {
             {currentView === 'api-keys' && <ApiKeysPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'usage' && <ModelUsagePage mode="self" onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'playground' && <PlaygroundPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
+            {currentView === 'custom-deployment-configuration' && <Suspense fallback={<LoadingState />}><InferenceDesigner onNavigate={handleNavigate} /></Suspense>}
             {currentView === 'optimization-deployments' && <DeploymentManagementPage key={JSON.stringify([navigationParams.deploymentSearch, navigationParams.clusterId])} initialSearch={navigationParams.deploymentSearch} initialClusterId={navigationParams.clusterId || ''} onNavigate={handleNavigate} />}
             {(currentView === 'model-market' || (currentView === 'model-cache' && cacheFromModelMarket)) && (
               <div hidden={currentView !== 'model-market'}>

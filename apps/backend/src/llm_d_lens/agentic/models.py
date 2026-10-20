@@ -42,6 +42,7 @@ class AgenticDeploymentCreateRequest(StandardKubernetesServiceRequest):
     planning_facts: PlanningFacts
     planner_prompt: str | None = Field(default=None, max_length=2_000)
     ai_provider_id: str | None = Field(default=None, max_length=200)
+    composition_mode: Literal["advanced", "agentic"] | None = None
 
 
 class AgenticCandidateRefinementRequest(BaseModel):

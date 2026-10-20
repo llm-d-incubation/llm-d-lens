@@ -21,7 +21,7 @@ function initialAccessModeFor(status, supportedAccessModes = []) {
 }
 
 export function InstallAcceleratorModal(props) {
-    return props.isOpen ? <InstallAcceleratorModalForm {...props} /> : null;
+    return props.isOpen ? <InstallAcceleratorModalForm key={`${props.clusterId}:${props.accelerator}`} {...props} /> : null;
 }
 
 function InstallAcceleratorModalForm({ isOpen, accelerator, defaultNamespace, status, supportedAccessModes = [], initialAccessMode, clusterId, onClose, onOperationStarted }) {

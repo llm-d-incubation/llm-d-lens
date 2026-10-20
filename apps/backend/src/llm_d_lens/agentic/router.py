@@ -5,8 +5,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from llm_d_lens.auth.access import current_principal, owner_for_create
+from llm_d_lens.auth.access import current_principal, owner_for_create, require_cluster_access
+from llm_d_lens.cluster.sessions import require_active_session
 
+from .composition import CompositionSelectionRequest, select_composition_optimizations
 from .models import (
     AgenticCandidateRefinementRequest,
     AgenticCandidateSelectionRequest,
@@ -18,6 +20,29 @@ from .streaming import planning_stream_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agentic-deployments", tags=["agentic-deployments"])
+
+
+@router.post(
+    "/{run_id}/composition-selection",
+    summary="Select source optimizations for a pending Agentic Deployment plan.",
+    description=(
+        "Update the bounded source optimizations for an Agentic Deployment plan that is awaiting approval. "
+        "Requires access to the plan's cluster and an active cluster session."
+    ),
+    operation_id="select_agentic_composition_optimizations",
+)
+async def composition_selection(run_id: str, body: CompositionSelectionRequest, request: Request):
+    run = service.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="agentic deployment run not found")
+    session = require_active_session(run.request.cluster_session_id)
+    require_cluster_access(current_principal(request), session.server_id)
+    if run.status != "awaiting_approval" or run.request.composition_mode is None:
+        raise HTTPException(status_code=409, detail="A pending composition plan is required")
+    try:
+        return await select_composition_optimizations(run, body)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.post(

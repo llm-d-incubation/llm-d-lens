@@ -1,0 +1,490 @@
+---
+title: Custom Deployment
+description: Configure source-backed inference deployments and inspect the generated resource map.
+---
+
+Open **Custom Deployment** in the left navigation, or use
+`?view=custom-deployment-configuration`. This standalone page requires
+`configuration:artifact:read`. Generation additionally requires
+`guide:plan:execute` and `configuration:artifact:render`; saving requires
+`configuration:artifact:save`. Deploy also requires `deployment:run:create`. Backend authorization remains authoritative.
+
+## Read the 3D map
+
+The map uses Three.js with independently stacked horizontal planes, cubes,
+relationship markers and floating controls. It borrows Horizon's infrastructure
+map interaction: clicking an optimization diamond or its Tiers row toggles its independent optimization intent and includes required dependencies. Clicking a module cube or tier only inspects and focuses it. Hovering never changes selection.
+
+| Layer | Meaning |
+| --- | --- |
+| Inference flow | Logical request stages: API/client → input preparation → endpoint selection → Prefill → Decode → stream response; output streams back to the client. These stages are logical responsibilities, not independent deployments. |
+| Serving components | EPP/router, a model server or separate Prefill/Decode model servers, optional KV index and CPU cache. |
+| Kubernetes platform | Target cluster, Service endpoints, model-server Pods and worker-node resources. These are desired resource groups, not discovered live inventory. |
+
+**Cubes** represent modules. **Diamonds** represent optimization capabilities:
+
+- **Relationship optimization**: Prefill/Decode disaggregation is attached to Prefill → Decode;
+  precise routing to KV index → EPP; offload/restore to model workers ↔ CPU cache.
+- **Module optimization**: TP/batching belongs to an engine worker; speculative
+  decoding belongs to Decode; autoscaling belongs to the workload.
+- Source-backed capabilities open the component editor; availability depends on the selected source version.
+
+The scene uses quiet module labels and short role descriptions, with overlapping
+labels hidden while orbiting. Colors distinguish responsibilities within a layer:
+sky for ingress, streaming and KV storage; amber for scheduling and discovery;
+emerald for prompt compute and workloads; violet for input processing, token
+generation and compute resources. Dimmed markers are inactive; unavailable
+source references stay gray. Matching dots appear in **Tiers**.
+
+Each module tile previews at most six optimization diamonds. Dense groups such
+as **Model-server Pods** show a `+N more · Tiers` annotation; click the module and use
+its bounded, scrollable Tiers group to access every optimization. Selecting an
+optimization outside the preview anchors its details to the owning module.
+Hover a cube or diamond to inspect it; click a diamond to toggle its inclusion.
+The bottom hint explains the first interaction, orbit and zoom controls.
+Planned paths animate directionally, while Decode and selected optimization rings
+pulse subtly. These are illustrations of the desired plan, not live traffic.
+Animations respect the system's reduced-motion preference and pause in hidden tabs.
+
+Clicking a tier plane in the map or its **Tiers** heading uses the same camera focus and highlights the matching section. Colored dots indicate included components; gray dots indicate inactive components. Clicking a node in either view focuses it and opens its anchored information card. Tiers mirrors the enabled colors; optimization rows toggle on click without separate checkboxes.
+The card follows its anchor as the camera moves. Its close button clears selection.
+
+Cards show the selected model and cluster, role replicas and tensor parallelism,
+cache connector and capacity, or an optimization's relationship endpoints as
+applicable. Generated resource names and bundle namespaces are shown only when
+present in the generated manifests. These are desired resources, not live discovery.
+No service identity or runtime metrics are invented for an ungenerated draft.
+
+Drag to orbit, right-drag to pan, and scroll to zoom. Compact toolbar buttons offer
+zoom, rotation and reset. Tier eye buttons control visibility independently of
+focus. Placement links appear for related selections. Moving dots show schematic
+flow direction, not observed request traffic. Reduced-motion preferences disable
+camera interpolation and moving dots. The interface supports light and dark themes.
+The keyboard-accessible Tiers list also works when WebGL is unavailable.
+
+## Configure and generate
+
+The initial source-backed plan selects **optimized-baseline** with no additional
+Guide optimizations. Once the source catalog loads, the Guides badge and selector
+include this automatic baseline and show **1**. Counts include selected presets and
+automatically included Guides, without counting the same Guide twice. Its upstream router defaults are included and labeled as such;
+Lens does not claim those defaults are disabled. Selecting another serving Guide
+replaces the fallback baseline. Clearing optional Guides restores the baseline.
+Incompatible serving recipes still report conflicts rather than silently merging
+workloads. Deployability depends on source support, target setup and validation.
+
+Cluster, cached model and hardware remain in the initial setup and context bar;
+namespace and admission validation remain in Deployment settings. They apply to
+all nodes. Node cards expose only owned selected resources. Logical stages without
+such resources have no empty parameter action. Their optimization list links to
+the relevant capability cards.
+
+
+1. On entry, choose the **Target cluster** and a ready
+   **Downloaded model**. Model Cache and Storage provide these records; only ready,
+   synchronized models are offered. The repository ID and PVC are inherited.
+   The deployment uses the existing storage namespace. The context bar reopens setup.
+2. Click an optimization diamond or its row in **Tiers** to enable it; click again
+   to disable it. The same action selects its Guide and resolves dependencies.
+   There is no separate Enable checkbox or button. Colors show inclusion, while
+   the outline identifies the inspected item. Required dependencies and baseline
+   components remain enabled and explain why in the information card.
+   Alternatively use the searchable **Guides** multi-select dropdown.
+   **Configure parameters** in the information card opens the owned resource editor.
+   The small settings icon beside an included Tiers optimization opens its parameters
+   without toggling it. Tier headings, module cubes, eye controls and Guide configuration
+   buttons never toggle optimization selection.
+3. Choose a resource card to inspect and edit its effective fields. Paths appear
+   as secondary labels; source details and advanced runtime settings are collapsible.
+   Required components cannot be removed while a selected Guide depends on them.
+4. Click **Generate** to open the output page with validation results and downloads.
+   Admission validation uses the selected cluster session and never applies resources.
+
+**Runtime image override** is the inference-engine container image, not model
+weights. It is optional and lives under **Deployment settings → Target → Advanced runtime settings**, not first-run setup. Cluster image preparation pre-pulls hardware-profile images; it does not select one image version for every deployment. Blank preserves
+source images; unresolved source image placeholders use the registered hardware
+profile. An explicit override replaces the model-server image. Model-cache-backed
+workloads mount the selected PVC read-only, use the selected repository revision,
+and run Hugging Face offline. Generation rechecks cache and storage readiness and
+cluster ownership; stale or cross-cluster selections fail.
+
+Generated assets record the source commit and chart version. Model-server YAML is
+only one part of the deployment: keep router Helm values, auxiliary resources and
+calibration assets together. Do not apply Helm values as Kubernetes resources.
+Configuration validation does not prove runtime readiness: verify CRDs, credentials,
+model access, storage, network and calibration in the target deployment environment.
+
+## Explore the optimization catalog
+
+The request plane now follows six logical stages: **API / gateway → Prepare
+input → Endpoint selection → Prefill → Decode → Stream response**. Preparation
+includes model/adapter resolution, tokenization and conditional media encoding.
+Decode has a repeated token-generation loop. Streaming returns to the client.
+These are logical responsibilities, not six separately deployed services.
+
+The runtime plane separates worker execution from the **KV cache** group. KV
+read/write, index events and offload links are not sequential request hops.
+The platform plane owns placement, startup, scaling and rollout capabilities.
+The right hierarchy groups capabilities under their stages. Use the search icon
+to find an optimization by name, description or Guide without adding text to the scene.
+
+The catalog contains 29 capability entries reviewed against llm-d source commit
+`a9cf07a77a3016db21ae87134e5745b3a2d45ba6`. The catalog's reference commit is
+separate from the target cluster's source commit used for generation.
+
+| Location | Capability families |
+| --- | --- |
+| API / input | Batch/async ingress, stateful Responses API, payload/media encoding, Encode disaggregation, model/LoRA resolution |
+| Endpoint selection | Admission/fair queuing, prefix affinity, token-load scoring, predicted latency, precise cache knowledge, pipeline coordinator |
+| Prefill | Local prefix reuse, chunked prefill, Prefill/Decode disaggregation |
+| Decode / response | TP/batching, expert/data parallelism, speculative/MTP decoding, omni output, tracing |
+| KV cache | CPU offload, disk/NVMe tiers, peer KV sharing |
+| Platform | Autoscaling, fast actuation, KEDA, snapshot restore, P2P weight loading, rollouts, runtime inventory |
+
+The initial scene uses a curated optimization vocabulary. Loading a cluster's
+source catalog adds nested Guide recipes and their source components to the map.
+The original simple generator supports a smaller set of combinations; use the
+source composer below for explicit composition of additional upstream resources.
+Model recipes represent combinations of mechanisms, not independent stages.
+Benchmarking and simulation validate deployments rather than adding request hops.
+
+## Node and deployment parameters
+
+**Configure parameters** opens fields owned by the selected node immediately.
+There is no Guide picker, resource picker, or all-fields gate in this dialog.
+Router nodes show only their plugin tuning; workload nodes show their own engine,
+capacity and resource settings. Undeclared engine/plugin defaults stay inherited.
+
+Configure **P/D disaggregation** in the first inference-flow tier. Its dialog contains
+source-defined model-server and infrastructure choices, then Prefill and Decode
+replicas, parallelism, KV-transfer and connector settings from the selected source.
+Required choices remain accessible before the workload paths resolve. Second-tier
+Prefill/Decode model-server nodes edit their respective runtime roles; the third
+tier describes Kubernetes placement, not another optimization-selection layer.
+
+**Deployment settings** opens the final configuration generated from the current
+optimization selection. **All parameters** edits typed fields across the generated
+resources; **Final YAML** edits the same complete deployment. These views stay in
+sync. Node edits and selection changes clear final overrides to avoid applying an
+old full manifest to a new topology. Generation checks the baseline checksum,
+resource references and selected capabilities, retains managed model/cache binding,
+and optionally performs admission validation before the edited result is deployed.
+
+## Guide presets and dependency selection
+
+The floating sidebar is vertically centered. Switch between **Tiers** and
+**Guides**. Open the searchable multi-select dropdown to select multiple complete
+upstream deployment recipes;
+required serving Guides are checked automatically and locked with their dependency
+reason. Reference-only entries are disabled with explanations. Only included Guides
+have configuration cards below the dropdown. Use the **+** on a card to configure
+its source variables and focus its map node. Press Escape or click outside to close
+the dropdown. **Reset to baseline** removes Guide selections, optimization overrides, variant choices and source parameter edits.
+Clear the requesting Guide to remove its automatic dependencies. Shared dependencies
+remain while another selected Guide needs them.
+
+The same resolved plan drives resource generation and map highlighting. Solid
+selection rings identify included components, muted markers identify available
+optimizations, and the sidebar distinguishes **Selected**, **Required** and **Off**.
+Each module sits on a group tile inside its tier. Clicking a module row focuses the map; clicking an optimization row also toggles its inclusion;
+hover details show target cluster, namespace, source revision, Guide and components.
+Source links appear below the description with aligned padding and space between links.
+CPU-only cache selection does not enable the filesystem tier.
+
+Open **Deployment settings** for two sections:
+
+- **Parameters** opens immediately: the current selection's final YAML and all
+  resource parameters, including the rendered router. It contains no Guide list.
+- **Target** controls namespace, admission validation, runtime image and target setup.
+  Changing clusters clears source-dependent selections and edits. Hardware remains
+  inherited from the cluster profile.
+
+Recipe selection is available separately in the sidebar's **Guides** tab. Node
+configuration never requires browsing those recipe cards.
+
+The resolver reads conditions, exports, resource references and router values from
+`guide.yaml` at the cluster's source revision. KEDA EPP brings in optimized-baseline,
+monitoring and the router feature layer. Agentic API brings in its configured base
+serving Guide. Older KEDA queue/saturation and multimodal section names resolve to
+current upstream presets. Resource-only monitoring components, chart values,
+source-prescribed relabeling and declarative role bindings are included automatically.
+
+Generation recomputes the plan on the server. Competing workload topologies,
+conflicting router releases, unsupported hardware/engine pairs, missing source
+paths, unmatched InferencePool selectors, and multiple autoscalers controlling one
+workload are rejected. Target validation additionally checks referenced Secrets,
+ConfigMaps, ServiceAccounts, volumes and external scale targets before admission.
+Namespace references follow the selected target; controller-specific namespaces
+are preserved. Upstream runtime-image placeholders use the hardware profile image
+or your explicit override.
+
+The dependency resolver covers the 35 deployment recipes in both reviewed revisions
+`a9cf07a77a3016db21ae87134e5745b3a2d45ba6` and
+`7893487cb8012f45bbc9a0311bf98a9340f1ff05`. The six remaining sections are categories,
+non-Kubernetes workflows or rollout operations; they are labeled separately and
+are not selectable as fresh deployment recipes. This is dependency-plan coverage,
+not a claim that every hardware variant has been deployed.
+
+Token-aware KEDA, WVA and async/batch processing pull in their serving dependency. Token-aware KEDA infers a selected supported topology, and Agentic API reuses an explicitly selected serving Guide unless its base is overridden.
+Coordinator and multi-model routing select gateway mode. Kueue resolves its named
+existing Deployments and applies the source rollout/queue patches to exported
+snapshots. Multi-pool generation verifies existing workers match the new pool.
+Neither path changes those running resources. External Secrets, controllers,
+network/storage provisioning and calibration still require the actual environment;
+reference and admission checks report missing prerequisites. P2P calibration is a
+post-deployment measurement, not a prerequisite to rendering the manifest.
+
+Charts without a source-pinned version must be inspected before generation.
+The payload-processor chart is discovered from the multi-model Guide's source
+repository and pinned to an exact Git commit during inspection. Generation reuses
+that commit. Inspect resolves current chart values and records archive checksums.
+No source shell scripts are executed. Existing cluster software versions are not
+silently upgraded when upstream HEAD changes.
+
+## Compose current source components
+
+The source composer reads the **selected cluster's downloaded llm-d checkout**.
+It discovers nested Guide sections, complete resource files, Kustomize entrypoints,
+router values, concrete YAML documentation examples and OCI chart references.
+The source commit is displayed; modified checkouts and changed commits are rejected.
+The catalog is not a promise that every upstream example is a complete deployment.
+
+Configure the current selection as follows:
+
+1. Choose the cluster and cached model, then select optimizations on the map.
+2. Open an optimization's **Configure parameters** to choose its required variants
+   and directly edit its owned settings. Model identity and cache mounting remain
+   managed by the selected target.
+3. Open **Deployment settings** to render the actual selected deployment. Edit
+   **All parameters** or **Final YAML** without selecting individual Guide files.
+   Source substitutions do not execute shell expressions or modify the checkout.
+4. Keep target validation enabled to check Kubernetes admission when generating.
+   Required namespaces, CRDs and admission dependencies must already exist.
+5. **Generate** validates the edited final configuration and produces deployment
+   YAML and provenance. **Deploy** uses that generated snapshot through the managed
+   deployment lifecycle; opening settings and generation never apply resources.
+
+Different definitions of the same Kubernetes resource are rejected; identical
+resources are deduplicated. Unresolved template placeholders block generation.
+Independent components can be combined, while competing workload recipes require
+an explicit choice or consistent edits. The composer resolves selected dependencies automatically. It does not
+install prerequisite controllers, execute
+Guide shell commands, perform cloud provisioning, or run calibration jobs.
+Review the pinned Guide's prerequisites and deployment steps. A successful render
+or dry-run does not establish model loading, runtime compatibility or performance.
+RL and non-Kubernetes integrations remain visible in the source inventory; they
+are not represented as Kubernetes request-path optimization nodes.
+
+Reproduce per-component local-render coverage with
+`npx tsx tools/audit-inference-guides.ts /path/to/llm-d /tmp/report.json`.
+
+Append `--plan-only` to audit every discovered deployment recipe and its dependency closure without downloading or rendering charts. The JSON separates recipe plans from category and operational sections.
+
+
+## First-run walkthrough
+
+1. Open Custom Deployment and choose an existing cluster and a ready downloaded model.
+   Its Accelerator is inherited automatically. Runtime images are resolved automatically.
+   For a compatible custom engine build, open Deployment settings → Target → Advanced
+   runtime settings. The optional override changes the model-server image only.
+2. Continue to the map. The top tier is request order; the middle tier contains
+   executing components; the bottom tier shows Kubernetes placement. They are not
+   three consecutive request-processing pipelines.
+3. Generate the default baseline first to check the target and source configuration.
+   Return to the map after reviewing the result.
+4. Open Guides and select the required recipe in the multi-select dropdown. For
+   example, choose pd-disaggregation only when the source supports the target hardware
+   and transport variant. It replaces the fallback baseline and displays separate
+   Prefill and Decode workers.
+5. Alternatively, click a small optimization diamond or its Tiers row once to enable
+   it and again to disable it. Clicking a large module cube or module row only inspects
+   and focuses it. Eye buttons only hide/show layers. Use the Tiers settings icon to
+   edit an already enabled optimization without toggling it.
+6. Inspect the resulting dependency explanation and colored included components.
+   Guide presets and individual optimization overrides are stored separately.
+   A diamond changes only its optimization intent. Required components are added
+   by the planner; incompatible combinations block generation.
+7. Open Configure parameters in the selected node card. Edit its fields directly;
+   required source variants appear in the same dialog. For P/D, use its first-tier
+   optimization to configure both serving roles.
+8. Generate again and review the Services, model workloads and cached-model groups.
+   Enter a deployment name, select the inference Service port, and click **Deploy**.
+   Lens saves the generated resources and opens **Deployments**, where the run's
+   startup status, logs, endpoint and lifecycle are managed alongside Evaluation
+   deployments. Generate alone does not apply resources.
+
+## Generated files and deployment
+
+`deployment.yaml` contains the rendered Kubernetes resources, including router
+resources; another Helm installation is not needed. `provenance.json` records the
+source commit, component checksums, selected plan and model-cache binding. It is
+an audit record, not a Kubernetes manifest. Both files can be inspected and
+downloaded separately. **Source & checks** holds the complete source revision,
+chart version, dependency notes and original Guide instructions.
+
+**Deploy** uses the generated snapshot and its original cluster, creates an isolated
+namespace, rebinds internal namespace references, and mounts the existing model
+cache through Storage. It retains source namespace labels and leaves the shared
+storage namespace intact. Select a Service that accepts inference requests;
+metrics and EPP control ports are not inference endpoints.
+
+The managed composition provider supports Deployment rollouts and namespaced
+routing, monitoring and configuration resources. Cluster-wide resources and
+workload kinds without a managed lifecycle are rejected. Recipes that patch
+existing workloads must be managed through those workloads' owning deployment;
+the result page explains this before starting a new run.
+
+A successful server dry-run means Kubernetes admission accepted the generated
+resources. It does not prove model startup or end-to-end inference; follow the
+actual deployment status in **Deployments**.
+
+## Node inspection and source parameters
+
+Clicking a module cube automatically opens its optimization children in Tiers.
+Clicking an optimization diamond toggles that optimization, expands its owning module,
+and highlights the same optimization in Tiers. No expansion button is required.
+Required dependencies and baseline components remain enabled.
+
+The Guide picker follows the selected revision's `guides/README.md`: public titles,
+section hierarchy and order are preserved. Child strategies remain inside their
+parent Guide. Official operational and external Guides remain visible with a
+separate generation-support status. They are not silently removed from the index.
+
+Selecting a Guide loads its capability preset. Tiers stores individual overrides
+without changing unrelated selections. Mutually exclusive source choices such as
+TOPOLOGY, CONNECTOR, VARIANT and SIGNAL require an explicit user choice. A category
+such as Workload Autoscaling requires its strategy selection. Both browser and
+server block generation while choices are missing. Multiple scaling controllers
+for the same target are rejected. Source compatibility checks still apply.
+
+Direct prefix-cache and chunked-prefill switches change rendered vLLM arguments;
+affinity and token-load switches update EPP plugins and scheduling references.
+Disk KV offload includes its required CPU tier. Literal `exec vllm serve` launch scripts are converted to equivalent argument lists.
+Recipes with shell control flow or another runtime may not support these switches; generation reports
+that limitation instead of silently ignoring the requested optimization.
+
+Hover and parameter cards link to revision-pinned explanation lines and selected
+configuration files. A reference to an unselected variant is labelled Source example.
+
+Hover cards show local relationships and state rather than repeating the target
+cluster or model. Node parameter editors restrict fields to the relevant engine
+flags, controller settings or EPP plugins in selected resources. Each field includes
+its source context and expandable source path. Unspecified engine defaults are not
+invented. Flags encoded in shell expressions remain in the advanced editor.
+Node dialogs contain only owned parameters and required source choices. Full YAML,
+structural edits and parameters shared across components belong in Deployment
+settings, which opens the current selection's final configuration directly.
+
+### Cluster Accelerator inheritance
+
+Custom Deployment reads the selected cluster's hardware summary and resolves its
+Accelerator through the hardware registry. A cluster with one Accelerator type
+uses it automatically; the setup displays its name without another hardware
+profile picker. Mixed-hardware clusters offer only the Accelerator types present
+in that cluster. Unknown or unavailable hardware blocks setup until configured
+in Clusters. Switching clusters clears the previous hardware selection and edits.
+
+The inherited Accelerator selects the matching `ACCELERATOR_TYPE` branch and
+model-server YAML paths in the selected cluster's versioned llm-d Guide source,
+including dependencies whose first selected Guide has no Accelerator variable.
+Unsupported Guide/Accelerator combinations report an error instead of falling
+back to another vendor. Source images remain intact; unresolved image placeholders
+use the registry default, and explicit runtime image overrides remain supported.
+
+The default baseline includes the selected hardware profile's model-server resources,
+including source revisions that document its conditional apply command as an
+explicitly commented alternative. Monitoring components alone do not count as a
+model workload; an incomplete serving plan is rejected before model binding.
+
+### Compatibility feedback and configuration reset
+
+Tiers marks conflicting optimizations as **Conflict**. Clicking a conflicting row
+or map diamond explains the source-plan conflict without changing the selection.
+The Guide picker disables competing serving topologies, router releases and
+mutually exclusive source variants. Remove the conflicting selection first.
+Missing variant choices remain editable; rendered-resource compatibility and
+controller target checks still run during generation.
+
+Use **Reset configuration** in Tiers or the parameter dialog to restore the
+baseline and clear all optimization selections, Guide choices, resource edits,
+router overrides and runtime settings. The selected cluster, cached model,
+storage binding and pinned source inventory are retained. Generated output is
+invalidated and must be generated again. Reset does not change deployed resources.
+
+### Compare a source link with the baseline map
+
+Source links use `/blob/<commit>/`, where the commit is the selected cluster's
+source catalog revision. A commit can be on `main`; the immutable link records
+which revision the deployment uses. `/blob/main/` follows future upstream edits
+and is useful for comparison, but is not evidence for the generated configuration.
+README links to other repositories may still follow their own branches.
+
+For optimized-baseline, the README's **Prefix-cache aware** corresponds to
+**Endpoint selection → Prefix-cache affinity**, and **Load-aware** corresponds
+to **Endpoint selection → Token load scorer**. **Model server → Tensor parallelism / batching**
+is engine execution tuning, not a replacement name for either routing policy.
+The UI detects routing defaults from the selected source's actual router values.
+An explanation link may open the whole Guide; compare the selected configuration
+link for exact resource fields. Unspecified engine defaults are not invented.
+
+To reproduce selection-time incompatibility:
+
+1. Reset configuration, select `pd-disaggregation` in Guides and explicitly choose
+   its required variables, such as `MODEL_SERVER=vllm` where supported.
+2. Open Guides again and locate `tiered-prefix-cache`. For source revision
+   `a9cf07a77a3016db21ae87134e5745b3a2d45ba6`, the picker disables it with
+   `Competing serving topologies` and `Conflicting router releases` explanations.
+3. In Tiers, open **KV cache** group and click **CPU RAM cache offloading**.
+   It displays **Conflict** and preserves the previous selection. Its source recipe
+   would introduce the same conflicting serving topology.
+4. Reset configuration and select the cache recipe alone. Explicitly choose its
+   source variants before generation. The P/D conflict is gone; independent
+   hardware, source and admission validation still applies.
+
+Selecting optimized-baseline together with P/D is not a conflict example: P/D
+replaces the fallback baseline. A conflict between complete source recipes also
+does not establish that the underlying mechanisms can never be combined in a
+separately authored compatible configuration. Controller collisions that require
+rendered target identities remain generation-time checks.
+
+
+## Deployment settings: which parameters to edit
+
+Open **Deployment settings** to render the final resources for the current
+selection. **All parameters** provides searchable, typed fields labelled by
+resource kind and name. **Final YAML** edits the same complete Kubernetes manifest,
+including rendered Helm resources. There are no per-Guide parameter cards.
+
+For a node-specific change, use that node's **Configure parameters** instead.
+For changes spanning nodes or additional fields, edit the final deployment.
+The server rejects stale final edits after the underlying rendered configuration
+changes. Changing target, optimizations, variants or node parameters clears final
+overrides and requires a new generation. Invalid YAML remains editable and cannot
+produce a valid deployment bundle.
+
+## Map terminology and upstream sources
+
+The map combines request stages, runtime components and Kubernetes objects. It
+is a design view, not a live inventory of independently deployed services.
+
+| Map label | Meaning and reference |
+| --- | --- |
+| Model server | Performs prefill and decode in the same serving workload; see [Optimized Baseline](https://github.com/llm-d/llm-d/blob/main/guides/optimized-baseline/README.md). Previously labeled “Combined workers”. |
+| Prefill / Decode model servers | Separate serving roles from [Prefill/Decode Disaggregation](https://github.com/llm-d/llm-d/blob/main/guides/pd-disaggregation/README.md). |
+| Endpoint Picker (EPP) | Selects model-server endpoints using the router's scheduling plugins. |
+| CPU RAM cache | Offloaded KV blocks in CPU memory; see [Tiered Prefix Cache](https://github.com/llm-d/llm-d/blob/main/guides/tiered-prefix-cache/README.md). Previously labeled “CPU KV tier”. |
+| KV cache | A Lens diagram grouping for prefix caching, offloading and P2P KV cache sharing. It is not a separate upstream service or deployment parameter. Previously labeled “KV data plane”. |
+| KV cache indexer | Cache-location information used for [Precise Prefix-Cache Routing](https://github.com/llm-d/llm-d/blob/main/guides/precise-prefix-cache-routing/README.md). |
+| Kubernetes nodes | The cluster machines that host Pods. “Worker node” is Kubernetes terminology, not an llm-d serving role. |
+
+Optimization settings retain their upstream argument or YAML key under **Source
+field**. README links on the selected optimization explain the corresponding
+mechanism at the selected source revision.
+
+## Generation progress
+
+**Generate** opens the full-width results page immediately. Deployment target,
+resource groups and generated-file panels remain visible while their contents
+load. Deployment controls stay disabled until generation completes. Generation
+errors appear on the same page with **Edit settings**; successful rendering does
+not itself prove runtime readiness.

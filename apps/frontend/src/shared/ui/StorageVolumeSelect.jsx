@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Database, HardDrive, Network, Search, X } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { kindLabel, statusDotClass, statusLabel } from '../lib/storageVolumePresentation';

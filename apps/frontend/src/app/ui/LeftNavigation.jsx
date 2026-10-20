@@ -176,7 +176,7 @@ export default function LeftNavigation({ currentView, onNavigate, isMobileOpen, 
                                         {isExpanded && (
                                             <div className="flex flex-1 items-center justify-between truncate">
                                                 <span className="flex items-center gap-1.5 min-w-0">
-                                                    <span className={cn('text-sm tracking-wide truncate', isActive ? 'text-white font-medium' : 'font-normal')}>
+                                                    <span className={cn('text-sm tracking-wide', item.wrapLabel ? 'whitespace-normal leading-tight' : 'truncate', isActive ? 'text-white font-medium' : 'font-normal')}>
                                                         {item.label}
                                                     </span>
                                                     {item.badge && (

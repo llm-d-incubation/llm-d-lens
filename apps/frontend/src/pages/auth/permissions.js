@@ -24,6 +24,7 @@ export const VIEW_PERMISSIONS = {
     welcome: ['cluster:cluster:read'],
     'welcome/issues': ['cluster:cluster:read'],
     'model-market': ['deployment:run:read'],
+    'custom-deployment-configuration': ['configuration:artifact:read'],
     'optimization-deployments': ['deployment:run:read'],
     'optimization-evaluate': ['evaluate:run:read'],
     // New-evaluation wizard: create a deploy-and-benchmark workflow, deploy an

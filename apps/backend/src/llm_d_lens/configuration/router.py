@@ -71,7 +71,13 @@ def _configuration_errors(failure_message: str, client_errors: tuple[type[Except
     operation_id="get_configuration_capabilities",
 )
 async def capabilities() -> dict:
-    return {"schema_version": "deployment-capabilities.v1", "providers": deployment_capabilities()}
+    from llm_d_bench.deploy.providers.source_composition import SourceCompositionAdapter
+
+    return {
+        "schema_version": "deployment-capabilities.v1",
+        "providers": deployment_capabilities(),
+        "composition_resource_kinds": sorted(SourceCompositionAdapter.managed_resource_kinds),
+    }
 
 
 @router.post(

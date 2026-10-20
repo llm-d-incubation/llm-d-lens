@@ -22,6 +22,7 @@ from llm_d_lens.deploy.providers.hardware_profile import cluster_accelerator
 from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.infrastructure.kubernetes import list_resources
 
+from .composition import COMPOSITION_OBJECTIVE, cost_order
 from .configuration import build_agentic_configuration
 from .facts import resolve_planning_facts
 from .generator import AICandidateGenerator, CandidateGenerationError, CandidateProposal, CandidateValidator
@@ -111,14 +112,18 @@ class AgenticDeploymentService:
             operator_preference=request.planner_prompt or "",
         )
         deterministic = DeterministicPlanner()
-        provider = OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
+        provider = (
+            None
+            if request.composition_mode == "advanced"
+            else OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
+        )
         candidates, generation, resolved = await self._generate_candidates(
             provider,
             session.server_id,
             request.model,
             planning_facts,
             request.planner_prompt,
-            provider_requested=bool(request.ai_provider_id),
+            provider_requested=bool(request.ai_provider_id) and request.composition_mode != "advanced",
             on_progress=on_progress,
             principal_id=principal_id,
         )
@@ -187,7 +192,9 @@ class AgenticDeploymentService:
                 decision, provider_candidates = await provider.recommend(
                     resolved.facts,
                     [candidate for candidate in ai_candidates if candidate.deployable],
-                    operator_prompt=request.planner_prompt,
+                    operator_prompt=(COMPOSITION_OBJECTIVE + " " + (request.planner_prompt or ""))
+                    if request.composition_mode
+                    else request.planner_prompt,
                     on_progress=on_progress,
                 )
                 validated_candidate_ids = {candidate.id for candidate in ai_candidates if candidate.deployable}
@@ -248,6 +255,24 @@ class AgenticDeploymentService:
                         f"{decision.candidate_id}."
                     ),
                 },
+            )
+        if request.composition_mode:
+            ordered = cost_order(
+                deterministic_candidates if request.composition_mode == "advanced" else scored_candidates
+            )
+            if not ordered:
+                raise ValueError(
+                    "No resource-valid candidate satisfies the known SLA evidence; revise the requirements."
+                )
+            scored_candidates = ordered[:10]
+            selected_candidates = scored_candidates
+            decision = decision.model_copy(
+                update={
+                    "action": "select_candidate",
+                    "candidate_id": ordered[0].id,
+                    "rationale": COMPOSITION_OBJECTIVE + " " + decision.rationale,
+                    "slo_status": ordered[0].slo_status,
+                }
             )
         if decision.action != "select_candidate" or decision.candidate_id is None:
             raise ValueError("no deployable Agentic candidate: " + "; ".join(decision.unmet_constraints))
@@ -567,10 +592,14 @@ class AgenticDeploymentService:
                     + ("; ".join(reasons) or "AIC returned no matching prediction")
                     + ". Reduce the load target or select more compatible accelerator capacity."
                 )
-            await self._emit_progress(on_progress, {
-                "phase": "generation", "status": "complete",
-                "message": f"Validated {len(validated.accepted)} AIC load-target recommendation(s).",
-            })
+            await self._emit_progress(
+                on_progress,
+                {
+                    "phase": "generation",
+                    "status": "complete",
+                    "message": f"Validated {len(validated.accepted)} AIC load-target recommendation(s).",
+                },
+            )
             return validated.accepted, generation, resolved
         if provider is None or not hasattr(provider, "settings"):
             await self._emit_progress(

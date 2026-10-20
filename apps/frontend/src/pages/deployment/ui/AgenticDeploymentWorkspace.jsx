@@ -1,5 +1,5 @@
 import { requestJson } from '../../../shared/api/httpClient';
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, CheckCircle2, ChevronDown, Cpu, FileStack, LoaderCircle, RotateCcw, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
 import { Badge, StatusChip } from '../../../shared/ui/Badge';
 import { Button } from '../../../shared/ui/Button';
@@ -153,7 +153,7 @@ function generatorFallbackSummary(reason) {
     return 'The configured AI generator could not be reached.';
 }
 
-export default function AgenticDeploymentWorkspace({ draft, embedded = false, onBack, onDeploymentStarted, vllmParameterControls }) {
+export default function AgenticDeploymentWorkspace({ draft, embedded = false, onBack, onDeploymentStarted, vllmParameterControls, compositionMode, onPlanReady }) {
     const [run, setRun] = useState(null);
     const [creating, setCreating] = useState(false);
     const [deployingCandidateId, setDeployingCandidateId] = useState('');
@@ -186,6 +186,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
     }, []);
 
     const createPlan = async () => {
+        if (!draft?.clusterId || !draft?.model || !draft?.deploymentName?.trim()) { setError('Select a cluster, model and deployment name.'); return; }
         if (numeric(requirements.concurrency) !== null && numeric(requirements.requestRate) !== null) {
             setError('AIC accepts only one load target: Concurrent requests or Request rate (QPS). Both were provided; choose one and clear the other because AIC does not support joint load targets.');
             return;
@@ -226,6 +227,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                 },
                 planner_prompt: plannerPrompt.trim() || null,
                 ai_provider_id: aiProviderId || null,
+                ...(compositionMode ? { composition_mode: compositionMode } : {}),
             };
             let created = null;
             await streamAgenticRecommendation(payload, (type, data) => {
@@ -235,6 +237,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
             });
             if (!created) throw new Error('Recommendation stream ended before returning a result');
             setRun(created);
+            onPlanReady?.(created);
         } catch (failure) {
             setError(failure.message || 'Unable to generate an Agentic recommendation');
         } finally {
@@ -309,7 +312,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
     const content = (
         <>
             {!embedded && <ModuleHeader icon={Sparkles} title="Agentic deployment recommendation" description="Prism chooses a supported guide from the model, live cluster capacity, AIC, and prior evidence." actions={<div className="flex gap-2"><Button variant="secondary" onClick={reset}><RotateCcw size={15} />Reset</Button><Button variant="secondary" onClick={onBack}><ArrowLeft size={15} />Model details</Button></div>} />}
-            {embedded && <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold text-white">Agentic deployment plan</h2><p className="mt-1 text-sm text-slate-400">Prism chooses a supported guide from live cluster capacity and available evidence.</p></div><Button variant="secondary" onClick={reset}><RotateCcw size={15} />Reset</Button></div>}
+            {embedded && <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold text-white">{compositionMode === 'advanced' ? 'Deployment requirements' : 'Agentic deployment plan'}</h2><p className="mt-1 text-sm text-slate-400">Prism chooses a supported guide from live cluster capacity and available evidence.</p></div><Button variant="secondary" onClick={reset}><RotateCcw size={15} />Reset</Button></div>}
             <div className="rounded-lg border border-slate-800 bg-slate-900/45 p-3">
                 <label className="block text-xs font-semibold text-slate-300">AI provider <span className="font-normal text-slate-500">(optional; powers the external planner used to rank candidates)</span></label>
                 <Select className="mt-1.5" value={aiProviderId} onChange={(event) => setAiProviderId(event.target.value)}>

@@ -1,0 +1,46 @@
+---
+title: 源码组合
+description: 自定义部署使用的指南目录、预览和生成接口。
+---
+
+`source-composition` provider 使用已渲染路由资源的 `manifest` 配置，
+复用现有的配置保存及部署生命周期，不会再次安装路由 Helm chart。
+部署使用独立命名空间；清理时不删除模型缓存原有的命名空间。
+只读缓存挂载采用 `runtime.modelSource: "cached-readonly"`、
+`storageVolumeId` 和 `modelPvcClaimName`。不支持的资源生命周期
+会在验证时明确报错。
+
+## 读取来源目录
+
+`GET /api/guide-planning/source-catalog?clusterId=<id>` 需要
+`guide:plan:execute` 权限。响应包含来源 `commit`、官方指南、
+环境默认值、指南步骤和资源清单。目录从经过认证的集群来源解析；
+本地修改的来源会被拒绝。
+
+## 预览资源
+
+`POST /api/guide-planning/source-preview` 需要同一权限。
+提交 `clusterId`、`commit` 和 `unit`；`unit` 包含资源路径，
+并可指定编辑、变量、命名空间及 Helm chart 的 values 和版本。
+响应包含路径、校验和、渲染后的文档及 YAML 内容。
+预览只运行 Kustomize 或 Helm 渲染，不会执行指南脚本或应用资源。
+无效路径、类型变化及过期路径都会报错。
+
+## 生成组合
+
+`POST /api/guide-planning/compose` 接受 `clusterId`、来源提交、
+命名空间和资源选择；自动模式使用 `guideSelection` 选择指南、
+能力及互斥变体。服务器会根据固定提交重新计算必需依赖，
+因此客户端不能移除必需组件。启用 `validateCluster` 时，
+必须提供属于同一集群且已授权的 `clusterSessionId`；
+服务器通过 Kubernetes dry-run 验证，不执行部署。
+
+响应包含 `compositionChecksum`、`deployment.yaml`、
+`provenance.json`、资源数量和验证结果。可用
+`finalConfiguration` 提交完整编辑后的 YAML 及基准校验和；
+服务器会重新生成基准、拒绝过期内容，并重新检查资源、
+缓存绑定和可选的集群准入。互斥选择缺失、资源冲突、
+未解析占位符或准入失败时，不会返回成功的部署包。
+
+上述渲染操作属于 Node 服务，不对应额外的 Python 渲染接口。
+集群及会话身份仍由现有的 Python API 授权。

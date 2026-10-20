@@ -259,13 +259,15 @@ def _validate_storage(
     host_path = runtime.get("mountPath")
     pvc_name = runtime.get("modelPvcClaimName") or runtime.get("pvcName")
     storage_id = runtime.get("storageVolumeId")
-    storage_declared = source in {"shared-path", "auto-cache"} or any(
+    storage_declared = source in {"shared-path", "auto-cache", "cached-readonly"} or any(
         isinstance(value, str) and value for value in (host_path, pvc_name, storage_id)
     )
     if not storage_declared:
         return
-    if source not in {"shared-path", "auto-cache"}:
-        raise ValueError("configuration storage requires runtime.modelSource shared-path or auto-cache")
+    if source not in {"shared-path", "auto-cache", "cached-readonly"}:
+        raise ValueError(
+            "configuration storage requires runtime.modelSource shared-path, auto-cache or cached-readonly"
+        )
     mounts = container.get("volumeMounts") or []
     volumes = (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
     if not isinstance(mounts, list) or not isinstance(volumes, list):
@@ -278,7 +280,7 @@ def _validate_storage(
     if len(backing) != 1:
         raise ValueError(f"model server {deployment_name} storage volume is absent or ambiguous")
     volume = backing[0]
-    if source == "shared-path" and mount.get("readOnly") is not True:
+    if source in {"shared-path", "cached-readonly"} and mount.get("readOnly") is not True:
         raise ValueError(f"model server {deployment_name} shared-path storage must be read-only")
     if source == "auto-cache" and mount.get("readOnly") is True:
         raise ValueError(f"model server {deployment_name} auto-cache storage must be writable")

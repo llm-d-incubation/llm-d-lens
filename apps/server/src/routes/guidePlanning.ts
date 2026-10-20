@@ -6,6 +6,8 @@ import { profileForKey, profileForResource, acceleratorTotal, overlayRoot, match
 // you may not use this file except in compliance with the License.
 
 import express from 'express';
+import { guideSourceInventory, renderSourceUnit, generateSourceComposition, validateSourceComposition } from '../services/guideComposition.ts';
+import { automaticComposition, validateCompositionTarget } from '../services/automaticComposition.ts';
 import yaml from 'js-yaml';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +21,7 @@ import { inspectPlanningCluster } from '../services/planningDiscovery.ts';
 import { performance } from 'node:perf_hooks';
 import { storagePath } from '../infrastructure/storagePaths.ts';
 import { createGuideManifestCache } from '../services/guideManifestCache.ts';
+import { loadCompositionModel } from '../services/guideCompositionModel.ts';
 import { loadClusterSources } from '../services/clusterSources.ts';
 import { clusterSessionKubeconfig } from '../services/clusterSession.ts';
 import { executeRemoteInspection } from './remoteDeploy.ts';
@@ -31,6 +34,11 @@ import { buildGuideDeploymentBundle, pinModelServerImage, ROUTER_DISAGG_SIDECAR_
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const guidePlanningRouter = express.Router();
+
+guidePlanningRouter.post('/api/guide-planning/automatic-composition', async (req, res) => {
+    try { res.json(await automaticComposition(req.body)); }
+    catch (error: any) { res.status(error.status || 500).json({ error: error.message }); }
+});
 
 const GITHUB_REPOSITORY = process.env.LLM_D_GUIDES_REPOSITORY || 'llm-d/llm-d';
 const GITHUB_API = 'https://api.github.com';
@@ -1265,4 +1273,38 @@ guidePlanningRouter.post('/api/guide-planning/plan', async (req, res) => {
         timingHeader();
         return res.status(status >= 400 && status < 600 ? status : 500).json({ error: message });
     }
+});
+
+// Reuse cluster-source authorization and the existing planner permission boundary.
+guidePlanningRouter.get('/api/guide-planning/source-catalog', async (req, res) => {
+    try {
+        const source = await loadClusterSources({ clusterId: req.query.clusterId });
+        res.json(await guideSourceInventory(source.llmDRepoPath!));
+    } catch (error: any) { res.status(error.status || 500).json({ error: error.message }); }
+});
+guidePlanningRouter.post('/api/guide-planning/source-preview', async (req, res) => {
+    try {
+        const source = await loadClusterSources({ clusterId: req.body.clusterId });
+        const inventory = await guideSourceInventory(source.llmDRepoPath!);
+        if (req.body.commit !== inventory.commit) throw Object.assign(new Error('Source changed. Reload the catalog.'), { status: 409 });
+        res.json(await renderSourceUnit(source.llmDRepoPath!, inventory, req.body.unit));
+    } catch (error: any) { res.status(error.status || 500).json({ error: error.message }); }
+});
+guidePlanningRouter.post('/api/guide-planning/compose', async (req, res) => {
+    try {
+        const source = await loadClusterSources({ clusterId: req.body.clusterId, clusterSessionId: req.body.clusterSessionId });
+        const binding = req.body.modelCacheEntryId ? await loadCompositionModel(source.id, String(req.body.modelCacheEntryId), req.body.namespace) : undefined;
+        const result = await generateSourceComposition(source.llmDRepoPath!, req.body, binding, clusterSessionKubeconfig(req.body.clusterSessionId) || undefined);
+        if (req.body.runtimeConfiguration) {
+            await validateCompositionTarget(result, source.id, binding, req.body.runtimeConfiguration.profileId);
+        }
+        if (req.body.validateCluster === true) {
+            const kubeconfig = clusterSessionKubeconfig(req.body.clusterSessionId);
+            if (!kubeconfig) throw Object.assign(new Error('Connect the selected target cluster before validation.'), { status: 409 });
+            await validateSourceComposition(result.files[0].content, kubeconfig, req.body.namespace, result.existingPoolIntegration);
+            result.validation.clusterValidated = true;
+            result.validation.level = 'server-dry-run';
+        }
+        res.json(result);
+    } catch (error: any) { res.status(error.status || 500).json({ error: error.message }); }
 });

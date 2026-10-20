@@ -25,6 +25,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/welcome',
         'user-guide/model-market',
         'user-guide/deployments',
+        'user-guide/custom-deployment-configuration',
         'user-guide/evaluation',
         'user-guide/simulation',
         'user-guide/model-services',

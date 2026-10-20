@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useId } from 'react';
 import { ChevronDown, Check, Search } from 'lucide-react';
+import { Button, Input } from '../ui';
+import { cn } from '../lib/cn';
 
-export const MultiSelectDropdown = ({ label, options, selected = new Set(), onChange, counts, formatLabel, labelSuffix, emptyLabel = 'All', clearLabel, className = '', searchable = false, searchPlaceholder = 'Search…' }) => {
+export const MultiSelectDropdown = ({ label, options, selected = new Set(), onChange, counts, formatLabel, labelSuffix, emptyLabel = 'All', clearLabel, className = '', searchable = false, searchPlaceholder = 'Search…', disabledOptions, optionDescription, optionGroup, inlineMenu = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [query, setQuery] = useState('');
     const containerRef = useRef(null);
+    const triggerRef = useRef(null);
+    const menuId = useId();
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -47,72 +51,71 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
     }, [options, query, formatLabel]);
 
     return (
-        <div className="relative" ref={containerRef}>
-            <button 
+        <div className="relative" ref={containerRef} onKeyDown={event => {
+            if (event.key === 'Escape' && isOpen) { event.stopPropagation(); setIsOpen(false); triggerRef.current?.focus(); }
+        }}>
+            <Button variant="ghost" size="sm" ref={triggerRef} aria-expanded={isOpen} aria-controls={menuId}
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
-                className={`w-full bg-[#0b0f17] border border-slate-800/40 text-slate-300 text-xs rounded-xl px-3 py-2 flex items-center justify-between hover:border-slate-700/45 hover:bg-[#101622] transition-all duration-200 ${className}`}
-                title={`${label}: ${selectedCount > 0 ? [...safeSelected].join(', ') : 'All'}`}
+                className={cn('w-full border border-theme-border text-theme-text text-xs rounded-xl px-3 py-2 flex items-center justify-between', className)}
+                title={`${label}: ${selectedCount > 0 ? [...safeSelected].join(', ') : emptyLabel}`}
             >
                 <div className="flex items-center gap-2 truncate pr-2">
-                    <span className="font-semibold text-slate-500">{label}</span>
+                    <span className="font-semibold text-theme-muted">{label}</span>
                     {labelSuffix}
-                    <span className="truncate text-slate-200">
+                    <span className="truncate text-theme-text">
                         {selectedCount === 0 ? emptyLabel : `${selectedCount} selected`}
                     </span>
                 </div>
-                <ChevronDown size={12} className={`text-slate-500 transition-transform duration-350 ${isOpen ? 'rotate-180 text-cyan-400' : ''}`} />
-            </button>
+                <ChevronDown size={12} className={cn('text-theme-muted transition-transform', isOpen && 'rotate-180')} />
+            </Button>
 
             {isOpen && (
-                <div className="absolute top-full left-0 mt-2 w-72 max-h-80 overflow-y-auto bg-[#0b0f17]/95 border border-slate-700 rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5 backdrop-blur-md">
+                <div id={menuId} role="group" aria-label={`${label} options`} className={cn("mt-2 max-h-80 overflow-y-auto bg-theme-card border border-theme-border rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5", inlineMenu ? "relative w-full" : "absolute top-full left-0 w-72")}>
                     {searchable && (
                         <div className="relative mb-1">
                             <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                            <input
+                            <Input aria-label={`Search ${label}`}
                                 type="text"
                                 value={query}
                                 onChange={(event) => setQuery(event.target.value)}
                                 placeholder={searchPlaceholder}
                                 autoFocus
-                                className="w-full rounded-lg border border-slate-800/40 bg-slate-950 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none"
+                                className="w-full py-1.5 pl-7 pr-2 text-xs"
                             />
                         </div>
                     )}
-                    <div 
-                        className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-slate-800/80 transition-all ${selectedCount === 0 ? 'bg-cyan-500/10 text-cyan-400 font-semibold' : 'text-slate-300 hover:text-slate-200'}`}
-                        onClick={() => { onChange(''); setIsOpen(false); }}
-                    >
-                         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${selectedCount === 0 ? 'bg-cyan-500 border-cyan-500 text-white' : 'border-slate-800/40 bg-slate-950'}`}>
-                            {selectedCount === 0 && <Check size={10} className="text-white" strokeWidth={3} />}
-                         </div>
-                         <span className="text-xs">{clearLabel || `All ${label}`}</span>
-                         <span className="text-[10px] text-slate-500 ml-auto font-mono">{options.length}</span>
-                    </div>
-                    
-                    <div className="h-px bg-slate-800/30 my-1.5 mx-1" />
+                    <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-xs" onClick={() => { onChange(''); setIsOpen(false); triggerRef.current?.focus(); }}>
+                        {clearLabel || `All ${label}`}
+                        <span className="text-[10px] text-theme-muted ml-auto font-mono">{options.length}</span>
+                    </Button>
+                    <div className="h-px bg-theme-border my-1.5 mx-1" />
 
                     {visibleOptions.length === 0 && (
                         <p className="px-2.5 py-2 text-xs text-slate-500">No matches</p>
                     )}
-                    {visibleOptions.map(opt => {
+                    {visibleOptions.map((opt, optionIndex) => {
                         const count = (counts && counts[opt]) || 0;
                         const isSelected = safeSelected.has(opt);
-                        return (
-                            <div 
-                                key={opt} 
-                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-all ${hasCounts && count === 0 ? 'opacity-45 hover:bg-slate-800/30' : 'hover:bg-slate-800/80'} ${isSelected ? 'bg-cyan-500/10 text-cyan-400 font-semibold' : 'text-slate-300 hover:text-slate-200'}`}
-                                onClick={() => onChange(opt)}
-                                title={formatLabel ? formatLabel(opt) : opt}
+                        const disabled = disabledOptions?.has(opt) || false;
+                        const description = optionDescription?.(opt);
+                        return (<React.Fragment key={opt}>
+                            {optionGroup && (optionIndex === 0 || optionGroup(opt) !== optionGroup(visibleOptions[optionIndex - 1])) && <p className="px-2.5 pt-3 pb-1 text-xs font-semibold text-theme-muted">{optionGroup(opt)}</p>}
+                            <Button type="button" variant="ghost" size="sm" key={opt} role="checkbox" aria-checked={isSelected} disabled={disabled}
+                                className={cn('w-full flex items-start gap-2 px-2.5 py-2 rounded-lg text-left whitespace-normal', hasCounts && count === 0 && 'opacity-45', isSelected && 'bg-theme-bg font-semibold')}
+                                onClick={() => { if (!disabled) onChange(opt); }}
+                                title={description || (formatLabel ? formatLabel(opt) : opt)}
+                                aria-label={formatLabel ? formatLabel(opt) : opt}
                             >
-                                 <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-cyan-500 border-cyan-500 text-white' : 'border-slate-800/40 bg-slate-950'}`}>
-                                    {isSelected && <Check size={10} className="text-white" strokeWidth={3} />}
-                                 </div>
-                                 <span className={`text-xs truncate flex-1 ${isSelected ? 'text-cyan-400 font-semibold' : 'text-slate-300'}`}>
-                                     {formatLabel ? formatLabel(opt) : opt}
-                                 </span>
-                                 {hasCounts && <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono ml-auto">{count}</span>}
-                            </div>
+                                <span className="w-3.5 h-3.5 mt-0.5 shrink-0 rounded border border-theme-border flex items-center justify-center" aria-hidden="true">
+                                    {isSelected && <Check size={10} strokeWidth={3} />}
+                                </span>
+                                <span className="text-xs flex-1 min-w-0 text-theme-text">
+                                    <span className="block break-words">{formatLabel ? formatLabel(opt) : opt}</span>
+                                    {description && <small className="block text-[10px] font-normal text-theme-muted mt-1">{description}</small>}
+                                </span>
+                                {hasCounts && <span className="text-[10px] text-theme-muted font-mono ml-auto">{count}</span>}
+                            </Button></React.Fragment>
                         );
                     })}
                 </div>

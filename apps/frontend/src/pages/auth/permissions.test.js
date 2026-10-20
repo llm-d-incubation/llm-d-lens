@@ -45,3 +45,9 @@ test('a model-service consumer only sees their usage, API keys and services', ()
         assert.equal(canAccessView(consumer, view), expected, `${view} visibility for a model-service consumer`);
     }
 });
+
+test('custom deployment configuration has a guarded independent route', () => {
+    assert.equal(canAccessView([], 'custom-deployment-configuration'), false);
+    assert.equal(canAccessView(['deployment:run:read'], 'custom-deployment-configuration'), false);
+    assert.equal(canAccessView(['configuration:artifact:read'], 'custom-deployment-configuration'), true);
+});

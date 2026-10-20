@@ -49,7 +49,9 @@ before(async () => {
             const cookie = req.headers.cookie || '';
             // Node verifies the signature before introspecting, so a signed
             // session call is trusted here even without a browser cookie.
-            const permissions = cookie.includes('prism_session=playground')
+            const permissions = cookie.includes('prism_session=planner')
+                ? ['guide:plan:execute']
+                : cookie.includes('prism_session=playground')
                 ? ['playground:chat:use']
                 : cookie.includes('prism_session=good') || req.headers['x-prism-internal-sig']
                     ? ['deploy-poc:job:execute', 'deployment:run:read']
@@ -83,6 +85,10 @@ before(async () => {
     app.post('/api/deploy-poc/start', (req, res) => {
         res.json({ spoofed: req.headers['x-prism-principal-id'] ?? null });
     });
+    app.get('/api/guide-planning/source-catalog', (_req, res) => res.json({ ok: true }));
+    app.post('/api/guide-planning/source-preview', (_req, res) => res.json({ ok: true }));
+    app.post('/api/guide-planning/automatic-composition', (_req, res) => res.json({ ok: true }));
+    app.post('/api/guide-planning/compose', (_req, res) => res.json({ ok: true }));
     app.post('/api/mcp', (_req, res) => res.json({ ok: true }));
     app.use(backendApiProxyRouter);
     gateway = http.createServer(app);
@@ -241,4 +247,16 @@ test('internal signatures use the decoded path uvicorn validates', () => {
         }),
         'u2',
     );
+});
+
+test('source composition routes require planner permission', async () => {
+    for (const [route, method] of [['source-catalog', 'GET'], ['source-preview', 'POST'], ['compose', 'POST'], ['automatic-composition', 'POST']]) {
+        for (const [session, status] of [['good', 403], ['planner', 200]]) {
+            const response = await fetch(`${gatewayUrl}/api/guide-planning/${route}`, {
+                method, headers: { cookie: `prism_session=${session}`, 'content-type': 'application/json' },
+                ...(method === 'POST' ? { body: '{}' } : {}),
+            });
+            assert.equal(response.status, status, `${method} ${route} ${session}`);
+        }
+    }
 });

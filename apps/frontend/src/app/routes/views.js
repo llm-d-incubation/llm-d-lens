@@ -8,7 +8,7 @@ const VIEW_ALIASES = {
   'optimization-explore': 'optimization-evaluate-new',
 };
 
-const SUPPORTED_VIEWS = new Set(['welcome', 'welcome/issues', 'cluster-monitoring-stack', 'clusters', 'storage-management', 'model-cache', 'ai-providers', 'model-service', 'api-keys', 'usage', 'playground', 'optimization-deployments', 'model-market', 'optimization-evaluate', 'optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-deploy', 'optimization-workspace', 'optimization-simulate', 'optimization-simulate-details', 'opt-define', 'opt-search', 'opt-deploy', 'opt-benchmark', 'opt-performance', 'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/master-key', 'admin/sessions', 'admin/audit', 'admin/model-service', 'admin/usage']);
+const SUPPORTED_VIEWS = new Set(['custom-deployment-configuration', 'welcome', 'welcome/issues', 'cluster-monitoring-stack', 'clusters', 'storage-management', 'model-cache', 'ai-providers', 'model-service', 'api-keys', 'usage', 'playground', 'optimization-deployments', 'model-market', 'optimization-evaluate', 'optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-deploy', 'optimization-workspace', 'optimization-simulate', 'optimization-simulate-details', 'opt-define', 'opt-search', 'opt-deploy', 'opt-benchmark', 'opt-performance', 'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/master-key', 'admin/sessions', 'admin/audit', 'admin/model-service', 'admin/usage']);
 
 export function resolveView(view, fallback = 'model-market') {
   const resolved = VIEW_ALIASES[view] || view;
@@ -26,6 +26,7 @@ export const NAVIGATION_GROUPS = [
     title: 'Services',
     items: [
       { id: 'model-market', label: 'Model market', icon: 'Database', view: 'model-market', iconColor: 'text-white' },
+      { id: 'custom-deployment-configuration', label: 'Custom Deployment', icon: 'Waypoints', view: 'custom-deployment-configuration', iconColor: 'text-white', badge: 'Exp' },
       { id: 'optimization-deployments', label: 'Deployments', icon: 'Rocket', view: 'optimization-deployments', iconColor: 'text-white' },
       { id: 'admin-model-service', label: 'Model services', icon: 'Boxes', view: 'admin/model-service', iconColor: 'text-white' },
       { id: 'admin-usage', label: 'Usage reports', icon: 'Activity', view: 'admin/usage', iconColor: 'text-white' },

@@ -32,6 +32,7 @@ from llm_d_lens.deploy.providers.optimized_baseline import (
 )
 from llm_d_lens.deploy.providers.pd_disaggregation import PdDisaggregationAdapter
 from llm_d_lens.deploy.providers.precise_prefix_cache_routing import PrecisePrefixCacheRoutingAdapter
+from llm_d_lens.deploy.providers.source_composition import SourceCompositionAdapter
 from llm_d_lens.deploy.service import GuideAdapterDeploymentService
 from llm_d_lens.infrastructure.process import run_sync, spawn
 from llm_d_lens.infrastructure.storage.paths import storage_path
@@ -869,6 +870,18 @@ def build_deployment_service_from_environment(
             )
             for provider in providers
         ]
+        + [
+            SourceCompositionAdapter(
+                RestrictedKubectlRunner(
+                    settings.kubectl_path,
+                    settings.namespace_prefix,
+                    max(settings.command_timeout_seconds, settings.readiness_timeout_seconds),
+                    settings.kubeconfig,
+                ),
+                settings.namespace_prefix,
+                settings.readiness_timeout_seconds,
+            )
+        ]
     )
     return GuideAdapterDeploymentService(catalog, build_namespace_factory(settings.namespace_prefix)), catalog
 
@@ -882,9 +895,7 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
     sources = guide_overlays(guide_root, "optimized-baseline", accelerator=settings.accelerator)
     source_error = None
     try:
-        variant = default_guide_variant(
-            sources, guide="optimized-baseline", accelerator=settings.accelerator
-        )
+        variant = default_guide_variant(sources, guide="optimized-baseline", accelerator=settings.accelerator)
         overlay_path = sources[variant]
     except ValueError as error:
         source_error = str(error)

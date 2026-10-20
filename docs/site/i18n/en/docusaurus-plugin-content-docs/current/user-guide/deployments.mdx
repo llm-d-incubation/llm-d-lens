@@ -5,6 +5,16 @@ description: Find deployments, check readiness, view logs and remove unused serv
 
 Open **Deployments** to check whether a model is ready, inspect a failure, or manage an existing deployment.
 
+Open **Custom Deployment** directly from the left navigation to configure a 3D
+inference flow and generate deployment inputs. This is separate from the deployment
+execution list. See [Custom Deployment](/user-guide/custom-deployment-configuration).
+Its **Deploy** action publishes the generated YAML through the same configuration
+and run APIs used by Evaluation. The run appears here with provider
+`source-composition`. Router resources are already rendered; Lens does not install
+a second router chart. Each run owns an isolated namespace and mounts the selected
+model cache. Use this page for status, logs, endpoint access and cleanup. Cleanup
+removes the deployment namespace, not the original cache namespace.
+
 P/D deployments using Router 0.11 automatically adapt legacy plugin settings when
 created or retried. The original configuration is retained, and deployment
 diagnostics record the effective Router values. A legacy `disagg-headers-handler`

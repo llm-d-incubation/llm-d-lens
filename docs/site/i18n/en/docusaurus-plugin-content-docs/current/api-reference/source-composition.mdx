@@ -1,0 +1,125 @@
+---
+title: Source composition
+description: Source catalog, preview and composition contracts for Custom Deployment.
+---
+
+The `source-composition` provider accepts a saved `manifest` configuration whose
+router resources are already rendered. It reuses the managed manifest lifecycle
+without installing a Guide Helm chart. The namespace-neutral manifest and endpoint
+contract use the existing Configuration render/save API. Use
+`runtime.modelSource: "cached-readonly"`, `storageVolumeId` and `modelPvcClaimName`
+for a read-only Hugging Face cache mount. `runtime.namespaceLabels` may contain
+string pairs. The source namespace is never used for deployment cleanup.
+Deployment rollouts and namespaced auxiliary resources are supported; unsupported
+resource lifecycles fail validation.
+
+For generated compositions, use `guide_ref` and `guide_source.guide` equal to
+`source-composition`; include rendered router resources in `rendered_manifest`
+and omit `deployment_bundle`. `readinessDeployments` and `endpoint` must name
+resources present in the namespace-neutral manifest. The existing Python
+`render_configuration(RenderRequest)` contract accepts this same input.
+
+## Read the source Guide catalog
+
+`GET /api/guide-planning/source-catalog?clusterId=<id>` requires
+`guide:plan:execute`. It returns `commit`, `officialGuides` (ID, official title,
+group, description, source and index line from `guides/README.md`), shared
+`environment` defaults from `guides/env.sh`, `guides` (ID, title, source,
+variables, support, instructions and deployment steps), and `assets` (path,
+kind, checksum, owning Guide and source content or chart coordinates).
+Local modifications are rejected. The Node implementation uses the authenticated
+cluster-source resolver; Python cluster APIs continue to enforce cluster visibility.
+
+## Preview a source component
+
+`POST /api/guide-planning/source-preview` requires `guide:plan:execute`.
+Request fields are `clusterId`, `commit`, and `unit`: an inventory `path`,
+optional `edits` (path-token array and typed scalar `value`), `variables`,
+`namespace`, `files` for required generator inputs, optional `runtimeImage` for
+upstream image placeholders, and chart `values` / `chartVersion`.
+Source-derived charts may include `chartValues` (inventory paths) and `chartSet`
+(Helm overrides). Responses contain `path`, `checksum`, rendered `documents`
+and YAML `content`; chart previews also include resolved `chartVersion` and
+default/effective `values`.
+
+```json
+{"clusterId":"cluster-1","commit":"a9cf07a77a3016db21ae87134e5745b3a2d45ba6","unit":{"path":"guides/optimized-baseline/modelserver/gpu/vllm/base","namespace":"inference","edits":[]}}
+```
+
+The Node renderer runs Kustomize or Helm only; it never executes Guide scripts
+or applies resources. Unknown paths, scalar type changes and stale paths fail.
+
+## Generate a source composition
+
+The Guide planner includes explicitly documented commented conditional
+model-server apply commands only when their source hardware condition matches.
+Ordinary comments are not activated. Monitoring and shared support components
+cannot satisfy the serving-workload requirement.
+
+`POST /api/guide-planning/compose` requires `guide:plan:execute`. Send `clusterId`,
+`commit`, `namespace`, `units` (1–60 preview selections in manual mode), optional
+Guide-keyed `variables`, `router` (`mode`, `release`, `version`, ordered values with
+inventory paths and optional edited content), `runtimeImage`,
+`runtimeImageOverride` and `modelCacheEntryId`. For automatic dependencies, send
+`guideSelection` with `guides`, `mode` and optional registry-derived `accelerator`.
+Custom Deployment sends the cluster accelerator independently of the first Guide;
+it takes precedence over Guide defaults, variable overrides and source exports
+for `ACCELERATOR_TYPE`, including serving dependencies. Required components
+and router layers are recomputed from the pinned checkout; client-side removal
+cannot remove a required component. With `validateCluster: true`, an authorized
+`clusterSessionId` for the same cluster is required. Kubernetes server-side dry-run
+validates the manifest without mutating the deployment.
+
+```json
+{"clusterId":"cluster-1","commit":"a9cf07a77a3016db21ae87134e5745b3a2d45ba6","namespace":"inference","units":[{"path":"guides/optimized-baseline/modelserver/gpu/vllm/base","edits":[]}],"validateCluster":false}
+```
+
+Responses include `commit`, `compositionChecksum` (SHA-256 of the pre-override
+rendered YAML), `existingPoolIntegration`, `files` (`deployment.yaml` and
+`provenance.json`), `resourceCount`, and `validation` (`errors`, `warnings`,
+`level` and `clusterValidated`). Conflicting resource definitions, unresolved
+placeholders, rendering failures and failed admission checks return errors
+instead of a successful bundle. Automatic selection records the resolved plan
+in `provenance.json`:
+
+```json
+{"clusterId":"cluster-1","commit":"a9cf07a77a3016db21ae87134e5745b3a2d45ba6","namespace":"inference","guideSelection":{"guides":["workload-autoscaling/keda-epp"],"mode":"standalone"},"units":[],"variables":{},"validateCluster":false}
+```
+
+Optional `finalConfiguration` includes `baseChecksum` (the preceding
+`compositionChecksum`) and `content` (complete edited deployment YAML).
+The server rerenders the selection, rejects stale checksums, recomposes
+edited resources, retains managed model/cache binding and reruns capability,
+reference and optional cluster-admission checks. Edited content must retain
+the namespace and be under 5 MB. Provenance records baseline and edited checksums.
+
+Resource selections may include `replacementContent` (complete Kubernetes YAML,
+at most 2 MB) for structural edits; scalar `edits` apply to the replacement.
+Chart selections can carry `chartCommit`, `chartVersion`, `chartValues`,
+`chartSet` and edited `values`. Source-documented Git charts require a
+40-character commit. Kueue and multi-pool integrations require a matching
+connected session even when admission validation is off: generation inspects
+existing Deployments or Pods.
+
+```json
+{"clusterId":"cluster-1","clusterSessionId":"session-1","modelCacheEntryId":"model-cache-123","commit":"a9cf07a77a3016db21ae87134e5745b3a2d45ba6","namespace":"llm-d-bench-storage","guideSelection":{"guides":["workload-autoscaling/keda-epp-token-aware"],"mode":"standalone"},"units":[],"validateCluster":true}
+```
+
+`guideSelection.capabilities` maps optimization IDs to boolean overrides;
+`guideSelection.guideChoices` maps category Guide IDs to child-strategy IDs.
+Guide presets stay in `guideSelection.guides`. Missing mutually exclusive
+variant choices, unsupported runtime switches and competing autoscalers fail
+instead of silently generating different resources. Overrides to engine
+arguments and EPP plugin references are checked against the final resources
+and recorded in provenance.
+
+```json
+{"guideSelection":{"guides":[],"capabilities":{"prefix":true,"chunked":false},"guideChoices":{}},"variables":{}}
+```
+
+These are Node-native operations, with no Python rendering counterpart.
+The authenticated Python cluster/session APIs supply source and session identity.
+Generated output is not a single-Guide Configuration artifact; saving it needs
+the source-composition adapter. Cached models are rechecked against Model Cache
+and Storage for cluster ownership, readiness, sync state and namespace
+compatibility before the PVC, model revision and offline environment are bound.
