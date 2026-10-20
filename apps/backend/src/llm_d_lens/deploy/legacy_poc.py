@@ -122,11 +122,12 @@ def push_log(job: dict, text: str) -> None:
     del job["logTail"][:-200]
 
 
-async def run_job(job: dict, argv: list[str], environment: dict[str, str], stdin: str | None) -> None:
+async def run_job(job: dict, executable: str, args: list[str], environment: dict[str, str], stdin: str | None) -> None:
     process = None
     try:
-        process = await ShellClient().spawn(
-            argv,
+        process = await ShellClient().spawn_with_executable(
+            executable,
+            args,
             env=environment,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -168,10 +169,17 @@ async def run_job(job: dict, argv: list[str], environment: dict[str, str], stdin
         job["finishedAt"] = timestamp()
 
 
-def launch(namespace: str, action: str, argv: list[str], environment: dict[str, str], stdin: str | None = None):
+def launch(
+    namespace: str,
+    action: str,
+    executable: str,
+    args: list[str],
+    environment: dict[str, str],
+    stdin: str | None = None,
+):
     job = {"action": action, "phase": "running", "startedAt": timestamp(), "logTail": []}
     jobs[namespace] = job
-    task = asyncio.create_task(run_job(job, argv, environment, stdin))
+    task = asyncio.create_task(run_job(job, executable, args, environment, stdin))
     tasks.add(task)
     task.add_done_callback(tasks.discard)
 
@@ -208,11 +216,11 @@ async def mutate(request: Request, action: str):
     root = os.environ.get("LLM_D_ROOT", "")
     stdin = None
     if descriptor is SMOKE:
-        argv = (
-            [kubectl, "apply", "-f", "-"]
+        program = kubectl
+        args = (
+            ["apply", "-f", "-"]
             if action == "deploy"
             else [
-                kubectl,
                 "delete",
                 "namespace",
                 namespace,
@@ -231,10 +239,11 @@ async def mutate(request: Request, action: str):
                 },
                 status_code=409,
             )
-        argv = ["bash", "-c", build_cli_deploy_command(kubectl, namespace, executable, root)]
+        program = "bash"
+        args = ["-c", build_cli_deploy_command(kubectl, namespace, executable, root)]
     else:
-        argv = [
-            executable,
+        program = executable
+        args = [
             "deploy",
             "destroy",
             KNOWN_GOOD["guide"],
@@ -245,7 +254,7 @@ async def mutate(request: Request, action: str):
             f"--llm-d-root={root}",
             "--delete-namespace",
         ]
-    launch(namespace, action, argv, environment, stdin)
+    launch(namespace, action, program, args, environment, stdin)
     response = {"namespace": namespace, "phase": "deploying" if action == "deploy" else "deleting"}
     if action == "deploy":
         response["config"] = descriptor["id"]

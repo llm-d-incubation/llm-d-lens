@@ -138,8 +138,9 @@ def apply_custom_patches(
             continue
         try:
             parsed = [document for document in yaml.safe_load_all(content) if document]
-        except yaml.YAMLError as error:
-            errors.append(f"Custom patch {label} could not be parsed as YAML: {error}")
+        except yaml.YAMLError:
+            logger.warning("Custom Guide patch could not be parsed as YAML", exc_info=True)
+            errors.append(f"Custom patch {label} could not be parsed as YAML.")
             continue
         if not parsed:
             warnings.append(f"Custom patch {label} did not contain any YAML documents.")
@@ -387,8 +388,9 @@ def plan_documents(
     settings = {}
     try:
         settings = normalize_guide_settings(requested.get("guide", ""), requested.get("guideSettings", {}))
-    except ValueError as error:
-        errors.append(str(error))
+    except ValueError:
+        logger.warning("Invalid Guide settings", exc_info=True)
+        errors.append("Invalid Guide settings; check cacheCpuGiB, rdmaNicCount and routerValues.")
     profile = profile_for_key(requested.get("accelerator", ""))
     cluster_accel = (cluster or {}).get("accelerator") or {}
     machine_accel = machine.get("accelerator") or {}
@@ -767,8 +769,9 @@ def plan_documents(
         for item in overrides:
             if id(item) not in applied:
                 errors.append(f"No model server matched runtime override {item['target']}:{item['name']}.")
-    except (ValueError, TypeError, KeyError) as error:
-        errors.append(str(error))
+    except (ValueError, TypeError, KeyError):
+        logger.warning("Invalid model-server runtime configuration", exc_info=True)
+        errors.append("Invalid model-server runtime configuration; check arguments, environment and cache settings.")
     if "rdmaNicCount" in settings and not nic_requests:
         errors.append("The selected Guide has no supported RDMA NIC request.")
     if not any(

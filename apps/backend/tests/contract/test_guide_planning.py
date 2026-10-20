@@ -397,3 +397,38 @@ def test_guide_validation_keeps_actionable_message_and_status(monkeypatch):
     )
     assert response.status_code == 404
     assert response.json() == {"error": "Remote branch/ref could not be resolved to a commit"}
+
+
+def test_patch_parser_exception_is_not_in_validation_errors(monkeypatch, caplog):
+    import yaml
+
+    detail = "internal parser detail /private/config credential-value"
+
+    def fail(_content):
+        raise yaml.YAMLError(detail)
+
+    monkeypatch.setattr(guide.yaml, "safe_load_all", fail)
+    errors = []
+    assert guide.apply_custom_patches([deployment()], [{"content": "broken", "path": "patch.yaml"}], errors, []) == []
+    assert errors == ["Custom patch patch.yaml could not be parsed as YAML."]
+    assert detail in caplog.text
+
+
+@pytest.mark.parametrize("helper", ["normalize_guide_settings", "runtime_overrides"])
+def test_plan_validation_does_not_expose_internal_exceptions(monkeypatch, caplog, helper):
+    detail = "internal validation detail /private/config credential-value"
+
+    def fail(*_args):
+        raise ValueError(detail)
+
+    monkeypatch.setattr(guide, helper, fail)
+    result = guide.plan_documents(
+        [deployment()],
+        "example/model",
+        {"cpu": {"logicalCores": 64}, "memoryGiB": 512, "accelerator": {"count": 2}},
+        None,
+        {"guide": "optimized-baseline", "accelerator": "gpu"},
+    )
+    assert result["validation"]["status"] == "invalid"
+    assert detail not in str(result)
+    assert detail in caplog.text
