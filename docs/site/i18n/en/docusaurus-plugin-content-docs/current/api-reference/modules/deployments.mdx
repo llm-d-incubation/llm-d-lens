@@ -271,6 +271,22 @@ failure retains the round, observed call count, and limit in
 `generator_fallback_detail` on the run and `generator.fallback_detail` in its
 planning snapshot; `generator_fallback_reason` remains the stable category.
 
+Agentic generator and planner user messages begin with the operator's full preference,
+before the JSON context. Their instructions prioritize platform/hardware validity,
+explicit user requirements, soft preferences, then evidence and diversity. Diversity
+must not introduce forbidden topologies; selection may return fewer than three options.
+This is prompt guidance, not a general server-side natural-language constraint parser.
+
+Planning snapshots (schema version 2) preserve `request.planner_prompt` without redaction.
+`planner_prompt_present` remains a compatibility indicator, not a substitute for the text.
+Run fields `generator_requests` and `planner_requests` contain the actual provider-native
+request bodies, raw responses, timestamps, HTTP status, and error type for every HTTP attempt,
+including retries. Snapshots expose these under `generator.requests` and `planner.requests`.
+Stage audit files under `session-artifacts/agentic-planning/<run_id>/requests/` are persisted
+before sending and after completion, including failed or cancelled planning with no final
+run. Authentication headers and API keys are excluded; full prompts and tool context are
+private application data. Auditing applies to new requests, not historical reconstruction.
+
 Agentic planning estimates missing exact AIC predictions separately for each validated baseline-vllm,
 optimized-baseline, and pd-disaggregation candidate using its workload and GPU topology. The
 candidate's estimate is supplied to AI scoring as `aic_estimate`; an unavailable estimate remains

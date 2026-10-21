@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
+import httpx
 import pytest
 
 from llm_d_lens.ai_providers.client import (
@@ -9,6 +13,7 @@ from llm_d_lens.ai_providers.client import (
     AnthropicCompatibleClient,
     OpenAICompatibleClient,
     build_client,
+    capture_ai_requests,
     client_for,
     get_client,
 )
@@ -31,6 +36,10 @@ class _Response:
     def json(self):
         return self._body
 
+    @property
+    def text(self):
+        return json.dumps(self._body)
+
 
 class _Client:
     def __init__(self, responses):
@@ -46,6 +55,153 @@ class _Client:
     async def post(self, endpoint, *, json, headers):
         self.requests.append({"endpoint": endpoint, "json": json, "headers": headers})
         return self._responses[len(self.requests) - 1]
+
+
+@pytest.mark.asyncio
+async def test_request_audit_captures_exact_structured_output_attempts_without_headers(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(400, {"error": {"message": "response_format is unsupported"}}),
+            _Response(body={"choices": [{"message": {"content": '{"ok":true}'}}]}),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+    client = OpenAICompatibleClient("https://api.openai.com/", "planner", api_key="test-auth-value")
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+    updates = []
+    with capture_ai_requests(lambda records: updates.append([record.model_dump() for record in records])) as records:
+        await client.complete(system_prompt="full system", user_content="full preference", json_schema=schema)
+
+    assert len(records) == 2
+    assert [record.attempt for record in records] == [1, 2]
+    assert records[0].response_status == 400
+    assert records[0].error_type == "HTTPStatusError"
+    assert records[1].response_body == fake_client._responses[1].text
+    assert records[0].request == fake_client.requests[0]["json"]
+    assert records[1].request == fake_client.requests[1]["json"]
+    assert records[1].request["response_format"] == {"type": "json_object"}
+    assert "Example of the exact shape" in records[1].request["messages"][1]["content"]
+    assert updates[0][0]["finished_at"] is None
+    assert updates[-1][-1]["finished_at"] is not None
+    assert "test-auth-value" not in json.dumps([record.model_dump(mode="json") for record in records])
+    assert all(record.path == "/v1/chat/completions" for record in records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_type", ["openai", "anthropic"])
+async def test_request_audit_preserves_native_multiround_messages_and_transport_retries(monkeypatch, provider_type):
+    request = httpx.Request("POST", "https://provider.example/v1/messages")
+    body = (
+        {"choices": [{"message": {"content": "done"}}]}
+        if provider_type == "openai"
+        else {"content": [{"type": "text", "text": "done"}]}
+    )
+
+    class Client(_Client):
+        async def post(self, endpoint, *, json, headers):
+            response = await super().post(endpoint, json=json, headers=headers)
+            if isinstance(response, httpx.TransportError):
+                raise response
+            return response
+
+    fake_client = Client([httpx.ReadTimeout("timeout", request=request), _Response(body=body), _Response(body=body)])
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    async def validate_endpoint(_url):
+        pass
+
+    monkeypatch.setattr("llm_d_lens.ai_providers.service.validate_provider_endpoint", validate_endpoint)
+    client = client_for(base_url="https://provider.example/", model="planner", provider_type=provider_type)
+    messages = [{"role": "user", "content": "keep the complete preference"}]
+    tools = (
+        [{"name": "inspect", "description": "", "input_schema": {"type": "object"}}]
+        if provider_type == "anthropic"
+        else [{"type": "function", "function": {"name": "inspect", "parameters": {"type": "object"}}}]
+    )
+    with capture_ai_requests() as records:
+        await client.complete_tool_turn(system_prompt="system", messages=messages, tools=tools)
+        messages.extend(
+            [
+                {"role": "assistant", "tool_calls": [{"id": "tool-1", "name": "inspect", "arguments": {"all": True}}]},
+                {"role": "tool", "results": [{"tool_call_id": "tool-1", "content": "complete tool result"}]},
+            ]
+        )
+        await client.complete_tool_turn(system_prompt="system", messages=messages, tools=tools)
+    assert len(records) == 3
+    assert records[0].error_type == "ReadTimeout"
+    assert records[0].response_status is None
+    assert records[0].finished_at is not None
+    assert records[1].request == records[0].request
+    assert records[2].request == fake_client.requests[2]["json"]
+    assert records[2].request["tools"] == tools
+    assert "complete tool result" in json.dumps(records[2].request)
+    assert "complete tool result" not in json.dumps(records[0].request)
+    assert records[2].response_body == json.dumps(body)
+    if provider_type == "anthropic":
+        assert records[2].request["system"] == "system"
+        assert records[2].request["messages"][-1]["content"][0]["type"] == "tool_result"
+    else:
+        assert records[2].request["messages"][0] == {"role": "system", "content": "system"}
+        assert records[2].request["messages"][-1]["role"] == "tool"
+
+
+@pytest.mark.asyncio
+async def test_request_audit_separates_concurrent_calls_and_resets_scope(monkeypatch):
+    fake_client = _Client([_Response(body={"choices": [{"message": {"content": "ok"}}]})] * 3)
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+    client = OpenAICompatibleClient("https://api.openai.com/", "planner")
+
+    async def call(preference):
+        with capture_ai_requests() as records:
+            await asyncio.sleep(0)
+            await client.complete(system_prompt="system", user_content=preference)
+        return records
+
+    first, second = await asyncio.gather(call("first preference"), call("second preference"))
+    await client.complete(system_prompt="system", user_content="outside audit")
+    assert len(first) == len(second) == 1
+    assert first[0].request["messages"][1]["content"] == "first preference"
+    assert second[0].request["messages"][1]["content"] == "second preference"
+
+
+@pytest.mark.asyncio
+async def test_request_audit_persists_pending_request_and_cancellation_without_a_plan(monkeypatch, tmp_path):
+    from llm_d_lens.agentic.planning_snapshot import PlanningSnapshotStore
+
+    entered = asyncio.Event()
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def post(self, *_args, **_kwargs):
+            entered.set()
+            await asyncio.Future()
+
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: Client())
+    store = PlanningSnapshotStore(tmp_path)
+
+    async def call():
+        with store.capture_requests("run-cancelled", "planner"):
+            await OpenAICompatibleClient("https://api.openai.com/", "planner").complete(
+                system_prompt="complete system", user_content="complete preference"
+            )
+
+    task = asyncio.create_task(call())
+    await entered.wait()
+    path = next((tmp_path / "run-cancelled" / "requests").glob("*.json"))
+    assert json.loads(path.read_text())["requests"][0]["finished_at"] is None
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    audit = json.loads(path.read_text())
+    assert audit["requests"][0]["error_type"] == "CancelledError"
+    assert audit["requests"][0]["finished_at"] is not None
+    assert audit["requests"][0]["request"]["messages"][1]["content"] == "complete preference"
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_client_for_selects_openai_by_default():
@@ -354,9 +510,13 @@ async def test_anthropic_client_sends_x_api_key_header_and_parses_text_blocks(mo
     client = AnthropicCompatibleClient(
         base_url="https://api.anthropic.com/", model="claude-3-5-sonnet", api_key="sk-ant-abc"
     )
-    content = await client.complete(system_prompt="sys", user_content="user")
+    with capture_ai_requests() as records:
+        content = await client.complete(system_prompt="sys", user_content="user")
 
     assert content == '{"ok":true}'
+    assert records[0].request == fake_client.requests[0]["json"]
+    assert records[0].response_body == fake_client._responses[0].text
+    assert "sk-ant-abc" not in json.dumps(records[0].model_dump(mode="json"))
     request = fake_client.requests[0]
     assert request["headers"]["x-api-key"] == "sk-ant-abc"
     assert "Authorization" not in request["headers"]

@@ -870,7 +870,24 @@ Logs, traces, artifacts, and snapshots remain diagnostic. All unstructured evide
 - Historical benchmarks can be appended and filtered by current deployment conditions. Repeated failures or sufficiently supported stable performance conclusions inform deterministic fallback.
 - AI scoring receives bounded raw history during plan creation; unavailable or invalid AI results use separate aggregated-history deterministic decisions.
 - Candidate priors can be extracted from fully validated history, but do not affect generation by default. Enabling them first observes or validates before admitting candidates.
-- Traceable, redacted planning snapshots are saved, and resources are checked again before approval.
+- Traceable planning snapshots retain the complete original `planner_prompt` and resolved
+  `operator_preference`, and resources are checked again before approval. Generator and planner
+  user messages start with a separate operator-preference section, followed by JSON context.
+  Platform validity and hardware limits take precedence over explicit operator requirements,
+  then soft preferences, performance evidence, and diversity. Diversity must not introduce
+  operator-forbidden providers or topologies; the planner may return fewer than three options.
+- Schema-version 2 snapshots include `generator.requests` and `planner.requests`. Each record
+  contains the exact provider-native JSON body after message/tool conversion and structured-output
+  changes, the API path, attempt number, timestamps, HTTP status, full raw response, and error
+  type. All transport and output-format retries are retained, including invalid responses.
+  Generator tool traces retain complete arguments/results, not only hashes.
+- Stage audits are written before sending and after response/failure to
+  `session-artifacts/agentic-planning/<run_id>/requests/<timestamp>-<stage>-<uuid>.json`.
+  They survive cancellation, fallback, or failure before a run is created. Create and refinement
+  use separate audit files; final snapshots remain append-only. Files are atomically replaced
+  with mode `0600`. Prompt content is not redacted; authentication headers and API keys are not
+  recorded. Treat audits as restricted application data, not shareable logs. Existing snapshots
+  cannot reconstruct exchanges that were not recorded.
 - Historical candidate seeds default off. Enabling `AGENTIC_BENCHMARK_SEEDS_ENABLED` defaults to `shadow`: record qualifying seed counts without merging. Only `AGENTIC_HISTORICAL_SEEDS_MODE=apply` admits seeds after `CandidateValidator`. Nullable prefill parameters can participate in ranking without comparing `None` against integers and interrupting planning.
 - Snapshots separately save the selected candidate and its `evidence`, planning evidence, and `decision_evidence_ids`. The latter deduplicates cluster overview, applicable AIC refs, selected-candidate evidence refs, and historical sample IDs; it excludes unselected candidates. AI scoring scope is not the entire hard-valid catalog.
 - Diagnostic RAG foundations support searchable logs/traces/artifacts with access controls and artifact-integrity checks. This RAG is not yet integrated into deployment planning or AI scoring and cannot affect candidate generation, selection, or performance decisions.
@@ -884,7 +901,7 @@ Logs, traces, artifacts, and snapshots remain diagnostic. All unstructured evide
 5. Before cross-tenant benchmark queries, define ownership/authorization and verify tenant isolation.
 6. After access boundaries are clear, expose logs/traces/artifacts for explanation only, not AI recommendation or deterministic performance ranking.
 7. Record policies/switches in snapshots and replay history to compare deterministic decisions before/after priors.
-8. Archive candidates, final selection, and rationale for each AI/deterministic decision. With redaction, access controls, and pinned versions, index snapshots as RAG references for similar-decision context/explanation; never treat them as measurements or alter deterministic ranking.
+8. Archive candidates, final selection, and rationale for each AI/deterministic decision. With access controls and pinned versions, index separately prepared, policy-approved projections of snapshots as RAG references for similar-decision context/explanation; do not expose complete private prompt audits or treat them as measurements or alter deterministic ranking.
 9. Implement two-stage cloud-report retrieval: discovery-only RAG projections, then source validation and request-local `BenchmarkRecord` normalization. Do not persist records; use the same `match_similarity` as online records to supply at most five jointly ranked raw samples per candidate.
 10. Implement/replay a versioned `EvidenceSimilarityPolicy` with configurable weights, decay, and thresholds, forbidding arbitrary per-request tuning.
 11. Implement the use-case + accelerator/model estimator, passing uncertainty-aware TTFT, TPOT, and workload limits to generator/scorer as soft targets when explicit SLOs are absent. Verify it cannot bypass hard constraints or replace measurements.

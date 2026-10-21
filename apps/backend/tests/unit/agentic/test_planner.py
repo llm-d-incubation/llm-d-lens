@@ -960,11 +960,13 @@ def test_openai_compatible_planner_sends_all_validated_candidates_without_resour
         )
     )
     assert "name every other returned candidate ID" in captured["json"]["messages"][0]["content"]
-    supplied = json.loads(captured["json"]["messages"][1]["content"].partition("\n\n")[0])["valid_candidates"]
+    supplied = json.loads(
+        captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0]
+    )["valid_candidates"]
     supplied_by_id = {candidate["id"]: candidate for candidate in supplied}
     assert decision.candidate_id == "baseline-vllm-tp2-r1"
     assert "not_applicable" in captured["json"]["messages"][0]["content"]
-    assert "Return exactly 3 candidate ID(s)" in captured["json"]["messages"][0]["content"]
+    assert "Return up to 3 candidate ID(s)" in captured["json"]["messages"][0]["content"]
     assert "resource_policy" not in supplied_by_id["baseline-vllm-tp1-r1"]
     assert "resource_policy" not in supplied_by_id["baseline-vllm-tp2-r1"]
     assert supplied_by_id["baseline-vllm-tp1-r1"]["performance_estimate_applicability"] == "applicable"
@@ -1204,6 +1206,45 @@ def test_openai_compatible_planner_extracts_final_valid_json_from_reasoning_text
     assert scored[0].score == 1.0
 
 
+@pytest.mark.parametrize("operator_prompt", [None, "", "single GPU, no PD"])
+def test_planner_keeps_prompt_and_nested_preference_consistent(monkeypatch, operator_prompt):
+    captured = {}
+    facts = PlanningFacts(8, 32, 4, operator_preference="prefer existing cache")
+    candidates = DeterministicPlanner().candidates(facts)
+    candidate = candidates[0]
+    assert len([item for item in candidates if item.deployable]) >= 3
+
+    class Client:
+        async def complete(self, **kwargs):
+            captured.update(kwargs)
+            return json.dumps(
+                {
+                    "candidate_id": candidate.id,
+                    "candidate_ids": [candidate.id],
+                    "scores": {candidate.id: 1.0},
+                    "confidence": 0.8,
+                    "rationale": "Matches the supplied preference.",
+                }
+            )
+
+    monkeypatch.setattr("llm_d_lens.agentic.planner.client_for", lambda **_kwargs: Client())
+    decision, ranked = asyncio.run(
+        OpenAICompatiblePlanner("http://provider", "planner").recommend(
+            facts, candidates, operator_prompt=operator_prompt
+        )
+    )
+    assert decision.candidate_id == candidate.id
+    assert len(ranked) == 1
+    preference = facts.operator_preference if operator_prompt is None else operator_prompt
+    prefix, context = captured["user_content"].split("\n\nPlanning context (JSON):\n", 1)
+    assert prefix.startswith("Operator preference")
+    assert prefix.endswith(preference or "(not provided)")
+    payload = json.loads(context.partition("\n\n")[0])
+    assert payload["operator_preference"] == preference
+    assert payload["planning_facts"]["operator_preference"] == preference
+    assert facts.operator_preference == "prefer existing cache"
+
+
 def test_openai_compatible_planner_accepts_a_valid_preference_choice(monkeypatch):
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=1)
@@ -1394,6 +1435,8 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
     assert captured["json"]["response_format"]["json_schema"]["strict"] is True
     system_prompt = captured["json"]["messages"][0]["content"]
     assert "Follow this priority order" in system_prompt
+    assert system_prompt.index("explicit operator requirements") < system_prompt.index("Provider semantics:")
+    assert "Never pad the result with a forbidden topology" in system_prompt
     assert "operator_preference must be the primary scoring criterion" in system_prompt
     assert "deployment use case and planning_facts workload signals" in system_prompt
     assert (
@@ -1430,6 +1473,10 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
         "uniqueItems" not in captured["json"]["response_format"]["json_schema"]["schema"]["properties"]["candidate_ids"]
     )
     assert captured["json"]["messages"][1]["content"]
+    assert captured["json"]["messages"][1]["content"].startswith("Operator preference")
+    assert captured["json"]["messages"][1]["content"].index("Prefer prefix cache routing when feasible.") < captured[
+        "json"
+    ]["messages"][1]["content"].index("Planning context (JSON):")
     assert "Operator preference" in captured["json"]["messages"][1]["content"]
     assert "primary scoring criterion after hard constraints" in captured["json"]["messages"][1]["content"]
     assert "Prefer prefix cache routing when feasible." in captured["json"]["messages"][1]["content"]
@@ -1438,7 +1485,9 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
         in captured["json"]["messages"][1]["content"]
     )
     assert "general-chat" in captured["json"]["messages"][1]["content"]
-    facts_content, _separator, _preference = captured["json"]["messages"][1]["content"].partition("\n\n")
+    facts_content = (
+        captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0]
+    )
     valid_candidate = json.loads(facts_content)["valid_candidates"][0]
     assert valid_candidate["id"] == candidate.id
     assert "resource_policy" not in valid_candidate

@@ -1044,6 +1044,8 @@ class OpenAICompatiblePlanner:
         operator_prompt: str | None = None,
         on_progress: PlannerProgressCallback | None = None,
     ) -> tuple[PlannerDecision, list[PlannedCandidate]]:
+        operator_prompt = facts.operator_preference if operator_prompt is None else operator_prompt
+        facts = replace(facts, operator_preference=operator_prompt)
         deterministic_planner = DeterministicPlanner()
         valid_candidates = self._diverse_candidate_catalog(facts, candidates)
         if not valid_candidates:
@@ -1069,21 +1071,24 @@ class OpenAICompatiblePlanner:
         planning_facts = asdict(facts)
         planning_facts.pop("performance_score_inputs", None)
         context = {
+            "operator_preference": operator_prompt,
             "planning_facts": planning_facts,
             "valid_candidates": [self._candidate_context(facts, candidate) for candidate in valid_candidates],
         }
-        if operator_prompt:
-            context["operator_preference"] = operator_prompt
-        user_content = json.dumps(context)
-        if operator_prompt:
-            user_content += (
-                "\n\nOperator preference (primary scoring criterion after hard constraints; "
-                "it cannot create configurations):\n" + operator_prompt
-            )
+        user_content = (
+            "Operator preference (primary scoring criterion after hard constraints; "
+            "explicit requirements constrain eligibility; it cannot create configurations):\n"
+            f"{operator_prompt or '(not provided)'}\n\nPlanning context (JSON):\n" + json.dumps(context)
+        )
         user_content += "\n\nDeployment use case (important scenario-specific planning input):\n" + facts.use_case
         expected_candidate_count = min(3, len(valid_candidates))
         system_prompt = (
             "You are Prism's configuration selector. Follow this priority order:\n"
+            "Platform validity and hardware constraints come first, then explicit operator requirements, "
+            "operator soft preferences, and finally performance evidence and candidate diversity. "
+            "Never relax an explicit operator requirement to improve SLO estimates, resource policy, or diversity. "
+            "Prefer only candidates satisfying explicit operator requirements; do not treat a forbidden "
+            "provider or topology as an acceptable tradeoff.\n"
             "Provider semantics:\n"
             f"{provider_guidance()}\n"
             "1. Choose only among valid_candidates. Never invent IDs, configurations, providers, or facts.\n"
@@ -1107,8 +1112,9 @@ class OpenAICompatiblePlanner:
             "relevance to this target; it is not a current performance guarantee. Do not alter their metrics, "
             "configurations, outcomes, or match_confidence. Historical observations are supporting evidence from "
             "similar workloads, not candidate-specific guarantees.\n"
-            f"Return exactly {expected_candidate_count} candidate ID(s): return the top three "
-            "when at least three valid candidates exist; otherwise return every valid candidate. "
+            f"Return up to {expected_candidate_count} candidate ID(s): return the top three "
+            "when at least three valid candidates satisfy explicit operator requirements; otherwise return "
+            "only the candidates satisfying those requirements. Never pad the result with a forbidden topology. "
             "Assign scores from 0 to 1. candidate_id must "
             "have the highest score. scores must contain exactly one numeric entry per selected ID. In rationale, "
             "explain why the top candidate scores highest, then name every other returned candidate ID and give its "

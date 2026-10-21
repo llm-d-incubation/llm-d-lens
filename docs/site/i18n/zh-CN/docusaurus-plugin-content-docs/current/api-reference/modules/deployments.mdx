@@ -198,6 +198,21 @@ Guide 兼容端点保留 `{ "error": "..." }` 响应结构。
 流会先发出 `progress`，然后是 `complete` 或 `error`；断开连接时的清理
 操作会取消并等待尚未完成的规划。网关操作/日志流是单独处理的。
 
+Agentic 的生成器和规划器用户消息均以完整用户偏好开头，随后才是 JSON 上下文。
+提示词的优先级为：平台和硬件有效性、明确用户要求、软偏好、证据与候选多样性。
+多样性不得引入用户禁止的拓扑，最终可以返回少于三个方案。
+这是提示词约束，并不等同于服务端具备通用的自然语言硬约束解析能力。
+
+规划快照（schema version 2）完整保留 `request.planner_prompt`，不做内容脱敏。
+`planner_prompt_present` 仅作为兼容性标志保留，不再替代原文。
+运行记录的 `generator_requests` 和 `planner_requests` 保存每一次实际 HTTP 尝试
+最终发送的提供方原生请求体、原始响应、时间戳、HTTP 状态与错误类型，包括重试。
+快照中对应字段为 `generator.requests` 和 `planner.requests`。
+阶段审计文件位于 `session-artifacts/agentic-planning/<run_id>/requests/`，
+在发送前和完成后落盘，因此取消、失败或未生成最终运行记录时仍可排查。
+不记录认证头和 API Key；完整提示词和工具上下文属于私有应用数据。
+审计只适用于修改后的新请求，无法补回过去没有记录的交互。
+
 部署相关功能位于 `llm_d_lens/deploy/router.py` 中的 FastAPI 路由下，
 前缀为 `/api/v1/deployments`。
 

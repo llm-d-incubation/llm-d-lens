@@ -5,6 +5,7 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -182,7 +183,7 @@ def test_create_generates_an_approval_plan_without_deploying(monkeypatch):
     assert run.planning_trace[3]["ranking"][0]["candidate_id"] == run.selected_candidate.id
 
 
-def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp_path):
+def test_create_preserves_full_prompt_in_append_only_planning_snapshot(monkeypatch, tmp_path):
     service = AgenticDeploymentService(snapshot_store=PlanningSnapshotStore(tmp_path))
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.require_active_session",
@@ -190,7 +191,7 @@ def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp
     )
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
 
-    run = asyncio.run(service.create(_request(planner_prompt="do not persist this prompt")))
+    run = asyncio.run(service.create(_request(planner_prompt="persist this complete prompt")))
 
     assert run.planning_snapshot_id is not None
     assert run.planning_snapshot_path is not None
@@ -198,7 +199,10 @@ def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp
     assert payload["event"] == "created"
     assert payload["run_id"] == run.id
     assert payload["request"]["planner_prompt_present"] is True
-    assert "planner_prompt" not in payload["request"]
+    assert payload["schema_version"] == 2
+    assert payload["request"]["planner_prompt"] == "persist this complete prompt"
+    assert payload["generator"]["requests"] == []
+    assert payload["planner"]["requests"] == []
     assert payload["selected_candidate"]["id"] == run.selected_candidate.id
 
 
@@ -1109,7 +1113,11 @@ def test_refine_keeps_provider_selected_candidates(monkeypatch, tmp_path):
     assert created_path.read_text(encoding="utf-8") == created_payload
 
 
-def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
+@pytest.mark.parametrize("planner_fails", [False, True])
+def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch, tmp_path, planner_fails):
+    from llm_d_lens.agentic.planner import OpenAIPlannerError
+    from llm_d_lens.ai_providers.client import OpenAICompatibleClient
+
     service = AgenticDeploymentService()
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.require_active_session",
@@ -1119,17 +1127,45 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     prompts = []
     planning_lengths = []
 
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def post(self, endpoint, *, json, headers):
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "complete raw response"}}]},
+                request=httpx.Request("POST", endpoint),
+            )
+
+    async def validate_endpoint(_url):
+        pass
+
+    monkeypatch.setattr("llm_d_lens.ai_providers.service.validate_provider_endpoint", validate_endpoint)
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: Client())
+
     class Provider:
         settings = OpenAIPlannerSettings(base_url="http://provider", model="generator-model")
 
         async def recommend(self, facts, candidates, **_kwargs):
             from llm_d_lens.agentic.planner import DeterministicPlanner
 
+            await OpenAICompatibleClient("https://api.openai.com/", "planner-model").complete(
+                system_prompt="full planner system", user_content=_kwargs["operator_prompt"]
+            )
+            if planner_fails:
+                raise OpenAIPlannerError("invalid recorded response")
             return DeterministicPlanner().decide(facts, candidates), DeterministicPlanner().score(facts, candidates)
 
     async def generate(_self, _cluster_id, _model, facts, operator_prompt, on_progress=None):
         from llm_d_lens.agentic.generator import CandidateGenerationResult
 
+        await OpenAICompatibleClient("https://api.openai.com/", "generator-model").complete(
+            system_prompt="full generator system", user_content=operator_prompt
+        )
         prompts.append(operator_prompt)
         planning_lengths.append(facts.context_length)
         return CandidateGenerationResult(
@@ -1152,6 +1188,10 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     run = asyncio.run(
         service.create(_request(ai_provider_id="provider-1", planner_prompt="balanced", max_model_len=32768))
     )
+    original_path = tmp_path / run.planning_snapshot_path
+    original_payload = original_path.read_text()
+    assert run.generator_requests[0].request["messages"][1]["content"] == "balanced"
+    assert run.planner_requests[0].request["messages"][1]["content"] == "balanced"
     refined = asyncio.run(
         service.refine(
             run.id,
@@ -1166,6 +1206,17 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     assert refined.generator_fallback_reason is None
     assert refined.planning_trace[-1]["candidate_id"] == refined.selected_candidate.id
     assert refined.planning_trace[3]["ranking"]
+    payload = json.loads((tmp_path / refined.planning_snapshot_path).read_text())
+    assert payload["request"]["planner_prompt"] == "prefer fewer replicas"
+    for stage in ("generator", "planner"):
+        record = payload[stage]["requests"][0]
+        assert record["request"]["messages"][1]["content"] == "prefer fewer replicas"
+        assert "complete raw response" in record["response_body"]
+        assert record["response_status"] == 200
+        assert record["finished_at"] is not None
+    assert refined.planner_fallback_reason == ("invalid_response" if planner_fails else None)
+    assert original_path.read_text() == original_payload
+    assert len(list((tmp_path / run.id / "requests").glob("*.json"))) == 4
 
 
 def test_refine_falls_back_to_deterministic_planning_when_provider_fails(monkeypatch):

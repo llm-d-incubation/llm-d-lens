@@ -13,8 +13,39 @@ from llm_d_lens.agentic.generator import (
     CandidateValidator,
 )
 from llm_d_lens.agentic.planner import OpenAIPlannerSettings, PlanningFacts, WorkloadProfile
-from llm_d_lens.ai_providers.client import AIToolCall, AIToolTurn
+from llm_d_lens.ai_providers.client import AIProviderClientError, AIToolCall, AIToolTurn
 from llm_d_lens.auth.security import verify_internal
+
+
+@pytest.mark.parametrize("operator_prompt", [None, "", "single GPU, no PD"])
+def test_generator_keeps_prompt_and_nested_preference_consistent(monkeypatch, operator_prompt):
+    captured = {}
+
+    class Client:
+        async def complete_tool_turn(self, **kwargs):
+            captured.update(kwargs)
+            raise AIProviderClientError("stop after capturing input")
+
+    class Tools:
+        async def available_tools(self):
+            return [_cluster_tool(), _aic_tool()]
+
+    monkeypatch.setattr("llm_d_lens.agentic.generator.client_for", lambda **_kwargs: Client())
+    facts = PlanningFacts(8, 32, 4, operator_preference="prefer existing cache")
+    generator = AICandidateGenerator(
+        OpenAIPlannerSettings(base_url="http://provider", model="generator"), tools=Tools()
+    )
+    with pytest.raises(CandidateGenerationError, match="stop after capturing input"):
+        asyncio.run(generator.generate("cluster-a", "model-a", facts, operator_prompt))
+    preference = facts.operator_preference if operator_prompt is None else operator_prompt
+    content = captured["messages"][0]["content"]
+    assert content.startswith("Operator preference")
+    prefix, context = content.split("\n\nPlanning context (JSON):\n", 1)
+    assert prefix.endswith(preference or "(not provided)")
+    payload = json.loads(context)
+    assert payload["operator_preference"] == preference
+    assert payload["deployment_intent"]["operator_preference"] == preference
+    assert facts.operator_preference == "prefer existing cache"
 
 
 def test_validator_keeps_valid_ai_candidates_when_other_proposals_are_invalid():
@@ -297,7 +328,11 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeyp
     ]
     assert "The server will independently recompute" in captured["system_prompt"]
     assert "Do not score, select, render, approve, or deploy" in captured["system_prompt"]
-    user_context = json.loads(captured["messages"][0]["content"])
+    user_content = captured["messages"][0]["content"]
+    assert user_content.startswith("Operator preference")
+    assert user_content.index("prefer throughput") < user_content.index("Planning context (JSON):")
+    user_context = json.loads(user_content.split("Planning context (JSON):\n", 1)[1])
+    assert next(iter(user_context)) == "operator_preference"
     assert user_context["operator_preference"] == "prefer throughput"
     assert "validated_planning_facts" not in user_context
     assert proposals.proposals.candidates[0].provider_ref == "baseline-vllm"
@@ -907,8 +942,8 @@ def test_ai_generator_runs_bounded_optional_mcp_calls_before_final_candidates(mo
     assert all(trace["status"] == "success" for trace in proposals.proposals.tool_trace[2:])
     assert len(proposals.proposals.tool_trace[2]["arguments_digest"]) == 64
     assert len(proposals.proposals.tool_trace[2]["result_digest"]) == 64
-    assert "arguments" not in proposals.proposals.tool_trace[2]
-    assert "result" not in proposals.proposals.tool_trace[2]
+    assert proposals.proposals.tool_trace[2]["arguments"] == {"model": "Qwen/Qwen3-8B"}
+    assert proposals.proposals.tool_trace[2]["result"] == {"items": [{"id": "simulation-1", "status": "completed"}]}
     aic_trace = proposals.proposals.tool_trace[1]
     assert aic_trace["arguments"] == _aic_arguments()
     assert aic_trace["result"] == {"candidates": []}
@@ -1670,6 +1705,10 @@ def test_ai_generator_prompt_encodes_candidate_priorities_and_tool_policy():
     assert "First request only get_cluster_overview and search_candidates" in prompt
     assert "prefer those values over the corresponding deployment_intent fields" in prompt
     assert "operator_preference as the primary recommendation criterion" in prompt
+    assert prompt.index("explicit operator requirements") < prompt.index("Provider semantics:")
+    assert "Never relax an explicit operator requirement" in prompt
+    assert "explicit operator requirement, or explicit SLO" in prompt
+    assert "Diversity never requires an operator-forbidden provider or topology" in prompt
     assert "valid AIC predictions as secondary recommendation evidence" in prompt
     assert "Only when that search returns zero AIC candidates" in prompt
     assert "scale replicas first (prefill for TTFT, decode for TPOT in PD), then supported TP" in prompt
