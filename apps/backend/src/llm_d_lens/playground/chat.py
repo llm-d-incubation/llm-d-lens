@@ -10,6 +10,7 @@ from contextlib import suppress
 from copy import deepcopy
 from pathlib import Path
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Request
@@ -22,6 +23,8 @@ from llm_d_lens.mcp.tools import api_request, invoke_tool
 MAX_TOOL_CALL_TURNS = 40
 MCP_TOOL_CALL_TIMEOUT = 630
 AGENTIC_PLAN_TOOL = "create_agentic_plan"
+DEPLOYMENT_NAME_TOOLS = {AGENTIC_PLAN_TOOL, "create_standard_vllm_deployment_run"}
+SHORT_UUID_SUFFIX = re.compile(r"-[0-9a-f]{8}$", re.IGNORECASE)
 router = APIRouter(include_in_schema=False)
 SYSTEM_PROMPT = (
     "When you start a deployment (or any long-running Lens operation) and check its status, if the "
@@ -179,7 +182,7 @@ def append_tool_result(conversation, call, result):
     conversation.append({"role": "tool", "tool_call_id": call["id"], "content": encode(result)})
 
 
-def inherit_assistant_provider(name, arguments, provider_id):
+def prepare_tool_arguments(name, arguments, provider_id):
     """Carry the assistant's external provider into an Agentic planning call.
 
     The assistant model cannot reliably know which saved provider connection is
@@ -187,11 +190,17 @@ def inherit_assistant_provider(name, arguments, provider_id):
     Deployment fall back to deterministic planning. Only fill an absent/blank
     value; an explicit provider chosen by the model still wins.
     """
-    if name != AGENTIC_PLAN_TOOL or not provider_id:
-        return arguments
-    if str(arguments.get("ai_provider_id") or "").strip():
-        return arguments
-    return {**arguments, "ai_provider_id": provider_id}
+    prepared = arguments
+    if name == AGENTIC_PLAN_TOOL and provider_id and not str(prepared.get("ai_provider_id") or "").strip():
+        prepared = {**prepared, "ai_provider_id": provider_id}
+    if name in DEPLOYMENT_NAME_TOOLS:
+        deployment_name = str(prepared.get("deployment_name") or "").strip()
+        if deployment_name and not SHORT_UUID_SUFFIX.search(deployment_name):
+            # Keep assistant-created deployments unique. The backend request
+            # caps this field at 120 characters, so reserve room for "-<uuid8>".
+            base = deployment_name.rstrip("-")[:111] or "deployment"
+            prepared = {**prepared, "deployment_name": f"{base}-{uuid4().hex[:8]}"}
+    return prepared
 
 
 async def call_tool_safely(request, name, arguments):
@@ -209,7 +218,7 @@ async def process_pending_tool_calls(
     definitions = {tool["name"]: tool for tool in catalog(request.app)}
     for index, call in enumerate(tool_calls):
         name = call["function"]["name"]
-        arguments = inherit_assistant_provider(name, tool_arguments(call), default_ai_provider_id)
+        arguments = prepare_tool_arguments(name, tool_arguments(call), default_ai_provider_id)
         definition = definitions.get(name)
         if definition is None:
             await emit("blocked", {"name": name, "arguments": arguments, "reason": "unknown tool"})
