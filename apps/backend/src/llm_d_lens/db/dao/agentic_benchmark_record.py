@@ -87,11 +87,11 @@ class BenchmarkRecordDao(BaseDao):
     def find_compatible(
         self,
         *,
-        accelerator: str,
-        backend: str,
-        quantization: str,
+        accelerator: str | None,
+        backend: str | None,
+        quantization: str | None,
         topology: str,
-        minimum_vram_per_gpu_gib: float,
+        minimum_vram_per_gpu_gib: float | None,
         observed_after: datetime | None = None,
     ) -> list[BenchmarkRecord]:
         """Return records eligible for deterministic retriever fine scoring.
@@ -99,7 +99,10 @@ class BenchmarkRecordDao(BaseDao):
         These predicates exactly match the retriever's hard compatibility rules.
         Continuous similarity inputs and outcome remain unfiltered so Agentic can
         compute weights, confidence, and negative evidence consistently.
+        Missing query identities cannot establish compatibility and return no matches.
         """
+        if any(value is None for value in (accelerator, backend, quantization, minimum_vram_per_gpu_gib)):
+            return []
         with self._read_only() as session:
             stmt = select(BenchmarkRecordRow).where(
                 BenchmarkRecordRow.hardware_accelerator == accelerator,
@@ -116,17 +119,20 @@ class BenchmarkRecordDao(BaseDao):
     def find_seed_candidates(
         self,
         *,
-        accelerator: str,
-        backend: str,
-        quantization: str,
-        minimum_vram_per_gpu_gib: float,
+        accelerator: str | None,
+        backend: str | None,
+        quantization: str | None,
+        minimum_vram_per_gpu_gib: float | None,
         observed_after: datetime | None = None,
     ) -> list[BenchmarkRecord]:
         """Return hard-compatible history across topologies for seed discovery.
 
         The caller must still aggregate each configuration through
         ``BenchmarkEvidenceRetriever`` and validate every resulting proposal.
+        Incomplete query identities return no seed candidates.
         """
+        if any(value is None for value in (accelerator, backend, quantization, minimum_vram_per_gpu_gib)):
+            return []
         with self._read_only() as session:
             stmt = select(BenchmarkRecordRow).where(
                 BenchmarkRecordRow.hardware_accelerator == accelerator,

@@ -155,13 +155,20 @@ def test_saved_metadata_is_used_without_live_or_planning_lookups(task, monkeypat
     assert record.metrics.error_rate == 0
 
 
+def test_unknown_runtime_version_does_not_block_simulation_archival(task):
+    task.benchmark_evidence["benchmark_context"]["runtime"]["backend_version"] = "unknown"
+    records, issues = evidence.normalize_simulation_task(task)
+    assert not issues
+    assert records[0].runtime.backend_version is None
+    assert records[0].provenance["attribution"] == "serving-snapshot"
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         lambda t: setattr(t, "benchmark_evidence", None),
         lambda t: t.benchmark_evidence["benchmark_context"].pop("verified_at"),
         lambda t: t.benchmark_evidence.update(benchmark_context_error="API unavailable"),
-        lambda t: t.benchmark_evidence["benchmark_context"]["runtime"].update(backend_version="unknown"),
         lambda t: t.benchmark_evidence["benchmark_context"].update(captured_at="2026-10-20T12:01:30Z"),
         lambda t: t.benchmark_evidence.update(task_id="12345678"),
         lambda t: setattr(t, "endpoint_cluster_id", "other"),

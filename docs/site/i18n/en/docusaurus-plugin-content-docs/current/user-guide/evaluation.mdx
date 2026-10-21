@@ -140,12 +140,16 @@ Before traffic, Lens uses read-only Kubernetes queries and serving-container met
 to capture the actual model, accelerator memory and runtime version. This requires
 permission to read Pods and execute a read-only Python metadata probe in the serving
 container. It does not load model weights, download another model, change the deployment
-or restart it. Metadata collection has a 60-second budget. Unsupported or unavailable
-metadata does not fail the benchmark: the saved `benchmark_evidence` report explains
-why evidence was skipped. Serving Pod changes/restarts invalidate the snapshot.
-Current automatic enrichment requires single-worker inference-perf and identifiable vLLM containers with unambiguous
-local, uncompressed safetensors metadata. Packed quantized models, same-pod baseline
-traffic, heterogeneous replicas and unsupported workload attribution are skipped.
+or restart it. Serving capture has a 60-second budget. Model family, dense/MoE
+architecture and parameter count can also be enriched through the public model API/config,
+with a 10-second timeout per HTTP operation. API revision and lookup time are recorded
+separately from the actual serving revision. Missing descriptive metadata, device details
+or vLLM/PyTorch versions remain null and do not block archival of valid measured results.
+The saved `benchmark_evidence.metadata` reports missing fields and collection errors.
+Serving Pod changes/restarts invalidate the snapshot.
+Automatic serving capture requires single-worker inference-perf and identifiable vLLM
+containers. Packed quantized weights leave uncompressed parameter counts unknown;
+same-pod baseline traffic and unsupported workload attribution are skipped.
 Hub-cache sources must identify the immutable serving revision; an unpinned current
 cache branch is not historical proof.
 
@@ -153,11 +157,24 @@ Administrators can preview historical ingestion in the backend's configured envi
 
 ```bash
 python -m llm_d_lens.evaluation.benchmark_evidence
+python -m llm_d_lens.evaluation.benchmark_evidence --run-id <evaluate-run-uuid> --enrich
 python -m llm_d_lens.evaluation.benchmark_evidence --run-id <evaluate-run-uuid> --apply
 ```
 
 Without `--apply`, nothing is written. Backfill uses only saved test-time evidence;
 it does not substitute the current cluster state for missing historical metadata.
+Without a complete serving snapshot, valid saved configuration and measurements can
+still be archived with explicit provenance, but those records do not participate in
+predictive matching. `--enrich` optionally retrieves public model descriptors, never
+current cluster state. Native lifecycle JSON can be read from `workspace.tar.zst`;
+no missing token statistics are fabricated from planned request lengths.
+For an explicitly known historical environment, operators may supply
+`--hardware-accelerator "Intel Arc Pro B60" --hardware-vram-per-gpu-gib 24
+--hardware-count-from-configuration` together with explicit `--run-id` filters.
+All three options are required. Memory/model are operator declarations; card count is
+the saved decode plus prefill TP times replicas, not discovered device allocation.
+The declaration, timestamp and configuration checksum survive in permanent provenance.
+It cannot replace a serving snapshot or make archive-only records predictive evidence.
 Repeated application is idempotent. Original Evaluate results are retained even when
 evidence is ineligible or evidence persistence fails.
 

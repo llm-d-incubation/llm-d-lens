@@ -10,6 +10,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
+
 from llm_d_lens.agentic.benchmark_evidence import (
     BenchmarkRecord,
     CandidateConfiguration,
@@ -30,56 +32,141 @@ _MODEL_PROBE = r"""
 import json, math, re, sys
 from importlib.metadata import version
 from pathlib import Path
-import torch
-from safetensors import safe_open
-from huggingface_hub import snapshot_download
 
 source, model_id, revision, quantization = sys.argv[1:]
-root = Path(source)
-if not root.is_dir():
-    if not re.fullmatch(r"[0-9a-f]{40}", revision):
-        raise ValueError("A cached Hub model needs an immutable serving revision, not the latest cached branch")
-    root = Path(snapshot_download(source, revision=revision or None, local_files_only=True))
-config = json.loads((root / "config.json").read_text())
-text = config.get("text_config") or config
-parameters = 0
-seen = set()
-files = sorted(root.glob("*.safetensors"))
-if not files:
-    raise ValueError("Local safetensors parameter metadata is unavailable")
-for file in files:
-    with safe_open(file, framework="pt", device="cpu") as weights:
-        for key in weights.keys():
-            if key in seen:
-                raise ValueError("Duplicate tensor metadata; parameter count is ambiguous")
-            seen.add(key)
-            parameters += math.prod(weights.get_slice(key).get_shape())
-device = torch.get_device_module()
-properties = [device.get_device_properties(i) for i in range(device.device_count())]
-if not properties or len({(p.name, p.total_memory) for p in properties}) != 1:
-    raise ValueError("Heterogeneous or missing accelerator properties")
-experts = text.get("num_local_experts") or text.get("num_experts") or text.get("n_routed_experts")
-quant = quantization or (config.get("quantization_config") or {}).get("quant_method") or "none"
-if quant != "none":
-    raise ValueError("Packed quantized tensors do not establish the uncompressed model parameter count")
-print(json.dumps({
-    "model": {
-        "model_id": model_id, "family": text["model_type"],
-        "architecture": "moe" if experts else "dense",
-        "parameter_count_b": parameters / 1e9, "quantization": quant,
-        "tokenizer_id": model_id, "revision": revision or config.get("_commit_hash")
-    },
-    "hardware": {
-        "accelerator": properties[0].name,
-        "vram_per_gpu_gib": properties[0].total_memory / 1024**3,
-        "gpu_count": len(properties)
-    },
-    "runtime": {
-        "backend": "vllm", "backend_version": version("vllm"),
-        "accelerator_runtime": device.__name__ + ":torch-" + torch.__version__
-    }
-}))
+model = {"model_id": model_id, "revision": revision or None}
+runtime, hardware, warnings = {"backend": "vllm"}, {}, []
+try:
+    root = Path(source)
+    if not root.is_dir():
+        if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise ValueError("Unpinned serving revision")
+        from huggingface_hub import snapshot_download
+        root = Path(snapshot_download(source, revision=revision, local_files_only=True))
+    config = json.loads((root / "config.json").read_text())
+    text = config.get("text_config") or config
+    experts = text.get("num_local_experts") or text.get("num_experts") or text.get("n_routed_experts")
+    quant = quantization or (config.get("quantization_config") or {}).get("quant_method") or "none"
+    model.update(family=text.get("model_type"), architecture="moe" if experts else "dense",
+                 quantization=quant, tokenizer_id=model_id)
+    if quant == "none":
+        from safetensors import safe_open
+        parameters, seen = 0, set()
+        files = sorted(root.glob("*.safetensors"))
+        if not files:
+            raise ValueError("No local parameter metadata")
+        for file in files:
+            with safe_open(file, framework="pt", device="cpu") as weights:
+                for key in weights.keys():
+                    if key in seen:
+                        raise ValueError("Duplicate tensor metadata")
+                    seen.add(key)
+                    parameters += math.prod(weights.get_slice(key).get_shape())
+        model["parameter_count_b"] = parameters / 1e9
+except (ImportError, OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+    warnings.append("model:" + type(error).__name__)
+if quantization:
+    model["quantization"] = quantization
+try:
+    runtime["backend_version"] = version("vllm")
+except ImportError as error:
+    warnings.append("vllm:" + type(error).__name__)
+try:
+    import torch
+    device = torch.get_device_module()
+    runtime["accelerator_runtime"] = device.__name__ + ":torch-" + torch.__version__
+    properties = [device.get_device_properties(i) for i in range(device.device_count())]
+    if not properties or len({(p.name, p.total_memory) for p in properties}) != 1:
+        raise ValueError("Heterogeneous or missing accelerator properties")
+    hardware.update(accelerator=properties[0].name,
+                    vram_per_gpu_gib=properties[0].total_memory / 1024**3,
+                    gpu_count=len(properties))
+except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as error:
+    warnings.append("hardware:" + type(error).__name__)
+print(json.dumps({"model": model, "hardware": hardware, "runtime": runtime, "warnings": warnings}))
 """
+
+
+async def enrich_model_metadata(run: dict) -> None:
+    """Fetch public descriptive model facts, never serving settings or benchmark metrics.
+
+    API revision and lookup time are retained separately from the actual serving
+    revision. A lookup failure is reported but cannot prevent result archival.
+    """
+    saved = run.get("deployment_configuration")
+    content = saved.get("content") if isinstance(saved, dict) else None
+    model_spec = content.get("model") if isinstance(content, dict) else None
+    model_id = model_spec.get("name") if isinstance(model_spec, dict) else None
+    if not isinstance(model_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?", model_id
+    ):
+        run["benchmark_model_metadata_error"] = "Public metadata requires a saved Hub model identity"
+        logger.warning("Benchmark %s: %s", run["id"], run["benchmark_model_metadata_error"])
+        return
+    context = run.get("benchmark_context")
+    serving_model = context.get("model") if isinstance(context, dict) else None
+    serving_model = serving_model if isinstance(serving_model, dict) else {}
+    if all(serving_model.get(key) is not None for key in ("family", "architecture", "parameter_count_b")):
+        return
+    revision = serving_model.get("revision")
+    suffix = f"/revision/{revision}" if isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{40}", revision) else ""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            response = await client.get(f"https://huggingface.co/api/models/{model_id}{suffix}")
+            response.raise_for_status()
+            info = response.json()
+            sha = info.get("sha")
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+                raise ValueError("Model API did not return an immutable revision")
+            response = await client.get(f"https://huggingface.co/{model_id}/resolve/{sha}/config.json")
+            response.raise_for_status()
+            config = response.json()
+        text = config.get("text_config") or config
+        experts = text.get("num_local_experts") or text.get("num_experts") or text.get("n_routed_experts")
+        fields = {
+            "family": text.get("model_type"),
+            "architecture": "moe" if experts else "dense",
+            "parameter_count_b": (info.get("safetensors") or {}).get("total"),
+        }
+        if fields["parameter_count_b"] is not None:
+            fields["parameter_count_b"] = positive(fields["parameter_count_b"], "API parameter count") / 1e9
+        descriptor = ModelDescriptor(model_id=model_id, **fields)
+        run["benchmark_model_metadata"] = {
+            "model": descriptor.model_dump(exclude_none=True),
+            "source": "Hugging Face model API and config.json",
+            "api_revision": sha,
+            "serving_revision_pinned": revision == sha,
+            "retrieved_at": datetime.now(UTC).isoformat(),
+        }
+        run.pop("benchmark_model_metadata_error", None)
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError) as error:
+        reason = f"Public model metadata lookup failed ({type(error).__name__})"
+        run["benchmark_model_metadata_error"] = reason
+        logger.warning("Benchmark %s: %s", run["id"], reason)
+
+
+def _model_descriptor(run: dict, values: dict) -> ModelDescriptor:
+    """Combine serving facts with descriptive public metadata without overwriting facts."""
+    extra = run.get("benchmark_model_metadata") or {}
+    public = extra.get("model") or {}
+    merged = dict(values)
+    if public.get("model_id") == values.get("model_id"):
+        for name in ("family", "architecture", "parameter_count_b"):
+            if merged.get(name) is None and public.get(name) is not None:
+                merged[name] = public[name]
+    return ModelDescriptor.model_validate(_available_descriptor_fields(merged), strict=True)
+
+
+def _available_descriptor_fields(values: dict) -> dict:
+    """Normalize explicit missing-value markers from collected metadata to null."""
+    return {
+        name: None
+        if name != "model_id"
+        and isinstance(value, str)
+        and value.strip().lower() in ("", "unknown", "unavailable", "cluster")
+        else value
+        for name, value in values.items()
+    }
 
 
 def positive(value: Any, field: str) -> float:
@@ -212,9 +299,16 @@ async def _capture(run: dict) -> None:
             timeout=30,
         )
         if response.returncode:
-            raise ValueError("Serving-container metadata probe failed; no inferred metadata was substituted")
-        snapshot = json.loads(response.stdout)
-        if snapshot["hardware"]["gpu_count"] != int(tp):
+            logger.warning("Benchmark %s serving metadata probe exited %s", run["id"], response.returncode)
+            snapshot = {
+                "model": {"model_id": expected_model, "revision": _argument(arguments, "--revision")},
+                "hardware": {},
+                "runtime": {"backend": "vllm"},
+                "warnings": [f"metadata probe exit {response.returncode}"],
+            }
+        else:
+            snapshot = json.loads(response.stdout)
+        if snapshot["hardware"].get("gpu_count") is not None and snapshot["hardware"]["gpu_count"] != int(tp):
             raise ValueError("Visible devices in a serving container do not match its tensor parallelism")
         snapshots.append(snapshot)
         identities.append(_pod_identity(pod, container))
@@ -240,17 +334,18 @@ async def _capture(run: dict) -> None:
                 else (False if "--no-enable-prefix-caching" in arguments else None),
             }
         )
-    first = snapshots[0]
-    for snapshot in snapshots[1:]:
-        if any(snapshot[key] != first[key] for key in ("model", "runtime")):
-            raise ValueError("Serving replicas have inconsistent model or runtime metadata")
-        if any(snapshot["hardware"][key] != first["hardware"][key] for key in ("accelerator", "vram_per_gpu_gib")):
-            raise ValueError("Serving replicas have heterogeneous accelerators")
-    hardware = dict(first["hardware"], gpu_count=sum(item["hardware"]["gpu_count"] for item in snapshots))
+    first = {}
+    for section in ("model", "runtime", "hardware"):
+        first[section] = {}
+        for key in set().union(*(snapshot[section] for snapshot in snapshots)):
+            values = [snapshot[section].get(key) for snapshot in snapshots]
+            first[section][key] = values[0] if all(value == values[0] for value in values) else None
+    counts = [item["hardware"].get("gpu_count") for item in snapshots]
+    hardware = dict(first["hardware"], gpu_count=sum(counts) if all(count is not None for count in counts) else None)
     expected_tps = [candidate.decode_tp] * candidate.decode_replicas
     if candidate.prefill_tp is not None and candidate.prefill_replicas is not None:
         expected_tps += [candidate.prefill_tp] * candidate.prefill_replicas
-    if hardware["gpu_count"] != sum(expected_tps):
+    if hardware["gpu_count"] is not None and hardware["gpu_count"] != sum(expected_tps):
         raise ValueError("Visible model devices do not match the saved deployment allocation")
     if sorted(parallel_sizes) != sorted(expected_tps):
         raise ValueError("Actual serving tensor parallelism does not match the deployment configuration")
@@ -269,6 +364,8 @@ async def _capture(run: dict) -> None:
         "runtime": first["runtime"],
         "pods": identities,
         "serving_configuration": serving,
+        "replica_metadata": snapshots,
+        "warnings": [warning for snapshot in snapshots for warning in snapshot.get("warnings", [])],
     }
     run.pop("benchmark_context_error", None)
 
@@ -280,6 +377,7 @@ async def capture_benchmark_context(run: dict) -> None:
         run.pop("benchmark_context", None)
         run["benchmark_context_error"] = str(error) or "Serving metadata collection exceeded 60 seconds"
         logger.warning("Benchmark %s metadata unavailable: %s", run["id"], run["benchmark_context_error"])
+    await enrich_model_metadata(run)
 
 
 async def verify_benchmark_context(run: dict) -> None:
@@ -302,20 +400,41 @@ async def verify_benchmark_context(run: dict) -> None:
 
 def validate_benchmark_context(
     run: dict,
+    *,
+    allow_saved_configuration: bool = False,
 ) -> tuple[datetime, ModelDescriptor, HardwareDescriptor, RuntimeFingerprint, CandidateConfiguration]:
+    """Validate attribution; optionally archive saved Evaluate configuration without claiming a live snapshot.
+
+    Without a serving snapshot, hardware remains unknown and is ineligible for
+    predictive matching. Public model descriptors do not establish serving identity.
+    """
     context = run.get("benchmark_context") or {}
-    if context.get("schema_version") != 1 or not context.get("verified_at") or run.get("benchmark_context_error"):
-        raise ValueError(run.get("benchmark_context_error") or "Verified test-time metadata snapshot is missing")
     configuration, candidate = configuration_snapshot(run)
     if run.get("use_baseline_endpoint"):
         raise ValueError("Same-pod baseline topology is not attributable")
+    if not context and allow_saved_configuration:
+        timestamp = datetime.fromisoformat(run["finished_at"].replace("Z", "+00:00"))
+        started = datetime.fromisoformat(run["benchmark_started_at"].replace("Z", "+00:00"))
+        if timestamp.tzinfo is None or started.tzinfo is None or started > timestamp:
+            raise ValueError("Measurement timestamps do not establish a valid test window")
+        model = _model_descriptor(run, {"model_id": configuration.content.get("model", {}).get("name")})
+        if not model.model_id.strip():
+            raise ValueError("The saved deployment configuration must identify the model")
+        backend = (run.get("configuration") or {}).get("runtime")
+        return timestamp, model, HardwareDescriptor(), RuntimeFingerprint(backend=backend), candidate
+    if context.get("schema_version") != 1 or not context.get("verified_at") or run.get("benchmark_context_error"):
+        raise ValueError(run.get("benchmark_context_error") or "Verified test-time metadata snapshot is missing")
     if context.get("configuration_checksum") != configuration.checksum:
         raise ValueError("Metadata snapshot refers to a different deployment configuration")
-    model = ModelDescriptor.model_validate(context.get("model"), strict=True)
-    hardware = HardwareDescriptor.model_validate(context.get("hardware"), strict=True)
-    runtime = RuntimeFingerprint.model_validate(context.get("runtime"), strict=True)
-    positive(model.parameter_count_b, "parameter count")
-    positive(hardware.vram_per_gpu_gib, "per-device memory")
+    model = _model_descriptor(run, context.get("model") or {})
+    hardware = HardwareDescriptor.model_validate(
+        _available_descriptor_fields(context.get("hardware") or {}), strict=True
+    )
+    runtime = RuntimeFingerprint.model_validate(_available_descriptor_fields(context.get("runtime") or {}), strict=True)
+    if model.parameter_count_b is not None:
+        positive(model.parameter_count_b, "parameter count")
+    if hardware.vram_per_gpu_gib is not None:
+        positive(hardware.vram_per_gpu_gib, "per-device memory")
     if model.active_parameter_count_b is not None:
         positive(model.active_parameter_count_b, "active parameter count")
     for value in (
@@ -328,14 +447,14 @@ def validate_benchmark_context(
         runtime.backend_version,
         runtime.accelerator_runtime,
     ):
-        if not value.strip() or value.lower() in ("unknown", "cluster"):
+        if value is not None and (not value.strip() or value.lower() in ("unknown", "cluster")):
             raise ValueError("Model, hardware and runtime identity fields must be known")
     if model.model_id != configuration.content.get("model", {}).get("name"):
         raise ValueError("Model metadata does not match the deployment snapshot")
     expected_gpus = candidate.decode_tp * candidate.decode_replicas
     if candidate.prefill_tp is not None and candidate.prefill_replicas is not None:
         expected_gpus += candidate.prefill_tp * candidate.prefill_replicas
-    if hardware.gpu_count != expected_gpus:
+    if hardware.gpu_count is not None and hardware.gpu_count != expected_gpus:
         raise ValueError("Hardware allocation and deployment topology disagree")
     timestamp = datetime.fromisoformat(run["finished_at"].replace("Z", "+00:00"))
     started = datetime.fromisoformat(run["benchmark_started_at"].replace("Z", "+00:00"))

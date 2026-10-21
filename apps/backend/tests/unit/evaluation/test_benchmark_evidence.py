@@ -2,12 +2,17 @@
 
 import asyncio
 import importlib
+import io
 import json
+import subprocess
 import sys
+import tarfile
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from llm_d_lens.agentic import benchmark_context
@@ -115,11 +120,7 @@ def test_nonmeasured_terminal_or_inflight_runs_are_not_promoted(run, status):
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda r: r.pop("benchmark_context"),
         lambda r: r["benchmark_context"].pop("verified_at"),
-        lambda r: r["benchmark_context"]["model"].pop("parameter_count_b"),
-        lambda r: r["benchmark_context"]["model"].update(architecture="unknown"),
-        lambda r: r["benchmark_context"]["runtime"].update(backend_version="unknown"),
         lambda r: r["benchmark_context"]["hardware"].update(vram_per_gpu_gib=float("inf")),
         lambda r: r["benchmark_context"]["hardware"].update(gpu_count=2),
         lambda r: r["benchmark_context"]["model"].update(model_id="other/model"),
@@ -196,7 +197,7 @@ def test_backfill_cli_defaults_to_preview_then_idempotently_applies_only_eligibl
     dao.save(EvaluateRunRecord.model_validate(run))
     incomplete = deepcopy(run)
     incomplete["id"] = str(uuid4())
-    incomplete.pop("benchmark_context")
+    incomplete.pop("benchmark_started_at")
     dao.save(EvaluateRunRecord.model_validate(incomplete))
     monkeypatch.setattr(sys, "argv", ["backfill"])
     evidence.main()
@@ -273,7 +274,8 @@ def test_standalone_random_workload_is_supported_but_mixed_stages_are_not(run):
     assert not evidence.normalize_evaluate_run(run)[0]
 
 
-def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it(run, monkeypatch):
+@pytest.mark.parametrize("probe_exit", [0, 1])
+def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it(run, monkeypatch, probe_exit):
     metadata = deepcopy(run.pop("benchmark_context"))
     probe = {key: metadata[key] for key in ("model", "hardware", "runtime")}
     pod = {
@@ -303,13 +305,21 @@ def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it
 
     async def execute(argv, **kwargs):
         calls.append(argv)
-        return SimpleNamespace(returncode=0, stdout=json.dumps({"items": [pod]} if "get" in argv else probe))
+        return SimpleNamespace(
+            returncode=0 if "get" in argv else probe_exit,
+            stdout=json.dumps({"items": [pod]} if "get" in argv else probe),
+        )
 
     monkeypatch.setattr(benchmark_context, "scoped_runner", lambda cluster: SimpleNamespace(run=execute))
     monkeypatch.setattr(benchmark_context, "resolve_by_resource", lambda key: True)
+    monkeypatch.setattr(benchmark_context, "enrich_model_metadata", AsyncMock())
     asyncio.run(evidence.capture_benchmark_context(run))
-    assert run["benchmark_context"]["model"] == probe["model"]
-    assert run["benchmark_context"]["hardware"] == probe["hardware"]
+    if not probe_exit:
+        assert run["benchmark_context"]["model"] == probe["model"]
+        assert run["benchmark_context"]["hardware"] == probe["hardware"]
+    else:
+        assert run["benchmark_context"]["hardware"]["gpu_count"] is None
+        assert run["benchmark_context"]["warnings"] == ["metadata probe exit 1"]
     assert any("exec" in argv for argv in calls)
     asyncio.run(evidence.verify_benchmark_context(run))
     assert run["benchmark_context"]["verified_at"]
@@ -326,9 +336,17 @@ def test_metadata_api_failure_does_not_replace_missing_metadata_with_defaults(ru
         raise ValueError("Selected cluster is unavailable")
 
     monkeypatch.setattr(benchmark_context, "_model_pods", unavailable)
+    monkeypatch.setattr(benchmark_context, "enrich_model_metadata", AsyncMock())
     asyncio.run(evidence.capture_benchmark_context(run))
     assert "benchmark_context" not in run
     assert run["benchmark_context_error"] == "Selected cluster is unavailable"
+
+
+def test_missing_deployment_context_never_fails_benchmark_metadata_collection(run):
+    run.pop("deployment_configuration")
+    asyncio.run(evidence.capture_benchmark_context(run))
+    assert run["benchmark_context_error"]
+    assert run["benchmark_model_metadata_error"]
 
 
 def test_probe_is_valid_python():
@@ -344,8 +362,7 @@ def test_probe_never_substitutes_latest_cached_revision_for_unpinned_serving_mod
 
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=unexpected_download))
     monkeypatch.setattr(sys, "argv", ["probe", "org/model", "org/model", "", ""])
-    with pytest.raises(ValueError, match="immutable serving revision"):
-        exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+    exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
 
 
 def test_batch_failure_rolls_back_every_new_record(run):
@@ -420,13 +437,214 @@ def test_live_probe_reads_actual_metadata_and_refuses_packed_or_duplicate_weight
     monkeypatch.setitem(sys.modules, "safetensors", SimpleNamespace(safe_open=lambda *a, **kw: Header()))
     monkeypatch.setattr("importlib.metadata.version", lambda name: "0.11.0")
     monkeypatch.setattr(sys, "argv", ["probe", str(root), "org/model", "pinned-revision", ""])
+    exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+    result = json.loads(capsys.readouterr().out)
     if quantization != "none" or duplicate:
-        with pytest.raises(ValueError, match="Packed|Duplicate"):
-            exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+        assert "parameter_count_b" not in result["model"]
     else:
-        exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
-        result = json.loads(capsys.readouterr().out)
         assert result["model"]["parameter_count_b"] == 0.008
-        assert result["model"]["architecture"] == "moe"
-        assert result["hardware"]["vram_per_gpu_gib"] == 80
-        assert result["runtime"]["backend_version"] == "0.11.0"
+    assert result["model"]["architecture"] == "moe"
+    assert result["hardware"]["vram_per_gpu_gib"] == 80
+    assert result["runtime"]["backend_version"] == "0.11.0"
+
+
+@pytest.mark.parametrize("missing", [None, "unknown", ""])
+def test_missing_auxiliary_metadata_is_archived_as_null_and_roundtrips(run, missing):
+    run["benchmark_context"]["model"] = {"model_id": "org/model"}
+    run["benchmark_context"]["runtime"] = {"backend": "vllm", "backend_version": missing}
+    run["benchmark_context"]["hardware"] = {}
+    report = evidence.ingest_evaluate_run(run)
+    assert report["status"] == "stored"
+    (record,) = BenchmarkRecordDao().list()
+    assert record.model.parameter_count_b is None
+    assert record.model.architecture is None
+    assert record.runtime.backend_version is None
+    assert record.hardware.accelerator is None
+    assert record.provenance["attribution"] == "serving-snapshot"
+    assert "runtime.backend_version" in report["metadata"]["missing_fields"]
+
+
+def test_saved_configuration_can_archive_without_claiming_historical_hardware(run):
+    run.pop("benchmark_context")
+    run["benchmark_context_error"] = "Serving-container metadata probe failed"
+    records, issues = evidence.normalize_evaluate_run(run)
+    assert not issues
+    assert records[0].model.model_id == "org/model"
+    assert records[0].hardware.gpu_count is None
+    assert records[0].hardware.accelerator is None
+    assert records[0].runtime.backend_version is None
+    assert records[0].provenance["attribution"] == "saved-configuration"
+
+
+@pytest.mark.parametrize("prefill", [False, True])
+def test_operator_hardware_declaration_preserves_source_and_configured_count(run, prefill):
+    run.pop("benchmark_context")
+    if prefill:
+        content = run["deployment_configuration"]["content"]
+        content["prefill"] = {"tensorParallelSize": 1, "replicaCount": 1}
+        run["deployment_configuration"]["checksum"] = configuration_checksum(content)
+    evidence.declare_historical_hardware(run, "Intel Arc Pro B60", 24)
+    records, issues = evidence.normalize_evaluate_run(run)
+    assert not issues
+    record = records[0]
+    assert record.hardware.accelerator == "Intel Arc Pro B60"
+    assert record.hardware.vram_per_gpu_gib == 24
+    assert record.hardware.gpu_count == (2 if prefill else 1)
+    assert record.provenance["attribution"] == "saved-configuration"
+    declaration = record.provenance["hardware_enrichment"]
+    assert declaration["source"] == "operator-declaration"
+    assert declaration["gpu_count_source"] == "saved-deployment-configuration"
+    run["benchmark_hardware_metadata"]["hardware"]["gpu_count"] = 99
+    assert "card count disagrees" in evidence.normalize_evaluate_run(run)[1][0]["reason"]
+
+
+def test_operator_hardware_cli_previews_then_persists_idempotently(run, monkeypatch, capsys):
+    run.pop("benchmark_context")
+    dao = EvaluateRunDao()
+    dao.save(EvaluateRunRecord.model_validate(run))
+    arguments = [
+        "backfill",
+        "--run-id",
+        run["id"],
+        "--hardware-accelerator",
+        "Intel Arc Pro B60",
+        "--hardware-vram-per-gpu-gib",
+        "24",
+        "--hardware-count-from-configuration",
+    ]
+    monkeypatch.setattr(sys, "argv", arguments)
+    evidence.main()
+    assert json.loads(capsys.readouterr().out)["status"] == "eligible"
+    assert not BenchmarkRecordDao().list()
+    assert "benchmark_hardware_metadata" not in dao.get(run["id"]).model_dump()
+    monkeypatch.setattr(sys, "argv", arguments + ["--apply"])
+    evidence.main()
+    assert json.loads(capsys.readouterr().out)["status"] == "stored"
+    (record,) = BenchmarkRecordDao().list()
+    original = record.model_dump()
+    assert record.hardware.accelerator == "Intel Arc Pro B60"
+    original_declaration = dao.get(run["id"]).model_dump()["benchmark_hardware_metadata"]
+    assert dao.get(run["id"]).model_dump()["benchmark_hardware_metadata"]["source"] == "operator-declaration"
+    evidence.main()
+    assert json.loads(capsys.readouterr().out)["inserted_ids"] == []
+    assert BenchmarkRecordDao().get(record.benchmark_id).model_dump() == original
+    assert dao.get(run["id"]).model_dump()["benchmark_hardware_metadata"] == original_declaration
+
+
+def test_hardware_declarations_refuse_live_snapshots_and_invalid_memory(run):
+    with pytest.raises(ValueError, match="without a serving snapshot"):
+        evidence.declare_historical_hardware(run, "Intel Arc Pro B60", 24)
+    run.pop("benchmark_context")
+    with pytest.raises(ValueError, match="finite positive"):
+        evidence.declare_historical_hardware(run, "Intel Arc Pro B60", float("nan"))
+    evidence.declare_historical_hardware(run, "Intel Arc Pro B60", 24)
+    run["benchmark_hardware_metadata"]["configuration_checksum"] = "different"
+    assert "does not identify" in evidence.normalize_evaluate_run(run)[1][0]["reason"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--hardware-accelerator", "Intel Arc Pro B60"],
+        [
+            "--hardware-accelerator",
+            "Intel Arc Pro B60",
+            "--hardware-vram-per-gpu-gib",
+            "24",
+            "--hardware-count-from-configuration",
+        ],
+    ],
+)
+def test_hardware_cli_requires_explicit_scope_and_complete_declaration(arguments, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["backfill", *arguments])
+    with pytest.raises(SystemExit) as error:
+        evidence.main()
+    assert error.value.code == 2
+    assert not BenchmarkRecordDao().list()
+
+
+def test_public_model_api_enriches_descriptors_without_claiming_serving_revision(run, monkeypatch):
+    run.pop("benchmark_context")
+    sha = "a" * 40
+    requests = []
+
+    def handle(request):
+        requests.append(str(request.url))
+        if "/api/models/" in str(request.url):
+            return httpx.Response(200, json={"sha": sha, "safetensors": {"total": 600_000_000}})
+        return httpx.Response(200, json={"model_type": "qwen3", "num_experts": 0})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        benchmark_context.httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle), **kwargs)
+    )
+    asyncio.run(benchmark_context.enrich_model_metadata(run))
+    records, issues = evidence.normalize_evaluate_run(run)
+    assert not issues
+    assert records[0].model.family == "qwen3"
+    assert records[0].model.architecture == "dense"
+    assert records[0].model.parameter_count_b == 0.6
+    assert records[0].model.revision is None
+    assert run["benchmark_model_metadata"]["api_revision"] == sha
+    assert not run["benchmark_model_metadata"]["serving_revision_pinned"]
+    assert f"/resolve/{sha}/config.json" in requests[1]
+
+
+def test_public_metadata_failure_does_not_block_archival(run, monkeypatch):
+    run.pop("benchmark_context")
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        benchmark_context.httpx,
+        "AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(lambda request: httpx.Response(503)), **kwargs),
+    )
+    asyncio.run(benchmark_context.enrich_model_metadata(run))
+    assert "HTTPStatusError" in run["benchmark_model_metadata_error"]
+    assert evidence.normalize_evaluate_run(run)[0]
+
+
+def test_native_archive_recovers_measured_tokens_and_stage_concurrency(run, tmp_path):
+    run.pop("matrix")
+    run.pop("matrix_results")
+    run.pop("benchmark_context")
+    run["shared_prefix"] = {"system_prompt_len": 12, "question_len": 4}
+    metrics = {
+        "success_count": 2,
+        "failure_count": 0,
+        "request_count": 2,
+        "token_distributions": {"input": {"mean": 0}, "output": {"mean": 999}},
+        "summary_path": str(tmp_path / "benchmark_report,_stage_0_lifecycle_metrics.json.yaml"),
+    }
+    run["rate_stage_results"] = [{"metrics": metrics}]
+    native = {
+        "benchmark_time_seconds": 2,
+        "successes": {
+            "count": 2,
+            "prompt_tokens": {"mean": 16, "p95": 16, "total": 32},
+            "output_len": {"mean": 8, "p95": 8},
+            "output_tokens": {"mean": 10, "total": 20},
+            "latency": {"request_latency": {"mean": 0.5, "p95": 0.6}},
+            "throughput": {"output_tokens_per_sec": 8, "requests_per_sec": 1},
+        },
+        "failures": {"count": 0},
+    }
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        data = json.dumps(native).encode()
+        member = tarfile.TarInfo("./stage_0_lifecycle_metrics.json")
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    result = subprocess.run(["zstd", "-q", "-c"], input=buffer.getvalue(), capture_output=True, check=True)
+    (tmp_path / "workspace.tar.zst").write_bytes(result.stdout)
+    records, issues = evidence.normalize_evaluate_run(run)
+    assert not issues
+    (record,) = records
+    assert record.workload.mean_input_tokens == 16
+    assert record.workload.p95_input_tokens == 16
+    assert record.workload.mean_output_tokens == 8
+    assert record.workload.concurrency == 0.5
+    assert record.metrics.e2e_p95_ms == 600
+    assert record.metrics.throughput_tokens_per_s == 8
+    assert metrics["token_distributions"]["input"]["mean"] == 0  # Original result remains unchanged.
+    metrics["request_count"] = 3
+    assert "counts disagree" in evidence.normalize_evaluate_run(run)[1][0]["reason"]

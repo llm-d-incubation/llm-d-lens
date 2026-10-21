@@ -83,7 +83,7 @@ def test_benchmark_performance_evidence_maps_matching_records_to_candidate_input
     assert evidence[0].evidence_refs == ("benchmark:bench-1",)
     sample = evidence[0].weighted_samples[0]
     assert sample.benchmark_id == "bench-1"
-    assert sample.match_confidence > 0.99
+    assert sample.match_confidence == pytest.approx(0.9, abs=0.001)
     assert sample.ttft_p95_ms == 300
     assert sample.outcome == "succeeded"
     assert sample.topology == "baseline-vllm"
@@ -271,4 +271,6 @@ def test_persisted_benchmark_history_flows_to_planner_and_ai_context(tmp_path):
     assert [sample["benchmark_id"] for sample in ai_context["historical_benchmarks"]] == [
         f"baseline-success-{index}" for index in range(3)
     ]
-    assert all(sample["match_confidence"] > 0.99 for sample in ai_context["historical_benchmarks"])
+    assert all(
+        sample["match_confidence"] == pytest.approx(0.9, abs=0.001) for sample in ai_context["historical_benchmarks"]
+    )

@@ -360,6 +360,14 @@ def normalize_simulation_task(task: SimulationTask) -> tuple[list[BenchmarkRecor
             workload=workload,
             metrics=BenchmarkMetrics(**metrics, error_rate=failures / total),
             failure_reason=task.error_message if task.status == "failed" else None,
+            provenance={
+                "schema_version": 1,
+                "attribution": "serving-snapshot",
+                "serving_snapshot": snapshot.get("benchmark_context"),
+                "model_enrichment": snapshot.get("benchmark_model_metadata"),
+                "configuration_checksum": snapshot["deployment_configuration"]["checksum"],
+                "measurement_source": "per-request-artifacts",
+            },
         )
         return [record], []
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as error:

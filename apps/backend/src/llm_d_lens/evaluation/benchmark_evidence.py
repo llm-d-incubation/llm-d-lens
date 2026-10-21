@@ -7,9 +7,16 @@ historical ingestion; ``--apply`` writes only records that pass the same checks.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import math
+import os
+import re
+import selectors
+import subprocess
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -20,6 +27,8 @@ from llm_d_lens.agentic.benchmark_context import (
     capture_benchmark_context as capture_serving_context,
 )
 from llm_d_lens.agentic.benchmark_context import (
+    configuration_snapshot,
+    enrich_model_metadata,
     persist_benchmark_records,
     validate_benchmark_context,
 )
@@ -32,11 +41,217 @@ from llm_d_lens.agentic.benchmark_context import (
 from llm_d_lens.agentic.benchmark_evidence import (
     BenchmarkMetrics,
     BenchmarkRecord,
+    HardwareDescriptor,
     WorkloadProfile,
 )
 from llm_d_lens.db.dao.evaluate_run import EvaluateRunDao
 
 logger = logging.getLogger(__name__)
+
+
+def declare_historical_hardware(run: dict, accelerator: str, vram_per_gpu_gib: float) -> None:
+    """Attach an explicit operator declaration to a terminal run lacking a serving snapshot.
+
+    Card count comes only from its checksummed saved TP/replica configuration.
+    This declaration is archival context, not test-time discovery or predictive proof.
+    """
+    if run.get("status") not in ("succeeded", "failed") or run.get("benchmark_context"):
+        raise ValueError("Hardware declarations require a terminal run without a serving snapshot")
+    configuration, candidate = configuration_snapshot(run)
+    if not accelerator.strip() or len(accelerator) > 64 or accelerator.strip().lower() in ("unknown", "cluster"):
+        raise ValueError("An explicit accelerator model of at most 64 characters is required")
+    count = candidate.decode_tp * candidate.decode_replicas
+    if candidate.prefill_tp is not None and candidate.prefill_replicas is not None:
+        count += candidate.prefill_tp * candidate.prefill_replicas
+    hardware = HardwareDescriptor(
+        accelerator=accelerator.strip(),
+        vram_per_gpu_gib=_positive(vram_per_gpu_gib, "declared per-device memory"),
+        gpu_count=count,
+    )
+    if run.get("benchmark_hardware_metadata") is not None:
+        if _declared_hardware(run) != hardware:
+            raise ValueError("Existing historical hardware declaration differs; it must not be silently replaced")
+        return
+    run["benchmark_hardware_metadata"] = {
+        "schema_version": 1,
+        "source": "operator-declaration",
+        "declared_at": datetime.now(UTC).isoformat(),
+        "configuration_checksum": configuration.checksum,
+        "gpu_count_source": "saved-deployment-configuration",
+        "hardware": hardware.model_dump(),
+    }
+
+
+def _declared_hardware(run: dict) -> HardwareDescriptor:
+    """Validate saved operator attribution before using it as archival hardware context."""
+    metadata = run["benchmark_hardware_metadata"]
+    configuration, candidate = configuration_snapshot(run)
+    if (
+        run.get("benchmark_context")
+        or metadata.get("schema_version") != 1
+        or metadata.get("source") != "operator-declaration"
+        or metadata.get("gpu_count_source") != "saved-deployment-configuration"
+        or metadata.get("configuration_checksum") != configuration.checksum
+    ):
+        raise ValueError("Hardware declaration does not identify this saved configuration and operator source")
+    if datetime.fromisoformat(metadata["declared_at"]).tzinfo is None:
+        raise ValueError("Hardware declaration timestamp must include a timezone")
+    hardware = HardwareDescriptor.model_validate(metadata.get("hardware"), strict=True)
+    if not hardware.accelerator or hardware.accelerator.strip().lower() in ("unknown", "cluster"):
+        raise ValueError("Hardware declaration must identify the accelerator model")
+    _positive(hardware.vram_per_gpu_gib, "declared per-device memory")
+    count = candidate.decode_tp * candidate.decode_replicas
+    if candidate.prefill_tp is not None and candidate.prefill_replicas is not None:
+        count += candidate.prefill_tp * candidate.prefill_replicas
+    if hardware.gpu_count != count:
+        raise ValueError("Declared card count disagrees with the saved deployment configuration")
+    return hardware
+
+
+def read_lifecycle_artifact(summary_path: str | Path, name: str) -> bytes | None:
+    """Read one bounded sibling artifact, loose or in its own workspace archive.
+
+    No archive member is extracted to disk. Only lifecycle/config members are
+    accepted, and ambiguous duplicate members are rejected by tar.
+    """
+    if not re.fullmatch(r"(?:config\.yaml|(?:summary|stage_\d+|per_request)_lifecycle_metrics\.json)", name):
+        raise ValueError("Unsupported lifecycle artifact name")
+    root = Path(summary_path).parent
+    limit = 64 * 1024 * 1024
+    path = root / name
+    if path.is_file():
+        if path.stat().st_size > limit:
+            raise ValueError("Lifecycle artifact exceeds the 64 MiB limit")
+        return path.read_bytes()
+    archive = root / "workspace.tar.zst"
+    if not archive.is_file():
+        return None
+    # Captured workspaces use ./ members; tar does not follow stored links when
+    # streaming a member to stdout.
+    with subprocess.Popen(
+        ["tar", "--zstd", "-xOf", str(archive), f"./{name}"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    ) as process:
+        stdout = bytearray()
+        deadline = time.monotonic() + 15
+        try:
+            if process.stdout is None:
+                raise ValueError("Lifecycle archive output is unavailable")
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise ValueError("Lifecycle archive read timed out")
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    if not chunk:
+                        break
+                    stdout.extend(chunk)
+                    if len(stdout) > limit:
+                        raise ValueError("Lifecycle artifact exceeds the 64 MiB limit")
+            process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except (subprocess.TimeoutExpired, ValueError) as error:
+            process.kill()
+            process.wait()
+            raise ValueError(str(error)) from error
+        if process.returncode:
+            raise ValueError(f"Unable to read {name} from its lifecycle archive")
+    return bytes(stdout)
+
+
+def summarize_lifecycle(payload: dict, summary_path: str | Path) -> dict:
+    """Normalize one native lifecycle report, retaining client output-token semantics."""
+    successes = payload.get("successes") or {}
+    failures = payload.get("failures") or {}
+    load = payload.get("load_summary") or {}
+    latency = successes.get("latency") or {}
+    throughput = successes.get("throughput") or {}
+    quantiles = {
+        "mean": "mean",
+        "min": "min",
+        "max": "max",
+        "p50": "median",
+        "p75": "p75",
+        "p90": "p90",
+        "p95": "p95",
+        "p99": "p99",
+    }
+
+    def distribution(values: dict, *, milliseconds: bool = False) -> dict:
+        return {
+            key + ("_ms" if milliseconds else ""): round(float(value) * 1000, 3) if milliseconds else value
+            for key, source in quantiles.items()
+            if isinstance(value := values.get(source), (int, float)) and not isinstance(value, bool)
+        }
+
+    token_lengths = {
+        "input": distribution(successes.get("prompt_tokens") or successes.get("prompt_len") or {}),
+        # output_len measures generated client tokens and is the throughput
+        # denominator in native inference-perf; server usage may disagree.
+        "output": distribution(successes.get("output_len") or successes.get("output_tokens") or {}),
+    }
+    success_count, failure_count = successes.get("count"), failures.get("count")
+    total = success_count + failure_count if type(success_count) is int and type(failure_count) is int else None
+    distributions = {
+        name: distribution(latency.get(source) or {}, milliseconds=True)
+        for name, source in {
+            "request_latency": "request_latency",
+            "ttft": "time_to_first_token",
+            "itl": "inter_token_latency",
+            "tpot": "time_per_output_token",
+            "ntpot": "normalized_time_per_output_token",
+        }.items()
+    }
+    return {
+        "throughput_tps": throughput.get("output_tokens_per_sec"),
+        "input_throughput_tps": throughput.get("input_tokens_per_sec"),
+        "total_throughput_tps": throughput.get("total_tokens_per_sec"),
+        "throughput_rps": throughput.get("requests_per_sec"),
+        **{
+            name + "_ms": distributions[source].get("p50_ms")
+            for name, source in {
+                "ttft": "ttft",
+                "tpot": "tpot",
+                "itl": "itl",
+                "ntpot": "ntpot",
+                "request_latency": "request_latency",
+            }.items()
+        },
+        "latency_distributions": distributions,
+        "token_distributions": token_lengths,
+        "total_input_tokens": (successes.get("prompt_tokens") or {}).get("total"),
+        "total_output_tokens": (successes.get("output_tokens") or {}).get("total"),
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "request_count": total,
+        "success_rate": round(success_count / total * 100, 3) if total else None,
+        "error_rate": round(failure_count / total * 100, 3) if total else None,
+        "scheduled_request_count": load.get("count"),
+        "schedule_delay": distribution(load.get("schedule_delay") or {}, milliseconds=True),
+        "benchmark_time_seconds": payload.get("benchmark_time_seconds"),
+        "summary_path": str(summary_path),
+    }
+
+
+def _native_summary(metrics: dict, stage_index: int | None) -> tuple[dict, dict | None]:
+    path = metrics.get("summary_path")
+    if not path:
+        return metrics, None
+    name = (
+        f"stage_{stage_index}_lifecycle_metrics.json" if stage_index is not None else "summary_lifecycle_metrics.json"
+    )
+    payload = read_lifecycle_artifact(path, name)
+    if payload is None:
+        return metrics, None
+    raw = json.loads(payload)
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid native lifecycle summary")
+    measured = summarize_lifecycle(raw, Path(path).with_name(name))
+    for name in ("success_count", "failure_count", "request_count"):
+        if metrics.get(name) is not None and measured.get(name) != metrics[name]:
+            raise ValueError("Native lifecycle counts disagree with the saved sample")
+    return measured, raw
 
 
 async def capture_benchmark_context(run: dict) -> None:
@@ -69,11 +284,35 @@ def _metrics(metrics: dict) -> BenchmarkMetrics:
     return BenchmarkMetrics(**values, error_rate=failures / total)
 
 
-def _concurrency(metrics: dict, stage_index: int | None) -> float:
+def _concurrency(metrics: dict, stage_index: int | None, native: dict | None = None) -> float:
+    if native is not None:
+        # Sum of request lifetimes / measured stage duration is mean in-flight
+        # concurrency. Stage aggregates avoid guessing stage IDs on unlabeled rows.
+        duration = _positive(metrics.get("benchmark_time_seconds"), "benchmark_time_seconds")
+        lifetime = 0.0
+        for outcome, count_name in (("successes", "success_count"), ("failures", "failure_count")):
+            count = metrics.get(count_name)
+            if type(count) is not int or count < 0:
+                raise ValueError("Measured request counts are missing")
+            if count:
+                section = native.get(outcome) or {}
+                latency = (
+                    (section.get("latency") or {}).get("request_latency")
+                    if outcome == "successes"
+                    else section.get("request_latency")
+                )
+                mean = _positive((latency or {}).get("mean"), "measured mean request latency")
+                if mean > duration * 1.001 + 0.001:
+                    raise ValueError("Mean request latency exceeds the measured stage duration")
+                lifetime += count * mean
+        return _positive(lifetime / duration, "measured mean concurrency")
     path = metrics.get("summary_path")
     if not path:
         raise ValueError("Measured concurrency requires per-request lifecycle artifacts")
-    rows = json.loads(Path(path).with_name("per_request_lifecycle_metrics.json").read_text(encoding="utf-8"))
+    payload = read_lifecycle_artifact(path, "per_request_lifecycle_metrics.json")
+    if payload is None:
+        raise ValueError("Per-request lifecycle artifacts are missing")
+    rows = json.loads(payload)
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise ValueError("Invalid per-request lifecycle artifacts")
     if stage_index is not None and any(type(row.get("stage_id")) is not int for row in rows):
@@ -111,7 +350,9 @@ def _concurrency(metrics: dict, stage_index: int | None) -> float:
     return _positive(total / duration, "measured mean concurrency")
 
 
-def _workload(run: dict, metrics: dict, concurrency: Any, stage_index: int | None) -> WorkloadProfile:
+def _workload(
+    run: dict, metrics: dict, concurrency: Any, stage_index: int | None, native: dict | None = None
+) -> WorkloadProfile:
     tokens = metrics.get("token_distributions") or {}
     mean_input = _positive((tokens.get("input") or {}).get("mean"), "measured mean input tokens")
     mean_output = _positive((tokens.get("output") or {}).get("mean"), "measured mean output tokens")
@@ -127,9 +368,8 @@ def _workload(run: dict, metrics: dict, concurrency: Any, stage_index: int | Non
     else:
         workload = yaml.safe_load(run["workload_yaml"]) if run.get("workload_yaml") else None
         if not workload and metrics.get("summary_path"):
-            workload = yaml.safe_load(
-                Path(metrics["summary_path"]).with_name("config.yaml").read_text(encoding="utf-8")
-            )
+            payload = read_lifecycle_artifact(metrics["summary_path"], "config.yaml")
+            workload = yaml.safe_load(payload) if payload is not None else None
         data = (workload or {}).get("data") or {}
         if data.get("type") != "random":
             raise ValueError("The saved workload does not establish its shared-prefix semantics")
@@ -145,7 +385,7 @@ def _workload(run: dict, metrics: dict, concurrency: Any, stage_index: int | Non
         mean_output_tokens=mean_output,
         concurrency=_positive(concurrency, "configured concurrency")
         if concurrency is not None
-        else _concurrency(metrics, stage_index),
+        else _concurrency(metrics, stage_index, native),
         request_rate=_positive(metrics.get("throughput_rps"), "measured request rate"),
         shared_prefix_ratio=shared_prefix,
         prefill_fraction=mean_input / (mean_input + mean_output),
@@ -161,7 +401,9 @@ def normalize_evaluate_run(run: dict) -> tuple[list[BenchmarkRecord], list[dict]
         if run.get("harness") != "inference-perf" or type(run.get("parallelism")) is not int or run["parallelism"] != 1:
             raise ValueError("Evidence requires inference-perf with one worker and attributable lifecycle reports")
         run_id = str(UUID(run["id"]))
-        timestamp, model, hardware, runtime, candidate = validate_benchmark_context(run)
+        timestamp, model, hardware, runtime, candidate = validate_benchmark_context(run, allow_saved_configuration=True)
+        if run.get("benchmark_hardware_metadata") is not None:
+            hardware = _declared_hardware(run)
         if run["status"] == "failed" and not run.get("error"):
             raise ValueError("Failed benchmark evidence requires an explicit failure reason")
     except (ValueError, TypeError, KeyError, AttributeError) as error:
@@ -189,8 +431,9 @@ def normalize_evaluate_run(run: dict) -> tuple[list[BenchmarkRecord], list[dict]
             metrics = sample.get("metrics")
             if not isinstance(metrics, dict):
                 raise ValueError("Measured lifecycle summary is missing")
+            metrics, native = _native_summary(metrics, stage_index)
             benchmark_id = f"evaluate:{run_id}{suffix}"
-            workload = _workload(run, metrics, sample.get("concurrency"), stage_index)
+            workload = _workload(run, metrics, sample.get("concurrency"), stage_index, native)
             record = BenchmarkRecord(
                 benchmark_id=benchmark_id,
                 timestamp=timestamp,
@@ -202,6 +445,19 @@ def normalize_evaluate_run(run: dict) -> tuple[list[BenchmarkRecord], list[dict]
                 configuration=candidate,
                 metrics=_metrics(metrics),
                 failure_reason=run.get("error") if status == "failed" else None,
+                provenance={
+                    "schema_version": 1,
+                    "attribution": "serving-snapshot" if run.get("benchmark_context") else "saved-configuration",
+                    "configuration_checksum": run["deployment_configuration"]["checksum"],
+                    "benchmark_started_at": run["benchmark_started_at"],
+                    "finished_at": run["finished_at"],
+                    "serving_snapshot": run.get("benchmark_context"),
+                    "model_enrichment": run.get("benchmark_model_metadata"),
+                    "hardware_enrichment": run.get("benchmark_hardware_metadata"),
+                    "collection_error": run.get("benchmark_context_error"),
+                    "summary_path": metrics.get("summary_path"),
+                    "measurement_source": "native-lifecycle" if native is not None else "saved-metrics",
+                },
             )
             records.append(record)
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
@@ -211,14 +467,48 @@ def normalize_evaluate_run(run: dict) -> tuple[list[BenchmarkRecord], list[dict]
 
 def ingest_evaluate_run(run: dict, *, apply: bool = True) -> dict:
     records, issues = normalize_evaluate_run(run)
-    return persist_benchmark_records(records, issues, source_id=run["id"], apply=apply)
+    report = persist_benchmark_records(records, issues, source_id=run["id"], apply=apply)
+    report["metadata"] = {
+        "serving_snapshot": bool((run.get("benchmark_context") or {}).get("verified_at")),
+        "model_enrichment": run.get("benchmark_model_metadata"),
+        "hardware_enrichment": run.get("benchmark_hardware_metadata"),
+        "collection_error": run.get("benchmark_context_error"),
+        "enrichment_error": run.get("benchmark_model_metadata_error"),
+        "missing_fields": sorted(
+            {
+                f"{section}.{name}"
+                for record in records
+                for section in ("model", "hardware", "runtime")
+                for name, value in getattr(record, section).model_dump().items()
+                if value is None
+            }
+        ),
+    }
+    return report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Persist eligible evidence; default is read-only preview")
     parser.add_argument("--run-id", action="append", type=UUID, help="Only process these saved Evaluate run IDs")
+    parser.add_argument(
+        "--enrich", action="store_true", help="Look up public model descriptors; never query live serving state"
+    )
+    parser.add_argument("--hardware-accelerator", help="Operator-declared historical accelerator model")
+    parser.add_argument("--hardware-vram-per-gpu-gib", type=float, help="Operator-declared per-device memory in GiB")
+    parser.add_argument(
+        "--hardware-count-from-configuration",
+        action="store_true",
+        help="Acknowledge using saved TP times replicas as configured, not measured, card count",
+    )
     args = parser.parse_args()
+    hardware_options = (
+        args.hardware_accelerator is not None,
+        args.hardware_vram_per_gpu_gib is not None,
+        args.hardware_count_from_configuration,
+    )
+    if any(hardware_options) and (not all(hardware_options) or not args.run_id):
+        parser.error("Hardware declarations require explicit --run-id filters and all three --hardware-* options")
     dao = EvaluateRunDao()
     if args.run_id:
         runs = []
@@ -229,9 +519,19 @@ def main() -> None:
             runs.append(run)
     else:
         runs = dao.list()
-    failed = False
+    payloads = []
     for run in runs:
         payload = run.model_dump(mode="json")
+        if all(hardware_options):
+            try:
+                declare_historical_hardware(payload, args.hardware_accelerator, args.hardware_vram_per_gpu_gib)
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                parser.error(f"Invalid hardware declaration for {run.id}: {error}")
+        payloads.append((run, payload))
+    failed = False
+    for run, payload in payloads:
+        if args.enrich:
+            asyncio.run(enrich_model_metadata(payload))
         report = ingest_evaluate_run(payload, apply=args.apply)
         if args.apply and run.status in ("succeeded", "failed", "cancelled"):
             payload["benchmark_evidence"] = report

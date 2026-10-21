@@ -11,28 +11,28 @@ from pydantic import BaseModel, Field
 
 class ModelDescriptor(BaseModel):
     model_id: str
-    family: str
-    architecture: Literal["dense", "moe"]
-    parameter_count_b: float = Field(gt=0)
+    family: str | None = None
+    architecture: Literal["dense", "moe"] | None = None
+    parameter_count_b: float | None = Field(default=None, gt=0)
     active_parameter_count_b: float | None = Field(default=None, gt=0)
-    quantization: str
-    tokenizer_id: str
+    quantization: str | None = None
+    tokenizer_id: str | None = None
     revision: str | None = None
 
 
 class RuntimeFingerprint(BaseModel):
-    backend: str
-    backend_version: str
-    accelerator_runtime: str
+    backend: str | None = None
+    backend_version: str | None = None
+    accelerator_runtime: str | None = None
     driver_version: str | None = None
     container_digest: str | None = None
     git_revision: str | None = None
 
 
 class HardwareDescriptor(BaseModel):
-    accelerator: str
-    vram_per_gpu_gib: float = Field(gt=0)
-    gpu_count: int = Field(ge=1)
+    accelerator: str | None = None
+    vram_per_gpu_gib: float | None = Field(default=None, gt=0)
+    gpu_count: int | None = Field(default=None, ge=1)
 
 
 class WorkloadProfile(BaseModel):
@@ -73,6 +73,7 @@ class BenchmarkRecord(BaseModel):
     configuration: CandidateConfiguration
     metrics: BenchmarkMetrics = Field(default_factory=BenchmarkMetrics)
     failure_reason: str | None = None
+    provenance: dict[str, object] = Field(default_factory=dict)
 
 
 class BenchmarkQuery(BaseModel):
@@ -135,6 +136,8 @@ class BenchmarkEvidenceRetriever:
         else:
             status = "interpolated"
         confidence = min(1.0, effective_sample_size / self.min_effective_samples)
+        if successful:
+            confidence *= sum(match.runtime_similarity for _, match in successful) / len(successful)
         if negative_evidence:
             confidence *= 0.5
         return CandidatePredictionEvidence(
@@ -201,12 +204,25 @@ class BenchmarkEvidenceRetriever:
 
     @staticmethod
     def model_similarity(record: ModelDescriptor, query: ModelDescriptor) -> float:
-        if record.quantization != query.quantization:
+        if record.quantization is None or record.quantization != query.quantization:
             return 0.0
-        if record.architecture != query.architecture:
+        if record.architecture and query.architecture and record.architecture != query.architecture:
             return 0.0
         parameter_record = BenchmarkEvidenceRetriever._compute_parameters(record)
         parameter_query = BenchmarkEvidenceRetriever._compute_parameters(query)
+        if not all(
+            (
+                record.family,
+                query.family,
+                record.architecture,
+                query.architecture,
+                parameter_record,
+                parameter_query,
+                record.tokenizer_id,
+                query.tokenizer_id,
+            )
+        ):
+            return 0.8 if record.model_id == query.model_id else 0.0
         parameter_score = exp(-0.8 * abs(log(parameter_record / parameter_query)))
         similarity = (
             0.45 * (1.0 if record.family == query.family else 0.15)
@@ -220,9 +236,16 @@ class BenchmarkEvidenceRetriever:
     def runtime_similarity(record: RuntimeFingerprint, query: RuntimeFingerprint) -> float:
         if record.backend != query.backend:
             return 0.0
-        record_version = BenchmarkEvidenceRetriever._version_parts(record.backend_version)
-        query_version = BenchmarkEvidenceRetriever._version_parts(query.backend_version)
-        if record_version[0] != query_version[0]:
+        record_version = BenchmarkEvidenceRetriever._version_parts(record.backend_version or "")
+        query_version = BenchmarkEvidenceRetriever._version_parts(query.backend_version or "")
+        if not record.backend or not query.backend:
+            return 0.0
+        if not all(
+            version and version.lower() not in ("unknown", "unavailable")
+            for version in (record.backend_version, query.backend_version)
+        ):
+            backend_score = 0.9
+        elif record_version[0] != query_version[0]:
             backend_score = 0.2
         elif record_version[1] != query_version[1]:
             backend_score = 0.65
@@ -230,7 +253,16 @@ class BenchmarkEvidenceRetriever:
             backend_score = 0.9
         else:
             backend_score = 1.0
-        accelerator_score = 1.0 if record.accelerator_runtime == query.accelerator_runtime else 0.6
+        accelerator_score = (
+            0.9
+            if not all(
+                version and version.lower() not in ("unknown", "unavailable")
+                for version in (record.accelerator_runtime, query.accelerator_runtime)
+            )
+            else 1.0
+            if record.accelerator_runtime == query.accelerator_runtime
+            else 0.6
+        )
         return 0.7 * backend_score + 0.3 * accelerator_score
 
     def time_decay(self, timestamp: datetime, now: datetime) -> float:
@@ -241,8 +273,24 @@ class BenchmarkEvidenceRetriever:
 
     @staticmethod
     def _compatible(record: BenchmarkRecord, query: BenchmarkQuery) -> bool:
+        if record.provenance.get("attribution") == "saved-configuration":
+            return False
+        enrichment = record.provenance.get("model_enrichment")
+        if (
+            isinstance(enrichment, dict)
+            and not enrichment.get("serving_revision_pinned")
+            and record.model.model_id != query.model.model_id
+        ):
+            return False
         return (
-            record.hardware.accelerator == query.hardware.accelerator
+            record.hardware.accelerator is not None
+            and record.runtime.backend is not None
+            and record.model.quantization is not None
+            and record.hardware.vram_per_gpu_gib is not None
+            and query.hardware.vram_per_gpu_gib is not None
+            and record.hardware.gpu_count is not None
+            and query.hardware.gpu_count is not None
+            and record.hardware.accelerator == query.hardware.accelerator
             and record.runtime.backend == query.runtime.backend
             and record.model.quantization == query.model.quantization
             and record.hardware.vram_per_gpu_gib >= query.hardware.vram_per_gpu_gib
@@ -251,6 +299,8 @@ class BenchmarkEvidenceRetriever:
 
     @staticmethod
     def hardware_similarity(record: HardwareDescriptor, query: HardwareDescriptor) -> float:
+        if record.gpu_count is None or query.gpu_count is None:
+            return 0.0
         return 0.7 + 0.3 * exp(-abs(log(record.gpu_count / query.gpu_count)))
 
     @staticmethod
@@ -302,7 +352,7 @@ class BenchmarkEvidenceRetriever:
         )
 
     @staticmethod
-    def _compute_parameters(model: ModelDescriptor) -> float:
+    def _compute_parameters(model: ModelDescriptor) -> float | None:
         return (
             model.active_parameter_count_b
             if model.architecture == "moe" and model.active_parameter_count_b
