@@ -1045,6 +1045,40 @@ async def test_probe_members_reports_per_component_health(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_serving_probe_uses_public_service_name_not_model_ref(monkeypatch):
+    payloads: list[dict] = []
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, _url, json):  # noqa: A002
+            payloads.append(json)
+            return SimpleNamespace(status_code=401)
+
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _cid: SimpleNamespace(gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"),
+    )
+    monkeypatch.setattr(gateway_ops_module, "gateway_base_url", lambda *_args: "http://gateway")
+    monkeypatch.setattr(gateway_ops_module, "local_public_ip", lambda: "127.0.0.1")
+    monkeypatch.setattr(gateway_ops_module.httpx, "AsyncClient", _Client)
+    group = SimpleNamespace(name="qwen3-0.6b", model_ref="Qwen/Qwen3-0.6B")
+
+    state = await GatewayOpsService()._gateway_serving_state(SimpleNamespace(cluster_id="cluster-a"), group)
+
+    assert state == "ready"
+    assert payloads[0]["model"] == "qwen3-0.6b"
+
+
+@pytest.mark.asyncio
 async def test_standby_provider_does_not_require_route_when_last_positive_provider_is_offline(monkeypatch):
     standby = _seed_component_member("no-routed-provider", weight=0)
     members = ModelServiceMemberDao()

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestJson } from '../../../../shared/api/httpClient';
-import { ArrowDown, Boxes, ListFilter, Plus, Repeat, RotateCcw, Search } from 'lucide-react';
+import { ArrowDown, Boxes, ListFilter, Loader2, Plus, Repeat, RotateCcw, Search } from 'lucide-react';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { useNotice } from '../../../../shared/lib/useNotice';
@@ -687,7 +687,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                             </Button>
                         </Panel>
                     </div>
-                    <div className="mt-3 flex min-h-0 flex-1 flex-col">
+                    <div className="relative mt-3 flex min-h-0 flex-1 flex-col" aria-busy={!loaded}>
                         {hasFlowFilters && filteredFlow.clusters.length === 0 ? (
                             <EmptyState title="No matching service flow"
                                 message="Try another cluster, model service status or public model name, or clear the filters." />
@@ -720,6 +720,13 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                             publicationPending={toggleSubmission.pending || serviceToggleSubmission.pending || deleteSubmission.pending}
                             onViewDeploymentDetails={openDeploymentDetails}
                         />}
+                        {!loaded && (
+                            <div role="status" aria-live="polite"
+                                className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl bg-white/70 backdrop-blur-[1px] dark:bg-slate-950/55">
+                                <Loader2 className="h-5 w-5 animate-spin text-[#037ffc] dark:text-emerald-300" aria-hidden="true" />
+                                <span className="text-xs font-medium text-slate-600 dark:text-slate-300">Loading service flow…</span>
+                            </div>
+                        )}
                     </div>
                 </section>
 
@@ -741,7 +748,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                     </>
                 }>
                 {trafficDraft && <TrafficDistributionForm draft={trafficDraft} onChange={setTrafficDraft}
-                    deployments={deployments} pending={trafficSubmission.pending}
+                    deployments={deployments} members={members} pending={trafficSubmission.pending}
                     error={trafficSubmission.error || trafficDistributionError(trafficDraft.rows)} />}
             </Modal>
 
@@ -1275,11 +1282,13 @@ export function AddModelForm({ form, onChange, clusters, deployments, models = [
     );
 }
 
-export function TrafficDistributionForm({ draft, onChange, deployments, pending, error }) {
+export function TrafficDistributionForm({ draft, onChange, deployments, members = [], pending, error }) {
     const total = trafficTotal(draft.rows);
+    const published = new Set(members.map((member) => member.executionId));
     const available = deployments.filter((deployment) => (
         deployment.clusterId === draft.clusterId && deployment.status === 'ready'
         && deployment.endpointKind === 'llm-d-epp' && deployment.model === draft.providerModel
+        && !published.has(deployment.executionId)
         && !draft.rows.some((row) => row.executionId === deployment.executionId)
     ));
     return (
@@ -1319,7 +1328,7 @@ export function TrafficDistributionForm({ draft, onChange, deployments, pending,
             ))}
             <div>
                 <Label htmlFor="traffic-add-deployment"
-                    help="Only ready llm-d deployments in this cluster with the same provider model name can be added. New providers start at weight 1 and are saved with the entire allocation.">
+                    help="Only ready llm-d deployments in this cluster with the same provider model name that are not already attached to a public model can be added. New providers start at weight 1 and are saved with the entire allocation.">
                     Add deployment
                 </Label>
                 <Select id="traffic-add-deployment" value="" disabled={pending || draft.rows.length >= 16 || !available.length}
@@ -1339,7 +1348,7 @@ export function TrafficDistributionForm({ draft, onChange, deployments, pending,
                         {deployment.name || deployment.executionId}
                     </option>)}
                 </Select>
-                {!available.length && <p className="mt-1 text-xs text-theme-muted">No additional compatible ready deployments.</p>}
+                {!available.length && <p className="mt-1 text-xs text-theme-muted">No additional compatible, unpublished ready deployments.</p>}
             </div>
             <p className="text-xs text-theme-muted">
                 Changes take effect only after saving and Gateway reconciliation. Weights do not rewrite the request model name.

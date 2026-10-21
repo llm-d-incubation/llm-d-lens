@@ -11,7 +11,7 @@ import { errorMessage } from './aiProvidersPresentation';
 const FORM_ID = 'ai-provider-form';
 
 function emptyForm() {
-    return { name: '', baseUrl: '', model: '', apiKey: '', providerType: 'openai', timeoutSeconds: '30' };
+    return { name: '', baseUrl: '', model: '', contextWindow: '', apiKey: '', providerType: 'openai', timeoutSeconds: '30' };
 }
 
 // Create/edit an External provider (an OpenAI- or Anthropic-compatible
@@ -25,6 +25,7 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
             name: provider.name || '',
             baseUrl: provider.baseUrl || '',
             model: provider.model || '',
+            contextWindow: provider.contextWindow ? String(provider.contextWindow) : '',
             apiKey: '',
             providerType: provider.providerType || 'openai',
             timeoutSeconds: String(provider.timeoutSeconds ?? 30),
@@ -62,6 +63,9 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
                 timeoutSeconds,
             });
             setTestResult(result);
+            if (result.contextWindow && !form.contextWindow) {
+                setForm((prev) => ({ ...prev, contextWindow: String(result.contextWindow) }));
+            }
         } catch (failure) {
             setTestResult({ success: false, message: errorMessage(failure, 'Test failed') });
         } finally {
@@ -73,11 +77,13 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
         event.preventDefault();
         if (saving) return;
         await run(async () => {
+            const contextWindow = form.contextWindow.trim() ? Number(form.contextWindow) : null;
             if (isEdit) {
                 const payload = {
                     name: form.name.trim(),
                     baseUrl: form.baseUrl.trim(),
                     model: form.model.trim(),
+                    ...(contextWindow ? { contextWindow } : {}),
                     providerType: form.providerType,
                     timeoutSeconds,
                 };
@@ -90,6 +96,7 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
                     name: form.name.trim(),
                     baseUrl: form.baseUrl.trim(),
                     model: form.model.trim(),
+                    ...(contextWindow ? { contextWindow } : {}),
                     apiKey: form.apiKey,
                     providerType: form.providerType,
                     timeoutSeconds,
@@ -162,6 +169,20 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
                     />
                 </div>
                 <div>
+                    <Label htmlFor="ai-provider-context-window">Context window (tokens)</Label>
+                    <Input
+                        id="ai-provider-context-window"
+                        type="number"
+                        min={1}
+                        value={form.contextWindow}
+                        onChange={setField('contextWindow')}
+                        placeholder="Auto-detect or enter an override"
+                    />
+                    <p className="mt-1 text-[10px] text-slate-500">
+                        Optional. Test connection fills this when the provider reports a context length; otherwise Lens falls back to Hugging Face metadata and then 4096 tokens.
+                    </p>
+                </div>
+                <div>
                     <Label htmlFor="ai-provider-api-key">
                         API key {isEdit && <span className="font-normal text-slate-500">({provider.hasApiKey ? `saved, ending ${provider.apiKeyPreview || '...'}` : 'not set'} — leave blank to keep)</span>}
                     </Label>
@@ -206,7 +227,10 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
                             <span className="mt-0.5 shrink-0">
                                 {testing ? <Loader2 size={14} className="animate-spin" /> : testResult.success ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
                             </span>
-                            <span className="whitespace-pre-wrap break-words">{testResult.message}</span>
+                            <span className="whitespace-pre-wrap break-words">
+                                {testResult.message}
+                                {testResult.contextWindow ? ` Detected context window: ${testResult.contextWindow.toLocaleString()} tokens.` : ''}
+                            </span>
                         </div>
                     )}
                 </div>

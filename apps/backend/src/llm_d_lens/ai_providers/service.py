@@ -131,6 +131,7 @@ class AIProviderService:
             name=name,
             baseUrl=request.base_url,
             model=request.model,
+            contextWindow=request.context_window,
             apiKey=request.api_key,
             providerType=request.provider_type,
             timeoutSeconds=request.timeout_seconds,
@@ -153,6 +154,9 @@ class AIProviderService:
                 "name": request.name.strip() if request.name is not None else provider.name,
                 "base_url": request.base_url if request.base_url is not None else provider.base_url,
                 "model": request.model if request.model is not None else provider.model,
+                "context_window": request.context_window
+                if request.context_window is not None
+                else provider.context_window,
                 "api_key": request.api_key if request.api_key is not None else provider.api_key,
                 "provider_type": request.provider_type if request.provider_type is not None else provider.provider_type,
                 "timeout_seconds": request.timeout_seconds
@@ -167,6 +171,28 @@ class AIProviderService:
         if self._store.get(provider_id) is None:
             raise AIProviderStoreError(f"AI provider not found: {provider_id}")
         self._store.delete(provider_id)
+
+
+def _entry_context_window(entry: dict | None) -> int | None:
+    """Read a context-window hint from a provider model-list entry, if present."""
+    if not isinstance(entry, dict):
+        return None
+    for source in (entry, entry.get("top_provider"), entry.get("limits"), entry.get("metadata")):
+        if not isinstance(source, dict):
+            continue
+        for key in (
+            "context_length",
+            "context_window",
+            "max_context_length",
+            "max_model_len",
+            "inputTokenLimit",
+            "input_token_limit",
+            "max_input_tokens",
+        ):
+            value = source.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= 1_000_000_000:
+                return value
+    return None
 
 
 async def check_connection(
@@ -210,8 +236,11 @@ async def check_connection(
         latency_ms = (time.monotonic() - started) * 1000
         response.raise_for_status()
         payload = response.json()
-        models = [str(item.get("id")) for item in payload.get("data") or [] if item.get("id")]
+        entries = [item for item in payload.get("data") or [] if isinstance(item, dict) and item.get("id")]
+        models = [str(item.get("id")) for item in entries]
         model_found = model in models if models else None
+        selected_entry = next((item for item in entries if str(item.get("id")) == model), None)
+        context_window = _entry_context_window(selected_entry)
         message = "Connected successfully."
         if models and not model_found:
             message = f"Connected, but model '{model}' was not found in the provider's model list."
@@ -220,6 +249,7 @@ async def check_connection(
             message=message,
             modelFound=model_found,
             availableModels=models,
+            contextWindow=context_window,
             latencyMs=round(latency_ms, 1),
         )
     except httpx.HTTPStatusError as error:

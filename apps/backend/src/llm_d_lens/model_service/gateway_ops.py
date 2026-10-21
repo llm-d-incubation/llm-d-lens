@@ -43,12 +43,14 @@ from llm_d_lens.model_service.gateway_contracts import (
     GatewayStatusMember,
 )
 from llm_d_lens.model_service.gateway_providers import (
+    AUTHZ_TLS_DR_NAME,
     DEFAULT_PROVIDER,
     INFERENCE_MODEL_REWRITE_CRD,
     MANAGED_LABEL,
     MANAGED_VALUE,
     MODEL_SERVICE_LABEL,
     PoolBinding,
+    authz_tls_insecure_enabled,
     default_pool_name,
     ensure_istioctl,
     model_rewrite_name,
@@ -930,6 +932,7 @@ class GatewayOpsService:
         # Per-cluster ext_authz host (auto-filled in the wizard/edit form) plus
         # Lens' own live serving port. Unset host = ext_authz disabled.
         authz_host, authz_port = resolve_authz_endpoint(getattr(cluster, "gateway_authz_host", None))
+        authz_tls_insecure = authz_tls_insecure_enabled()
         if install_prerequisites:
             # Apply the pinned Gateway API / Gateway API Inference Extension CRDs
             # before the provider, so their versions follow the stack profile.
@@ -996,6 +999,7 @@ class GatewayOpsService:
                 authz_host=authz_host,
                 authz_port=authz_port,
                 authz_cluster_id=cluster_id,
+                authz_tls_insecure=authz_tls_insecure,
             )
             return await self._kubectl(cluster_id, ["apply", "-f", "-"], input=manifest, timeout=120)
 
@@ -1006,6 +1010,14 @@ class GatewayOpsService:
             return self._finish(operation, ok=False, message=f"kubectl unavailable: {error}")
         if applied.returncode != 0:
             return self._finish(operation, ok=False, message=(applied.stderr or "apply failed").strip())
+        if provider == "istio" and not (authz_host and authz_tls_insecure):
+            # Do not leave an insecure TLS exception behind after it is disabled.
+            with suppress(Exception):
+                await self._kubectl(
+                    cluster_id,
+                    ["delete", "destinationrule", AUTHZ_TLS_DR_NAME, "-n", namespace, "--ignore-not-found"],
+                    timeout=30,
+                )
         programmed = await self._wait_gateway_programmed(cluster_id, namespace, name, on_log=on_log)
         if (
             not programmed
@@ -1900,7 +1912,9 @@ class GatewayOpsService:
         base = gateway_base_url(cluster, local_public_ip(), global_url)
         if not base:
             return "n/a"
-        model = (group.model_ref if group else None) or (group.name if group else None)
+        # The shared route matches X-Gateway-Base-Model-Name against the public
+        # service name, which may differ from model_ref for duplicate services.
+        model = (group.name if group else None) or (group.model_ref if group else None)
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(

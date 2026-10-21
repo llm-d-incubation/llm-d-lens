@@ -151,6 +151,33 @@ class _Client:
         return self._post_response or _Response()
 
 
+def test_context_window_round_trips_and_can_be_updated(service):
+    provider = service.create(
+        AIProviderCreateRequest(
+            name="Long context",
+            baseUrl="https://api.openai.com",
+            model="gpt-4.1",
+            contextWindow=1_000_000,
+        )
+    )
+    assert provider.context_window == 1_000_000
+
+    updated = service.update(provider.id, AIProviderUpdateRequest(contextWindow=128_000))
+    assert updated.context_window == 128_000
+
+
+@pytest.mark.asyncio
+async def test_test_connection_reads_context_window_from_model_metadata(monkeypatch):
+    response = _Response(body={"data": [{"id": "gpt-4o-mini", "context_length": 128_000}]})
+    monkeypatch.setattr(
+        "llm_d_lens.ai_providers.service.httpx.AsyncClient", lambda **_kwargs: _Client(response=response)
+    )
+
+    result = await check_connection("https://api.openai.com/", "gpt-4o-mini", "sk-abc", 30)
+
+    assert result.context_window == 128_000
+
+
 @pytest.mark.asyncio
 async def test_test_connection_reports_success_and_model_found(monkeypatch):
     monkeypatch.setattr("llm_d_lens.ai_providers.service.httpx.AsyncClient", lambda **_kwargs: _Client())

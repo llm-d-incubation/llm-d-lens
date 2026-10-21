@@ -115,12 +115,16 @@ class GatewayUsageSync:
 
     def _group_for_model(self, model_name: str, cluster_id: str):
         # A model service is scoped to one cluster, so match within that cluster
-        # (the same public name may exist in another cluster).
-        for group in self._service.list_groups():
-            if group.cluster_id != cluster_id:
-                continue
-            if model_name in {group.served_name, group.base_model, group.model_ref, group.name}:
-                return group
+        # (the same public name may exist in another cluster). Prefer the exact
+        # public routing key before falling back to the underlying engine model:
+        # several public services may share one served/model_ref, and matching
+        # that first would collapse their usage into whichever group is listed
+        # first.
+        groups = [group for group in self._service.list_groups() if group.cluster_id == cluster_id]
+        for field in ("base_model", "name", "served_name", "model_ref"):
+            for group in groups:
+                if getattr(group, field, None) == model_name:
+                    return group
         return None
 
     def _build_request(

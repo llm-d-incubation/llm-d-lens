@@ -353,6 +353,8 @@ class ModelService:
             from llm_d_lens.auth.access import require_cluster_access  # noqa: PLC0415
 
             require_cluster_access(principal, target.cluster_id)
+        if any(member.execution_id == request.execution_id for member in self.members.list_all()):
+            raise ModelServiceConflictError("deployment is already published to a model service")
         member = self._member_for_target(
             request.group_id, target, pool_name=request.pool_name, published_by=published_by
         )
@@ -454,6 +456,7 @@ class ModelService:
         if not authorize(principal, "model-service:member:manage", resource=resource).allowed:
             raise ForbiddenError("model-service member management is required in this cluster")
         existing = {member.execution_id: member for member in self.members.list_by_group(group_id)}
+        published = {member.execution_id for member in self.members.list_all()}
         members = []
         pools = set()
         for item in request.members:
@@ -474,6 +477,8 @@ class ModelService:
                         "provider model name must match the model service's provider model name"
                     )
                 if member is None:
+                    if item.execution_id in published:
+                        raise ModelServiceConflictError("deployment is already published to a model service")
                     member = self._member_for_target(group_id, target, published_by=principal.user_id)
             if member.endpoint_kind != "llm-d-epp":
                 raise ModelServiceConflictError("weighted routing requires deployment-owned InferencePools")

@@ -764,6 +764,10 @@ start_services() {
 
     local scheme="http"
     [[ "$ENABLE_HTTPS" == "1" ]] && scheme="https"
+    local authz_tls_insecure="${LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE:-}"
+    if [[ -z "$authz_tls_insecure" ]]; then
+        [[ "$ENABLE_HTTPS" == "1" ]] && authz_tls_insecure=1 || authz_tls_insecure=0
+    fi
 
     if [[ "$target" == all || "$target" == backend ]]; then
     start_one backend env \
@@ -772,6 +776,7 @@ start_services() {
         PRISM_MCP_URL="$scheme://127.0.0.1:$BACKEND_PORT/api/mcp" \
         PRISM_MCP_CA_FILE="${TLS_CERT_FILE:-}" \
         LENS_INTERNAL_AUTH_SECRET="$LENS_INTERNAL_AUTH_SECRET" \
+        LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE="$authz_tls_insecure" \
         BACKEND_PORT="$BACKEND_PORT" BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}" \
         TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" TLS_CA_FILE="${TLS_CA_FILE:-}" \
         bash scripts/run-backend.sh
@@ -940,6 +945,9 @@ Environment:
   PRISM_GPU_PCI_ALLOWLIST  Optional explicit device restriction; no auto-discovery
   ENABLE_HTTPS            Default 1; set 0 for plain HTTP
   TLS_HOST / TLS_DIR      Certificate host (auto-detected) / directory (.dev-tls)
+  LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE
+                          Default 1 with HTTPS, 0 otherwise; skips authz TLS
+                          certificate verification (trusted local/dev only)
   NODE_MIN_MAJOR          Default 22
   NODE_AUTO_INSTALL       Default 1; set 0 to disable automatic Node downloads
   NODE_INSTALL_VERSION   Optional exact Node.js version

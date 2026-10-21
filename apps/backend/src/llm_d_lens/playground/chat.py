@@ -15,6 +15,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from llm_d_lens.ai_providers.service import default_service as default_ai_provider_service
 from llm_d_lens.mcp.catalog import catalog
 from llm_d_lens.mcp.tools import api_request, invoke_tool
 
@@ -61,6 +62,19 @@ SYSTEM_PROMPT = (
     "select_agentic_plan_candidate after the user has told you which candidate they want, and only call "
     "approve_agentic_plan once the user has explicitly confirmed they want to deploy that selected "
     "candidate."
+    "Deploying and publishing a Model Service are different steps. A ready deployment is not a published "
+    "Model Service. When the user asks to publish or expose a model through the Gateway, create a Model "
+    "Service, or make it callable through the shared Gateway, do not stop after the deployment becomes "
+    "ready. Call list_publishable_deployments to confirm the ready execution, then publish_model_service "
+    "with name, clusterId and executionId to create a new public model name, or create_model_service_member "
+    "with groupId and executionId when the public model name already exists. Verify the result with "
+    "get_model_service_group (or list_model_service_groups) and, when the user needs the client URL, "
+    "get_model_service_connection. Only say a model service is published after the publish/member call "
+    "succeeds and the group is queryable. If Gateway reconciliation is still in progress, say it is created "
+    "and reconciling, not fully available. If the user did not specify a public model name, use a lowercase "
+    "model-derived name such as qwen3-0.6b and tell the user which name you used; ask only if it conflicts "
+    "or is ambiguous. When the request combines deploy and publish, complete both phases before giving the "
+    "final answer."
 )
 
 
@@ -336,7 +350,10 @@ async def run_turn(request, body, emit):
         for tool in catalog(request.app)
         if not read_only or tool["riskTier"] == "read"
     ]
-    max_length = await discover_max_model_len(deployment["model"])
+    provider = default_ai_provider_service().get(deployment.get("providerId", ""))
+    max_length = (provider.context_window if provider is not None else None) or await discover_max_model_len(
+        deployment["model"]
+    )
     budget = math.floor(max_length * 0.8)
     resume = body.get("pendingResume")
     conversation = deepcopy(resume["conversation"] if resume else body["messages"])

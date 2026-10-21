@@ -20,7 +20,7 @@ export default function OptimizationComparisonTree({ guide, selected = ['full'],
             <g role="button" tabIndex={disabled ? -1 : 0} aria-disabled={disabled} aria-pressed={active} aria-label={`Compare ${option.label}: ${option.summary}`} onClick={() => toggle(option.id)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(option.id); } }} className="cursor-pointer outline-none focus-visible:stroke-white">
                 <rect x={x-25} y={y-26} width="230" height="52" fill="transparent"/>
                 <title>{`${option.summary}. ${option.components.join(' · ')}. Click to ${active ? 'remove from' : 'add to'} comparison.`}</title>
-                <circle cx={x} cy={y} r={19} fill={active ? color : '#101c2c'} fillOpacity={active ? .09 : 1} stroke={active ? color : '#344358'} />
+                <circle className={active ? undefined : 'scenario-node-surface'} cx={x} cy={y} r={19} fill={active ? color : '#101c2c'} fillOpacity={active ? .09 : 1} stroke={active ? color : '#344358'} />
                 {active && <circle cx={x} cy={y} r={25} fill="none" stroke={color} strokeOpacity=".2" />}
                 <circle cx={x} cy={y} r={5} fill={active ? color : '#50627a'} />
                 <text x={x + 32} y={y - 3} fill={active ? '#e0f2fe' : '#94a3b8'} fontSize="12" fontWeight="500">{option.label}</text>
@@ -31,14 +31,14 @@ export default function OptimizationComparisonTree({ guide, selected = ['full'],
     return <section aria-label="Optimization comparisons" className="mt-5 min-w-0 border-t border-slate-800/70 pt-5">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-xs font-semibold text-slate-200">Optimization comparisons</h3><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-400">Compare serving scenarios with the same workload. Hover for details.</p></div><span aria-live="polite" className="text-xs text-cyan-300">{selected.length} scenarios selected</span></div>
         <div className="overflow-x-auto" style={{background: 'radial-gradient(ellipse at 48% 45%, #0e749012, transparent 65%)'}}>
-            <svg role="group" aria-label="Serving scenario comparison tree" viewBox={`0 0 760 ${height}`} className="w-full min-w-[570px]" style={{maxHeight: 410}}>
+            <svg role="group" aria-label="Serving scenario comparison tree" viewBox={`0 0 760 ${height}`} className="optimization-comparison-tree w-full min-w-[570px]" style={{maxHeight: 410}}>
                 <defs><linearGradient id={gradient}><stop stopColor="#155e75"/><stop offset="1" stopColor="#22d3ee"/></linearGradient></defs>
                 <path d={`M80,${height / 2} C150,${height / 2} 130,${hubY} 215,${hubY}`} stroke="#387386" strokeWidth="2" fill="none"/>
                 {routed.map((option, index) => leaf(option, 440, 35 + index * 65, 235, hubY))}
                 {direct.map((option, index) => leaf(option, 215 + index * 295, height - 38, 80, height / 2))}
-                <circle cx="80" cy={height / 2} r="30" fill="#0c2033" stroke="#38bdf8" strokeOpacity=".65"/><circle cx="80" cy={height / 2} r="6" fill="#38bdf8"/>
+                <circle className="scenario-node-surface" cx="80" cy={height / 2} r="30" fill="#0c2033" stroke="#38bdf8" strokeOpacity=".65"/><circle cx="80" cy={height / 2} r="6" fill="#38bdf8"/>
                 <text x="80" y={height / 2 - 43} textAnchor="middle" fill="#cbd5e1" fontSize="12">Same workload</text>
-                <circle cx="225" cy={hubY} r="24" fill="#102331" stroke="#2a8e9e"/><text x="225" y={hubY + 4} textAnchor="middle" fill="#67e8f9" fontSize="11">EPP</text>
+                <circle className="scenario-node-surface" cx="225" cy={hubY} r="24" fill="#102331" stroke="#2a8e9e"/><text x="225" y={hubY + 4} textAnchor="middle" fill="#67e8f9" fontSize="11">EPP</text>
                 <text x="225" y={hubY - 37} textAnchor="middle" fill="#64748b" fontSize="10">EPP scenarios</text>
             </svg>
         </div>

@@ -207,6 +207,13 @@ describe("Traffic distribution", () => {
         }
     });
 
+    test('traffic form excludes deployments already attached to another public model', () => {
+        const html = renderToStaticMarkup(createElement(TrafficDistributionForm, {
+            draft, deployments, members: [{ executionId: 'b', groupId: 'other-model' }],
+        }));
+        assert.doesNotMatch(html, /Canary deployment/);
+    });
+
     test('adding a provider defaults to weight one and preserves the concurrency snapshot', () => {
         let changed;
         const tree = TrafficDistributionForm({ draft, deployments, onChange: (next) => { changed = next; } });

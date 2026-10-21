@@ -59,6 +59,14 @@ async def test_authorization_failure_stops_siblings(monkeypatch):
     assert "not executed" in conversation[-1]["content"]
 
 
+def test_system_prompt_distinguishes_deploy_and_model_service_publish():
+    prompt = chat.SYSTEM_PROMPT
+    assert "different steps" in prompt
+    assert "publish_model_service" in prompt
+    assert "create_model_service_member" in prompt
+    assert "only say a model service is published" in prompt.lower()
+
+
 def test_csrf_failure_is_not_classified_as_user_permission_denial():
     assert chat.detect_permission_failure(json.dumps({"status": 403, "code": "csrf_failed"})) is None
     assert chat.estimate_tokens("\u4e2d\u6587") == 2

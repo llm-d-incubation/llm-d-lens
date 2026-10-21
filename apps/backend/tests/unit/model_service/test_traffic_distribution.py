@@ -344,6 +344,23 @@ async def test_publication_patch_applies_state_and_reports_apply_failures(monkey
         assert result["status"] == "disabled"
 
 
+def test_rejects_provider_already_published_to_another_model(monkeypatch):
+    service, group, principal, _, _ = _setup(monkeypatch)
+    other = service.create_group(
+        GroupCreateRequest(name="other", modelRef="provider", servedName="provider", clusterId="cluster-a"),
+        created_by=None,
+    )
+    with pytest.raises(ModelServiceConflictError, match="already published"):
+        service.create_member(MemberCreateRequest(groupId=other.id, executionId="a"), published_by=None)
+    with pytest.raises(ModelServiceConflictError, match="already published"):
+        service.update_traffic(
+            other.id,
+            TrafficUpdateRequest(members=[{"executionId": "a", "weight": 1}], expectedWeights={}),
+            principal=principal,
+        )
+    assert service.list_members(other.id) == []
+
+
 @pytest.mark.parametrize(
     "changes",
     [

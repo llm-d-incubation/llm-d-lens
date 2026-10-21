@@ -220,6 +220,9 @@ main span:has(> :only-child) + p.text-slate-600 {
 
     --chart-grid: #cfe9f7;
     --chart-axis: #475569;
+    --scrollbar-track: #f1f5f9;
+    --scrollbar-thumb: #cbd5e1;
+    --scrollbar-thumb-hover: #94a3b8;
   }
 
   .dark {
@@ -237,6 +240,9 @@ main span:has(> :only-child) + p.text-slate-600 {
 
     --chart-grid: #1e293b;
     --chart-axis: #64748b;
+    --scrollbar-track: rgba(15, 23, 42, 0.4);
+    --scrollbar-thumb: #334155;
+    --scrollbar-thumb-hover: #475569;
   }
 
   body {
@@ -273,24 +279,24 @@ main span:has(> :only-child) + p.text-slate-600 {
   scrollbar-width: none;  /* Firefox */
 }
 
-/* Prism Custom Scrollbars */
+/* Shared by page, panel, and custom-scrollbar containers in both themes. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.4);
+  background: var(--scrollbar-track);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--scrollbar-thumb);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: var(--scrollbar-thumb-hover);
 }
 
 ::-webkit-scrollbar-corner {
@@ -299,31 +305,7 @@ main span:has(> :only-child) + p.text-slate-600 {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #334155 rgba(15, 23, 42, 0.4);
-}
-
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.4);
-  border-radius: 9999px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 9999px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #475569;
-}
-
-.custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: #334155 rgba(15, 23, 42, 0.4);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
 /* Rendered Markdown (react-markdown + remark-gfm) -- used by both the
@@ -1074,6 +1056,14 @@ html:not(.dark) .benchmark-task-page .configuration-editor .configuration-source
   background: #ffffff;
 }
 
+/* Override the legacy disclosure gradient, including its inset list surface. */
+html:not(.dark) .benchmark-task-page .configuration-saved-panel {
+  background: var(--bg-card) !important;
+}
+html:not(.dark) .benchmark-task-page .configuration-saved-panel > div {
+  background: var(--bg-primary);
+}
+
 /* Light mode: no shadows anywhere on New Benchmark Task. */
 html:not(.dark) .benchmark-task-page [class*="shadow-"] {
   box-shadow: none !important;
@@ -1483,6 +1473,16 @@ html:not(.dark) .simulation-task-dialog [class*="border-cyan"],
 html:not(.dark) .simulation-task-dialog [class*="border-emerald"],
 html:not(.dark) .simulation-task-dialog [class*="border-slate"] {
   border-color: #d1d5db !important;
+}
+
+html:not(.dark) .optimization-comparison-tree .scenario-node-surface {
+  fill: var(--bg-secondary);
+}
+html:not(.dark) .optimization-comparison-tree text {
+  fill: var(--text-secondary);
+}
+html:not(.dark) .optimization-comparison-tree [aria-pressed="true"] text {
+  fill: var(--brand-accent);
 }
 
 /* Light mode: selected scenario uses brand blue with white ink. */
@@ -1899,6 +1899,27 @@ html:not(.dark) .observability-page .deployment-empty-icon {
   color: #ffffff !important;
 }
 
+/* Light mode: My Services empty-state icon uses brand blue with white ink. */
+html:not(.dark) .my-services-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Model Usage empty-state icons use brand blue with white ink. */
+html:not(.dark) .model-usage-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Deployments empty-state icon uses brand blue with white ink. */
+html:not(.dark) .deployments-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
 /* Light mode: Administration uses the shared white surface, gray border,
    no-shadow palette. */
 html:not(.dark) .administration-page {
@@ -1968,4 +1989,61 @@ html:not(.dark) .sidebar-account-avatar {
   background-color: #037ffc !important;
   border-color: #037ffc !important;
   color: #ffffff !important;
+}
+
+/* Light mode: readable markdown headings inside assistant answers. */
+html:not(.dark) .markdown-body h1,
+html:not(.dark) .markdown-body h2,
+html:not(.dark) .markdown-body h3,
+html:not(.dark) .markdown-body h4,
+html:not(.dark) .markdown-body h5,
+html:not(.dark) .markdown-body h6 {
+  color: #1f2937 !important;
+}
+
+/* Lens Assistant transcript scrollbar: keep it off the panel edge and use
+   a pale track/thumb in light mode. */
+.assistant-chat-scroll {
+  scrollbar-gutter: stable;
+}
+
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-button:single-button,
+::-webkit-scrollbar-button:double-button,
+::-webkit-scrollbar-button:vertical:decrement,
+::-webkit-scrollbar-button:vertical:increment,
+::-webkit-scrollbar-button:horizontal:decrement,
+::-webkit-scrollbar-button:horizontal:increment,
+::-webkit-scrollbar-button:start,
+::-webkit-scrollbar-button:end,
+.assistant-chat-scroll::-webkit-scrollbar-button,
+.assistant-chat-scroll::-webkit-scrollbar-button:single-button,
+.assistant-chat-scroll::-webkit-scrollbar-button:double-button,
+.assistant-chat-scroll::-webkit-scrollbar-button:start:decrement,
+.assistant-chat-scroll::-webkit-scrollbar-button:end:increment,
+.assistant-chat-scroll::-webkit-scrollbar-button:vertical:start:decrement,
+.assistant-chat-scroll::-webkit-scrollbar-button:vertical:end:increment,
+.assistant-chat-scroll::-webkit-scrollbar-button:horizontal:start:decrement,
+.assistant-chat-scroll::-webkit-scrollbar-button:horizontal:end:increment {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
+}
+html:not(.dark) .assistant-chat-scroll {
+  scrollbar-color: #cbd5e1 #f1f5f9;
+}
+html:not(.dark) .assistant-chat-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 9999px;
+}
+html:not(.dark) .assistant-chat-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+html:not(.dark) .assistant-chat-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }

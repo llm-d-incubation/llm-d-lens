@@ -395,7 +395,7 @@ export function DeploymentPodsLogsModal({ deployment, clusterNameById = {}, onCl
                         {/* Log Text Box */}
                         <div
                             ref={logContainerRef}
-                            className="relative flex-1 min-h-[12rem] overflow-y-auto rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200"
+                            className="relative flex-1 min-h-[12rem] overflow-y-auto rounded-lg border border-theme-border bg-theme-bg p-3 font-mono text-[11px] leading-relaxed text-theme-text dark:text-slate-200"
                         >
                             {logsLoading && !logs ? (
                                 <div className="flex items-center justify-center h-48 text-slate-400 gap-2">
