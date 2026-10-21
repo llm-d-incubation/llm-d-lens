@@ -555,7 +555,7 @@ class AgenticDeploymentService:
             resolved = await resolve_planning_facts(cluster_id, model, facts)
             proposals = [
                 CandidateProposal(
-                    provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "baseline-vllm",
+                    provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "optimized-baseline",
                     replicas=prediction.replicas,
                     tensor_parallel_size=prediction.tensor_parallel_size,
                     prefill_replicas=prediction.prefill_replicas,
@@ -783,7 +783,7 @@ class AgenticDeploymentService:
         predictions = list(facts.aic_predictions)
         updated = []
         for candidate in candidates:
-            if candidate.provider_ref not in {"baseline-vllm", "optimized-baseline", "pd-disaggregation"}:
+            if candidate.provider_ref not in {"optimized-baseline", "pd-disaggregation"}:
                 updated.append(candidate)
                 continue
             if DeterministicPlanner._aic_prediction(facts, candidate):

@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 PlannerProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 _PROVIDER_GUIDANCE = (
-    "- baseline-vllm: direct standard vLLM deployment without llm-d request routing.\n"
     "- optimized-baseline: vLLM with llm-d prefix-affinity and load-aware routing; useful for repeated prefixes, "
     "multiple replicas, or uneven request load.\n"
     "- pd-disaggregation: separate prefill and decode roles; useful for prefill-heavy or long-input workloads.\n"
@@ -67,7 +66,7 @@ class PlannedCandidate(BaseModel):
         "pd-disaggregation",
         "tiered-prefix-cache",
         "precise-prefix-cache-routing",
-    ] = "baseline-vllm"
+    ] = "optimized-baseline"
     replicas: int = Field(ge=1)
     tensor_parallel_size: int = Field(ge=1)
     prefill_replicas: int | None = Field(default=None, ge=1)
@@ -424,7 +423,7 @@ class DeterministicPlanner:
         shared_prefix_guides = [("precise-prefix-cache-routing", None)]
         if facts.cpu_buffer_gib >= facts.required_cpu_buffer_gib:
             shared_prefix_guides.append(("tiered-prefix-cache", "native/cpu/base"))
-        providers = [("baseline-vllm", None), ("optimized-baseline", None), *shared_prefix_guides]
+        providers = [("optimized-baseline", None), *shared_prefix_guides]
         return [
             PlannedCandidate(
                 id=f"{provider}-tp{tensor_parallel_size}-r{replicas}",
@@ -529,13 +528,15 @@ class DeterministicPlanner:
 
     def decide(self, facts: PlanningFacts, candidates: list[PlannedCandidate]) -> PlannerDecision:
         facts = resolve_workload_signals(facts)
-        deployable = [candidate for candidate in candidates if candidate.deployable]
+        deployable = [
+            candidate for candidate in candidates if candidate.deployable and candidate.provider_ref != "baseline-vllm"
+        ]
         if not deployable:
             reasons = sorted({reason for candidate in candidates for reason in candidate.rejection_reasons})
             return PlannerDecision(
                 action="cannot_satisfy",
                 confidence=1.0,
-                rationale="No bounded Standard vLLM candidate satisfies the current resource constraints.",
+                rationale="No eligible Agentic candidate satisfies the current resource constraints.",
                 evidence_ids=list(facts.evidence_ids),
                 unmet_constraints=reasons,
             )
@@ -566,7 +567,9 @@ class DeterministicPlanner:
 
     def score(self, facts: PlanningFacts, candidates: list[PlannedCandidate]) -> list[PlannedCandidate]:
         facts = resolve_workload_signals(facts)
-        deployable = [candidate for candidate in candidates if candidate.deployable]
+        deployable = [
+            candidate for candidate in candidates if candidate.deployable and candidate.provider_ref != "baseline-vllm"
+        ]
         ranked = self._rank(facts, deployable)
         total = max(len(ranked), 1)
         return [
@@ -616,7 +619,9 @@ class DeterministicPlanner:
 
     def ranking_trace(self, facts: PlanningFacts, candidates: list[PlannedCandidate]) -> list[dict[str, Any]]:
         facts = resolve_workload_signals(facts)
-        deployable = [candidate for candidate in candidates if candidate.deployable]
+        deployable = [
+            candidate for candidate in candidates if candidate.deployable and candidate.provider_ref != "baseline-vllm"
+        ]
         if not deployable:
             return []
         balanced_candidate_ids = {candidate.id for candidate in self._balanced_candidates(facts, deployable)}

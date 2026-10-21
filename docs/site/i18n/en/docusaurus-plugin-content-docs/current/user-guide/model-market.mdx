@@ -71,6 +71,11 @@ again. A resource or network error during generation must be resolved before dep
 Optionally, expand **Pod placement** before generating a recommendation to choose
 where the deployment runs.
 
+Agentic generation and selection offer `optimized-baseline` instead of direct
+`baseline-vllm`, including built-in fallback and AIC recommendations. Historical
+direct-vLLM configurations are not reintroduced as candidates. Existing plans
+and manual Standard vLLM deployments are unchanged.
+
 For load-based sizing, enter either **Concurrent requests** or **Request rate (QPS)**,
 not both. These are optional and have no prefilled target. A provided target selects
 native AIC recommendation mode; leaving both blank keeps the fixed-GPU search.

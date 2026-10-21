@@ -66,7 +66,6 @@ logger = logging.getLogger(__name__)
 
 
 ProviderRef = Literal[
-    "baseline-vllm",
     "optimized-baseline",
     "pd-disaggregation",
     "tiered-prefix-cache",
@@ -413,7 +412,7 @@ class AICandidateGenerator:
                         mode = anchor.get("topologyMode")
                         try:
                             topology = {
-                                "provider_ref": "pd-disaggregation" if mode == "disagg" else "baseline-vllm",
+                                "provider_ref": "pd-disaggregation" if mode == "disagg" else "optimized-baseline",
                                 "replicas": anchor["decodeReplicas"],
                                 "tensor_parallel_size": anchor["decodeTp"],
                                 "rationale": "Validated relaxed AIC anchor; original latency SLO remains unverified.",
@@ -928,7 +927,7 @@ class AICandidateGenerator:
             "candidate eligibility constraints when explicitly requested. "
             "Soft preferences only rank eligible options.\n"
             "Generate 1 to 10 materially useful deployment candidates using only these provider_ref values: "
-            "baseline-vllm, optimized-baseline, pd-disaggregation, tiered-prefix-cache, "
+            "optimized-baseline, pd-disaggregation, tiered-prefix-cache, "
             "precise-prefix-cache-routing.\n"
             "Provider semantics:\n"
             f"{provider_guidance()}\n"

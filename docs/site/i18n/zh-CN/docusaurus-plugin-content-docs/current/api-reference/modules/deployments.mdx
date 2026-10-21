@@ -222,7 +222,11 @@ Agentic 的生成器和规划器用户消息均以完整用户偏好开头，随
 校准和模型发现共享惰性的 modelserver 调用遍历逻辑，同时各自保留了
 自己的"取最后一个值"和"取第一个模型"选择规则。
 
-智能体规划会针对每个经过校验的 baseline-vllm、optimized-baseline 和
+Agentic 候选提交接受 `optimized-baseline`、`pd-disaggregation`、`tiered-prefix-cache`
+和 `precise-prefix-cache-routing`；生成器 schema 拒绝 `baseline-vllm`，规划器排序也会
+排除它。AIC 聚合推荐映射到 `optimized-baseline`，包括负载目标和宽松锚点路径。
+
+智能体规划会针对每个经过校验的 optimized-baseline 和
 pd-disaggregation 候选方案，根据其工作负载和 GPU 拓扑结构，分别估算
 缺失的精确 AIC 预测值。候选方案的估算值会以 `aic_estimate` 的形式
 提供给 AI 评分；如果估算值不可用，则保持为未知状态，而不是一种

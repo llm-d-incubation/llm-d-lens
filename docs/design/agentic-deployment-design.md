@@ -194,11 +194,15 @@ generate candidates.
 `llm_d_lens.agentic.planner.DeterministicPlanner` generates only registered providers that can be
 mapped to Deploy:
 
-- `baseline-vllm`
 - `optimized-baseline`
 - `pd-disaggregation`
 - `tiered-prefix-cache`
 - `precise-prefix-cache-routing`
+
+AI generation, deterministic fallback, AIC load-target recommendations, historical
+candidate seeds, and planner ranking exclude `baseline-vllm`. Aggregated AIC
+recommendations use `optimized-baseline`. Existing saved configurations remain
+readable and deployable; manual Standard vLLM deployment is unchanged.
 
 Candidate enumeration uses fixed TP values: `1, 2, 4, 8, 16`; and fixed replica counts:
 `1, 2, 4`. Every candidate must satisfy:
@@ -252,14 +256,14 @@ flowchart LR
     AR --> AS["AIC support + search"]
     AS --> N["Normalize AICCandidatePrediction"]
     N --> M{"Exact topology match?"}
-    M -->|"agg: same TP + replicas"| B["baseline-vllm candidate"]
+    M -->|"agg: same TP + replicas"| B["optimized-baseline candidate"]
     M -->|"disagg: same prefill/decode TP + replicas"| P["pd-disaggregation candidate"]
     M -->|"no"| E["Evidence only; no ranking effect"]
     B --> S["SLO pass -> TTFT -> TPOT -> throughput"]
     P --> S
 ```
 
-- AIC `agg` matches only `baseline-vllm` with the same TP and replicas.
+- AIC `agg` matches `optimized-baseline` candidates with the same TP and replicas.
 - AIC `disagg` matches only `pd-disaggregation` whose prefill/decode TP and replicas are both
   identical.
 - When TTFT/TPOT SLO is not set, all exactly matched AIC-predicted candidates rank ahead of purely
@@ -838,12 +842,12 @@ Minimal valid response example: `rationale` explains decisive differences withou
    "candidate_ids": [
       "pd-disaggregation-p1-tp2-d1-tp2",
       "optimized-baseline-tp2-r1",
-      "baseline-vllm-tp2-r1"
+      "precise-prefix-cache-routing-tp2-r1"
    ],
    "scores": {
       "pd-disaggregation-p1-tp2-d1-tp2": 0.91,
       "optimized-baseline-tp2-r1": 0.79,
-      "baseline-vllm-tp2-r1": 0.68
+      "precise-prefix-cache-routing-tp2-r1": 0.68
    },
    "confidence": 0.82,
    "rationale": "The preferred candidate fits the low-latency preference and has comparable AIC and historical measurements; the others are validated alternatives."

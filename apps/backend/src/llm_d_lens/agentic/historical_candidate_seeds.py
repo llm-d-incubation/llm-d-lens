@@ -42,7 +42,7 @@ class HistoricalCandidateSeedRetriever:
             model_name,
             facts,
             CandidateConfiguration(
-                topology="baseline-vllm",
+                topology="optimized-baseline",
                 decode_tp=1,
                 decode_replicas=1,
             ),
@@ -53,7 +53,6 @@ class HistoricalCandidateSeedRetriever:
             for record in records
             if record.configuration.topology
             in {
-                "baseline-vllm",
                 "optimized-baseline",
                 "pd-disaggregation",
                 "tiered-prefix-cache",

@@ -62,6 +62,10 @@ Agentic 推荐也使用该值。例如，Qwen3-0.6B 使用 `40960`，而不是 `
 
 可选：生成推荐前展开 **Pod placement（Pod 放置）**，选择部署运行的位置。
 
+Agentic 生成和选择使用 `optimized-baseline`，不再提供直接部署的 `baseline-vllm`，
+包括内置回退和 AIC 推荐；历史 direct-vLLM 配置也不会重新进入候选集。
+已有计划和手动 Standard vLLM 部署不受影响。
+
 按负载估算容量时，填写 **Concurrent requests（并发请求数）**或 **Request rate (QPS)（每秒请求数）**之一，不能同时填写。
 两项均为可选，不预填目标值。提供其中一项时调用 AIC 原生推荐模式；两项留空时保留固定 GPU 数搜索。
 Lens 会按所选 GPU 容量和部署约束校验推荐的精确拓扑。联合输入、预测不可用、容量不足或延迟 SLO 无法满足时，

@@ -287,8 +287,13 @@ before sending and after completion, including failed or cancelled planning with
 run. Authentication headers and API keys are excluded; full prompts and tool context are
 private application data. Auditing applies to new requests, not historical reconstruction.
 
-Agentic planning estimates missing exact AIC predictions separately for each validated baseline-vllm,
-optimized-baseline, and pd-disaggregation candidate using its workload and GPU topology. The
+Agentic candidate submissions accept `optimized-baseline`, `pd-disaggregation`,
+`tiered-prefix-cache`, and `precise-prefix-cache-routing`; `baseline-vllm` is rejected
+by the generator schema and excluded from planner ranking. Aggregated AIC recommendations
+map to `optimized-baseline`, including load-target and relaxed-anchor paths.
+
+Agentic planning estimates missing exact AIC predictions separately for each validated
+optimized-baseline and pd-disaggregation candidate using its workload and GPU topology. The
 candidate's estimate is supplied to AI scoring as `aic_estimate`; an unavailable estimate remains
 unknown, not a performance or SLO guarantee. Agentic estimates do not pass the original search
 TTFT/TPOT targets; they verify the fixed topology and workload without an SLO filter. Generator
