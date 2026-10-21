@@ -881,7 +881,17 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
         // disappear right away, before the network round-trip resolves.
         const entry = pending.toolEntries.find((item) => item.id === id);
         if (entry) entry.decision = decision;
-        setMessages((prev) => withInterstitial(prev, pending.thinkChunks, pending.toolEntries));
+        setMessages((prev) => {
+            // The initial stream's `done` event finalizes the reasoning block
+            // when it pauses for approval. Remove that now-finalized block for
+            // this confirmation before rebuilding it, otherwise the resumed
+            // turn appends a second copy of the same tool-call/approval trail.
+            const withoutResolvedReasoning = prev.filter(
+                (message) => !(message.role === 'reasoning'
+                    && message.entries?.some((item) => item.id === id)),
+            );
+            return withInterstitial(withoutResolvedReasoning, pending.thinkChunks, pending.toolEntries);
+        });
 
         await driveChatStream(
             {
