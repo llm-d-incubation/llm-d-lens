@@ -738,6 +738,10 @@ cmd_restart() {
     local target="${1:-all}"
     case "$target" in all|frontend|server|backend) ;; *) fail "Unknown service: $target"; return 1 ;; esac
     if [[ "$target" == server ]]; then target=backend; fi
+    # Load recorded ports for the target even when it is currently stopped, so
+    # `restart backend` keeps 3001 instead of falling back to 3000 and failing
+    # the "port changed" guard.
+    load_saved_ports
     if [[ "$target" != all ]]; then
         local svc saved_port
         for svc in "${SERVICES[@]}"; do
@@ -747,15 +751,8 @@ cmd_restart() {
                     fail "Missing port state for $svc; run restart all once before targeted restarts."
                     return 1
                 fi
-                case "$svc" in
-                    frontend) FRONTEND_PORT="$saved_port" ;;
-                    server) SERVER_PORT="$saved_port" ;;
-                    backend) BACKEND_PORT="$saved_port" ;;
-                esac
             fi
         done
-    else
-        load_saved_ports
     fi
     prepare_start "$target" || return $?
     if [[ "$target" == all ]]; then cmd_stop; else cmd_stop "$target"; fi
