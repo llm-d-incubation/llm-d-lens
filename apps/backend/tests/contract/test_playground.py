@@ -59,6 +59,31 @@ async def test_authorization_failure_stops_siblings(monkeypatch):
     assert "not executed" in conversation[-1]["content"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [None, "", "provider-2"])
+async def test_agentic_plan_inherits_assistant_provider(monkeypatch, explicit):
+    seen = {}
+    call = tool_call("create_agentic_plan")
+    call["function"]["arguments"] = json.dumps(
+        {"model": "qwen3", **({"ai_provider_id": explicit} if explicit is not None else {})}
+    )
+
+    async def invoke(_request, name, arguments):
+        seen.update({"name": name, "arguments": arguments})
+        return {"content": [{"type": "text", "text": "{}"}]}, False
+
+    monkeypatch.setattr(chat, "call_tool_safely", invoke)
+    outcome = await chat.process_pending_tool_calls(
+        [call], [], SimpleNamespace(app=app), AsyncMock(), default_ai_provider_id="provider-1"
+    )
+
+    assert outcome == "continue"
+    assert seen == {
+        "name": "create_agentic_plan",
+        "arguments": {"model": "qwen3", "ai_provider_id": explicit or "provider-1"},
+    }
+
+
 def test_system_prompt_distinguishes_deploy_and_model_service_publish():
     prompt = chat.SYSTEM_PROMPT
     assert "different steps" in prompt

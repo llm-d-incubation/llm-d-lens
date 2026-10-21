@@ -21,6 +21,7 @@ from llm_d_lens.mcp.tools import api_request, invoke_tool
 
 MAX_TOOL_CALL_TURNS = 40
 MCP_TOOL_CALL_TIMEOUT = 630
+AGENTIC_PLAN_TOOL = "create_agentic_plan"
 router = APIRouter(include_in_schema=False)
 SYSTEM_PROMPT = (
     "When you start a deployment (or any long-running Lens operation) and check its status, if the "
@@ -178,6 +179,21 @@ def append_tool_result(conversation, call, result):
     conversation.append({"role": "tool", "tool_call_id": call["id"], "content": encode(result)})
 
 
+def inherit_assistant_provider(name, arguments, provider_id):
+    """Carry the assistant's external provider into an Agentic planning call.
+
+    The assistant model cannot reliably know which saved provider connection is
+    serving it, so leaving ``ai_provider_id`` to the tool call makes Agentic
+    Deployment fall back to deterministic planning. Only fill an absent/blank
+    value; an explicit provider chosen by the model still wins.
+    """
+    if name != AGENTIC_PLAN_TOOL or not provider_id:
+        return arguments
+    if str(arguments.get("ai_provider_id") or "").strip():
+        return arguments
+    return {**arguments, "ai_provider_id": provider_id}
+
+
 async def call_tool_safely(request, name, arguments):
     try:
         async with asyncio.timeout(MCP_TOOL_CALL_TIMEOUT):
@@ -187,10 +203,13 @@ async def call_tool_safely(request, name, arguments):
         return {"isError": True, "error": str(error)}, True
 
 
-async def process_pending_tool_calls(tool_calls, conversation, request, emit, read_only=False):
+async def process_pending_tool_calls(
+    tool_calls, conversation, request, emit, read_only=False, default_ai_provider_id=None
+):
     definitions = {tool["name"]: tool for tool in catalog(request.app)}
     for index, call in enumerate(tool_calls):
-        name, arguments = call["function"]["name"], tool_arguments(call)
+        name = call["function"]["name"]
+        arguments = inherit_assistant_provider(name, tool_arguments(call), default_ai_provider_id)
         definition = definitions.get(name)
         if definition is None:
             await emit("blocked", {"name": name, "arguments": arguments, "reason": "unknown tool"})
@@ -287,7 +306,7 @@ async def call_provider(request, deployment, conversation, tools):
     return result
 
 
-async def resume_pending(request, resume, conversation, emit, read_only):
+async def resume_pending(request, resume, conversation, emit, read_only, default_ai_provider_id=None):
     assistant = next(
         (
             message
@@ -332,12 +351,15 @@ async def resume_pending(request, resume, conversation, emit, read_only):
                 conversation, sibling, {"error": "not executed: a previous tool call was denied by permissions"}
             )
         return "denied"
-    return await process_pending_tool_calls(siblings, conversation, request, emit, read_only)
+    return await process_pending_tool_calls(
+        siblings, conversation, request, emit, read_only, default_ai_provider_id=default_ai_provider_id
+    )
 
 
 async def run_turn(request, body, emit):
     deployment = body["deployment"]
     read_only = bool(body.get("readOnly"))
+    assistant_provider_id = deployment.get("providerId") or None
     tools = [
         {
             "type": "function",
@@ -359,7 +381,13 @@ async def run_turn(request, body, emit):
     conversation = deepcopy(resume["conversation"] if resume else body["messages"])
     if conversation[0].get("role") != "system":
         conversation.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-    outcome = await resume_pending(request, resume, conversation, emit, read_only) if resume else "continue"
+    outcome = (
+        await resume_pending(
+            request, resume, conversation, emit, read_only, default_ai_provider_id=assistant_provider_id
+        )
+        if resume
+        else "continue"
+    )
     final_answer, turn = None, 0
     while outcome == "continue" and turn < MAX_TOOL_CALL_TURNS:
         turn += 1
@@ -386,7 +414,14 @@ async def run_turn(request, body, emit):
         if answer:
             await emit("progress", {"content": answer})
         conversation.append(message)
-        outcome = await process_pending_tool_calls(message["tool_calls"], conversation, request, emit, read_only)
+        outcome = await process_pending_tool_calls(
+            message["tool_calls"],
+            conversation,
+            request,
+            emit,
+            read_only,
+            default_ai_provider_id=assistant_provider_id,
+        )
     if outcome == "continue" and final_answer is None and turn >= MAX_TOOL_CALL_TURNS:
         conversation.append(
             {

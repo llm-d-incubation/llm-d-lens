@@ -25,6 +25,646 @@ kubelet 会重建静态 Pod，期间 API 访问会短暂中断。清单备份应
 
 ## 从 kubeconfig 注册集群
 
+### kubeconfig 权限
+
+最简单、兼容性最好的方式是使用具有 `cluster-admin` 角色的 kubeconfig。
+如果安全策略要求收束权限，请将下面的辅助脚本保存为临时文件，赋予执行权限，
+然后使用管理员 kubeconfig 运行：
+
+```bash
+chmod +x lens-rbac-kubeconfig.sh
+./lens-rbac-kubeconfig.sh --kubeconfig ~/.kube/config --output lens-lens-minimal.kubeconfig
+```
+
+上传生成的 `lens-lens-minimal.kubeconfig`。脚本会创建
+`lens-access/lens-minimal` ServiceAccount 和 ClusterRole，执行一次实际权限自检，
+并打印输出路径。只有目标集群不允许创建测试工作负载时才使用 `--skip-self-test`。
+
+<details>
+<summary>展开 RBAC 辅助脚本</summary>
+
+```bash
+#!/usr/bin/env bash
+# Generate the least-privilege Kubernetes identity Lens needs and a kubeconfig
+# for it.
+#
+# The role is deliberately NOT cluster-admin. It is an operator role:
+#   * read-only discovery across every resource/API group (Lens renders arbitrary
+#     CRDs and its namespace cleanup enumerates every listable namespaced kind);
+#   * workload, storage, networking, batch, RBAC and CRD writes needed to
+#     deploy/evaluate models, provision model-cache volumes, install the
+#     monitoring stack and install/upgrade Gateway/GPU controllers;
+#   * no impersonation, no service-account token minting, no
+#     authentication/authorization review endpoints and no CSR approval.
+#
+# Installing arbitrary third-party Helm charts (monitoring, Gateway, GPU
+# operator) inherently requires creating ClusterRoles/ClusterRoleBindings, so
+# the role includes bind/escalate on those two resources. Everything else is
+# scoped to the resources Lens actually uses.
+#
+# Usage:
+#   lens-rbac-kubeconfig.sh [options]
+#
+# Options:
+#   --kubeconfig PATH        Admin kubeconfig used to create the RBAC
+#                            (default: $KUBECONFIG, else ~/.kube/config)
+#   --context NAME           Admin context (default: current-context)
+#   --namespace NAME         Namespace for the ServiceAccount/token
+#                            (default: lens-access)
+#   --service-account NAME   ServiceAccount name (default: lens-minimal)
+#   --cluster-role NAME      ClusterRole name (default: lens-minimal)
+#   --output PATH            kubeconfig destination
+#                            (default: ./lens-<service-account>.kubeconfig)
+#   --skip-self-test         Do not create/delete a throwaway namespace
+#   --delete                 Remove the generated RBAC identity and token secret
+#   -h, --help               Show this help
+#
+# The generated kubeconfig uses a long-lived ServiceAccount token. Pass
+# --delete first if you want to rotate the token.
+
+set -euo pipefail
+umask 077
+
+SOURCE_KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+CONTEXT=""
+NAMESPACE="lens-access"
+SERVICE_ACCOUNT="lens-minimal"
+CLUSTER_ROLE="lens-minimal"
+OUTPUT=""
+SELF_TEST=1
+DELETE=0
+
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+info() { printf '%s\n' "$*"; }
+
+usage() {
+  sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit 0
+}
+
+while (($#)); do
+  case "$1" in
+    --kubeconfig) SOURCE_KUBECONFIG="${2:?missing value}"; shift 2 ;;
+    --context) CONTEXT="${2:?missing value}"; shift 2 ;;
+    --namespace) NAMESPACE="${2:?missing value}"; shift 2 ;;
+    --service-account) SERVICE_ACCOUNT="${2:?missing value}"; shift 2 ;;
+    --cluster-role) CLUSTER_ROLE="${2:?missing value}"; shift 2 ;;
+    --output) OUTPUT="${2:?missing value}"; shift 2 ;;
+    --skip-self-test) SELF_TEST=0; shift ;;
+    --delete) DELETE=1; shift ;;
+    -h|--help) usage ;;
+    *) die "unknown option: $1 (use --help)" ;;
+  esac
+done
+
+for cmd in kubectl python3 base64; do
+  command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+done
+if ((SELF_TEST)); then
+  command -v curl >/dev/null 2>&1 || die "required command not found: curl (or pass --skip-self-test)"
+fi
+[[ -f "$SOURCE_KUBECONFIG" ]] || die "kubeconfig not found: $SOURCE_KUBECONFIG"
+
+KUBECTL=(kubectl --kubeconfig "$SOURCE_KUBECONFIG" --request-timeout=30s)
+if [[ -n "$CONTEXT" ]]; then
+  KUBECTL+=(--context "$CONTEXT")
+fi
+
+info "Using kubeconfig: $SOURCE_KUBECONFIG"
+info "Context: $("${KUBECTL[@]}" config current-context 2>/dev/null || true)"
+
+if ((DELETE)); then
+  info "Deleting Lens RBAC identity in namespace $NAMESPACE"
+  "${KUBECTL[@]}" delete clusterrolebinding "$CLUSTER_ROLE" --ignore-not-found
+  "${KUBECTL[@]}" delete clusterrole "$CLUSTER_ROLE" --ignore-not-found
+  "${KUBECTL[@]}" -n "$NAMESPACE" delete secret "${SERVICE_ACCOUNT}-token" --ignore-not-found
+  "${KUBECTL[@]}" -n "$NAMESPACE" delete serviceaccount "$SERVICE_ACCOUNT" --ignore-not-found
+  info "Deleted. The namespace $NAMESPACE was left in place."
+  exit 0
+fi
+
+[[ -n "$OUTPUT" ]] || OUTPUT="$PWD/lens-${SERVICE_ACCOUNT}.kubeconfig"
+
+info "Applying namespace/ServiceAccount/ClusterRole/ClusterRoleBinding..."
+
+"${KUBECTL[@]}" apply -f - <<YAML
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${SERVICE_ACCOUNT}
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${CLUSTER_ROLE}
+  labels:
+    app.kubernetes.io/part-of: llm-d-lens
+rules:
+  # Discovery/read for dashboards, cleanup and arbitrary CRDs.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  # Namespaced core workloads and configuration.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - pods/exec
+      - pods/attach
+      - pods/portforward
+      - pods/status
+      - services
+      - services/proxy
+      - endpoints
+      - configmaps
+      - secrets
+      - persistentvolumeclaims
+      - serviceaccounts
+      - events
+      - replicationcontrollers
+      - replicationcontrollers/scale
+      - limitranges
+      - resourcequotas
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  # Cluster lifecycle and node maintenance (cordon/uncordon).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy"]
+    verbs: ["update", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  # Workload controllers.
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - deployments/scale
+      - daemonsets
+      - statefulsets
+      - statefulsets/scale
+      - replicasets
+      - replicasets/scale
+      - controllerrevisions
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  # Storage and node/device APIs used by storage volumes and DRA/GPU installs.
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+      - csidrivers
+      - csinodes
+      - volumeattachments
+      - csistoragecapacities
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["resource.k8s.io"]
+    resources:
+      - resourceclaims
+      - resourceclaimtemplates
+      - resourceslices
+      - deviceclasses
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["create", "update", "patch", "delete"]
+
+  # CRD/API registration and admission configuration installed by charts.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["create", "update", "patch", "delete"]
+
+  # Namespaced RBAC created by Lens and by installed charts.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "clusterroles"]
+    verbs: ["bind", "escalate"]
+
+  # llm-d / Gateway / inference / monitoring / accelerator CRDs.
+  - apiGroups:
+      - gateway.networking.k8s.io
+      - gateway.envoyproxy.io
+      - aigateway.envoyproxy.io
+      - inference.networking.k8s.io
+      - llm-d.ai
+      - agentgateway.dev
+      - networking.istio.io
+      - security.istio.io
+      - telemetry.istio.io
+      - install.istio.io
+      - monitoring.coreos.com
+      - nvidia.com
+      - keda.sh
+      - leaderworkerset.x-k8s.io
+      - disaggregatedset.x-k8s.io
+    resources: ["*"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  # Prometheus scrapes and API probes.
+  - nonResourceURLs: ["/metrics", "/version", "/readyz", "/healthz", "/livez", "/apis", "/apis/*", "/api", "/api/*"]
+    verbs: ["get"]
+YAML
+
+"${KUBECTL[@]}" apply -f - <<YAML
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${CLUSTER_ROLE}
+  labels:
+    app.kubernetes.io/part-of: llm-d-lens
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${CLUSTER_ROLE}
+subjects:
+  - kind: ServiceAccount
+    name: ${SERVICE_ACCOUNT}
+    namespace: ${NAMESPACE}
+YAML
+
+"${KUBECTL[@]}" apply -f - <<YAML
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${SERVICE_ACCOUNT}-token
+  namespace: ${NAMESPACE}
+  annotations:
+    kubernetes.io/service-account.name: ${SERVICE_ACCOUNT}
+type: kubernetes.io/service-account-token
+YAML
+
+info "Waiting for the token controller..."
+TOKEN=""
+CA_B64=""
+for _ in $(seq 1 30); do
+  TOKEN="$("${KUBECTL[@]}" -n "$NAMESPACE" get secret "${SERVICE_ACCOUNT}-token" -o jsonpath='{.data.token}' 2>/dev/null || true)"
+  CA_B64="$("${KUBECTL[@]}" -n "$NAMESPACE" get secret "${SERVICE_ACCOUNT}-token" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)"
+  [[ -n "$TOKEN" ]] && break
+  sleep 2
+done
+[[ -n "$TOKEN" ]] || die "token was not generated; check the service-account token controller"
+
+# Connection details come from the admin kubeconfig, without its credentials.
+CLUSTER_JSON="$(mktemp)"
+trap 'rm -f "$CLUSTER_JSON" "$CLUSTER_JSON.tmp"' EXIT
+"${KUBECTL[@]}" config view --minify --flatten --raw -o json |
+  python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d["clusters"][0]["cluster"]))' >"$CLUSTER_JSON"
+
+python3 - "$CLUSTER_JSON" "$OUTPUT" "$SERVICE_ACCOUNT" "$NAMESPACE" "$TOKEN" "$CA_B64" <<'PY'
+import base64
+import json
+import os
+import sys
+
+cluster_file, output, user, namespace, token_b64, ca_b64 = sys.argv[1:]
+with open(cluster_file, encoding="utf-8") as handle:
+    cluster = json.load(handle)
+# Prefer the CA embedded in the service-account token secret when the source
+# kubeconfig did not carry certificate-authority-data.
+if not cluster.get("certificate-authority-data") and ca_b64:
+    cluster["certificate-authority-data"] = ca_b64
+cluster.pop("certificate-authority", None)
+
+config = {
+    "apiVersion": "v1",
+    "kind": "Config",
+    "clusters": [{"name": "lens", "cluster": cluster}],
+    "users": [{"name": user, "user": {"token": base64.b64decode(token_b64).decode("utf-8")}}],
+    "contexts": [
+        {
+            "name": user,
+            "context": {"cluster": "lens", "user": user, "namespace": "default"},
+        }
+    ],
+    "current-context": user,
+}
+with open(output, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, indent=2)
+    handle.write("\n")
+os.chmod(output, 0o600)
+PY
+
+unset TOKEN CA_B64
+info "Wrote kubeconfig: $OUTPUT"
+
+NEW_KUBECTL=(kubectl --kubeconfig "$OUTPUT" --request-timeout=30s)
+
+info "Checking connection..."
+"${NEW_KUBECTL[@]}" cluster-info >/dev/null
+"${NEW_KUBECTL[@]}" get --raw=/readyz >/dev/null
+"${NEW_KUBECTL[@]}" get nodes -o name >/dev/null
+
+info "Checking the permission matrix..."
+FAILED=0
+SERVED_RESOURCES=" $("${NEW_KUBECTL[@]}" api-resources -o name 2>/dev/null | sort -u | tr '\n' ' ') "
+check() {
+  local verb="$1" resource="$2"
+  shift 2
+  # A CRD that is not installed cannot be authorized; skip it here and let the
+  # wildcard group rule cover it once the chart/installer creates the CRD.
+  if [[ "$resource" == *.* && "$SERVED_RESOURCES" != *" $resource "* ]]; then
+    printf '  SKIP: %-18s %-50s (CRD/API not installed)\n' "$verb" "$resource"
+    return 0
+  fi
+  if ! "${NEW_KUBECTL[@]}" auth can-i "$verb" "$resource" "$@" >/dev/null 2>&1; then
+    printf '  MISSING: %-18s %-50s %s\n' "$verb" "$resource" "$*"
+    FAILED=1
+  fi
+}
+
+for resource in nodes namespaces pods services secrets configmaps \
+  persistentvolumes persistentvolumeclaims storageclasses customresourcedefinitions \
+  deployments daemonsets statefulsets replicasets jobs cronjobs \
+  resourceclaims.resource.k8s.io resourceslices.resource.k8s.io \
+  deviceclasses.resource.k8s.io runtimeclasses.node.k8s.io; do
+  check get "$resource" --all-namespaces
+  check list "$resource" --all-namespaces
+  check watch "$resource" --all-namespaces
+done
+check get nodes.metrics.k8s.io
+check get gateways.gateway.networking.k8s.io --all-namespaces
+check get httproutes.gateway.networking.k8s.io --all-namespaces
+check get inferencepools.inference.networking.k8s.io --all-namespaces
+check get inferencemodelrewrites.llm-d.ai --all-namespaces
+check get servicemonitors.monitoring.coreos.com --all-namespaces
+
+for resource in pods services secrets configmaps persistentvolumeclaims \
+  serviceaccounts endpoints deployments daemonsets statefulsets replicasets \
+  jobs cronjobs roles rolebindings \
+  gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io \
+  referencegrants.gateway.networking.k8s.io \
+  inferencepools.inference.networking.k8s.io inferencemodelrewrites.llm-d.ai \
+  envoyproxies.gateway.envoyproxy.io clienttrafficpolicies.gateway.envoyproxy.io \
+  securitypolicies.gateway.envoyproxy.io \
+  agentgatewaypolicies.agentgateway.dev envoyfilters.networking.istio.io \
+  destinationrules.networking.istio.io authorizationpolicies.security.istio.io \
+  prometheuses.monitoring.coreos.com servicemonitors.monitoring.coreos.com \
+  podmonitors.monitoring.coreos.com; do
+  check create "$resource" -n "$NAMESPACE"
+  check update "$resource" -n "$NAMESPACE"
+  check patch "$resource" -n "$NAMESPACE"
+  check delete "$resource" -n "$NAMESPACE"
+done
+
+check create namespaces
+check delete namespaces
+check create persistentvolumes
+check delete persistentvolumes
+check update nodes
+check patch nodes
+check create customresourcedefinitions
+check patch customresourcedefinitions
+check create clusterroles
+check create clusterrolebindings
+check delete clusterrolebindings
+check bind clusterroles
+check escalate clusterroles
+check create gatewayclasses.gateway.networking.k8s.io
+check create runtimeclasses.node.k8s.io
+check create deviceclasses.resource.k8s.io
+check create resourceslices.resource.k8s.io
+check create mutatingwebhookconfigurations.admissionregistration.k8s.io
+check create validatingwebhookconfigurations.admissionregistration.k8s.io
+check create priorityclasses.scheduling.k8s.io
+check create apiservices.apiregistration.k8s.io
+check create pods/exec -n "$NAMESPACE"
+check create pods/portforward -n "$NAMESPACE"
+check get pods/log -n "$NAMESPACE"
+check get services/proxy -n "$NAMESPACE"
+check patch deployments/scale -n "$NAMESPACE"
+check deletecollection jobs -n "$NAMESPACE"
+check deletecollection persistentvolumeclaims -n "$NAMESPACE"
+check get /metrics
+
+if ((FAILED)); then
+  die "the generated identity is missing required permissions (see above)"
+fi
+info "Permission matrix: PASS"
+
+if ((SELF_TEST)); then
+  TEST_NS="lens-rbac-selftest-$$-$(date +%s)"
+  info "Running live smoke test in namespace $TEST_NS..."
+  cleanup() {
+    "${NEW_KUBECTL[@]}" delete namespace "$TEST_NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  }
+  trap cleanup EXIT
+
+  "${NEW_KUBECTL[@]}" create namespace "$TEST_NS" >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" apply -f - >/dev/null <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: selftest
+data:
+  key: value
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: selftest
+stringData:
+  key: value
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: selftest
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: selftest
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: selftest
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: selftest
+subjects:
+  - kind: ServiceAccount
+    name: selftest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: selftest
+  labels:
+    app: lens-rbac-selftest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lens-rbac-selftest
+  template:
+    metadata:
+      labels:
+        app: lens-rbac-selftest
+    spec:
+      containers:
+        - name: nginx
+          image: docker.io/library/nginx:1.25.2-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: selftest
+spec:
+  selector:
+    app: lens-rbac-selftest
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: selftest
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: busybox
+          image: docker.io/library/nginx:1.25.2-alpine
+          command: ["sh", "-c", "echo ok"]
+YAML
+
+  DEFAULT_SC="$("${NEW_KUBECTL[@]}" get storageclasses -o json | python3 -c '
+import json, sys
+items = json.load(sys.stdin).get("items") or []
+for item in items:
+    annotations = (item.get("metadata") or {}).get("annotations") or {}
+    if annotations.get("storageclass.kubernetes.io/is-default-class") == "true":
+        print(item["metadata"]["name"])
+        break
+else:
+    print("")
+')"
+  if [[ -n "$DEFAULT_SC" ]]; then
+    "${NEW_KUBECTL[@]}" -n "$TEST_NS" apply -f - >/dev/null <<YAML
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: selftest
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: ${DEFAULT_SC}
+  resources:
+    requests:
+      storage: 64Mi
+YAML
+  fi
+
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" rollout status deployment/selftest --timeout=120s >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" wait --for=condition=complete job/selftest --timeout=120s >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" logs job/selftest >/dev/null
+  POD="$("${NEW_KUBECTL[@]}" -n "$TEST_NS" get pods -l app=lens-rbac-selftest -o jsonpath='{.items[0].metadata.name}')"
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" logs "$POD" >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" exec "$POD" -- true >/dev/null
+
+  # Exercise pods/portforward through a Service while its pod is Ready.
+  LOCAL_PORT=18999
+  PF_PID=""
+  for attempt in 1 2 3; do
+    "${NEW_KUBECTL[@]}" -n "$TEST_NS" port-forward service/selftest "${LOCAL_PORT}:80" >/dev/null 2>&1 &
+    PF_PID=$!
+    for _ in $(seq 1 30); do
+      if curl -fsS "http://127.0.0.1:${LOCAL_PORT}" >/dev/null 2>&1; then break; fi
+      kill -0 "$PF_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    if curl -fsS "http://127.0.0.1:${LOCAL_PORT}" >/dev/null 2>&1; then
+      break
+    fi
+    kill "$PF_PID" 2>/dev/null || true
+    wait "$PF_PID" 2>/dev/null || true
+    PF_PID=""
+    sleep 1
+  done
+  [[ -n "$PF_PID" ]] || die "port-forward smoke test failed"
+  kill "$PF_PID" 2>/dev/null || true
+  wait "$PF_PID" 2>/dev/null || true
+
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" label deployment selftest selftest=ok --overwrite >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" scale deployment/selftest --replicas=0 >/dev/null
+  if [[ -n "$DEFAULT_SC" ]]; then
+    "${NEW_KUBECTL[@]}" -n "$TEST_NS" get pvc/selftest >/dev/null
+  fi
+
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" delete job selftest --ignore-not-found >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" delete pvc selftest --ignore-not-found >/dev/null
+  "${NEW_KUBECTL[@]}" -n "$TEST_NS" delete deployment selftest --ignore-not-found >/dev/null
+  "${NEW_KUBECTL[@]}" delete namespace "$TEST_NS" --ignore-not-found >/dev/null
+  trap - EXIT
+  info "Live smoke test: PASS"
+fi
+
+info ""
+info "Done."
+info "  kubeconfig: $OUTPUT"
+info "  identity:   system:serviceaccount:${NAMESPACE}:${SERVICE_ACCOUNT}"
+info "  clusterrole: ${CLUSTER_ROLE}"
+```
+
+</details>
+
 1. 打开 **Clusters（集群）**，点击 **Add（新增）**。
 2. 填写 **Cluster name（集群名称）**，保持 **I already have a kubeconfig（已有 kubeconfig）**，点击 **Browse（浏览）**选择文件。
 3. 点击 **Next（下一步）**。连接或版本检查失败时，先解决页面提示的问题。
