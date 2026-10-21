@@ -262,7 +262,6 @@ def _readiness_is_transient(reasons: list[str], diagnostics: dict | None = None)
     timeout_markers = (
         "kubectl command timed out",
         "helm command timed out",
-        "endpoint smoke test timed out",
     )
     connectivity_markers = (
         "was refused",

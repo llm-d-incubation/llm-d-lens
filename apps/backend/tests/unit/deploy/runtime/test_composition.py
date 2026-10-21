@@ -406,11 +406,7 @@ def test_structured_startup_diagnostics_remain_namespace_scoped(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_published_deployment_names_scope_commands_and_smoke_test(tmp_path, monkeypatch):
-    from unittest.mock import AsyncMock
-
-    from llm_d_lens.deploy.runtime import composition
-
+async def test_published_deployment_names_scope_commands(tmp_path):
     namespace = "llm-d-bench-published"
     runner = RegisteredGuideCommandRunner(
         kubectl_path=tmp_path / "kubectl",
@@ -446,72 +442,3 @@ async def test_published_deployment_names_scope_commands_and_smoke_test(tmp_path
         )
     with pytest.raises(RuntimeConfigurationError):
         runner.register_published_deployments("default", ["published-decode"])
-    process = AsyncMock()
-    process.returncode = 0
-    process.communicate.return_value = (b"ok", b"")
-    spawn = AsyncMock(return_value=process)
-    monkeypatch.setattr(composition, "spawn", spawn)
-    assert await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80") is None
-    assert spawn.call_args.args[0][2] == "deployment/published-decode"
-    # The smoke test must run `python3`: the official vllm/vllm-openai image
-    # only installs `python3` via update-alternatives, not a bare `python`
-    # (a prior `python` command failed with "executable file not found").
-    assert spawn.call_args.args[0][-3] == "python3"
-
-
-@pytest.mark.asyncio
-async def test_smoke_test_failure_reason_preserves_connectivity_detail(tmp_path, monkeypatch):
-    """A model server still loading rejects connections, not a workload bug.
-
-    The reason returned must still contain that connectivity detail (not a
-    generic "failed" string) so `_readiness_is_transient` can tell this
-    startup race apart from a genuine failure (see
-    `test_readiness_transient.py`).
-    """
-    from unittest.mock import AsyncMock
-
-    from llm_d_lens.deploy.runtime import composition
-    from llm_d_lens.deploy.service import _readiness_is_transient
-
-    namespace = "llm-d-bench-smoke-detail"
-    runner = RegisteredGuideCommandRunner(
-        kubectl_path=tmp_path / "kubectl",
-        helm_path=tmp_path / "helm",
-        namespace_prefix="llm-d-bench-",
-        guide=RegisteredGuideRuntime(
-            guide_id="optimized-baseline",
-            source_ref="main",
-            content_hash="test",
-            maturity="supported",
-            manifest_path=tmp_path / "kustomization.yaml",
-            readiness_deployment_name="decode",
-            endpoint_service_name="epp",
-            endpoint_service_port=80,
-        ),
-        timeout_seconds=30,
-        rendered_overlay_root=tmp_path,
-    )
-    process = AsyncMock()
-    process.returncode = 1
-    process.communicate.return_value = (
-        b"",
-        b"urllib.error.URLError: <urlopen error [Errno 111] Connection refused>\n",
-    )
-    monkeypatch.setattr(composition, "spawn", AsyncMock(return_value=process))
-    reason = await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80")
-    assert reason is not None
-    assert "connection refused" in reason.lower()
-
-    process.communicate.return_value = (
-        b"",
-        b"urllib.error.URLError: <urlopen error [Errno 111] Connection refused>\ncommand terminated with exit code 1\n",
-    )
-    reason = await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80")
-    assert reason is not None
-    assert "connection refused" in reason.lower()
-    assert _readiness_is_transient([reason])
-
-    process.communicate.return_value = (b"", b"AssertionError\n")
-    reason = await runner.endpoint_smoke_test(namespace, f"http://epp.{namespace}.svc:80")
-    assert reason == "endpoint smoke test failed: AssertionError"
-    assert not _readiness_is_transient([reason])

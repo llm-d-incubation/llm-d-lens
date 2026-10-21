@@ -439,14 +439,6 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             f"{baseline.get('serviceName', self._policy.baseline_service_name)}.{namespace}.svc:"
             f"{baseline.get('port', self._policy.baseline_service_port)}"
         )
-        smoke_test = getattr(self._command_runner, "endpoint_smoke_test", None)
-        if not callable(smoke_test):
-            return ValidationResult(accepted=False, reasons=["registered guide runner cannot smoke test the endpoint"])
-        # Gateway Mode disables the chart's own proxy, so the EPP Service port has no
-        # backend; validate the model server directly instead.
-        smoke_result = await smoke_test(namespace, baseline_endpoint_url)
-        if smoke_result is not None:
-            return ValidationResult(accepted=False, reasons=[str(smoke_result)])
         execution["endpoint_url"] = endpoint_url
         execution["baseline_endpoint_url"] = baseline_endpoint_url
         execution["endpoint_classification"] = "routed_guide_endpoint"

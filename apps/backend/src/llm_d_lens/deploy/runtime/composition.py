@@ -11,7 +11,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 from llm_d_lens.core.hashing import stable_hash
 from llm_d_lens.deploy.data_plane import GATEWAY_MODE_VALUES_PATH, PLAINTEXT_EPP_VALUES_PATH
@@ -109,8 +108,8 @@ class RegisteredGuideRuntime:
     readiness_deployment_name: str | None = None
     endpoint_service_name: str | None = None
     endpoint_service_port: int | None = None
-    #: The model server Service a readiness smoke test can reach directly. In
-    #: Gateway Mode the EPP proxy is disabled, so its Service port has no backend.
+    #: The model server Service reported as the deployment's baseline endpoint.
+    #: In Gateway Mode the EPP proxy is disabled, so its Service port has no backend.
     baseline_service_name: str | None = None
     baseline_service_port: int | None = None
     adapter_type: str = "kubernetes"
@@ -643,54 +642,6 @@ class RegisteredGuideCommandRunner:
         await self._kubectl.copy_model_secret(namespace, source_namespace, source_name)
         self._evidence.extend(self._take_kubectl_evidence())
 
-    async def endpoint_smoke_test(self, namespace: str, endpoint_url: str) -> str | None:
-        epp_host = f"{self._guide.endpoint_service_name}.{namespace}.svc"
-        baseline_host = f"{self._guide.baseline_service_name}.{namespace}.svc"
-        parsed = urlparse(endpoint_url)
-        host = parsed.hostname or ""
-        if host.rstrip(".") not in {
-            epp_host,
-            f"{epp_host}.cluster.local",
-            baseline_host,
-            f"{baseline_host}.cluster.local",
-        }:
-            raise RuntimeConfigurationError("endpoint smoke test is outside the registered Guide plan")
-        command = [
-            "kubectl",
-            "exec",
-            f"deployment/{self._published_deployments.get(namespace, [self._guide.readiness_deployment_name])[0]}",
-            "--namespace",
-            namespace,
-            "--container",
-            "modelserver",
-            "--",
-            "python3",
-            "-c",
-            (
-                "from urllib.request import ProxyHandler, build_opener; "
-                f"response = build_opener(ProxyHandler({{}})).open({endpoint_url!r} + '/v1/models', timeout=15); "
-                "assert response.status == 200"
-            ),
-        ]
-        process = await spawn(
-            [str(self._kubectl._kubectl_path), *command[1:]],
-            env=self._kubectl._environment,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self._timeout_seconds)
-        except TimeoutError:
-            process.kill()
-            await process.communicate()
-            self._record(["kubectl", "exec", "endpoint-smoke"], 124, "endpoint smoke test timed out", timed_out=True)
-            return "endpoint smoke test timed out"
-        output = f"{_redact_output(stdout)}\n{_redact_output(stderr)}"
-        self._record(["kubectl", "exec", "endpoint-smoke"], process.returncode, output)
-        if process.returncode == 0:
-            return None
-        return f"endpoint smoke test failed: {_smoke_test_failure_detail(output)}"
-
     def _validate_kustomize(self, command: list[str]) -> None:
         namespace = (
             command[3]
@@ -755,15 +706,6 @@ class RegisteredGuideCommandRunner:
                 "modelserver",
                 "--tail=120",
             ),
-            (
-                "kubectl",
-                "exec",
-                f"deployment/{self._guide.readiness_deployment_name}",
-                "--namespace",
-                namespace,
-                "--container",
-                "modelserver",
-            ),
         }
         for name in self._published_deployments.get(namespace, []):
             allowed.add(("kubectl", "rollout", "status", f"deployment/{name}", "--namespace", namespace))
@@ -773,16 +715,7 @@ class RegisteredGuideCommandRunner:
             if path.is_dir() and path.is_relative_to(self._rendered_overlay_root):
                 allowed.add(("kubectl", "apply", "--namespace", namespace, "--kustomize", str(path)))
         prefix = tuple(command[: len(command) - 1]) if command[-1].startswith("--timeout=") else tuple(command)
-        is_endpoint_smoke = tuple(command[:7]) == (
-            "kubectl",
-            "exec",
-            f"deployment/{self._guide.readiness_deployment_name}",
-            "--namespace",
-            namespace,
-            "--container",
-            "modelserver",
-        ) and command[7:9] == ["--", "python3"]
-        if prefix not in allowed and not is_endpoint_smoke:
+        if prefix not in allowed:
             raise RuntimeConfigurationError("Kubernetes command operation is outside the registered Guide plan")
 
     def _validate_helm(self, command: list[str]) -> None:
@@ -1187,21 +1120,6 @@ def _argument_after(command: list[str], argument: str) -> str | None:
         return command[command.index(argument) + 1]
     except (ValueError, IndexError):
         return None
-
-
-def _smoke_test_failure_detail(output: str) -> str:
-    """The most specific line of a failed smoke test's captured output.
-
-    The model server often isn't listening yet while it is still loading the
-    model (``connection refused``); embedding that detail lets
-    ``_readiness_is_transient`` tell this startup race apart from a genuine
-    workload failure (for example an assertion on a non-200 response), which
-    a bare ``"endpoint smoke test failed"`` string could not distinguish.
-    """
-    lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if len(lines) > 1 and re.fullmatch(r"command terminated with exit code \d+", lines[-1]):
-        lines.pop()
-    return lines[-1] if lines else "no output captured"
 
 
 def _redact_output(value: bytes) -> str:
