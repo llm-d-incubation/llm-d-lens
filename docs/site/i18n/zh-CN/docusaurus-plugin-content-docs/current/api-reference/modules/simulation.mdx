@@ -25,6 +25,14 @@ import TabItem from '@theme/TabItem';
 每条证据使用 `simulation:<task-id>` 及原始测试时间。先保存源测试结果，再写入证据，
 已有证据不覆盖。必需上下文缺失或工件不完整时返回明确原因，不使用当前环境替代。
 
+标准化将 AIPerf 的报告时长与成功请求窗口比较，将 Trace Replayer 的报告时长与全部
+请求窗口比较，均保留一秒容差；另行检查完整请求窗口不超过任务的实测执行时长。
+平均并发度使用全部请求存续时间之和除以完整请求窗口，不修改原始汇总时长和吞吐指标。
+证据记录的 provenance 包含 `measurement_windows`，字段为
+`reported_duration_seconds`、`reported_duration_scope`（`successful-requests` 或
+`all-requests`）、`all_requests_duration_seconds` 和
+`successful_requests_duration_seconds`。
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     通过 **`GET /api/simulation/tasks/{task_id}`** 读取 `benchmark_evidence`。

@@ -29,6 +29,16 @@ Source results are saved before evidence insertion, and existing evidence is
 never overwritten. Missing required context or incomplete artifacts produce
 explicit issues instead of current-environment substitutions.
 
+Normalization checks AIPerf's reported duration against the successful-request
+window and Trace Replayer's against the all-request window, with a one-second
+tolerance. The full request window is separately bounded by the task's measured
+execution duration. Mean concurrency divides all request lifetimes by the full
+request window; original summary durations and throughput metrics are unchanged.
+Benchmark record provenance includes `measurement_windows` with
+`reported_duration_seconds`, `reported_duration_scope` (`successful-requests` or
+`all-requests`), `all_requests_duration_seconds` and
+`successful_requests_duration_seconds`.
+
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     Read `benchmark_evidence` from **`GET /api/simulation/tasks/{task_id}`**.

@@ -12,6 +12,7 @@ import json
 import logging
 import math
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
 
 from llm_d_lens.agentic.benchmark_context import (
@@ -319,13 +320,27 @@ def normalize_simulation_task(task: SimulationTask) -> tuple[list[BenchmarkRecor
             if row.completed < row.arrived:
                 raise ValueError("Request completion precedes its start")
             intervals.append(row.completed - row.arrived)
-        if max(row.completed for row in rows) - min(row.arrived for row in rows) > duration + 1:
-            raise ValueError("Request lifecycle window exceeds the reported measurement duration")
         successful = [row for row in rows if row.successful]
+        if not successful:
+            raise ValueError("Measured token lengths from successful requests are required")
+        request_duration = positive(
+            max(row.completed for row in rows) - min(row.arrived for row in rows),
+            "observed request duration",
+        )
+        successful_duration = max(row.completed for row in successful) - min(row.arrived for row in successful)
+        # AIPerf's benchmark duration covers successful requests, not earlier or later failures.
+        duration_scope = "successful-requests" if task.result.backend == "aiperf" else "all-requests"
+        scoped_duration = successful_duration if duration_scope == "successful-requests" else request_duration
+        if scoped_duration > duration + 1:
+            raise ValueError(f"The {duration_scope} window exceeds the reported measurement duration")
+        started_at = task.execution_started_at
+        if started_at is None:
+            raise ValueError("Simulation execution start is missing")
+        execution_duration = (timestamp - datetime.fromisoformat(started_at.replace("Z", "+00:00"))).total_seconds()
+        if request_duration > execution_duration + 1:
+            raise ValueError("Request lifecycle window exceeds the measured execution duration")
         inputs = [positive(row.input_tokens, "observed input tokens") for row in successful]
         outputs = [positive(row.output_tokens, "observed output tokens") for row in successful]
-        if not inputs:
-            raise ValueError("Measured token lengths from successful requests are required")
         mean_input, mean_output = sum(inputs) / len(inputs), sum(outputs) / len(outputs)
         metrics = {}
         for field, attribute in (("ttft_p95_ms", "ttft_ms"), ("tpot_p95_ms", "tpot_ms"), ("e2e_p95_ms", "latency_ms")):
@@ -344,7 +359,7 @@ def normalize_simulation_task(task: SimulationTask) -> tuple[list[BenchmarkRecor
             mean_input_tokens=mean_input,
             p95_input_tokens=_p95(inputs),
             mean_output_tokens=mean_output,
-            concurrency=positive(sum(intervals) / duration, "measured mean concurrency"),
+            concurrency=positive(sum(intervals) / request_duration, "measured mean concurrency"),
             request_rate=positive(summary.get("throughput_rps"), "measured request rate"),
             shared_prefix_ratio=None,
             prefill_fraction=mean_input / (mean_input + mean_output),
@@ -367,6 +382,12 @@ def normalize_simulation_task(task: SimulationTask) -> tuple[list[BenchmarkRecor
                 "model_enrichment": snapshot.get("benchmark_model_metadata"),
                 "configuration_checksum": snapshot["deployment_configuration"]["checksum"],
                 "measurement_source": "per-request-artifacts",
+                "measurement_windows": {
+                    "reported_duration_seconds": duration,
+                    "reported_duration_scope": duration_scope,
+                    "all_requests_duration_seconds": request_duration,
+                    "successful_requests_duration_seconds": successful_duration,
+                },
             },
         )
         return [record], []

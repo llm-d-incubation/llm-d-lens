@@ -66,8 +66,14 @@ or external endpoints without verifiable environment metadata are explicitly ski
 The Simulation itself still retains its result if evidence is unavailable.
 
 Normalization requires complete request artifacts and matching measured counts.
-P95 latency is calculated from observations, concurrency from measured request-time
-overlap, and missing metrics are not invented. Unknown shared-prefix ratios stay
+P95 latency is calculated from observations. Mean concurrency uses the summed
+lifetimes of all requests divided by their full observed window, including failures.
+AIPerf's reported duration is checked against successful requests; Trace Replayer's
+duration is checked against all requests. Both retain a one-second tolerance, and
+the full request window must also fit within the task's measured execution duration.
+Reported durations and throughput metrics are preserved; missing metrics are not
+invented. Record provenance identifies the duration scope and observed windows.
+Unknown shared-prefix ratios stay
 null and receive no similarity credit. The task API's `benchmark_evidence` contains
 the saved context, collection errors and `ingestion` report. Rerun collects a fresh
 snapshot rather than reusing the previous test environment.

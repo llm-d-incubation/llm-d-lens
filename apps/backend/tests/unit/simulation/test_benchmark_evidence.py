@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -163,6 +164,113 @@ def test_unknown_runtime_version_does_not_block_simulation_archival(task):
     assert records[0].provenance["attribution"] == "serving-snapshot"
 
 
+@pytest.mark.parametrize("backend", ["aiperf", "trace-replayer"])
+@pytest.mark.parametrize("failed_interval", [(-1.5, -1.0), (2.5, 3.5)])
+def test_duration_scope_allows_failures_outside_successful_window(task, backend, failed_interval):
+    task.simulation = task.simulation.model_copy(update={"backend": backend})
+    task.result.backend = backend
+    task.benchmark_evidence["simulation"] = task.simulation.model_dump(mode="json")
+    task.result.per_request.append(
+        task.result.per_request[0].model_copy(
+            update={
+                "request_id": "failed",
+                "successful": False,
+                "started_at_seconds": failed_interval[0],
+                "completed_at_seconds": failed_interval[1],
+                "status_code": 503,
+            }
+        )
+    )
+    duration = 2.0 if backend == "aiperf" else 3.5
+    task.result.summary.update(total_requests=3, failed_requests=1, duration_seconds=duration)
+    original_summary = deepcopy(task.result.summary)
+    records, issues = evidence.normalize_simulation_task(task)
+    assert not issues
+    record = records[0]
+    assert record.workload.concurrency == pytest.approx((3 + failed_interval[1] - failed_interval[0]) / 3.5)
+    assert record.workload.request_rate == 1
+    assert record.metrics.throughput_tokens_per_s == 20
+    assert record.metrics.error_rate == pytest.approx(1 / 3)
+    assert record.provenance["measurement_windows"] == {
+        "reported_duration_seconds": duration,
+        "reported_duration_scope": "successful-requests" if backend == "aiperf" else "all-requests",
+        "all_requests_duration_seconds": 3.5,
+        "successful_requests_duration_seconds": 2.0,
+    }
+    assert task.result.summary == original_summary
+
+
+@pytest.mark.parametrize("backend", ["aiperf", "trace-replayer"])
+@pytest.mark.parametrize("request_window,eligible", [(3.0, True), (3.01, False)])
+def test_reported_duration_checks_matching_scope_at_tolerance_boundary(task, backend, request_window, eligible):
+    task.simulation = task.simulation.model_copy(update={"backend": backend})
+    task.result.backend = backend
+    task.benchmark_evidence["simulation"] = task.simulation.model_dump(mode="json")
+    task.result.per_request[1] = task.result.per_request[1].model_copy(update={"completed_at_seconds": request_window})
+    records, issues = evidence.normalize_simulation_task(task)
+    assert bool(records) == eligible
+    assert bool(issues) != eligible
+    if not eligible:
+        assert "reported measurement duration" in issues[0]["reason"]
+
+
+@pytest.mark.parametrize("backend", ["aiperf", "trace-replayer"])
+def test_trace_replayer_duration_includes_failed_requests(task, backend):
+    task.simulation = task.simulation.model_copy(update={"backend": backend})
+    task.result.backend = backend
+    task.benchmark_evidence["simulation"] = task.simulation.model_dump(mode="json")
+    task.result.per_request.append(
+        task.result.per_request[0].model_copy(
+            update={
+                "request_id": "late-failure",
+                "successful": False,
+                "started_at_seconds": 3.0,
+                "completed_at_seconds": 4.0,
+            }
+        )
+    )
+    task.result.summary.update(total_requests=3, failed_requests=1)
+    records, issues = evidence.normalize_simulation_task(task)
+    if backend == "aiperf":
+        assert records
+        assert not issues
+    else:
+        assert not records
+        assert "all-requests" in issues[0]["reason"]
+
+
+def test_failed_request_window_cannot_exceed_execution_duration(task):
+    task.result.per_request.append(
+        task.result.per_request[0].model_copy(
+            update={
+                "request_id": "outlier",
+                "successful": False,
+                "started_at_seconds": -100.0,
+                "completed_at_seconds": -99.0,
+            }
+        )
+    )
+    task.result.summary.update(total_requests=3, failed_requests=1)
+    records, issues = evidence.normalize_simulation_task(task)
+    assert not records
+    assert "execution duration" in issues[0]["reason"]
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"started_at_seconds": float("nan")},
+        {"completed_at_seconds": float("inf")},
+        {"started_at_seconds": 2.0, "completed_at_seconds": 1.0},
+    ],
+)
+def test_invalid_request_times_remain_ineligible(task, updates):
+    task.result.per_request[0] = task.result.per_request[0].model_copy(update=updates)
+    records, issues = evidence.normalize_simulation_task(task)
+    assert not records
+    assert issues[0]["reason"]
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -177,6 +285,8 @@ def test_unknown_runtime_version_does_not_block_simulation_archival(task):
         lambda t: setattr(t, "artifacts_incomplete", True),
         lambda t: t.result.summary.update(total_requests=99),
         lambda t: t.result.summary.update(failed_requests=True),
+        lambda t: t.result.summary.update(duration_seconds=0),
+        lambda t: t.result.summary.update(duration_seconds=float("nan")),
         lambda t: t.result.summary.update(throughput_rps=float("nan")),
         lambda t: t.result.per_request.pop(),
         lambda t: t.result.per_request.__setitem__(1, t.result.per_request[0]),
@@ -429,13 +539,25 @@ def test_cli_preview_never_writes_and_apply_saves_report(task, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_persists_snapshot_before_traffic_and_verifies_before_ingestion(task, monkeypatch, tmp_path):
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "cancelled"])
+async def test_lifecycle_persists_snapshot_before_traffic_and_verifies_before_ingestion(
+    task, monkeypatch, tmp_path, terminal_status
+):
     monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
     service.reset_service_state()
     task.status = "queued"
     result = task.result
     task.result = None
     snapshot = deepcopy(task.benchmark_evidence)
+    timestamps = iter(
+        (
+            task.started_at,
+            task.execution_started_at,
+            task.completed_at,
+            snapshot["benchmark_context"].pop("verified_at"),
+        )
+    )
+    monkeypatch.setattr(service, "_now", timestamps.__next__)
     task.benchmark_evidence = None
     task.execution_started_at = None
     order = []
@@ -447,16 +569,35 @@ async def test_lifecycle_persists_snapshot_before_traffic_and_verifies_before_in
     async def verify(current):
         order.append("verify")
         assert current.completed_at
-        current.benchmark_evidence["benchmark_context"]["verified_at"] = service._now()
+        assert not service.save_jobs.get(current.id)
+        assert BenchmarkRecordDao().get(f"simulation:{current.id}") is None
+        saved_snapshot = current.benchmark_evidence
+        await asyncio.sleep(0)
+        assert current.benchmark_evidence is saved_snapshot
+        saved_snapshot["benchmark_context"]["verified_at"] = service._now()
+
+    ingest = evidence.ingest_simulation_task
+
+    def ingest_after_verification(current):
+        order.append("ingest")
+        assert current.benchmark_evidence["benchmark_context"]["verified_at"]
+        return ingest(current)
 
     async def run(current, context):
         order.append("traffic")
         assert SimulationTaskDao().get(task.id).benchmark_evidence == snapshot
         context.on_ready()
+        context.progress(99, "Finalizing simulation results")
+        if terminal_status != "completed":
+            current.result = result
+            if terminal_status == "cancelled":
+                raise service.SimulationCancelledError("Cancelled after measurement")
+            raise service.SimulationError("Failed after measurement")
         return result
 
     monkeypatch.setattr(evidence, "capture_simulation_context", capture)
     monkeypatch.setattr(evidence, "verify_simulation_context", verify)
+    monkeypatch.setattr(evidence, "ingest_simulation_task", ingest_after_verification)
     monkeypatch.setattr(
         service,
         "_resolve_task_endpoint_url",
@@ -477,9 +618,18 @@ async def test_lifecycle_persists_snapshot_before_traffic_and_verifies_before_in
         ),
     )
     await service._run_task(task)
-    assert order == ["capture", "traffic", "verify"]
-    assert SimulationTaskDao().get(task.id).status == "completed"
-    assert BenchmarkRecordDao().get("simulation:abcdef12") is not None
+    assert order == ["capture", "traffic", "verify", "ingest"]
+    saved = SimulationTaskDao().get(task.id)
+    assert saved.status == terminal_status
+    assert saved.benchmark_evidence["benchmark_context"]["verified_at"]
+    record = BenchmarkRecordDao().get("simulation:abcdef12")
+    if terminal_status == "cancelled":
+        assert record is None
+        assert saved.benchmark_evidence["ingestion"]["status"] == "skipped"
+    else:
+        assert record is not None
+        assert record.outcome == ("succeeded" if terminal_status == "completed" else "failed")
+        assert saved.benchmark_evidence["ingestion"]["status"] == "stored"
     service.reset_service_state()
 
 

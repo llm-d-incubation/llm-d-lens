@@ -993,6 +993,7 @@ async def _run_task(task: SimulationTask) -> None:
     task.started_at = _now()
     task.progress_message = "Simulation running"
     await save_task(task)
+    terminal_status: SimulationTaskStatus = "failed"
     try:
         resolved_endpoint = await _resolve_task_endpoint_url(
             endpoint_mode=task.endpoint_mode,
@@ -1010,14 +1011,14 @@ async def _run_task(task: SimulationTask) -> None:
         backend = get_backend(task.simulation.backend)
         task.backend_version = backend.descriptor().version
         task.result = await backend.run(task, context)
-        task.status = "completed"
+        terminal_status = "completed"
         task.progress_percent = 100
         task.progress_message = "Simulation completed"
     except (SimulationCancelledError, asyncio.CancelledError):
-        task.status = "cancelled"
+        terminal_status = "cancelled"
         task.progress_message = "Simulation cancelled"
     except Exception as error:
-        task.status = "failed"
+        terminal_status = "failed"
         task.progress_message = "Simulation failed"
         task.error_message = (
             str(error) if isinstance(error, SimulationError) else f"Unexpected simulation error: {error}"
@@ -1027,9 +1028,11 @@ async def _run_task(task: SimulationTask) -> None:
     finally:
         task.completed_at = _now()
         task.artifacts_incomplete = context.artifacts_incomplete
+        # Drain progress saves while still running so ingestion cannot replace the snapshot during verification.
+        await _await_saves(task.id)
+        task.status = terminal_status
         await verify_simulation_context(task)
         controllers.pop(task.id, None)
-        await _await_saves(task.id)
         await save_task(task)
 
 

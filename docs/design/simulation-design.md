@@ -833,6 +833,12 @@ The `Backend` base validates the common trace replay and SLO contract. Each
 current backend is a `CommandBackend` responsible for its additional
 validation, CLI invocation, subprocess execution, and result parsing.
 
+Finalization drains queued progress and log saves while the task is still
+`running`, then sets its terminal status, verifies the saved serving and routing
+snapshot, and performs the final save and benchmark evidence ingestion. This
+ordering prevents an earlier save from replacing the snapshot while verification
+is awaiting cluster metadata and losing its `verified_at` marker.
+
 Backend components import the public Python API from
 `llm_d_lens.simulation`. Python calls return typed domain objects where a
 model exists and raise `SimulationConfigurationError` for domain errors. REST
