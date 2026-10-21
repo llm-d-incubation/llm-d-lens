@@ -18,6 +18,13 @@ as you type. Use **Clear filters** to reset both search and category.
 | **Manual** | You want to choose an llm-d Guide template, configure resources or review generated YAML |
 | **Agentic** (Experimental) | You want Lens to recommend a configuration for a workload and performance target |
 
+Deployment setup uses the model card's **Context** metadata as its initial maximum
+context length, including Agentic recommendations. For example, Qwen3-0.6B starts
+with `40960`, not `4096`. Only models with no listed context use the `4096`
+default. Standard and Agentic requests accept `256` through `1048576` tokens
+without silently shortening the card value; resource and model compatibility
+checks still apply. Existing plans and deployments are not rewritten.
+
 ## Create a manual deployment
 
 1. Open **Model Market**, use **Model categories** to narrow the list, and click a model card.

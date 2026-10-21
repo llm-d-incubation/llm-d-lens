@@ -611,7 +611,8 @@ The generated run defaults to preferring replicas on one node without making it 
     - `storage_type` (`"model-cache"`, default `"model-cache"`)
     - `storage_volume_id` (`string`, required, nonempty registered Model Cache volume ID)
     - `model_cache_path`, `pvc_name` (legacy fields, no longer used for deployment storage)
-    - `max_model_len`, `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`
+    - `max_model_len` (`integer`, default `4096`, range `256` to `1048576`; also applies to Agentic requests)
+    - `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`
     - `enable_prefix_caching`, `enforce_eager`, `vllm_arguments`, `use_cluster_proxy`, `http_proxy`, `https_proxy`, `no_proxy`
 
     ```json

@@ -31,7 +31,7 @@ function parseVllmArguments(input) {
     return { arguments: [...argumentsByName].map(([name, value]) => ({ name, value })), error: '' };
 }
 
-function standardRecommendation(model, hardware, resourceBasis = 'available') {
+export function standardRecommendation(model, hardware, resourceBasis = 'available') {
     const availableGpus = recommendationBudget(hardware, resourceBasis);
     const totalVramGiB = (hardware?.vramBytes || 0) / GiB;
     const vramPerGpuGiB = availableGpus > 0 ? totalVramGiB / availableGpus : 0;
@@ -43,7 +43,7 @@ function standardRecommendation(model, hardware, resourceBasis = 'available') {
     return {
         tensorParallelism,
         replicas,
-        maxModelLen: model.context === '128K' ? 8192 : 4096,
+        maxModelLen: model.contextLength ?? 4096,
         cpuOffload: requiredVramGiB > totalVramGiB && totalVramGiB > 0,
         availableGpus,
         vramPerGpuGiB,

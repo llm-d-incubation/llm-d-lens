@@ -485,7 +485,8 @@ asyncio.run(main())
     - `tensor_parallel_size`（`integer`，必需）
     - `storage_type`（`"local-cache" | "pvc" | "model-cache"`，默认 `"local-cache"`）
     - `storage_volume_id`、`model_cache_path`、`pvc_name`（特定存储设置）
-    - `max_model_len`、`gpu_memory_utilization`、`max_num_seqs`、`max_num_batched_tokens`
+    - `max_model_len`（`integer`，默认 `4096`，范围为 `256` 到 `1048576`；同样适用于 Agentic 请求）
+    - `gpu_memory_utilization`、`max_num_seqs`、`max_num_batched_tokens`
     - `enable_prefix_caching`、`enforce_eager`、`vllm_arguments`、`use_cluster_proxy`、`http_proxy`、`https_proxy`、`no_proxy`
 
     ```json

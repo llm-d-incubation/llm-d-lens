@@ -105,6 +105,25 @@ def _request(**overrides) -> AgenticDeploymentCreateRequest:
     )
 
 
+@pytest.mark.parametrize("context_length", [40960, 262144, 1048576])
+def test_model_card_context_reaches_effective_planning_facts(context_length):
+    request = _request(max_model_len=context_length)
+    facts = AgenticDeploymentService._planning_only_facts(
+        request.planning_facts,
+        max_model_len=request.max_model_len,
+        gpu_memory_utilization=request.gpu_memory_utilization,
+    )
+
+    assert request.planning_facts.context_length == 4096
+    assert facts.context_length == context_length
+
+
+@pytest.mark.parametrize("context_length", [255, 1048577])
+def test_deployment_context_rejects_values_outside_supported_range(context_length):
+    with pytest.raises(ValidationError, match="max_model_len"):
+        _request(max_model_len=context_length)
+
+
 def _resolved_facts(*, free_gpu_count=4, aic_predictions=()) -> ResolvedPlanningFacts:
     facts = PlanningFacts(
         model_weight_gib=8,

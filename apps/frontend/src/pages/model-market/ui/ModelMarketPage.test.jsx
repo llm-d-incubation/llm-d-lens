@@ -5,7 +5,21 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MODELS } from '@repo/shared/catalog';
 import { AuthContext } from '../../auth/AuthContext.js';
 import AgenticDeploymentWorkspace from '../../deployment/ui/AgenticDeploymentWorkspace.jsx';
-import ModelMarketPage from './ModelMarketPage.jsx';
+import ModelMarketPage, { standardRecommendation } from './ModelMarketPage.jsx';
+
+test('deployment context uses the exact model card metadata for every listed context', () => {
+    for (const model of MODELS.filter((model) => model.contextLength != null)) {
+        assert.equal(standardRecommendation(model, null).maxModelLen, model.contextLength, model.repository);
+    }
+    const qwen = MODELS.find((model) => model.repository === 'Qwen/Qwen3-0.6B');
+    assert.equal(standardRecommendation(qwen, null).maxModelLen, 40960);
+});
+
+test('deployment context keeps the default only when model card context is missing', () => {
+    for (const contextLength of [null, undefined]) {
+        assert.equal(standardRecommendation({ contextLength, sizeGiB: 1 }, null).maxModelLen, 4096);
+    }
+});
 
 test('Agentic deployment prefills AIC latency defaults without an end-to-end latency input', () => {
     const html = renderToStaticMarkup(createElement(AgenticDeploymentWorkspace, {
