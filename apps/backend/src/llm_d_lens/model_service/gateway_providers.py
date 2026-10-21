@@ -196,7 +196,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     ),
 }
 
-DEFAULT_PROVIDER: GatewayProvider = "envoy-ai-gateway"
+DEFAULT_PROVIDER: GatewayProvider = "istio"
 
 
 def provider_spec(provider: str) -> ProviderSpec:

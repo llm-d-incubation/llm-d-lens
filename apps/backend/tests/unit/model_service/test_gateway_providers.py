@@ -7,6 +7,7 @@ import yaml
 
 from llm_d_lens.model_service.gateway_providers import (
     BASE_MODEL_HEADER,
+    DEFAULT_PROVIDER,
     PROVIDER_SPECS,
     PoolBinding,
     available_providers,
@@ -25,6 +26,7 @@ def _docs(text: str) -> list[dict]:
 def test_available_providers_covers_the_supported_gateways():
     assert available_providers() == ["agentgateway", "envoy-ai-gateway", "gke", "istio"]
     assert set(PROVIDER_SPECS) == set(available_providers())
+    assert DEFAULT_PROVIDER == "istio"
 
 
 def test_provider_spec_rejects_unknown_provider():
