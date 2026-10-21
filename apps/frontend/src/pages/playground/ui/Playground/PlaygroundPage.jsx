@@ -200,63 +200,91 @@ function ConfirmToolEntry({ entry, onResolve }) {
     } else if (resolved) {
         statusLabel = entry.result?.rejected ? 'Rejected' : 'Approved';
     }
+    const resolvedTone = entry.result?.rejected
+        ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-300'
+        : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300';
 
     return (
         <details
             open={!decided}
-            className={
-                'group rounded-md px-2 py-1.5 text-xs font-mono ' +
-                (isApproveTier ? 'border border-rose-500/40 bg-rose-500/5 text-rose-200' : 'border border-amber-500/30 bg-amber-500/5 text-amber-200')
-            }
+            className="group/confirm overflow-hidden rounded-xl border border-slate-200 bg-white text-xs dark:border-slate-800 dark:bg-slate-900/70"
         >
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 font-sans font-medium marker:content-none">
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" />
-                <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
-                <span>{isApproveTier ? 'Needs approval' : 'Needs confirmation'}</span>
-                <span className="text-slate-400">{entry.name}</span>
-                {statusLabel && <span className="ml-auto font-sans text-[11px] font-normal text-slate-400">{statusLabel}</span>}
-            </summary>
-            {entry.description && <p className="mt-1 pl-5 font-sans text-[11px] normal-case text-slate-400">{entry.description}</p>}
-            <pre className="mt-1 whitespace-pre-wrap break-all pl-5 text-[11px] text-slate-400">
-                {JSON.stringify(entry.arguments, null, 2)}
-            </pre>
-            {!decided && (
-                <div className="mt-2 flex flex-col gap-2 pl-5">
-                    {isApproveTier && (
-                        <label className="flex items-center gap-1.5 font-sans text-[11px] normal-case text-slate-300">
-                            <input
-                                type="checkbox"
-                                checked={acknowledged}
-                                onChange={(event) => setAcknowledged(event.target.checked)}
-                                className="h-3.5 w-3.5 rounded border-slate-500"
-                            />
-                            I reviewed the arguments above and want to proceed.
-                        </label>
+            <summary className="flex cursor-pointer list-none items-start gap-2.5 p-2.5 marker:content-none">
+                <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border ${isApproveTier ? 'border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300' : 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300'}`}>
+                    <ShieldAlert className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-sans font-semibold text-slate-900 dark:text-slate-100">
+                            {isApproveTier ? 'Approval required' : 'Confirmation required'}
+                        </span>
+                        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            {entry.name}
+                        </span>
+                        {statusLabel && (
+                            <span className={`rounded-full border px-2 py-0.5 font-sans text-[10px] font-medium ${resolved ? resolvedTone : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400'}`}>
+                                {statusLabel}
+                            </span>
+                        )}
+                    </span>
+                    {entry.description && (
+                        <span className="mt-1 block font-sans text-[11px] leading-5 text-slate-600 dark:text-slate-400">
+                            {entry.description}
+                        </span>
                     )}
-                    <div className="flex gap-2">
-                        <button
-                            type="button"
-                            onClick={() => onResolve(entry.id, 'approve')}
-                            disabled={isApproveTier && !acknowledged}
-                            className="rounded-md bg-emerald-600/80 px-2.5 py-1 font-sans text-[11px] font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                            Approve
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => onResolve(entry.id, 'reject')}
-                            className="rounded-md bg-slate-700 px-2.5 py-1 font-sans text-[11px] font-medium text-slate-200 hover:bg-slate-600"
-                        >
-                            Reject
-                        </button>
-                    </div>
-                </div>
-            )}
-            {resolved && (
-                <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all pl-5 text-[11px] text-emerald-400/80">
-                    {JSON.stringify(entry.result, null, 2)}
+                </span>
+                <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform group-open/confirm:rotate-90" />
+            </summary>
+
+            <div className="space-y-2.5 border-t border-slate-200 px-3 pb-4 pt-2.5 dark:border-slate-800">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-slate-200 bg-slate-50 p-2.5 font-mono text-[11px] leading-5 text-slate-700 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300">
+                    {JSON.stringify(entry.arguments, null, 2)}
                 </pre>
-            )}
+
+                {!decided && (
+                    <>
+                        {isApproveTier && (
+                            <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 p-2.5 font-sans text-[11px] leading-5 text-slate-700 dark:border-amber-500/20 dark:bg-amber-500/5 dark:text-slate-300">
+                                <input
+                                    type="checkbox"
+                                    checked={acknowledged}
+                                    onChange={(event) => setAcknowledged(event.target.checked)}
+                                    className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-slate-400 accent-[#037ffc] dark:border-slate-600 dark:accent-emerald-500"
+                                />
+                                I reviewed the arguments above and want to proceed.
+                            </label>
+                        )}
+                        <div className="flex justify-end gap-2 pt-1">
+                            <button
+                                type="button"
+                                onClick={() => onResolve(entry.id, 'reject')}
+                                className="h-9 rounded-lg border border-slate-300 bg-white px-4 font-sans text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                            >
+                                Reject
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onResolve(entry.id, 'approve')}
+                                disabled={isApproveTier && !acknowledged}
+                                className="h-9 rounded-lg bg-[#037ffc] px-4 font-sans text-xs font-semibold text-white transition hover:bg-[#036fe0] disabled:cursor-not-allowed disabled:opacity-40 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+                            >
+                                Approve
+                            </button>
+                        </div>
+                    </>
+                )}
+
+                {resolved && (
+                    <div>
+                        <div className={`mb-1.5 inline-flex rounded-full border px-2 py-0.5 font-sans text-[10px] font-medium ${resolvedTone}`}>
+                            {statusLabel}
+                        </div>
+                        <pre className={`max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg border p-3 font-mono text-[11px] leading-5 ${entry.result?.rejected ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/5 dark:text-rose-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/5 dark:text-emerald-300'}`}>
+                            {JSON.stringify(entry.result, null, 2)}
+                        </pre>
+                    </div>
+                )}
+            </div>
         </details>
     );
 }
@@ -766,6 +794,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
             setMessages((prev) => replacePendingAssistant(prev, null));
         } finally {
             if (generation === turnGenerationRef.current) {
+                setMessages((prev) => finalizePendingTurn(prev));
                 setSending(false);
                 abortRef.current = null;
             }
@@ -974,8 +1003,8 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                         ref={chatScrollRef}
                         className={
                             messages.length === 0
-                                ? 'flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4'
-                                : 'min-h-0 flex-1 space-y-3 overflow-y-auto p-4'
+                                ? 'assistant-chat-scroll my-1.5 mr-1.5 flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-4'
+                                : 'assistant-chat-scroll my-1.5 mr-1.5 min-h-0 flex-1 space-y-3 overflow-y-auto p-4'
                         }
                     >
                         {messages.length === 0 ? (
@@ -1115,11 +1144,6 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                             </div>
                         </div>
                     </div>
-                    {sending && (
-                        <p className="px-3 pb-1 text-center text-[10px] text-slate-500">
-                            Type to interject or press Esc to stop.
-                        </p>
-                    )}
                     <p className="px-3 pb-2 pt-1 text-center text-[10px] text-slate-500">
                         llm-d Lens assistant is AI and can make mistakes.
                     </p>

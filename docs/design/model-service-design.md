@@ -1301,7 +1301,14 @@ curl -s localhost:8899/v1/completions -H 'Content-Type: application/json' \
   Service rather than registering the shared mesh-wide `lens-authz` extension
   provider. It runs after the default-priority IPP filter, forwards
   Authorization and X-Gateway-Base-Model-Name, injects the allowed identity
-  headers, and fails closed when the auth backend is unavailable. The legacy
+  headers, and fails closed when the auth backend is unavailable. If Lens serves
+  authz over HTTPS with a certificate the cluster cannot verify (the local
+  self-signed certificate), setting `LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE=1`
+  makes Istio originate TLS to `lens-authz` while skipping certificate
+  verification. This is an explicit local-development escape hatch: a
+  man-in-the-middle can impersonate the authz service and forge approval and
+  identity headers, so never enable it on an untrusted network or in production.
+  The DestinationRule is removed when the switch is disabled. The legacy
   `istio_authz_overlay` renderer remains for compatibility but is not used by
   Gateway installation. Lens must be cluster-reachable (default bind `0.0.0.0`).
   **gke is unsupported:** its managed Gateway lacks a Gateway API ext_authz

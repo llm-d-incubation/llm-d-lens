@@ -30,7 +30,7 @@ function comparisonName(type) {
 
 function DiagnosticBlock({ title, value }) {
     if (!value) return null;
-    return <div className="min-w-0 max-w-full border-t border-slate-800 pt-3"><h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><Terminal className="h-3.5 w-3.5 text-cyan-300" />{title}</h3><pre className="max-h-64 max-w-full overflow-auto bg-black/30 p-3 text-[11px] leading-5 text-slate-400">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre></div>;
+    return <div className="min-w-0 max-w-full border-t border-slate-800 pt-3"><h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><Terminal className="h-3.5 w-3.5 text-cyan-300" />{title}</h3><pre className="max-h-64 max-w-full overflow-auto bg-theme-bg dark:bg-black/30 p-3 text-[11px] leading-5 text-theme-text dark:text-slate-400">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre></div>;
 }
 
 function modelFromText(value) {

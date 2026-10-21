@@ -6,7 +6,7 @@ import { PaginationControls } from '../../../../shared/ui/PaginationControls';
 import { useClusterNames } from '../../../optimization';
 import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Plus, RefreshCw, Rocket, Search, ServerCog } from 'lucide-react';
+import { CheckCircle2, Plus, Rocket, Search, ServerCog } from 'lucide-react';
 import {
     deleteDeploymentExecution,
     connectDeploymentExecution,
@@ -209,9 +209,6 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                                 <Plus size={14} /> Create
                             </Button>
                         )}
-                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh deployments">
-                            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                        </Button>
                     </>
                 )}
             />
@@ -280,6 +277,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                     emptyContent={(
                     <EmptyState
                         icon={<Rocket size={28} />}
+                        iconClassName="deployments-empty-icon"
                         title={hasFilters ? 'No deployments match your filters' : 'No deployments yet'}
                         message={
                             hasFilters

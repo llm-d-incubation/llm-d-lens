@@ -227,6 +227,10 @@ async def list_models(request: Request) -> dict:
 @router.get(
     "/connection",
     summary="Gateway connection info for clients (per cluster).",
+    description=(
+        "Return per-cluster Gateway base URLs for clients. Use after publishing a Model Service to give the user "
+        "the callable endpoint; deployment readiness alone does not establish this route."
+    ),
     operation_id="get_model_service_connection",
 )
 async def model_service_connection(request: Request) -> dict:
@@ -351,7 +355,10 @@ def _daily_totals(records) -> list[dict]:
 @admin_router.get(
     "/groups",
     summary="List model routing groups in the caller's cluster scope.",
-    description="List model services visible in the caller's cluster scope.",
+    description=(
+        "List public Model Services visible in the caller's cluster scope. Use this before publishing to check "
+        "whether the desired public model name already exists."
+    ),
     operation_id="list_model_service_groups",
 )
 async def admin_list_groups(request: Request) -> dict:
@@ -400,10 +407,11 @@ async def admin_create_group(request: Request, body: GroupCreateRequest, backgro
     status_code=201,
     summary="Publish a ready deployment as a new public model name.",
     description=(
-        "Create a cluster-scoped public model name and its first provider from a ready deployment. "
-        "Requires model-service:member:manage in the deployment's cluster; group metadata and "
-        "selection policy remain admin-managed. Returns 409 for duplicate names, non-ready "
-        "providers or cluster mismatch."
+        "Publish a ready deployment as a new public Model Service: a cluster-scoped public model name "
+        "plus its first Gateway provider. This is the publishing step, not deployment; deployment "
+        "readiness alone does not create a Model Service. Use list_publishable_deployments to choose "
+        "the execution, then verify with get_model_service_group. Requires model-service:member:manage "
+        "in the deployment's cluster. Returns 409 for duplicate names, non-ready providers or cluster mismatch."
     ),
     operation_id="publish_model_service",
 )
@@ -422,7 +430,10 @@ async def admin_publish_group(request: Request, body: GroupPublishRequest, backg
 @admin_router.get(
     "/groups/{group_id}",
     summary="Get a model routing group with cluster-scoped read permission.",
-    description="Return one model service's configuration when the caller can read it and its cluster.",
+    description=(
+        "Return one Model Service's public name, providers and status. Use after publish_model_service or "
+        "create_model_service_member to verify that publication and its provider are present."
+    ),
     operation_id="get_model_service_group",
 )
 async def admin_get_group(group_id: str, request: Request) -> dict:
@@ -664,7 +675,11 @@ async def admin_list_members(request: Request, group_id: str | None = None) -> d
 @admin_router.get(
     "/deployments",
     summary="Ready deployments that can be published as members.",
-    description="List ready deployments the caller can publish as model service members.",
+    description=(
+        "List ready deployments that can be published to a Model Service. This does not publish anything: use "
+        "publish_model_service for a new public model name or create_model_service_member to add a provider to an "
+        "existing one."
+    ),
     operation_id="list_publishable_deployments",
 )
 async def admin_publishable_deployments(request: Request) -> dict:
@@ -676,8 +691,12 @@ async def admin_publishable_deployments(request: Request) -> dict:
     "/members",
     status_code=201,
     summary="Publish a deployment as a group member.",
-    description="Publish a deployment in the group's cluster with default weight 1, preserving existing provider "
-    "weights. Schedules Gateway reconciliation; use traffic distribution to change the allocation.",
+    description=(
+        "Add a ready deployment as a provider to an existing public Model Service, with default weight 1 and "
+        "preserving existing provider weights. Use this when the public model name already exists; use "
+        "publish_model_service to create a new public name. Schedules Gateway reconciliation; use traffic "
+        "distribution to change the allocation."
+    ),
     operation_id="create_model_service_member",
 )
 async def admin_create_member(request: Request, body: MemberCreateRequest, background: BackgroundTasks) -> dict:

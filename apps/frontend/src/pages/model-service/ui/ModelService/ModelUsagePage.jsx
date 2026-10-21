@@ -172,7 +172,7 @@ function PieCard({ title, data }) {
     return (
         <ChartContainer title={title}>
             {total === 0 ? (
-                <EmptyState icon={<Activity size={22} />} title="No data" message="No usage in the selected range." />
+                <EmptyState icon={<Activity size={22} />} iconClassName="model-usage-empty-icon" title="No data" message="No usage in the selected range." />
             ) : (
                 <>
                     <div className="relative">
@@ -206,7 +206,7 @@ function TokensBar({ title, data, byHour }) {
     return (
         <ChartContainer title={title}>
             {data.length === 0 ? (
-                <EmptyState icon={<Activity size={22} />} title="No data" message="No usage in the selected range." />
+                <EmptyState icon={<Activity size={22} />} iconClassName="model-usage-empty-icon" title="No data" message="No usage in the selected range." />
             ) : (
                 <>
                     <ResponsiveContainer width="100%" height={220}>
@@ -236,7 +236,7 @@ function RequestsTrend({ title, data, byHour }) {
     return (
         <ChartContainer title={title}>
             {data.length === 0 ? (
-                <EmptyState icon={<Activity size={22} />} title="No data" message="No usage in the selected range." />
+                <EmptyState icon={<Activity size={22} />} iconClassName="model-usage-empty-icon" title="No data" message="No usage in the selected range." />
             ) : (
                 <ResponsiveContainer width="100%" height={200}>
                     <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -489,7 +489,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
 
                             <ChartContainer title="Tokens over time" actions={<ToggleGroup options={METRICS} value={metric} onChange={setMetric} activeClassName="usage-toggle-active" />}>
                                 {series.length === 0 ? (
-                                    <EmptyState icon={<Activity size={22} />} title="No usage" message="No usage in the selected range." />
+                                    <EmptyState icon={<Activity size={22} />} iconClassName="model-usage-empty-icon" title="No usage" message="No usage in the selected range." />
                                 ) : (
                                     <ResponsiveContainer width="100%" height={260}>
                                         <BarChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }} barCategoryGap="25%">
@@ -505,10 +505,10 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
 
                             {groups.map((group) => (
                                 <div key={group.key} className="flex flex-col gap-4">
-                                    <SectionLabel className="text-[#037ffc]">{group.label}</SectionLabel>
+                                    <SectionLabel className="normal-case text-[#037ffc]">{group.label}</SectionLabel>
                                     <div className="grid gap-4 lg:grid-cols-2">
-                                        <TokensBar title={`${group.label} · tokens`} data={group.series} byHour={byHour} />
-                                        <RequestsTrend title={`${group.label} · API requests`} data={group.series} byHour={byHour} />
+                                        <TokensBar title={<span className="normal-case">{`${group.label} · tokens`}</span>} data={group.series} byHour={byHour} />
+                                        <RequestsTrend title={<span className="normal-case">{`${group.label} · API requests`}</span>} data={group.series} byHour={byHour} />
                                     </div>
                                 </div>
                             ))}
@@ -608,7 +608,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                     actions={<ToggleGroup options={METRICS} value={metric} onChange={setMetric} activeClassName="usage-toggle-active" />}
                 >
                     {overallDaily.length === 0 ? (
-                        <EmptyState icon={<Activity size={22} />} title="No usage yet" message="Usage appears here after your first model call." />
+                        <EmptyState icon={<Activity size={22} />} iconClassName="model-usage-empty-icon" title="No usage yet" message="Usage appears here after your first model call." />
                     ) : (
                         <ResponsiveContainer width="100%" height={260}>
                             <BarChart data={overallDaily} margin={{ top: 4, right: 8, left: 0, bottom: 0 }} barCategoryGap="25%">
@@ -633,10 +633,10 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                     const modelDaily = bucketSeries(filtered.filter((record) => (record.groupName || record.modelRef || 'unknown') === model), byHour);
                     return (
                         <div key={model} className="flex flex-col gap-4">
-                            <SectionLabel className="text-[#037ffc]">{model}</SectionLabel>
+                            <SectionLabel className="normal-case text-[#037ffc]">{model}</SectionLabel>
                             <div className="grid gap-4 lg:grid-cols-2">
-                                <TokensBar title={`${model} · tokens`} data={modelDaily} byHour={byHour} />
-                                <RequestsTrend title={`${model} · API requests`} data={modelDaily} byHour={byHour} />
+                                <TokensBar title={<span className="normal-case">{`${model} · tokens`}</span>} data={modelDaily} byHour={byHour} />
+                                <RequestsTrend title={<span className="normal-case">{`${model} · API requests`}</span>} data={modelDaily} byHour={byHour} />
                             </div>
                         </div>
                     );

@@ -34,6 +34,9 @@ test('saved resource timeline exposes sample drilldown for each collected chart'
   assert.match(html, /Device memory/);
   assert.match(html, /Inspect saved sample/);
   assert.match(html, /Device memory saved sample/);
+  assert.match(html, /bg-theme-card/);
+  assert.match(html, /dark:bg-\[#0b1220\]/);
+  assert.doesNotMatch(html, /!bg-\[#0b1220\]/);
   // Recharts lays out its SVG legend in the browser; SSR verifies the sample controls.
 });
 

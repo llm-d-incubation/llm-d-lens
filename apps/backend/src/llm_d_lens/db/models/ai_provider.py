@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Float, Index, String, Text, func
+from sqlalchemy import Float, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from llm_d_lens.ai_providers.contracts import AIProvider
@@ -27,6 +27,7 @@ class AIProviderRow(Base, DeclarativeDtoMixin):
     column_map = {
         "name": "name",
         "model": "model",
+        "context_window": "context_window",
         "api_key": "api_key",
         "provider_type": "provider_type",
         "timeout_seconds": "timeout_seconds",
@@ -42,6 +43,7 @@ class AIProviderRow(Base, DeclarativeDtoMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
+    context_window: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     api_key: Mapped[str] = mapped_column(Text, nullable=False, default="")
     provider_type: Mapped[str] = mapped_column(String(16), nullable=False, default="openai")
     timeout_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=30)

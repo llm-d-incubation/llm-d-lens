@@ -1812,7 +1812,7 @@
     },
     {
       "name": "list_ready_deployments",
-      "description": "List real Lens deployments (created via Model Market / Deploy) that are Ready and expose an OpenAI-compatible gateway endpoint. Optionally scope to one cluster. Use this to discover which Deployment can be selected as the model service for a Playground conversation.",
+      "description": "List real Lens deployments (created via Model Market / Deploy) that are Ready. This only confirms deployment readiness: it does not mean the deployment was published as a Model Service through the Gateway. For Model Service publication, use list_publishable_deployments and then publish_model_service or create_model_service_member. Use this tool to discover a target for a Playground conversation.",
       "riskTier": "read",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

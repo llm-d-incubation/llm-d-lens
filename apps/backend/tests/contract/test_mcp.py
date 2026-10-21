@@ -35,6 +35,17 @@ def test_generated_catalog_keeps_names_parameters_and_risk_tiers():
     assert render_path(tool["route"], {"id": "part/with space"}) == "/api/example/part%2Fwith%20space"
 
 
+def test_publish_tools_distinguish_deployment_readiness_from_model_service():
+    from llm_d_lens.api.main import app
+    from llm_d_lens.mcp.catalog import catalog
+
+    tools = {tool["name"]: tool for tool in catalog(app)}
+    assert "publishing step, not deployment" in tools["publish_model_service"]["description"].lower()
+    assert "does not publish anything" in tools["list_publishable_deployments"]["description"].lower()
+    assert "existing public model service" in tools["create_model_service_member"]["description"].lower()
+    assert "does not mean the deployment was published" in tools["list_ready_deployments"]["description"].lower()
+
+
 def test_generator_refuses_unclassified_operations():
     with pytest.raises(ValueError, match="Unexpected MCP"):
         generate_catalog({"paths": {"/new-route": {"post": {"operationId": "new_route_post"}}}})

@@ -130,6 +130,22 @@ const LINK_COLOR = {
 // stroke is the reliable way to separate neighbouring ribbons).
 const FLOW_GAP_COLOR = '#0b1120';
 
+function flowThemeColors() {
+    if (typeof window === 'undefined') {
+        return { canvas: FLOW_GAP_COLOR, node: '#16161f', border: '#475569', text: '#f8fafc', muted: '#94a3b8', track: BAR_TRACK };
+    }
+    const styles = window.getComputedStyle(window.document.documentElement);
+    const color = (token, fallback) => styles.getPropertyValue(token).trim() || fallback;
+    return {
+        canvas: color('--bg-card', FLOW_GAP_COLOR),
+        node: color('--bg-secondary', '#16161f'),
+        border: color('--border-color', '#475569'),
+        text: color('--text-primary', '#f8fafc'),
+        muted: color('--text-muted', '#94a3b8'),
+        track: color('--border-color', BAR_TRACK),
+    };
+}
+
 function FlowToolButton({ children, active, label, onClick }) {
     return (
         <button
@@ -270,12 +286,12 @@ function metricRowsFor(node, downstreamRoles) {
 // Rich styles are attached per node (not per series), so each bar segment can
 // carry its own exact pixel width instead of being quantised into shared
 // buckets.
-function nodeLabelRich(rows) {
+function nodeLabelRich(rows, theme) {
     const rich = {
-        role: { color: '#e2e8f0', fontSize: 11, fontWeight: 700, lineHeight: 16 },
-        name: { color: '#f8fafc', fontSize: 9, fontFamily: MONO_FONT, lineHeight: 14 },
-        lbl: { color: '#94a3b8', fontSize: 9, fontFamily: MONO_FONT, lineHeight: 14, width: LABEL_COL_W, align: 'left' },
-        val: { color: '#f8fafc', fontSize: 9, fontFamily: MONO_FONT, lineHeight: 14, width: VALUE_COL_W, align: 'right', padding: [0, 0, 0, VALUE_PAD_L] },
+        role: { color: theme.text, fontSize: 11, fontWeight: 700, lineHeight: 16 },
+        name: { color: theme.text, fontSize: 9, fontFamily: MONO_FONT, lineHeight: 14 },
+        lbl: { color: theme.muted, fontSize: 9, fontFamily: MONO_FONT, lineHeight: 14, width: LABEL_COL_W, align: 'left' },
+        val: { color: theme.text, fontSize: 9, fontFamily: MONO_FONT, lineHeight: 14, width: VALUE_COL_W, align: 'right', padding: [0, 0, 0, VALUE_PAD_L] },
         gap: { width: BAR_W, height: BAR_H, lineHeight: 14 },
     };
     (rows || []).forEach((row, i) => {
@@ -292,7 +308,7 @@ function nodeLabelRich(rows) {
         if (row.restW > 0) {
             rich[`r${i}`] = {
                 width: row.restW, height: BAR_H, lineHeight: 14,
-                backgroundColor: BAR_TRACK,
+                backgroundColor: theme.track,
                 borderRadius: row.fillW > 0 ? [0, 3, 3, 0] : 3,
             };
         }
@@ -322,7 +338,7 @@ function nodeLabelFormatter(params) {
 // an "ok" ribbon for requests that advance and a "fail" ribbon for the ones
 // that fail at that hop — so failures stay visible at the stage where they
 // occurred instead of pooling into a single Failed sink.
-function buildSankeyOption(present, metric) {
+function buildSankeyOption(present, metric, theme) {
     const showErrors = metric === 'request';
     // Which serving roles are actually in this pipeline, so the EPP card only
     // claims a per-role queue for stages that exist.
@@ -623,10 +639,10 @@ function buildSankeyOption(present, metric) {
             isUser: node.isUser,
             metrics: node.metrics,
             metricRows,
-            itemStyle: { color: '#16161f', borderColor: accent, borderWidth: 1.5, borderRadius: 10 },
+            itemStyle: { color: theme.node, borderColor: accent, borderWidth: 1.5, borderRadius: 10 },
             label: {
                 position: 'inside',
-                rich: nodeLabelRich(metricRows),
+                rich: nodeLabelRich(metricRows, theme),
             },
         };
     }));
@@ -642,7 +658,7 @@ function buildSankeyOption(present, metric) {
         lineStyle: {
             color: LINK_COLOR[l.status] || LINK_COLOR.success,
             opacity: 0.8,
-            borderColor: FLOW_GAP_COLOR,
+            borderColor: theme.canvas,
             borderWidth: 2,
         },
     }));
@@ -722,11 +738,11 @@ function buildSankeyOption(present, metric) {
             animationDurationUpdate: 300,
             tooltip: {
                 trigger: 'item',
-                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                borderColor: '#334155',
+                backgroundColor: 'var(--bg-secondary)',
+                borderColor: 'var(--border-color)',
                 borderWidth: 1,
                 padding: [8, 12],
-                textStyle: { color: '#e2e8f0', fontSize: 12 },
+                textStyle: { color: 'var(--text-primary)', fontSize: 12 },
                 formatter: tooltip,
             },
             series: [{
@@ -761,9 +777,9 @@ function buildSankeyOption(present, metric) {
                     formatter: edgeLabel,
                 },
                 itemStyle: {
-                    color: '#16161f',
+                    color: theme.node,
                     borderWidth: 1.5,
-                    borderColor: '#475569',
+                    borderColor: theme.border,
                     borderRadius: 10,
                 },
                 lineStyle: {
@@ -782,6 +798,7 @@ export function FlowMap({ data, metric, onRefresh, historical = false }) {
     const [containerWidth, setContainerWidth] = useState(FLOW_MAP_WIDTH);
     const [zoom, setZoom] = useState(1);
     const [selectedName, setSelectedName] = useState(null);
+    const [darkMode, setDarkMode] = useState(() => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'));
 
     const zoomIn = () => setZoom((current) => Math.min(current + 0.25, 3));
     const zoomOut = () => setZoom((current) => Math.max(current - 0.25, 0.5));
@@ -791,10 +808,20 @@ export function FlowMap({ data, metric, onRefresh, historical = false }) {
         if (onRefresh) onRefresh();
     };
 
+    useEffect(() => {
+        const root = document.documentElement;
+        const updateTheme = () => setDarkMode(root.classList.contains('dark'));
+        updateTheme();
+        const observer = new MutationObserver(updateTheme);
+        observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+        return () => observer.disconnect();
+    }, []);
+
+    const flowTheme = useMemo(() => flowThemeColors(), [darkMode]);
     const { option, height: chartHeight } = useMemo(() => {
         const present = (data.components || []).filter((component) => component.present);
-        return buildSankeyOption(present, metric);
-    }, [data, metric]);
+        return buildSankeyOption(present, metric, flowTheme);
+    }, [data, metric, flowTheme]);
 
     useEffect(() => {
         if (!containerRef.current) return undefined;
@@ -848,10 +875,10 @@ export function FlowMap({ data, metric, onRefresh, historical = false }) {
                 <FlowToolButton label="Reset view" active={zoom === 1} onClick={resetView}><RotateCcw size={15} /></FlowToolButton>
                 <FlowToolButton label="Fit view" onClick={fitView}><Maximize2 size={15} /></FlowToolButton>
             </div>
-            <div className="relative min-w-0 overflow-hidden rounded-xl border border-slate-800/60 bg-slate-950/50">
+            <div className="relative min-w-0 overflow-hidden rounded-xl border border-theme-border bg-theme-card">
                 <div ref={scrollRef} className="overflow-auto" style={{ maxHeight: FLOW_MAP_HEIGHT + 24 }}>
                     <div className="relative">
-                        <div ref={containerRef} style={{ width: width * zoom, height: chartHeight * zoom, backgroundColor: FLOW_GAP_COLOR }} />
+                        <div ref={containerRef} style={{ width: width * zoom, height: chartHeight * zoom, backgroundColor: flowTheme.canvas }} />
                     </div>
                 </div>
             </div>

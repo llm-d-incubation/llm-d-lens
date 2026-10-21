@@ -264,6 +264,27 @@ def test_ext_auth_service_port_is_stable_while_endpoints_track_lens_port():
     assert endpoints["subsets"][0]["ports"][0]["port"] == 8084
 
 
+def test_istio_authz_tls_insecure_renders_destination_rule():
+    docs = _docs(
+        render_inference_gateway(
+            namespace="lens-gateway",
+            gateway_name="lens-inference-gateway",
+            provider="istio",
+            authz_host="10.0.0.9",
+            authz_tls_insecure=True,
+        )
+    )
+    rule = next(doc for doc in docs if doc["kind"] == "DestinationRule")
+    assert rule["metadata"]["name"] == "lens-authz-tls"
+    assert rule["spec"]["host"] == "lens-authz.lens-gateway.svc.cluster.local"
+    assert rule["spec"]["trafficPolicy"]["tls"] == {"mode": "SIMPLE", "insecureSkipVerify": True}
+
+
+def test_istio_authz_tls_verification_is_on_by_default():
+    docs = _ext_auth_docs("istio")
+    assert not any(doc["kind"] == "DestinationRule" for doc in docs)
+
+
 def test_ext_auth_uses_each_provider_policy_kind():
     envoy = _ext_auth_docs("envoy-ai-gateway")
     policy = next(doc for doc in envoy if doc["kind"] == "SecurityPolicy")

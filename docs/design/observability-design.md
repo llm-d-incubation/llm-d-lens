@@ -448,6 +448,18 @@ with code `SERVICE_RESTARTED`; cluster status is then rediscovered so the UI can
 
 ### 7. Frontend Design
 
+Benchmark comparison and resource charts use the shared theme-aware tooltip.
+Resource chart panels and time-range controls follow the active theme, including
+recorded monitoring. ECharts flow tooltips use the same surface, border, and text
+tokens. Benchmark and deployment log surfaces stay light in light mode; translucent
+black log backgrounds are restricted to dark mode.
+Page, panel, and log scrollbars share theme-aware track and thumb colors, while
+containers that intentionally hide their scrollbars retain that behavior.
+The optimization comparison tree uses light node surfaces and readable labels
+in light mode, retaining scenario-colored selection indicators and dark-mode styling.
+New Benchmark Task configuration cards and the saved-configuration list use light
+surfaces in light mode; dark gradients and inset black surfaces are dark-mode only.
+
 #### 7.1 Navigation and Files
 
 Add under **Utility suite** in `LeftNavigation.jsx`:

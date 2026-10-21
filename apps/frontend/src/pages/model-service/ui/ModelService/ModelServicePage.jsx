@@ -141,6 +141,7 @@ export function ModelServicePage({ onToggleMobileNav }) {
                     <div className="mt-4">
                         <AsyncState loading={loading} error={null} empty={models.length === 0}
                             emptyContent={<EmptyState icon={<Waypoints size={22} />} title="No models available"
+                                iconClassName="my-services-empty-icon"
                                 message="You do not have access to any published model service yet. Ask an administrator to grant access." />}>
                             <div className="flex flex-col gap-5">
                                 {Object.entries(modelsByCluster).map(([clusterId, clusterModels]) => (

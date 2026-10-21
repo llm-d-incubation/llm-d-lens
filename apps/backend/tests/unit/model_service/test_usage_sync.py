@@ -93,6 +93,33 @@ def test_diff_counters_handles_new_keys_and_resets():
     assert delta["requests"] == 1
 
 
+def test_group_lookup_prefers_public_route_name_over_shared_model_ref():
+    member = SimpleNamespace(status="active", cluster_id="cluster-a", epp_ref="qwen-epp", target_namespace="ns-1")
+    upper = SimpleNamespace(
+        id="msg-upper",
+        cluster_id="cluster-a",
+        name="qwen/qwen3-0.6b",
+        display_name="qwen/qwen3-0.6b",
+        served_name="Qwen/Qwen3-0.6B",
+        base_model="Qwen/Qwen3-0.6B",
+        model_ref="Qwen/Qwen3-0.6B",
+    )
+    lower = SimpleNamespace(
+        id="msg-lower",
+        cluster_id="cluster-a",
+        name="qwen3-0.6b",
+        display_name="qwen3-0.6b",
+        served_name="Qwen/Qwen3-0.6B",
+        base_model="qwen3-0.6b",
+        model_ref="Qwen/Qwen3-0.6B",
+    )
+    service = _FakeService(members=[member], groups=[lower, upper], tokens={})
+    sync = GatewayUsageSync(service=service, snapshots=_FakeSnapshots())
+
+    assert sync._group_for_model("Qwen/Qwen3-0.6B", "cluster-a").id == "msg-upper"
+    assert sync._group_for_model("qwen3-0.6b", "cluster-a").id == "msg-lower"
+
+
 @pytest.mark.asyncio
 async def test_sync_baselines_then_writes_attributed_delta():
     service = _service()

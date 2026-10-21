@@ -58,6 +58,16 @@ AUTHZ_SERVICE_NAME = "lens-authz"
 #: Lens' live serving port, which can move without reinstalling the Gateway.
 AUTHZ_SERVICE_PORT = 8081
 AUTHZ_PATH = "/api/v1/internal/model-gateway/authorize"
+#: Opt-in TLS origination for the Istio authz hop when Lens serves authz over
+#: HTTPS with a certificate Istio cannot verify (for example a local self-signed
+#: certificate). This deliberately disables certificate verification.
+AUTHZ_TLS_INSECURE_ENV = "LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE"
+AUTHZ_TLS_DR_NAME = f"{AUTHZ_SERVICE_NAME}-tls"
+
+
+def authz_tls_insecure_enabled() -> bool:
+    """Whether to originate unverified TLS to the Istio authz backend."""
+    return os.environ.get(AUTHZ_TLS_INSECURE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def authz_path(cluster_id: str | None) -> str:
@@ -286,6 +296,7 @@ def render_inference_gateway(
     authz_host: str | None = None,
     authz_port: int = AUTHZ_SERVICE_PORT,
     authz_cluster_id: str | None = None,
+    authz_tls_insecure: bool = False,
 ) -> str:
     """Render the cluster-level shared Gateway (GatewayClass + Gateway).
 
@@ -380,6 +391,7 @@ def render_inference_gateway(
                 authz_host=authz_host,
                 authz_port=authz_port,
                 authz_cluster_id=authz_cluster_id,
+                authz_tls_insecure=authz_tls_insecure,
             )
         )
     return yaml.safe_dump_all(documents, sort_keys=False)
@@ -393,6 +405,7 @@ def render_gateway_ext_auth(
     authz_host: str,
     authz_port: int = AUTHZ_SERVICE_PORT,
     authz_cluster_id: str | None = None,
+    authz_tls_insecure: bool = False,
 ) -> list[dict]:
     """Render ext_authz resources that inject Lens' identity headers upstream.
 
@@ -545,6 +558,20 @@ def render_gateway_ext_auth(
                 },
             }
         )
+        if authz_tls_insecure:
+            documents.append(
+                {
+                    "apiVersion": "networking.istio.io/v1",
+                    "kind": "DestinationRule",
+                    "metadata": {"name": AUTHZ_TLS_DR_NAME, "namespace": namespace, "labels": labels},
+                    "spec": {
+                        "host": service,
+                        "trafficPolicy": {
+                            "tls": {"mode": "SIMPLE", "insecureSkipVerify": True},
+                        },
+                    },
+                }
+            )
     return documents
 
 

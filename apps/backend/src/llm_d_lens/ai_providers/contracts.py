@@ -41,6 +41,7 @@ class AIProvider(StrictModel):
     name: str = Field(min_length=1, max_length=200)
     base_url: HttpUrl = Field(alias="baseUrl")
     model: str = Field(min_length=1, max_length=200)
+    context_window: int | None = Field(default=None, ge=1, le=1_000_000_000, alias="contextWindow")
     api_key: str = Field(default="", alias="apiKey")
     provider_type: AIProviderType = Field(default="openai", alias="providerType")
     timeout_seconds: float = Field(default=30, gt=0, le=120, alias="timeoutSeconds")
@@ -59,6 +60,7 @@ class AIProviderCreateRequest(StrictModel):
     name: str = Field(min_length=1, max_length=200)
     base_url: HttpUrl = Field(alias="baseUrl")
     model: str = Field(min_length=1, max_length=200)
+    context_window: int | None = Field(default=None, ge=1, le=1_000_000_000, alias="contextWindow")
     api_key: str = Field(default="", alias="apiKey")
     provider_type: AIProviderType = Field(default="openai", alias="providerType")
     timeout_seconds: float = Field(default=30, gt=0, le=120, alias="timeoutSeconds")
@@ -74,6 +76,7 @@ class AIProviderUpdateRequest(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     base_url: HttpUrl | None = Field(default=None, alias="baseUrl")
     model: str | None = Field(default=None, min_length=1, max_length=200)
+    context_window: int | None = Field(default=None, ge=1, le=1_000_000_000, alias="contextWindow")
     api_key: str | None = Field(default=None, alias="apiKey")
     provider_type: AIProviderType | None = Field(default=None, alias="providerType")
     timeout_seconds: float | None = Field(default=None, gt=0, le=120, alias="timeoutSeconds")
@@ -84,6 +87,7 @@ class AIProviderTestRequest(StrictModel):
 
     base_url: HttpUrl = Field(alias="baseUrl")
     model: str = Field(min_length=1, max_length=200)
+    context_window: int | None = Field(default=None, ge=1, le=1_000_000_000, alias="contextWindow")
     api_key: str = Field(default="", alias="apiKey")
     provider_type: AIProviderType = Field(default="openai", alias="providerType")
     timeout_seconds: float = Field(default=30, gt=0, le=120, alias="timeoutSeconds")
@@ -94,4 +98,5 @@ class AIProviderTestResult(StrictModel):
     message: str
     model_found: bool | None = Field(default=None, alias="modelFound")
     available_models: list[str] = Field(default_factory=list, alias="availableModels")
+    context_window: int | None = Field(default=None, alias="contextWindow")
     latency_ms: float | None = Field(default=None, alias="latencyMs")

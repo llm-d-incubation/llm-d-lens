@@ -19,3 +19,14 @@ test('scenario tree exposes selectable branches without checkbox lists',()=>{
  assert.doesNotMatch(html,/type="checkbox"/);
 
 });
+test('only unselected scenario surfaces and hubs receive the light-theme override',()=>{
+ const render=selected=>renderToStaticMarkup(createElement(Tree,{guide:'optimized-baseline',selected,onChange(){}}));
+ const unselected=render([]);
+ const selected=render(['full']);
+ const surfaceCount=html=>(html.match(/class="scenario-node-surface"/g)||[]).length;
+ assert.match(selected,/class="optimization-comparison-tree /);
+ assert.equal(surfaceCount(unselected),surfaceCount(selected)+1);
+ assert.match(selected,/<circle class="scenario-node-surface" cx="80"/);
+ assert.match(selected,/<circle class="scenario-node-surface" cx="225"/);
+ assert.match(selected,/fill-opacity="0.09"/);
+});
