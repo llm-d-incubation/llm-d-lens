@@ -13,14 +13,22 @@ import yaml
 
 from llm_d_lens.core.hashing import stable_hash
 from llm_d_lens.deploy.providers.gpu_selection import gpu_device_selectors
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.hardware_profile import (
     active_profile,
+    apply_runtime_class,
     claim_request_name,
     device_class,
     set_accelerator_request,
 )
 from llm_d_lens.deploy.providers.model_cache_environment import model_cache_environment
+from llm_d_lens.deploy.providers.shared_memory import DEFAULT_SHM_SIZE
 from llm_d_lens.deploy.providers.storage_mount import resolve_mount
 from llm_d_lens.infrastructure.storage.paths import prism_temp_root
 
@@ -276,7 +284,7 @@ class BaselineVllmAdapter:
             or ("shared-path" if runtime.get("mountPath") else "huggingface"),
             "environment": runtime.get("environment") or {},
             "custom_parameters": overrides.get("customParameters") or [],
-            "max_model_len": decode.get("maxModelLen"),
+            "serving_arguments": serving_arguments(model, decode),
         }
 
     @staticmethod
@@ -323,8 +331,8 @@ class BaselineVllmAdapter:
         mount_active = bool(resolved_mount) or bool(parameters["mount_path"]) or bool(parameters["pvc_name"])
         served_model = "/model-cache" if active_model_source == "shared-path" and mount_active else parameters["model"]
         args = [served_model, "--port=8000", f"--tensor-parallel-size={parameters['tensor_parallel_size']}"]
-        if isinstance(parameters.get("max_model_len"), int) and parameters["max_model_len"] > 0:
-            args.append(f"--max-model-len={parameters['max_model_len']}")
+        for name, value in parameters["serving_arguments"].items():
+            args = set_vllm_argument(args, name, value)
         environment = [
             {"name": name, "value": str(value)} for name, value in sorted(parameters["environment"].items()) if value
         ]
@@ -345,15 +353,7 @@ class BaselineVllmAdapter:
             if item.get("target") not in {"decode", "both"}:
                 continue
             if item.get("kind") == "argument":
-                name = item["name"]
-                value = str(item["value"]).lower()
-                if name in {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"} and value in {
-                    "true",
-                    "false",
-                }:
-                    args.append(f"--{name}" if value == "true" else f"--no-{name}")
-                else:
-                    args.append(f"--{name}={item['value']}")
+                args = set_vllm_argument(args, item["name"], item["value"])
             elif item.get("kind") == "environment":
                 environment.append({"name": item["name"], "value": item["value"]})
         managed_environment = model_cache_environment(active_model_source, cache_mounted=mount_active)
@@ -418,6 +418,13 @@ class BaselineVllmAdapter:
             ]
             if parameters["model_source"] == "shared-path":
                 pod_spec["containers"][0]["args"][0] = "/model-cache"
+        # vLLM's multiprocessing queues can exceed the runtime's default 64 MiB /dev/shm.
+        pod_spec.setdefault("volumes", []).append(
+            {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": DEFAULT_SHM_SIZE}}
+        )
+        pod_spec["containers"][0].setdefault("volumeMounts", []).append(
+            {"name": "dshm", "mountPath": "/dev/shm"}  # noqa: S108 - mount target in an isolated Pod, not a temp file.
+        )
         labels = {"app": "vllm", "llm-d.ai/role": "decode", "prism.ai/evaluation-kind": "baseline"}
         gpu_request: dict[str, Any] = {
             "name": claim_request_name(accelerator=accelerator, access_mode=access_mode),
@@ -465,4 +472,5 @@ class BaselineVllmAdapter:
             set_accelerator_request(
                 container, None, parameters["tensor_parallel_size"], accelerator=accelerator, access_mode=access_mode
             )
+        apply_runtime_class(pod_spec, accelerator=accelerator, access_mode=access_mode)
         return documents

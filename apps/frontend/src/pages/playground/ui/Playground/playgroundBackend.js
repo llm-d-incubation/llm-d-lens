@@ -1,4 +1,5 @@
 import { loadClusters } from '../../../optimization';
+import { streamSseRequest } from '../../../../shared/api/sse.js';
 
 // Copyright 2026 Google LLC
 //
@@ -15,7 +16,7 @@ import { loadClusters } from '../../../optimization';
 // limitations under the License.
 
 // Reads Server-Sent Events emitted by POST /api/playground/chat
-// (server/playground/chat.ts). fetch() is used instead of EventSource
+// (llm_d_lens/playground/chat.py). fetch() is used instead of EventSource
 // because EventSource cannot send a POST body.
 // `pendingResume` (instead of `messages`) resumes a turn paused on a
 // `confirm_required` event, once the user has approved or rejected the
@@ -24,44 +25,12 @@ import { loadClusters } from '../../../optimization';
 // carried. `readOnly` restricts the turn to read-tier Lens MCP tools only
 // (used for voice-transcribed messages, see PlaygroundPage.jsx).
 export async function streamPlaygroundChat({ deployment, messages, pendingResume, readOnly }, onEvent, signal) {
-    const response = await fetch('/api/playground/chat', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(pendingResume ? { deployment, pendingResume } : { deployment, messages, readOnly }),
+    return streamSseRequest(
+        '/api/playground/chat',
+        pendingResume ? { deployment, pendingResume } : { deployment, messages, readOnly },
+        onEvent,
         signal,
-    });
-    if (!response.ok || !response.body) {
-        const detail = await response.text().catch(() => '');
-        throw new Error(`Playground chat request failed (${response.status}): ${detail.slice(0, 300)}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    // Minimal SSE parser: events are separated by a blank line and carry an
-    // "event:" line followed by a "data:" line (see sseWrite in chat.ts).
-    for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split('\n\n');
-        buffer = chunks.pop() ?? '';
-        for (const chunk of chunks) {
-            const lines = chunk.split('\n');
-            const eventLine = lines.find((line) => line.startsWith('event:'));
-            const dataLine = lines.find((line) => line.startsWith('data:'));
-            if (!eventLine || !dataLine) continue;
-            const type = eventLine.slice('event:'.length).trim();
-            let data = {};
-            try {
-                data = JSON.parse(dataLine.slice('data:'.length).trim());
-            } catch {
-                data = {};
-            }
-            onEvent(type, data);
-        }
-    }
+    );
 }
 
 // Clusters and cluster sessions are Prism-wide concepts (see

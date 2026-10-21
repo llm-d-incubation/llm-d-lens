@@ -1,5 +1,6 @@
 .githubStar {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 0.3rem;
 }
@@ -20,4 +21,5 @@
   gap: 0.2rem;
   font-size: 0.8rem;
   font-weight: 600;
+  white-space: nowrap;
 }

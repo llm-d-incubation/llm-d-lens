@@ -12,11 +12,11 @@ const CENTRAL_NAMESPACE = 'llm-d-monitoring';
 const GRAFANA_PERFORMANCE_DASHBOARD = '/d/llm-d-performance/llm-d-performance-dashboard';
 
 const TONE_CLASSES = {
-    enabled: 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100',
-    disabled: 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100',
-    absent: 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100',
-    unreachable: 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100',
-    neutral: 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100',
+    enabled: 'text-slate-400 hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-100',
+    disabled: 'text-slate-400 hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-100',
+    absent: 'text-slate-400 hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-100',
+    unreachable: 'text-slate-400 hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-100',
+    neutral: 'text-slate-400 hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-100',
 };
 
 function MenuItem({ onClick, disabled, icon, label, danger = false }) {
@@ -145,7 +145,7 @@ export function DeploymentMonitoringButton({ deployment, onNavigate }) {
                 <>
                     <div className="fixed inset-0 z-[290]" onClick={() => setOpen(false)} />
                     <div
-                        className="fixed z-[300] w-48 overflow-hidden rounded-lg border border-slate-700/70 bg-slate-900 shadow-xl"
+                        className="fixed z-[300] w-48 overflow-hidden rounded-lg border border-slate-700/70 bg-slate-900 dark:shadow-xl"
                         style={{ top: (menuPosition?.top || 0) + 6, right: menuPosition?.right || 0 }}
                         role="menu"
                     >

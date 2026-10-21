@@ -1,6 +1,6 @@
 <!-- markdownlint-disable MD001 MD041 -->
 <p align="center">
-  <img alt="Lens" src="public/lens_logo.png" width="150">
+  <img alt="Lens" src="apps/frontend/public/lens_logo.png" width="150">
 </p>
 
 <h3 align="center">
@@ -60,7 +60,7 @@ Or with **wget**:
 VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
-Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, app port `3000`, backend port `8081`). When it finishes, open the printed URL (`https://localhost:3000` by default) and sign in with the auto-generated admin credentials — the installer prints the path to the mode-600 file that holds them (`cat` that file to read the username and password; it's removed once you change the password).
+Press Enter to accept the defaults (install directory `$HOME/llm-d-lens`, unified app/API port `3000`). When it finishes, open the printed URL (`https://localhost:3000` by default) and sign in with the auto-generated admin credentials — the installer prints the path to the mode-600 file that holds them (`cat` that file to read the username and password; it's removed once you change the password).
 
 The installer reads prompts from your terminal and, after validating the source
 archive, saves a uniquely named installer copy in the current directory.
@@ -76,7 +76,7 @@ scripts/lens-local.sh start
 scripts/lens-local.sh status
 ```
 
-The source frontend runs on port `5173`, the Node API on `3000`, and the Python backend on `8081`. `scripts/lens-local.sh` prepares dependencies, manages the whole stack and regenerates the MCP tool catalog. To constrain deployments to one node, use `scripts/lens-local.sh restart --target-node node-a --kubeconfig "$HOME/.kube/config"`, or set `TARGET_NODE` and `KUBECONFIG`; no target-specific configuration file is needed. Use `npm run dev:web` when managing the Python backend separately. See the [CLI Reference](https://llm-d-incubation.github.io/llm-d-lens/cli-reference) for every subcommand.
+The source frontend runs on port `5173` and the unified Python API on `3000`. `scripts/lens-local.sh` prepares dependencies, manages both processes and validates the Python MCP catalog. To constrain deployments to one node, use `scripts/lens-local.sh restart --target-node node-a --kubeconfig "$HOME/.kube/config"`, or set `TARGET_NODE` and `KUBECONFIG`; no target-specific configuration file is needed. `npm run dev:web` also starts both development processes. For production, `npm run build` followed by `npm start` serves the built frontend, API and MCP from Python on one port. See the [CLI Reference](https://llm-d-incubation.github.io/llm-d-lens/cli-reference) for every subcommand.
 
 Build and test:
 

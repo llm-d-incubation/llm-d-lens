@@ -1,6 +1,6 @@
 ---
 title: Lens Assistant
-description: Lens Assistant 背后的 Node MCP 端点与工具目录。
+description: Lens Assistant 背后的 Python MCP 端点与工具目录。
 ---
 
 import Tabs from '@theme/Tabs';
@@ -8,11 +8,17 @@ import TabItem from '@theme/TabItem';
 
 ## 后端 API
 
-Lens Assistant 由 `server/mcp/` 下的 Node MCP 服务器支撑，而不是由一个专门的 FastAPI 路由器支撑。`server/server.js` 通过 `app.use(mcpRouter)` 直接挂载 `mcpRouter`，而 `server/mcp/router.ts` 在 `/api/mcp` 上暴露无状态的 Streamable HTTP 端点。
+Lens Assistant 使用统一 Python 服务中的 `llm_d_lens.mcp.router`。其 FastAPI 路由通过官方 MCP Python SDK 在 `/api/mcp` 提供无状态 Streamable HTTP 端点。
+
+候选工具声明并转发 `workload.concurrency` 或 `workload.request_rate`
+（正数且互斥的负载目标）。兼容 API 的输入／输出 token 长度缺省为
+4000／1000，与 Agentic 规划一致。预期的校验提示和无可行候选时的重试行为
+保持不变。其他 AIC 服务错误返回状态码 `400` 及通用响应
+`{ "error": "AIC candidate search failed" }`，内部异常详情仅记录在服务端日志中。
 
 ### 发送一次无状态的 MCP 请求
 
-通过创建一个全新的 `McpServer`、建立连接并处理请求体，来处理一次无状态的 Streamable HTTP MCP 请求。
+使用新的 SDK 服务器和传输管理器处理一次无状态 Streamable HTTP MCP 请求。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -74,7 +80,7 @@ Lens Assistant 由 `server/mcp/` 下的 Node MCP 服务器支撑，而不是由�
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-该端点是一个 Node.js MCP 处理程序，而不是一个 Python 函数——对于 `/api/mcp` 传输本身没有直接对应的 Python 调用。请改为直接调用其背后的 Python 领域逻辑；例如，一个与部署相关的 MCP 工具可以复用[部署](/api-reference/modules/deployments)页面上展示的同一个部署辅助函数：
+使用官方 MCP Python 客户端进行传输调用。查询元数据时，`llm_d_lens.mcp.catalog.catalog(app)` 返回与端点相同的工具定义。进程内领域集成可复用[部署](/api-reference/modules/deployments)页面上的辅助函数：
 
 ```python
 from llm_d_lens.deploy.standard_kubernetes_service import (
@@ -127,7 +133,7 @@ print(configuration.checksum)
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-该端点是一个 Node.js MCP 传输防护逻辑，而不是一个 Python 函数——没有直接对应的 Python 调用。对于你实际想调用的工具，请使用其背后的 Python 模块，具体可参见下方的[MCP 工具调用的内容](#what-the-mcp-tools-call)。
+Python 路由在无状态模式下拒绝 GET 流。请使用 MCP 客户端的 POST 传输，或直接调用底层 Python 领域逻辑，参见[MCP 工具调用的内容](#what-the-mcp-tools-call)。
 
   </TabItem>
 </Tabs>
@@ -163,12 +169,12 @@ print(configuration.checksum)
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-该端点是一个 Node.js MCP 传输防护逻辑，而不是一个 Python 函数——没有直接对应的 Python 调用。如果需要 Python 自动化，请跳过 MCP，直接调用其背后的 Lens 领域模块。
+Python 路由不保留传输会话，因此拒绝终止会话的请求。使用 Python MCP 客户端时请设置 `terminate_on_close=False`。
 
   </TabItem>
 </Tabs>
 
-工具目录由两部分组成：`server/mcp/tools.ts` 包含 138 个自动生成的工具，`server/mcp/specialTools.ts` 包含 25 个手写工具。自动生成的那一半由 `node scripts/generate-mcp-tools.mjs` 根据 `llm_d_lens` FastAPI 的 OpenAPI schema 生成，而手写的那一半涵盖了组合型或 Node 支撑的路由。这些处理程序都是对 Lens 自身 REST API 的瘦封装：`server/mcp/internal.ts` 通过 `internalRequest(...)` 将请求转发到环回地址的 `/api/...` 路径上。
+`llm_d_lens.mcp.catalog` 根据 FastAPI OpenAPI schema 生成工具，并与 `llm_d_lens/mcp/definitions.json` 中的 25 个特殊工具定义合并。`node scripts/generate-mcp-tools.mjs --check` 校验该目录，不再生成 Node 文件。`llm_d_lens.mcp.tools` 通过进程内 ASGI 客户端调用规范 REST 路由，保留认证、CSRF 和资源范围检查。
 
 ## MCP 工具调用的内容 {/* #what-the-mcp-tools-call */}
 
@@ -189,7 +195,9 @@ print(configuration.checksum)
 集群授权、匿名身份及禁用认证模式的 `system` 身份均不符合要求。
 浏览器 Cookie 调用还必须满足标准 CSRF 策略。MCP 调用者还需要
 `mcp:tool:invoke` 或 `playground:chat:use`。
-Node 使用内部 HMAC 签名转发真实调用者，不使用服务身份或参数中指定的身份。
+Python MCP 适配器通过进程内 ASGI 请求和内部 HMAC 签名转发真实调用者，
+不使用服务身份或参数中指定的身份。适配器严格校验输入和响应结构，不转换 Decimal
+字符串；失败或格式损坏的响应转换为 MCP 工具错误，不返回上游证据。无需独立 Node 服务。
 
 ```json
 {

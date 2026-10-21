@@ -20,10 +20,17 @@ from llm_d_lens.model_cache.service import (
     ModelCacheInvalidStateError,
     ModelCacheNotFoundError,
     ModelCacheService,
+    ModelCacheVolumePurposeError,
     ModelCatalogNotSupportedError,
 )
 from llm_d_lens.model_cache.store import ModelCacheStore
-from llm_d_lens.storage.contracts import LocalDiskSpec, StorageVolume, StorageVolumeKind, StorageVolumeStatus
+from llm_d_lens.storage.contracts import (
+    LocalDiskSpec,
+    StorageVolume,
+    StorageVolumeKind,
+    StorageVolumePurpose,
+    StorageVolumeStatus,
+)
 
 
 def _volume(**overrides) -> StorageVolume:
@@ -36,6 +43,7 @@ def _volume(**overrides) -> StorageVolume:
         "readOnly": False,
         "localDisk": LocalDiskSpec(hostPath="/data/models"),
         "pvcName": "prism-storage-abc",
+        "purposes": [StorageVolumePurpose.MODEL_CACHE],
     }
     defaults.update(overrides)
     return StorageVolume(**defaults)
@@ -71,6 +79,18 @@ async def test_request_download_validates_volume_readiness(monkeypatch, service)
     monkeypatch.setattr(service_module, "get_ready_volume", fake_get_ready_volume)
     with pytest.raises(ValueError, match="not ready"):
         await service.request_download(_request())
+
+
+@pytest.mark.asyncio
+async def test_request_download_requires_model_cache_purpose(monkeypatch, service):
+    volume = _volume(purposes=[])
+
+    async def fake_get_ready_volume(volume_id, *, cluster_id=None):
+        return volume
+
+    monkeypatch.setattr(service_module, "get_ready_volume", fake_get_ready_volume)
+    with pytest.raises(ModelCacheVolumePurposeError, match="not configured for model-cache"):
+        await service.request_download(_request(storageVolumeId=volume.id))
 
 
 @pytest.mark.asyncio

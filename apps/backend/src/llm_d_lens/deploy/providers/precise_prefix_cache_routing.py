@@ -38,8 +38,16 @@ from llm_d_lens.deploy.providers.deployment_bundle import (
     subprocess_bundle_runner,
     text_checksum,
 )
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact, ValidationResult
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    ValidationResult,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.hardware_profile import (
+    apply_runtime_class,
+    default_guide_variant,
     guide_overlays,
     overlay_variant,
     requires_dra_claim,
@@ -115,7 +123,12 @@ class PrecisePrefixCacheRoutingAdapter:
         # different clusters/vendors must not race on a single overlay choice.
         self._accelerator = accelerator
         self._overlay_variant_value = overlay_variant(accelerator=accelerator)
-        self._modelserver_source = self._modelserver_overlay(guide_root)
+        self._modelserver_source_error = None
+        try:
+            self._modelserver_source = self._modelserver_overlay(guide_root)
+        except ValueError as error:
+            self._modelserver_source_error = str(error)
+            self._modelserver_source = guide_root / "unavailable-overlay"
         self._render_source = guide_root / "guides/precise-prefix-cache-routing/render"
         self._baseline_source = (
             Path(__file__).resolve().parent / "guide_overlays" / "precise-prefix-cache-routing" / "baseline"
@@ -167,9 +180,8 @@ class PrecisePrefixCacheRoutingAdapter:
         overlay.
         """
         sources = guide_overlays(guide_root, "precise-prefix-cache-routing", accelerator=self._accelerator)
-        return (
-            sources.get(".") or sources.get("base") or next(iter(sources.values()), guide_root / "unavailable-overlay")
-        )
+        variant = default_guide_variant(sources, guide="precise-prefix-cache-routing", accelerator=self._accelerator)
+        return sources[variant]
 
     def discover(self) -> GuideDefinition:
         return self._definition
@@ -178,6 +190,8 @@ class PrecisePrefixCacheRoutingAdapter:
         self, definition, cluster_snapshot: dict[str, Any], overrides: dict[str, Any]
     ) -> ValidationResult:
         try:
+            if self._modelserver_source_error:
+                raise ValueError(self._modelserver_source_error)
             self._parameters(overrides)
             for path in (self._modelserver_source, self._render_source, self._baseline_source):
                 if not path.is_dir():
@@ -193,6 +207,8 @@ class PrecisePrefixCacheRoutingAdapter:
     async def render(self, definition, overrides: dict[str, Any]) -> GuideDeploymentArtifact:
         if definition.guide_id != self._definition.guide_id:
             raise ValueError("adapter cannot render a different guide")
+        if self._modelserver_source_error:
+            raise ValueError(self._modelserver_source_error)
         parameters = self._parameters(overrides)
         parameters["resolved_mount"] = await resolve_mount(
             overrides.get("runtime") or {},
@@ -767,8 +783,7 @@ class PrecisePrefixCacheRoutingAdapter:
             "mount_path": mount_path,
             "replicas": replicas,
             "tensor_parallel_size": tensor_parallel,
-            "max_model_len": decode.get("maxModelLen"),
-            "gpu_memory_utilization": decode.get("gpuMemoryUtilization"),
+            "serving_arguments": serving_arguments(model, decode),
             "environment": runtime.get("environment") if isinstance(runtime.get("environment"), dict) else {},
             "custom_parameters": overrides.get("customParameters") or [],
             "peak_prefill_throughput": (int(peak_prefill_throughput) if peak_prefill_throughput is not None else None),
@@ -813,10 +828,8 @@ class PrecisePrefixCacheRoutingAdapter:
                     serialized if argument == "--kv-events-config" else f"--kv-events-config={serialized}"
                 )
         args = _set_argument(args, "tensor-parallel-size", parameters["tensor_parallel_size"])
-        if parameters["max_model_len"]:
-            args = _set_argument(args, "max-model-len", parameters["max_model_len"])
-        if parameters["gpu_memory_utilization"]:
-            args = _set_argument(args, "gpu-memory-utilization", parameters["gpu_memory_utilization"])
+        for name, value in parameters["serving_arguments"].items():
+            args = _set_argument(args, name, value)
         environment = list(container.get("env") or [])
         for custom in parameters["custom_parameters"]:
             if custom.get("target") not in {"decode", "both"}:
@@ -834,6 +847,7 @@ class PrecisePrefixCacheRoutingAdapter:
         container["env"] = environment
         container["image"] = parameters["image"]
         set_accelerator_request(container, claim, parameters["tensor_parallel_size"], accelerator=self._accelerator)
+        apply_runtime_class(deployment["spec"]["template"]["spec"], accelerator=self._accelerator)
         if cache_mounted:
             pod_spec = deployment["spec"]["template"]["spec"]
             volume_source = (
@@ -858,10 +872,7 @@ class PrecisePrefixCacheRoutingAdapter:
 
 
 def _set_argument(args: list[str], name: str, value: object) -> list[str]:
-    prefix = f"--{name}="
-    if any(item.startswith(prefix) for item in args):
-        return [f"{prefix}{value}" if item.startswith(prefix) else item for item in args]
-    return [*args, f"{prefix}{value}"]
+    return set_vllm_argument(args, name, value)
 
 
 def _set_environment(items: list[dict[str, Any]], name: str, value: object) -> list[dict[str, Any]]:

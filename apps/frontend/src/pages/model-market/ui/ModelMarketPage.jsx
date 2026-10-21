@@ -55,21 +55,21 @@ export function ModelCard({ model, onSelect }) {
         <button
             type="button"
             onClick={() => onSelect(model)}
-            className="group flex min-h-52 flex-col rounded-lg border border-slate-800 bg-slate-900/70 p-5 text-left transition hover:border-cyan-400/60 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+            className="group flex min-h-52 flex-col rounded-lg border border-[#b7d4e6] bg-white p-5 text-left transition hover:border-[#037ffc99] hover:bg-gradient-to-br hover:from-white hover:via-[#037ffc05] hover:to-[#037ffc0d] focus:outline-none focus:ring-2 focus:ring-[#037ffc] dark:border-slate-800 dark:bg-slate-900 dark:bg-gradient-to-br dark:from-slate-900 dark:via-slate-900/70 dark:to-slate-950 dark:shadow-none dark:hover:border-cyan-400/60 dark:hover:from-slate-900 dark:hover:via-slate-900/70 dark:hover:to-slate-900 dark:focus:ring-cyan-400"
         >
             <div className="flex items-start justify-between gap-4">
                 <div>
-                    <p className="text-xs font-medium uppercase text-cyan-300">{model.family}</p>
-                    <h2 className="mt-2 text-lg font-semibold text-white">{model.name}</h2>
+                    <p className="text-xs font-medium uppercase text-[#037ffc] dark:text-cyan-300">{model.family}</p>
+                    <h2 className="mt-2 text-lg font-semibold text-slate-900 dark:text-white">{model.name}</h2>
                 </div>
-                <Box size={19} className="text-slate-500 transition group-hover:text-cyan-300" aria-hidden="true" />
+                <Box size={19} className="text-[#037ffc] transition group-hover:text-[#037ffc] dark:text-slate-500 dark:group-hover:text-cyan-300" aria-hidden="true" />
             </div>
             <dl className="mt-5 grid grid-cols-2 gap-x-3 gap-y-4 text-xs">
-                <div><dt className="text-slate-500">Released</dt><dd className="mt-1 text-slate-200">{model.releaseDate}</dd></div>
-                <div><dt className="text-slate-500">Precision</dt><dd className="mt-1 text-slate-200">{model.dtype}</dd></div>
-                <div><dt className="text-slate-500">Weights</dt><dd className="mt-1 text-slate-200">{model.weightGiB ? `${model.weightGiB} GiB` : 'Not listed'}</dd></div>
-                <div><dt className="text-slate-500">Context</dt><dd className="mt-1 text-slate-200">{model.contextLength ? model.contextLength.toLocaleString() : 'Not listed'}</dd></div>
-                <div className="col-span-2"><dt className="text-slate-500">Model type</dt><dd className="mt-1 text-slate-200">{model.modelType}</dd></div>
+                <div><dt className="text-slate-500">Released</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.releaseDate}</dd></div>
+                <div><dt className="text-slate-500">Precision</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.dtype}</dd></div>
+                <div><dt className="text-slate-500">Weights</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.weightGiB ? `${model.weightGiB} GiB` : 'Not listed'}</dd></div>
+                <div><dt className="text-slate-500">Context</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.contextLength ? model.contextLength.toLocaleString() : 'Not listed'}</dd></div>
+                <div className="col-span-2"><dt className="text-slate-500">Model type</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.modelType}</dd></div>
             </dl>
         </button>
     );
@@ -425,7 +425,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
                     </div>
                     {(search || category !== 'All') && <Button type="button" variant="secondary" onClick={() => { setSearch(''); setCategory('All'); }}>Clear filters</Button>}
                 </div>
-                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Model categories">{CATEGORIES.map((item) => <button key={item} type="button" role="tab" aria-selected={category === item} onClick={() => setCategory(item)} className={`rounded-md border px-3 py-1.5 text-xs ${category === item ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>{item}</button>)}</div>
+                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Model categories">{CATEGORIES.map((item) => <button key={item} type="button" role="tab" aria-selected={category === item} onClick={() => setCategory(item)} className={`rounded-md border px-3 py-1.5 text-xs ${category === item ? 'border-[#037ffc] bg-[#037ffc] text-white dark:border-cyan-400 dark:bg-cyan-400/10 dark:text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>{item}</button>)}</div>
                 <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {visibleModels.map((model) => <ModelCard key={model.id} model={model} onSelect={chooseModel} />)}
                     {!visibleModels.length && <EmptyState className="col-span-full" icon={<Search size={22} aria-hidden="true" />}
@@ -438,7 +438,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
     if (!canDeploy) {
         return (
             <ModulePage contentClassName="flex flex-col gap-5">
-                <ModuleHeader icon={Rocket} title="One-click deployment" actions={<Button variant="secondary" onClick={() => setSelected(null)}><ArrowLeft size={15} aria-hidden="true" />Model Market</Button>} />
+                <ModuleHeader icon={Rocket} title="One-click deployment" actions={<Button variant="secondary" onClick={() => setSelected(null)} className="not-dark:bg-transparent not-dark:hover:bg-[#f3f4f6]"><ArrowLeft size={15} aria-hidden="true" />Model Market</Button>} />
                 <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-6">
                     <p className="text-sm font-medium text-slate-200">Your role cannot create deployments.</p>
                     <p className="mt-2 text-sm leading-6 text-slate-400">You can use deployments that already exist or were shared with you. Open the Deployments page to view them, or ask an administrator to grant you the deployment-create permission.</p>
@@ -450,7 +450,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
 
     return (
         <ModulePage contentClassName="flex flex-col gap-5">
-            <ModuleHeader icon={Rocket} title="One-click deployment" actions={<Button variant="secondary" onClick={() => setSelected(null)}><ArrowLeft size={15} aria-hidden="true" />Model Market</Button>} />
+            <ModuleHeader icon={Rocket} title="One-click deployment" actions={<Button variant="secondary" onClick={() => setSelected(null)} className="not-dark:bg-transparent not-dark:hover:bg-[#f3f4f6]"><ArrowLeft size={15} aria-hidden="true" />Model Market</Button>} />
             <div className="grid grid-cols-1 gap-5">
                 <form id="model-market-deployment-form" className="rounded-lg border border-slate-800 bg-slate-900/70 p-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
                     <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-5"><div><p className="text-xs uppercase text-cyan-300">{selected.family}</p><h1 className="mt-1 text-xl font-semibold text-white">{selected.name}</h1></div><span className="text-sm text-slate-400">{selected.sizeGiB} GiB</span></div>
@@ -470,7 +470,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
                             return;
                         }
                         setMode(value);
-                    }} className={`rounded-lg border p-3 text-left ${mode === value ? 'border-cyan-400 bg-cyan-400/10' : 'border-slate-700 bg-slate-950 hover:border-slate-600'}`}><span className="flex items-center gap-2 text-sm font-medium text-white">{label}{experimental && <Badge tone="warning" size="xs">Experimental</Badge>}</span><span className="mt-1 block text-xs text-slate-500">{description}</span></button>)}</div></fieldset>
+                    }} className={`mode-option rounded-lg border p-3 text-left ${mode === value ? 'mode-option-selected border-cyan-400 bg-cyan-400/10' : 'border-slate-700 bg-slate-950 hover:border-slate-600'}`}><span className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-white">{label}{experimental && <Badge tone="warning" size="xs" className="experimental-chip">Experimental</Badge>}</span><span className="mt-1 block text-xs text-slate-500">{description}</span></button>)}</div></fieldset>
                     {error && <p role="alert" className="mt-5 text-sm text-rose-300">{error}{error.startsWith('This model is not ready') && <> <button type="button" className="underline" onClick={() => onNavigate?.('model-cache')}>Open Model Cache</button></>}</p>}
                     {mode === 'advanced' && <div className="mt-7 flex justify-end"><Button type="submit" disabled={!cluster || !deployName || submitting}><Rocket size={16} aria-hidden="true" />{submitting ? 'Creating deployment...' : 'Configure deployment'}</Button></div>}
                 </form>

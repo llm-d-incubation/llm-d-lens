@@ -19,7 +19,7 @@ The core maintainers lead the development of `llm-d-lens` and define the benchma
 
 The core maintainers should publicly articulate their decision-making, and share the reasoning behind their decisions, vetoes, and dispute resolution.
 
-List of core maintainers can be found in the [OWNERS](OWNERS) file.
+List of core maintainers can be found in the [OWNERS](https://github.com/llm-d-incubation/llm-d-lens/blob/main/OWNERS) file.
 
 ### Lead core maintainer
 
@@ -109,8 +109,9 @@ Similarity candidates require analysis, not automatic refactoring.
 `npm run docs:check` checks local file links in changed Markdown/MDX; pass
 `--base REF` for a branch comparison or file paths explicitly. It does not compile
 MDX or validate route/anchor links. `npm run docs:build` builds the bilingual site
-for rendering, site configuration and dependency changes; documentation CI runs
-that full build. GitHub statistics refresh is explicit and optional.
+for rendering, site configuration and dependency changes. Broken routes, Markdown
+links and anchors are fatal, so the docs CI job fails and blocks merge when any
+link no longer resolves. GitHub statistics refresh is explicit and optional.
 
 ### Periodic full local validation
 

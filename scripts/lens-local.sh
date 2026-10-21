@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Local source installation and service manager for Lens.
 #
-# Checks the environment and starts/stops the three local services:
+# Checks the environment and starts/stops the two local services:
 #   - Vite frontend       (FRONTEND_PORT,   default 5173)
-#   - Express API server  (SERVER_PORT,     default 3000)
-#   - FastAPI backend     (BACKEND_PORT, default 8081)
+#   - FastAPI app/API     (BACKEND_PORT, default 3000; SERVER_PORT is an alias)
 #
 # All ports are configurable via environment variables (see below), and the
 # frontend/backend proxies read the same variables so everything stays in sync.
@@ -38,7 +37,7 @@ fi
 # ---- Configuration (override via environment) -------------------------------
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 SERVER_PORT="${SERVER_PORT:-3000}"
-BACKEND_PORT="${BACKEND_PORT:-8081}"
+BACKEND_PORT="${BACKEND_PORT:-$SERVER_PORT}"
 VITE_HOST="${VITE_HOST:-0.0.0.0}"
 
 # HTTPS is on by default: browsers only expose features like microphone
@@ -84,13 +83,10 @@ PRISM_MODEL_API_PUBLIC_HOST="${PRISM_MODEL_API_PUBLIC_HOST:-}"
 
 
 # Optional comma-separated PCI allowlist restricting which XPUs/GPUs can be
-# selected for deployment (read by the FastAPI backend and the Express server).
+# selected for deployment (read by the FastAPI backend).
 PRISM_GPU_PCI_ALLOWLIST="${PRISM_GPU_PCI_ALLOWLIST:-}"
 
-# Shared secret for signed Node->Python internal calls (design section 8.3).
-# The Express server signs internal reads with the authenticated caller's
-# principal id; the FastAPI backend verifies the HMAC. Both processes must see
-# the same value, so a local default keeps them in sync in development.
+# Shared secret for authenticated Agentic/MCP calls (design section 8.3).
 LENS_INTERNAL_AUTH_SECRET="${LENS_INTERNAL_AUTH_SECRET:-dev-internal-secret}"
 
 # Deploy/Model Cache render Guide manifests from an llm-d checkout containing
@@ -102,7 +98,7 @@ export LLM_D_ROOT
 PID_DIR="$ROOT_DIR/.dev-pids"
 LOG_DIR="$LENS_LOG_DIR/dev"
 
-SERVICES=(frontend server backend)
+SERVICES=(frontend backend)
 
 # ---- Helpers -----------------------------------------------------------------
 log()  { printf '\033[1;36m[lens-local]\033[0m %s\n' "$*"; }
@@ -666,18 +662,16 @@ wait_for_http() {
 }
 
 # ---- MCP tool catalog ---------------------------------------------------------
-# regenerate_mcp_tools — regenerate apps/server/src/mcp/tools.ts from the FastAPI
-# backend's live OpenAPI schema before every start, so the MCP tool catalog
-# can never silently drift from the routes actually exposed by the backend.
-# Non-fatal: falls back to whatever tools.ts is already on disk if this fails.
+# Validate the Python MCP catalog before stopping any running service.
 regenerate_mcp_tools() {
-    if [[ ! -x .venv/bin/python || ! -f scripts/generate-mcp-tools.mjs ]]; then
+    if [[ ! -x .venv/bin/python ]]; then
         return 0
     fi
     mkdir -p "$LOG_DIR"
-    log "regenerating MCP tool catalog from the backend API..."
-    if ! node scripts/generate-mcp-tools.mjs >"$LOG_DIR/generate-mcp-tools.log" 2>&1; then
-        warn "MCP tool catalog regeneration failed — see $LOG_DIR/generate-mcp-tools.log (using existing apps/server/src/mcp/tools.ts)"
+    log "validating MCP tool catalog from the backend API..."
+    if ! .venv/bin/python -c 'from llm_d_lens.api.main import app; from llm_d_lens.mcp.catalog import catalog; print(f"Validated {len(catalog(app))} MCP tools")' >"$LOG_DIR/generate-mcp-tools.log" 2>&1; then
+        fail "MCP tool catalog validation failed; see $LOG_DIR/generate-mcp-tools.log"
+        return 1
     fi
 }
 
@@ -689,6 +683,7 @@ prepare_start() {
     ensure_node || exit 1
     ensure_node_modules || exit 1
     if [[ "${1:-all}" != frontend ]]; then ensure_venv || return 1; fi
+    if [[ "${1:-all}" != frontend ]]; then regenerate_mcp_tools || return 1; fi
     log "updating reusable capability map..."
     local reuse_status=0
     node tools/reuse/cli.mjs map || reuse_status=$?
@@ -724,6 +719,7 @@ cmd_start() {
 cmd_restart() {
     local target="${1:-all}"
     case "$target" in all|frontend|server|backend) ;; *) fail "Unknown service: $target"; return 1 ;; esac
+    if [[ "$target" == server ]]; then target=backend; fi
     if [[ "$target" != all ]]; then
         local svc saved_port
         for svc in "${SERVICES[@]}"; do
@@ -748,18 +744,19 @@ cmd_restart() {
 
 start_services() {
     local target="${1:-all}"
+    if is_running server; then
+        fail "The legacy Node gateway is still running; use restart all to switch to the Python entry point."
+        return 1
+    fi
     if [[ "$target" == all || "$target" == backend ]]; then ensure_database || return 1; fi
     ensure_tls
-    if [[ "$target" == all || "$target" == server ]]; then regenerate_mcp_tools; fi
 
     # Remember what was requested so we can report any port that got shifted.
-    local requested_frontend="$FRONTEND_PORT" requested_server="$SERVER_PORT" requested_backend="$BACKEND_PORT"
+    local requested_frontend="$FRONTEND_PORT" requested_backend="$BACKEND_PORT"
 
     # Shift off any port already occupied by another process.
     if [[ "$target" == all || "$target" == backend ]]; then BACKEND_PORT="$(resolve_free_port backend "$BACKEND_PORT")"; fi
     if [[ "$target" == backend && "$BACKEND_PORT" != "$requested_backend" ]]; then fail "Port changed for backend; use restart all to update dependent proxies."; return 1; fi
-    if [[ "$target" == all || "$target" == server ]]; then SERVER_PORT="$(resolve_free_port server "$SERVER_PORT")"; fi
-    if [[ "$target" == server && "$SERVER_PORT" != "$requested_server" ]]; then fail "Port changed for server; use restart all to update dependent proxies."; return 1; fi
     if [[ "$target" == all || "$target" == frontend ]]; then FRONTEND_PORT="$(resolve_free_port frontend "$FRONTEND_PORT")"; fi
     if [[ "$target" == frontend && "$FRONTEND_PORT" != "$requested_frontend" ]]; then fail "Port changed for frontend; use restart all to update dependent proxies."; return 1; fi
 
@@ -772,36 +769,25 @@ start_services() {
     start_one backend env \
         PRISM_MODEL_API_PUBLIC_HOST="$PRISM_MODEL_API_PUBLIC_HOST" \
         PRISM_GPU_PCI_ALLOWLIST="$PRISM_GPU_PCI_ALLOWLIST" \
-        PRISM_MCP_URL="$scheme://127.0.0.1:$SERVER_PORT/api/mcp" \
+        PRISM_MCP_URL="$scheme://127.0.0.1:$BACKEND_PORT/api/mcp" \
         PRISM_MCP_CA_FILE="${TLS_CERT_FILE:-}" \
         LENS_INTERNAL_AUTH_SECRET="$LENS_INTERNAL_AUTH_SECRET" \
-        .venv/bin/python -m uvicorn llm_d_lens.api:app \
-        --host "${BACKEND_HOST:-0.0.0.0}" --port "$BACKEND_PORT"
-    fi
-
-    if [[ "$target" == all || "$target" == server ]]; then
-    start_one server env SERVER_PORT="$SERVER_PORT" PORT="$SERVER_PORT" \
-        PRISM_GPU_PCI_ALLOWLIST="$PRISM_GPU_PCI_ALLOWLIST" \
-        LENS_INTERNAL_AUTH_SECRET="$LENS_INTERNAL_AUTH_SECRET" \
-        SIMULATION_API_URL="http://127.0.0.1:$BACKEND_PORT" \
-        TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" \
-        ./node_modules/.bin/tsx apps/server/src/server.js
+        BACKEND_PORT="$BACKEND_PORT" BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}" \
+        TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" TLS_CA_FILE="${TLS_CA_FILE:-}" \
+        bash scripts/run-backend.sh
     fi
 
     if [[ "$target" == all || "$target" == frontend ]]; then
     start_one frontend env VITE_HOST="$VITE_HOST" VITE_PORT="$FRONTEND_PORT" \
-        VITE_AUTH_PROXY_TARGET="$scheme://127.0.0.1:$SERVER_PORT" \
-        VITE_API_PROXY_TARGET="$scheme://127.0.0.1:$SERVER_PORT" \
+        VITE_AUTH_PROXY_TARGET="$scheme://127.0.0.1:$BACKEND_PORT" \
+        VITE_API_PROXY_TARGET="$scheme://127.0.0.1:$BACKEND_PORT" \
         TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" \
         ./node_modules/.bin/vite apps/frontend
     fi
 
     log "waiting for services to become ready..."
     if [[ "$target" == all || "$target" == backend ]]; then
-    wait_for_http backend "http://127.0.0.1:$BACKEND_PORT/api/health" || return 1
-    fi
-    if [[ "$target" == all || "$target" == server ]]; then
-    wait_for_http server     "$scheme://127.0.0.1:$SERVER_PORT/api/config" || return 1
+    wait_for_http backend "$scheme://127.0.0.1:$BACKEND_PORT/api/health" || return 1
     fi
     if [[ "$target" == all || "$target" == frontend ]]; then
     wait_for_http frontend   "$scheme://127.0.0.1:$FRONTEND_PORT/" || return 1
@@ -809,16 +795,14 @@ start_services() {
 
     log "started service selection: $target; configured endpoints:"
     log "  frontend   $scheme://localhost:$FRONTEND_PORT (bound to $VITE_HOST)"
-    log "  server     $scheme://127.0.0.1:$SERVER_PORT"
-    log "  backend    http://127.0.0.1:$BACKEND_PORT"
+    log "  app/API    $scheme://127.0.0.1:$BACKEND_PORT"
     if [[ "$ENABLE_HTTPS" == "1" ]]; then
         log "  HTTPS is on with a self-signed cert (browser will warn once; accept it) — needed for mic access etc."
     fi
 
-    if [[ "$FRONTEND_PORT" != "$requested_frontend" || "$SERVER_PORT" != "$requested_server" || "$BACKEND_PORT" != "$requested_backend" ]]; then
+    if [[ "$FRONTEND_PORT" != "$requested_frontend" || "$BACKEND_PORT" != "$requested_backend" ]]; then
         warn "requested ports were occupied; using free ports instead:"
         warn "  frontend  $requested_frontend -> $FRONTEND_PORT"
-        warn "  server    $requested_server -> $SERVER_PORT"
         warn "  backend   $requested_backend -> $BACKEND_PORT"
     fi
 
@@ -828,7 +812,7 @@ start_services() {
 # ---- stop --------------------------------------------------------------------
 cmd_stop() {
     local stopped=0
-    local selected=("${SERVICES[@]}")
+    local selected=("${SERVICES[@]}" server)
     if [[ $# -gt 0 ]]; then selected=("$@"); fi
     for svc in "${selected[@]}"; do
         local pf
@@ -951,7 +935,7 @@ TARGET_NODE falls back to the existing PRISM_K8S_TARGET_NODE environment value.
 stop/status never require a Kubernetes connection.
 
 Environment:
-  FRONTEND_PORT / SERVER_PORT / BACKEND_PORT   Defaults: 5173 / 3000 / 8081
+    FRONTEND_PORT / BACKEND_PORT   Defaults: 5173 / 3000 (SERVER_PORT is a legacy alias)
   LLM_D_ROOT              llm-d checkout with guides/; default $LENS_CACHE_DIR/llm-d
   PRISM_GPU_PCI_ALLOWLIST  Optional explicit device restriction; no auto-discovery
   ENABLE_HTTPS            Default 1; set 0 for plain HTTP

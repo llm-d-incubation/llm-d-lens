@@ -10,12 +10,12 @@ export function availableModelProviders(deployments, members, clusterId) {
     ));
 }
 
-export function filterServiceFlow(clusters, memberGroups, { clusterId = '', modelQuery = '' } = {}) {
+export function filterServiceFlow(clusters, memberGroups, { clusterId = '', modelQuery = '', status = '' } = {}) {
     const query = modelQuery.trim().toLowerCase();
     const selectedClusters = clusters.filter((cluster) => !clusterId || cluster.clusterId === clusterId);
     const selectedIds = new Set(selectedClusters.map((cluster) => cluster.clusterId));
     const groups = memberGroups
-        .filter((group) => group.name.toLowerCase().includes(query))
+        .filter((group) => (!status || group.status === status) && group.name.toLowerCase().includes(query))
         .map((group) => ({
             ...group,
             clusters: group.clusters.filter((cluster) => selectedIds.has(cluster.clusterId)),
@@ -23,7 +23,9 @@ export function filterServiceFlow(clusters, memberGroups, { clusterId = '', mode
         .filter((group) => group.clusters.length > 0);
     const matchingIds = new Set(groups.flatMap((group) => group.clusters.map((cluster) => cluster.clusterId)));
     return {
-        clusters: query ? selectedClusters.filter((cluster) => matchingIds.has(cluster.clusterId)) : selectedClusters,
+        clusters: (query || status)
+            ? selectedClusters.filter((cluster) => matchingIds.has(cluster.clusterId))
+            : selectedClusters,
         memberGroups: groups,
     };
 }

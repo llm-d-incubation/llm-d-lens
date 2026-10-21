@@ -24,14 +24,13 @@ in the request. The generated chat example includes it.
 2. Click **New key**.
 3. In **Create API key**, enter a value in **Key name**.
 4. Click **Create**.
-5. In **Copy your key now**, click **Copy** and store the full token immediately.
-6. After you have saved the token, click **I saved it**.
+5. In **Copy your key now**, click **Copy and save**. This copies the full token to the clipboard and closes the dialog; store it safely because it is shown only once.
 
 ## Reset or revoke an API key
 
 1. Open **API keys**.
 2. To rotate the default key, click **Reset**. Lens immediately opens **Copy your key now** for the replacement token.
-3. In **Copy your key now**, click **Copy**, save the new token, then click **I saved it**.
+3. In **Copy your key now**, click **Copy and save** to copy the new token and close the dialog.
 4. To remove a key completely, use the row action button for that key and open **Revoke API key**.
 5. In **Revoke API key**, click **Revoke**.
 
@@ -49,6 +48,12 @@ Update those clients with the replacement key.
 7. Click **Add**. A new public name creates the model service and its model server together. An existing public name in the same cluster adds the deployment to that model and reuses its HTTPRoute; it does not create another service. Click **Cancel** to discard the form.
 8. Check the service's status in **Service flow**, then open **My services** and send a copied **cURL** request.
 
+When the public name differs from the provider model name, Lens creates an
+`InferenceModelRewrite` for the service's InferencePool. The shared Gateway uses
+it to rewrite the request body's `model` field before the request reaches the
+model server, so clients use the public name while the engine keeps its own
+model name.
+
 Each field label has a question-mark icon. Hover over it or focus it with the
 keyboard to learn what the field does.
 Changing the cluster clears the selected provider and provider model name.
@@ -62,16 +67,18 @@ explicitly indicate when the deployment was already added.
 
 ## Filter service flow
 
-Use **Cluster** and **Public model name** above **Service flow** to narrow the
-topology. The cluster dropdown defaults to **All clusters**. Public model search
-matches part of the name, ignores case and surrounding whitespace, and suggests
-names from the selected cluster. Both filters apply together.
+Use **Cluster**, **Model service status** and **Public model name** above
+**Service flow** to narrow the topology. The cluster dropdown defaults to
+**All clusters**. Status offers **All statuses**, **Active** and **Disabled**.
+Public model search matches part of the name, ignores case and surrounding
+whitespace, and suggests names from the selected cluster. All filters apply
+together.
 
-Model-name searches hide clusters without a matching model. Selecting only a
-cluster still shows its Gateway and IPP even when it has no published models.
-Use **Clear filters** (the reset icon) to restore the full topology. Automatic refresh keeps your
-filters; filtering does not change provider states, weights, routing, or the
-scope of the page-level **Reconcile** action.
+Model-name and status filters hide clusters without a matching service. Selecting
+only a cluster still shows its Gateway and IPP even when it has no published
+models. Use **Clear filters** (the reset icon) to restore the full topology.
+Automatic refresh keeps your filters; filtering does not change provider states,
+weights, routing, or the scope of the page-level **Reconcile** action.
 
 The flow is horizontally centered when it fits the canvas. Hold the left mouse
 button on the diagram background or non-interactive cards and drag to pan when
@@ -147,8 +154,11 @@ positive-weight providers through the unchanged native HTTPRoute weights.
 ## Manage model access
 
 Admin and maintainers can manage inference grants in their authorized clusters.
-This does not give maintainers permission to create/delete model services or
-manage the shared Gateway.
+Maintainers can also publish a ready deployment as a new public model name in
+their clusters, attach or remove providers, start or stop a model service, remove
+an empty model service, and maintain the shared Gateway and IPP (install,
+start/stop, configure and reconcile). Editing group metadata or the selection
+policy remains admin-only.
 
 1. Open the public model name's menu and choose **Manage access**.
 2. In the right-hand drawer, choose **User** or **Group**, then the recipient.
@@ -252,6 +262,7 @@ Gateway or IPP auto-healing.
 
 | Goal | Component and action |
 | --- | --- |
+| Change the gateway provider, exposed port, host/IP or Lens address | **Gateway → Configure**; saved changes reconcile the shared Gateway. Requires cluster edit access. |
 | Install a missing gateway | **Gateway → Install** |
 | Apply saved gateway and route settings | **Gateway → Reconcile**, or page-level **Reconcile** for all clusters with members |
 | Inspect gateway or payload-processor logs | **Gateway → View logs** or **IPP → View logs**; disabled while the component is stopped or not installed, with a hover hint to start or install it |

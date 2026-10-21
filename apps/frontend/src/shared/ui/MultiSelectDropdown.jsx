@@ -51,7 +51,7 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
             <button 
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
-                className={`w-full bg-[#0b0f17] border border-slate-800/40 text-slate-300 text-xs rounded-xl px-3 py-2 flex items-center justify-between hover:border-slate-700/45 hover:bg-[#101622] transition-all duration-200 ${className}`}
+                className={`w-full bg-white dark:bg-[#0b0f17] border border-[#cbd5e1] dark:border-slate-800/40 text-[#33475b] dark:text-slate-300 text-xs rounded-xl px-3 py-2 flex items-center justify-between hover:border-[#94a3b8] dark:hover:border-slate-700/45 hover:bg-[#e6f6fe] dark:hover:bg-[#101622] transition-all duration-200 ${className}`}
                 title={`${label}: ${selectedCount > 0 ? [...safeSelected].join(', ') : 'All'}`}
             >
                 <div className="flex items-center gap-2 truncate pr-2">
@@ -65,7 +65,7 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
             </button>
 
             {isOpen && (
-                <div className="absolute top-full left-0 mt-2 w-72 max-h-80 overflow-y-auto bg-[#0b0f17]/95 border border-slate-700 rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5 backdrop-blur-md">
+                <div className="absolute top-full left-0 mt-2 w-72 max-h-80 overflow-y-auto bg-white/95 dark:bg-[#0b0f17]/95 border border-[#cbd5e1] dark:border-slate-700 rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5 backdrop-blur-md">
                     {searchable && (
                         <div className="relative mb-1">
                             <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -75,15 +75,15 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
                                 onChange={(event) => setQuery(event.target.value)}
                                 placeholder={searchPlaceholder}
                                 autoFocus
-                                className="w-full rounded-lg border border-slate-800/40 bg-slate-950 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/50 focus:outline-none"
+                                className="w-full rounded-lg border border-[#cbd5e1] dark:border-slate-800/40 bg-white dark:bg-slate-950 py-1.5 pl-7 pr-2 text-xs text-[#051c2c] dark:text-slate-200 placeholder:text-[#5f7284] dark:placeholder:text-slate-600 focus:border-[#037ffc] dark:focus:border-cyan-500/50 focus:outline-none"
                             />
                         </div>
                     )}
                     <div 
-                        className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-slate-800/80 transition-all ${selectedCount === 0 ? 'bg-cyan-500/10 text-cyan-400 font-semibold' : 'text-slate-300 hover:text-slate-200'}`}
+                        className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-[#e6f6fe] dark:hover:bg-slate-800/80 transition-all ${selectedCount === 0 ? 'bg-[#e6f6fe] text-[#0773c4] dark:bg-cyan-500/10 dark:text-cyan-400 font-semibold' : 'text-[#33475b] dark:text-slate-300 hover:text-[#0f172a] dark:hover:text-slate-200'}`}
                         onClick={() => { onChange(''); setIsOpen(false); }}
                     >
-                         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${selectedCount === 0 ? 'bg-cyan-500 border-cyan-500 text-white' : 'border-slate-800/40 bg-slate-950'}`}>
+                         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${selectedCount === 0 ? 'bg-[#037ffc] border-[#037ffc] text-white dark:bg-cyan-500 dark:border-cyan-500' : 'border-[#cbd5e1] bg-white dark:border-slate-800/40 dark:bg-slate-950'}`}>
                             {selectedCount === 0 && <Check size={10} className="text-white" strokeWidth={3} />}
                          </div>
                          <span className="text-xs">{clearLabel || `All ${label}`}</span>
@@ -101,14 +101,14 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
                         return (
                             <div 
                                 key={opt} 
-                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-all ${hasCounts && count === 0 ? 'opacity-45 hover:bg-slate-800/30' : 'hover:bg-slate-800/80'} ${isSelected ? 'bg-cyan-500/10 text-cyan-400 font-semibold' : 'text-slate-300 hover:text-slate-200'}`}
+                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-all ${hasCounts && count === 0 ? 'opacity-45 hover:bg-[#e6f6fe] dark:hover:bg-slate-800/30' : 'hover:bg-[#e6f6fe] dark:hover:bg-slate-800/80'} ${isSelected ? 'bg-[#e6f6fe] text-[#0773c4] dark:bg-cyan-500/10 dark:text-cyan-400 font-semibold' : 'text-[#33475b] dark:text-slate-300 hover:text-[#0f172a] dark:hover:text-slate-200'}`}
                                 onClick={() => onChange(opt)}
                                 title={formatLabel ? formatLabel(opt) : opt}
                             >
-                                 <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-cyan-500 border-cyan-500 text-white' : 'border-slate-800/40 bg-slate-950'}`}>
+                                 <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-[#037ffc] border-[#037ffc] text-white dark:bg-cyan-500 dark:border-cyan-500' : 'border-[#cbd5e1] bg-white dark:border-slate-800/40 dark:bg-slate-950'}`}>
                                     {isSelected && <Check size={10} className="text-white" strokeWidth={3} />}
                                  </div>
-                                 <span className={`text-xs truncate flex-1 ${isSelected ? 'text-cyan-400 font-semibold' : 'text-slate-300'}`}>
+                                 <span className={`text-xs truncate flex-1 ${isSelected ? 'text-[#055693] dark:text-cyan-400 font-semibold' : 'text-[#33475b] dark:text-slate-300'}`}>
                                      {formatLabel ? formatLabel(opt) : opt}
                                  </span>
                                  {hasCounts && <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono ml-auto">{count}</span>}

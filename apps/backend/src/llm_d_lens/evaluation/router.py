@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -2360,6 +2361,7 @@ def _matrix_workload_yaml(
     endpoint_url: str,
     targets: dict | None = None,
     api_key: str | None = None,
+    tokenizer_model: str | None = None,
 ) -> str:
     """Build an exact-length, closed-loop inference-perf workload for one ISL/OSL matrix point.
 
@@ -2377,7 +2379,7 @@ def _matrix_workload_yaml(
         },
         "api": {"type": "completion", "streaming": True},
         "server": _inference_server_config(model, endpoint_url, api_key),
-        "tokenizer": {"pretrained_model_name_or_path": model},
+        "tokenizer": {"pretrained_model_name_or_path": tokenizer_model or model},
         "data": {
             "type": "random",
             "input_distribution": {"min": point.isl, "max": point.isl, "mean": point.isl, "std_dev": 0},
@@ -2396,6 +2398,7 @@ def _shared_prefix_workload_yaml(
     endpoint_url: str,
     targets: dict | None = None,
     api_key: str | None = None,
+    tokenizer_model: str | None = None,
 ) -> str:
     """Build an open-loop, shared-system-prompt inference-perf workload.
 
@@ -2420,7 +2423,7 @@ def _shared_prefix_workload_yaml(
         },
         "api": {"type": "completion", "streaming": True},
         "server": _inference_server_config(model, endpoint_url, api_key),
-        "tokenizer": {"pretrained_model_name_or_path": model},
+        "tokenizer": {"pretrained_model_name_or_path": tokenizer_model or model},
         "data": {
             "type": "shared_prefix",
             "shared_prefix": {
@@ -2642,6 +2645,7 @@ async def _prepare_benchmark_runtime(source: dict | None = None) -> tuple[str, P
         # fresh install) so checkouts installed before this patch existed --
         # or reinstalled/upgraded later -- still get it applied.
         await asyncio.to_thread(_patch_kubernetes_client_no_proxy_bug, root / ".venv")
+        await asyncio.to_thread(_patch_harness_kubernetes_no_proxy, root)
         return str(root / ".venv" / "bin" / "llmdbenchmark"), root
     raise ValueError(
         "Cluster llm-d-benchmark source is required. Configure and download its Software Versions before benchmarking."
@@ -2740,6 +2744,40 @@ def _patch_kubernetes_client_no_proxy_bug(venv: Path) -> None:
                 text.replace(_KUBERNETES_NO_PROXY_BUG_PATTERN, _KUBERNETES_NO_PROXY_BUG_REPLACEMENT, 1),
                 encoding="utf-8",
             )
+
+
+def _harness_kubernetes_no_proxy_command() -> str:
+    """Repair the affected image's client before any harness/report process imports it."""
+    script = (
+        "import sys; from pathlib import Path; "
+        "from kubernetes.client import configuration; "
+        "path = Path(configuration.__file__); "
+        "text = path.read_text(encoding='utf-8'); "
+        f"pattern = {_KUBERNETES_NO_PROXY_BUG_PATTERN!r}; "
+        f"replacement = {_KUBERNETES_NO_PROXY_BUG_REPLACEMENT!r}; "
+        "path.write_text(text.replace(pattern, replacement, 1), encoding='utf-8') if pattern in text else None; "
+        "print('[Lens] Kubernetes NO_PROXY compatibility patch: ' + "
+        "('applied' if pattern in text else 'pattern absent; client unchanged'), file=sys.stderr)"
+    )
+    return f"python -c {shlex.quote(script)} || exit $?;"
+
+
+def _patch_harness_kubernetes_no_proxy(root: Path) -> None:
+    """Carry the SDK compatibility fix into newly rendered harness Pods."""
+    template = root / "config/templates/jinja/20_harness_pod.yaml.j2"
+    anchor = "{{ harness_command }}"
+    marker = "{# Lens: preserve Kubernetes client NO_PROXY in the harness image. #}\n"
+    with template.open("r+", encoding="utf-8") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        text = stream.read()
+        if marker in text:
+            return
+        if text.count(anchor) != 1:
+            raise ValueError("Benchmark harness template has no unique harness_command; cannot install proxy fix")
+        patched = marker + text.replace(anchor, f"{_harness_kubernetes_no_proxy_command()} {anchor}", 1)
+        stream.seek(0)
+        stream.write(patched)
+        stream.truncate()
 
 
 def _harness_proxy_environment(run: dict, *, kubeconfig_path: str | None = None) -> dict[str, str]:
@@ -3158,6 +3196,7 @@ async def _execute_owned(run_id: str) -> None:
         # execution's underlying model_ref: the Gateway's HTTPRoute only matches
         # the BASE_MODEL_HEADER that ext_authz injects after validating that name.
         model_name = run.get("model_service_published_name") or _execution_model(execution)
+        tokenizer_model = _execution_model(execution) or model_name
         run.update(endpoint_used=endpoint_url, namespace=execution.namespace, model=model_name)
         session_id = execution.provenance.get("cluster_session_id")
         environment = {**os.environ, **deployment_runtime_overrides(session_id)} if session_id else dict(os.environ)
@@ -3346,6 +3385,7 @@ async def _execute_owned(run_id: str) -> None:
                         model_name,
                         endpoint_url,
                         api_key=api_key,
+                        tokenizer_model=tokenizer_model,
                     ),
                     encoding="utf-8",
                 )
@@ -3374,7 +3414,13 @@ async def _execute_owned(run_id: str) -> None:
                 workload_path = point_workspace / "workload.yaml"
                 workload_path.write_text(
                     _matrix_workload_yaml(
-                        point, stages, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key
+                        point,
+                        stages,
+                        model_name,
+                        endpoint_url,
+                        run.get("sla_targets"),
+                        api_key=api_key,
+                        tokenizer_model=tokenizer_model,
                     ),
                     encoding="utf-8",
                 )
@@ -3435,7 +3481,14 @@ async def _execute_owned(run_id: str) -> None:
             spec = SharedPrefixWorkloadSpec(**run["shared_prefix"])
             workload_path = output / "workload.yaml"
             workload_path.write_text(
-                _shared_prefix_workload_yaml(spec, model_name, endpoint_url, run.get("sla_targets"), api_key=api_key),
+                _shared_prefix_workload_yaml(
+                    spec,
+                    model_name,
+                    endpoint_url,
+                    run.get("sla_targets"),
+                    api_key=api_key,
+                    tokenizer_model=tokenizer_model,
+                ),
                 encoding="utf-8",
             )
             command = _base_command(output) + ["--workload-file-path", str(workload_path)]

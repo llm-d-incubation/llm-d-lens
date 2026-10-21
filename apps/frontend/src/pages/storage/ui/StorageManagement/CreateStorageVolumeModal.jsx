@@ -15,13 +15,13 @@ const KINDS = [
     { value: 'dynamic-pvc', label: 'Dynamic PVC' },
 ];
 
-export function CreateStorageVolumeModal({ clusters = [], defaultClusterId = '', onCancel, onCreate }) {
+export function CreateStorageVolumeModal({ clusters = [], defaultClusterId = '', defaultPurpose = '', onCancel, onCreate }) {
     const [clusterId, setClusterId] = useState(defaultClusterId);
     const [kind, setKind] = useState('local-disk');
     const [name, setName] = useState('');
     const [capacity, setCapacity] = useState('100Gi');
-    const [readOnly, setReadOnly] = useState(true);
-    const [purposes, setPurposes] = useState([]);
+    const [readOnly, setReadOnly] = useState(defaultPurpose !== 'model-cache');
+    const [purposes, setPurposes] = useState(() => (PURPOSE_OPTIONS.includes(defaultPurpose) ? [defaultPurpose] : []));
     const [hostPath, setHostPath] = useState('');
     const [nfsServer, setNfsServer] = useState('');
     const [nfsPath, setNfsPath] = useState('');

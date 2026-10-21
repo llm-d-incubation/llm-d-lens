@@ -6,6 +6,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from llm_d_lens.agentic.facts import PlanningEvidence, ResolvedPlanningFacts
 from llm_d_lens.agentic.generator import CandidateProposal
@@ -43,7 +44,56 @@ def validated_model_cache(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.parametrize("target", ["concurrency", "request_rate"])
+def test_load_target_uses_exact_aic_replicas_without_plain_estimates(monkeypatch, target):
+    from llm_d_lens.agentic.planner import AICCandidatePrediction, WorkloadProfile
+
+    facts = PlanningFacts(
+        8,
+        32,
+        8,
+        workload_profile=WorkloadProfile(**{target: 10}),
+        aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=3),),
+        evidence_ids=("aic:search",),
+    )
+
+    async def resolve(*args, **kwargs):
+        return SimpleNamespace(facts=facts)
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", resolve)
+    service = AgenticDeploymentService()
+    candidates, _, _ = asyncio.run(
+        service._generate_candidates(
+            None,
+            "cluster-a",
+            "Qwen/Qwen3-8B",
+            facts,
+            None,
+            provider_requested=False,
+        )
+    )
+    assert len(candidates) == 1
+    assert candidates[0].replicas == 3
+    assert candidates[0].required_gpus == 3
+
+
+def test_joint_load_targets_fail_before_cluster_or_cache_access(monkeypatch):
+    from llm_d_lens.agentic.planner import WorkloadProfile
+
+    request = SimpleNamespace(
+        planning_facts=PlanningFacts(
+            8,
+            32,
+            8,
+            workload_profile=WorkloadProfile(concurrency=10, request_rate=2),
+        )
+    )
+    with pytest.raises(ValueError, match="choose one and clear the other"):
+        asyncio.run(AgenticDeploymentService().create(request))
+
+
 def _request(**overrides) -> AgenticDeploymentCreateRequest:
+    overrides.setdefault("storage_volume_id", "storage-model-cache")
     return AgenticDeploymentCreateRequest(
         model="Qwen/Qwen3-8B",
         deployment_name="agentic-qwen3",
@@ -255,7 +305,9 @@ def test_planning_uses_deployment_context_length_and_preserves_workload_signals(
 
     async def resolve(_cluster_id, _model, facts, **_kwargs):
         captured["facts"] = facts
-        return _resolved_facts()
+        return _resolved_facts(
+            aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=1),)
+        )
 
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", resolve)
     request = _request(
@@ -908,9 +960,9 @@ def test_create_falls_back_only_when_all_ai_generated_candidates_are_invalid(mon
     [
         ('MCP tool "search_candidates" failed: unavailable', "mcp_unavailable", None),
         (
-            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "AI candidate generation returned too many tool calls in round 1: 5 (limit 4)",
             "invalid_response",
-            "AI candidate generation returned too many tool calls in round 1: 4 (limit 3)",
+            "AI candidate generation returned too many tool calls in round 1: 5 (limit 4)",
         ),
     ],
 )
@@ -1283,7 +1335,7 @@ def test_create_requires_a_model_cache_volume(monkeypatch):
         lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
     )
 
-    with pytest.raises(ValueError, match="requires a model cache storage volume"):
+    with pytest.raises(ValidationError, match="storage_volume_id"):
         asyncio.run(service.create(_request(storage_volume_id="")))
 
 

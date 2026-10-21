@@ -146,10 +146,13 @@ _PERMISSIONS: tuple[Permission, ...] = (
     _permission("model-service:inference:use", "Call published model services", READ),
     _permission("model-service:usage:read", "View one's own model usage", READ),
     _permission("model-service:group:read", "View model routing groups and members", READ),
+    _permission("model-service:group:toggle", "Enable or disable a model service"),
+    _permission("model-service:group:remove", "Remove an empty model service"),
     _permission("model-service:group:manage", "Create/edit/delete/enable-disable model services"),
     _permission("model-service:group:share", "Grant or revoke model-service inference access"),
     _permission("model-service:member:manage", "Publish/edit/remove a cluster deployment as a service provider"),
     _permission("model-service:gateway:read", "View model gateway data-plane status", READ),
+    _permission("model-service:gateway:reconcile", "Reconcile the shared model gateway and routes"),
     _permission("model-service:gateway:manage", "Install/uninstall/reload the shared Edge Envoy data plane"),
     _permission("model-service:router:manage", "Install/uninstall/start/stop a cluster's Agent Router"),
     _permission("usage:report:read", "View model usage across users/groups", READ),
@@ -250,7 +253,6 @@ _MAINTAINER_DENIED = _permissions_named(
     "system:secret:read",
     "system:secret:manage",
     "model-service:group:manage",
-    "model-service:gateway:manage",
     "benchmark-rag:query:read",
 )
 

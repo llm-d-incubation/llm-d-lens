@@ -141,7 +141,7 @@ describe("Add model", () => {
             { value: { can: (permission) => permissions.includes(permission) } },
             createElement(ModelServiceAdminPage),
         ));
-        const html = renderPage(['model-service:group:manage', 'model-service:member:manage', 'model-service:gateway:manage']);
+        const html = renderPage(['model-service:member:manage', 'model-service:gateway:reconcile']);
         const header = html.match(/<header[^]*?<\/header>/)[0];
         assert.match(header, /<button[^>]*bg-sky-500[^>]*>[^]*?Add model<\/button>/);
         assert.match(header, /Reconcile<\/button>/);
@@ -150,7 +150,9 @@ describe("Add model", () => {
         assert.doesNotMatch(html, /Add model service|Add model server/);
         assert.doesNotMatch(html, /cluster\(s\)|member\(s\)|model service\(s\)|route\(s\)/);
         assert.doesNotMatch(renderPage(['model-service:group:manage']), /Add model</);
-        assert.doesNotMatch(renderPage(['model-service:member:manage']), /Add model</);
+        assert.match(renderPage(['model-service:member:manage']), /Add model<\/button>/);
+        assert.doesNotMatch(renderPage(['model-service:gateway:reconcile']), /Add model<\/button>/);
+        assert.doesNotMatch(renderPage(['model-service:gateway:manage']), /Reconcile<\/button>/);
         assert.doesNotMatch(renderPage(['model-service:group:manage', 'model-service:member:manage']), /Reconcile<\/button>/);
     });
 });
@@ -338,7 +340,8 @@ describe("Service flow", () => {
         assert.match(html, /role="region" aria-label="Service flow canvas" tabindex="0"/);
         assert.match(html, /cursor-grab select-none overflow-auto/);
         assert.match(html, /active:cursor-grabbing/);
-        assert.match(html, /max-h-\[max\(16rem,calc\(100vh-18rem\)\)\]/);
+        assert.match(html, /class="flex h-full min-h-0 w-full flex-col gap-3"/);
+        assert.match(html, /class="min-h-0 w-full flex-1 cursor-grab/);
         assert.match(html, /class="mx-auto w-max"><div class="relative"/);
     });
 
@@ -843,7 +846,7 @@ describe("Component logs", () => {
 
     test('nested fields and embedded line breaks stay inline without losing content', () => {
         const html = render([JSON.stringify({ msg: 'First line\nSecond line\tindented', fields: { items: [1, 2] } })]);
-        assert.match(html, /First line\\nSecond line\\tindented/);
+        assert.match(html, /First line\\nSecond line\tindented/);
         assert.match(html, /\{&quot;items&quot;:\[1,2\]\}/);
         assert.doesNotMatch(html, /\n/);
     });
@@ -989,7 +992,7 @@ describe("Model API client", () => {
         const result = await addModel(input);
         assert.equal(result.created, true);
         assert.deepEqual(writes, [{
-            url: `${admin}/groups`, method: 'POST',
+            url: `${admin}/groups/publish`, method: 'POST',
             body: { ...input, name: 'public-model' },
         }]);
     });
@@ -1105,6 +1108,33 @@ describe("Model state", () => {
         for (const filters of [{ clusterId: 'a', modelQuery: 'code' }, { clusterId: 'deleted' }]) {
             assert.deepEqual(filterServiceFlow(clusters, memberGroups, filters), { clusters: [], memberGroups: [] });
         }
+    });
+
+    test('model service status filters active and disabled groups', () => {
+        const disabled = filterServiceFlow(clusters, memberGroups, { status: 'disabled' });
+        assert.deepEqual(disabled.clusters, clusters.slice(0, 2));
+        assert.deepEqual(disabled.memberGroups.map((group) => group.id), ['chat']);
+
+        const active = filterServiceFlow(clusters, memberGroups, { status: 'active' });
+        assert.deepEqual(active.clusters, [clusters[1]]);
+        assert.deepEqual(active.memberGroups.map((group) => group.id), ['code']);
+
+        assert.deepEqual(filterServiceFlow(clusters, memberGroups, { status: 'unknown' }), { clusters: [], memberGroups: [] });
+    });
+
+    test('status combines with cluster and public model filters', () => {
+        const result = filterServiceFlow(clusters, memberGroups, {
+            clusterId: 'a',
+            status: 'disabled',
+            modelQuery: 'chat',
+        });
+        assert.deepEqual(result.clusters, [clusters[0]]);
+        assert.deepEqual(result.memberGroups.map((group) => group.id), ['chat']);
+
+        assert.deepEqual(
+            filterServiceFlow(clusters, memberGroups, { clusterId: 'b', status: 'disabled', modelQuery: 'code' }),
+            { clusters: [], memberGroups: [] },
+        );
     });
 
     test('the same public name remains visible in every matching cluster', () => {

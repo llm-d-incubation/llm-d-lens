@@ -44,9 +44,9 @@ export function ModelCacheStorageList({ volumes, loading, clusterNameById = {}, 
                             <span className="truncate text-xs font-semibold text-slate-100" title={volume.name}>{volume.name}</span>
                         </div>
                         <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                            <div><dt className="text-slate-600">Capacity</dt><dd className="truncate text-slate-300">{capacityLabel(volume)}</dd></div>
-                            <div><dt className="text-slate-600">Cluster</dt><dd className="truncate text-slate-300">{clusterNameById[volume.clusterId] || volume.clusterId || '—'}</dd></div>
-                            <div className="col-span-2"><dt className="text-slate-600">Location</dt><dd className="truncate font-mono text-slate-300">{volumeLocation(volume)}</dd></div>
+                            <div><dt className="text-[#9ca3af] dark:text-slate-600">Capacity</dt><dd className="truncate text-[#1f2937] dark:text-slate-300">{capacityLabel(volume)}</dd></div>
+                            <div><dt className="text-[#9ca3af] dark:text-slate-600">Cluster</dt><dd className="truncate text-[#1f2937] dark:text-slate-300">{clusterNameById[volume.clusterId] || volume.clusterId || '—'}</dd></div>
+                            <div className="col-span-2"><dt className="text-[#9ca3af] dark:text-slate-600">Location</dt><dd className="truncate font-mono text-[#1f2937] dark:text-slate-300">{volumeLocation(volume)}</dd></div>
                         </dl>
                     </button>
                 );

@@ -21,6 +21,7 @@ from llm_d_lens.model_cache.service import (
     ModelCacheEntryExistsError,
     ModelCacheInvalidStateError,
     ModelCacheNotFoundError,
+    ModelCacheVolumePurposeError,
     ModelCatalogNotSupportedError,
     default_service,
 )
@@ -102,6 +103,8 @@ async def create_entry(request: ModelCacheCreateRequest) -> dict:
                 "storageVolumeId": error.entry.storage_volume_id,
             },
         )
+    except ModelCacheVolumePurposeError as error:
+        return problem(409, "Storage volume not usable for model cache", str(error), "storage_volume_not_model_cache")
     except ModelCatalogNotSupportedError as error:
         return problem(501, "Model Catalog not supported", str(error), "model_catalog_not_supported")
     except ValueError as error:

@@ -64,7 +64,7 @@ function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit,
     return (
         <div className="flex items-center justify-end gap-1">
             <>
-                {busy && <Loader2 size={14} className="mr-1 animate-spin text-cyan-300" aria-hidden="true" />}
+                {busy && <Loader2 size={14} className="mr-1 animate-spin text-[#037ffc] dark:text-cyan-300" aria-hidden="true" />}
                 {canConnect && (
                     <button
                         type="button"
@@ -72,7 +72,7 @@ function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit,
                         disabled={busy || connecting}
                         aria-label={`Connect local endpoint for ${name}`}
                         title="Create local port-forward"
-                        className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-cyan-200 disabled:opacity-40"
+                        className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-[#037ffc] disabled:opacity-40 dark:hover:text-cyan-200"
                     >
                         {connecting ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Link2 size={14} />}
                     </button>
@@ -83,7 +83,7 @@ function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit,
                     disabled={busy}
                     aria-label={`View details of ${name}`}
                     title="View details"
-                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-slate-100 disabled:opacity-40"
+                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-[#037ffc] disabled:opacity-40 dark:hover:text-slate-100"
                 >
                     <Info size={14} />
                 </button>
@@ -93,7 +93,7 @@ function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit,
                     disabled={busy}
                     aria-label={`Edit description of ${name}`}
                     title="Edit name and description"
-                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-slate-100 disabled:opacity-40"
+                    className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-800/70 hover:text-[#037ffc] disabled:opacity-40 dark:hover:text-slate-100"
                 >
                     <Pencil size={14} />
                 </button>}
@@ -105,8 +105,8 @@ function RowActions({ item, busy, connecting, onInspect, onViewPodsLogs, onEdit,
                     title="View Pods & Logs"
                     className={`rounded-lg p-1.5 transition disabled:opacity-40 ${
                         isInProgress
-                            ? 'text-sky-400 bg-sky-500/10 border border-sky-500/30 animate-pulse hover:bg-sky-500/20'
-                            : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100'
+                            ? 'text-[#037ffc] bg-[#037ffc1a] border border-[#037ffc] animate-pulse hover:bg-[#037ffc26] dark:text-sky-400 dark:bg-sky-500/10 dark:border-sky-500/30 dark:hover:bg-sky-500/20'
+                            : 'text-slate-400 hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-100'
                     }`}
                 >
                     <FileText size={14} />
@@ -152,7 +152,7 @@ function PodsExpandPanel({ pods, loading, error }) {
                             <th scope="col" className="py-1 pr-3 font-medium">Pod IP</th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/40">
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800/40">
                         {list.map((pod) => (
                             <tr key={pod.name}>
                                 <td className="py-1 pl-10 pr-3 font-mono text-slate-300">{pod.name}</td>
@@ -182,7 +182,7 @@ function ExpandToggle({ expanded, onToggle, name }) {
             aria-expanded={expanded}
             aria-label={expanded ? `Hide pods for ${name}` : `Show pods for ${name}`}
             title={expanded ? 'Hide pods' : 'Show pods'}
-            className="shrink-0 rounded p-0.5 text-slate-500 transition hover:bg-slate-800/70 hover:text-slate-200"
+            className="shrink-0 rounded p-0.5 text-slate-500 transition hover:bg-slate-800/70 hover:text-[#037ffc] dark:hover:text-slate-200"
         >
             {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
@@ -246,7 +246,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                             <th scope="col" className="px-4 py-3 text-right text-[10px] font-semibold uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/70">
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800/70">
         {items.map((item) => {
                             const internalEndpoint = deploymentInternalEndpoint(item);
                             const busy = mutatingId === item.execution_id;
@@ -257,7 +257,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                 <Fragment key={item.execution_id}>
                                 <tr
                                     aria-busy={busy}
-                                    className="align-top transition-colors hover:bg-slate-800/40"
+                                    className="align-top transition-colors hover:bg-[#037ffc0d] dark:hover:bg-slate-800/40"
                                 >
                                     <td className="max-w-[260px] px-4 py-3 text-left">
                                         <div className="flex items-start gap-2">
@@ -300,7 +300,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                 </tr>
                                 {expanded && (
                                     <tr className="bg-slate-950/50">
-                                        <td colSpan={7} className="border-t border-slate-800/60 p-0">
+                                        <td colSpan={7} className="border-t border-slate-200 p-0 dark:border-slate-800/60">
                                             <PodsExpandPanel
                                                 pods={pods}
                                                 loading={podsLoadingId === item.execution_id}
@@ -365,7 +365,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                     </div>
                                 </div>
                             )}
-                            <div className="mt-3 border-t border-slate-800/60 pt-2">
+                            <div className="mt-3 border-t border-slate-200 pt-2 dark:border-slate-800/60">
                                 <RowActions item={item} busy={busy} connecting={connecting} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} />
                             </div>
                             {expanded && (

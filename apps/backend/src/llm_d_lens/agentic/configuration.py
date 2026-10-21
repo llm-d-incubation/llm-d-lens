@@ -104,8 +104,11 @@ def build_agentic_configuration(
         content["guideVariant"] = candidate.guide_variant or "vllm"
     elif candidate.provider_ref == "tiered-prefix-cache":
         configuration_type = "tiered_cache"
-        content["cache"] = {"variant": candidate.guide_variant or "native/cpu/base"}
-        content["guideVariant"] = candidate.guide_variant or "native/cpu/base"
+        variant = candidate.guide_variant or "native/cpu"
+        if variant == "native/cpu/base":
+            variant = "native/cpu"
+        content["cache"] = {"variant": variant}
+        content["guideVariant"] = variant
     elif candidate.provider_ref == "precise-prefix-cache-routing":
         content["router"] = {}
 

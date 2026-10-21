@@ -27,39 +27,12 @@ import remarkGfm from 'remark-gfm';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../../shared/ui/ModulePage';
 import { Button } from '../../../../shared/ui/Button';
+import { AnimatedBotIcon } from '../../../../shared/ui/AnimatedBotIcon';
 import { listClusters, openClusterSession, streamPlaygroundChat } from './playgroundBackend';
 import { listDeploymentExecutions } from '../../../optimization';
 import { listAIProviders } from '../../../ai-providers';
 import { getMicUnavailableReason, isSpeechToTextSupported, SPEECH_TO_TEXT_LANGUAGES, transcribeAudioBlob } from './speechToText';
-
-// A playful variant of lucide's Bot icon: the eyes (the two short vertical
-// bars) occasionally blink, and the whole icon occasionally hops in place.
-// Pure CSS animation (see .prism-bot-icon / .prism-bot-eyes in index.css) so
-// it costs nothing beyond the header render.
-function AnimatedBotIcon({ className }) {
-    return (
-        <svg
-            className={`prism-bot-icon ${className || ''}`}
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-        >
-            <path d="M12 8V4H8" />
-            <rect width="16" height="12" x="4" y="8" rx="2" />
-            <path d="M2 14h2" />
-            <path d="M20 14h2" />
-            <g className="prism-bot-eyes">
-                <path d="M15 13v2" />
-                <path d="M9 13v2" />
-            </g>
-        </svg>
-    );
-}
+import { consumeAssistantDraft } from '../../../../shared/lib/assistantHandoff';
 
 // A larger, rotating pool of prompts shown as floating speech bubbles near
 // the bot icon — more variety than the fixed chip row since these take turns
@@ -328,7 +301,7 @@ function ChatMessage({ message, onResolveConfirm }) {
             <div
                 className={
                     'max-w-2xl rounded-xl px-3.5 py-2 text-sm ' +
-                    (isUser ? 'whitespace-pre-wrap bg-sky-500/10 text-slate-100' : 'markdown-body bg-slate-800/70 text-slate-100')
+                    (isUser ? 'whitespace-pre-wrap bg-sky-500/10 text-slate-100' : 'assistant-message-bubble markdown-body bg-slate-800/70 text-slate-100')
                 }
             >
                 {isUser ? (
@@ -378,11 +351,13 @@ function createDefaultChatSession() {
 }
 let chatSession = createDefaultChatSession();
 
+const INTERNAL_PROVIDER_ENABLED = false;
+
 export default function PlaygroundPage({ onToggleMobileNav }) {
     // "AI provider" mode: Internal (pick a Cluster, then a Deployment already
     // running on it) or External (pick a saved External AI provider — see
     // Resources → External providers). Only one is active at a time.
-    const [providerMode, setProviderMode] = useState(() => chatSession.providerMode);
+    const [providerMode, setProviderMode] = useState(() => (INTERNAL_PROVIDER_ENABLED ? chatSession.providerMode : 'external'));
 
     const [clusters, setClusters] = useState([]);
     const [loadingClusters, setLoadingClusters] = useState(true);
@@ -400,12 +375,18 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     const [loadingAiProviders, setLoadingAiProviders] = useState(true);
     const [aiProvidersError, setAiProvidersError] = useState('');
     const [selectedProviderId, setSelectedProviderId] = useState(() => chatSession.selectedProviderId);
+    const [handoffNotice, setHandoffNotice] = useState('');
+    const handoffProviderRef = useRef(null);
+    const consumedDraftRef = useRef(false);
+    const autoSendPromptRef = useRef(null);
+    const inputRef = useRef(null);
 
     const [messages, setMessages] = useState(() => chatSession.messages);
     const [input, setInput] = useState('');
     const [sending, setSending] = useState(false);
     const [chatError, setChatError] = useState('');
     const abortRef = useRef(null);
+    const turnGenerationRef = useRef(0);
     // Resume data for tool calls currently paused on a `confirm_required`
     // event, keyed by tool_call id: the exact resume conversation blob plus
     // the shared thinkChunks/toolEntries arrays for that turn, so approving
@@ -416,6 +397,19 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     const pendingConfirmationsRef = useRef(new Map());
     const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
     const chatScrollRef = useRef(null);
+
+    useEffect(() => {
+        if (consumedDraftRef.current) return;
+        consumedDraftRef.current = true;
+        const draft = consumeAssistantDraft();
+        if (!draft) return;
+        handoffProviderRef.current = draft.providerId;
+        autoSendPromptRef.current = draft.prompt;
+        setProviderMode('external');
+        setInput(draft.prompt);
+        if (draft.providerId) setSelectedProviderId(draft.providerId);
+        window.requestAnimationFrame(() => inputRef.current?.focus());
+    }, []);
 
     // Context-window usage for the small number + pie indicator next to the
     // input box: maxModelLen comes from the backend's best-effort discovery
@@ -434,6 +428,9 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     const [recording, setRecording] = useState(false);
     const [transcribing, setTranscribing] = useState(false);
     const [micError, setMicError] = useState('');
+    const [voiceStatus, setVoiceStatus] = useState('');
+    const [voiceProgress, setVoiceProgress] = useState(null);
+    const [voiceFile, setVoiceFile] = useState('');
     const [micLanguage, setMicLanguage] = useState(SPEECH_TO_TEXT_LANGUAGES[0].value);
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
@@ -471,6 +468,9 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
             const openAiItems = items.filter((provider) => provider.providerType === 'openai');
             setAiProviders(openAiItems);
             setSelectedProviderId((current) => (current && openAiItems.some((provider) => provider.id === current) ? current : openAiItems[0]?.id || ''));
+            if (handoffProviderRef.current && !openAiItems.some((provider) => provider.id === handoffProviderRef.current)) {
+                setHandoffNotice('The AI provider selected on Welcome is no longer available. Choose another provider before sending.');
+            }
         } catch (failure) {
             setAiProvidersError(failure instanceof Error ? failure.message : 'Failed to load External AI providers');
         } finally {
@@ -623,7 +623,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                 },
             })
             : (selectedProvider && {
-                label: selectedProvider.name,
+                label: selectedProvider.name?.trim() || selectedProvider.model || selectedProvider.id,
                 model: selectedProvider.model || 'default',
                 deploymentPayload: {
                     providerId: selectedProvider.id,
@@ -636,6 +636,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     // confirm_required event) against a shared thinkChunks/toolEntries pair,
     // so both call sites funnel through identical event handling.
     const driveChatStream = useCallback(async (requestBody, thinkChunks, toolEntries) => {
+        const generation = ++turnGenerationRef.current;
         setChatError('');
         setSending(true);
         const controller = new AbortController();
@@ -645,6 +646,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
             await streamPlaygroundChat(
                 requestBody,
                 (type, data) => {
+                    if (generation !== turnGenerationRef.current) return;
                     if (type === 'think') {
                         thinkChunks.push(data.content);
                         setMessages((prev) => withInterstitial(prev, thinkChunks, toolEntries));
@@ -758,21 +760,57 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                 controller.signal,
             );
         } catch (failure) {
+            if (generation !== turnGenerationRef.current) return;
+            if (controller.signal.aborted || (failure instanceof Error && failure.name === 'AbortError')) return;
             setChatError(failure instanceof Error ? failure.message : 'Playground chat failed');
             setMessages((prev) => replacePendingAssistant(prev, null));
         } finally {
-            setSending(false);
-            abortRef.current = null;
+            if (generation === turnGenerationRef.current) {
+                setSending(false);
+                abortRef.current = null;
+            }
         }
     }, []);
 
+    const stopCurrentTurn = useCallback(({ announce = true } = {}) => {
+        const controller = abortRef.current;
+        if (!controller) return;
+        abortRef.current = null;
+        turnGenerationRef.current += 1;
+        controller.abort();
+        setSending(false);
+        setCompacting(false);
+        setMessages((prev) => {
+            const finalized = finalizePendingTurn(prev);
+            return announce ? [...finalized, { role: 'system-note', content: 'Stopped current response.' }] : finalized;
+        });
+    }, []);
+
+    useEffect(() => {
+        const onKeyDown = (event) => {
+            if (event.key !== 'Escape' || !abortRef.current) return;
+            event.preventDefault();
+            stopCurrentTurn();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [stopCurrentTurn]);
+
     const sendMessage = useCallback(async (overrideText, { readOnly = false } = {}) => {
         const text = (overrideText ?? input).trim();
-        if (!text || !activeService || sending || pendingConfirmCount > 0 || compacting) return;
+        if (!text || !activeService || pendingConfirmCount > 0 || compacting) return;
+        if (abortRef.current) stopCurrentTurn({ announce: false });
         setInput('');
 
-        const history = [...messages, { role: 'user', content: text }];
-        setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', pending: true }]);
+        const history = [
+            ...messages.filter((message) => !(message.role === 'assistant' && message.pending)),
+            { role: 'user', content: text },
+        ];
+        setMessages((prev) => [
+            ...prev.filter((message) => !(message.role === 'assistant' && message.pending)),
+            { role: 'user', content: text },
+            { role: 'assistant', content: '', pending: true },
+        ]);
 
         const openAiMessages = history
             .filter((message) => message.role === 'user' || message.role === 'assistant')
@@ -783,7 +821,23 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
         // turn to read-only Lens MCP tools so a misheard word can never
         // even reach a write/approve-tier tool, confirmation dialog or not.
         await driveChatStream({ deployment: activeService.deploymentPayload, messages: openAiMessages, readOnly }, [], []);
-    }, [input, messages, activeService, sending, pendingConfirmCount, compacting, driveChatStream]);
+    }, [input, messages, activeService, pendingConfirmCount, compacting, driveChatStream, stopCurrentTurn]);
+
+    // A prompt staged from Welcome is submitted once the selected provider and
+    // its service are ready. The draft is consumed exactly once.
+    useEffect(() => {
+        const prompt = autoSendPromptRef.current;
+        if (
+            !prompt
+            || providerMode !== 'external'
+            || !activeService
+            || sending
+            || pendingConfirmCount > 0
+            || compacting
+        ) return;
+        autoSendPromptRef.current = null;
+        sendMessage(prompt);
+    }, [activeService, compacting, pendingConfirmCount, providerMode, sendMessage, sending]);
 
     // Approve or reject a paused approve-tier tool call, resuming the
     // exact turn it paused (same reasoning block, same underlying
@@ -815,8 +869,18 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     // utterance is transcribed in one pass instead of streaming partial audio.
     const startRecording = useCallback(async () => {
         setMicError('');
+        setVoiceStatus('');
+        setVoiceProgress(null);
+        setVoiceFile('');
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                });
+            } catch {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            }
             const recorder = new MediaRecorder(stream);
             audioChunksRef.current = [];
             recorder.ondataavailable = (event) => {
@@ -824,18 +888,57 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
             };
             recorder.onstop = async () => {
                 stream.getTracks().forEach((track) => track.stop());
-                const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+                const chunks = audioChunksRef.current;
+                audioChunksRef.current = [];
+                if (!chunks.length) {
+                    setMicError('No audio was recorded. Please try again.');
+                    return;
+                }
+                const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
                 setTranscribing(true);
+                setVoiceStatus('Preparing speech model…');
+                setVoiceProgress(null);
+                setVoiceFile('');
                 try {
-                    const text = await transcribeAudioBlob(blob, { language: micLanguage });
+                    const text = await transcribeAudioBlob(blob, {
+                        language: micLanguage,
+                        onModelProgress: (event) => {
+                            const file = String(event?.file || '').split('/').pop();
+                            const isModelFile = file.endsWith('.onnx');
+                            if (event?.status === 'progress' && isModelFile) {
+                                const percent = Math.max(0, Math.min(100, Math.round(event.progress || 0)));
+                                setVoiceFile(file);
+                                setVoiceProgress(percent);
+                                setVoiceStatus('Downloading speech model…');
+                            } else if (event?.status === 'initiate' || event?.status === 'download') {
+                                if (isModelFile) {
+                                    setVoiceFile(file);
+                                    setVoiceProgress(null);
+                                }
+                                if (isModelFile || !file) setVoiceStatus('Downloading speech model…');
+                            } else if (event?.status === 'done') {
+                                if (isModelFile || !file) setVoiceStatus('Downloading speech model…');
+                            } else if (event?.status === 'ready') {
+                                setVoiceStatus('Preparing speech model…');
+                            }
+                        },
+                        onModelReady: () => {
+                            setVoiceProgress(null);
+                            setVoiceFile('');
+                            setVoiceStatus('Transcribing your voice message…');
+                        },
+                    });
                     if (text) sendMessage(text, { readOnly: true });
                 } catch (failure) {
                     setMicError(failure instanceof Error ? failure.message : 'Speech-to-text failed');
                 } finally {
+                    setVoiceStatus('');
+                    setVoiceProgress(null);
+                    setVoiceFile('');
                     setTranscribing(false);
                 }
             };
-            recorder.start();
+            recorder.start(250);
             mediaRecorderRef.current = recorder;
             setRecording(true);
         } catch (failure) {
@@ -844,6 +947,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     }, [micLanguage, sendMessage]);
 
     const stopRecording = useCallback(() => {
+        mediaRecorderRef.current?.requestData?.();
         mediaRecorderRef.current?.stop();
         setRecording(false);
     }, []);
@@ -876,7 +980,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                     >
                         {messages.length === 0 ? (
                             <div className="flex flex-col items-center gap-2 text-center">
-                                <div className="relative mb-2 flex h-24 w-24 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
+                                <div className="assistant-bot-badge relative mb-2 flex h-24 w-24 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
                                     <AnimatedBotIcon className="h-12 w-12" />
                                     {BUBBLE_SUGGESTED_QUESTIONS.map((question, index) => (
                                         <button
@@ -906,7 +1010,25 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                         )}
                     </div>
                     {chatError && <p className="border-t border-slate-800 px-4 py-2 text-xs text-red-400">{chatError}</p>}
+                    {handoffNotice && <p className="border-t border-slate-800 px-4 py-2 text-xs text-amber-300">{handoffNotice}</p>}
                     {micError && <p className="border-t border-slate-800 px-4 py-2 text-xs text-red-400">{micError}</p>}
+                    {voiceStatus && (
+                        <div className="flex items-center gap-2 border-t border-slate-800 px-4 py-2 text-[11px] text-cyan-300" role="status">
+                            <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />
+                            <span className="min-w-0 truncate">
+                                {voiceStatus}
+                                {voiceFile ? ` · ${voiceFile}` : ''}
+                            </span>
+                            {voiceProgress !== null && (
+                                <>
+                                    <span className="shrink-0 font-mono">{voiceProgress}%</span>
+                                    <span className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-slate-800">
+                                        <span className="block h-full rounded-full bg-cyan-400 transition-[width]" style={{ width: `${voiceProgress}%` }} />
+                                    </span>
+                                </>
+                            )}
+                        </div>
+                    )}
                     {typeof maxModelLen === 'number' && (
                         <div className="flex items-center justify-end gap-1.5 px-3 pt-2 text-[10px] text-slate-500">
                             <ContextUsagePie ratio={usedTokens / maxModelLen} />
@@ -918,18 +1040,19 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                     <div className="flex items-center gap-2 px-3 pt-2">
                         <div className="relative flex-1">
                             <input
+                                ref={inputRef}
                                 className="w-full rounded-lg border border-slate-700 bg-slate-950 py-3.5 pl-3 pr-20 text-sm text-slate-100 disabled:opacity-50"
                                 placeholder={
                                     transcribing
-                                        ? 'Transcribing your voice message…'
+                                        ? (voiceStatus || 'Transcribing your voice message…')
                                         : recording
                                             ? 'Listening… click the mic again to stop'
                                             : activeService
-                                                ? 'Message Lens…'
+                                                ? (sending ? 'Message Lens… (Esc to stop)' : 'Message Lens…')
                                                 : 'Select an AI provider on the right first'
                                 }
                                 value={input}
-                                disabled={!activeService || sending || recording || transcribing || pendingConfirmCount > 0 || compacting}
+                                disabled={!activeService || recording || transcribing || pendingConfirmCount > 0 || compacting}
                                 onChange={(event) => setInput(event.target.value)}
                                 onKeyDown={(event) => {
                                     if (event.key === 'Enter' && !event.shiftKey) {
@@ -992,6 +1115,11 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                             </div>
                         </div>
                     </div>
+                    {sending && (
+                        <p className="px-3 pb-1 text-center text-[10px] text-slate-500">
+                            Type to interject or press Esc to stop.
+                        </p>
+                    )}
                     <p className="px-3 pb-2 pt-1 text-center text-[10px] text-slate-500">
                         llm-d Lens assistant is AI and can make mistakes.
                     </p>
@@ -1011,34 +1139,36 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                             </Button>
                         </div>
 
-                        <div className="mb-3 flex gap-1 rounded-lg border border-slate-700 bg-slate-950 p-0.5 text-xs font-semibold">
-                            <button
-                                type="button"
-                                onClick={() => setProviderMode('internal')}
-                                className={
-                                    'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
-                                    (providerMode === 'internal' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
-                                }
-                            >
-                                Internal
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setProviderMode('external')}
-                                className={
-                                    'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
-                                    (providerMode === 'external' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
-                                }
-                            >
-                                External
-                            </button>
-                        </div>
+                        {INTERNAL_PROVIDER_ENABLED && (
+                            <div className="mb-3 flex gap-1 rounded-lg border border-slate-700 bg-slate-950 p-0.5 text-xs font-semibold">
+                                <button
+                                    type="button"
+                                    onClick={() => setProviderMode('internal')}
+                                    className={
+                                        'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
+                                        (providerMode === 'internal' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
+                                    }
+                                >
+                                    Internal
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setProviderMode('external')}
+                                    className={
+                                        'flex-1 rounded-md px-2 py-1.5 transition-colors ' +
+                                        (providerMode === 'external' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200')
+                                    }
+                                >
+                                    External
+                                </button>
+                            </div>
+                        )}
 
                         <p className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-200/90">
                             Pick a model with a <span className="font-semibold">max context window of at least 32K tokens</span> (64K+
                             recommended). Lens Assistant sends its full tool catalog on every turn, so a smaller context window
                             leaves little room for actual conversation and tool results before older history has to be trimmed.
-                            So far this has only been tested against <span className="font-semibold">deepseek-v4-pro</span> —
+                            So far this has only been tested against <span className="font-semibold">deepseek-flash</span> —
                             other models may behave differently, especially around tool-calling reliability.
                         </p>
 
@@ -1108,7 +1238,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                                     </option>
                                     {aiProviders.map((provider) => (
                                         <option key={provider.id} value={provider.id}>
-                                            {provider.name} · {provider.model}
+                                            {provider.name?.trim() || provider.model || provider.id}
                                         </option>
                                     ))}
                                 </select>

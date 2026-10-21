@@ -54,7 +54,7 @@ export default function GuideCoreMetrics({details, runs, selected, guideType, on
     return <section aria-label="Guide core metrics" className="min-w-0 rounded-xl border border-slate-800 bg-slate-900/30 p-5">
         <header className="flex flex-wrap items-start justify-between gap-3">
             <h3 className="text-base font-semibold text-slate-100">{profile.title}</h3>
-            <div role="group" aria-label="Latency percentile" className="flex rounded-lg border border-slate-700 p-0.5">{['p95','p99'].map(value=><button key={value} type="button" aria-pressed={stat===value} onClick={()=>setStat(value)} className={`rounded-md px-3 py-1.5 text-xs ${stat===value?'bg-cyan-900/70 text-cyan-100':'text-slate-400 hover:text-slate-100'}`}>{value.toUpperCase()}</button>)}</div>
+            <div role="group" aria-label="Latency percentile" className="flex rounded-lg border border-slate-700 p-0.5">{['p95','p99'].map(value=><button key={value} type="button" aria-pressed={stat===value} onClick={()=>setStat(value)} className={`rounded-md px-3 py-1.5 text-xs ${stat===value?'details-percentile-active bg-cyan-900/70 text-cyan-100':'text-slate-400 hover:text-slate-100'}`}>{value.toUpperCase()}</button>)}</div>
         </header>
         {collection?.reason && ['empty','unavailable','failed'].includes(collection.status) && <span tabIndex={0} title={`${collectionScope}: ${collection.reason}`} className="mt-3 inline-block rounded border border-amber-900/50 px-2 py-1 text-xs text-amber-200">{collectionScope} unavailable</span>}
         <GuideMetricTable details={details} points={points} profile={profile} stat={stat} selected={selected} onSelect={inspectPoint} onInspect={onInspect}/>

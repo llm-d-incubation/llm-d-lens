@@ -1,0 +1,102 @@
+---
+title: 欢迎页
+description: 发起 Lens Assistant 对话、查看当前集群问题并打开常用运维操作。
+---
+
+欢迎页是运维人员的落地页。它包含欢迎语、Lens Assistant 输入框、当前集群问题和一组快捷操作。
+它不再重复展示集群容量、模型服务列表、部署历史或 Token 使用量；这些内容仍由各自页面负责。
+
+## 谁可以看到欢迎页
+
+管理员、维护者以及拥有 `cluster:cluster:read` 的自定义角色会看到侧边栏第一项“欢迎”。
+仅面向模型消费者的角色保留原有落地页。页面中的问题和操作始终按当前账号可访问的集群和权限过滤。
+如果当前账号没有可访问集群且拥有创建集群权限，欢迎页会提示打开创建集群向导。
+
+## 加入 Slack
+
+点击欢迎页右上角的 **Join Slack** 在新标签页中打开 llm-d Slack 工作区。
+
+## 打开文档
+
+点击欢迎页右上角的 **Documentation** 在新标签页中打开 Lens 文档。
+
+## 为项目点亮 Star
+
+点击欢迎页右上角的 **Star on GitHub**。Lens 会打开 GitHub 登录页，登录后进入
+`llm-d-incubation/llm-d-lens` 仓库。在 GitHub 页面上点击 **Star** 即可。
+
+## 使用 Lens Assistant
+
+1. 在 **Ask Lens Assistant** 中输入消息。
+2. 在输入框左下角选择 AI provider。
+3. 点击 **Send**，或按 `Ctrl+Enter` / `Cmd+Enter`。
+
+点击发送后会打开 Lens Assistant，自动选择你选择的 provider，并在 provider 就绪后
+自动提交消息。工具调用仍遵循 Assistant 原有的确认规则。消息只通过浏览器临时
+session storage 传递，不会写入 URL。
+
+下拉框只列出 Lens Assistant 可使用的 provider。没有可用 provider 时，发送按钮会禁用，
+输入框内会提供 **External providers** 链接。如果当前角色不能添加 provider，请联系管理员。
+如果 provider 列表加载失败，请重试，不要直接认为没有 provider。
+
+如果当前角色不能使用 Lens Assistant，页面会显示权限提示，而不是不可用的输入框；
+问题列表和有权限的快捷操作仍然可用。
+
+## 查看集群问题
+
+**Needs attention** 显示当前集群范围内的异常：
+
+- 没有任何可访问集群、集群没有 model-cache 存储卷，或记录的 HF_TOKEN Secret 已不存在。缺少存储卷的问题会链接到 **New storage volume**，并自动选好集群和 **Model cache** 用途。
+- 某个 model-cache 存储卷中没有任何模型，或集群的 model-cache 存储卷中没有任何可用模型。
+- 组件或节点未就绪。核心监控正常但缺少 Grafana dashboard 时以 info 级别提示。
+- 模型服务没有可用的服务路径，或 Gateway/IPP 不可用。
+- 后端部署持续出现服务压力或错误率升高。
+- 最近的部署失败，或已就绪但未发布为模型服务的部署。
+- 存储创建失败，或模型缓存下载/同步失败。
+- 活跃用户既没有直接角色、所在组也没有角色，或组没有任何角色绑定（info 级别）。用户相关问题会显示用户名，并链接到该用户的角色编辑位置。
+- 没有兼容的 External AI provider（info 级别）。
+
+每条问题包含严重程度、资源标识、证据、首次发现时间和诊断链接，例如
+标有 **To check**、**To fix** 或 **To resolve** 的按钮。遥测不足时会显示未知或过期，
+不会当成健康状态。
+
+使用区块标题旁的严重程度和集群选择器缩小范围。**View all issues** 打开完整的可筛选问题页面，并带上相同筛选条件。
+Lens 每 60 秒在后台检查当前问题并保存最新快照；页面每 15 秒读取该快照，静默刷新期间保留已有内容。
+切换页面不会重复触发检查。结果还会再次按你的集群访问范围和权限过滤。
+
+## 快捷操作
+
+右侧栏显示当前角色可以执行的操作：
+
+| 操作 | 打开内容 |
+| --- | --- |
+| Token usage analytics | 使用报告，查看已记录的 Token 消耗。 |
+| Add a model deployment | 模型市场，准备部署模型。 |
+| Publish a model service | 模型服务页面，并请求打开添加表单。 |
+| Launch benchmark | 评测页面，并打开新建任务向导。 |
+| Replay traces | 仿真页面，并打开新建任务表单。 |
+| Manage storages | 存储页面，查看或创建集群存储卷。 |
+| Cache a new model | 模型缓存页面，并请求打开下载表单。 |
+| Create a new cluster | 集群页面，并请求打开创建向导。 |
+
+快捷操作只负责跳转。表单、校验、确认和写操作仍在目标页面执行，并继续受权限控制。
+没有权限的操作不会显示。
+
+## 空状态与部分状态
+
+| 页面显示 | 含义 |
+| --- | --- |
+| All systems operational | 所有受监控集群的健康检查和遥测数据均正常，无需执行操作。 |
+| Cluster access needed | 当前账号没有可访问的集群，请联系管理员分配集群范围角色。 |
+| Some checks unavailable | 部分遥测或 Kubernetes 数据源没有返回结果。 |
+| No compatible provider | 请到 External providers 添加兼容的 OpenAI 类型 provider。 |
+| Assistant not available | 当前角色缺少 `playground:chat:use` 权限。 |
+
+## 相关页面
+
+- [模型市场](/user-guide/model-market)
+- [模型服务](/user-guide/model-services)
+- [模型缓存](/user-guide/model-cache)
+- [集群](/user-guide/clusters)
+- [外部提供方](/user-guide/external-providers)
+- [Lens Assistant](/user-guide/lens-assistant)

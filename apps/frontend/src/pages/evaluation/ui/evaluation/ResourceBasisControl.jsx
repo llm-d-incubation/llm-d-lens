@@ -27,6 +27,7 @@ export default function ResourceBasisControl({ onGenerate, hardware, disabled, l
         if (event.key === 'Escape' && open) { event.preventDefault(); close(); }
     }}>
         <Button ref={trigger} type="button" aria-haspopup={needsConfirmation ? 'dialog' : undefined} aria-expanded={open} disabled={disabled} isLoading={loading}
+            className="benchmark-blue-button not-dark:border-[#037ffc] not-dark:bg-[#037ffc] not-dark:text-white not-dark:hover:bg-[#037ffc]"
             onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -34,7 +35,7 @@ export default function ResourceBasisControl({ onGenerate, hardware, disabled, l
                 else if (needsConfirmation) setOpen(true);
                 else onGenerate('available');
             }}>
-            {!loading && <FileCode size={15} aria-hidden="true" />}
+            {!loading && <FileCode size={16} aria-hidden="true" />}
             {label}
         </Button>
         {open && <div ref={dialog} tabIndex={-1} role="dialog" aria-label="Insufficient available cards"

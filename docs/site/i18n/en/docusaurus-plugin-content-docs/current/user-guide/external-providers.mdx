@@ -10,12 +10,54 @@ model name and API key ready. For **Lens Assistant**, choose an OpenAI-compatibl
 
 1. On **External providers**, click **Add provider**.
 2. Enter a **Name**, choose **API type**, and copy **Base URL** and **Model** from your provider's API documentation.
-3. Paste the secret into **API key**, not the URL. Use a public HTTPS URL without a query string or fragment; private network addresses are not accepted.
+3. Paste the secret into **API key**, not the URL. Use a public HTTPS URL without a query string or fragment; private network addresses are not accepted. Enter the API root (for example `https://api.openai.com/`); a trailing `/v1` is also accepted.
 4. Keep **Timeout (seconds)** at its initial value for the first test, then click **Test connection**.
 5. Click **Add provider**. The provider appears in the table.
 
 A failed connection test does not prevent saving. Before using the provider,
 correct the URL, model or key and test again.
+
+## "Could not reach the provider"
+
+This means the Lens backend could not establish an HTTPS connection. The browser
+being able to open the URL is not sufficient: the backend host or container may
+have different DNS, outbound firewall rules or proxy settings.
+
+1. Confirm the URL is a public HTTPS address, not `localhost`, a LAN address or
+   a private hostname.
+2. From the machine or container running the Lens backend, probe the same host,
+   for example `curl -v https://api.openai.com/v1/models`.
+3. If outbound traffic requires a proxy, set `HTTPS_PROXY` (and `NO_PROXY` for
+   hosts that must bypass it) for the backend, then restart it.
+4. Check that the provider certificate is valid and the host is reachable from
+   your network. A provider blocked in your region needs a reachable
+   OpenAI-compatible endpoint or an approved proxy.
+5. Retest. The message now includes the transport error type and cause when one
+   is available; include it when asking an administrator for help.
+
+## "SSLv3 alert handshake failure"
+
+This is a TLS negotiation failure, not an API-key or model-name error.
+
+1. Confirm the URL uses `https://` **and** the port actually serves TLS. A vLLM,
+   Ollama or other HTTP service on port 8000/11434 is not an HTTPS endpoint;
+   expose it through an HTTPS ingress or reverse proxy.
+2. Use the DNS hostname, not a bare IP, when the provider uses virtual hosting
+   or requires SNI. The certificate must match that hostname.
+3. If the backend inherits an HTTPS proxy, Lens uses it by default and keeps
+   the original hostname/SNI. Set `LENS_TRUSTED_AI_PROVIDER_PROXY` only when you
+   need to pin a specific verified proxy URL; a mismatched value or proxy bypass
+   keeps application-side IP pinning, which can break SNI through some proxies.
+4. A provider that only supports TLS 1.0/1.1 or obsolete ciphers cannot
+   negotiate with the current OpenSSL defaults. Upgrade it or terminate TLS at
+   a modern reverse proxy.
+5. Run these on the Lens backend host to separate a provider/network problem
+   from a Lens problem:
+
+   ```bash
+   openssl s_client -connect provider.example:443 -servername provider.example -tls1_2 </dev/null
+   curl -v https://provider.example/v1/models
+   ```
 
 ## Search and filter providers
 

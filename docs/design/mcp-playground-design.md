@@ -212,6 +212,10 @@ Guardrails:
 
 ## 6. Playground frontend
 
+- Chat and tool-confirmation resumption use the shared `streamSseRequest` transport
+  in `apps/frontend/src/shared/api/sse.js`. Each POST to `/api/playground/chat`
+  sends the current `prism_csrf` cookie value in `X-Prism-CSRF`; Python enforces
+  the same CSRF check as other authenticated browser mutations.
 - Add top-level Playground navigation with multiple use cases; "Talk with your Prism" comes first.
 - **Select a Deployment before conversation.** Populate a dropdown/card selector through
   `list_ready_deployments`, showing current-session ready deployments with `gateway_endpoint`

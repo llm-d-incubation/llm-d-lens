@@ -243,7 +243,7 @@ def test_builtin_roles_keep_management_boundaries():
     assert "deployment:run:share" not in ALL_PERMISSIONS
     assert SHARE in BUILTIN_ROLE_PERMISSIONS["maintainer"]
     assert "model-service:group:manage" not in BUILTIN_ROLE_PERMISSIONS["maintainer"]
-    assert "model-service:gateway:manage" not in BUILTIN_ROLE_PERMISSIONS["maintainer"]
+    assert "model-service:gateway:manage" in BUILTIN_ROLE_PERMISSIONS["maintainer"]
     assert BUILTIN_ROLE_PERMISSIONS["end-user"] == {
         USE,
         "model-service:token:manage",

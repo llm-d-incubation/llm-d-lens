@@ -6,33 +6,35 @@ description: Ask questions about Lens resources and review actions before approv
 Use **Lens Assistant** to ask about clusters and deployments, or request an operation.
 For example: `List failed deployments in my clusters.`
 
-## Start a conversation with an internal deployment
+## Start a conversation
+
+Lens Assistant currently supports **External AI providers** only. Internal
+deployments are not supported yet.
 
 1. Open **Lens Assistant**.
-2. In the right-side **AI provider** panel, keep **Internal** selected.
-3. Under **1. Cluster**, open **Select a Cluster…** and choose a ready cluster.
-4. Under **2. Deployment (model service)**, open **Select a Deployment…** and choose a ready deployment.
-5. Click into the message box when its placeholder changes to **Message Lens…**.
-6. Type your question and press <kbd>Enter</kbd> to send it.
-7. Confirm the assistant is connected by checking the status card that starts with **Talking to**.
-
-Choose a model with at least a 32K-token context window; 64K or more is recommended.
-
-## Start a conversation with an external provider
-
-1. In **AI provider**, click **External**.
-2. Under **External AI provider**, open **Select an AI provider…** and choose a configured provider.
+2. Under **External AI provider**, open **Select an AI provider…** and choose a
+   configured provider.
 3. Click into the message box when its placeholder shows **Message Lens…**.
 4. Type your question and press <kbd>Enter</kbd>.
 
+Choose a model with at least a 32K-token context window; 64K or more is recommended.
 If the list is empty, ask an administrator to [add an OpenAI-compatible provider](/user-guide/external-providers).
 Anthropic-type providers are not supported by Lens Assistant.
 
 ## Start over with a new chat
 
 1. Click **New chat** in the page header.
-2. If needed, reselect **Internal** or **External**, then choose the service you want to use.
+2. If needed, reselect the External AI provider you want to use.
 3. Send the first message in the cleared conversation.
+
+## Interrupt or interject
+
+While Lens Assistant is working, the message box stays available.
+
+- Type a new message and press <kbd>Enter</kbd> to stop the current turn and send the new message.
+- Press <kbd>Esc</kbd> to stop the current turn without sending anything.
+
+Lens stops scheduling further tool calls and discards the interrupted turn. A tool call that was already running may finish in the background, but its result is not added to the conversation.
 
 ## Review the assistant's reasoning and tool activity
 
@@ -65,6 +67,11 @@ instead of running it.
 3. Speak your request.
 4. Click the microphone again when its tooltip changes to **Stop recording**.
 5. Wait for **Transcribing your voice message…**, then let Lens send the transcribed message.
+
+The first transcription downloads a Whisper model through Lens; the composer
+shows download progress and then the transcription status. Audio processing
+stays in your browser; model files are proxied because browsers on proxy-only
+networks may not reach the Hugging Face CDN directly.
 
 ## Connect an external MCP client
 

@@ -43,3 +43,4 @@ from llm_d_lens.db.models import simulation_task as simulation_task  # noqa: F40
 from llm_d_lens.db.models import storage_volume as storage_volume  # noqa: F401
 from llm_d_lens.db.models import usage_record as usage_record  # noqa: F401
 from llm_d_lens.db.models import user as user  # noqa: F401
+from llm_d_lens.db.models import welcome_issue_snapshot as welcome_issue_snapshot  # noqa: F401

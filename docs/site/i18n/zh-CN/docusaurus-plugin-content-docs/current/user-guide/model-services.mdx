@@ -22,15 +22,14 @@ description: 发布部署、创建 API 密钥并调用模型。
 
 1. 打开 **API keys（API 密钥）**，点击 **New key（新建密钥）**。
 2. 在 **Key name（密钥名称）**中填写便于识别的名称，点击 **Create（创建）**。
-3. 在 **Copy your key now** 中点击 **Copy**，立即保存完整密钥。
-4. 保存后点击 **I saved it（我已保存）**。
+3. 在 **Copy your key now** 中点击 **Copy and save**。完整密钥会复制到剪贴板并关闭弹窗；密钥只显示一次，请妥善保存。
 
 完整密钥只显示一次，不要分享给其他用户或写入代码仓库。
 
 ## 重置或吊销 API 密钥
 
 1. 打开 **API keys**。
-2. 重置默认密钥：点击 **Reset**，复制并保存新密钥，再点击 **I saved it**。
+2. 重置默认密钥：点击 **Reset**，然后在 **Copy your key now** 中点击 **Copy and save**。
 3. 吊销密钥：打开该行操作，在 **Revoke API key** 中点击 **Revoke**。
 
 旧密钥会失效。重置后请更新所有使用旧密钥的客户端。
@@ -45,6 +44,10 @@ description: 发布部署、创建 API 密钥并调用模型。
 6. 点击 **Add**。新名称会同时创建模型服务和模型服务器；同一集群中的已有名称会向该模型添加部署并复用 HTTPRoute。点击 **Cancel** 放弃操作。
 7. 在 **Service flow（服务流程）**中检查状态，然后到 **My services** 复制 **cURL** 请求进行调用。
 
+当公开模型名与 provider 模型名不一致时，Lens 会为该服务的 InferencePool 创建
+`InferenceModelRewrite`。共享 Gateway 在请求到达模型服务器前用它改写请求体中的
+`model` 字段，因此客户端使用公开模型名，模型引擎仍保留自己的模型名。
+
 每个字段名称旁都有问号图标，悬停或通过键盘聚焦可查看说明。切换集群会清空提供方选择和
 提供方模型名称。没有就绪部署时，界面会明确说明原因。新模型的两个记录在同一事务内创建，
 任意一个保存失败都不会留下部分记录。
@@ -55,11 +58,12 @@ description: 发布部署、创建 API 密钥并调用模型。
 
 ## 筛选服务流程
 
-使用 **Service flow** 上方的 **Cluster** 和 **Public model name** 筛选拓扑。
-集群默认是 **All clusters**；公开模型名称支持部分匹配，忽略大小写和首尾空格，
-并提供所选集群内的名称建议。两个条件同时生效。
+使用 **Service flow** 上方的 **Cluster**、**Model service status** 和
+**Public model name** 筛选拓扑。集群默认是 **All clusters**；状态可选
+**All statuses**、**Active** 和 **Disabled**。公开模型名称支持部分匹配，
+忽略大小写和首尾空格，并提供所选集群内的名称建议。所有条件同时生效。
 
-按模型名称搜索时，没有匹配模型的集群会隐藏；只选集群时，即使没有模型，
+按模型名称或状态筛选时，没有匹配服务的集群会隐藏；只选集群时，即使没有模型，
 也保留 Gateway 和 IPP。点击重置图标 **Clear filters** 恢复完整拓扑。
 自动刷新保留筛选条件，不改变提供方状态、权重、路由或页面级 **Reconcile** 的作用范围。
 
@@ -119,7 +123,9 @@ HTTPRoute 权重路由访问该模型所有在线且权重为正的提供方。
 ## 管理模型访问权限
 
 admin 和 maintainer 可以管理其权限范围内集群的模型推理授权。
-这不会额外赋予 maintainer 创建、删除模型服务或管理共享 Gateway 的权限。
+Maintainer 还可以把所辖集群中的就绪部署发布为新的公开模型名称，添加或移除提供方，
+启动或停止模型服务，删除空的模型服务，并维护共享 Gateway 和 IPP（安装、启停、配置和协调）。
+编辑模型服务元数据或选择策略仍仅限 admin。
 
 1. 打开公开模型名称旁的菜单，选择 **Manage access**。
 2. 在右侧抽屉中选择 **User** 或 **Group**，然后选择授权对象。
@@ -196,6 +202,7 @@ EPP 和模型服务器故障仍可见，单纯 standby 不会触发 Gateway/IPP 
 
 | 目标 | 组件与操作 |
 | --- | --- |
+| 修改网关 provider、暴露端口、host/IP 或 Lens 地址 | **Gateway → Configure**；保存后会协调共享网关。需要集群编辑权限。 |
 | 安装缺失的网关 | **Gateway → Install** |
 | 应用已保存的网关和路由设置 | **Gateway → Reconcile**；页面顶部的 **Reconcile** 处理所有有服务成员的集群 |
 | 查看网关或载荷处理器日志 | **Gateway → View logs** 或 **IPP → View logs**；组件停止或未安装时禁用，悬停提示先启动或安装 |

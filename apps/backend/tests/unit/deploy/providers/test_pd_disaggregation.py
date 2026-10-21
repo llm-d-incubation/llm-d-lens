@@ -10,10 +10,61 @@ import pytest
 import yaml
 
 from llm_d_lens.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
-from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
+from llm_d_lens.deploy.providers.guide_adapter import (
+    GuideDefinition,
+    GuideDeploymentArtifact,
+    serving_arguments,
+    set_vllm_argument,
+)
 from llm_d_lens.deploy.providers.pd_disaggregation import PdDisaggregationAdapter
 from llm_d_lens.deploy.providers.storage_mount import require_cached_model
 from tests.unit.deploy.providers.test_storage_mount import cached_model as cached_model
+
+
+def test_serving_argument_defaults_and_role_precedence():
+    assert serving_arguments({}, {}) == {}
+    assert serving_arguments({"maxModelLen": 4096}, {}) == {"max-model-len": 4096}
+    assert serving_arguments({"maxModelLen": 4096}, {"maxModelLen": 2048}) == {"max-model-len": 2048}
+    assert serving_arguments({}, {"gpuMemoryUtilization": 1}) == {"gpu-memory-utilization": 1}
+
+
+@pytest.mark.parametrize("field", ["maxModelLen", "maxNumSeqs", "blockSize", "maxNumBatchedTokens"])
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "4096"])
+def test_serving_integer_controls_reject_invalid_values(field, value):
+    with pytest.raises(ValueError, match=field):
+        serving_arguments({}, {field: value})
+
+
+@pytest.mark.parametrize("value", [True, 0, -0.1, 1.1, "0.9", float("nan"), float("inf")])
+def test_memory_utilization_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="gpuMemoryUtilization"):
+        serving_arguments({}, {"gpuMemoryUtilization": value})
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--max-model-len=32000"],
+        ["--max-model-len", "32000"],
+        ["--max-model-len=32000", "--max-model-len", "8192"],
+        [],
+    ],
+)
+def test_argument_replacement_leaves_one_effective_value(arguments):
+    args = ["org/model", *arguments, "--kv-transfer-config", '{"kv_role":"kv_both"}']
+    assert set_vllm_argument(args, "max-model-len", 4096) == [
+        "org/model",
+        "--kv-transfer-config",
+        '{"kv_role":"kv_both"}',
+        "--max-model-len=4096",
+    ]
+
+
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_boolean_arguments_replace_existing_positive_and_negative_forms(value):
+    args = ["model", "--enable-prefix-caching", "--no-enable-prefix-caching", "--enable-prefix-caching=false"]
+    expected = "--enable-prefix-caching" if value == "true" else "--no-enable-prefix-caching"
+    assert set_vllm_argument(args, "enable-prefix-caching", value) == ["model", expected]
 
 
 class _ReadinessRunner:
@@ -126,8 +177,9 @@ def _asset(name: str, content: str) -> dict[str, str]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("read_only", [False, True])
+@pytest.mark.parametrize("accelerator", ["xpu", "nvidia"])
 async def test_render_mounts_selected_cache_volume_for_both_roles(
-    monkeypatch, tmp_path: Path, read_only: bool, cached_model
+    monkeypatch, tmp_path: Path, read_only: bool, accelerator: str, cached_model
 ):
     import llm_d_lens.deploy.providers.pd_disaggregation as pd
 
@@ -135,7 +187,18 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
         {
             "kind": "Deployment",
             "metadata": {"name": f"pd-disaggregation-vllm-{role}"},
-            "spec": {"template": {"spec": {"containers": [{"name": "modelserver", "args": ["old-model"]}]}}},
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "modelserver",
+                                "args": ["old-model", "--max-model-len=32000", "--max-num-seqs", "16"],
+                            }
+                        ]
+                    }
+                }
+            },
         }
         for role in ("prefill", "decode")
     ]
@@ -143,7 +206,6 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     process.communicate = AsyncMock(return_value=(yaml.safe_dump_all(documents).encode(), b""))
     monkeypatch.setattr(pd.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
     monkeypatch.setattr(pd, "gpu_device_selectors", lambda **_: [])
-    monkeypatch.setattr(pd, "requires_dra_claim", lambda **_: True)
     mount = {
         "volume_source": {"persistentVolumeClaim": {"claimName": "cache-in-deployment-namespace"}},
         "mount_path": "/model-cache",
@@ -157,13 +219,21 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     adapter._sources = {"vllm": tmp_path}
     adapter._root = tmp_path
     adapter._environment = None
-    adapter._accelerator = "xpu"
+    adapter._accelerator = accelerator
     overrides = {
         "guideVariant": "vllm",
         "model": {"name": "Qwen/Qwen3-8B"},
         "runtime": {"image": "example/vllm:latest", "modelSource": "auto-cache", "storageVolumeId": "storage-id"},
-        "prefill": {"replicaCount": 1, "tensorParallelSize": 1},
-        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+        "prefill": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 4096, "maxNumSeqs": 64},
+        "decode": {
+            "replicaCount": 1,
+            "tensorParallelSize": 1,
+            "maxModelLen": 2048,
+            "maxNumSeqs": 128,
+            "gpuMemoryUtilization": 0.85,
+            "blockSize": 32,
+            "maxNumBatchedTokens": 8192,
+        },
         "_cluster_id": "cluster-id",
         "_deployment_namespace": "deployment-namespace",
     }
@@ -177,6 +247,9 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
         prefill_entry.source.huggingface.revision = "v2"
         cache.list.return_value.append(prefill_entry)
         overrides["customParameters"] = [{"kind": "argument", "name": "revision", "value": "v2", "target": "prefill"}]
+        overrides["customParameters"].append(
+            {"kind": "argument", "name": "max-model-len", "value": "1024", "target": "decode"}
+        )
         await require_cached_model(overrides, cluster_id="cluster-id", provider_id="pd-disaggregation")
         wrapper = ConfigurationManifestAdapter(adapter, None, "llmd-", 30, output_root=tmp_path)
         artifact = await wrapper.render(adapter._definition, overrides)
@@ -186,11 +259,26 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     for deployment in rendered:
         pod_spec = deployment["spec"]["template"]["spec"]
         container = pod_spec["containers"][0]
-        assert pod_spec["volumes"] == [{"name": "model-cache", **mount["volume_source"]}]
-        assert container["volumeMounts"] == [
-            {"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}
-        ]
+        assert pod_spec.get("runtimeClassName") is None
+        expected_volumes = [{"name": "model-cache", **mount["volume_source"]}]
+        expected_mounts = [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
+        if not read_only:
+            expected_volumes.append({"name": "lens-shm", "emptyDir": {"medium": "Memory", "sizeLimit": "4Gi"}})
+            expected_mounts.append({"name": "lens-shm", "mountPath": "/dev/shm"})
+        assert pod_spec["volumes"] == expected_volumes
+        assert container["volumeMounts"] == expected_mounts
         assert container["args"][0] == ("/model-cache" if read_only else "Qwen/Qwen3-8B")
+        role = "prefill" if deployment["metadata"]["name"].endswith("prefill") else "decode"
+        expected = overrides[role]
+        expected_length = 1024 if not read_only and role == "decode" else expected["maxModelLen"]
+        assert f"--max-model-len={expected_length}" in container["args"]
+        assert sum(arg.startswith("--max-model-len=") for arg in container["args"]) == 1
+        assert f"--max-num-seqs={expected['maxNumSeqs']}" in container["args"]
+        assert "--max-model-len=32000" not in container["args"]
+        assert "--max-num-seqs" not in container["args"]
+        assert ("--gpu-memory-utilization=0.85" in container["args"]) == (role == "decode")
+        assert ("--block-size=32" in container["args"]) == (role == "decode")
+        assert ("--max-num-batched-tokens=8192" in container["args"]) == (role == "decode")
         environment = {item["name"]: item["value"] for item in container["env"]}
         assert environment["HF_HUB_OFFLINE"] == "1"
         assert environment["TRANSFORMERS_OFFLINE"] == "1"
@@ -361,5 +449,30 @@ def test_guide_sources_follow_the_active_accelerator(monkeypatch, tmp_path):
         overlay = tmp_path / "guides/pd-disaggregation/modelserver" / relative
         overlay.mkdir(parents=True)
         (overlay / "kustomization.yaml").write_text("resources: []")
-    assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "gpu")) == {"base"}
+    assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "gpu")) == {"base", "vllm"}
     assert set(PdDisaggregationAdapter._guide_sources(tmp_path, "xpu")) == {".", "vllm", "vllm-rdma"}
+
+
+@pytest.mark.parametrize(
+    ("accelerator", "variant", "entries", "expected"),
+    [
+        ("gpu", "gpu", ("base",), "base"),
+        ("xpu", "xpu", (".",), "."),
+        ("gpu", "gpu", (".", "base"), "."),
+        ("gpu", "gpu", ("gke",), None),
+        ("unknown", "gpu", (".", "base"), None),
+    ],
+)
+def test_vllm_alias_uses_an_existing_generic_entry(tmp_path, accelerator, variant, entries, expected):
+    source_root = tmp_path / "guides/pd-disaggregation/modelserver" / variant / "vllm"
+    for entry in entries:
+        overlay = source_root / entry
+        overlay.mkdir(parents=True, exist_ok=True)
+        (overlay / "kustomization.yaml").write_text("resources: []")
+
+    sources = PdDisaggregationAdapter._guide_sources(tmp_path, accelerator)
+
+    if expected is None:
+        assert "vllm" not in sources
+    else:
+        assert sources["vllm"] == source_root / expected

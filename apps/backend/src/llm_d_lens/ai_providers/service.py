@@ -21,6 +21,7 @@ from llm_d_lens.ai_providers.contracts import (
     AIProviderUpdateRequest,
     utcnow,
 )
+from llm_d_lens.ai_providers.endpoints import normalize_provider_base_url
 from llm_d_lens.ai_providers.store import AIProviderStore, AIProviderStoreError, default_store
 
 
@@ -80,7 +81,15 @@ class PublicProviderTransport(httpx.AsyncBaseTransport):
     def __init__(self, hostname: str) -> None:
         proxies = getproxies()
         proxy = None if proxy_bypass(hostname) else proxies.get("https") or proxies.get("all")
-        self._trusted_proxy = bool(proxy and proxy == os.environ.get("LENS_TRUSTED_AI_PROVIDER_PROXY"))
+        configured_trusted_proxy = os.environ.get("LENS_TRUSTED_AI_PROVIDER_PROXY")
+        if configured_trusted_proxy:
+            self._trusted_proxy = bool(proxy and proxy == configured_trusted_proxy)
+        else:
+            # A proxy inherited from the host environment is the operator's
+            # configured egress path. Trust it by default so TLS keeps the
+            # original SNI hostname instead of pinning the CONNECT target to
+            # an IP (which breaks TLS through many proxies).
+            self._trusted_proxy = bool(proxy)
         self._transport = httpx.AsyncHTTPTransport(proxy=proxy)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -179,6 +188,7 @@ async def check_connection(
     probe, since some gateways (e.g. DeepSeek's Anthropic-compatible endpoint)
     only implement message completion, not model listing.
     """
+    base_url = normalize_provider_base_url(base_url)
     try:
         await validate_provider_endpoint(base_url)
     except UnsafeProviderEndpointError:
@@ -186,7 +196,6 @@ async def check_connection(
             success=False,
             message="Provider URL must use HTTPS and resolve only to public addresses.",
         )
-    base_url = base_url if base_url.endswith("/") else f"{base_url}/"
     if provider_type == "anthropic":
         headers = {"anthropic-version": DEFAULT_ANTHROPIC_VERSION}
         if api_key:
@@ -226,11 +235,29 @@ async def check_connection(
         latency_ms = (time.monotonic() - started) * 1000
         return AIProviderTestResult(
             success=False,
-            message=f"Could not reach the provider ({type(error).__name__}).",
+            message=_network_error_message(error),
             latencyMs=round(latency_ms, 1),
         )
     except UnsafeProviderEndpointError as error:
         return AIProviderTestResult(success=False, message=str(error))
+
+
+def _network_error_message(error: httpx.HTTPError) -> str:
+    """Return a safe, actionable transport failure without request content."""
+    cause = error.__cause__ or error.__context__
+    detail = str(error) or (str(cause) if cause else "")
+    detail = detail.strip()[:300]
+    suffix = f": {detail}" if detail else ""
+    guidance = (
+        "Check DNS, outbound firewall rules, proxy settings, and that the URL is reachable from the Lens backend."
+    )
+    if "SSL" in detail.upper() or "TLS" in detail.upper() or "HANDSHAKE" in detail.upper():
+        guidance = (
+            "TLS negotiation failed. Confirm the URL uses HTTPS on the correct port, the "
+            "provider supports a modern TLS version, the hostname and certificate match, and "
+            "any egress proxy preserves the original SNI hostname."
+        )
+    return f"Could not reach the provider ({type(error).__name__}{suffix}). {guidance}"
 
 
 async def _probe_anthropic_messages(
@@ -244,6 +271,7 @@ async def _probe_anthropic_messages(
     uses, so a success here is a stronger signal than a model-list check would
     have been anyway.
     """
+    base_url = normalize_provider_base_url(base_url)
     try:
         await validate_provider_endpoint(base_url)
     except UnsafeProviderEndpointError:
@@ -285,7 +313,7 @@ async def _probe_anthropic_messages(
         latency_ms = (time.monotonic() - started) * 1000
         return AIProviderTestResult(
             success=False,
-            message=f"Could not reach the provider ({type(error).__name__}).",
+            message=_network_error_message(error),
             latencyMs=round(latency_ms, 1),
         )
     except UnsafeProviderEndpointError as error:

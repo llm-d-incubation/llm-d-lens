@@ -11,11 +11,44 @@ description: 配置 Lens 可选 AI 功能所使用的、兼容 OpenAI 或 Anthro
 
 1. 在**外部服务提供方**页面，点击**添加提供方**。
 2. 填写 **Name（名称）**、选择 **API type（API 类型）**，从提供方的 API 文档复制 **Base URL（基础地址）**和 **Model（模型名称）**。
-3. 将密钥填入 **API key**，不要放进 URL。地址必须是公开的 HTTPS 地址，且不能带查询参数或片段标识；不支持私有网络地址。
+3. 将密钥填入 **API key**，不要放进 URL。地址必须是公开的 HTTPS 地址，且不能带查询参数或片段标识；不支持私有网络地址。请输入 API 根地址（例如 `https://api.openai.com/`）；末尾带 `/v1` 也可以。
 4. 首次测试保持 **Timeout（超时）**的初始值，点击 **Test connection（测试连接）**。
 5. 点击 **Add provider（添加提供方）**，确认列表中出现新条目。
 
 连接测试失败时仍可保存，但使用前应先修正地址、模型名称或密钥，再次测试。
+
+## 提示“Could not reach the provider”
+
+这表示 Lens 后端无法建立 HTTPS 连接。浏览器能打开该地址，并不代表后端主机或容器也能访问；
+DNS、出站防火墙或代理设置可能不同。
+
+1. 确认地址是公开的 HTTPS 地址，不能是 `localhost`、局域网地址或私有主机名。
+2. 在运行 Lens 后端的主机或容器里探测同一主机，例如
+   `curl -v https://api.openai.com/v1/models`。
+3. 如果出站流量需要代理，请为后端设置 `HTTPS_PROXY`（以及需要直连的 `NO_PROXY`），
+   然后重启后端。
+4. 检查提供方证书是否有效，以及当前网络是否能访问该主机。如果提供方在所在地区不可达，
+   请改用可访问的 OpenAI 兼容服务或经过批准的代理。
+5. 重新测试。当前错误信息会尽可能带上传输错误类型和原因，向管理员求助时可一并提供。
+
+## 提示“SSLv3 alert handshake failure”
+
+这是 TLS 协商失败，不是 API key 或模型名称错误。
+
+1. 确认地址使用 `https://`，并且该端口确实提供 TLS。vLLM、Ollama 等 HTTP 服务
+   默认使用 8000/11434 端口，本身不是 HTTPS 端点；请通过 HTTPS Ingress 或反向代理暴露。
+2. 如果提供方使用虚拟主机或要求 SNI，请填写 DNS 主机名而不是裸 IP，并确保证书匹配该主机名。
+3. 如果后端继承了 HTTPS 代理，Lens 默认会使用该代理并保留原始主机名和 SNI。
+   只有在需要固定某个经过验证的代理地址时才设置 `LENS_TRUSTED_AI_PROVIDER_PROXY`；
+   设置不匹配或代理被绕过时，Lens 仍会在应用层绑定已验证 IP，某些代理下会破坏 SNI。
+4. 如果提供方只支持 TLS 1.0/1.1 或过时加密套件，将无法与当前 OpenSSL 默认配置协商。
+   请升级提供方，或在现代反向代理上终止 TLS。
+5. 在 Lens 后端所在主机执行以下命令，区分是提供方/网络问题还是 Lens 问题：
+
+   ```bash
+   openssl s_client -connect provider.example:443 -servername provider.example -tls1_2 </dev/null
+   curl -v https://provider.example/v1/models
+   ```
 
 ## 搜索和筛选提供方
 

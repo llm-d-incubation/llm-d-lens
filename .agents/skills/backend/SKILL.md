@@ -1,6 +1,6 @@
 ---
 name: backend
-description: Use when changing Node or Express services in apps/server/src/, Python APIs and domain services in apps/backend/src/llm_d_lens/, persistence, backend validation or task execution.
+description: Use when changing Python APIs and domain services in apps/backend/src/llm_d_lens/, MCP, persistence, backend validation or task execution.
 ---
 
 # Backend
@@ -10,9 +10,9 @@ verification and unresolved decisions. All source paths below are repo-relative.
 
 ## Locate the implementation
 
-- `apps/server/src/`: Node/Express endpoints, integrations and proxy boundaries. Inspect
-  existing callers and `apps/server/src/infrastructure/http.ts` before adding outbound JSON requests;
-  compare error, timeout and streaming contracts before reuse.
+- The Python service owns browser API routes, MCP, Playground and static frontend
+  delivery. Inspect existing callers and compare error, timeout and streaming
+  contracts before changing an integration.
 - `apps/backend/src/llm_d_lens/`: Python APIs and domain services. Start in the owning domain
   (`configuration`, `deploy`, `evaluate`, `simulation`, etc.), then inspect
   `core/`, `schemas/`, `tasks/` and `utils/` for existing lower-level contracts.
@@ -31,7 +31,7 @@ command-result contract. Inspect their error contracts before choosing:
 Reuse cluster/session identity resolution, authentication, client pooling and
 timeout/cancellation handling. Do not add scattered kubectl subprocess calls,
 shell-string construction or separate SDK initialization for covered operations.
-For Node session discovery, reuse the existing Python session endpoint rather
+For session discovery, reuse the existing Python session helpers rather
 than introducing another client or accepting arbitrary kubeconfig paths.
 
 SDK request failures must not trigger CLI retries, especially for writes.
@@ -60,7 +60,7 @@ for the selection table.
 | Queries | Named/list JSON or YAML; namespace/all namespaces; label/field selectors; pagination; multi-resource lists; selected raw API GETs |
 | Writes | Namespace creation; one core/apps/batch manifest from stdin; strategic/merge/JSON patches; labels with overwrite checks; scale; cordon/uncordon; named/selector deletion and UID-aware deletion waits |
 | Logs | Bounded named-Pod logs with container, tail, previous and timestamp selection |
-| Node planning | Four allowlisted session planning queries use the Python session endpoint; Node default-context queries stay local CLI |
+| Guide planning | Session queries use the Python session helpers; default-context queries use the shared Kubernetes transport |
 | Benchmark diagnostics | SDK Watch wakes failure checks; periodic pod/log reconciliation remains; CLI mode retains polling |
 
 Only recognized argv shapes enter the adapter in
@@ -139,9 +139,7 @@ Cover the profile contract and its consumers, not only one vendor.
 
 | Type | Directory | Filename | Export |
 | --- | --- | --- | --- |
-| Node shared transport or utility | `apps/server/src/` | Responsibility-based `camelCase.ts` | camelCase function; PascalCase type/class |
-| Node domain capability | `apps/server/src/` or existing domain subdirectory | `<domain><Responsibility>.ts` | camelCase function; PascalCase type/class |
-| MCP adapter | `apps/server/src/mcp/` | `camelCase.ts` | camelCase function |
+| MCP adapter | `apps/backend/src/llm_d_lens/mcp/` | `snake_case.py` | snake_case function |
 | Python shared base types | `apps/backend/src/llm_d_lens/core/` | `snake_case.py` | PascalCase class |
 | Python HTTP adaptation | `apps/backend/src/llm_d_lens/api/` | `snake_case.py` | snake_case function |
 | Python technical adapter | `apps/backend/src/llm_d_lens/infrastructure/<capability>/` | Responsibility-based `snake_case.py` | snake_case function; PascalCase class |
@@ -150,9 +148,7 @@ Cover the profile contract and its consumers, not only one vendor.
 | Node test | Beside the tested module | `<filename>.test.ts` or existing `.test.js` convention | Existing test conventions |
 | Python test | Owning domain or utility directory | `test_<capability>.py` | `test_<behavior>` function |
 
-Examples: `apps/server/src/infrastructure/http.ts` / `fetchJsonWithTimeout`,
-`apps/server/src/services/clusterSources.ts` / `loadClusterSources`,
-`apps/backend/src/llm_d_lens/core/exceptions.py` / `DomainError`,
+Examples: `apps/backend/src/llm_d_lens/core/exceptions.py` / `DomainError`,
 `apps/backend/src/llm_d_lens/infrastructure/kubernetes/__init__.py` / `validate_namespace`.
 
 Extend existing owners and preserve public import compatibility; do not rename
@@ -161,9 +157,8 @@ design; do not recreate the reverted JSON Store abstraction. Unresolved shared
 schema/task ownership is not a reason to place new domain models in those folders.
 The [capability map](../../../.reuse/map.md) links to current implementations,
 callers and tests; do not maintain a second hand-written capability inventory.
-For Node upstream JSON, reuse `fetchJsonWithTimeout` where its body-consumption
-timeout and parsing contract fits; routes retain status/error mapping. Python
-domain exceptions remain separate from HTTP serialization through
+Reuse existing upstream clients and preserve their timeout, parsing and
+status/error mapping contracts. Python domain exceptions remain separate from HTTP serialization through
 `install_problem_handlers`. Historical extraction reports do not establish
 current persistence or shared-type ownership; consult the database skill and
 the decision ledger rather than reviving a withdrawn file Store abstraction.
@@ -171,8 +166,8 @@ the decision ledger rather than reviving a withdrawn file Store abstraction.
 ## File storage
 
 Use the [storage scheme](../../../docs/design/storage-layout.md) for exact domain paths.
-Reuse `storage_path` / `prism_temp_root` in `apps/backend/src/llm_d_lens/utils/paths.py` and
-`storagePath` in `apps/server/src/infrastructure/storagePaths.ts`; do not introduce another storage root
+Reuse `storage_path` / `prism_temp_root` in `apps/backend/src/llm_d_lens/utils/paths.py`;
+do not introduce another storage root
 variable or restore legacy directory overrides. `LENS_*` roots take precedence
 over XDG defaults. Explicit source checkout inputs such as `LLM_D_ROOT` retain
 their existing input semantics.

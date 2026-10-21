@@ -21,6 +21,8 @@ test('hasPermission returns true when any grant matches', () => {
 
 test('canAccessView enforces the route catalog', () => {
     assert.equal(canAccessView(['deployment:run:read'], 'model-market'), true);
+    assert.equal(canAccessView(['cluster:cluster:read'], 'welcome'), true);
+    assert.equal(canAccessView(['cluster:cluster:read'], 'welcome/issues'), true);
     assert.equal(canAccessView(['deployment:run:read'], 'admin/users'), false);
     assert.equal(canAccessView(['user:user:read'], 'admin/users'), true);
     assert.equal(canAccessView([], 'unknown-view'), true);

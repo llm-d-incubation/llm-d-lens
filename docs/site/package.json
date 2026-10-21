@@ -5,8 +5,8 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "sync-external-docs": "node scripts/sync-external-docs.mjs",
-    "start": "npm run sync-external-docs && docusaurus start",
-    "build": "npm run sync-external-docs && docusaurus build",
+    "start": "npm run sync-external-docs && npm run fetch-github-stats && docusaurus start",
+    "build": "npm run sync-external-docs && npm run fetch-github-stats && docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
@@ -37,12 +37,6 @@
     "@types/react": "^19.0.0",
     "typescript": "~6.0.2",
     "undici": "^7.30.0"
-  },
-  "overrides": {
-    "postcss-selector-parser": "7.1.6",
-    "tinypool": "2.2.0",
-    "serialize-javascript": "7.1.2",
-    "uuid": "14.0.3"
   },
   "browserslist": {
     "production": [

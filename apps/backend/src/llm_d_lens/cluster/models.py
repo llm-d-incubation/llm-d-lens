@@ -196,6 +196,9 @@ class ComponentSummary(StrictModel):
     ready: int
     desired: int
     status: str
+    dashboards_ready: bool | None = Field(default=None, alias="dashboardsReady")
+    dashboard_only: bool = Field(default=False, alias="dashboardOnly")
+    message: str | None = None
 
 
 class ComponentsSummary(StrictModel):

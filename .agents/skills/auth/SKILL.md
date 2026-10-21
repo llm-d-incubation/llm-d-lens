@@ -40,8 +40,8 @@ Implementation map:
   `require_cluster_access`, `owner_for_create`, `resource_readable`).
 - Route registry + default-deny middleware: `apps/backend/src/llm_d_lens/auth/routes.py`,
   `apps/backend/src/llm_d_lens/auth/context.py` (CSRF double-submit on unsafe methods).
-- Node gateway: `apps/server/src/middleware/auth.ts`, `apps/server/src/middleware/internalAuth.ts`,
-  `apps/server/src/proxy/backend-api-proxy.ts`.
+- Browser entry and internal tools: `apps/backend/src/llm_d_lens/api/web.py`,
+  `apps/backend/src/llm_d_lens/mcp/tools.py`.
 - Browser: `apps/frontend/src/api/httpClient.js`, `apps/frontend/src/features/auth/`,
   `apps/frontend/src/components/LeftNavigation.jsx`.
 
@@ -54,8 +54,8 @@ Implementation map:
    `ALL_PERMISSIONS`. Every non-whitelist route must have an entry — startup
    self-check fails fast otherwise. Missing the entry makes the route
    default-deny (`403 "route is not registered"`).
-3. If the route is served by Node itself (not proxied), add it to
-   `NODE_ROUTE_PERMISSIONS` (`apps/server/src/middleware/auth.ts`) instead.
+3. Compatibility, MCP and Playground routes use the same Python registry;
+   preserve their existing permissions when moving handlers.
 4. Enforce **resource scope**, not just the action: pass `current_principal(request)`
    and use `filter_by_cluster` (lists), `require_cluster_access` (target cluster),
    or `resource_readable(...)` (a concrete resource). A registered action alone
@@ -64,8 +64,7 @@ Implementation map:
    trust `clusterId`-style fields in the request body.
 6. Add/adjust tests in `apps/backend/src/llm_d_lens/auth/` and the owning domain, and run the
    app import (startup self-check) plus `make test-python`.
-7. **Removing a route or feature**: delete its registry entry (and
-   `NODE_ROUTE_PERMISSIONS` if Node-native), its `VIEW_PERMISSIONS`/nav/page
+7. **Removing a route or feature**: delete its registry entry, its `VIEW_PERMISSIONS`/nav/page
    entries, and revoke any resource shares it owned. Unused permission codes may
    stay in the catalog, but a removed built-in-role capability is a human
    decision.
@@ -102,20 +101,16 @@ A new shareable/owned resource needs, in the same task:
   colon-delimited and keyMatch2 treats `:` as a wildcard, which leaks one
   resource's permission onto another.
 
-## Node gateway and internal calls
+## Backend entry and internal calls
 
-- The gateway resolves the session (`fetchPrincipal`) and strips client-supplied
-  `x-prism-internal-*` headers unless they carry a valid HMAC for that exact
-  method+path. Never trust those headers from a client.
-- Browser requests are proxied with cookie + `x-prism-csrf`; the proxy re-signs
-  the caller for the canonical upstream path (`backend-api-proxy.ts`).
-- **Node→Python internal reads must sign**: use `internalHeadersFor(method, path)`
-  from a context set by `runWithInternalAuth` (see `apps/server/src/services/clusterSources.ts`,
-  `apps/server/src/mcp/internal.ts`). Do not `fetch` the backend without auth. The
-  Playground assistant follows the same rule when it calls `/api/mcp`; Node-native
-  rules may accept an any-of list (e.g. `/api/mcp` accepts `mcp:tool:invoke` or
-  `playground:chat:use`), because each tool action is still enforced by its target
-  route permission.
+- The Python auth middleware resolves browser sessions and validates
+  `x-prism-internal-*` signatures for the exact method and path. Never trust
+  unsigned client-supplied identity headers.
+- Browser requests carry cookie + `x-prism-csrf` directly to the Python API.
+- MCP dispatch in `apps/backend/src/llm_d_lens/mcp/tools.py` signs internal ASGI
+  requests for the current principal. Keep target route and resource permissions
+  enforced even when the outer `/api/mcp` route accepts either `mcp:tool:invoke`
+  or `playground:chat:use`. Playground uses the same tool dispatcher.
 - Never add a browser-reachable path to the public whitelist to make an internal
   call work; fix the call's auth instead.
 
@@ -141,7 +136,7 @@ A new shareable/owned resource needs, in the same task:
   exceptions now return `500` with `detail` (`<Type>: <message>`) and a
   `requestId` tied to the server traceback; the UI shows both. Never put secrets
   in exception messages.
-- The Lens Assistant (`apps/server/src/playground/chat.ts`) treats authorization errors as
+- The Lens Assistant (`apps/backend/src/llm_d_lens/playground/chat.py`) treats authorization errors as
   final: its system prompt tells the model to stop (not retry or try other tools)
   and tell the user which permission is missing. Keep that rule in sync when you
   change 401/403 problem codes, and prefer a deterministic stop in the orchestrator

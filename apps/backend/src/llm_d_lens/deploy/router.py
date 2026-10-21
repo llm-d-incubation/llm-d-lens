@@ -48,11 +48,13 @@ from llm_d_lens.deploy.orphans import (
     namespace_prefix,
     scan_orphan_namespaces,
 )
+from llm_d_lens.deploy.providers.hardware_profile import active_profile, discover_runtime_classes
 from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.deploy.standard_kubernetes_service import (
     StandardKubernetesServiceRequest,
     build_standard_kubernetes_service_configuration,
 )
+from llm_d_lens.hardware.resolver import deployment_mode
 from llm_d_lens.infrastructure.kubernetes import PortForwardError, list_resources
 
 router = APIRouter(prefix="/api/v1/deployments", tags=["deployments"])
@@ -212,6 +214,8 @@ async def create_run(request: DeploymentRunCreateRequest, http_request: Request 
 @router.get(
     "/node-labels",
     summary="List available node labels for deployment placement.",
+    description="Return distinct node labels and values from the selected accessible cluster so callers can "
+    "choose a placement label for a deployment.",
     operation_id="list_deployment_node_labels",
 )
 async def list_deployment_node_labels(cluster_id: str = Query(..., min_length=1), request: Request = None) -> dict:
@@ -224,6 +228,70 @@ async def list_deployment_node_labels(cluster_id: str = Query(..., min_length=1)
         if isinstance(key, str) and isinstance(value, str)
     }
     return {"items": [{"key": key, "value": value} for key, value in sorted(labels)]}
+
+
+@router.get(
+    "/runtime-classes",
+    summary="Discover RuntimeClasses available to a target deployment cluster.",
+    description=(
+        "List RuntimeClass names, handlers, scheduling constraints and matching nodes for an accessible cluster. "
+        "An optional hardware profile and access mode identify a profile suggestion, not a runtime requirement. "
+        "Discovery failures are reported, never treated as an empty list. Class existence cannot verify node "
+        "handler, CDI or driver readiness. Select auto, node-default or named through runtime_binding.runtime_class."
+    ),
+    operation_id="list_deployment_runtime_classes",
+)
+async def list_deployment_runtime_classes(
+    cluster_id: str = Query(..., min_length=1),
+    accelerator: str | None = None,
+    access_mode: str | None = None,
+    request: Request = None,
+) -> dict:
+    require_cluster_access(current_principal(request), cluster_id)
+    profile = active_profile(accelerator) if accelerator else None
+    if access_mode and profile is None:
+        raise HTTPException(status_code=422, detail="An access mode requires a registered hardware profile")
+    if accelerator and profile is None:
+        raise HTTPException(status_code=422, detail="Unknown hardware profile")
+    try:
+        mode = deployment_mode(profile, access_mode) if profile else {}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        capabilities = await discover_runtime_classes(cluster_id)
+    except ValueError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    items = []
+    for runtime in capabilities["items"]:
+        scheduling = runtime.get("scheduling") or {}
+        selector = scheduling.get("nodeSelector") or {}
+        items.append(
+            {
+                "name": runtime["metadata"]["name"],
+                "handler": runtime.get("handler"),
+                "scheduling": scheduling,
+                "overhead": runtime.get("overhead") or {},
+                "matching_nodes": [
+                    node["metadata"]["name"]
+                    for node in capabilities["nodes"]
+                    if all(
+                        node.get("metadata", {}).get("labels", {}).get(key) == value for key, value in selector.items()
+                    )
+                ],
+            }
+        )
+    suggested = mode.get("runtime_class_name")
+    return {
+        "items": items,
+        "profile_suggestion": suggested,
+        "available_suggestion": suggested if any(item["name"] == suggested for item in items) else None,
+        "requirement": "unknown",
+        "node_runtime_readiness": "unknown",
+        "warnings": [
+            "Class existence does not verify node handler, CDI or driver readiness. "
+            "Use node-default only when the node default runtime provides device access."
+        ],
+    }
 
 
 @router.post(
@@ -293,10 +361,11 @@ async def create_standard_kubernetes_service_run(
                     },
                 },
                 runtime_binding={
+                    "runtime_class": request.runtime_class,
                     "placement": {
                         "replicas": request.placement_replicas,
                         **({"nodeLabel": request.placement_node_label} if request.placement_node_label else {}),
-                    }
+                    },
                 },
             ),
             owner_user_id=owner_for_create(current_principal(http_request)),

@@ -1,6 +1,6 @@
 ---
 description: "Require accurate API descriptions and contract documentation for every new or modified API endpoint."
-applyTo: "apps/backend/src/llm_d_lens/**/*.py,apps/server/src/**/*.ts"
+applyTo: "apps/backend/src/llm_d_lens/**/*.py"
 ---
 
 # API Description Requirements

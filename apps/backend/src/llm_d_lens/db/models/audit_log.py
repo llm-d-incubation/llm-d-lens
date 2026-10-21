@@ -1,8 +1,9 @@
-"""``audit_logs`` table -- see docs/design/auth-rbac-design.md section 4.2.11.
+"""``audit_logs`` table -- unified append-only audit ledger.
 
-Append-only authentication and authorization trail. The actor id is kept only
-as a snapshot-friendly reference (``SET NULL`` on user deletion) alongside the
-username so history survives account removal.
+Automatic ORM writes and explicit service events share this table. The actor
+id is kept only as a snapshot-friendly reference (``SET NULL`` on user
+deletion) alongside the username so history survives account removal.
+See docs/design/audit-event-ledger-design.md.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, String, func
+from sqlalchemy import ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from llm_d_lens.db.base import Base, JSONVariant, UTCDateTime
@@ -23,14 +24,23 @@ class AuditLogRow(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, server_default=func.now())
     actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     actor_username: Mapped[str] = mapped_column(String(150), nullable=False, default="")
-    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(96), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="system", server_default="system")
+    action: Mapped[str] = mapped_column(String(16), nullable=False, default="execute", server_default="execute")
     permission: Mapped[str | None] = mapped_column(String(100), nullable=True)
     method: Mapped[str | None] = mapped_column(String(8), nullable=True)
     path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    cluster_id: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    target_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    cluster_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     result: Mapped[str] = mapped_column(String(16), nullable=False, default="success")
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parent_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     detail: Mapped[dict[str, Any] | None] = mapped_column(JSONVariant, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
@@ -38,4 +48,9 @@ class AuditLogRow(Base):
         Index("ix_audit_logs_created_at", "created_at"),
         Index("ix_audit_logs_actor_created", "actor_user_id", "created_at"),
         Index("ix_audit_logs_event_created", "event_type", "created_at"),
+        Index("ix_audit_logs_target_created", "target_type", "target_id", "created_at"),
+        Index("ix_audit_logs_cluster_created", "cluster_id", "created_at"),
+        Index("ix_audit_logs_request", "request_id"),
+        Index("ix_audit_logs_result_created", "result", "created_at"),
+        Index("ix_audit_logs_source_created", "source", "created_at"),
     )

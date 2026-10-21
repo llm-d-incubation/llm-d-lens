@@ -12,6 +12,15 @@ role name, determines this landing page. If no pages are accessible, Lens shows
 an access-denied message. Refreshing an existing signed-in session preserves a
 valid page URL and its filters; a fresh sign-in starts at the landing page instead.
 
+## Switch color mode
+
+Use the sun/moon button at the bottom of the sidebar to switch between dark
+and light mode. Light mode uses an airy sky-blue-white workspace, white surfaces,
+ink text, and Intel sky-blue primary actions inspired by modern finance dashboards.
+Dark mode, chart series, and status colors
+retain their existing appearance. The choice is stored in this browser and also
+applies to the sign-in screen.
+
 ## Create a user
 
 1. Open the **Users** page.
@@ -35,7 +44,7 @@ valid page URL and its filters; a fresh sign-in starts at the landing page inste
 
 1. Open the **Users** page.
 2. In the user's row, click the action titled **Reset password**.
-3. In the **Reset password** dialog, enter the **New password**.
+3. In the **Reset password** dialog, enter the **New password** and **Confirm new password**. Both values must match.
 4. Click **Reset password**.
 
 ## Create a group and manage members
@@ -104,11 +113,12 @@ When `LENS_SECRET_KEY` is provided through the environment the page is read-only
 
 1. Open the **Audit log** page.
 2. Use **All events** to narrow the **Event filter**.
-3. Use **All results** to narrow the **Result filter**.
-4. In **Filter by user…**, choose a username.
-5. Optional: set **Start** and **End** with **Start time** and **End time**.
-6. Click **Clear Filters** to reset the current filters.
-7. Use **Rows per page** and the pager to move through the **Events** table.
+3. Use **All results** and **All actions** to narrow the result and action.
+4. Use **All sources** to distinguish browser, API, assistant, background, and system events.
+5. In **Filter by user…**, choose a username.
+6. Optional: set **Start** and **End** with **Start time** and **End time**.
+7. Click **Clear Filters** to reset the current filters.
+8. Use **Rows per page** and the pager to move through the **Events** table. Each row shows the event, action, actor, source, result, and target.
 
 ## Related reference
 

@@ -180,6 +180,16 @@ class GroupCreateRequest(StrictModel):
     )
 
 
+class GroupPublishRequest(StrictModel):
+    """Publish a ready deployment as a new cluster-scoped public model name."""
+
+    name: str = Field(min_length=1, max_length=100)
+    cluster_id: str = Field(alias="clusterId", min_length=1, max_length=32)
+    execution_id: str = Field(alias="executionId", min_length=1)
+    display_name: str = Field(default="", max_length=200, alias="displayName")
+    description: str = ""
+
+
 class GroupUpdateRequest(StrictModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     model_ref: str | None = Field(default=None, min_length=1, max_length=200, alias="modelRef")
@@ -194,6 +204,12 @@ class GroupUpdateRequest(StrictModel):
     cluster_id: str | None = Field(default=None, alias="clusterId")
     served_name: str | None = Field(default=None, alias="servedName")
     base_model: str | None = Field(default=None, alias="baseModel")
+
+
+class GroupStatusRequest(StrictModel):
+    """Enable or disable a public model service without changing providers."""
+
+    status: Literal["active", "disabled"]
 
 
 class MemberCreateRequest(StrictModel):

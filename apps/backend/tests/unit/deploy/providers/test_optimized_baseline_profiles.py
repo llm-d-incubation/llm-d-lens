@@ -1,10 +1,13 @@
 import hashlib
+import shlex
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 import yaml
 
+from llm_d_lens.deploy.providers.configuration_manifest import ConfigurationManifestAdapter
 from llm_d_lens.deploy.providers.guide_adapter import GuideDefinition, GuideDeploymentArtifact
 from llm_d_lens.deploy.providers.optimized_baseline import (
     OptimizedBaselineGuideAdapter,
@@ -358,6 +361,123 @@ def _rendered_container(adapter, overlay: Path, runtime: dict) -> tuple[dict, di
     container = patch["spec"]["template"]["spec"]["containers"][0]
     entries = container.get("env") or []
     return container, {item["name"]: item.get("value") for item in entries}
+
+
+def test_repeated_rendering_does_not_delete_or_reuse_another_deployment_directory(tmp_path):
+    adapter, overlay = _adapter(tmp_path)
+    _write_model_overlay(overlay)
+    first = adapter._render_overlay(_deployment_parameters(), "Qwen/Qwen3-8B", _runtime())
+    original = (first / "manifest.yaml").read_text()
+    (first / "deployment-marker").write_text("first deployment")
+
+    second = adapter._render_overlay(_deployment_parameters(), "Qwen/Qwen3-8B", _runtime())
+
+    assert second != first
+    assert first.parent == second.parent == adapter._policy.rendered_overlay_root
+    assert first.name.startswith("llm-d-bench-")
+    assert second.name.startswith("llm-d-bench-")
+    assert (first / "manifest.yaml").read_text() == original
+    assert (first / "deployment-marker").read_text() == "first deployment"
+    assert not (second / "deployment-marker").exists()
+
+
+@pytest.mark.asyncio
+async def test_isolated_directory_preserves_deployment_validation_and_cleanup(monkeypatch, tmp_path):
+    adapter, overlay = _adapter(tmp_path)
+    _write_model_overlay(overlay)
+    monkeypatch.setattr("llm_d_lens.deploy.providers.optimized_baseline.resolve_mount", AsyncMock(return_value=None))
+    wrapper = ConfigurationManifestAdapter(adapter, _runner, "test", 5, tmp_path / "output")
+    overrides = {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+        "runtime": {"image": "example/vllm:1", "imageMode": "use-upstream-image"},
+        "_runtime_class_policy": {"mode": "node-default"},
+    }
+    first = await wrapper.render(adapter.discover(), overrides)
+    second = await wrapper.render(adapter.discover(), overrides)
+    second_manifest = (Path(second.manifest_ref) / "manifest.yaml").read_text()
+
+    adapter._validate_artifact(first)
+    adapter._validate_artifact(second)
+    assert first.manifest_ref != second.manifest_ref
+    assert adapter.remove_rendered_overlay(first)
+    assert not Path(first.manifest_ref).exists()
+    assert (Path(second.manifest_ref) / "manifest.yaml").read_text() == second_manifest
+    adapter._validate_artifact(second)
+
+
+@pytest.mark.parametrize("existing", [None, "custom-runtime"])
+def test_render_overlay_applies_hardware_runtime_class(tmp_path, existing):
+    adapter, overlay = _adapter(tmp_path)
+    adapter._policy = replace(adapter._policy, accelerator="nvidia")
+    _write_model_overlay(overlay)
+    source = overlay / "patch-vllm.yaml"
+    document = yaml.safe_load(source.read_text())
+    pod = document["spec"]["template"]["spec"]
+    pod.pop("resourceClaims")
+    if existing:
+        pod["runtimeClassName"] = existing
+    source.write_text(yaml.safe_dump(document))
+
+    rendered = adapter._render_overlay(_deployment_parameters(), "Qwen/Qwen3-8B", _runtime())
+
+    deployment = next(
+        item
+        for item in yaml.safe_load_all((rendered / "manifest.yaml").read_text())
+        if item.get("kind") == "Deployment"
+    )
+    result = deployment["spec"]["template"]["spec"]
+    assert result.get("runtimeClassName") == existing
+    assert result["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "1"
+
+
+@pytest.mark.parametrize("shell", [False, True])
+def test_structured_serving_parameters_and_custom_overrides_reach_rendered_overlay(tmp_path, shell):
+    adapter, overlay = _adapter(tmp_path)
+    _write_model_overlay(overlay)
+    if shell:
+        source = yaml.safe_load((overlay / "patch-vllm.yaml").read_text())
+        container = source["spec"]["template"]["spec"]["containers"][0]
+        container["command"] = ["/bin/bash", "-c"]
+        container["args"] = ["exec vllm serve Qwen/Old --max-model-len 32000 --gpu-memory-utilization=0.8"]
+        (overlay / "patch-vllm.yaml").write_text(yaml.safe_dump(source))
+    deployment, model, runtime = adapter._deployment_parameters(
+        {
+            "model": {"name": "Qwen/Qwen3-8B"},
+            "runtime": {"image": "example/vllm:1", "imageMode": "use-upstream-image"},
+            "decode": {
+                "replicaCount": 1,
+                "tensorParallelSize": 1,
+                "maxModelLen": 4096,
+                "maxNumSeqs": 128,
+                "gpuMemoryUtilization": 0.85,
+                "blockSize": 32,
+                "maxNumBatchedTokens": 8192,
+            },
+            "customParameters": [
+                {"target": "decode", "kind": "argument", "name": "max-model-len", "value": "2048"},
+                {"target": "prefill", "kind": "argument", "name": "max-model-len", "value": "1024"},
+                {"target": "both", "kind": "environment", "name": "TEST_VALUE", "value": "present"},
+            ],
+        }
+    )
+    path = adapter._render_overlay(deployment, model, runtime)
+    workload = next(
+        item for item in yaml.safe_load_all((path / "manifest.yaml").read_text()) if item.get("kind") == "Deployment"
+    )
+    container = workload["spec"]["template"]["spec"]["containers"][0]
+    arguments = shlex.split(container["args"][0].replace("\\\n", " ")) if shell else container["args"]
+    for argument in (
+        "--max-model-len=2048",
+        "--max-num-seqs=128",
+        "--gpu-memory-utilization=0.85",
+        "--block-size=32",
+        "--max-num-batched-tokens=8192",
+    ):
+        assert argument in arguments
+    assert "--max-model-len=4096" not in arguments
+    assert "--max-model-len" not in arguments
+    assert {"name": "TEST_VALUE", "value": "present"} in container["env"]
 
 
 @pytest.mark.asyncio

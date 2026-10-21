@@ -87,7 +87,7 @@ export function Modal({
     const content = (
         <div className={inline ? 'w-full' : 'fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none'}>
             {showOverlay && <div
-                className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm pointer-events-auto"
+                className="modal-overlay absolute inset-0 backdrop-blur-sm pointer-events-auto"
                 onClick={isDrawer ? undefined : (closeOnBackdrop ? onClose : undefined)}
                 aria-hidden="true"
             />}

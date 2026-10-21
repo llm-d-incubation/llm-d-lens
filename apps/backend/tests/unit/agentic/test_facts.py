@@ -3,6 +3,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from llm_d_lens.agentic.facts import _configuration_topology, resolve_planning_facts
 from llm_d_lens.agentic.planner import PlanningFacts, WorkloadProfile
 
@@ -151,7 +153,8 @@ def test_resolver_retains_hard_cluster_facts_when_supplementary_sources_fail(mon
     assert {item.source for item in resolved.evidence if item.status == "unavailable"} >= {"aic", "simulation"}
 
 
-def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monkeypatch):
+@pytest.mark.parametrize("target", [None, "concurrency", "request_rate"])
+def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monkeypatch, target):
     monkeypatch.setattr(
         "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
     )
@@ -200,7 +203,9 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
                 model_weight_gib=8,
                 vram_per_gpu_gib=1,
                 free_gpu_count=0,
-                workload_profile=WorkloadProfile(mean_input_tokens=4096, mean_output_tokens=512),
+                workload_profile=WorkloadProfile(
+                    mean_input_tokens=4096, mean_output_tokens=512, **({target: 10} if target else {})
+                ),
             ),
         )
     )
@@ -208,10 +213,35 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
     assert captured["request"].aic_system_name == "a100_sxm"
     assert captured["request"].mean_input_tokens == 4096
     assert captured["request"].mean_output_tokens == 512
+    assert captured["request"].target_concurrency == (10 if target == "concurrency" else None)
+    assert captured["request"].target_request_rate == (10 if target == "request_rate" else None)
     assert resolved.trace[-1]["request"]["mean_input_tokens"] == 4096
     assert resolved.trace[-1]["request"]["mean_output_tokens"] == 512
     assert resolved.trace[-1]["search_status"] == "available"
     assert resolved.facts.aic_predictions[0].ttft_ms == 300
+
+
+def test_load_prediction_failure_is_not_silently_discarded(monkeypatch):
+    from llm_d_lens.agentic.facts import _supplementary_evidence
+    from llm_d_lens.aic.service import AICError
+
+    async def support(request):
+        return SimpleNamespace(supported=True, model_dump=lambda: {"supported": True})
+
+    async def search(request):
+        raise AICError("Minimum recommended GPUs: 8; selected GPU budget: 4")
+
+    monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", support)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.search", search)
+    with pytest.raises(ValueError, match="AIC load-target prediction failed: Minimum recommended GPUs: 8"):
+        asyncio.run(
+            _supplementary_evidence(
+                "model",
+                PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(request_rate=10)),
+                4,
+                {"accelerators": [{"id": "nvidia", "models": ["NVIDIA A100"]}]},
+            )
+        )
 
 
 def test_resolver_persists_similar_completed_history_as_benchmark_evidence(monkeypatch):

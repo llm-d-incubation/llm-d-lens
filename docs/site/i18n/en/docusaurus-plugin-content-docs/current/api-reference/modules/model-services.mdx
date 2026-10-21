@@ -635,6 +635,29 @@ Create a routing group that exposes one user-facing model name in a single clust
   </TabItem>
 </Tabs>
 
+### Publish a ready deployment as a public model service
+
+Publish one ready deployment as a new cluster-scoped public model name without granting full group-management rights. This is the route used by **Add model** when the public name does not exist yet. The caller needs `model-service:member:manage` in the deployment's cluster. The service uses the default `random` selection policy; editing group metadata or selection policy still requires `model-service:group:manage`.
+
+**`POST /api/v1/model-service/admin/groups/publish`**
+
+Request body (`GroupPublishRequest`):
+
+- `name` (`string`): public model name.
+- `clusterId` (`string`): deployment's cluster.
+- `executionId` (`string`): ready deployment to publish.
+- `displayName` / `description` (`string`, optional).
+
+Response: `201` with the created `ModelServiceGroup`; the deployment is committed as its first member and gateway reconciliation is scheduled. Errors match group creation (`403`, `404`, `409`, `422`).
+
+```json
+{
+  "name": "qwen3-8b",
+  "clusterId": "cluster-a",
+  "executionId": "exec-123"
+}
+```
+
 ### List published model service members
 
 List the published members that back routing groups. The route can optionally filter by one group id and adds a human-friendly deployment `name` field derived from `execution_name()`.
@@ -1082,6 +1105,14 @@ the stable cluster-registration short ID.
 </Tabs>
 
 ### Reconcile gateway clusters
+### Reconcile one gateway cluster with logs
+
+Re-render and reapply one cluster's shared Gateway, HTTPRoutes and provider wiring. This is available to scoped maintainers and streams operation logs as SSE.
+
+**`POST /api/v1/model-service/admin/gateway/reconcile/stream`**
+
+Request body: `{ "clusterId": "cluster-a" }`. Requires `model-service:gateway:reconcile`.
+
 
 Schedule a full data-plane reconciliation for every cluster that currently has active members. The route discovers the affected cluster ids, then runs `_reconcile_clusters()` in the background.
 
@@ -1254,6 +1285,14 @@ permission in every affected cluster. Controller convergence is asynchronous.
   </TabItem>
 </Tabs>
 
+### Enable or disable a model service
+
+Start or stop serving a public model without changing provider states, weights or running Pods.
+
+**`POST /api/v1/model-service/admin/groups/{group_id}/status`**
+
+Request body: `{ "status": "active" }` or `{ "status": "disabled" }`. Requires `model-service:group:toggle` in the model's cluster.
+
 ### Delete a model routing group
 
 Remove an empty routing group with cluster-scoped group-management permission.
@@ -1268,7 +1307,7 @@ shared Gateway resources, deployments and Pods are not removed.
   <TabItem value="rest-api" label="REST API">
     **`DELETE /api/v1/model-service/admin/groups/{group_id}`**
 
-    Request: no request body. Response: `204 No Content`.
+    Requires `model-service:group:remove`. Request: no request body. Response: `204 No Content`.
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

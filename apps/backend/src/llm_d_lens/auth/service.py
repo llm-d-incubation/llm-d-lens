@@ -343,24 +343,58 @@ class AuthService:
         target_type: str | None = None,
         target_id: str | None = None,
         cluster_id: str | None = None,
+        target_name: str | None = None,
         detail: dict | None = None,
         ip: str | None = None,
+        source: str | None = None,
+        action: str | None = None,
+        status_code: int | None = None,
+        duration_ms: int | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        parent_request_id: str | None = None,
+        user_agent: str | None = None,
     ) -> None:
+        from llm_d_lens.auth.context import current_audit_context  # noqa: PLC0415
+
+        context = current_audit_context()
+        if action is None:
+            if event_type.startswith("login"):
+                action = "login"
+            elif event_type.startswith("logout"):
+                action = "logout"
+            elif "denied" in event_type or result == "failure":
+                action = "deny"
+            else:
+                action = "execute"
         try:
             self.audit_dao.append(
                 AuditLogRecord(
                     event_type=event_type,
                     result=result,
-                    actor_user_id=actor.id if actor else actor_user_id,
-                    actor_username=actor.username if actor else actor_username,
-                    permission=permission,
-                    method=method,
-                    path=path,
+                    actor_user_id=actor.id
+                    if actor
+                    else (actor_user_id or (context.actor_user_id if context else None)),
+                    actor_username=actor.username
+                    if actor
+                    else (actor_username or (context.actor_username if context else "")),
+                    permission=permission or (context.permission if context else None),
+                    method=method or (context.method if context else None),
+                    path=path or (context.path if context else None),
                     target_type=target_type,
                     target_id=target_id,
-                    cluster_id=cluster_id,
+                    target_name=target_name,
+                    cluster_id=cluster_id or (context.cluster_id if context else None),
                     detail=detail,
-                    ip=ip,
+                    ip=ip or (context.ip if context else None),
+                    source=source or (context.source if context else "system"),
+                    action=action,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    request_id=request_id or (context.request_id if context else None),
+                    trace_id=trace_id or (context.trace_id if context else None),
+                    parent_request_id=parent_request_id or (context.parent_request_id if context else None),
+                    user_agent=user_agent or (context.user_agent if context else None),
                 )
             )
         except Exception:  # noqa: BLE001 - audit must never break the request

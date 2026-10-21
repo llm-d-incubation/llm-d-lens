@@ -41,7 +41,7 @@ The backend uses the following module boundaries:
 
 `llm_d_lens.configuration.app:app` remains available as a compatibility import.
 
-Lens's Express server proxies configuration requests to this service. Set the data
+Lens's unified Python entry serves configuration requests directly. Set the data
 root with `LENS_DATA_DIR`; configuration payloads use `artifacts/configurations`
 beneath it (default `~/.local/share/lens/artifacts/configurations`). The logical
 file path returned to Deploy is `/configs/<artifact-id>/<file>`.

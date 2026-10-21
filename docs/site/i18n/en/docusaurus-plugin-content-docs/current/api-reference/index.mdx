@@ -4,24 +4,22 @@ description: Backend API surfaces, contracts and integration points.
 slug: /api-reference
 ---
 
-Lens exposes a same-origin HTTP API through the Node BFF; the browser only calls
-`/api/...` paths, which Vite proxies to the Node backend in development. The Node
-backend forwards domain calls to the Python FastAPI backend (`llm_d_lens`),
-which owns validation, persistence and task execution.
+Lens exposes a same-origin HTTP API through the Python FastAPI backend
+(`llm_d_lens`). Vite proxies browser `/api/...` calls directly to it in development.
+In production, the same backend serves the built frontend, API and MCP endpoint,
+and owns validation, persistence and task execution.
 
 ```mermaid
 flowchart LR
-    UI["Lens UI"] --> BFF["Node BFF :3000"]
-    BFF -->|Domain APIs, including /api/v1/deployments| PY["Python API (llm_d_lens)"]
-    BFF -->|/api/remote-deploy| SSH["Remote host over SSH"]
+    UI["Lens UI"] --> PY["Python API (llm_d_lens) :3000"]
+    PY -->|/api/remote-deploy| SSH["Remote host over SSH"]
     PY --> DB["Database"]
     PY --> K8s["Kubernetes"]
 ```
 
 Deploy is part of the Lens Python backend, not a separate llm-d-bench API.
-For deployment routes, the BFF selects `LLM_D_DEPLOY_API_URL`, then
-`SIMULATION_API_URL`, then `OPTIMALBENCH_URL`, falling back to
-`http://127.0.0.1:8081`. Use `scripts/lens-local.sh start` for local development; see
+Deployment routes run in the same process; no separate BFF upstream is required.
+Use `scripts/lens-local.sh start` for local development; see
 [Installation](/installation) and [Environment variables](/environment-variables)
 for current startup and storage settings rather than host-specific `/root/...`
 paths. Requests require an authenticated Lens session and the relevant permission;
@@ -32,8 +30,7 @@ header. Unauthenticated smoke requests may return `401`, not a resource list.
 
 | Surface | Description |
 | --- | --- |
-| Node BFF | Same-origin `/api/...` routes used by the browser; proxies to the Python API and hosts MCP tooling. |
-| Python API | FastAPI routes for deploy, simulation, evaluation, storage, monitoring and auth. |
+| Python API | Same-origin FastAPI routes for deploy, simulation, evaluation, storage, monitoring, auth and Playground; also serves the production frontend. |
 | MCP tools | Assistant-callable operations generated from backend routes into the MCP catalog. |
 | Kubernetes backend | Server-side Kubernetes access over the official Python client, with CLI rollback. |
 
@@ -44,6 +41,7 @@ where one exists, how to call its Python service layer directly (for internal
 scripts, tests or automation) instead of over HTTP:
 
 <CardGroup cols={3}>
+  <Card title="Welcome" href="/api-reference/modules/welcome">Scoped current issues and diagnostic links.</Card>
   <Card title="Model market" href="/api-reference/modules/model-market">Catalog hand-off (frontend-only catalog).</Card>
   <Card title="Deployments" href="/api-reference/modules/deployments">Runs, executions, cases, access.</Card>
   <Card title="Evaluation" href="/api-reference/modules/evaluation">Guided benchmark tasks.</Card>
@@ -54,7 +52,7 @@ scripts, tests or automation) instead of over HTTP:
   <Card title="Model cache" href="/api-reference/modules/model-cache">Cached model artifacts.</Card>
   <Card title="External providers" href="/api-reference/modules/external-providers">Third-party AI providers.</Card>
   <Card title="Observability" href="/api-reference/modules/observability">Accelerator, cluster stack, GPU driver, profiling.</Card>
-  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Node MCP tool catalog.</Card>
+  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Python MCP tool catalog.</Card>
   <Card title="Administration" href="/api-reference/modules/administration">Auth, RBAC and system settings.</Card>
 </CardGroup>
 

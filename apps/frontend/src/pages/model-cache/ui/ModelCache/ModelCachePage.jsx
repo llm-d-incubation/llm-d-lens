@@ -5,7 +5,7 @@ import { PaginationControls } from '../../../../shared/ui/PaginationControls';
 import { useClusterNames } from '../../../optimization';
 import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { AsyncState } from '../../../../shared/ui/AsyncState';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Download, Plus, RefreshCw, Search, Server, ServerCog } from 'lucide-react';
 import { createModelCacheEntry, deleteModelCacheEntry, listModelCacheEntries, retryModelCacheEntry, syncAllModelCacheEntryNodes, syncModelCacheEntryNodes } from './modelCacheBackend';
@@ -40,19 +40,21 @@ function StatCard({ label, value, tone = 'text-white' }) {
     );
 }
 
-export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHandled } = {}) {
+export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHandled, initialClusterId = '', initialEntryId = '', initialAction = '' } = {}) {
     const [searchInput, setSearchInput] = useState('');
     const query = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
     const [typeFilter, setTypeFilter] = useState('');
-    const [clusterId, setClusterId] = useState('');
+    const [clusterId, setClusterId] = useState(initialClusterId || '');
     const [storageVolumeId, setStorageVolumeId] = useState('');
-    const [dialog, setDialog] = useState(initialDownload ? 'download' : null);
+    const [dialog, setDialog] = useState(initialDownload || initialAction === 'download' ? 'download' : null);
     const [selected, setSelected] = useState(null);
     const [mutatingId, setMutatingId] = useState(null);
     const [syncingAll, setSyncingAll] = useState(false);
     const [notice, setNotice] = useNotice();
     const [page, setPage] = useState(0);
     const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+    const focusedEntryId = useRef('');
+    const handledInitialAction = useRef(false);
 
     const { clusters, clusterNameById } = useClusterNames();
     const [volumeNameById, setVolumeNameById] = useState({});
@@ -175,6 +177,25 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
         [filteredItems, page, pageSize]
     );
 
+    useEffect(() => {
+        setClusterId(initialClusterId || '');
+    }, [initialClusterId]);
+
+    useEffect(() => {
+        if (initialAction !== 'download' || handledInitialAction.current) return;
+        handledInitialAction.current = true;
+        setDialog('download');
+    }, [initialAction]);
+
+    useEffect(() => {
+        if (!initialEntryId || focusedEntryId.current === initialEntryId) return;
+        const index = items.findIndex((item) => item.id === initialEntryId);
+        if (index >= 0) {
+            focusedEntryId.current = initialEntryId;
+            setPage(Math.floor(index / pageSize));
+        }
+    }, [initialEntryId, items, pageSize]);
+
     const closeDialog = () => {
         setDialog(null);
         setSelected(null);
@@ -271,7 +292,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
     };
 
     return (
-        <ModulePage contentClassName="flex flex-col gap-4">
+        <ModulePage className="model-cache-page" contentClassName="flex flex-col gap-4 lg:h-screen lg:pb-4">
             <ModuleHeader
                 icon={Download}
                 title="Model cache"
@@ -279,7 +300,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                 actions={(
                     <>
                         {onNavigateBack && (
-                            <Button variant="secondary" size="sm" onClick={onNavigateBack} title="Back to model" aria-label="Back to model">
+                            <Button variant="secondary" size="sm" onClick={onNavigateBack} title="Back to model" aria-label="Back to model" className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
                                 <ArrowLeft size={14} aria-hidden="true" /><span className="hidden sm:inline">Back to model</span>
                             </Button>
                         )}
@@ -289,7 +310,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                                 {notice}
                             </span>
                         )}
-                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh model cache entries">
+                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh model cache entries" className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
                             <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
                         </Button>
                         {pendingSyncCount > 0 && (
@@ -326,10 +347,10 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                 </div>
             </section>
 
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch lg:h-[calc(100vh-17rem)] lg:min-h-[28rem]">
+            <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:items-stretch">
               <div className="flex flex-col gap-3 lg:h-full lg:w-72 lg:shrink-0">
                 <div className="flex shrink-0 items-center gap-2.5 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-1.5 pl-3 backdrop-blur-xl transition-colors hover:border-cyan-500/40">
-                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-cyan-400">
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-[#037ffc] dark:text-cyan-400">
                         <Server size={14} />
                         <span className="hidden sm:inline">Target cluster</span>
                     </span>
@@ -346,8 +367,8 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                         ))}
                     </Select>
                 </div>
-                <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-4 shadow-2xl backdrop-blur-xl">
-                    <SectionLabel className="shrink-0">Model cache storage</SectionLabel>
+                <section className="model-cache-card flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-4 shadow-2xl backdrop-blur-xl">
+                    <SectionLabel className="shrink-0 text-[#037ffc]">Model cache storage</SectionLabel>
                     <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
                         <ModelCacheStorageList
                             volumes={pagedModelCacheVolumes}
@@ -385,10 +406,10 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
 
               <section
                 aria-busy={loading || refreshing}
-                className="flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
+                className="model-cache-card flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
               >
               <div className="flex min-h-0 flex-1 flex-col p-6">
-                <SectionLabel className="shrink-0">{`Cached models (${filteredItems.length})`}</SectionLabel>
+                <SectionLabel className="shrink-0 text-[#037ffc]">{`Cached models (${filteredItems.length})`}</SectionLabel>
                 <div className="mt-3 flex shrink-0 flex-col gap-3">
                     <div className="relative">
                         <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true" />
@@ -407,7 +428,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                             role="tab"
                             aria-selected={typeFilter === ''}
                             onClick={() => setTypeFilter('')}
-                            className={`rounded-md border px-3 py-1.5 text-xs transition ${typeFilter === '' ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                            className={`rounded-md border px-3 py-1.5 text-xs transition ${typeFilter === '' ? 'type-filter-selected border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
                         >
                             All
                         </button>
@@ -418,7 +439,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                                 role="tab"
                                 aria-selected={typeFilter === option}
                                 onClick={() => setTypeFilter(option)}
-                                className={`rounded-md border px-3 py-1.5 text-xs transition ${typeFilter === option ? 'border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                                className={`rounded-md border px-3 py-1.5 text-xs transition ${typeFilter === option ? 'type-filter-selected border-cyan-400 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
                             >
                                 {option}
                             </button>

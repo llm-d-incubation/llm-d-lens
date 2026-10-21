@@ -8,16 +8,17 @@ import fs from 'fs'
 // over HTTPS too -- browsers only expose features like microphone access
 // (getUserMedia) in a "secure context" (HTTPS or http://localhost), so a
 // bare-metal box reached over http://<lan-ip> needs both the frontend dev
-// server and the Express API server on HTTPS.
+// server and the Python API server on HTTPS.
 const tlsCertFile = process.env.TLS_CERT_FILE
 const tlsKeyFile = process.env.TLS_KEY_FILE
 const httpsOptions =
   tlsCertFile && tlsKeyFile
     ? { cert: fs.readFileSync(tlsCertFile), key: fs.readFileSync(tlsKeyFile) }
     : undefined
-// The Express server (server/server.js) is started with the same cert, so
+// The Python API server is started with the same cert, so
 // proxied requests need https:// targets too when TLS is enabled.
 const proxyScheme = httpsOptions ? 'https' : 'http'
+const backendPort = process.env.BACKEND_PORT || process.env.SERVER_PORT || process.env.PORT || 3000
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -33,12 +34,12 @@ export default defineConfig({
     },
     proxy: {
       '/api/cluster-overview': {
-        target: process.env.VITE_AUTH_PROXY_TARGET || `${proxyScheme}://localhost:3000`,
+        target: process.env.VITE_AUTH_PROXY_TARGET || `${proxyScheme}://localhost:${backendPort}`,
         changeOrigin: true,
         secure: false,
       },
       '/api': {
-        target: process.env.VITE_API_PROXY_TARGET || `${proxyScheme}://localhost:3000`,
+        target: process.env.VITE_API_PROXY_TARGET || `${proxyScheme}://localhost:${backendPort}`,
         changeOrigin: true,
         secure: false,
       }

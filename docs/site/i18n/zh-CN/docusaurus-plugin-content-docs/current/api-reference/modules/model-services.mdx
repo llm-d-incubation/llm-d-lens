@@ -633,6 +633,29 @@ def revoke_model(model_id: str, binding_id: str, principal):
   </TabItem>
 </Tabs>
 
+### 将就绪部署发布为公开模型服务
+
+把单个就绪部署发布为新的集群级公开模型名称，无需授予完整的模型组管理权限。公开名称尚不存在时，**Add model** 会使用此接口。调用者需要部署所在集群的 `model-service:member:manage` 权限。服务使用默认的 `random` 选择策略；编辑模型服务元数据或选择策略仍需要 `model-service:group:manage`。
+
+**`POST /api/v1/model-service/admin/groups/publish`**
+
+请求体（`GroupPublishRequest`）：
+
+- `name`（`string`）：公开模型名称。
+- `clusterId`（`string`）：部署所在集群。
+- `executionId`（`string`）：要发布的就绪部署。
+- `displayName` / `description`（`string`，可选）。
+
+响应：`201` 和创建后的 `ModelServiceGroup`；部署会作为首个成员提交，并安排 Gateway 调谐。错误码与创建模型组一致（`403`、`404`、`409`、`422`）。
+
+```json
+{
+  "name": "qwen3-8b",
+  "clusterId": "cluster-a",
+  "executionId": "exec-123"
+}
+```
+
 ### 列出已发布的模型服务成员
 
 列出为路由组提供后端支持的已发布成员。该路由可以选择按某个组 ID 进行过滤，并添加一个根据 `execution_name()` 推导出来的、便于阅读的部署 `name` 字段。
@@ -1070,6 +1093,14 @@ HTTP 处理函数会安排调谐，直接 Python 调用只持久化记录。
   </TabItem>
 </Tabs>
 
+### 协调单个网关集群并查看日志
+
+重新渲染并应用单个集群的共享 Gateway、HTTPRoute 和提供方连接，并以 SSE 流返回操作日志。
+
+**`POST /api/v1/model-service/admin/gateway/reconcile/stream`**
+
+请求体：`{ "clusterId": "cluster-a" }`。需要 `model-service:gateway:reconcile`。
+
 ### 调谐网关所在集群
 
 为当前拥有活跃成员的每个集群安排一次完整的数据面调谐。该路由会先发现受影响的集群 ID，然后在后台运行 `_reconcile_clusters()`。
@@ -1234,6 +1265,14 @@ HTTP 处理函数保存配置并等待受影响集群的调谐提交。`status: 
   </TabItem>
 </Tabs>
 
+### 启用或停止模型服务
+
+在不改变提供方状态、权重或运行中 Pod 的情况下启动或停止公开模型。
+
+**`POST /api/v1/model-service/admin/groups/{group_id}/status`**
+
+请求体：`{ "status": "active" }` 或 `{ "status": "disabled" }`。需要模型所在集群的 `model-service:group:toggle`。
+
 ### 删除一个模型路由组
 
 需要模型所在集群的组管理权限，只允许移除空路由组。只要仍有关联提供方（包括离线或
@@ -1246,7 +1285,7 @@ HTTP 处理函数保存配置并等待受影响集群的调谐提交。`status: 
   <TabItem value="rest-api" label="REST API">
     **`DELETE /api/v1/model-service/admin/groups/{group_id}`**
 
-    请求：无请求体。响应：`204 No Content`。
+    需要 `model-service:group:remove`。请求：无请求体。响应：`204 No Content`。
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

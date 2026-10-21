@@ -1,6 +1,6 @@
 ---
 title: Lens Assistant
-description: The Node MCP endpoint and tool catalog behind Lens Assistant.
+description: The Python MCP endpoint and tool catalog behind Lens Assistant.
 ---
 
 import Tabs from '@theme/Tabs';
@@ -8,11 +8,19 @@ import TabItem from '@theme/TabItem';
 
 ## Backend API
 
-Lens Assistant is backed by the Node MCP server under `server/mcp/`, not by a dedicated FastAPI router. `server/server.js` mounts `mcpRouter` directly with `app.use(mcpRouter)`, and `server/mcp/router.ts` exposes the stateless Streamable HTTP endpoint at `/api/mcp`.
+Lens Assistant uses `llm_d_lens.mcp.router` in the unified Python service. Its FastAPI router exposes the stateless Streamable HTTP endpoint at `/api/mcp` using the official MCP Python SDK.
+
+Candidate tools advertise and forward either `workload.concurrency` or
+`workload.request_rate` (positive, mutually exclusive load targets). The compatibility
+API defaults omitted input/output token lengths to 4000/1000, matching Agentic
+planning. Expected validation messages and no-feasible-candidate retry behavior
+are preserved. Other AIC service failures return the generic
+`{ "error": "AIC candidate search failed" }` response with status `400`;
+internal exception details are logged only on the server.
 
 ### Send one stateless MCP request
 
-Handle one stateless Streamable HTTP MCP request by creating a fresh `McpServer`, connecting it, and serving the request body.
+Handle one stateless Streamable HTTP MCP request with a fresh SDK server and transport manager.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -74,7 +82,7 @@ If an unhandled server error occurs before the SDK sends a response, Lens return
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-This endpoint is a Node.js MCP handler, not a Python function — there is no direct Python call for the `/api/mcp` transport itself. Call the underlying Python-backed domain directly instead; for example, a deployment-related MCP tool can reuse the same deployment helper shown on the [Deployments](/api-reference/modules/deployments) page:
+Use the official MCP Python client for transport calls. For metadata, `llm_d_lens.mcp.catalog.catalog(app)` returns the same tool definitions used by the endpoint. In-process domain integrations can reuse the helper shown on the [Deployments](/api-reference/modules/deployments) page:
 
 ```python
 from llm_d_lens.deploy.standard_kubernetes_service import (
@@ -127,7 +135,7 @@ Returns a JSON-RPC error payload with HTTP status `405`.
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-This endpoint is a Node.js MCP transport guard, not a Python function — there is no direct Python call. Use the underlying Python-backed module for the tool you actually want to invoke, as summarized below in [What the MCP tools call](#what-the-mcp-tools-call).
+The Python router rejects GET streams in stateless mode. Use the MCP client's POST transport or the underlying Python domain, as summarized in [What the MCP tools call](#what-the-mcp-tools-call).
 
   </TabItem>
 </Tabs>
@@ -163,12 +171,12 @@ Returns a JSON-RPC error payload with HTTP status `405`.
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
-This endpoint is a Node.js MCP transport guard, not a Python function — there is no direct Python call. For Python automation, skip MCP and call the underlying Lens domain module directly.
+The Python router rejects session termination because it keeps no transport session. Configure the Python MCP client with `terminate_on_close=False`.
 
   </TabItem>
 </Tabs>
 
-The tool catalog is assembled in two parts: `server/mcp/tools.ts` contains 138 generated tools, and `server/mcp/specialTools.ts` contains 25 hand-written tools. The generated half is produced by `node scripts/generate-mcp-tools.mjs` from the `llm_d_lens` FastAPI OpenAPI schema, while the hand-written half covers composite or Node-backed routes. The handlers are thin wrappers over Lens' own REST API: `server/mcp/internal.ts` forwards requests to loopback `/api/...` paths through `internalRequest(...)`.
+`llm_d_lens.mcp.catalog` derives tools from the FastAPI OpenAPI schema and combines them with 25 special definitions in `llm_d_lens/mcp/definitions.json`. `node scripts/generate-mcp-tools.mjs --check` validates this catalog without generating Node files. `llm_d_lens.mcp.tools` invokes the canonical REST routes through an in-process ASGI client, preserving authentication, CSRF and resource-scope checks.
 
 ## What the MCP tools call
 
@@ -190,8 +198,11 @@ scope. Only GLOBAL admins receive it by default. Other roles require explicit
 GLOBAL grants; cluster grants, anonymous and disabled-auth `system` identities
 do not qualify. Browser cookie calls must also satisfy the standard CSRF policy.
 MCP callers additionally need `mcp:tool:invoke` or `playground:chat:use`.
-Node forwards the actual caller using internal HMAC signatures, never a service
-principal or an identity provided in arguments.
+The Python MCP adapter forwards the actual caller through an in-process ASGI
+request using internal HMAC signatures, never a service principal or an identity
+provided in arguments. It validates strict input and response schemas without
+converting Decimal strings; failed or malformed responses become MCP tool errors
+without returning upstream evidence. No separate Node server is required.
 
 ```json
 {

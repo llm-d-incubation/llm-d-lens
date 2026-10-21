@@ -191,7 +191,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
     };
 
     return (
-        <ModulePage contentClassName="flex flex-col gap-4">
+        <ModulePage className="deployment-page" contentClassName="flex flex-col gap-4">
             <ModuleHeader
                 icon={Rocket}
                 title="Deployments"
@@ -231,7 +231,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                 className="relative rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
             >
               <div className="relative overflow-visible p-6">
-                <SectionLabel>{`Deployments (${items.length})`}</SectionLabel>
+                <SectionLabel className="text-[#037ffc] dark:text-cyan-400">{`Deployments (${items.length})`}</SectionLabel>
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_220px_220px]">
                     <div className="relative">
                         <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true" />

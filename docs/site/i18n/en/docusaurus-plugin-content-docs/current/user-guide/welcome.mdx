@@ -1,0 +1,113 @@
+---
+title: Welcome
+description: Start a Lens Assistant conversation, review current cluster issues and open common operator tasks.
+---
+
+Welcome is the operator landing page. It combines a greeting, a Lens Assistant
+prompt starter, current cluster issues and a small set of quick actions. It does
+not duplicate cluster capacity, model-service tables, deployment history or
+token usage; those remain on their owning pages.
+
+## Who sees Welcome
+
+Welcome is the first sidebar item for admins, maintainers and custom roles with
+`cluster:cluster:read`. Consumer-only roles keep their existing landing page.
+The page always filters issues and actions to the clusters and permissions your
+account can use. If no cluster is accessible and your role can create clusters,
+Welcome offers to open the create-cluster wizard.
+
+## Join Slack
+
+Click **Join Slack** in the Welcome header to open the llm-d Slack
+workspace in a new tab.
+
+## Open the documentation
+
+Click **Documentation** in the Welcome header to open the Lens documentation
+in a new tab.
+
+## Star the project
+
+Click **Star on GitHub** in the Welcome header. Lens opens GitHub sign-in and
+returns to the `llm-d-incubation/llm-d-lens` repository after you sign in. Click
+**Star** on GitHub to finish.
+
+## Ask Lens Assistant
+
+1. Type a message in **Ask Lens Assistant**.
+2. Choose an AI provider in the lower-left of the composer.
+3. Click **Send**, or press `Ctrl+Enter` / `Cmd+Enter`.
+
+Sending opens Lens Assistant, selects the provider you chose, and submits the
+message automatically once the provider is ready. Tool calls keep the assistant's
+normal confirmation rules. The prompt is carried in temporary browser session
+storage, not in the URL.
+
+Only providers Lens Assistant can use are listed. If none are available, Send
+is disabled and the composer links to **External providers**. If your role
+cannot add providers, ask an administrator. If the provider list cannot be
+loaded, retry; do not assume no provider exists.
+
+If your role cannot use Lens Assistant, the page shows a short permission note
+instead of an unusable composer. Issues and permitted quick actions remain
+available.
+
+## Review cluster issues
+
+**Needs attention** lists current findings in the selected cluster scope:
+
+- No accessible clusters, a cluster without model-cache storage, or a recorded HF_TOKEN Secret that no longer exists. The missing-storage issue links to **New storage volume** with the cluster and the **Model cache** purpose already selected.
+- A model-cache volume has no cached model, or a cluster's model-cache volumes contain no ready model.
+- Cluster components or nodes that are not ready. Missing Grafana dashboards are informational when core monitoring is healthy.
+- Model services without a ready serving path, or unavailable Gateway/IPP.
+- Sustained serving pressure or backend errors on a backing deployment.
+- Recent deployment failures, or ready deployments that no model service publishes.
+- Failed storage provisioning or model-cache download/sync.
+- Active users with no direct or group-inherited role, or groups with no role binding (info). Each user finding names the user and links to that user's role editor.
+- No compatible External AI provider (info).
+
+Each row shows severity, resource identity, evidence, the first time the issue was seen and a diagnostic
+link labeled **To check**, **To fix**, or **To resolve**. A finding without sufficient telemetry
+is shown as unknown or stale, not as healthy.
+
+Use the cluster selector in the section header to narrow the list. **View all
+issues** opens the full, filterable issue page. The page refreshes current issues
+every 15 seconds and keeps the existing rows during a quiet refresh.
+
+## Quick actions
+
+The right-hand rail contains actions your role can perform:
+
+| Action | What it opens |
+| --- | --- |
+| Token usage analytics | Usage reports for recorded token consumption. |
+| Add a model deployment | Model market, to prepare a model for serving. |
+| Publish a model service | Model services with the add form requested. |
+| Launch benchmark | Evaluation with the new-task wizard open. |
+| Replay traces | Simulation with the new-task form open. |
+| Manage storages | Storage, to inspect or create cluster volumes. |
+| Cache a new model | Model cache with the download form requested. |
+| Create a new cluster | Clusters with the create wizard requested. |
+
+Actions are navigation only. Forms, validation, confirmations and writes remain
+on the destination pages and are still permission-gated. Actions you cannot
+perform are not shown.
+
+## Empty and partial states
+
+| What you see | Meaning |
+| --- | --- |
+| All systems operational | Health checks and telemetry across monitored clusters are reporting normally. No action is required. |
+| Cluster access needed | Your account has no accessible cluster. Ask for a cluster-scoped role. |
+| Some checks unavailable | One or more telemetry or Kubernetes sources did not answer. |
+| No compatible provider | Add an OpenAI-compatible provider under External providers. |
+| Assistant not available | Your role lacks `playground:chat:use`. |
+
+## Related pages
+
+- [Model market](/user-guide/model-market)
+- [Model services](/user-guide/model-services)
+- [Model cache](/user-guide/model-cache)
+- [Clusters](/user-guide/clusters)
+- [External providers](/user-guide/external-providers)
+- [Lens Assistant](/user-guide/lens-assistant)

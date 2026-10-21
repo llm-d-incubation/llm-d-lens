@@ -5,13 +5,13 @@ import { firstAccessibleView, NAVIGATION_GROUPS, resolveView } from './views.js'
 
 test('landing page follows the first accessible sidebar entry, including custom grants', () => {
   for (const [permissions, expected] of [
-    [['*:*:*'], 'model-market'],
-    [['deployment:run:read', 'cluster:cluster:read'], 'model-market'],
+    [['*:*:*'], 'welcome'],
+    [['deployment:run:read', 'cluster:cluster:read'], 'welcome'],
     [['model-service:group:read', 'model-service:usage:read'], 'admin/model-service'],
     [['evaluate:run:read', 'model-service:usage:read'], 'optimization-evaluate'],
     [['model-service:usage:read', 'model-service:token:manage', 'model-service:inference:use'], 'usage'],
     [['model-service:token:manage'], 'api-keys'],
-    [['cluster:cluster:read', 'user:user:read'], 'clusters'],
+    [['cluster:cluster:read', 'user:user:read'], 'welcome'],
     [['user:user:read'], 'admin/users'],
     [[], ''],
   ]) {
@@ -51,6 +51,8 @@ test('other optimization views and existing aliases remain available', () => {
     assert.equal(resolveView(view), view);
   }
   assert.equal(resolveView('home'), 'clusters');
+  assert.equal(resolveView('dashboard'), 'welcome');
+  assert.equal(resolveView('dashboard/alerts'), 'welcome/issues');
   assert.equal(resolveView('simulation'), 'optimization-simulate');
   assert.equal(resolveView('unknown'), 'model-market');
 });

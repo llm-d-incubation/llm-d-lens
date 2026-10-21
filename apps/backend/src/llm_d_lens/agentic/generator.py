@@ -23,6 +23,7 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from llm_d_lens.ai_providers.client import AIProviderClientError, AIToolCall, client_for
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS
 from llm_d_lens.auth.security import sign_internal
 from llm_d_lens.capacity import (
     KVCacheDetail,
@@ -32,6 +33,7 @@ from llm_d_lens.capacity import (
     max_concurrent_requests,
     wrap_config,
 )
+from llm_d_lens.hardware.registry import all_profiles
 
 from .facts import PlanningEvidence, ResolvedPlanningFacts, _aic_predictions, _select_gpu_capacity
 from .planner import OpenAIPlannerSettings, PlannedCandidate, PlanningFacts, WorkloadProfile, provider_guidance
@@ -40,7 +42,7 @@ _GENERATOR_MAX_TOKENS = 8192
 _MCP_TIMEOUT_SECONDS = 300
 _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
-_MAX_CALLS_PER_ROUND = 3
+_MAX_CALLS_PER_ROUND = 4
 _MAX_TOOL_RESULT_BYTES = 200_000
 _BASE_MCP_TOOLS = frozenset({"get_cluster_overview", "search_candidates"})
 _RELAXED_AIC_TOOL = "search_aic_with_relaxation"
@@ -539,6 +541,11 @@ class AICandidateGenerator:
                     if call.name == "search_candidates":
                         if cluster_result is None:
                             raise CandidateGenerationError("MCP cluster overview is required before AIC search")
+                        hardware = (
+                            cluster_result.get("hardware")
+                            or (cluster_result.get("kubernetes") or {}).get("hardware")
+                            or {}
+                        )
                         budget = self._resolve_mcp_facts(
                             cluster_id,
                             facts,
@@ -549,7 +556,19 @@ class AICandidateGenerator:
                                 "No GPUs available for AIC search in the selected capacity mode"
                             )
                         arguments = dict(call.arguments)
-                        arguments["searchConfig"] = {**arguments.get("searchConfig", {}), "totalGpus": budget}
+                        config = {**arguments.get("searchConfig", {}), "totalGpus": budget}
+                        profiles = {profile.id: profile for profile in all_profiles()}
+                        systems = {
+                            row["system"]
+                            for accelerator in hardware.get("accelerators", [])
+                            for model in accelerator.get("models") or []
+                            if (profile := profiles.get(accelerator.get("id"))) is not None
+                            for row in profile.planning.aic_system_models
+                            if row.get("pattern") and re.search(row["pattern"], model, re.IGNORECASE)
+                        }
+                        if len(systems) == 1:
+                            config["aicSystemName"] = next(iter(systems))
+                        arguments["searchConfig"] = config
                         call = call.model_copy(update={"arguments": arguments})
                     other_calls.append(call)
                 other_executions = await asyncio.gather(
@@ -736,8 +755,20 @@ class AICandidateGenerator:
                     if profile
                     else None
                 )
-                workload["isl"] = int(input_tokens) if input_tokens is not None else 1024
-                workload["osl"] = int(output_tokens) if output_tokens is not None else 256
+                workload["isl"] = int(input_tokens) if input_tokens is not None else DEFAULT_INPUT_TOKENS
+                workload["osl"] = int(output_tokens) if output_tokens is not None else DEFAULT_OUTPUT_TOKENS
+                for field in ("concurrency", "request_rate"):
+                    value = profile.get(field) if isinstance(profile, dict) else getattr(profile, field, None)
+                    if value is None:
+                        workload.pop(field, None)
+                    else:
+                        workload[field] = value
+                if workload.get("concurrency") is not None and workload.get("request_rate") is not None:
+                    raise CandidateGenerationError(
+                        "AIC accepts only one load target: Concurrent requests or Request rate (QPS). "
+                        "Both were provided; choose one and clear the other "
+                        "because AIC does not support joint load targets."
+                    )
                 for target, value in (("ttftMs", facts.ttft_slo_ms), ("tpotMs", facts.tpot_slo_ms)):
                     if value is None:
                         workload.pop(target, None)
@@ -937,7 +968,9 @@ class AICandidateGenerator:
             "sourceIds including aic; use search_aic_with_relaxation only after an empty result.\n"
             "14. Use only the provided allowlisted MCP tools, never call write, deploy, approve, delete, "
             "or port-forward "
-            "operations, and do not repeat equivalent calls.\n"
+            "operations, and do not repeat equivalent calls. "
+            f"Request at most {_MAX_CALLS_PER_ROUND} MCP tool calls in one response and {_MAX_TOOL_CALLS} "
+            f"across at most {_MAX_TOOL_ROUNDS} tool rounds. Split additional evidence requests across rounds.\n"
             "15. Finish by calling submit_candidate_proposals exactly once with one to ten candidates."
         )
 

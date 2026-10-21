@@ -701,6 +701,13 @@ async def list_audit_logs(
     result: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
+    action: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    cluster_id: str | None = None,
+    source: str | None = None,
+    request_id: str | None = None,
+    trace_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
@@ -711,6 +718,13 @@ async def list_audit_logs(
         "result": result,
         "since": since,
         "until": until,
+        "action": action,
+        "target_type": target_type,
+        "target_id": target_id,
+        "cluster_id": cluster_id,
+        "source": source,
+        "request_id": request_id,
+        "trace_id": trace_id,
     }
     return {
         "items": _jsonify(dao.list(**filters, limit=limit, offset=offset)),

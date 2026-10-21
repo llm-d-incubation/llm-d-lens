@@ -90,6 +90,10 @@ export function createGroup(body) {
     return requestJson(`${admin}/groups`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) });
 }
 
+export function publishModel(body) {
+    return requestJson(`${admin}/groups/publish`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) });
+}
+
 export async function addModel({ name, clusterId, executionId }) {
     const publicName = name.trim();
     const [groups, members] = await Promise.all([listGroups(), listMembers()]);
@@ -98,7 +102,7 @@ export async function addModel({ name, clusterId, executionId }) {
     }
     const group = groups.find((item) => item.clusterId === clusterId && item.name === publicName);
     if (!group) {
-        return { group: await createGroup({ name: publicName, clusterId, executionId }), created: true };
+        return { group: await publishModel({ name: publicName, clusterId, executionId }), created: true };
     }
     const providers = members.filter((member) => member.groupId === group.id);
     const weight = 1;
@@ -110,6 +114,12 @@ export async function addModel({ name, clusterId, executionId }) {
         ],
     });
     return { group, created: false, weight, operation: result.operation };
+}
+
+export function setGroupStatus(groupId, status) {
+    return requestJson(`${admin}/groups/${encodeURIComponent(groupId)}/status`, {
+        method: 'POST', headers: jsonHeaders, body: JSON.stringify({ status }),
+    });
 }
 
 export function updateGroup(groupId, body) {
@@ -197,13 +207,6 @@ export function getGatewayStatus({ signal } = {}) {
     return requestJson(`${gateway}/status`, { signal });
 }
 
-// Reconcile every cluster with members: ensure the shared Gateway and each
-// model service's HTTPRoute/IPP. Publishing/removing members triggers this
-// automatically; this is the manual retry.
-export function reconcileGateway() {
-    return requestJson(`${gateway}/reconcile`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({}) });
-}
-
 export function probeGateway() {
     return requestJson(`${gateway}/probe`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({}) });
 }
@@ -242,6 +245,10 @@ export function scaleComponent({ clusterId, namespace, name, replicas, kind = 'd
 }
 
 // Run any data-plane operation and stream its log lines (SSE `log`/`complete`/`error`).
+export function reconcileGateway(payload, onEvent, signal) {
+    return streamSseRequest(`${gateway}/reconcile/stream`, { clusterId: payload.clusterId }, onEvent, signal);
+}
+
 export function streamGatewayOperation(payload, onEvent, signal) {
     return streamSseRequest(`${gateway}/stream`, payload, onEvent, signal);
 }

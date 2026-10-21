@@ -15,6 +15,7 @@ from llm_d_lens.ai_providers.contracts import (
     AIProviderTestRequest,
     AIProviderUpdateRequest,
 )
+from llm_d_lens.ai_providers.endpoints import normalize_provider_base_url
 from llm_d_lens.ai_providers.service import (
     AIProviderNameConflictError,
     UnsafeProviderEndpointError,
@@ -206,7 +207,7 @@ async def proxy_chat_completions(provider_id: str, request: Annotated[dict, Body
             status_code=400,
             detail="Only openai-type AI providers support chat/completions passthrough",
         )
-    base_url = str(provider.base_url)
+    base_url = normalize_provider_base_url(str(provider.base_url))
     try:
         await validate_provider_endpoint(base_url)
     except UnsafeProviderEndpointError as error:
@@ -214,7 +215,7 @@ async def proxy_chat_completions(provider_id: str, request: Annotated[dict, Body
             status_code=422,
             detail="Provider URL must use HTTPS and resolve only to public addresses.",
         ) from error
-    endpoint = f"{base_url if base_url.endswith('/') else base_url + '/'}v1/chat/completions"
+    endpoint = f"{base_url}v1/chat/completions"
     headers = {"content-type": "application/json"}
     if provider.api_key:
         headers["Authorization"] = f"Bearer {provider.api_key}"

@@ -13,15 +13,11 @@
 // limitations under the License.
 
 // Voice input for "Chat with Lens": fully client-side speech-to-text, no
-// backend changes. Runs a small (~39M param) Whisper model entirely in the
-// browser via transformers.js (WebAssembly + CPU, no GPU/server round trip),
-// mirroring what a "small STT model that runs on CPU" means, just moved to
-// the browser's CPU instead of Prism's backend. The model is fetched lazily
-// (once, on first use) straight from the Hugging Face Hub CDN and cached by
-// the browser, so it costs nothing on every other page load.
+// backend inference. Runs Whisper in the browser via transformers.js
+// (WebAssembly + CPU) and fetches the model lazily through Lens' same-origin
+// asset proxy, then lets the browser cache it for later turns.
 //
-// "onnx-community/whisper-tiny" (not the .en variant, and not the older
-// "Xenova/whisper-tiny") is used deliberately:
+// "onnx-community/whisper-base" (not the .en variant) is used deliberately:
 //  - multilingual, since Prism's own operators have been chatting with Lens
 //    in both English and Chinese in this session ("*.en" would only
 //    understand English).
@@ -29,25 +25,36 @@
 //    @huggingface/transformers pipeline (the older "Xenova/*" ONNX exports,
 //    made for the predecessor @xenova/transformers v2, are missing some
 //    metadata this library's ONNX Runtime Web build expects).
+//
+// whisper-tiny was too inaccurate for short Chinese utterances (it often
+// hallucinated a single token); base is still small enough to run on CPU.
+const MODEL_ID = 'onnx-community/whisper-base';
+const SAMPLE_RATE = 16000;
+const MIN_SPEECH_SECONDS = 0.15;
+const MIN_RMS = 0.00005;
 let transcriberPromise = null;
 
 async function getTranscriber(onProgress) {
     if (!transcriberPromise) {
         transcriberPromise = import('@huggingface/transformers')
-            .then(({ pipeline }) =>
-                pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny', {
+            .then(({ pipeline, env }) => {
+                // Stream model files through Lens itself. Direct browser access
+                // to huggingface.co fails on proxy-only networks, while the
+                // Lens host already has outbound access for model downloads.
+                env.remoteHost = `${window.location.origin}/api/v1/speech-models/`;
+                env.remotePathTemplate = '{model}/resolve/{revision}/';
+                return pipeline('automatic-speech-recognition', MODEL_ID, {
                     // NOT 'q8'/quantized: the merged-decoder quantized export
                     // for this model has a broken/incompatible scale tensor
                     // for its (embed_tokens-tied) MatMulNBits weight in this
                     // onnxruntime-web version, which fails session creation
                     // with "TransposeDQWeightsForMatMulNBits ... Missing
                     // required scale". fp32 sidesteps that broken graph path
-                    // entirely; whisper-tiny is small enough (~39M params)
-                    // that full precision is still fast in-browser.
+                    // entirely.
                     dtype: 'fp32',
                     progress_callback: onProgress,
-                }),
-            )
+                });
+            })
             .catch((error) => {
                 // Don't cache a failed load -- let the next mic click retry
                 // instead of permanently failing for the rest of the session.
@@ -66,13 +73,43 @@ async function getTranscriber(onProgress) {
 async function decodeToMono16k(blob) {
     const arrayBuffer = await blob.arrayBuffer();
     const AudioContextImpl = window.AudioContext || window.webkitAudioContext;
-    const audioContext = new AudioContextImpl({ sampleRate: 16000 });
+    const audioContext = new AudioContextImpl({ sampleRate: SAMPLE_RATE });
     try {
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        return audioBuffer.getChannelData(0);
+        const channels = Math.max(1, audioBuffer.numberOfChannels);
+        let loudest = audioBuffer.getChannelData(0);
+        let loudestRms = 0;
+        for (let channel = 0; channel < channels; channel += 1) {
+            const data = audioBuffer.getChannelData(channel);
+            let sum = 0;
+            for (let index = 0; index < data.length; index += 1) sum += data[index] * data[index];
+            const rms = Math.sqrt(sum / Math.max(1, data.length));
+            if (rms > loudestRms) {
+                loudest = data;
+                loudestRms = rms;
+            }
+        }
+        return new Float32Array(loudest);
     } finally {
-        audioContext.close();
+        await audioContext.close();
     }
+}
+
+function trimSilence(samples) {
+    const threshold = 0.001;
+    let start = 0;
+    let end = samples.length;
+    while (start < end && Math.abs(samples[start]) < threshold) start += 1;
+    while (end > start && Math.abs(samples[end - 1]) < threshold) end -= 1;
+    if (end - start < SAMPLE_RATE * 0.15) return samples;
+    const padding = Math.floor(SAMPLE_RATE * 0.12);
+    return samples.slice(Math.max(0, start - padding), Math.min(samples.length, end + padding));
+}
+
+function speechStats(samples) {
+    let sum = 0;
+    for (let index = 0; index < samples.length; index += 1) sum += samples[index] * samples[index];
+    return { duration: samples.length / SAMPLE_RATE, rms: Math.sqrt(sum / Math.max(1, samples.length)) };
 }
 
 // Lazily built Traditional -> Simplified Chinese converter (opencc-js).
@@ -98,8 +135,20 @@ function getZhConverter() {
 // language auto-detection is unreliable on short clips, so letting the user
 // pick the language up front avoids it guessing wrong and transcribing
 // gibberish in the wrong language.
-export async function transcribeAudioBlob(blob, { onModelProgress, language } = {}) {
-    const [transcriber, audioData] = await Promise.all([getTranscriber(onModelProgress), decodeToMono16k(blob)]);
+export async function transcribeAudioBlob(blob, { onModelProgress, onModelReady, language } = {}) {
+    const [transcriber, decoded] = await Promise.all([getTranscriber(onModelProgress), decodeToMono16k(blob)]);
+    onModelReady?.();
+    const audioData = trimSilence(decoded);
+    const stats = speechStats(audioData);
+    if (stats.duration < MIN_SPEECH_SECONDS || stats.rms < MIN_RMS) {
+        throw new Error('No speech detected. Please try again and speak clearly into the microphone.');
+    }
+    let peak = 0;
+    for (let index = 0; index < audioData.length; index += 1) peak = Math.max(peak, Math.abs(audioData[index]));
+    if (peak > 0 && peak < 0.25) {
+        const gain = 0.9 / peak;
+        for (let index = 0; index < audioData.length; index += 1) audioData[index] *= gain;
+    }
     const result = await transcriber(audioData, language ? { language, task: 'transcribe' } : undefined);
     const text = Array.isArray(result) ? result[0]?.text : result?.text;
     const trimmed = (text || '').trim();

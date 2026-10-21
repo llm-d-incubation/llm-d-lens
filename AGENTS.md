@@ -17,6 +17,18 @@ Do not add helpers, frameworks, tests of trivial wiring or repeated documentatio
 just to satisfy a process. Explain non-obvious choices briefly; no mandatory plan
 or decision table for a straightforward fix.
 
+## Human approval for structural changes
+
+- Do not create or delete code files without explicit human confirmation. This
+  covers source, tests, scripts, migrations and executable configuration. A
+  feature request authorizes behavior, not unstated file additions or deletions;
+  describe the proposed paths and wait for approval before acting.
+- Before changing `.gitignore`, assess the impact and obtain explicit human
+  confirmation. Report what becomes ignored, whether tracked files, secrets,
+  generated output or runtime data are affected, and any cleanup or migration
+  required. A request to change ignore rules is not approval until that impact is
+  explained and confirmed.
+
 ## Read only applicable contracts
 
 Read the relevant sections of these skills when the change touches their contracts;
@@ -57,6 +69,17 @@ Commit only when requested. Before commits/PRs run `npm run check:english` over
 the repository; PR titles/bodies must also pass `--text-file` checks. Fix findings
 without hiding content or weakening checks. All repository text is English except
 published translations under `docs/site/i18n/zh-CN/`.
+
+## MCP tool catalog
+
+A FastAPI route intended for Lens Assistant or MCP must declare an explicit
+`operation_id`, `summary` and `description` on its decorator. After changing
+backend routes, run `node scripts/generate-mcp-tools.mjs --check`; it validates
+the Python catalog and fails on any unexpected skipped operation. Add UI-only,
+internal, streaming, secret-bearing or otherwise unsuitable routes to
+`intentionalSkips` in `apps/backend/src/llm_d_lens/mcp/definitions.json`.
+The catalog implementation is `llm_d_lens.mcp.catalog`; special handlers are in
+`llm_d_lens.mcp.tools`. No generated Node server artifact is required.
 
 ## Keep the docs site in sync
 

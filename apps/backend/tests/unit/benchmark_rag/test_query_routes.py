@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import replace
 from decimal import Decimal
@@ -422,3 +423,60 @@ def test_builtin_role_sync_updates_persisted_catalog(transport):
 def test_access_does_not_reject_real_identity_merely_named_system():
     principal = replace(context._disabled_principal(), authz_version=1)
     require_query_access(principal)
+
+
+@pytest.mark.parametrize(
+    "permissions,allowed",
+    [
+        ({QUERY_PERMISSION}, False),
+        ({"mcp:tool:invoke"}, False),
+        ({"playground:chat:use"}, False),
+        ({QUERY_PERMISSION, "mcp:tool:invoke"}, True),
+        ({QUERY_PERMISSION, "playground:chat:use"}, True),
+    ],
+)
+@pytest.mark.parametrize("include_internal", [None, False, True])
+def test_python_mcp_enforces_invocation_and_query_grants(transport, permissions, allowed, include_internal):
+    from httpx_sse import EventSource
+
+    client, auth, fake = transport
+    user, role = _login(client, auth)
+    auth.set_role_permissions(role.id, permissions)
+    payload = {"question": "throughput?"}
+    if include_internal is not None:
+        payload["include_internal"] = include_internal
+    response = client.post(
+        "/api/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "query_public_benchmark_rag", "arguments": payload},
+        },
+        headers={
+            "accept": "application/json, text/event-stream",
+            "x-prism-principal-id": "spoofed-admin",
+        },
+    )
+    if permissions == {QUERY_PERMISSION}:
+        assert response.status_code == 403
+    else:
+        assert response.status_code == 200, response.text
+        result = (
+            json.loads(next(EventSource(response).iter_sse()).data)
+            if response.headers["content-type"].startswith("text/event-stream")
+            else response.json()
+        )["result"]
+        assert bool(result.get("isError")) is not allowed
+        if allowed:
+            body = json.loads(result["content"][0]["text"])
+            assert body["evidence"][0]["value"] == "123.45"
+        else:
+            assert "status 403" in result["content"][0]["text"]
+            assert "published-item" not in response.text
+    if allowed:
+        assert len(fake.calls) == 1
+        assert fake.calls[0][1].user_id == user.id
+        assert fake.calls[0][0].include_internal is (include_internal is True)
+    else:
+        assert not fake.calls

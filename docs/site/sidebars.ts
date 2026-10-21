@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
       label: 'User Guide',
       collapsed: false,
       items: [
+        'user-guide/welcome',
         'user-guide/model-market',
         'user-guide/deployments',
         'user-guide/evaluation',
@@ -59,6 +60,7 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'Modules',
           items: [
+            'api-reference/modules/welcome',
             'api-reference/modules/model-market',
             'api-reference/modules/deployments',
             'api-reference/modules/evaluation',

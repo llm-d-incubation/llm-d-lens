@@ -35,8 +35,8 @@ function roleScopeTitle(role) {
     return 'All clusters';
 }
 
-export default function UsersPage({ onToggleMobileNav }) {
-    const { principal } = useAuth();
+export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
+    const { principal, can } = useAuth();
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -47,6 +47,7 @@ export default function UsersPage({ onToggleMobileNav }) {
     const [pendingDelete, setPendingDelete] = useState(null);
     const [pendingReset, setPendingReset] = useState(null);
     const [pendingRoles, setPendingRoles] = useState(null);
+    const handledInitialUser = useRef(false);
 
     const load = useCallback(async () => {
         try {
@@ -64,6 +65,14 @@ export default function UsersPage({ onToggleMobileNav }) {
     }, [load]);
     usePolling(() => load());
 
+    useEffect(() => {
+        if (!initialUserId || handledInitialUser.current || loading) return;
+        const user = users.find((entry) => entry.id === initialUserId);
+        if (!user) return;
+        handledInitialUser.current = true;
+        if (!user.protected && can('role:binding:manage')) setPendingRoles(user);
+    }, [can, initialUserId, loading, users]);
+
     const needle = query.trim().toLowerCase();
     const filtered = users.filter((user) => {
         if (status && user.status !== status) return false;
@@ -79,7 +88,7 @@ export default function UsersPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={Users}
@@ -183,6 +192,7 @@ export default function UsersPage({ onToggleMobileNav }) {
                                                                 <Badge
                                                                     key={`role-${role.name}-${index}`}
                                                                     tone="violet"
+                                                                    className="direct-role-tag"
                                                                     title={`Direct · ${roleScopeTitle(role)}`}
                                                                 >
                                                                     {role.name}
@@ -192,6 +202,7 @@ export default function UsersPage({ onToggleMobileNav }) {
                                                                 <Badge
                                                                     key={`inherited-${role.groupId}-${role.name}-${index}`}
                                                                     tone="info"
+                                                                    className="inherited-role-tag"
                                                                     title={`Via group ${role.groupName} · ${roleScopeTitle(role)}`}
                                                                 >
                                                                     {role.name}
@@ -433,13 +444,16 @@ function UserFormModal({ onCancel, onSaved }) {
 
 function ResetPasswordModal({ user, onCancel, onSaved }) {
     const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const { pending, error, run } = useSubmission('Failed to reset password', { keepPendingOnSuccess: true });
     const inputRef = useRef(null);
     useEffect(() => inputRef.current?.focus(), []);
 
+    const passwordsMatch = Boolean(password) && password === confirmPassword;
+
     const submit = async (event) => {
         event.preventDefault();
-        if (pending) return;
+        if (pending || !passwordsMatch) return;
         await run(async () => {
             await resetUserPassword(user.id, password);
             onSaved();
@@ -457,7 +471,7 @@ function ResetPasswordModal({ user, onCancel, onSaved }) {
             footer={
                 <>
                     <Button variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
-                    <Button type="submit" form="admin-reset-form" variant="primary" isLoading={pending}>Reset password</Button>
+                    <Button type="submit" form="admin-reset-form" variant="primary" isLoading={pending} disabled={!passwordsMatch}>Reset password</Button>
                 </>
             }
         >
@@ -465,6 +479,13 @@ function ResetPasswordModal({ user, onCancel, onSaved }) {
                 <div>
                     <Label htmlFor="admin-reset-password">New password</Label>
                     <Input ref={inputRef} id="admin-reset-password" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+                </div>
+                <div>
+                    <Label htmlFor="admin-reset-password-confirm">Confirm new password</Label>
+                    <Input id="admin-reset-password-confirm" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+                    {confirmPassword && password !== confirmPassword && (
+                        <p role="alert" className="mt-1 text-xs text-rose-300">Passwords do not match.</p>
+                    )}
                 </div>
                 <FormError message={error} />
             </form>

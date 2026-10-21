@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 路由位于 `llm_d_lens/ai_providers/router.py` 中。以下每个端点都记录了其 REST 契约，以及它所使用的 `AIProviderService` 对应方法、连通性探测或代理调用。
 
-出站请求会校验 HTTPS 提供方 URL 以及公网 DNS 解析结果。默认情况下，后端会在保留原始 Host 请求头和 TLS SNI 的同时，连接到一个经过校验的 IP。若要使用经过验证的出口代理——该代理会解析每个 CONNECT 主机名、拒绝非公网的 IPv4/IPv6 结果，并且只连接到已验证的地址——请将 `LENS_TRUSTED_AI_PROVIDER_PROXY` 设置为确切生效的 HTTPS 代理 URL（例如 `http://proxy.example:8080`）。设置后，后端会将原始主机名通过该代理发送；若该设置缺失或不匹配，或者代理被绕过，则仍保留应用层的 IP 绑定。系统不会跟随重定向。请勿为未经验证的代理启用此设置。
+出站请求会校验 HTTPS 提供方 URL 以及公网 DNS 解析结果。没有代理时，后端会在保留原始 Host 请求头和 TLS SNI 的同时，连接到一个经过校验的 IP。当主机环境配置了 HTTPS 代理时，后端默认使用该代理并发送原始主机名，确保 TLS SNI 正确。只有在需要固定某个经过验证的代理 URL 时才设置 `LENS_TRUSTED_AI_PROVIDER_PROXY`；设置不匹配或代理被绕过时，仍保留应用层 IP 绑定。系统不会跟随重定向。请只配置你信任、且用于解析公开提供方主机的出口代理。
 
 ### 列出已保存的 AI 提供方
 

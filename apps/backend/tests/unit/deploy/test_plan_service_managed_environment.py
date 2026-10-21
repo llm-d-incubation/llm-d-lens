@@ -8,6 +8,7 @@ from llm_d_lens.deploy.contracts import (
     RuntimeBinding,
 )
 from llm_d_lens.deploy.plan_service import DeploymentPlanService
+from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
 
 
 class _Store:
@@ -68,3 +69,26 @@ def test_create_run_allows_other_custom_environment():
         ]
     )
     assert _service().create_run(request) is not None
+
+
+@pytest.mark.parametrize(
+    "override,expected",
+    [
+        (None, {"mode": "named", "name": "saved"}),
+        ({"mode": "auto"}, {"mode": "auto"}),
+        ({"mode": "node-default"}, {"mode": "node-default"}),
+        ({"mode": "named", "name": "override"}, {"mode": "named", "name": "override"}),
+    ],
+)
+def test_runtime_policy_is_preserved_per_case_and_request_override_wins(override, expected):
+    configuration = _configuration({"model": {"name": "org/model"}, "runtime": {"image": "img:tag"}})
+    configuration.checksum = configuration_checksum(configuration.content)
+    configuration.provenance["runtime_class"] = {"mode": "named", "name": "saved"}
+    request = DeploymentRunCreateRequest(
+        configurations=[configuration],
+        runtime_binding=RuntimeBinding(runtime_class=override),
+    )
+    run = DeploymentPlanService(_Store()).create_run(request)
+    assert run.cases[0].create_request.deployment_policy.value["runtime_class"] == expected
+    assert configuration.provenance["runtime_class"] == {"mode": "named", "name": "saved"}
+    assert run.source_configurations[0].checksum == configuration.checksum

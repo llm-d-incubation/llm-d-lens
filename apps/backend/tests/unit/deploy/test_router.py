@@ -23,6 +23,48 @@ router = importlib.import_module("llm_d_lens.deploy.router")
 executions = importlib.import_module("llm_d_lens.deploy.executions")
 
 
+@pytest.mark.asyncio
+async def test_runtime_classes_api_exposes_capabilities_without_claiming_runtime_readiness(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    accesses = []
+    monkeypatch.setattr(router, "require_cluster_access", lambda principal, cluster_id: accesses.append(cluster_id))
+    monkeypatch.setattr(
+        router,
+        "discover_runtime_classes",
+        AsyncMock(
+            return_value={
+                "items": [
+                    {
+                        "metadata": {"name": "nvidia"},
+                        "handler": "gpu-handler",
+                        "scheduling": {"nodeSelector": {"pool": "gpu"}},
+                    }
+                ],
+                "nodes": [
+                    {"metadata": {"name": "gpu-node", "labels": {"pool": "gpu"}}},
+                    {"metadata": {"name": "cpu-node"}},
+                ],
+            }
+        ),
+    )
+    result = await router.list_deployment_runtime_classes("cluster-a", accelerator="nvidia", access_mode="plugin")
+    assert accesses == ["cluster-a"]
+    assert result["available_suggestion"] == "nvidia"
+    assert result["items"][0]["matching_nodes"] == ["gpu-node"]
+    assert result["requirement"] == result["node_runtime_readiness"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_runtime_classes_api_reports_discovery_failure(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(router, "discover_runtime_classes", AsyncMock(side_effect=ValueError("discovery unavailable")))
+    with pytest.raises(HTTPException) as error:
+        await router.list_deployment_runtime_classes("cluster-a")
+    assert error.value.status_code == 503
+
+
 def test_deployment_run_route_requires_request_body_not_cluster_query():
     route = next(route for route in router.router.routes if route.path.endswith("/runs") and "POST" in route.methods)
     assert route.endpoint is router.create_run
@@ -265,6 +307,7 @@ def test_baseline_vllm_renders_boolean_arguments_as_cli_flags():
             "pvc_name": "",
             "model_source": "huggingface",
             "environment": {},
+            "serving_arguments": {},
             "custom_parameters": [
                 {"target": "decode", "kind": "argument", "name": "enable-auto-tool-choice", "value": "true"},
                 {"target": "decode", "kind": "argument", "name": "enable-prefix-caching", "value": "true"},
@@ -524,13 +567,15 @@ def test_baseline_vllm_renders_model_cache_pvc():
             "pvc_name": "shared-model-cache",
             "model_source": "auto-cache",
             "environment": {},
+            "serving_arguments": {},
             "custom_parameters": [],
         }
     )
 
     pod_spec = resources[1]["spec"]["template"]["spec"]
     assert pod_spec["volumes"] == [
-        {"name": "model-cache", "persistentVolumeClaim": {"claimName": "shared-model-cache"}}
+        {"name": "model-cache", "persistentVolumeClaim": {"claimName": "shared-model-cache"}},
+        {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": "4Gi"}},
     ]
 
 

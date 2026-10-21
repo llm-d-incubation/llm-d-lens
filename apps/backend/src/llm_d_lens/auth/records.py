@@ -163,3 +163,12 @@ class AuditLogRecord:
     result: str = "success"
     detail: dict[str, Any] | None = None
     ip: str | None = None
+    source: str = "system"
+    action: str = "execute"
+    target_name: str | None = None
+    status_code: int | None = None
+    duration_ms: int | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
+    parent_request_id: str | None = None
+    user_agent: str | None = None

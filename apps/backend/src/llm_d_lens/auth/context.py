@@ -7,6 +7,10 @@ raises); the dependency makes the allow/deny decision for the matched route.
 
 from __future__ import annotations
 
+import contextvars
+import uuid
+from dataclasses import dataclass
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -27,6 +31,84 @@ from llm_d_lens.core.exceptions import (
 SESSION_COOKIE = "prism_session"
 CSRF_COOKIE = "prism_csrf"
 CSRF_HEADER = "x-prism-csrf"
+
+
+@dataclass
+class AuditContext:
+    request_id: str
+    trace_id: str | None
+    actor_user_id: str | None
+    actor_username: str
+    source: str
+    method: str | None
+    path: str | None
+    ip: str | None
+    user_agent: str | None
+    permission: str | None = None
+    parent_request_id: str | None = None
+    event_type: str | None = None
+    action: str | None = None
+    cluster_id: str | None = None
+    summary: str | None = None
+
+
+_audit_context: contextvars.ContextVar[AuditContext | None] = contextvars.ContextVar("lens_audit_context", default=None)
+
+
+def current_audit_context() -> AuditContext | None:
+    return _audit_context.get()
+
+
+def set_audit_event(event_type: str, *, action: str | None = None) -> None:
+    context = current_audit_context()
+    if context is not None:
+        context.event_type = event_type
+        if action is not None:
+            context.action = action
+
+
+def set_audit_cluster(cluster_id: str | None) -> None:
+    context = current_audit_context()
+    if context is not None:
+        context.cluster_id = cluster_id
+
+
+def set_audit_summary(summary: str | None) -> None:
+    context = current_audit_context()
+    if context is not None:
+        context.summary = summary
+
+
+def _trace_id(request: Request) -> str | None:
+    header = request.headers.get("traceparent") or ""
+    parts = header.split("-")
+    if len(parts) >= 3 and len(parts[1]) == 32:
+        return parts[1]
+    return request.headers.get("x-trace-id") or None
+
+
+def _request_id(request: Request) -> str:
+    return request.headers.get("x-request-id") or request.headers.get("x-prism-request-id") or uuid.uuid4().hex
+
+
+def _source(request: Request) -> str:
+    has_session = bool(request.cookies.get(SESSION_COOKIE))
+    has_origin = bool(request.headers.get("origin") or request.headers.get("referer"))
+    if has_session or has_origin:
+        return "browser"
+    declared = request.headers.get("x-prism-source")
+    if declared in {"assistant", "background"} and request.headers.get("x-prism-principal-id"):
+        return declared
+    if request.headers.get("x-prism-principal-id"):
+        return "assistant" if request.url.path == "/api/mcp" else "api"
+    return "api"
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip() or None
+    return request.client.host if request.client else None
 
 
 class CsrfFailedError(DomainError):
@@ -116,7 +198,27 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
                     principal = default_service().validate(token)
         request.state.principal = principal
         request.state.principal_token = token_from_request(request)
-        return await call_next(request)
+        found, permission = resolve_route_permission(request.method, request.url.path)
+        context = AuditContext(
+            request_id=_request_id(request),
+            trace_id=_trace_id(request),
+            actor_user_id=principal.user_id if principal and principal.user_id != "system" else None,
+            actor_username=principal.username if principal else "",
+            source=_source(request),
+            method=request.method,
+            path=request.url.path,
+            ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            permission=(" | ".join(permission) if isinstance(permission, tuple) else permission) if found else None,
+            parent_request_id=request.headers.get("x-audit-parent-request-id"),
+        )
+        token = _audit_context.set(context)
+        try:
+            response = await call_next(request)
+            response.headers["x-request-id"] = context.request_id
+            return response
+        finally:
+            _audit_context.reset(token)
 
 
 async def require_route_permission(request: Request) -> None:
@@ -137,14 +239,15 @@ async def require_route_permission(request: Request) -> None:
         raise PasswordChangeRequiredError("password change required before continuing")
     if permission == "":
         return
-    if not authorize(principal, permission).allowed:
+    permissions = permission if isinstance(permission, tuple) else (permission,)
+    if not any(authorize(principal, candidate).allowed for candidate in permissions):
         default_service().audit(
             "access_denied",
             result="deny",
             actor_username=principal.username,
-            permission=permission,
+            permission=" | ".join(permissions),
             method=request.method,
             path=request.url.path,
-            ip=request.client.host if request.client else None,
+            ip=_client_ip(request),
         )
         raise ForbiddenError("permission denied")

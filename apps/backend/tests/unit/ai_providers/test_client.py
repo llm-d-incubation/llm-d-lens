@@ -86,6 +86,17 @@ async def test_openai_client_sends_bearer_header_and_parses_content(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_openai_client_accepts_base_url_with_v1_suffix(monkeypatch):
+    fake_client = _Client([_Response(body={"choices": [{"message": {"content": "ok"}}]})])
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = OpenAICompatibleClient(base_url="https://api.openai.com/v1", model="gpt-4o-mini")
+    await client.complete(system_prompt="sys", user_content="user")
+
+    assert fake_client.requests[0]["endpoint"] == "https://api.openai.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
 async def test_openai_client_normalizes_native_tool_calls(monkeypatch):
     fake_client = _Client(
         [

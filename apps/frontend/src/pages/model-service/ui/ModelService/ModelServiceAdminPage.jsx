@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, Boxes, Plus, Repeat, RotateCcw, Search } from 'lucide-react';
+import { requestJson } from '../../../../shared/api/httpClient';
+import { ArrowDown, Boxes, ListFilter, Plus, Repeat, RotateCcw, Search } from 'lucide-react';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { useNotice } from '../../../../shared/lib/useNotice';
@@ -17,7 +18,7 @@ import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../../shared/ui/ModulePage';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { Toast } from '../../../../shared/ui/Toast';
-import { PermissionGate } from '../../../auth';
+import { PermissionGate, useAuth } from '../../../auth';
 import {
     addModel,
     deleteGroup,
@@ -31,7 +32,9 @@ import {
     listMembers,
     listPublishableDeployments,
     streamComponentLogs,
+    setGroupStatus,
     setGatewayIppConfig,
+    reconcileGateway,
     streamGatewayOperation,
     updateGroup,
     updateMember,
@@ -39,6 +42,7 @@ import {
     setProvidersStatus,
 } from './modelServiceBackend';
 import { DataPlaneTopology } from './DataPlaneTopology';
+import { loadCluster, listLensHosts } from '../../../optimization';
 import { ComponentLogViewer, GatewayOperationLogDrawer } from './GatewayOperationLogDrawer';
 import { availableModelProviders, filterServiceFlow, MAX_TRAFFIC_WEIGHT, trafficDistributionError, trafficShare, trafficTotal } from '../../model/modelService';
 import { CARD } from './modelServiceStyles';
@@ -63,13 +67,16 @@ const STATUS_DOT = {
 
 // Admin "Manage models": left picks a model service, right shows its members.
 // Styling mirrors the clusters overview page.
-export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialClusterId = '' }) {
+export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialClusterId = '', initialGroupId = '', initialAction = '', initialExecutionId = '' }) {
+    const { can } = useAuth();
     const [groups, setGroups] = useState([]);
     const [members, setMembers] = useState([]);
     const [deployments, setDeployments] = useState([]);
     const [status, setStatus] = useState({ clusters: [] });
+    const [loaded, setLoaded] = useState(false);
     const [flowClusterId, setFlowClusterId] = useState(initialClusterId);
     const [flowModelQuery, setFlowModelQuery] = useState('');
+    const [flowStatus, setFlowStatus] = useState('');
     const [error, setError] = useState('');
     const [notice, setNotice] = useNotice(6000);
     const [modelOpen, setModelOpen] = useState(false);
@@ -83,9 +90,13 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
     const [accessGroup, setAccessGroup] = useState(null);
     const [ippConfigEdit, setIppConfigEdit] = useState(null);
     const [operationLog, setOperationLog] = useState(null);
+    const [gatewayConfigCluster, setGatewayConfigCluster] = useState(null);
     const [logsTarget, setLogsTarget] = useState(null);
     const [logsLines, setLogsLines] = useState([]);
     const loadedOnceRef = useRef(false);
+    const focusedGroupId = useRef('');
+    const focusedClusterScope = useRef('');
+    const handledInitialAction = useRef(false);
     const memberGroups = groups
         .map((group) => {
             const groupMembers = members.filter((member) => member.groupId === group.id);
@@ -117,11 +128,12 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
             };
         })
         .filter((group) => group.clusters.length > 0);
-    const filteredFlow = filterServiceFlow(status.clusters, memberGroups, { clusterId: flowClusterId, modelQuery: flowModelQuery });
+    const filteredFlow = filterServiceFlow(status.clusters, memberGroups, { clusterId: flowClusterId, modelQuery: flowModelQuery, status: flowStatus });
     const flowModelNames = [...new Set(memberGroups
+        .filter((group) => (!flowStatus || group.status === flowStatus))
         .filter((group) => !flowClusterId || group.clusters.some((cluster) => cluster.clusterId === flowClusterId))
         .map((group) => group.name))].sort((a, b) => a.localeCompare(b));
-    const hasFlowFilters = Boolean(flowClusterId || flowModelQuery);
+    const hasFlowFilters = Boolean(flowClusterId || flowModelQuery || flowStatus);
 
     const load = useCallback(async () => {
         try {
@@ -140,6 +152,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
             setError(failure?.message || 'Failed to load model services');
         } finally {
             loadedOnceRef.current = true;
+            setLoaded(true);
         }
     }, []);
 
@@ -151,6 +164,30 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
             setSelectedGroupId(groups[0].id);
         }
     }, [groups, selectedGroupId]);
+
+    useEffect(() => {
+        if (!initialGroupId || focusedGroupId.current === initialGroupId) return;
+        if (!groups.some((group) => group.id === initialGroupId)) return;
+        focusedGroupId.current = initialGroupId;
+        setSelectedGroupId(initialGroupId);
+        const group = groups.find((item) => item.id === initialGroupId);
+        if (group?.clusterId) setFlowClusterId(group.clusterId);
+    }, [groups, initialGroupId]);
+
+    useEffect(() => {
+        if (!initialClusterId) return;
+        setFlowClusterId(initialClusterId);
+    }, [initialClusterId]);
+
+    useEffect(() => {
+        if (initialGroupId || !initialClusterId || groups.length === 0) return;
+        if (focusedClusterScope.current === initialClusterId) return;
+        const first = groups.find((group) => group.clusterId === initialClusterId);
+        if (!first) return;
+        focusedClusterScope.current = initialClusterId;
+        setSelectedGroupId(first.id);
+        setFlowClusterId(initialClusterId);
+    }, [groups, initialClusterId, initialGroupId]);
 
     const modelSubmission = useSubmission('Failed to add model');
     const trafficSubmission = useSubmission('Failed to save and apply traffic distribution');
@@ -264,7 +301,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
         (async () => {
             for (const payload of list) {
                 await new Promise((resolve) => {
-                    streamGatewayOperation(payload, (type, data) => {
+                    (payload.op === 'reconcile' ? reconcileGateway : streamGatewayOperation)(payload, (type, data) => {
                         if (type === 'log') append(data.message);
                         else if (type === 'complete') {
                             if (data.message) append(data.message);
@@ -411,6 +448,10 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
             runGatewayOperation({ op: 'reconcile', clusterId }, `Reconcile ${cluster.clusterName || clusterId}`);
             return;
         }
+        if (kind === 'gateway' && action === 'configure') {
+            setGatewayConfigCluster(cluster);
+            return;
+        }
         if (kind === 'ipp' && action === 'install') {
             runGatewayOperation({ op: 'install-ipp', clusterId }, 'Install IPP');
             return;
@@ -444,6 +485,14 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
         setModelForm({ name: '', clusterId: '', executionId: '' });
         setModelOpen(true);
     };
+
+    useEffect(() => {
+        if (initialAction !== 'add' || handledInitialAction.current) return;
+        if (!can('model-service:group:manage') || !can('model-service:member:manage')) return;
+        handledInitialAction.current = true;
+        setModelForm({ name: '', clusterId: initialClusterId || '', executionId: initialExecutionId || '' });
+        setModelOpen(true);
+    }, [can, initialAction, initialClusterId, initialExecutionId]);
 
     const openServiceDetails = (service) => {
         const group = groups.find((item) => item.id === service.id);
@@ -507,7 +556,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
         toggleSubmission.setError('');
         const resume = group.status === 'disabled';
         try {
-            await updateGroup(group.id, { status: resume ? 'active' : 'disabled' });
+            await setGroupStatus(group.id, resume ? 'active' : 'disabled');
             setNotice(resume
                 ? 'Model enabled. Only online providers with positive weights receive traffic.'
                 : 'Model stopped serving. Provider states, weights and running Pods are unchanged.');
@@ -565,8 +614,8 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
     ].find((item) => item.message);
 
     return (
-        <ModulePage>
-            <div className="flex w-full flex-col gap-6">
+        <ModulePage className="model-services-page" contentClassName="flex h-screen flex-col pb-4">
+            <div className="flex w-full flex-1 flex-col gap-6">
                 <ModuleHeader
                     className="[&>div:first-child]:flex-1"
                     icon={Boxes}
@@ -575,15 +624,13 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                     onToggleMobileNav={onToggleMobileNav}
                     actions={
                         <>
-                            <PermissionGate permission="model-service:group:manage">
-                                <PermissionGate permission="model-service:member:manage">
-                                    <Button variant="sky" size="sm" onClick={openAddModel}>
-                                        <Plus size={14} /> Add model
-                                    </Button>
-                                </PermissionGate>
+                            <PermissionGate permission="model-service:member:manage">
+                                <Button variant="sky" size="sm" onClick={openAddModel}>
+                                    <Plus size={14} /> Add model
+                                </Button>
                             </PermissionGate>
-                            <PermissionGate permission="model-service:gateway:manage">
-                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending}>
+                            <PermissionGate permission="model-service:gateway:reconcile">
+                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">
                                     <Repeat size={14} /> Reconcile
                                 </Button>
                             </PermissionGate>
@@ -591,9 +638,9 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                     }
                 />
 
-                <section className={cn(CARD, 'flex flex-col p-4 lg:min-h-[calc(100vh-13rem)]')}>
+                <section className={cn(CARD, 'model-services-card flex min-h-0 flex-1 flex-col p-4')}>
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                        <SectionLabel className="mb-0">service flow</SectionLabel>
+                        <SectionLabel className="mb-0 text-[#037ffc]">service flow</SectionLabel>
                         <Panel padding="none" tone="subtle"
                             className="flex w-full flex-wrap items-center gap-1 p-1 shadow-none sm:w-auto"
                             role="search" aria-label="Filter service flow">
@@ -602,12 +649,25 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                                 <Select id="service-flow-cluster" variant="toolbar" icon={Boxes}
                                     value={flowClusterId} onChange={(event) => setFlowClusterId(event.target.value)}>
                                     <option value="">All clusters</option>
-                                    {flowClusterId && !status.clusters.some((cluster) => cluster.clusterId === flowClusterId) && (
+                                    {flowClusterId && !loaded && (
+                                        <option value={flowClusterId}>Loading cluster…</option>
+                                    )}
+                                    {loaded && flowClusterId && !status.clusters.some((cluster) => cluster.clusterId === flowClusterId) && (
                                         <option value={flowClusterId}>{flowClusterId} (unavailable)</option>
                                     )}
                                     {status.clusters.map((cluster) => (
                                         <option key={cluster.clusterId} value={cluster.clusterId}>{cluster.clusterName || cluster.clusterId}</option>
                                     ))}
+                                </Select>
+                            </div>
+                            <span className="hidden h-4 border-l border-theme-border sm:block" aria-hidden="true" />
+                            <div className="w-full min-w-0 sm:w-36">
+                                <Label htmlFor="service-flow-status" className="sr-only">Model service status</Label>
+                                <Select id="service-flow-status" variant="toolbar" icon={ListFilter}
+                                    value={flowStatus} onChange={(event) => setFlowStatus(event.target.value)}>
+                                    <option value="">All statuses</option>
+                                    <option value="active">Active</option>
+                                    <option value="disabled">Disabled</option>
                                 </Select>
                             </div>
                             <span className="hidden h-4 border-l border-theme-border sm:block" aria-hidden="true" />
@@ -622,15 +682,15 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                             </div>
                             <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" disabled={!hasFlowFilters}
                                 aria-label="Clear filters" title="Clear filters"
-                                onClick={() => { setFlowClusterId(''); setFlowModelQuery(''); }}>
+                                onClick={() => { setFlowClusterId(''); setFlowModelQuery(''); setFlowStatus(''); }}>
                                 <RotateCcw size={14} aria-hidden="true" />
                             </Button>
                         </Panel>
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-3 flex min-h-0 flex-1 flex-col">
                         {hasFlowFilters && filteredFlow.clusters.length === 0 ? (
                             <EmptyState title="No matching service flow"
-                                message="Try another cluster or public model name, or clear the filters." />
+                                message="Try another cluster, model service status or public model name, or clear the filters." />
                         ) : <DataPlaneTopology
                             onNavigate={onNavigate}
                             clusters={filteredFlow.clusters}
@@ -675,7 +735,7 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                 closeOnBackdrop={!trafficSubmission.pending} closeOnEscape={!trafficSubmission.pending}
                 footer={
                     <>
-                        <Button variant="secondary" disabled={trafficSubmission.pending} onClick={() => setTrafficDraft(null)}>Cancel</Button>
+                        <Button variant="secondary" disabled={trafficSubmission.pending} onClick={() => setTrafficDraft(null)} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">Cancel</Button>
                         <Button variant="sky" isLoading={trafficSubmission.pending} onClick={submitTrafficDistribution}
                             disabled={!trafficDraft || Boolean(trafficDistributionError(trafficDraft.rows))}>Save and apply</Button>
                     </>
@@ -692,12 +752,13 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                 variant="drawer"
                 subtitle="Choose a provider, then define the model name users will call."
                 size="md"
+                className="add-model-dialog"
                 closeOnBackdrop={!modelSubmission.pending}
                 closeOnEscape={!modelSubmission.pending}
                 footer={
                     <>
                         <Button variant="secondary" size="sm" disabled={modelSubmission.pending}
-                            onClick={() => setModelOpen(false)}>Cancel</Button>
+                            onClick={() => setModelOpen(false)} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">Cancel</Button>
                         <Button variant="primary" size="sm" onClick={submitModel} isLoading={modelSubmission.pending}
                             disabled={!modelForm.name.trim() || !selectedDeployment?.model}>Add</Button>
                     </>
@@ -893,11 +954,170 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                 lines={operationLog?.lines || []}
                 message={operationLog?.message || ''}
             />
+            <GatewayConfigModal
+                cluster={gatewayConfigCluster}
+                onClose={() => setGatewayConfigCluster(null)}
+                onSaved={() => {
+                    setGatewayConfigCluster(null);
+                    setNotice('Gateway configuration saved');
+                    load({ quiet: true });
+                }}
+            />
         </ModulePage>
     );
 }
 
 export default ModelServiceAdminPage;
+
+function GatewayConfigModal({ cluster, onClose, onSaved }) {
+    const [gatewayProvider, setGatewayProvider] = useState('istio');
+    const [gatewayPort, setGatewayPort] = useState('');
+    const [gatewayPublicUrl, setGatewayPublicUrl] = useState('');
+    const [gatewayAuthzHost, setGatewayAuthzHost] = useState('');
+    const [lensHosts, setLensHosts] = useState([]);
+    const [portError, setPortError] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (!cluster) return undefined;
+        let alive = true;
+        setGatewayProvider(cluster.gatewayProvider || 'istio');
+        setGatewayPort(cluster.gatewayPort ? String(cluster.gatewayPort) : '');
+        setGatewayPublicUrl(cluster.gatewayPublicUrl || '');
+        setGatewayAuthzHost('');
+        setPortError('');
+        setError('');
+        Promise.all([loadCluster(cluster.clusterId), listLensHosts()])
+            .then(([fullCluster, hosts]) => {
+                if (!alive) return;
+                setGatewayProvider(fullCluster.gatewayProvider || 'istio');
+                setGatewayPort(fullCluster.gatewayPort ? String(fullCluster.gatewayPort) : '');
+                setGatewayPublicUrl(fullCluster.gatewayPublicUrl || '');
+                setGatewayAuthzHost(fullCluster.gatewayAuthzHost || hosts[0] || '');
+                setLensHosts(hosts);
+            })
+            .catch((failure) => {
+                if (alive) setError(errorMessage(failure, 'Failed to load Gateway configuration'));
+            });
+        return () => { alive = false; };
+    }, [cluster]);
+
+    if (!cluster) return null;
+
+    const checkGatewayPort = async () => {
+        const value = gatewayPort.trim();
+        if (!value || (cluster.gatewayPort && Number(value) === cluster.gatewayPort)) {
+            setPortError('');
+            return;
+        }
+        try {
+            const payload = await requestJson(
+                `/api/cluster/clusters/${encodeURIComponent(cluster.clusterId)}/gateway-port-check?port=${Number(value)}`,
+            );
+            setPortError(payload.available ? '' : (payload.owner ? `Port ${value} is already used by ${payload.owner}` : (payload.reason || 'Port is not available')));
+        } catch (failure) {
+            setPortError(failure?.message || 'Could not check the port');
+        }
+    };
+
+    const canSave = !busy && !portError && (gatewayProvider === 'gke' || Boolean(gatewayAuthzHost.trim()));
+
+    const submit = async () => {
+        if (!canSave) return;
+        setBusy(true);
+        setError('');
+        try {
+            const payload = await requestJson(`/api/cluster/clusters/${encodeURIComponent(cluster.clusterId)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ...(gatewayProvider !== (cluster.gatewayProvider || '') && { gatewayProvider: gatewayProvider || null }),
+                    ...(gatewayPort.trim() !== (cluster.gatewayPort ? String(cluster.gatewayPort) : '') && { gatewayPort: gatewayPort.trim() ? Number(gatewayPort.trim()) : null }),
+                    ...(gatewayPublicUrl.trim() !== (cluster.gatewayPublicUrl || '') && { gatewayPublicUrl: gatewayPublicUrl.trim() || null }),
+                    ...(gatewayAuthzHost.trim() !== (cluster.gatewayAuthzHost || '') && { gatewayAuthzHost: gatewayAuthzHost.trim() || null }),
+                }),
+            });
+            onSaved?.(payload.cluster);
+        } catch (failure) {
+            setError(errorMessage(failure, 'Failed to save Gateway configuration'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <Modal
+            isOpen
+            onClose={() => !busy && onClose?.()}
+            title={`Configure Gateway — ${cluster.clusterName || cluster.clusterId}`}
+            size="md"
+            variant="drawer"
+            footer={(
+                <>
+                    <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+                    <Button variant="sky" onClick={submit} isLoading={busy} disabled={!canSave}>Save changes</Button>
+                </>
+            )}
+        >
+            <div className="space-y-5">
+                <div className="space-y-2">
+                    <Label htmlFor="gateway-config-provider">Model gateway provider</Label>
+                    <Select id="gateway-config-provider" value={gatewayProvider} onChange={(event) => setGatewayProvider(event.target.value)} disabled={busy}>
+                        <option value="">Not set</option>
+                        <option value="istio">Istio</option>
+                        <option value="envoy-ai-gateway" disabled>Envoy AI Gateway (not supported yet)</option>
+                        <option value="agentgateway" disabled>agentgateway (not supported yet)</option>
+                        <option value="gke" disabled>GKE Gateway (not supported yet)</option>
+                    </Select>
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="gateway-config-port">Gateway exposed port (NodePort)</Label>
+                    <Input
+                        id="gateway-config-port"
+                        type="number"
+                        min="30000"
+                        max="32767"
+                        value={gatewayPort}
+                        onChange={(event) => { setGatewayPort(event.target.value); setPortError(''); }}
+                        onBlur={checkGatewayPort}
+                        placeholder="Optional, e.g. 30080"
+                        disabled={busy}
+                    />
+                    {portError && <p role="alert" className="text-xs text-rose-300">{portError}</p>}
+                    <p className="text-xs text-slate-500">NodePort the shared Gateway is exposed on. Leave empty and the cluster assigns a random one; the actual port is shown in the Gateway status.</p>
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="gateway-config-public-url">Gateway host/IP (optional)</Label>
+                    <Input
+                        id="gateway-config-public-url"
+                        value={gatewayPublicUrl}
+                        onChange={(event) => setGatewayPublicUrl(event.target.value)}
+                        placeholder="e.g. 10.112.229.74"
+                        disabled={busy}
+                    />
+                    <p className="text-xs text-slate-500">Externally reachable host/IP clients call to reach the Gateway. Leave empty and Lens derives one from the exposed port and the cluster node.</p>
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="gateway-config-authz-host">Lens address</Label>
+                    <Input
+                        id="gateway-config-authz-host"
+                        list="gateway-config-lens-hosts"
+                        value={gatewayAuthzHost}
+                        onChange={(event) => setGatewayAuthzHost(event.target.value)}
+                        placeholder="Pick one or type a host/IP"
+                        disabled={busy || gatewayProvider === 'gke'}
+                    />
+                    <datalist id="gateway-config-lens-hosts">
+                        {lensHosts.map((host) => <option key={host} value={host} />)}
+                    </datalist>
+                    <p className="text-xs text-slate-500">{gatewayProvider === 'gke' ? 'GKE Gateway has no Lens address hook, so callers are not checked.' : 'The host or IP this cluster uses to reach Lens (Lens adds its own port).'}</p>
+                </div>
+                {error && <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>}
+            </div>
+        </Modal>
+    );
+}
 
 export function ModelAccessDrawer({ group, onClose }) {
     const [subjectType, setSubjectType] = useState('user');
@@ -1014,7 +1234,7 @@ export function AddModelForm({ form, onChange, clusters, deployments, models = [
                     </p>
                 )}
             </div>
-            <Panel title="Model name mapping" padding="sm">
+            <Panel title="Model name mapping" padding="sm" className="shadow-none dark:shadow-lg">
                 <div>
                     <Label htmlFor="add-model-provider-name"
                         help="The model name reported by the selected provider. It is filled automatically and cannot be changed here.">
@@ -1073,7 +1293,7 @@ export function TrafficDistributionForm({ draft, onChange, deployments, pending,
                 Weight and configured traffic share
             </Label>
             {draft.rows.map((row, index) => (
-                <Panel key={row.executionId} padding="sm">
+                <Panel key={row.executionId} padding="sm" className="shadow-none dark:shadow-lg">
                     <div className="mb-3 flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-2">
                             <p className="min-w-0 break-words text-sm font-semibold text-theme-text">{row.name}</p>

@@ -1,7 +1,9 @@
 """Tests for deploying published configuration manifests."""
 
 import hashlib
+import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -47,6 +49,178 @@ def _asset(name: str, content: str) -> dict[str, str]:
         "content": content,
         "checksum": f"sha256:{hashlib.sha256(content.encode('utf-8')).hexdigest()}",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("directory", [False, True])
+@pytest.mark.parametrize(
+    "policy,available,expected",
+    [
+        ({"mode": "auto"}, [], None),
+        ({"mode": "auto"}, ["nvidia"], "nvidia"),
+        ({"mode": "node-default"}, [], None),
+        ({"mode": "named", "name": "custom"}, ["custom"], "custom"),
+    ],
+)
+async def test_runtime_policy_derives_deployment_manifest_without_mutating_configuration(
+    monkeypatch, tmp_path, directory, policy, available, expected
+):
+    manifest = yaml.safe_dump(
+        {
+            "kind": "Pod",
+            "spec": {
+                **({"runtimeClassName": "nvidia"} if policy["mode"] == "node-default" else {}),
+                "containers": [{"name": "modelserver", "resources": {"limits": {"nvidia.com/gpu": "1"}}}],
+            },
+        }
+    )
+    source = tmp_path / "source.yaml"
+    source.write_text(manifest)
+    if directory:
+        overlay = tmp_path / "overlay"
+        overlay.mkdir()
+        (overlay / "manifest.yaml").write_text(manifest)
+    delegate = SimpleNamespace(
+        _accelerator="nvidia",
+        render=AsyncMock(
+            return_value=GuideDeploymentArtifact(
+                guide_id="baseline-vllm",
+                artifact_hash="source",
+                manifest_ref=str(overlay if directory else source),
+                manifest_checksum="sha256:source",
+            )
+        ),
+    )
+    discovery = AsyncMock(
+        return_value={
+            "items": [{"metadata": {"name": name}} for name in available],
+            "nodes": [{"metadata": {"name": "gpu-node"}}],
+        }
+    )
+    monkeypatch.setattr(configuration_manifest, "discover_runtime_classes", discovery)
+    adapter = ConfigurationManifestAdapter(delegate, _Runner(), "llmd-", 5, tmp_path / "output")
+    artifact = await adapter.render(
+        GuideDefinition("baseline-vllm", "source", "hash", "stable"),
+        {
+            "_runtime_class_policy": policy,
+            "_cluster_id": "cluster-a",
+        },
+    )
+    path = Path(artifact.manifest_ref)
+    if directory:
+        path = path / "manifest.yaml"
+    assert yaml.safe_load(path.read_text())["spec"].get("runtimeClassName") == expected
+    assert source.read_text() == manifest
+    assert artifact.deployment_contract["runtimeClass"]["policy"] == policy
+    assert artifact.artifact_hash != "source"
+    if policy["mode"] == "node-default":
+        discovery.assert_not_awaited()
+    else:
+        discovery.assert_awaited_once_with("cluster-a")
+
+
+@pytest.mark.asyncio
+async def test_directory_runtime_policies_do_not_overwrite_another_deployment(monkeypatch, tmp_path):
+    overlay = tmp_path / "overlay"
+    overlay.mkdir()
+    manifest = yaml.safe_dump({"kind": "Pod", "spec": {"containers": [{"name": "modelserver"}]}})
+    (overlay / "manifest.yaml").write_text(manifest)
+    (overlay / "kustomization.yaml").write_text("resources:\n- manifest.yaml\n")
+    delegate = SimpleNamespace(
+        render=AsyncMock(
+            return_value=GuideDeploymentArtifact(
+                guide_id="optimized-baseline",
+                artifact_hash="source",
+                manifest_ref=str(overlay),
+                manifest_checksum="sha256:source",
+            )
+        )
+    )
+    monkeypatch.setattr(
+        configuration_manifest,
+        "discover_runtime_classes",
+        AsyncMock(
+            return_value={
+                "items": [{"metadata": {"name": name}} for name in ("first", "second")],
+                "nodes": [{"metadata": {"name": "gpu-node"}}],
+            }
+        ),
+    )
+    adapter = ConfigurationManifestAdapter(delegate, _Runner(), "llmd-", 5, tmp_path / "output")
+    definition = GuideDefinition("optimized-baseline", "source", "hash", "stable")
+    first = await adapter.render(
+        definition,
+        {
+            "_runtime_class_policy": {"mode": "named", "name": "first"},
+            "_cluster_id": "cluster-a",
+        },
+    )
+    first_manifest = (Path(first.manifest_ref) / "manifest.yaml").read_text()
+    second = await adapter.render(
+        definition,
+        {
+            "_runtime_class_policy": {"mode": "named", "name": "second"},
+            "_cluster_id": "cluster-a",
+        },
+    )
+    assert first.manifest_ref != second.manifest_ref
+    assert (Path(first.manifest_ref) / "manifest.yaml").read_text() == first_manifest
+    assert yaml.safe_load(first_manifest)["spec"]["runtimeClassName"] == "first"
+    assert (
+        yaml.safe_load((Path(second.manifest_ref) / "manifest.yaml").read_text())["spec"]["runtimeClassName"]
+        == "second"
+    )
+    assert (overlay / "manifest.yaml").read_text() == manifest
+    assert (Path(first.manifest_ref) / "kustomization.yaml").read_text() == "resources:\n- manifest.yaml\n"
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["baseline-vllm", "pd-disaggregation", "tiered-prefix-cache", "precise-prefix-cache-routing", "optimized-baseline"],
+)
+@pytest.mark.parametrize("invalid", [False, True])
+def test_provider_serving_controls_validate_explicit_values_and_fall_back_to_model(tmp_path, provider, invalid):
+    from llm_d_lens.deploy.providers.baseline_vllm import BaselineVllmAdapter
+    from llm_d_lens.deploy.providers.helm_kustomize import HelmKustomizeGuideAdapter
+    from llm_d_lens.deploy.providers.optimized_baseline import OptimizedBaselineGuideAdapter
+    from llm_d_lens.deploy.providers.pd_disaggregation import PdDisaggregationAdapter
+    from llm_d_lens.deploy.providers.precise_prefix_cache_routing import PrecisePrefixCacheRoutingAdapter
+
+    overrides = {
+        "model": {"name": "org/model", "maxModelLen": 4096},
+        "runtime": {"image": "example/vllm:1", "imageMode": "use-upstream-image"},
+        "prefill": {"replicaCount": 1, "tensorParallelSize": 1},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1},
+    }
+    if invalid:
+        overrides["decode"]["maxModelLen"] = 0
+
+    def parameters():
+        if provider == "optimized-baseline":
+            adapter = OptimizedBaselineGuideAdapter.__new__(OptimizedBaselineGuideAdapter)
+            return adapter._deployment_parameters(overrides)[2]["serving_arguments"]
+        if provider == "baseline-vllm":
+            return BaselineVllmAdapter._parameters(overrides)["serving_arguments"]
+        if provider == "pd-disaggregation":
+            adapter = PdDisaggregationAdapter.__new__(PdDisaggregationAdapter)
+            adapter._accelerator = "xpu"
+            adapter._sources = {".": tmp_path}
+            parsed = adapter._parameters(overrides)
+            assert parsed["prefill"]["serving_arguments"] == {"max-model-len": 4096}
+            return parsed["decode"]["serving_arguments"]
+        if provider == "tiered-prefix-cache":
+            adapter = HelmKustomizeGuideAdapter.__new__(HelmKustomizeGuideAdapter)
+            adapter._accelerator = "xpu"
+            adapter._descriptor = SimpleNamespace(variants={"native/cpu": tmp_path}, guide_id=provider)
+        else:
+            adapter = PrecisePrefixCacheRoutingAdapter.__new__(PrecisePrefixCacheRoutingAdapter)
+        return adapter._parameters(overrides)["serving_arguments"]
+
+    if invalid:
+        with pytest.raises(ValueError, match="maxModelLen"):
+            parameters()
+    else:
+        assert parameters() == {"max-model-len": 4096}
 
 
 def test_same_node_placement_adds_required_pod_affinity():
@@ -254,6 +428,7 @@ async def test_render_preserves_validated_deployment_bundle_and_router_profile(m
 async def test_target_node_does_not_read_kustomize_directory_as_manifest(monkeypatch, tmp_path: Path):
     overlay = tmp_path / "overlay"
     overlay.mkdir()
+    (overlay / "manifest.yaml").write_text("kind: Service\n", encoding="utf-8")
     delegate = AsyncMock()
     delegate.render.return_value = GuideDeploymentArtifact(
         guide_id="optimized-baseline", artifact_hash="hash", manifest_ref=str(overlay)
@@ -264,13 +439,16 @@ async def test_target_node_does_not_read_kustomize_directory_as_manifest(monkeyp
 
     artifact = await adapter.render(definition, {})
 
-    assert artifact.manifest_ref == str(overlay)
+    assert Path(artifact.manifest_ref).is_dir()
+    assert Path(artifact.manifest_ref) != overlay
+    assert (Path(artifact.manifest_ref) / "manifest.yaml").read_text() == "kind: Service\n"
 
 
 @pytest.mark.asyncio
 async def test_placement_accepts_overlay_when_delegate_applied_it(monkeypatch, tmp_path: Path):
     overlay = tmp_path / "overlay"
     overlay.mkdir()
+    (overlay / "manifest.yaml").write_text("kind: Service\n", encoding="utf-8")
     delegate = AsyncMock()
     delegate.render.return_value = GuideDeploymentArtifact(
         guide_id="optimized-baseline",
@@ -286,7 +464,9 @@ async def test_placement_accepts_overlay_when_delegate_applied_it(monkeypatch, t
         {"_placement": {"replicas": "spread"}},
     )
 
-    assert artifact.manifest_ref == str(overlay)
+    assert Path(artifact.manifest_ref).is_dir()
+    assert Path(artifact.manifest_ref) != overlay
+    assert artifact.deployment_contract["placementApplied"] is True
 
 
 @pytest.mark.asyncio
@@ -357,6 +537,7 @@ async def test_direct_data_plane_contract_delegates_lifecycle(tmp_path: Path):
     runner = _Runner()
     delegate = AsyncMock()
     delegate.deploy.return_value = {"namespace": "llm-d-bench-run"}
+    delegate.diagnostics.return_value = {}
     adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
     context = {"namespace": "llm-d-bench-run", "_artifact": artifact}
 
@@ -372,6 +553,72 @@ async def test_direct_data_plane_contract_delegates_lifecycle(tmp_path: Path):
     delegate.stop.assert_awaited_once_with(context, artifact)
     delegate.cleanup.assert_awaited_once_with(context, artifact, force=True)
     assert runner.commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lifecycle", ["pd-disaggregation", "baseline-vllm", "manifest", "legacy"])
+async def test_startup_diagnostics_cover_delegate_and_manifest_lifecycles(tmp_path, lifecycle):
+    from tests.unit.deploy.test_readiness_transient import startup_snapshot
+
+    snapshot = startup_snapshot()
+    pod = snapshot["pod_statuses"][0]
+    raw_pod = {
+        "metadata": {"name": pod["name"]},
+        "spec": {
+            "containers": [
+                {
+                    **pod["containers"][0],
+                    "env": [{"name": "PRIVATE_VALUE", "value": "not-for-diagnostics"}],
+                }
+            ]
+        },
+        "status": pod["status"],
+    }
+
+    class Runner(_Runner):
+        async def __call__(self, command):
+            self.commands.append(command)
+            if command[-2:] == ["-o", "json"]:
+                return 0, json.dumps({"items": [raw_pod]}), ""
+            if command[1:3] == ["get", "pods"]:
+                return 0, snapshot["pods"], ""
+            return 0, "ok", ""
+
+    delegate = AsyncMock()
+    delegate.diagnostics.return_value = {"pods": snapshot["pods"]}
+    runner = Runner()
+    contract = {
+        "readinessDeployments": ["model"],
+        "endpoint": {"protocol": "http", "serviceName": "model", "port": 8000},
+    }
+    artifact = GuideDeploymentArtifact(
+        lifecycle, "hash", deployment_contract={} if lifecycle == "baseline-vllm" else contract
+    )
+    context = {"namespace": "llm-d-bench-run"}
+    if lifecycle != "legacy":
+        context["_artifact"] = artifact
+    adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
+
+    diagnostics = await adapter.diagnostics(context)
+
+    assert diagnostics["pod_statuses"] == [pod]
+    assert "not-for-diagnostics" not in json.dumps(diagnostics)
+    assert "PRIVATE_VALUE" not in json.dumps(diagnostics)
+    assert runner.commands[-1] == ["kubectl", "get", "pods", "--namespace", "llm-d-bench-run", "-o", "json"]
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_query_is_reported_in_diagnostics(tmp_path, caplog):
+    delegate = AsyncMock()
+    delegate.diagnostics.return_value = {"pods": "model-0 0/1 Running"}
+    runner = AsyncMock(return_value=(1, "", "Unable to connect to the server"))
+    adapter = ConfigurationManifestAdapter(delegate, runner, "llm-d-bench-", 30, tmp_path)
+
+    diagnostics = await adapter.diagnostics({"namespace": "llm-d-bench-run"})
+
+    assert diagnostics["pod_statuses_error"] == "Unable to connect to the server"
+    assert "pod_statuses" not in diagnostics
+    assert "Pod startup diagnostics failed" in caplog.text
 
 
 @pytest.mark.asyncio

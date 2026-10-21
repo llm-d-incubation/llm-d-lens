@@ -24,7 +24,7 @@ from llm_d_lens.model_cache.contracts import (
 )
 from llm_d_lens.model_cache.jobs import ModelCacheJobError
 from llm_d_lens.model_cache.store import ModelCacheStore, default_store
-from llm_d_lens.storage.contracts import StorageVolume, StorageVolumeKind
+from llm_d_lens.storage.contracts import StorageVolume, StorageVolumeKind, StorageVolumePurpose
 from llm_d_lens.storage.service import get_ready_volume
 
 # Bounds on how long a Storage volume delete cascade waits for each Model
@@ -75,6 +75,10 @@ class ModelCatalogNotSupportedError(Exception):
     """Raised when a request names the not-yet-implemented Model Catalog source."""
 
 
+class ModelCacheVolumePurposeError(Exception):
+    """Raised when a volume is ready but not tagged for model-cache use."""
+
+
 class ModelCacheInvalidStateError(Exception):
     """Raised when an operation is attempted against an entry in the wrong status."""
 
@@ -89,9 +93,7 @@ class ModelCacheEntryExistsError(Exception):
 
     def __init__(self, entry: ModelCacheEntry) -> None:
         self.entry = entry
-        super().__init__(
-            f"'{entry.source.display_name()}' is already on this storage volume (status: {entry.status})"
-        )
+        super().__init__(f"'{entry.source.display_name()}' is already on this storage volume (status: {entry.status})")
 
 
 def _overall_status(entry: ModelCacheEntry) -> ModelCacheEntryStatus:
@@ -149,6 +151,11 @@ def get_or_none_volume(volume_id: str) -> StorageVolume | None:
     return default_service().get(volume_id)
 
 
+def _require_model_cache_purpose(volume) -> None:
+    if StorageVolumePurpose.MODEL_CACHE not in volume.purposes:
+        raise ModelCacheVolumePurposeError(f"storage volume {volume.id} is not configured for model-cache purpose")
+
+
 class ModelCacheService:
     """Facade combining the store, storage-volume lookups, and Job orchestration."""
 
@@ -184,6 +191,7 @@ class ModelCacheService:
         if request.source.kind == ModelSourceKind.MODEL_CATALOG:
             raise ModelCatalogNotSupportedError("model-catalog sources are not implemented yet")
         volume = await get_ready_volume(request.storage_volume_id, cluster_id=request.cluster_id)
+        _require_model_cache_purpose(volume)
         source_display = request.source.display_name()
         existing = self._store.find_by_volume_and_source(volume.id, source_display)
         if existing and not request.force:
@@ -224,6 +232,11 @@ class ModelCacheService:
             entry.failure_detail = "storage volume no longer exists"
             self._store.save(entry)
             return
+        if StorageVolumePurpose.MODEL_CACHE not in volume.purposes:
+            entry.status = ModelCacheEntryStatus.FAILED
+            entry.failure_detail = "storage volume is not configured for model-cache purpose"
+            self._store.save(entry)
+            return
         entry.status = ModelCacheEntryStatus.DOWNLOADING
         self._store.save(entry)
         # ``retry()`` trims node_progress down to only the previously-failed
@@ -244,6 +257,9 @@ class ModelCacheService:
             raise ModelCacheNotFoundError(f"model cache entry not found: {entry_id}")
         if entry.status != ModelCacheEntryStatus.FAILED:
             raise ModelCacheInvalidStateError("only failed entries can be retried")
+        volume = get_or_none_volume(entry.storage_volume_id)
+        if volume is not None:
+            _require_model_cache_purpose(volume)
         failed_nodes = [progress.node for progress in entry.node_progress if progress.status == "failed"]
         entry.node_progress = [progress for progress in entry.node_progress if progress.node in failed_nodes]
         entry.status = ModelCacheEntryStatus.PENDING
@@ -355,6 +371,8 @@ class ModelCacheService:
         volume = get_or_none_volume(entry.storage_volume_id)
         if volume is None or volume.kind != StorageVolumeKind.LOCAL_DISK:
             return entry
+        if StorageVolumePurpose.MODEL_CACHE not in volume.purposes:
+            return entry
         missing = await jobs.missing_nodes(entry, volume)
         if not missing:
             return entry
@@ -369,6 +387,11 @@ class ModelCacheService:
         if volume is None:
             entry.status = ModelCacheEntryStatus.FAILED
             entry.failure_detail = "storage volume no longer exists"
+            self._store.save(entry)
+            return
+        if StorageVolumePurpose.MODEL_CACHE not in volume.purposes:
+            entry.status = ModelCacheEntryStatus.FAILED
+            entry.failure_detail = "storage volume is not configured for model-cache purpose"
             self._store.save(entry)
             return
         try:

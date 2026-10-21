@@ -174,6 +174,17 @@ async def test_test_connection_accepts_versioned_provider_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_test_connection_accepts_base_url_with_v1_suffix(monkeypatch):
+    client = _Client()
+    monkeypatch.setattr("llm_d_lens.ai_providers.service.httpx.AsyncClient", lambda **_kwargs: client)
+
+    result = await check_connection("https://api.openai.com/v1", "gpt-4o-mini", "sk-abc", 30)
+
+    assert result.success is True
+    assert client.last_get_url == "https://api.openai.com/v1/models"
+
+
+@pytest.mark.asyncio
 async def test_provider_transport_pins_public_address_and_rejects_dns_rebinding(monkeypatch):
     requests = []
 
@@ -219,6 +230,34 @@ def test_provider_transport_preserves_configured_https_proxy(monkeypatch):
     PublicProviderTransport("api.openai.com")
 
     assert selected["proxy"] == "http://proxy.example:8080"
+
+
+@pytest.mark.asyncio
+async def test_provider_transport_trusts_the_active_host_proxy_by_default(monkeypatch):
+    requests = []
+
+    class RecordingTransport:
+        async def handle_async_request(self, request):
+            requests.append(request)
+            return httpx.Response(200, request=request)
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.delenv("LENS_TRUSTED_AI_PROVIDER_PROXY", raising=False)
+    monkeypatch.setattr("llm_d_lens.ai_providers.service.getproxies", lambda: {"https": "http://proxy.example:8080"})
+    monkeypatch.setattr("llm_d_lens.ai_providers.service.proxy_bypass", lambda _hostname: False)
+
+    async def public_addresses(_hostname, _port):
+        return ["8.8.8.8"]
+
+    monkeypatch.setattr("llm_d_lens.ai_providers.service._resolve_provider_addresses", public_addresses)
+    transport = PublicProviderTransport("api.openai.com")
+    transport._transport = RecordingTransport()
+    await transport.handle_async_request(httpx.Request("GET", "https://api.openai.com/v1/models"))
+    assert requests[0].url == httpx.URL("https://api.openai.com/v1/models")
+    assert requests[0].headers["host"] == "api.openai.com"
+    assert requests[0].extensions["sni_hostname"] == "api.openai.com"
 
 
 @pytest.mark.asyncio

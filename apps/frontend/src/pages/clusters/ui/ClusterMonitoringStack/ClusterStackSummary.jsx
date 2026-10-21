@@ -64,7 +64,7 @@ export function ClusterStackSummary({ snapshot }) {
 
     return (
         <section>
-            <div className="mb-3 text-[10px] font-extrabold uppercase tracking-widest text-sky-400/90">Live state</div>
+            <div className="mb-3 text-[10px] font-extrabold uppercase tracking-widest text-[#037ffc] dark:text-sky-400/90">Live state</div>
             <div className="grid gap-3 sm:grid-cols-2">
                 <StackMetricCard
                     icon={<Boxes size={13} />}

@@ -16,6 +16,7 @@ from llm_d_lens.db.dao.user import UserDao
 from llm_d_lens.model_service.contracts import (
     AuthorizeRequest,
     GroupCreateRequest,
+    GroupPublishRequest,
     GroupUpdateRequest,
     MemberCreateRequest,
     MemberUpdateRequest,
@@ -601,6 +602,28 @@ def test_create_model_with_provider_derives_names_and_ownership(monkeypatch):
     assert member.owner_user_id == member.published_by_user_id == user.id
     assert member.target_namespace == "ns" and member.target_port == 8000
     assert member.pool_name == "ns/vllm" and member.epp_ref == "vllm"
+
+
+def test_maintainer_can_publish_a_ready_deployment_without_group_manage(monkeypatch):
+    _patch_target(monkeypatch)
+    user = _create_user("deployment-publisher")
+    principal = Principal(
+        user_id=user.id,
+        username=user.username,
+        bindings=(RoleBinding("maintainer", ScopeType.CLUSTER, scope_cluster_id="cluster-a"),),
+        role_permissions={"maintainer": ("model-service:member:manage",)},
+    )
+    service = _service()
+
+    group = service.publish_group(
+        GroupPublishRequest(name="public-chat", clusterId="cluster-a", executionId="exec-1"),
+        created_by=user.id,
+        principal=principal,
+    )
+
+    assert group.name == "public-chat"
+    [member] = service.list_members(group.id)
+    assert member.execution_id == "exec-1"
 
 
 @pytest.mark.parametrize("change", [{"cluster_id": "cluster-b"}, {"status": "failed"}, {"model": None}])

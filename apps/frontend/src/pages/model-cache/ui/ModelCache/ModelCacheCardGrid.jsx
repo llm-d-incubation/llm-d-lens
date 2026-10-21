@@ -29,7 +29,7 @@ function ModelCacheCard({ item, modelType, busy, clusterNameById, volumeNameById
     return (
         <div
             aria-busy={busy}
-            className="group flex flex-col rounded-lg border border-slate-800 bg-slate-900/70 p-3 transition hover:border-cyan-400/60 hover:bg-slate-900"
+            className="model-cache-model-card group flex flex-col rounded-lg border border-slate-800 bg-slate-900/70 p-3 transition hover:border-[#037ffc99] hover:bg-[#037ffc0d] dark:hover:border-cyan-400/60 dark:hover:bg-slate-900"
         >
             <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -41,11 +41,11 @@ function ModelCacheCard({ item, modelType, busy, clusterNameById, volumeNameById
                     </div>
                     <p className="mt-0.5 truncate text-[10px] text-slate-500">{sourceKindLabel(item.source?.kind)} · #{shortId(item.id)}</p>
                     {modelType ? (
-                        <span className="mt-1 inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0.5 text-[9px] font-medium text-cyan-200">
+                        <span className="model-type-tag mt-1 inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-1.5 py-0.5 text-[9px] font-medium text-cyan-200">
                             {modelType}
                         </span>
                     ) : (
-                        <span className="mt-1 inline-flex items-center rounded-full border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-[9px] font-medium text-slate-400">
+                        <span className="model-type-tag model-type-tag-unlabeled mt-1 inline-flex items-center rounded-full border border-slate-600/40 bg-slate-700/20 px-1.5 py-0.5 text-[9px] font-medium text-slate-400">
                             Unlabeled
                         </span>
                     )}
@@ -54,20 +54,20 @@ function ModelCacheCard({ item, modelType, busy, clusterNameById, volumeNameById
             </div>
             <dl className="mt-2 space-y-1 text-[10px]">
                 <div className="flex items-center justify-between gap-2">
-                    <dt className="shrink-0 text-slate-600">Cluster</dt>
-                    <dd className="truncate text-right text-slate-300" title={item.clusterId || ''}>
+                    <dt className="shrink-0 text-[#9ca3af] dark:text-slate-600">Cluster</dt>
+                    <dd className="truncate text-right text-[#1f2937] dark:text-slate-300" title={item.clusterId || ''}>
                         {clusterNameById[item.clusterId] || item.clusterId || '—'}
                     </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                    <dt className="shrink-0 text-slate-600">Storage</dt>
-                    <dd className="truncate text-right text-slate-300" title={item.storageVolumeId || ''}>
+                    <dt className="shrink-0 text-[#9ca3af] dark:text-slate-600">Storage</dt>
+                    <dd className="truncate text-right text-[#1f2937] dark:text-slate-300" title={item.storageVolumeId || ''}>
                         {volumeNameById[item.storageVolumeId] || item.storageVolumeId || '—'}
                     </dd>
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                    <dt className="shrink-0 text-slate-600">Progress</dt>
-                    <dd className="truncate text-right text-slate-300">{item.status === 'ready' ? 'Complete' : nodeProgressSummary(item)}</dd>
+                    <dt className="shrink-0 text-[#9ca3af] dark:text-slate-600">Progress</dt>
+                    <dd className="truncate text-right text-[#1f2937] dark:text-slate-300">{item.status === 'ready' ? 'Complete' : nodeProgressSummary(item)}</dd>
                 </div>
             </dl>
             {item.status === 'failed' && item.failureDetail && (

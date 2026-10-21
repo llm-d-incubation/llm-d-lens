@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
+import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -16,7 +20,12 @@ from llm_d_lens.deploy.providers.guide_adapter import (
     GuideDeploymentArtifact,
     ValidationResult,
 )
-from llm_d_lens.deploy.providers.hardware_profile import accelerator_supported
+from llm_d_lens.deploy.providers.hardware_profile import (
+    accelerator_supported,
+    discover_runtime_classes,
+    prepare_runtime_class_manifest,
+)
+from llm_d_lens.deploy.providers.shared_memory import prepare_shared_memory
 from llm_d_lens.deploy.providers.target_node import apply_placement, configured_target_node, write_pinned_manifest
 from llm_d_lens.infrastructure.artifacts.manifests import (
     DEPLOYMENT_MANIFEST_DIR,
@@ -26,6 +35,8 @@ from llm_d_lens.infrastructure.artifacts.manifests import (
 from llm_d_lens.infrastructure.artifacts.store import register_artifacts
 from llm_d_lens.monitoring.kv_trace.manifest import instrument_manifest
 from llm_d_lens.storage.service import ensure_mount_in_namespace, get_ready_volume
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigurationManifestAdapter:
@@ -131,6 +142,16 @@ class ConfigurationManifestAdapter:
                 deployment_contract=deployment_contract,
             )
 
+        if artifact.manifest_ref and Path(artifact.manifest_ref).is_dir():
+            reference = Path(artifact.manifest_ref)
+            isolated = Path(tempfile.mkdtemp(prefix=f"{reference.name}-", dir=reference.parent))
+            shutil.copytree(reference, isolated, dirs_exist_ok=True)
+            artifact = replace(
+                artifact,
+                manifest_ref=str(isolated),
+                artifact_hash=stable_hash({"provider_artifact": artifact.artifact_hash, "overlay": str(isolated)}),
+            )
+        artifact = prepare_shared_memory(artifact, self._output_root, exact=self._is_exact(overrides))
         if "_model_cache_dependencies" in overrides:
             from llm_d_lens.deploy.providers.storage_mount import validate_cached_model_arguments
 
@@ -166,6 +187,45 @@ class ConfigurationManifestAdapter:
                 artifact_hash=stable_hash(
                     {"provider_artifact": artifact.artifact_hash, "placement": placement, "workloads": changed}
                 ),
+            )
+        runtime_policy = overrides.get("_runtime_class_policy")
+        cluster_id = overrides.get("_cluster_id")
+        if runtime_policy is not None:
+            capabilities = (
+                {"items": [], "nodes": []}
+                if runtime_policy.get("mode") == "node-default"
+                else await discover_runtime_classes(str(cluster_id or ""))
+            )
+            reference = Path(artifact.manifest_ref or "")
+            path = reference / "manifest.yaml" if reference.is_dir() else reference
+            manifest = path.read_text(encoding="utf-8")
+            source = (overrides.get("officialGuide") or {}).get("source") or {}
+            rendered, report = prepare_runtime_class_manifest(
+                manifest,
+                runtime_policy,
+                capabilities,
+                accelerator=overrides.get("hardware_profile")
+                or source.get("accelerator")
+                or getattr(self._delegate, "_accelerator", None)
+                or getattr(getattr(self._delegate, "_policy", None), "accelerator", None),
+            )
+            checksum = text_checksum(rendered)
+            if rendered != manifest:
+                if reference.is_dir():
+                    path.write_text(rendered, encoding="utf-8")
+                else:
+                    directory = self._output_root / checksum.removeprefix("sha256:")
+                    directory.mkdir(parents=True, exist_ok=True)
+                    path = directory / "manifest.yaml"
+                    if path.is_file() and path.read_text(encoding="utf-8") != rendered:
+                        raise ValueError("checksum-addressed RuntimeClass manifest drift detected")
+                    path.write_text(rendered, encoding="utf-8")
+            artifact = replace(
+                artifact,
+                manifest_ref=str(reference if reference.is_dir() else path),
+                manifest_checksum=artifact.manifest_checksum if reference.is_dir() else checksum,
+                artifact_hash=stable_hash({"provider_artifact": artifact.artifact_hash, "runtimeClass": report}),
+                deployment_contract={**artifact.deployment_contract, "runtimeClass": report},
             )
         if artifact.manifest_ref and artifact.manifest_checksum:
             saved_path = Path(artifact.manifest_ref)
@@ -336,24 +396,63 @@ class ConfigurationManifestAdapter:
 
     async def diagnostics(self, execution: dict[str, Any]) -> dict[str, Any]:
         artifact = execution.get("_artifact")
-        if not isinstance(artifact, GuideDeploymentArtifact) or not artifact.deployment_contract:
-            return await self._delegate.diagnostics(execution)
-        if self._uses_delegate_lifecycle(artifact):
-            return await self._delegate.diagnostics(execution)
-        namespace = self._namespace(execution)
+        if (
+            not isinstance(artifact, GuideDeploymentArtifact)
+            or not artifact.deployment_contract
+            or self._uses_delegate_lifecycle(artifact)
+        ):
+            diagnostics = await self._delegate.diagnostics(execution)
+        else:
+            namespace = self._namespace(execution)
 
-        async def capture(arguments: list[str]) -> str:
-            status, stdout, stderr = await self._runner(arguments)
-            return (stdout if status == 0 else stderr).strip()
+            async def capture(arguments: list[str]) -> str:
+                status, stdout, stderr = await self._runner(arguments)
+                return (stdout if status == 0 else stderr).strip()
 
-        return {
-            "namespace": namespace,
-            "pods": await capture(["kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"]),
-            "events": await capture(["kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]),
-            "resource_claims": await capture(
-                ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
-            ),
-        }
+            diagnostics = {
+                "namespace": namespace,
+                "pods": await capture(["kubectl", "get", "pods", "--namespace", namespace, "-o", "wide"]),
+                "events": await capture(
+                    ["kubectl", "get", "events", "--namespace", namespace, "--sort-by=.lastTimestamp"]
+                ),
+                "resource_claims": await capture(
+                    ["kubectl", "get", "resourceclaims.resource.k8s.io", "--namespace", namespace, "-o", "wide"]
+                ),
+            }
+        if "running" in str(diagnostics.get("pods") or "").lower():
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "get", "pods", "--namespace", self._namespace(execution), "-o", "json"]
+            )
+            if status != 0:
+                diagnostics["pod_statuses_error"] = (stderr or stdout or "Pod status query failed").strip()
+                logger.warning("Pod startup diagnostics failed: %s", diagnostics["pod_statuses_error"])
+            else:
+                pods = json.loads(stdout)["items"]
+                timing_fields = ("initialDelaySeconds", "periodSeconds", "timeoutSeconds", "failureThreshold")
+                diagnostics["pod_statuses"] = [
+                    {
+                        "name": pod["metadata"]["name"],
+                        "deleting": bool(pod["metadata"].get("deletionTimestamp")),
+                        "status": pod.get("status") or {},
+                        "containers": [
+                            {
+                                "name": container["name"],
+                                **{
+                                    probe: {
+                                        key: container[probe][key] for key in timing_fields if key in container[probe]
+                                    }
+                                    for probe in ("startupProbe", "readinessProbe")
+                                    if probe in container
+                                },
+                            }
+                            for container in pod.get("spec", {}).get("containers") or []
+                        ],
+                    }
+                    for pod in pods
+                ]
+        if isinstance(artifact, GuideDeploymentArtifact) and "sharedMemory" in artifact.deployment_contract:
+            diagnostics = {**diagnostics, "shared_memory": artifact.deployment_contract["sharedMemory"]}
+        return diagnostics
 
     async def stop(self, execution, artifact):
         if not artifact.deployment_contract:

@@ -104,7 +104,7 @@ function createShortId() {
         || Date.now().toString(36).slice(-8);
 }
 
-export default function SimulationDashboard({ onNavigate, onToggleMobileNav, embedded = false }) {
+export default function SimulationDashboard({ onNavigate, onToggleMobileNav, embedded = false, initialAction = '' }) {
     const [backends, setBackends] = useState([]);
     const [scenarios, setScenarios] = useState(FALLBACK_SCENARIOS);
     const [datasets, setDatasets] = useState([]);
@@ -148,7 +148,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
     const [facets, setFacets] = useState({
         backends: [], models: [], datasets: [], trace_formats: [], endpoints: [],
     });
-    const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
+    const [isNewTaskOpen, setIsNewTaskOpen] = useState(initialAction === 'new');
     const [wizardStep, setWizardStep] = useState(0);
     const [taskNameSuffix, setTaskNameSuffix] = useState('');
     const modelDiscoveryRequestRef = useRef(0);
@@ -1062,7 +1062,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
     };
 
     return (
-        <ModulePage className={embedded ? 'min-h-0' : undefined} contentClassName={`space-y-5 ${embedded ? 'py-0' : ''}`}>
+        <ModulePage className={embedded ? 'simulation-page min-h-0' : 'simulation-page'} contentClassName={`space-y-5 ${embedded ? 'py-0' : ''}`}>
                 {!embedded && (
                     <ModuleHeader
                         icon={SimulationIcon}
@@ -1321,7 +1321,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                             }
                                         }}
                                         className={`relative cursor-pointer overflow-hidden rounded-lg border p-4 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
-                                            'border-slate-800 bg-slate-900 hover:border-slate-700 hover:bg-slate-800/50'
+                                            'border-slate-800 bg-slate-900 hover:border-[#037ffc99] hover:bg-[#037ffc0d] dark:hover:border-slate-700 dark:hover:bg-slate-800/50'
                                         }`}
                                     >
                                         {status === 'running' && itemTimeline.length > 0 && (
@@ -1686,6 +1686,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                         title="New Simulation Task"
                         subtitle={`Step ${wizardStep + 1} of ${TASK_WIZARD_STEPS.length} · ${TASK_WIZARD_STEPS[wizardStep]}`}
                         size="xl"
+                        className="simulation-task-dialog"
                         closeOnBackdrop={!submitting}
                         closeOnEscape={!submitting}
                         footer={(
@@ -1719,8 +1720,8 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                         <ol className="grid grid-cols-4 gap-2" aria-label="Task creation progress">
                             {TASK_WIZARD_STEPS.map((label, index) => (
                                 <li key={label} className="min-w-0">
-                                    <div className={`h-1.5 rounded-full transition-colors ${index <= wizardStep ? 'bg-cyan-400' : 'bg-slate-800'}`} />
-                                    <div className={`mt-2 truncate text-[10px] font-bold uppercase tracking-wider ${index === wizardStep ? 'text-cyan-300' : 'text-slate-500'}`}>
+                                    <div className={`h-1.5 rounded-full transition-colors ${index <= wizardStep ? 'wizard-step-fill bg-cyan-400' : 'bg-slate-800'}`} />
+                                    <div className={`mt-2 truncate text-[10px] font-bold uppercase tracking-wider ${index === wizardStep ? 'wizard-step-label-active text-cyan-300' : 'text-slate-500'}`}>
                                         {index + 1}. {label}
                                     </div>
                                 </li>
@@ -1763,7 +1764,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                             <div className="space-y-5">
                                 <div className="rounded-lg border border-violet-500/25 bg-violet-500/5 p-4">
                                     <div className="mb-3">
-                                        <h3 className="text-sm font-semibold text-violet-200">Benchmark Backend</h3>
+                                        <h3 className="text-sm font-semibold text-[#037ffc] dark:text-violet-200">Benchmark Backend</h3>
                                         <p className="mt-1 text-[11px] text-slate-500">Select the tool that will generate and replay benchmark traffic.</p>
                                     </div>
                                     <Label htmlFor="simulation-backend">Benchmark tool</Label>
@@ -1841,9 +1842,9 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
                                 <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
                                 <div className="mb-4 flex items-center gap-2">
-                                    <Server className="h-4 w-4 text-emerald-400" />
+                                    <Server className="h-4 w-4 text-[#6b7280] dark:text-emerald-400" />
                                     <div>
-                                        <h3 className="text-sm font-semibold text-emerald-200">Inference Endpoint</h3>
+                                        <h3 className="text-sm font-semibold text-[#037ffc] dark:text-emerald-200">Inference Endpoint</h3>
                                         <p className="mt-0.5 text-[11px] text-slate-500">Configure the model-serving endpoint that receives benchmark requests.</p>
                                     </div>
                                 </div>
@@ -1882,6 +1883,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                                     value={form.endpointModelServiceId}
                                                     onChange={(event) => selectModelService(event.target.value)}
                                                     disabled={modelServicesLoading || modelServices.length === 0}
+                                                    className="h-9"
                                                 >
                                                     <option value="">
                                                         {modelServicesLoading
@@ -1901,6 +1903,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                                 variant="secondary"
                                                 onClick={() => void loadModelServices()}
                                                 isLoading={modelServicesLoading}
+                                                className="h-9"
                                             >
                                                 <RefreshCw className="h-3.5 w-3.5" /> Refresh
                                             </Button>
@@ -1976,7 +1979,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
                         {wizardStep === 1 && <section aria-labelledby="scenario-configuration-heading">
                             <h2 id="scenario-configuration-heading" className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-100">
-                                <MessageSquareText className="h-5 w-5 text-cyan-400" /> Scenario
+                                <MessageSquareText className="h-5 w-5 text-[#037ffc] dark:text-cyan-400" /> Scenario
                             </h2>
                             <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
                                 <fieldset>
@@ -1988,6 +1991,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                         value={form.scenario}
                                         onChange={chooseScenario}
                                         fullWidth
+                                        activeClassName="simulation-choice-active"
                                     />
                                 </fieldset>
                                 <p className="mt-3 text-xs text-slate-500">
@@ -1998,11 +2002,11 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
                         {wizardStep === 1 && <section aria-labelledby="workload-configuration-heading">
                             <h2 id="workload-configuration-heading" className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-100">
-                                <MessageSquareText className="h-5 w-5 text-violet-400" /> Workload
+                                <MessageSquareText className="h-5 w-5 text-[#037ffc] dark:text-violet-400" /> Workload
                             </h2>
                             <div className="rounded-lg border border-violet-500/20 bg-violet-500/5 p-4">
                                 <label className="mb-4 flex items-center gap-2 text-sm font-medium text-slate-200">
-                                    <input type="radio" checked readOnly className="accent-violet-500" />
+                                    <input type="radio" checked readOnly className="accent-[#037ffc] dark:accent-violet-500" />
                                     Trace replay
                                 </label>
                                 {datasetDownloadError && (
@@ -2103,7 +2107,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                                     </div>
                                                 ) : timelinePoints.length > 0 ? (
                                                     <>
-                                                        <div className="h-72 w-full">
+                                                        <div className="simulation-timeline h-72 w-full">
                                                             <ResponsiveContainer width="100%" height="100%">
                                                                 <AreaChart data={timelineChartPoints} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
                                                                     <defs>
@@ -2173,20 +2177,20 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                                                         startIndex: 0,
                                                                         endIndex: Number(event.target.value),
                                                                     })}
-                                                                    className="h-2 w-full cursor-pointer accent-cyan-400"
+                                                                    className="simulation-rate-range h-2 w-full cursor-pointer accent-[#037ffc] dark:accent-cyan-400"
                                                                 />
                                                             </div>
                                                         )}
                                                         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                                                             {supportsTraceRange && <div>
-                                                                <div className="text-xs font-medium text-slate-400">Replay start (seconds)</div>
-                                                                <div className="mt-2 font-mono text-lg font-semibold text-cyan-300">
+                                                                <div className="text-xs font-semibold text-[#6b7280] dark:text-slate-400">Replay start (seconds)</div>
+                                                                <div className="mt-2 font-mono text-lg font-semibold text-[#037ffc] dark:text-cyan-300">
                                                                     {Math.round(Number(form.traceStartSeconds))}
                                                                 </div>
                                                             </div>}
                                                             {supportsTraceRange && <div>
-                                                                <div className="text-xs font-medium text-slate-400">Replay end (seconds)</div>
-                                                                <div className="mt-2 font-mono text-lg font-semibold text-cyan-300">
+                                                                <div className="text-xs font-semibold text-[#6b7280] dark:text-slate-400">Replay end (seconds)</div>
+                                                                <div className="mt-2 font-mono text-lg font-semibold text-[#037ffc] dark:text-cyan-300">
                                                                     {Math.round(Number(form.traceEndSeconds))}
                                                                 </div>
                                                             </div>}
@@ -2232,7 +2236,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                                 ) : null}
                                             </div>
                                         )}
-                                        <p className="flex items-start gap-2 text-xs leading-relaxed text-violet-200/70">
+                                        <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-500 dark:text-violet-200/70">
                                             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                                             Showing datasets compatible with {selectedBackend?.display_name || displayName(form.backend)} and {scenarioDisplayName(form.scenario)}.
                                         </p>
@@ -2249,21 +2253,21 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
 
                         {wizardStep === 2 && <section aria-labelledby="load-sla-heading">
                             <h2 id="load-sla-heading" className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-100">
-                                <Gauge className="h-5 w-5 text-amber-400" /> Load &amp; SLA Parameters
+                                <Gauge className="h-5 w-5 text-[#037ffc] dark:text-amber-400" /> Load &amp; SLA Parameters
                             </h2>
                             <div className="grid gap-6 lg:grid-cols-2">
-                                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-                                    <h3 className="mb-3 text-sm font-semibold text-amber-300">Replay Parameters</h3>
+                                <div className="simulation-load-card rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+                                    <h3 className="mb-3 text-sm font-semibold text-[#037ffc] dark:text-amber-300">Replay Parameters</h3>
                                     <div className="grid gap-4 sm:grid-cols-2">
                                         <label className="flex min-h-10 cursor-not-allowed items-center gap-2 text-sm text-slate-300 sm:col-span-2">
-                                            <input type="checkbox" checked disabled readOnly className="h-4 w-4 accent-emerald-500" />
+                                            <input type="checkbox" checked disabled readOnly className="h-4 w-4 accent-[#037ffc] dark:accent-emerald-500" />
                                             Stream responses
                                         </label>
                                     </div>
                                 </div>
 
-                                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-4">
-                                    <h3 className="mb-3 text-sm font-semibold text-rose-300">SLA Targets</h3>
+                                <div className="simulation-load-card rounded-lg border border-rose-500/20 bg-rose-500/5 p-4">
+                                    <h3 className="mb-3 text-sm font-semibold text-[#037ffc] dark:text-rose-300">SLA Targets</h3>
                                     <div className="grid gap-4 sm:grid-cols-2">
                                         <div>
                                             <Label htmlFor="simulation-ttftSlo">TTFT SLO (milliseconds)</Label>

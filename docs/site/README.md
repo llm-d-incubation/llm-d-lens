@@ -77,8 +77,10 @@ bounded GitHub-stat refresh before Docusaurus. They do not rely on npm lifecycle
 hooks, which the repository's `ignore-scripts=true` disables. GitHub-stat failures
 warn and retain the existing value or create an empty fallback.
 
-Build output is `docs/site/build/`, including `zh-CN/` for Chinese. The
-`.docusaurus/`, `build/`, generated pages and fetched stats are not committed.
+Broken routes, Markdown links and anchors fail `docs:build`; the docs CI job
+runs it and therefore blocks merge. Build output is `docs/site/build/`, including
+`zh-CN/` for Chinese. The `.docusaurus/`, `build/`, generated pages and fetched
+stats are not committed.
 Use `npm run serve --workspace @repo/docs` to inspect the built site.
 
 ## CI and publishing

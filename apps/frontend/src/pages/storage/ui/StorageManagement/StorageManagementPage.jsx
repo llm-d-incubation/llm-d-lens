@@ -49,15 +49,16 @@ function StatCard({ label, value, tone = 'text-white', hint }) {
     );
 }
 
-export function StorageManagementPage() {
+export function StorageManagementPage({ initialClusterId = '', initialVolumeId = '', initialAction = '', initialPurpose = '' } = {}) {
     const [resourceStatuses, setResourceStatuses] = useState({});
-    const [selectedResourceId, setSelectedResourceId] = useState(null);
+    const [selectedResourceId, setSelectedResourceId] = useState(initialVolumeId || null);
     const [searchInput, setSearchInput] = useState('');
     const query = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
     const [kind, setKind] = useState('');
     const [purpose, setPurpose] = useState('');
-    const [clusterId, setClusterId] = useState('');
+    const [clusterId, setClusterId] = useState(initialClusterId || '');
     const [dialog, setDialog] = useState(null);
+    const [createPurpose, setCreatePurpose] = useState('');
     const [selected, setSelected] = useState(null);
     const [mutatingId, setMutatingId] = useState(null);
     const [notice, setNotice] = useNotice();
@@ -66,6 +67,8 @@ export function StorageManagementPage() {
     const pageSize = DEFAULT_PAGE_SIZE;
 
     const statusControllerRef = useRef(null);
+    const focusedVolumeId = useRef('');
+    const handledInitialAction = useRef(false);
     // Cluster choices come from the unfiltered list so narrowing by cluster
     // never removes the option the user just picked.
     const [knownClusters, setKnownClusters] = useState([]);
@@ -83,6 +86,27 @@ export function StorageManagementPage() {
 
     const hasInFlightVolume = items.some((item) => item.status === 'pending' || item.status === 'deleting');
     usePolling(() => load({ quiet: true }), { intervalMs: RESOURCE_STATUS_POLL_INTERVAL_MS, enabled: hasInFlightVolume });
+
+    useEffect(() => {
+        setClusterId(initialClusterId || '');
+    }, [initialClusterId]);
+
+    useEffect(() => {
+        if (initialAction !== 'create' || handledInitialAction.current) return;
+        handledInitialAction.current = true;
+        setCreatePurpose(initialPurpose);
+        setDialog('create');
+    }, [initialAction, initialPurpose]);
+
+    useEffect(() => {
+        if (!initialVolumeId || focusedVolumeId.current === initialVolumeId) return;
+        const index = items.findIndex((item) => item.id === initialVolumeId);
+        if (index >= 0) {
+            focusedVolumeId.current = initialVolumeId;
+            setPage(Math.floor(index / pageSize));
+            setSelectedResourceId(initialVolumeId);
+        }
+    }, [initialVolumeId, items, pageSize]);
 
     useEffect(() => {
         const volumeIds = items.map((item) => item.id);
@@ -154,6 +178,12 @@ export function StorageManagementPage() {
     const closeDialog = () => {
         setDialog(null);
         setSelected(null);
+        setCreatePurpose('');
+    };
+
+    const openCreate = () => {
+        setCreatePurpose('');
+        setDialog('create');
     };
 
     const openDelete = (item) => {
@@ -198,7 +228,7 @@ export function StorageManagementPage() {
     };
 
     return (
-        <ModulePage contentClassName="flex flex-col gap-4">
+        <ModulePage className="storage-page" contentClassName="flex flex-col gap-4">
             <ModuleHeader
                 icon={HardDrive}
                 title="Storage"
@@ -215,7 +245,7 @@ export function StorageManagementPage() {
                             <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
                         </Button>
                         <PermissionGate permission="storage:volume:create">
-                            <Button variant="sky" size="sm" onClick={() => setDialog('create')}>
+                            <Button variant="sky" size="sm" onClick={openCreate}>
                                 <Plus size={14} aria-hidden="true" /> New storage volume
                             </Button>
                         </PermissionGate>
@@ -242,7 +272,7 @@ export function StorageManagementPage() {
                 <div className="flex shrink-0 items-center gap-2">
                     {sidebarOpen && (
                         <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-1.5 pl-3 backdrop-blur-xl transition-colors hover:border-cyan-500/40">
-                            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-cyan-400">
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-[#037ffc] dark:text-cyan-400">
                                 <Server size={14} />
                                 <span className="hidden sm:inline">Cluster</span>
                             </span>
@@ -274,7 +304,7 @@ export function StorageManagementPage() {
             {sidebarOpen && (
             <section
                 aria-busy={loading || refreshing}
-                className="relative flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
+                className="storage-card relative flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
             >
               <div className="flex min-h-0 flex-1 flex-col p-4">
                 <div className="mt-3 flex shrink-0 flex-col gap-2">
@@ -377,8 +407,8 @@ export function StorageManagementPage() {
             )}
             </div>
 
-            <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
-                <SectionLabel className="shrink-0">Status</SectionLabel>
+            <section className="storage-card flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
+                <SectionLabel className="shrink-0 text-[#037ffc]">Status</SectionLabel>
                 <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
                     <StorageResourceDetailPanel
                         item={selectedResourceItem}
@@ -395,6 +425,7 @@ export function StorageManagementPage() {
                 <CreateStorageVolumeModal
                     clusters={clusters}
                     defaultClusterId={clusterId}
+                    defaultPurpose={createPurpose}
                     onCancel={closeDialog}
                     onCreate={handleCreate}
                 />

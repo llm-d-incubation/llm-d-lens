@@ -136,6 +136,12 @@ class GatewayStreamRequest(StrictModel):
     ipp_version: str | None = Field(default=None, alias="ippVersion")
 
 
+class GatewayReconcileRequest(StrictModel):
+    """Reconcile one cluster's shared Gateway and model routes."""
+
+    cluster_id: str = Field(alias="clusterId")
+
+
 class GatewayStatusMember(StrictModel):
     group_id: str = Field(alias="groupId")
     group_name: str = Field(alias="groupName")

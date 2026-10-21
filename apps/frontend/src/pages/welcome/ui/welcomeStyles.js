@@ -1,0 +1,1 @@
+export const WELCOME_CARD = 'border-sky-500/15 bg-gradient-to-br from-white/85 via-sky-50/60 to-cyan-50/40 shadow-lg shadow-sky-500/5 backdrop-blur-xl dark:border-sky-500/20 dark:from-slate-900/85 dark:via-slate-900/55 dark:to-sky-950/35';

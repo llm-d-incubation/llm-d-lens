@@ -17,7 +17,7 @@ const normalizeLevel = (value) => {
     return Object.hasOwn(LEVELS, level) ? LEVELS[level] : level;
 };
 const inlineLogValue = (value) => typeof value === 'string'
-    ? value.replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\t/g, '\\t')
+    ? value.replace(/\r/g, '\\r').replace(/\n/g, '\\n')
     : JSON.stringify(value);
 
 function parseLogLine(raw) {
@@ -101,16 +101,16 @@ function ComponentLogLine({ raw }) {
                 </time>}
                 {entry.level && <Badge tone={Object.hasOwn(LEVEL_TONES, entry.level) ? LEVEL_TONES[entry.level] : 'neutral'} size="xxs" className="shrink-0">{entry.level.toUpperCase()}</Badge>}
                 {entry.parseWarning && <Badge tone="warning" size="xxs" title={entry.parseWarning} className="shrink-0">Unparsed JSON</Badge>}
-                {message && <span className="shrink-0 text-theme-text">{inlineLogValue(message)}</span>}
+                {message && <span className="shrink-0 whitespace-pre text-theme-text">{inlineLogValue(message)}</span>}
                 {entry.fields.filter((field) => !stackFields.includes(field)).map(([key, value]) => (
-                    <span key={key} className="shrink-0 text-theme-text">
+                    <span key={key} className="shrink-0 whitespace-pre text-theme-text">
                         <span className="text-theme-muted">{inlineLogValue(key)}=</span>{inlineLogValue(value)}
                     </span>
                 ))}
                 {entry.source && <span className="shrink-0 text-theme-muted">
                     source={entry.source.pod}/{entry.source.container}
                 </span>}
-                {!entry.message && entry.fields.length === 0 && <span className="text-theme-muted">{inlineLogValue(entry.raw)}</span>}
+                {!entry.message && entry.fields.length === 0 && <span className="whitespace-pre text-theme-muted">{inlineLogValue(entry.raw)}</span>}
             </div>
             {continuation.length > 0 && <pre className="whitespace-pre font-mono leading-5 text-theme-text">{continuation.join('\n')}</pre>}
             {stackFields.map(([key, value]) => (

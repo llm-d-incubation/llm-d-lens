@@ -21,6 +21,8 @@ export function hasPermission(permissions = [], required) {
 
 // Any-of semantics: a view is visible when the principal holds one of these.
 export const VIEW_PERMISSIONS = {
+    welcome: ['cluster:cluster:read'],
+    'welcome/issues': ['cluster:cluster:read'],
     'model-market': ['deployment:run:read'],
     'optimization-deployments': ['deployment:run:read'],
     'optimization-evaluate': ['evaluate:run:read'],

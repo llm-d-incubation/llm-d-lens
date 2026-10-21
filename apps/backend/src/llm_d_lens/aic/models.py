@@ -8,22 +8,36 @@
 
 """HTTP contracts for the in-process AIConfigurator adapter."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+DEFAULT_INPUT_TOKENS = 4000
+DEFAULT_OUTPUT_TOKENS = 1000
 
 
 class AICRequest(BaseModel):
     model_name: str = Field(min_length=1)
     gpu_count: int = Field(default=8, ge=1, le=128)
-    mean_input_tokens: int = Field(default=1024, ge=1)
-    mean_output_tokens: int = Field(default=256, ge=1)
+    mean_input_tokens: int = Field(default=DEFAULT_INPUT_TOKENS, ge=1)
+    mean_output_tokens: int = Field(default=DEFAULT_OUTPUT_TOKENS, ge=1)
+    target_concurrency: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    target_request_rate: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     ttft_target_ms: float | None = None
     tpot_target_ms: float | None = None
     aic_system_name: str = Field(min_length=1)
     aic_backend_name: str = Field(default="vllm", min_length=1)
     aic_database_mode: str = Field(default="SILICON", min_length=1)
     max_candidates: int = Field(default=10, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_load_target(self) -> Self:
+        if self.target_concurrency is not None and self.target_request_rate is not None:
+            raise ValueError(
+                "AIC accepts only one load target: Concurrent requests or Request rate (QPS). "
+                "Both were provided; choose one and clear the other because AIC does not support joint load targets."
+            )
+        return self
 
 
 class AICExperimentRequest(BaseModel):

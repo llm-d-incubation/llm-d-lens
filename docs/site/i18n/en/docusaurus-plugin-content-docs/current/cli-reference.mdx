@@ -8,15 +8,17 @@ description: Command-line tools for running, installing and managing Lens.
 | Command | Purpose |
 | --- | --- |
 | `scripts/lens-local.sh check` | Validate the environment without starting anything. |
-| `scripts/lens-local.sh start` | Prepare dependencies and start the frontend, Node API and Python backend in the background. Logs are under `$LENS_LOG_DIR/dev/` (default `~/.local/state/lens/logs/dev/`). Regenerates and validates the reuse map first. |
+| `scripts/lens-local.sh start` | Prepare dependencies and start Vite and the unified Python backend in the background. Logs are under `$LENS_LOG_DIR/dev/` (default `~/.local/state/lens/logs/dev/`). Validates the reuse map and MCP catalog first. |
 | `scripts/lens-local.sh stop` | Stop all services started by this script. |
 | `scripts/lens-local.sh restart` | Complete target-node checks when enabled, prepare dependencies and validate the reuse map before stopping and restarting services. |
 | `scripts/lens-local.sh status` | Show which services are running and their PIDs. |
 | `scripts/lens-local.sh clean [-y\|--yes]` | Stop services and delete the embedded database plus all local app data under `~/.llm-d-lens`. |
 | `scripts/lens-local.sh install-node` | Install a supported Node.js into `.dev-tools/` (used automatically if the system Node is missing or too old). |
 
-Ports are configurable via `FRONTEND_PORT`, `SERVER_PORT` and `BACKEND_PORT`
-environment variables; see [Environment Variables](/environment-variables).
+Ports are configurable via `FRONTEND_PORT` (default `5173`) and `BACKEND_PORT`
+(default `3000`). `SERVER_PORT` remains a fallback for the Python port.
+The legacy `restart server` target selects `backend`; use `restart all` when
+switching from the old three-process setup. See [Environment Variables](/environment-variables).
 
 ### Target node and kubeconfig
 
@@ -39,7 +41,7 @@ then checks that the node is accessible, Ready and not cordoned before any
 existing services are stopped. This is not a guarantee that a particular
 workload's resource requests, affinity or tolerations can be scheduled.
 
-The target is exported to the existing backend/Node contract
+The target is exported to the existing backend contract
 `PRISM_K8S_TARGET_NODE`. That variable also remains a fallback when `TARGET_NODE`
 is unset. When `KUBECONFIG` is unset, Kubernetes uses its normal configuration
 lookup. `stop`, `status`, `clean` and `install-node` do not perform target-node
@@ -73,7 +75,7 @@ There is no version override or upgrade mode.
 | --- | --- |
 | `--install-dir DIR` | Install location (default `$HOME/llm-d-lens`). |
 | `--app-port PORT` | Web app/API port (default `3000`). |
-| `--backend-port PORT` | Internal FastAPI backend port (default `8081`). |
+| `--backend-port PORT` | Legacy alias for `--app-port`; both select the same listener. |
 | `--silent` | Non-interactive install using defaults/flags only. |
 | `--no-https` | Serve plain HTTP instead of auto-HTTPS. |
 | `--no-start` | Install without starting services. |
@@ -85,10 +87,11 @@ See [Installation](/installation) and [Upgrade](/upgrade) for full usage.
 
 ## `node scripts/generate-mcp-tools.mjs`
 
-Regenerates the MCP tool catalog the Node BFF exposes to
-[Lens Assistant](/user-guide/lens-assistant) from the backend's current API
-surface. Run it whenever backend routes change; `scripts/lens-local.sh
-start`/`restart` and Docker builds do this automatically.
+Validates the Python MCP catalog against the current REST schema, failing on
+unexpected skipped operations. `--check` performs the same validation; `--json`
+exports the catalog. No Node server artifact is generated. Local `start`/`restart`
+and installed launchers validate the same catalog directly. The Python-only
+equivalent is `.venv/bin/python -m llm_d_lens.mcp.catalog`.
 
 ## `alembic`
 

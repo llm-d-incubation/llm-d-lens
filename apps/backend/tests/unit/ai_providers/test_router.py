@@ -253,6 +253,21 @@ async def test_proxy_chat_completions_forwards_with_stored_key_and_default_model
 
 
 @pytest.mark.asyncio
+async def test_proxy_chat_completions_accepts_base_url_with_v1_suffix(service, monkeypatch):
+    client = _ChatClient()
+    monkeypatch.setattr("llm_d_lens.ai_providers.router.httpx.AsyncClient", lambda **_kwargs: client)
+    created = await ai_providers_router.create_provider(
+        AIProviderCreateRequest(
+            name="OpenAI", baseUrl="https://api.openai.com/v1", model="gpt-4o-mini", apiKey="sk-secret"
+        )
+    )
+
+    await ai_providers_router.proxy_chat_completions(created["id"], {"messages": [{"role": "user", "content": "hi"}]})
+
+    assert client.last_url == "https://api.openai.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
 async def test_proxy_chat_completions_rejects_dns_rebinding_during_request(service, monkeypatch):
     class RebindingClient(_ChatClient):
         async def post(self, *_args, **_kwargs):

@@ -62,20 +62,41 @@ test('typed confirmation disabling and custom storage actions remain caller owne
     assert.match(renderToStaticMarkup(deployment.props.children), /Also delete the Kubernetes namespace/);
 });
 
-test('resource deletions preserve warnings, retry after failure and success lock', async () => {
-    for (const [Component, resource, formId, warning] of [
-        [DeleteAIProviderModal, { provider: { name: 'Provider' } }, 'delete-ai-provider-form', /default planning behavior/],
-        [DeleteModelCacheModal, { entry: { cachePath: '/models/example' } }, 'delete-model-cache-form', /Other cached models/],
-    ]) {
+test('provider deletion preserves warnings, retry after failure and success lock', async () => {
+    let calls = 0;
+    const view = capture(DeleteAIProviderModal, {
+        provider: { name: 'Provider' },
+        onDelete: async () => { if (++calls === 1) throw new Error('retry'); },
+    });
+    assert.equal(view.props.formId, 'delete-ai-provider-form');
+    assert.match(renderToStaticMarkup(view.props.children), /default planning behavior/);
+    const event = { preventDefault() {} };
+    await view.props.onSubmit(event);
+    await view.props.onSubmit(event);
+    await view.props.onSubmit(event);
+    assert.equal(calls, 2);
+});
+
+test('cache deletion retries failures and only closes after confirmed deletion', async () => {
+    for (const status of ['deleted', 'deleting']) {
         let calls = 0;
-        const view = capture(Component, { ...resource, onDelete: async () => { if (++calls === 1) throw new Error('retry'); } });
-        assert.equal(view.props.formId, formId);
-        assert.match(renderToStaticMarkup(view.props.children), warning);
+        let completions = 0;
+        const view = capture(DeleteModelCacheModal, {
+            entry: { id: 'cache-1', cachePath: '/models/example' },
+            onDelete: async () => {
+                if (++calls === 1) throw new Error('retry');
+                return { status };
+            },
+            onDeleted: async () => { completions += 1; },
+        });
+        assert.equal(view.props.formId, 'delete-model-cache-form');
+        assert.match(renderToStaticMarkup(view.props.children), /Other cached models/);
         const event = { preventDefault() {} };
         await view.props.onSubmit(event);
-        await view.props.onSubmit(event);
+        assert.equal(completions, 0);
         await view.props.onSubmit(event);
         assert.equal(calls, 2);
+        assert.equal(completions, status === 'deleted' ? 1 : 0);
     }
 });
 

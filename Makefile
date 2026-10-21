@@ -24,10 +24,10 @@ build: ## Build the frontend
 .PHONY: test test-js test-app-js test-reuse test-python
 test: test-js test-python ## Run Node and Python tests
 
-test-js: test-app-js test-reuse ## Run frontend, Node API and reuse unit tests
+test-js: test-app-js test-reuse ## Run frontend, shared and reuse unit tests
 
-test-app-js: ## Run frontend and Node API unit tests
-	TSX_TSCONFIG_PATH=tsconfig.base.json node --import tsx --test $$(find apps/frontend/src apps/server/testing packages/shared/src -type f \( -name '*.test.js' -o -name '*.test.jsx' -o -name '*.test.ts' \))
+test-app-js: ## Run frontend and shared unit tests
+	TSX_TSCONFIG_PATH=tsconfig.base.json node --import tsx --test $$(find apps/frontend/src packages/shared/src -type f \( -name '*.test.js' -o -name '*.test.jsx' -o -name '*.test.ts' \))
 
 test-reuse: ## Run reuse tooling tests
 	npm run reuse:test

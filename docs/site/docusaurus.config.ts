@@ -32,11 +32,10 @@ const config: Config = {
   organizationName: ORG_NAME,
   projectName: PROJECT_NAME,
 
-  // Pre-existing Fern-era content has a handful of links to not-yet-written
-  // pages (tracked separately); don't fail CI builds on those, just surface
-  // them in the build log.
-  onBrokenLinks: 'warn',
-  onBrokenAnchors: 'warn',
+  // Documentation CI must fail (and therefore block merge) when a route,
+  // Markdown link or anchor no longer resolves.
+  onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
 
   // Plain `.md` files (the canonical design docs copied in from docs/design/
   // and CONTRIBUTING.md) use CommonMark, not MDX, so math notation like
@@ -44,6 +43,9 @@ const config: Config = {
   // full MDX/JSX support (Card, Tabs, etc.).
   markdown: {
     format: 'detect',
+    hooks: {
+      onBrokenMarkdownLinks: 'throw',
+    },
   },
 
   i18n: {

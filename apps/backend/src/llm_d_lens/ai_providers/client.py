@@ -42,6 +42,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from llm_d_lens.ai_providers.contracts import DEFAULT_ANTHROPIC_VERSION, AIProvider
+from llm_d_lens.ai_providers.endpoints import normalize_provider_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -288,9 +289,9 @@ class AIProviderClient(ABC):
         structured_output_mode: StructuredOutputMode = "json_schema",
     ) -> None:
         # Normalize so f"{self.base_url}v1/..." always inserts the required
-        # path separator, even when the saved base URL has no trailing slash
-        # (e.g. a bare "https://api.deepseek.com/anthropic").
-        self.base_url = base_url if base_url.endswith("/") else f"{base_url}/"
+        # path separator and never produces /v1/v1/, even when the saved base
+        # URL already includes /v1 (a common provider-doc spelling).
+        self.base_url = normalize_provider_base_url(base_url)
         self.model = model
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds

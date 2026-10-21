@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePolling } from '../../../shared/lib/usePolling';
-import { CheckCircle2, KeyRound, Pencil, Plus, RefreshCw, Trash2, XCircle } from 'lucide-react';
+import { CheckCircle2, Fingerprint, Pencil, Plus, RefreshCw, Trash2, XCircle } from 'lucide-react';
 import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../shared/ui/ModulePage';
 import { Button } from '../../../shared/ui/Button';
@@ -108,10 +108,10 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
-                    icon={KeyRound}
+                    icon={Fingerprint}
                     title="Identity providers"
                     badge="Experimental"
                     description="Connect external directories (LDAP) so directory users can sign in to Lens. This integration is experimental; behavior and configuration may change."
@@ -140,14 +140,15 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                     onRetry={load}
                     emptyContent={
                         <EmptyState
-                            icon={<KeyRound size={22} />}
+                            icon={<Fingerprint size={22} />}
+                            iconClassName="identity-empty-icon"
                             title="No external identity providers"
                             message="Lens manages local accounts by default. Add an LDAP provider to authenticate directory users."
                             action={<PermissionGate permission="idp:provider:configure"><Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}><Plus size={14} /> Add provider</Button></PermissionGate>}
                         />
                     }
                 >
-                    <AdminPanel icon={KeyRound} title="Providers" count={providers.length}>
+                    <AdminPanel icon={Fingerprint} title="Providers" count={providers.length}>
                         <div className="overflow-x-auto">
                             <table className="w-full min-w-[46rem] text-left text-sm">
                                 <thead className="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-500">
@@ -167,7 +168,7 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                                         return (
                                             <tr key={provider.id} className="border-t border-slate-800">
                                                 <td className="px-4 py-3 font-medium text-slate-100">{provider.name}</td>
-                                                <td className="px-4 py-3"><Badge tone="info">{provider.type}</Badge></td>
+                                                <td className="px-4 py-3"><Badge tone="info" className="identity-type-tag">{provider.type}</Badge></td>
                                                 <td className="px-4 py-3 text-slate-300">{provider.enabled ? 'Yes' : 'No'}</td>
                                                 <td className="px-4 py-3 text-slate-300">{provider.is_default ? 'Yes' : '—'}</td>
                                                 <td className="px-4 py-3">

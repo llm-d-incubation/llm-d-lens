@@ -17,6 +17,7 @@ from llm_d_lens.model_service.contracts import (
     AuthorizeRequest,
     AuthorizeResult,
     GroupCreateRequest,
+    GroupPublishRequest,
     GroupUpdateRequest,
     MemberCreateRequest,
     MemberUpdateRequest,
@@ -80,7 +81,12 @@ class ModelService:
         return self.groups.get(group_id)
 
     def create_group(
-        self, request: GroupCreateRequest, *, created_by: str | None, principal: Principal | None = None
+        self,
+        request: GroupCreateRequest,
+        *,
+        created_by: str | None,
+        principal: Principal | None = None,
+        required_permission: str = "model-service:group:manage",
     ) -> ModelServiceGroup:
         """Create a service, atomically publishing its ready execution when supplied.
 
@@ -92,8 +98,8 @@ class ModelService:
             resource = ResourceRef(
                 resource_type="cluster", resource_id=request.cluster_id, cluster_id=request.cluster_id
             )
-            if not authorize(principal, "model-service:group:manage", resource=resource).allowed:
-                raise ForbiddenError("model-service group management is required in this cluster")
+            if not authorize(principal, required_permission, resource=resource).allowed:
+                raise ForbiddenError(f"permission denied: {required_permission}")
         target = None
         if request.execution_id is not None:
             try:
@@ -106,7 +112,8 @@ class ModelService:
                 resource = ResourceRef(
                     resource_type="cluster", resource_id=target.cluster_id, cluster_id=target.cluster_id
                 )
-                for permission in ("model-service:group:manage", "model-service:member:manage"):
+                required = {required_permission, "model-service:member:manage"}
+                for permission in required:
                     if not authorize(principal, permission, resource=resource).allowed:
                         raise ForbiddenError(f"permission denied: {permission}")
             if target.status != "ready" or not target.model:
@@ -130,8 +137,31 @@ class ModelService:
         except Exception as error:  # noqa: BLE001 - map DAO conflict to domain error
             raise ModelServiceConflictError(str(error)) from error
 
+    def publish_group(
+        self, request: GroupPublishRequest, *, created_by: str | None, principal: Principal | None = None
+    ) -> ModelServiceGroup:
+        """Create a public model name for one ready deployment using member-manage rights."""
+        return self.create_group(
+            GroupCreateRequest(
+                name=request.name,
+                clusterId=request.cluster_id,
+                executionId=request.execution_id,
+                displayName=request.display_name,
+                description=request.description,
+                selectionPolicy="random",
+            ),
+            created_by=created_by,
+            principal=principal,
+            required_permission="model-service:member:manage",
+        )
+
     def update_group(
-        self, group_id: str, request: GroupUpdateRequest, *, principal: Principal | None = None
+        self,
+        group_id: str,
+        request: GroupUpdateRequest,
+        *,
+        principal: Principal | None = None,
+        required_permission: str = "model-service:group:manage",
     ) -> ModelServiceGroup:
         """Update a model's configuration, preserving provider status and weights when stopped."""
         group = self.groups.get(group_id)
@@ -142,8 +172,8 @@ class ModelService:
             cluster_ids.update(member.cluster_id for member in self.members.list_by_group(group_id))
             for cluster_id in cluster_ids or {""}:
                 resource = ResourceRef(resource_type="cluster", resource_id=cluster_id, cluster_id=cluster_id)
-                if not authorize(principal, "model-service:group:manage", resource=resource).allowed:
-                    raise ForbiddenError("model-service group management is required in this cluster")
+                if not authorize(principal, required_permission, resource=resource).allowed:
+                    raise ForbiddenError(f"permission denied: {required_permission}")
         if (
             request.cluster_id is not None
             and request.cluster_id != group.cluster_id
@@ -172,21 +202,33 @@ class ModelService:
         except Exception as error:  # noqa: BLE001
             raise ModelServiceConflictError(str(error)) from error
 
-    def require_empty_group(self, group_id: str, *, principal: Principal | None = None) -> ModelServiceGroup:
+    def require_empty_group(
+        self,
+        group_id: str,
+        *,
+        principal: Principal | None = None,
+        required_permission: str = "model-service:group:manage",
+    ) -> ModelServiceGroup:
         group = self.groups.get(group_id)
         if group is None:
             raise ModelServiceNotFoundError(f"group not found: {group_id}")
         if principal is not None:
             resource = ResourceRef(resource_type="cluster", resource_id=group.cluster_id, cluster_id=group.cluster_id)
-            if not authorize(principal, "model-service:group:manage", resource=resource).allowed:
-                raise ForbiddenError("model-service group management is required in this cluster")
+            if not authorize(principal, required_permission, resource=resource).allowed:
+                raise ForbiddenError(f"permission denied: {required_permission}")
         if self.members.list_by_group(group_id):
             raise ModelServiceConflictError("remove every provider from the model before removing it")
         return group
 
-    def delete_group(self, group_id: str, *, principal: Principal | None = None) -> None:
+    def delete_group(
+        self,
+        group_id: str,
+        *,
+        principal: Principal | None = None,
+        required_permission: str = "model-service:group:manage",
+    ) -> None:
         """Delete an empty model record; callers must first confirm its route cleanup."""
-        self.require_empty_group(group_id, principal=principal)
+        self.require_empty_group(group_id, principal=principal, required_permission=required_permission)
         try:
             self.groups.delete(group_id)
         except ModelServiceGroupDaoError as error:

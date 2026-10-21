@@ -33,7 +33,7 @@ export default function ChangePasswordPage() {
     };
 
     return (
-        <div className="flex min-h-screen w-full items-center justify-center bg-slate-950 p-6 font-sans text-slate-100 antialiased">
+        <div className="flex min-h-screen w-full items-center justify-center bg-theme-bg p-6 font-sans text-theme-text antialiased">
             <div className="w-full max-w-sm">
                 <div className="mb-8 flex items-center justify-center gap-3">
                     <a href="https://llm-d.ai" target="_blank" rel="noopener noreferrer" aria-label="llm-d">

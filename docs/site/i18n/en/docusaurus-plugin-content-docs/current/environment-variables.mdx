@@ -43,6 +43,7 @@ Gateway Mode: the cluster installs one shared Gateway (provider-selectable at cl
 | `LENS_MODEL_RECONCILE_INTERVAL_SECONDS` | How often the shared Gateway and model routes are reconciled automatically. | `300` |
 | `LENS_GATEWAY_EXPOSURE_INTERVAL_SECONDS` | How often Lens re-establishes the public `0.0.0.0` tunnel for each cluster's exposed Gateway port. | `60` |
 | `LENS_GATEWAY_USAGE_INTERVAL_SECONDS` | How often Lens syncs llm-d EPP token counters from each cluster's Prometheus into the usage ledger. Set `0` to disable. | `60` |
+| `LENS_WELCOME_CHECK_INTERVAL_SECONDS` | How often Lens refreshes and stores the Welcome page issue snapshot. Set `0` to disable the background check. | `60` |
 | `LENS_MODEL_GATEWAY_AUTHZ_HOST` | Fallback Lens ext_authz address when a cluster leaves its per-cluster **Lens authz address** unset. Prefer the per-cluster value (create/edit cluster form → `GET /api/cluster/lens-hosts`). When set, the Gateway injects the caller identity (`x-llm-d-inference-fairness-id`) for per-user usage. | *(unset)* |
 | `LENS_MODEL_GATEWAY_AUTHZ_PORT` | Port of the Lens ext_authz backend used by the Gateway. | `8081` |
 
@@ -75,7 +76,7 @@ and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `TARGET_NODE` | Optional node constraint for `scripts/lens-local.sh check/start/restart`; overridden by `--target-node`. Exported to backend/Node as `PRISM_K8S_TARGET_NODE`. | unset; falls back to `PRISM_K8S_TARGET_NODE` |
+| `TARGET_NODE` | Optional node constraint for `scripts/lens-local.sh check/start/restart`; overridden by `--target-node`. Exported to the backend as `PRISM_K8S_TARGET_NODE`. | unset; falls back to `PRISM_K8S_TARGET_NODE` |
 | `KUBECONFIG` | Fallback kubeconfig when a cluster-specific one isn't registered. The local launcher accepts `--kubeconfig FILE` as an override. | Kubernetes configuration lookup, normally `$HOME/.kube/config` |
 | `PRISM_GPU_PCI_ALLOWLIST` | Optional explicit comma-separated PCI restriction. The local launcher preserves it; hardware discovery remains in the backend. | unset |
 | `PRISM_KUBERNETES_BACKEND` / `PRISM_KUBERNETES_READ_BACKEND` | Selects which Kubernetes client implementation serves writes/reads. | `PRISM_KUBERNETES_BACKEND`: `sdk`<br />`PRISM_KUBERNETES_READ_BACKEND`: `sdk` |
@@ -87,6 +88,7 @@ and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
 | `LLM_D_BENCH_RETAIN_NAMESPACE_ON_FAILURE` | Retains failed deployment namespaces for troubleshooting. | `true` |
 | `PRISM_MODEL_API_PUBLIC_HOST` | Optional externally reachable host for Model API port-forward listeners. | `""` (localhost only) |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Standard proxy variables; the backend always adds each cluster's own API server host to `NO_PROXY` regardless of what's inherited, to avoid tunneling cluster-local traffic through an outbound proxy. | `HTTP_PROXY`: `""`<br />`HTTPS_PROXY`: `""`<br />`NO_PROXY`: `""` |
+| `LENS_TRUSTED_AI_PROVIDER_PROXY` | Optional exact HTTPS proxy URL for external AI providers. When unset, an inherited `HTTPS_PROXY`/`ALL_PROXY` is trusted by default so the original hostname and SNI are sent through it. A mismatched value keeps application-side IP pinning. | unset |
 
 The local launcher does not load a target-node configuration file or inject
 `LLM_D_BENCH_*` defaults. These deployment defaults belong to the backend;

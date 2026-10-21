@@ -6,7 +6,6 @@ import ts from 'typescript';
 
 export const SOURCE_ROOTS = [
   'apps/frontend/src/',
-  'apps/server/src/',
   'apps/backend/src/llm_d_lens/',
   'packages/shared/src/',
   // Retained for repository-tool fixtures and historical task baselines.

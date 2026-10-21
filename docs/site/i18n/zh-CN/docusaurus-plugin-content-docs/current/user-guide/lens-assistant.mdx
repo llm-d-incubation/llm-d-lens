@@ -6,21 +6,19 @@ description: 询问 Lens 资源状态，并检查和批准助手请求的操作�
 在 **Lens Assistant** 中询问集群和部署状态，或请求执行操作。
 例如：“列出我能访问的集群中失败的部署。”
 
-## 与内部部署开始对话
+## 开始对话
+
+Lens Assistant 目前只支持 **External AI provider**（外部 AI 提供方），暂不支持内部部署。
 
 1. 打开 **Lens Assistant**。
-2. 在右侧的 **AI provider**（AI 提供方）面板中，保持 **Internal**（内部）被
-   选中。
-3. 在 **1. Cluster**（集群）下，打开 **Select a Cluster…**（选择一个集群…）
-   并选择一个已就绪的集群。
-4. 在 **2. Deployment (model service)**（部署/模型服务）下，打开
-   **Select a Deployment…**（选择一个部署…）并选择一个已就绪的部署。
-5. 当消息框的占位符变为 **Message Lens…**（给 Lens 发消息…）时，点击进入
-   消息框。
-6. 输入你的问题，并按 <kbd>Enter</kbd> 发送。
-7. 查看以 **Talking to**（正在与……对话）开头的状态卡片，确认助手已连接。
+2. 在 **External AI provider** 下，打开 **Select an AI provider…**
+   （选择一个 AI 提供方…）并选择一个已配置的提供方。
+3. 当消息框的占位符显示 **Message Lens…** 时，点击进入消息框。
+4. 输入你的问题，并按 <kbd>Enter</kbd> 发送。
 
 请选择上下文窗口至少 32K token 的模型，推荐 64K 以上。
+列表为空时，请管理员[添加兼容 OpenAI 的提供方](/user-guide/external-providers)。
+Lens Assistant 暂不支持 Anthropic 类型。
 
 ## 与外部服务提供方开始对话
 
@@ -37,8 +35,17 @@ Lens Assistant 暂不支持 Anthropic 类型。
 ## 开始新的对话
 
 1. 在页头点击 **New chat**（新建对话）。
-2. 如有需要，重新选择 **Internal** 或 **External**，然后选择要使用的服务。
+2. 如有需要，重新选择要使用的 External AI provider。
 3. 在已清空的对话中发送第一条消息。
+
+## 中断或插话
+
+Lens Assistant 正在处理时，消息框仍可继续输入。
+
+- 输入新消息并按 <kbd>Enter</kbd>：停止当前轮次并发送新消息。
+- 按 <kbd>Esc</kbd>：停止当前轮次，不发送新消息。
+
+Lens 会停止继续调度工具调用，并丢弃被中断的轮次。已经在执行的工具调用可能仍会在后台完成，但结果不会加入对话。
 
 ## 查看助手的推理过程与工具调用活动
 
@@ -75,6 +82,9 @@ Lens Assistant 暂不支持 Anthropic 类型。
 4. 当麦克风按钮的提示变为 **Stop recording**（停止录音）时，再次点击它。
 5. 等待 **Transcribing your voice message…**（正在转写你的语音消息…），
    然后让 Lens 发送转写后的消息。
+
+首次转写会通过 Lens 下载 Whisper 模型；输入框下方会显示下载进度，随后显示转写状态。
+音频处理仍在浏览器本地完成；由于代理网络中的浏览器可能无法直接访问 Hugging Face CDN，模型文件由 Lens 代理下载。
 
 ## 连接外部 MCP 客户端
 

@@ -98,6 +98,30 @@ async def set_node_maintenance(cluster: registry.Cluster, names: list[str], *, d
     return list(await asyncio.gather(*(_apply(name) for name in names)))
 
 
+async def hf_token_secret_status(cluster: registry.Cluster) -> str:
+    """Return ``present``, ``missing``, ``not_configured`` or ``unreachable``.
+
+    The cluster record stores only the Secret coordinates. A recorded Secret
+    can be deleted on the cluster after registration; this probes the exact
+    recorded object without listing or returning secret values.
+    """
+    namespace = cluster.hf_token_secret_namespace
+    name = cluster.hf_token_secret_name
+    if not namespace or not name:
+        return "not_configured"
+    try:
+        result = await run_kubectl(
+            ["get", "secret", name, "--namespace", namespace, "--ignore-not-found", "-o", "name"],
+            cluster_id=cluster.id,
+            timeout=10,
+        )
+    except (FileNotFoundError, TimeoutError, OSError):
+        return "unreachable"
+    if result.returncode != 0:
+        return "unreachable"
+    return "present" if (result.stdout or "").strip() else "missing"
+
+
 async def list_model_secrets(cluster: registry.Cluster) -> list[dict[str, str]]:
     """List external Secret coordinates containing HF_TOKEN without exposing values.
 
@@ -263,8 +287,14 @@ async def monitoring_component(cluster: registry.Cluster) -> dict[str, Any]:
         if now < expire:
             return cached_val
 
+    from llm_d_lens.monitoring.cluster_stack.service import expected_dashboard_names  # noqa: PLC0415
+
     try:
-        snapshot = await discover_cluster_stack(_MONITORING_NAMESPACE, scoped_runner(cluster.id))
+        snapshot = await discover_cluster_stack(
+            _MONITORING_NAMESPACE,
+            scoped_runner(cluster.id),
+            expected_dashboards=await expected_dashboard_names(cluster.id),
+        )
     except (ClusterStackError, FileNotFoundError, TimeoutError):
         res = {"installed": False, "ready": 0, "desired": 0, "status": "unreachable"}
         _MONITORING_CACHE[cluster.id] = (res, now + 10)
@@ -272,11 +302,21 @@ async def monitoring_component(cluster: registry.Cluster) -> dict[str, Any]:
 
     components = snapshot.components or []
     ready = sum(1 for component in components if component.status in {"ready", "external"})
+    dashboard = next((component for component in components if component.name == "llm_d_dashboards"), None)
+    dashboard_degraded = dashboard is not None and dashboard.status not in {"ready", "external"}
+    core_degraded = any(
+        component.status not in {"ready", "external"}
+        for component in components
+        if component.name != "llm_d_dashboards"
+    )
     res = {
         "installed": snapshot.status not in {"absent", "unreachable", "unsupported"},
         "ready": ready,
         "desired": len(components),
         "status": snapshot.status,
+        "dashboardsReady": not dashboard_degraded,
+        "dashboardOnly": dashboard_degraded and not core_degraded,
+        "message": snapshot.message,
     }
     _MONITORING_CACHE[cluster.id] = (res, now + 20)
     return res

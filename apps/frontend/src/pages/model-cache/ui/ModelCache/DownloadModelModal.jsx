@@ -136,7 +136,7 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
             closeOnEscape={!creating}
             footer={
                 <>
-                    <Button variant="secondary" onClick={onCancel} disabled={creating}>Cancel</Button>
+                    <Button variant="secondary" onClick={onCancel} disabled={creating} className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">Cancel</Button>
                     {conflict ? (
                         <Button variant="danger" onClick={() => startDownload(true)} isLoading={creating} disabled={invalid}>
                             {creating ? 'Starting' : 'Download anyway'}
@@ -175,7 +175,7 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
                         </Select>
                         {clusterId && volumes.length === 0 && (
                             <p className="mt-1.5 text-[11px] text-amber-300">
-                                No ready storage volumes on this cluster. Register one on the Storage page first.
+                                No ready storage volume tagged for Model cache on this cluster. Register one with the Model cache purpose on the Storage page first.
                             </p>
                         )}
                     </div>
@@ -196,12 +196,12 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
                             ))}
                         </Select>
                         {modelSource === 'huggingface' && (
-                            <Button type="button" variant="secondary" onClick={() => setPickerOpen(true)} disabled={creating}>
+                            <Button type="button" variant="secondary" onClick={() => setPickerOpen(true)} disabled={creating} className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
                                 Browse Hugging Face Hub
                             </Button>
                         )}
                         {modelSource === 'model-market' && (
-                            <Button type="button" variant="secondary" onClick={() => setMarketPickerOpen(true)} disabled={creating}>
+                            <Button type="button" variant="secondary" onClick={() => setMarketPickerOpen(true)} disabled={creating} className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
                                 Browse Model Market
                             </Button>
                         )}
