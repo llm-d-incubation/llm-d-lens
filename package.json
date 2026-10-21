@@ -7,7 +7,6 @@
   "workspaces": [
     "docs/site",
     "apps/frontend",
-    "apps/server",
     "packages/shared"
   ],
   "scripts": {
@@ -18,11 +17,11 @@
     "reuse:map": "node tools/reuse/cli.mjs map",
     "reuse:test": "node --test tools/reuse/*.test.mjs",
     "reuse:test-model": "node --test tools/reuse/semantic.smoke.mjs",
-    "dev": "concurrently \"npm run dev --workspace @repo/server\" \"npm run dev --workspace @repo/frontend\" \"npm run backend\"",
-    "dev:web": "concurrently \"npm run dev --workspace @repo/server\" \"npm run dev --workspace @repo/frontend\"",
+    "dev": "concurrently \"npm run backend\" \"npm run dev --workspace @repo/frontend\"",
+    "dev:web": "npm run dev",
     "backend": "bash scripts/run-backend.sh",
     "build": "npm run build --workspace @repo/frontend",
-    "start": "npm run start --workspace @repo/server",
+    "start": "bash scripts/run-backend.sh",
     "type-check": "npm run type-check --workspaces --if-present",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -41,13 +40,9 @@
   "dependencies": {
     "@repo/shared": "*",
     "@huggingface/transformers": "^4.3.0",
-    "@modelcontextprotocol/sdk": "^1.31.0",
     "@tailwindcss/vite": "^4.1.17",
     "clsx": "^2.1.1",
-    "compression": "^1.8.2",
     "echarts": "^6.1.0",
-    "express": "^4.22.3",
-    "express-rate-limit": "^7.1.5",
     "js-yaml": "^4.3.2",
     "lucide-react": "^0.554.0",
     "opencc-js": "^1.4.2",
@@ -56,20 +51,15 @@
     "react-markdown": "^10.1.0",
     "recharts": "^3.4.1",
     "remark-gfm": "^4.0.1",
-    "shell-quote": "^1.12.0",
-    "ssh2": "^1.17.0",
     "tailwind-merge": "^3.4.0",
     "tsx": "^4.19.0",
-    "undici": "^6.28.1",
-    "zod": "^4.4.3"
+    "undici": "^6.28.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^20.11.24",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
-    "@types/shell-quote": "^1.7.5",
-    "@types/ssh2": "^1.15.5",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
     "concurrently": "^9.2.5",

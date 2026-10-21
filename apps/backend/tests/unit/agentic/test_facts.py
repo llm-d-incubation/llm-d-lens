@@ -234,10 +234,14 @@ def test_load_prediction_failure_is_not_silently_discarded(monkeypatch):
     monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", support)
     monkeypatch.setattr("llm_d_lens.agentic.facts.search", search)
     with pytest.raises(ValueError, match="AIC load-target prediction failed: Minimum recommended GPUs: 8"):
-        asyncio.run(_supplementary_evidence(
-            "model", PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(request_rate=10)),
-            4, {"accelerators": [{"id": "nvidia", "models": ["NVIDIA A100"]}]},
-        ))
+        asyncio.run(
+            _supplementary_evidence(
+                "model",
+                PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(request_rate=10)),
+                4,
+                {"accelerators": [{"id": "nvidia", "models": ["NVIDIA A100"]}]},
+            )
+        )
 
 
 def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkeypatch):

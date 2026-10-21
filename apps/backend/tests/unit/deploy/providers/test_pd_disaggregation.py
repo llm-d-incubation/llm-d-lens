@@ -259,7 +259,7 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
     for deployment in rendered:
         pod_spec = deployment["spec"]["template"]["spec"]
         container = pod_spec["containers"][0]
-        assert pod_spec.get("runtimeClassName") == ("nvidia" if accelerator == "nvidia" else None)
+        assert pod_spec.get("runtimeClassName") is None
         expected_volumes = [{"name": "model-cache", **mount["volume_source"]}]
         expected_mounts = [{"name": "model-cache", "mountPath": "/model-cache", "readOnly": read_only}]
         if not read_only:

@@ -97,6 +97,7 @@
   "deployment": {
     "overlay_root": "guides/{guide}/modelserver/{variant}/{model_server}",
     "arch": "xpu",
+    "legacy_cli": { "accelerator_pattern": "^Intel Data Center GPU", "accelerator_key": "xpu" },
     "device_class": "gpu.intel.com",
     "claim_request_name": "intel",
     "node_selector": { "intel.feature.node.kubernetes.io/gpu": "true" },

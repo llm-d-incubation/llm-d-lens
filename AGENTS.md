@@ -74,11 +74,12 @@ published translations under `docs/site/i18n/zh-CN/`.
 
 A FastAPI route intended for Lens Assistant or MCP must declare an explicit
 `operation_id`, `summary` and `description` on its decorator. After changing
-backend routes, run `node scripts/generate-mcp-tools.mjs`; it fails on any
-unexpected skipped operation. Add UI-only, internal, streaming, secret-bearing
-or otherwise unsuitable routes to `INTENTIONAL_SKIPS` in the generator with a
-clear reason. Do not hand-edit the generated
-`apps/server/src/mcp/tools.ts`; fix the route metadata or the exclusion list.
+backend routes, run `node scripts/generate-mcp-tools.mjs --check`; it validates
+the Python catalog and fails on any unexpected skipped operation. Add UI-only,
+internal, streaming, secret-bearing or otherwise unsuitable routes to
+`intentionalSkips` in `apps/backend/src/llm_d_lens/mcp/definitions.json`.
+The catalog implementation is `llm_d_lens.mcp.catalog`; special handlers are in
+`llm_d_lens.mcp.tools`. No generated Node server artifact is required.
 
 ## Keep the docs site in sync
 

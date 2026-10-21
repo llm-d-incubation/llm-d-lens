@@ -63,7 +63,7 @@ export default function RolesPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={ShieldCheck}
@@ -125,7 +125,7 @@ export default function RolesPage({ onToggleMobileNav }) {
                                                 <td className="px-4 py-3 font-medium text-slate-100">{role.name}</td>
                                                 <td className="px-4 py-3 text-slate-400">{role.description || '—'}</td>
                                                 <td className="px-4 py-3">
-                                                    <Badge tone={role.is_builtin ? 'info' : 'neutral'}>{role.is_builtin ? 'built-in' : 'custom'}</Badge>
+                                                    <Badge tone={role.is_builtin ? 'info' : 'neutral'} className={`role-type-tag ${role.is_builtin ? 'role-type-builtin' : 'role-type-custom'}`}>{role.is_builtin ? 'built-in' : 'custom'}</Badge>
                                                 </td>
                                                 <td className="px-4 py-3 text-slate-300">{role.permissions.length}</td>
                                                 <td className="px-4 py-3">
@@ -268,8 +268,8 @@ function RoleFormModal({ role, catalog, onCancel, onSaved }) {
                                         onChange={() => toggle(permission.code)}
                                         label={
                                             <span className="flex flex-col">
-                                                <span className="font-mono text-[11px] text-theme-text">{permission.code}</span>
-                                                <span className="text-[10px] text-theme-muted">{permission.description}</span>
+                                                <span className="font-mono text-[11px] font-semibold text-[#1f2937] dark:text-slate-100">{permission.code}</span>
+                                                <span className="text-[10px] text-[#6b7280] dark:text-slate-500">{permission.description}</span>
                                             </span>
                                         }
                                     />

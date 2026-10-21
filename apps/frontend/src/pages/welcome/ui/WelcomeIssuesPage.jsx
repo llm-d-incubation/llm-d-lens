@@ -151,8 +151,8 @@ export default function WelcomeIssuesPage({
     };
 
     return (
-        <div className="relative min-h-full bg-theme-bg">
-            <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+        <div className="welcome-page relative min-h-full bg-theme-bg">
+            <div className="pointer-events-none absolute inset-0 hidden overflow-hidden dark:block" aria-hidden="true">
                 <div className="absolute -top-40 left-1/4 h-96 w-[42rem] rounded-full bg-sky-400/10 blur-3xl dark:bg-sky-500/10" />
             </div>
             <PageHeader

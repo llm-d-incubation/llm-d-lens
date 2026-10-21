@@ -68,11 +68,12 @@ Invalid registrations still block restart. Run affected tests directly; startup
 does not certify test results or produce an audit report.
 
 For Docker-specific work, inspect actual service commands, mounts, ports and
-runtime versions before choosing a launch command. The current Compose app uses
-`node:20-alpine`, while `scripts/lens-local.sh` requires Node 22 or newer; these are not
-interchangeable validated environments. Check MCP generation requirements in
-`scripts/generate-mcp-tools.mjs` and startup code when changing Express startup.
-Do not assume a host-generated catalog or Python environment exists in a container.
+runtime versions before choosing a launch command. The root image uses Node only
+to build the frontend; its Python runtime serves the UI, API and MCP on one port.
+`scripts/lens-local.sh` requires Node 22 or newer for frontend development.
+The MCP catalog is generated in Python from route metadata and packaged definitions;
+`scripts/generate-mcp-tools.mjs --check` validates it without a Node server artifact.
+Do not assume a host Python environment or initialized database exists in a container.
 
 ## Storage paths in launchers and containers
 

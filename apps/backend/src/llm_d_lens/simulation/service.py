@@ -662,10 +662,15 @@ async def _resolve_task_endpoint_url(
 async def create_task(request: SimulationTaskCreateRequest, *, http_request: object | None = None) -> SimulationTask:
     global pending_creates
     request = request.model_copy(deep=True)
+    tokenizer_name: str | None = None
     if request.model_service_group_id:
         from llm_d_lens.model_service.resolution import resolve_model_service_target  # noqa: PLC0415
+        from llm_d_lens.model_service.service import default_service  # noqa: PLC0415
 
         execution_id, published_name = resolve_model_service_target(request.model_service_group_id, http_request)
+        group = default_service().groups.get(request.model_service_group_id)
+        if group is not None:
+            tokenizer_name = (group.served_name or group.model_ref or "").strip() or None
         request = request.model_copy(
             update={
                 "endpoint_mode": "deployment",
@@ -791,7 +796,7 @@ async def create_task(request: SimulationTaskCreateRequest, *, http_request: obj
                 dataset=SimulationDataset(
                     name=request.trace_dataset,
                     scenario=dataset["scenario"],
-                    tokenizer=None,
+                    tokenizer=tokenizer_name,
                 ),
                 trace=SimulationTrace(
                     path=request.trace_path,

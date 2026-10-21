@@ -6,15 +6,15 @@ description: Connect an MCP client (MCP Inspector, an IDE agent, or your own too
 Lens exposes its platform capabilities as a **Model Context Protocol (MCP)** server,
 so an MCP-capable client can inspect and operate Lens the same way the built-in
 [Lens Assistant](/user-guide/lens-assistant) does. The MCP layer is a **thin adapter**:
-every tool calls Lens' own REST API over loopback — no cluster, auth or domain logic is
+every tool calls Lens' own REST API through an in-process ASGI client; no cluster, auth or domain logic is
 re-implemented in the MCP server.
 
 ## Endpoint and transport
 
 | Property | Value |
 | --- | --- |
-| Method / path | `POST /api/mcp` (on the Lens BFF/Node server) |
-| Default port | `SERVER_PORT` / `PORT` (3000; `scripts/lens-local.sh` picks the next free port above it if 3000 is already in use) |
+| Method / path | `POST /api/mcp` (on the unified Python service) |
+| Default port | `BACKEND_PORT`, falling back to `SERVER_PORT` / `PORT` (3000; the local launcher selects a free port) |
 | Transport | MCP **Streamable HTTP**, JSON-RPC 2.0 |
 | Session | **Stateless** — one ephemeral MCP server per request, no `Mcp-Session-Id` |
 | Other methods | `GET` / `DELETE /api/mcp` return `405` (no server→client stream in stateless mode) |
@@ -36,8 +36,8 @@ Authorization: Bearer <session-token>
 ```
 
 `<session-token>` is the value of the `prism_session` cookie issued at login (read it from
-your browser's devtools while signed in). Requests are introspected against
-`GET /api/v1/auth/session`; unauthenticated calls get `401 unauthenticated`, and a session
+your browser's devtools while signed in). The Python authentication service validates
+the session; unauthenticated calls get `401 unauthenticated`, and a session
 without the permission above gets `403`.
 
 :::note
@@ -92,16 +92,16 @@ BASE=http://<lens-host>:3000/api/mcp
 H="Authorization: Bearer <session-token>"
 
 # 1) handshake
-curl -s $BASE -H "$H" -H 'content-type: application/json' -d '{
+curl -s "$BASE" -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{
   "jsonrpc":"2.0","id":1,"method":"initialize",
   "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 
 # 2) list tools
-curl -s $BASE -H "$H" -H 'content-type: application/json' -d '{
+curl -s "$BASE" -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{
   "jsonrpc":"2.0","id":2,"method":"tools/list"}'
 
 # 3) call a read tool
-curl -s $BASE -H "$H" -H 'content-type: application/json' -d '{
+curl -s "$BASE" -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' -d '{
   "jsonrpc":"2.0","id":3,"method":"tools/call",
   "params":{"name":"list_clusters","arguments":{}}}'
 ```

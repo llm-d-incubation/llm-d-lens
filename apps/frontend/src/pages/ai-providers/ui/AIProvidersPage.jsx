@@ -79,7 +79,7 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
     const hasActiveFilters = Boolean(searchInput || typeFilters.size);
 
     return (
-        <ModulePage>
+        <ModulePage className="external-providers-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={Plug}
@@ -88,7 +88,7 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                     onToggleMobileNav={onToggleMobileNav}
                     actions={
                         <>
-                            <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading}>
+                            <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading} className="providers-secondary-button">
                                 <RefreshCw size={14} /> Refresh
                             </Button>
                             <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
@@ -116,7 +116,7 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                         action={<Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}><Plus size={14} /> Add provider</Button>}
                     />}
                 >
-                    <section className="relative z-10 flex flex-col gap-3.5 rounded-3xl border border-slate-900/90 bg-[#070b13]/65 p-5 shadow-2xl backdrop-blur-md">
+                    <section className="external-providers-card relative z-10 flex flex-col gap-3.5 rounded-3xl border border-slate-900/90 bg-[#070b13]/65 p-5 shadow-2xl backdrop-blur-md">
                         <div className="relative z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800/60 bg-[#0a0f1d] p-3 shadow-md">
                             <div className="min-w-[240px] flex-1">
                                 <div className="relative">
@@ -182,7 +182,7 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                                                 <tr key={provider.id} className="border-t border-slate-800">
                                                     <td className="px-4 py-3 font-medium text-slate-100">{providerTitle(provider)}</td>
                                                     <td className="px-4 py-3">
-                                                        <span className="rounded-full border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300">
+                                                        <span className={`provider-type-tag ${provider.providerType === 'anthropic' ? 'provider-type-anthropic' : 'provider-type-openai'} rounded-full border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-300`}>
                                                             {provider.providerType === 'anthropic' ? 'Anthropic' : 'OpenAI'}
                                                         </span>
                                                     </td>
@@ -193,7 +193,7 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                                                     </td>
                                                     <td className="px-4 py-3">
                                                         <div className="flex items-center gap-2">
-                                                            <Button variant="secondary" size="xs" onClick={() => runTest(provider)} isLoading={isTesting}>
+                                                            <Button variant="secondary" size="xs" onClick={() => runTest(provider)} isLoading={isTesting} className="providers-secondary-button">
                                                                 Test
                                                             </Button>
                                                             {result && !isTesting && (

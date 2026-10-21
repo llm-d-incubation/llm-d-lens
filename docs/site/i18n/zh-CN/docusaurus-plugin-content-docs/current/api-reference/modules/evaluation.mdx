@@ -6,6 +6,20 @@ description: Lens Evaluate 背后的基准测试运行与评估工作流 API。
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+## Harness 代理兼容性
+
+Lens 保留用于外部下载的 HTTP(S) 代理，同时通过 `NO_PROXY` 传递集群地址和
+CIDR。Kubernetes Python client 35.0.0 可能丢弃该值，导致加速器检测通过代理
+访问 Kubernetes API，进而发生证书校验失败。
+
+运行时准备会将已知 SDK 修复应用于宿主机 CLI 环境和所选检出目录的 harness
+Pod 模板。新建 Pod 会在执行原有 harness 命令之前修复受影响的客户端，涵盖预热
+和矩阵运行。已修复的客户端保持不变，TLS 校验和下载代理仍然启用。如果模板不兼容，
+或无法写入受影响的容器软件包，启动会明确报错并停止，而不是在未修复的状态下继续。
+
+现有 Pod 不会被修改。未启用自动重载的后端进程需要加载更新代码后再开始新的评估；
+不要在该进程仍负责运行中的评估时重启它。
+
 ## 后端 API
 
 评估相关的路由位于 `llm_d_lens/evaluation/router.py` 中，前缀为 `/api/v1/evaluate`。请求模型定义在 `llm_d_lens.evaluation.models` 中；命名的 HTTP 响应模型定义在 `llm_d_lens.evaluation.api_models` 中。

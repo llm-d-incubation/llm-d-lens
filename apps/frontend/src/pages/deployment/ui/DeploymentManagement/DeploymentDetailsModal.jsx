@@ -197,14 +197,14 @@ export function DeploymentDetailsModal({ deployment, clusterNameById = {}, onClo
                         <div className="overflow-x-auto">
                             <table className="w-full text-left text-[11px]">
                                 <thead>
-                                    <tr className="border-b border-slate-800 text-slate-500">
+                                    <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
                                         <th className="py-1.5 pr-2">Target</th>
                                         <th className="py-1.5 px-2">Kind</th>
                                         <th className="py-1.5 px-2">Name</th>
                                         <th className="py-1.5 pl-2">Value</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-slate-800/50">
+                                <tbody className="divide-y divide-slate-200 dark:divide-slate-800/50">
                                     {customParams.map((param, index) => (
                                         <tr key={index} className="text-slate-300 font-mono">
                                             <td className="py-1 pr-2 text-slate-400">{param.target || '—'}</td>

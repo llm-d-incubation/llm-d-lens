@@ -55,6 +55,30 @@ def test_health_is_public():
         assert client.get("/api/health").status_code == 200
 
 
+def test_hidden_migrated_routes_participate_in_startup_validation(monkeypatch):
+    from llm_d_lens.auth import routes
+
+    prefixes = (
+        "/api/config",
+        "/api/mcp",
+        "/api/playground",
+        "/api/candidate-",
+        "/api/deploy-poc",
+        "/api/remote-deploy",
+        "/api/guide-planning",
+    )
+    expected = {(entry.method, entry.path) for entry in routes.ROUTE_PERMISSIONS if entry.path.startswith(prefixes)}
+    assert len(expected) == 26
+    assert expected <= routes.app_route_table(app)
+    assert routes.validate_route_registry(app) == []
+    monkeypatch.setattr(
+        routes,
+        "ROUTE_PERMISSIONS",
+        tuple(entry for entry in routes.ROUTE_PERMISSIONS if (entry.method, entry.path) != ("POST", "/api/mcp")),
+    )
+    assert routes.validate_route_registry(app) == ["route not registered: POST /api/mcp"]
+
+
 def test_session_cookie_max_age_uses_absolute_ttl_not_idle_window():
     """The session cookie must outlive the idle window.
 
@@ -86,6 +110,213 @@ def test_protected_route_requires_authentication():
         response = client.get("/api/v1/users")
         assert response.status_code == 401
         assert response.json()["code"] == "unauthenticated"
+
+
+def _migrated_routes():
+    from llm_d_lens.auth.routes import ROUTE_PERMISSIONS
+
+    prefixes = (
+        "/api/configurations/",
+        "/api/candidate-search",
+        "/api/candidate-support",
+        "/api/deploy-poc/",
+        "/api/remote-deploy/",
+        "/api/guide-planning/",
+    )
+    routes = [(entry.method, entry.path) for entry in ROUTE_PERMISSIONS if entry.path.startswith(prefixes)]
+    assert len(routes) >= 20
+    return [*routes, ("POST", "/api/playground/chat"), ("POST", "/api/mcp")]
+
+
+def test_migrated_business_routes_require_authentication():
+    with _client() as client:
+        for method, path in _migrated_routes():
+            response = client.request(method, path, json={})
+            assert response.status_code == 401, (method, path, response.text)
+            assert response.json()["code"] == "unauthenticated"
+
+
+@pytest.mark.parametrize("permission", ["mcp:tool:invoke", "playground:chat:use"])
+def test_mcp_entry_permission_does_not_grant_target_tool_permission(monkeypatch, permission):
+    import json
+
+    from httpx_sse import EventSource
+
+    from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
+    from llm_d_lens.auth.service import default_service
+
+    principal = Principal(
+        user_id="limited",
+        username="limited",
+        bindings=(RoleBinding(role="limited", scope_type=ScopeType.GLOBAL),),
+        role_permissions={"limited": frozenset({permission})},
+        role_self_scoped={"limited": frozenset()},
+        authz_version=0,
+    )
+    monkeypatch.setattr(type(default_service()), "validate", lambda _self, _token: principal)
+
+    def rpc(client, method, params):
+        response = client.post(
+            "/api/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+            headers={"accept": "application/json, text/event-stream", "authorization": "Bearer fixture"},
+        )
+        assert response.status_code == 200, response.text
+        return json.loads(next(EventSource(response).iter_sse()).data)
+
+    with _client() as client:
+        assert client.post("/api/mcp", json={}).status_code == 401
+        assert rpc(client, "tools/list", {})["result"]["tools"]
+        result = rpc(client, "tools/call", {"name": "list_deploy_poc_configs", "arguments": {}})
+        body = json.loads(result["result"]["content"][0]["text"])
+        assert "status 403" in body["error"]
+        assert body["detail"]["code"] == "forbidden"
+
+
+def test_migrated_business_mutations_require_csrf():
+    with _client() as client:
+        _bootstrap_and_login(client)
+        for method, path in _migrated_routes():
+            if method != "POST":
+                continue
+            response = client.post(path, json={})
+            assert response.status_code == 403, (path, response.text)
+            assert response.json()["code"] == "csrf_failed"
+
+
+def test_authenticated_playground_forwards_session_and_csrf_to_provider_and_tools(monkeypatch):
+    import json
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from llm_d_lens.ai_providers import router as provider_router
+    from llm_d_lens.playground import chat
+
+    monkeypatch.setattr(
+        "llm_d_lens.ai_providers.service._resolve_provider_addresses", AsyncMock(return_value=["8.8.8.8"])
+    )
+    monkeypatch.setattr(chat, "discover_max_model_len", AsyncMock(return_value=100000))
+    upstream = SimpleNamespace(
+        post=AsyncMock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call-1",
+                                            "type": "function",
+                                            "function": {"name": "list_deploy_poc_configs", "arguments": "{}"},
+                                        }
+                                    ],
+                                }
+                            }
+                        ]
+                    },
+                ),
+                httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "answer"}}]}),
+            ]
+        )
+    )
+
+    @asynccontextmanager
+    async def provider_client(_base_url, _timeout):
+        yield upstream
+
+    monkeypatch.setattr(provider_router, "public_provider_client", provider_client)
+    with _client() as client:
+        _bootstrap_and_login(client)
+        provider = client.post(
+            "/api/v1/ai-providers",
+            json={"name": "Chat test", "baseUrl": "https://provider.example.com", "model": "test-model"},
+            headers=_csrf_headers(client),
+        )
+        assert provider.status_code == 201, provider.text
+        body = {
+            "deployment": {"providerId": provider.json()["id"], "model": "test-model"},
+            "messages": [{"role": "user", "content": "List deployment configurations without making changes"}],
+            "readOnly": True,
+        }
+        for headers in ({}, {"x-prism-csrf": "mismatched-token"}):
+            rejected = client.post("/api/playground/chat", json=body, headers=headers)
+            assert rejected.status_code == 403
+            assert rejected.json()["code"] == "csrf_failed"
+        upstream.post.assert_not_awaited()
+
+        response = client.post("/api/playground/chat", json=body, headers=_csrf_headers(client))
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert "content-encoding" not in response.headers
+        events = [
+            (lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: ")))
+            for frame in response.text.strip().split("\n\n")
+            if (lines := frame.splitlines())
+        ]
+        assert not {"error", "permission_denied", "blocked"} & {event for event, _ in events}, events
+        result = next(data for event, data in events if event == "tool_result")
+        assert result["isError"] is False
+        assert json.loads(result["result"]["content"][0]["text"]) == client.get("/api/deploy-poc/config").json()
+        assert events[-2:] == [("message", {"content": "answer"}), ("done", {})]
+        assert upstream.post.await_count == 2
+        assert any(
+            message.get("tool_call_id") == "call-1" for message in upstream.post.call_args.kwargs["json"]["messages"]
+        )
+
+
+def test_authenticated_mcp_browser_session_initializes_and_calls_read_tool():
+    import json
+
+    from httpx_sse import EventSource
+
+    with _client() as client:
+        _bootstrap_and_login(client)
+
+        def rpc(method, params):
+            response = client.post(
+                "/api/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+                headers={**_csrf_headers(client), "accept": "application/json, text/event-stream"},
+            )
+            assert response.status_code == 200, response.text
+            return json.loads(next(EventSource(response).iter_sse()).data)["result"]
+
+        initialized = rpc(
+            "initialize",
+            {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "browser-test", "version": "1"},
+            },
+        )
+        assert initialized["serverInfo"]["name"] == "llm-d-prism"
+        listed = rpc("tools/list", {})
+        assert "list_deploy_poc_configs" in {tool["name"] for tool in listed["tools"]}
+        called = rpc("tools/call", {"name": "list_deploy_poc_configs", "arguments": {}})
+        assert not called.get("isError"), called
+        assert json.loads(called["content"][0]["text"]) == client.get("/api/deploy-poc/config").json()
+
+
+def test_migrated_business_routes_deny_unprivileged_users():
+    with _client() as client:
+        _bootstrap_and_login(client)
+        created = client.post(
+            "/api/v1/users", json={"username": "migration-user", "password": STRONG}, headers=_csrf_headers(client)
+        )
+        assert created.status_code == 201
+    with _client() as client:
+        login = client.post("/api/v1/auth/login", json={"username": "migration-user", "password": STRONG})
+        assert login.status_code == 200
+        for method, path in _migrated_routes():
+            response = client.request(method, path, json={}, headers=_csrf_headers(client))
+            assert response.status_code == 403, (method, path, response.text)
+            assert response.json()["code"] == "forbidden"
 
 
 def test_bootstrap_login_session_and_admin_access():
@@ -233,6 +464,8 @@ def test_cluster_and_storage_visibility_is_scope_filtered(monkeypatch):
         clusters_response = client.get("/api/cluster/clusters")
         assert clusters_response.status_code == 200, clusters_response.text
         bob_ids = {cluster["id"] for cluster in clusters_response.json()["items"]}
+        guide_response = client.get("/api/guide-planning/catalog", params={"clusterId": cluster_b.id})
+        assert guide_response.status_code == 403, guide_response.text
         assert bob_ids == {cluster_a.id}
 
         volumes_response = client.get("/api/v1/storage/volumes")

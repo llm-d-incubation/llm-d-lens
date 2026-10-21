@@ -26,7 +26,7 @@ _EXT_AUTH_METHODS = ("POST", "PUT", "PATCH", "DELETE", "GET")
 class RoutePermission:
     method: str
     path: str
-    permission: str | None
+    permission: str | tuple[str, ...] | None
 
 
 def _regex_for(path_template: str) -> re.Pattern[str]:
@@ -42,6 +42,11 @@ def _regex_for(path_template: str) -> re.Pattern[str]:
 
 
 ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
+    RoutePermission("GET", "/api/config", PUBLIC),
+    RoutePermission("POST", "/api/mcp", ("mcp:tool:invoke", "playground:chat:use")),
+    RoutePermission("POST", "/api/playground/chat", "playground:chat:use"),
+    RoutePermission("GET", "/api/mcp", ("mcp:tool:invoke", "playground:chat:use")),
+    RoutePermission("DELETE", "/api/mcp", ("mcp:tool:invoke", "playground:chat:use")),
     # --- public ---
     RoutePermission("GET", "/api/health", PUBLIC),
     RoutePermission("GET", "/healthz", PUBLIC),
@@ -194,6 +199,27 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/v1/configurations/render", "configuration:artifact:render"),
     RoutePermission("POST", "/api/v1/configurations/resolve", "configuration:artifact:render"),
     RoutePermission("POST", "/api/v1/configurations/save", "configuration:artifact:save"),
+    RoutePermission("POST", "/api/configurations/resolve", "configuration:artifact:render"),
+    RoutePermission("POST", "/api/configurations/render", "configuration:artifact:render"),
+    RoutePermission("POST", "/api/configurations/save", "configuration:artifact:save"),
+    RoutePermission("POST", "/api/candidate-search", "candidate:candidate:search"),
+    RoutePermission("POST", "/api/candidate-search/relaxed", "candidate:candidate:search"),
+    RoutePermission("POST", "/api/candidate-support", "candidate:candidate:search"),
+    RoutePermission("GET", "/api/deploy-poc/config", "deploy-poc:job:read"),
+    RoutePermission("GET", "/api/deploy-poc/status", "deploy-poc:job:read"),
+    RoutePermission("GET", "/api/deploy-poc/validate", "deploy-poc:job:read"),
+    RoutePermission("POST", "/api/deploy-poc/start", "deploy-poc:job:execute"),
+    RoutePermission("POST", "/api/deploy-poc/teardown", "deploy-poc:job:teardown"),
+    RoutePermission("GET", "/api/remote-deploy/defaults", "remote-deploy:target:read"),
+    RoutePermission("POST", "/api/remote-deploy/fingerprint", "remote-deploy:target:connect"),
+    RoutePermission("POST", "/api/remote-deploy/test", "remote-deploy:target:connect"),
+    RoutePermission("POST", "/api/remote-deploy/start", "remote-deploy:deploy:execute"),
+    RoutePermission("POST", "/api/remote-deploy/status", "remote-deploy:deploy:execute"),
+    RoutePermission("POST", "/api/remote-deploy/logs", "remote-deploy:deploy:execute"),
+    RoutePermission("POST", "/api/remote-deploy/teardown", "remote-deploy:deploy:teardown"),
+    RoutePermission("GET", "/api/guide-planning/catalog", "guide:plan:execute"),
+    RoutePermission("POST", "/api/guide-planning/prepare", "guide:plan:execute"),
+    RoutePermission("POST", "/api/guide-planning/plan", "guide:plan:execute"),
     # --- deployments ---
     RoutePermission("GET", "/api/v1/deployments", "deployment:run:read"),
     RoutePermission("GET", "/api/v1/deployments/cluster/{cluster_id}", "deployment:run:read"),
@@ -218,6 +244,7 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/v1/deployments/runs/{run_id}/cluster-session", "deployment:session:rebind"),
     RoutePermission("POST", "/api/v1/deployments/standard-vllm-runs", "deployment:run:create"),
     RoutePermission("GET", "/api/v1/deployments/node-labels", "deployment:run:create"),
+    RoutePermission("GET", "/api/v1/deployments/runtime-classes", "deployment:run:read"),
     RoutePermission("GET", "/api/v1/deployments/orphans", "deployment:run:read"),
     RoutePermission("POST", "/api/v1/deployments/orphans/clean", "deployment:execution:delete"),
     # --- deployment resource sharing ---
@@ -364,12 +391,12 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("GET", "/v1/models", PUBLIC),
 )
 
-_COMPILED: tuple[tuple[str, re.Pattern[str], str | None], ...] = tuple(
+_COMPILED: tuple[tuple[str, re.Pattern[str], str | tuple[str, ...] | None], ...] = tuple(
     (entry.method, _regex_for(entry.path), entry.permission) for entry in ROUTE_PERMISSIONS
 )
 
 
-def resolve_route_permission(method: str, path: str) -> tuple[bool, str | None]:
+def resolve_route_permission(method: str, path: str) -> tuple[bool, str | tuple[str, ...] | None]:
     """Return ``(found, permission)`` for a concrete request path."""
     upper = method.upper()
     for entry_method, pattern, permission in _COMPILED:
@@ -387,6 +414,32 @@ _NON_SCHEMA_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/simulation/redoc"),
     ("GET", "/api/simulation/openapi.json"),
     ("GET", "/docs/oauth2-redirect"),
+    ("GET", "/api/config"),
+    ("GET", "/api/mcp"),
+    ("POST", "/api/mcp"),
+    ("DELETE", "/api/mcp"),
+    ("POST", "/api/playground/chat"),
+    ("POST", "/api/configurations/resolve"),
+    ("POST", "/api/configurations/render"),
+    ("POST", "/api/configurations/save"),
+    ("POST", "/api/candidate-search"),
+    ("POST", "/api/candidate-search/relaxed"),
+    ("POST", "/api/candidate-support"),
+    ("GET", "/api/deploy-poc/config"),
+    ("GET", "/api/deploy-poc/status"),
+    ("GET", "/api/deploy-poc/validate"),
+    ("POST", "/api/deploy-poc/start"),
+    ("POST", "/api/deploy-poc/teardown"),
+    ("GET", "/api/remote-deploy/defaults"),
+    ("POST", "/api/remote-deploy/fingerprint"),
+    ("POST", "/api/remote-deploy/test"),
+    ("POST", "/api/remote-deploy/start"),
+    ("POST", "/api/remote-deploy/status"),
+    ("POST", "/api/remote-deploy/logs"),
+    ("POST", "/api/remote-deploy/teardown"),
+    ("GET", "/api/guide-planning/catalog"),
+    ("POST", "/api/guide-planning/prepare"),
+    ("POST", "/api/guide-planning/plan"),
 )
 
 
@@ -394,8 +447,8 @@ def app_route_table(app: object) -> set[tuple[str, str]]:
     """Concrete ``(method, path)`` pairs exposed by the app.
 
     OpenAPI supplies schema routes with correct prefixes (including nested
-    ``include_router`` calls); the explicit extras cover health aliases and
-    documentation routes that are excluded from the schema.
+    ``include_router`` calls); the explicit extras cover health aliases,
+    documentation and compatibility routes that are excluded from the schema.
     """
     spec = app.openapi()  # type: ignore[attr-defined]
     table: set[tuple[str, str]] = set()

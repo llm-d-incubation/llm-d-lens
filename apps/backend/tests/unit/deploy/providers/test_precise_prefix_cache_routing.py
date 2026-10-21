@@ -238,7 +238,7 @@ def test_patch_modelserver_applies_hardware_runtime_class(existing):
 
     adapter._patch_modelserver(documents, parameters)
 
-    assert pod["runtimeClassName"] == (existing or "nvidia")
+    assert pod.get("runtimeClassName") == existing
     assert pod["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == str(parameters["tensor_parallel_size"])
 
 

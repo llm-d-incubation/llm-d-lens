@@ -86,7 +86,7 @@ export default function GroupsPage({ onToggleMobileNav }) {
     };
 
     return (
-        <ModulePage>
+        <ModulePage className="administration-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={UserCog}
@@ -175,7 +175,7 @@ export default function GroupsPage({ onToggleMobileNav }) {
                                                     ) : (
                                                         <div className="flex flex-wrap gap-1">
                                                             {group.roles.map((role, index) => (
-                                                                <Badge key={`${role.name}-${index}`} tone="violet" title={roleScopeLabel(role)}>
+                                                                <Badge key={`${role.name}-${index}`} tone="violet" className="group-role-tag" title={roleScopeLabel(role)}>
                                                                     {role.name}
                                                                 </Badge>
                                                             ))}

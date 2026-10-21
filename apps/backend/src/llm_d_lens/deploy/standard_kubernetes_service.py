@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from llm_d_lens.deploy.contracts import DeployableConfiguration
+from llm_d_lens.deploy.contracts import DeployableConfiguration, RuntimeClassPolicy
 from llm_d_lens.deploy.runtime.composition import _model_environment
 from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
 
@@ -24,6 +24,7 @@ class StandardKubernetesServiceRequest(BaseModel):
     tensor_parallel_size: int = Field(ge=1, le=16)
     placement_replicas: Literal["prefer-same-node", "same-node", "balanced", "spread"] = "prefer-same-node"
     placement_node_label: dict[str, str] | None = None
+    runtime_class: RuntimeClassPolicy = Field(default_factory=RuntimeClassPolicy)
     storage_type: Literal["model-cache"] = "model-cache"
     storage_volume_id: str = Field(min_length=1, max_length=120)
     model_cache_path: str = Field(default_factory=lambda: str(Path.home() / ".cache"), min_length=1, max_length=1024)

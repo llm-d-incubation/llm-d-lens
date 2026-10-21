@@ -52,9 +52,7 @@ def test_global_model_length_fallback_and_custom_override():
     overrides = _base_overrides()
     overrides["model"]["maxModelLen"] = 4096
     assert "--max-model-len=4096" in _container(overrides)["args"]
-    overrides["customParameters"] = [
-        {"target": "decode", "kind": "argument", "name": "max-model-len", "value": "2048"}
-    ]
+    overrides["customParameters"] = [{"target": "decode", "kind": "argument", "name": "max-model-len", "value": "2048"}]
     args = _container(overrides)["args"]
     assert [arg for arg in args if arg.startswith("--max-model-len")] == ["--max-model-len=2048"]
 
@@ -95,7 +93,7 @@ def test_resources_name_the_modelserver_container_port():
 
 @pytest.mark.parametrize(
     "accelerator,access_mode,runtime_class",
-    [("nvidia", "plugin", "nvidia"), ("nvidia", "dra", None), ("intel-xpu", "dra", None)],
+    [("nvidia", "plugin", None), ("nvidia", "dra", None), ("intel-xpu", "dra", None)],
 )
 def test_resources_use_the_hardware_access_mode_runtime_class(accelerator, access_mode, runtime_class):
     overrides = {

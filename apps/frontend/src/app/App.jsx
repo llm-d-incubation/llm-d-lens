@@ -47,7 +47,11 @@ import {
   UsersPage,
 } from '../pages/administration';
 
-function AuthenticatedApp({ initialView = null }) {
+function initialAppTheme() {
+  return localStorage.getItem('app-theme') === 'light' ? 'light' : 'dark';
+}
+
+function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
   const { canView } = useAuth();
   const mainRef = useRef(null);
   const [currentView, setCurrentView] = useState(() => {
@@ -96,12 +100,6 @@ function AuthenticatedApp({ initialView = null }) {
     const saved = localStorage.getItem('prism_sidebar_expanded');
     return saved !== null ? saved === 'true' : true;
   });
-  useEffect(() => {
-    const root = window.document.documentElement;
-    root.classList.add('dark');
-    localStorage.setItem('app-theme', 'dark');
-  }, []);
-
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if ((params.get('view') || '') === currentView) return;
@@ -266,7 +264,7 @@ function AuthenticatedApp({ initialView = null }) {
           <img src="https://llm-d.ai/img/llm-d-logotype-and-icon.png" alt="llm-d" className="h-6 w-auto object-contain" />
           <span className="select-none bg-gradient-to-r from-sky-500 via-cyan-400 to-teal-400 bg-clip-text text-xl font-bold tracking-wide text-transparent">Lens</span>
         </a>
-        <LeftNavigation currentView={currentView} onNavigate={handleNavigate} isMobileOpen={isMobileNavOpen} isExpanded={isSidebarExpanded} onExpandedChange={setIsSidebarExpanded} />
+        <LeftNavigation currentView={currentView} onNavigate={handleNavigate} isMobileOpen={isMobileNavOpen} isExpanded={isSidebarExpanded} onExpandedChange={setIsSidebarExpanded} theme={theme} onToggleTheme={onToggleTheme} />
         <main ref={mainRef} className={`relative flex h-screen min-w-0 flex-1 flex-col overflow-y-auto transition-[margin] duration-300 ${isSidebarExpanded ? 'md:ml-[18rem]' : 'md:ml-24'}`}>
           {canView('welcome') && (
             <div className={currentView === 'welcome' ? '' : 'hidden'} aria-hidden={currentView !== 'welcome'}>
@@ -330,14 +328,14 @@ function AuthenticatedApp({ initialView = null }) {
   );
 }
 
-function AuthGate() {
+function AuthGate({ theme, onToggleTheme }) {
   const { status, principal } = useAuth();
   const [loginLandingView, setLoginLandingView] = useState(null);
   if (status === 'loading') {
     return <LoadingState fullPage label="Checking your session" />;
   }
   if (status === 'anonymous') {
-    return <LoginPage onSignedIn={(signedInPrincipal) => {
+    return <LoginPage theme={theme} onToggleTheme={onToggleTheme} onSignedIn={(signedInPrincipal) => {
       const view = firstAccessibleView((candidate) => canAccessView(signedInPrincipal.permissions || [], candidate));
       const params = new URLSearchParams();
       if (view) params.set('view', view);
@@ -348,14 +346,23 @@ function AuthGate() {
   if (principal?.mustChangePassword) {
     return <ChangePasswordPage />;
   }
-  return <AuthenticatedApp key={loginLandingView ?? 'session'} initialView={loginLandingView} />;
+  return <AuthenticatedApp key={loginLandingView ?? 'session'} initialView={loginLandingView} theme={theme} onToggleTheme={onToggleTheme} />;
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(initialAppTheme);
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    root.style.colorScheme = theme;
+    localStorage.setItem('app-theme', theme);
+  }, [theme]);
+
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <AuthGate />
+        <AuthGate theme={theme} onToggleTheme={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))} />
       </AuthProvider>
     </ErrorBoundary>
   );

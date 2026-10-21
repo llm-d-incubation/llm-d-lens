@@ -3,8 +3,8 @@ import { Layers, Activity, Server } from 'lucide-react';
 import { benchmarkSummary } from '../../model/benchmarkSettings';
 import { comparisonName } from '../../model/domain';
 
-const panelClass = 'rounded-2xl border border-slate-700/60 bg-gradient-to-br from-slate-900/80 to-slate-950/40 p-4 shadow-lg shadow-black/10 sm:p-5';
-const editClass = 'rounded-lg border border-slate-700 px-3 py-2 text-xs text-cyan-200 hover:border-cyan-500/50';
+const panelClass = 'rounded-2xl border border-slate-700/60 bg-white p-4 shadow-lg shadow-black/10 sm:p-5 dark:border-slate-700/60 dark:bg-gradient-to-br dark:from-slate-900/80 dark:to-slate-950/40';
+const editClass = 'rounded-lg border border-slate-700 px-3 py-2 text-xs text-[#4b5563] hover:border-[#9ca3af] hover:text-[#374151] dark:text-cyan-200 dark:hover:border-cyan-500/50';
 
 export default function EvaluationPlan({
     configurations, baselines, benchmark, slaTargets, cluster, existingEndpoint,
@@ -23,7 +23,7 @@ export default function EvaluationPlan({
     const hasStages = Boolean(matrix.length || prefix);
     const counts = benchmarkSummary(benchmark, targets.length);
 
-    return <div className="space-y-4">
+    return <div className="execution-plan space-y-4">
         <header className="flex flex-wrap items-start justify-between gap-3">
             <div>
                 <h2 className="text-lg font-bold">Execution plan</h2>
@@ -32,8 +32,8 @@ export default function EvaluationPlan({
             <button type="button" onClick={onEditSetup} className={editClass}>Edit setup</button>
         </header>
 
-        <section className="relative overflow-hidden rounded-2xl border border-cyan-400/25 bg-gradient-to-br from-cyan-500/15 via-sky-500/5 to-slate-950 p-5 sm:p-6">
-            <p className="text-lg font-semibold text-cyan-100">{targets.length} benchmark {targets.length === 1 ? 'task' : 'tasks'}{!existing && ' · sequential'}</p>
+        <section className="relative overflow-hidden rounded-2xl border border-cyan-400/25 bg-white p-5 sm:p-6 dark:border-cyan-400/25 dark:bg-gradient-to-br dark:from-cyan-500/15 dark:via-sky-500/5 dark:to-slate-950">
+            <p className="text-lg font-semibold text-[#037ffc] dark:text-cyan-100">{targets.length} benchmark {targets.length === 1 ? 'task' : 'tasks'}{!existing && ' · sequential'}</p>
             <p className="mt-2 text-xs leading-6 text-slate-300">
                 {hasStages ? `${targets.length} targets × ${matrix.length || 1} input/output points × ${stages.length} load stages = ${counts.measurements} measured combinations.` : 'Stage count and duration come from the workload.'}
                 {counts.requests != null && ` ${counts.requests} measured requests, excluding warm-up.`}
@@ -43,7 +43,7 @@ export default function EvaluationPlan({
         </section>
 
         <div className="grid gap-3 sm:grid-cols-3">
-            {[{ icon: Layers, label: 'Execution targets', value: targets.length, note: existing ? 'Existing endpoint' : 'Run sequentially' }, { icon: Activity, label: 'Measurements', value: counts.measurements ?? '—', note: 'Across selected load stages' }, { icon: Server, label: 'Target cluster', value: cluster || 'Unknown', note: existing ? 'No deployment required' : 'Deploy → benchmark → collect' }].map(({ icon: Icon, label, value, note }) => <div key={label} className="min-w-0 rounded-xl border border-slate-700/60 bg-slate-900/60 p-4"><div className="flex items-center gap-2 text-xs text-slate-400">{createElement(Icon, { className: 'h-4 w-4 text-cyan-300' })}{label}</div><p className="mt-3 break-words text-xl font-semibold text-slate-100">{value}</p><p className="mt-1 text-xs text-slate-500">{note}</p></div>)}
+            {[{ icon: Layers, label: 'Execution targets', value: targets.length, note: existing ? 'Existing endpoint' : 'Run sequentially' }, { icon: Activity, label: 'Measurements', value: counts.measurements ?? '—', note: 'Across selected load stages' }, { icon: Server, label: 'Target cluster', value: cluster || 'Unknown', note: existing ? 'No deployment required' : 'Deploy → benchmark → collect' }].map(({ icon: Icon, label, value, note }) => <div key={label} className="min-w-0 rounded-xl border border-slate-700/60 bg-white p-4 dark:bg-slate-900/60"><div className="flex items-center gap-2 text-xs text-slate-400">{createElement(Icon, { className: 'h-4 w-4 text-[#037ffc] dark:text-cyan-300' })}{label}</div><p className="mt-3 break-words text-xl font-semibold text-slate-100">{value}</p><p className="mt-1 text-xs text-slate-500">{note}</p></div>)}
         </div>
 
         <section className={panelClass}>
@@ -52,10 +52,10 @@ export default function EvaluationPlan({
                 {!existing && <button type="button" onClick={onEditConfigurations} className={editClass}>Edit configurations</button>}
             </div>
             <ol className="mt-4 space-y-3">
-                {targets.map((target, index) => <li key={target.id} className="flex gap-3 rounded-xl border border-slate-700/60 bg-slate-950/40 p-4">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-cyan-500/25 bg-cyan-500/10 text-xs font-semibold text-cyan-200">{index + 1}</span>
+                {targets.map((target, index) => <li key={target.id} className="flex gap-3 rounded-xl border border-slate-700/60 bg-white p-4 dark:bg-slate-950/40">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#037ffc33] bg-[#037ffc1a] text-xs font-semibold text-[#037ffc] dark:border-cyan-500/25 dark:bg-cyan-500/10 dark:text-cyan-200">{index + 1}</span>
                     <div className="min-w-0 flex-1 text-xs">
-                        <p className="font-semibold text-slate-200">{target.label ? `${target.label} · ` : ''}{target.guide}{target.reference && <span className="ml-2 font-normal text-violet-300">Reference</span>}</p>
+                        <p className="font-semibold text-slate-200">{target.label ? `${target.label} · ` : ''}{target.guide}{target.reference && <span className="ml-2 font-normal text-slate-500 dark:text-violet-300">Reference</span>}</p>
                         {target.endpoint ? <p className="mt-1 break-all text-slate-400">{target.endpoint}</p> : target.reference ? <p className="mt-1 text-slate-400">{target.sharedPods ? `Reuse ${target.label} pods through Kubernetes Service.` : 'Derived from this configuration. Uses the same workload and saved serving parameters.'}</p> : <>
                             <p className="mt-1 leading-5 text-slate-300">{target.topology} · {target.gpu || 'Unknown'} accelerators{target.candidate && ` · ${target.candidate}`}</p>
                             <p className="mt-1 break-all leading-5 text-slate-400">{target.model} · {target.image || 'Runtime image unknown'}</p>
@@ -77,8 +77,8 @@ export default function EvaluationPlan({
             {matrix.length > 0 && <p className="mt-4 text-xs leading-6 text-slate-300">Input → output tokens: {matrix.map(point => `${point.isl} → ${point.osl}`).join(' · ')}. Run every load stage for each token pair.</p>}
             {prefix && <p className="mt-4 text-xs leading-6 text-slate-300">Shared prefix: {prefix.num_groups} groups × {prefix.num_prompts_per_group} samples · {prefix.system_prompt_len} prefix + {prefix.question_len} unique input → {prefix.output_len} output tokens.</p>}
             {hasStages ? <ol className="mt-3 flex flex-wrap gap-2" aria-label="Load stages">
-                {stages.map((stage, index) => <li key={index} className="rounded-lg bg-slate-900 px-3 py-2 text-xs text-slate-300"><span className="mr-2 text-slate-500">{index + 1}.</span>{prefix ? `${stage.rate} req/s · ${stage.duration}s` : `${stage.concurrency} concurrent · ${stage.num_requests} requests`}</li>)}
-            </ol> : benchmark.workload_yaml ? <details className="mt-4 text-xs text-slate-300"><summary className="cursor-pointer text-cyan-300">View workload YAML</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3">{benchmark.workload_yaml}</pre></details> : <p className="mt-4 text-xs text-slate-300">Repository profile: {benchmark.workload}</p>}
+                {stages.map((stage, index) => <li key={index} className="rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600 dark:bg-slate-900 dark:text-slate-300"><span className="mr-2 text-slate-500">{index + 1}.</span>{prefix ? `${stage.rate} req/s · ${stage.duration}s` : `${stage.concurrency} concurrent · ${stage.num_requests} requests`}</li>)}
+            </ol> : benchmark.workload_yaml ? <details className="mt-4 text-xs text-slate-300"><summary className="cursor-pointer text-cyan-300">View workload YAML</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-100 p-3 dark:bg-slate-950">{benchmark.workload_yaml}</pre></details> : <p className="mt-4 text-xs text-slate-300">Repository profile: {benchmark.workload}</p>}
             <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t border-slate-800 pt-4 text-xs text-slate-300">
                 <p>Minimum success: {slaTargets.success_rate_min_percent ?? '—'}%</p>
                 {['ttft', 'tpot'].map(key => <p key={key}>{key.toUpperCase()}: {slaTargets[`${key}_ms`] ? `${String(slaTargets[`${key}_percentile`] || 'p99').toUpperCase()} ≤ ${slaTargets[`${key}_ms`]} ms` : 'Measure only'}</p>)}

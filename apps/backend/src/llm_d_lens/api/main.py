@@ -16,12 +16,15 @@ from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from llm_d_lens.agentic.router import router as agentic_deployment_router
 from llm_d_lens.ai_providers.router import router as ai_providers_router
 from llm_d_lens.aic import router as aic_router
 from llm_d_lens.api.problems import install_problem_handlers
 from llm_d_lens.api.speech_models import router as speech_models_router
+from llm_d_lens.api.web import WebEntryMiddleware
+from llm_d_lens.api.web import router as web_router
 from llm_d_lens.auth.bootstrap import ensure_initial_admin, format_initial_admin_banner
 from llm_d_lens.auth.context import AuthContextMiddleware, require_route_permission
 from llm_d_lens.auth.maintenance import run_maintenance
@@ -37,14 +40,19 @@ from llm_d_lens.cluster.errors import ClusterOverviewError
 from llm_d_lens.cluster.router import legacy_router
 from llm_d_lens.cluster.router import router as cluster_management_router
 from llm_d_lens.configuration import router as configuration_router
+from llm_d_lens.configuration.router import legacy_router as legacy_configuration_router
 from llm_d_lens.dashboard.collector import reset_collector
 from llm_d_lens.dashboard.router import router as dashboard_router
 from llm_d_lens.db.system_router import router as system_database_router
+from llm_d_lens.deploy.guide_planning import router as guide_planning_router
+from llm_d_lens.deploy.legacy_poc import router as legacy_poc_router
+from llm_d_lens.deploy.remote_deploy import router as remote_deploy_router
 from llm_d_lens.deploy.router import router as deploy_router
 from llm_d_lens.evaluation import router as evaluate_router
 from llm_d_lens.hardware.router import router as hardware_router
 from llm_d_lens.infrastructure.kubernetes import router as cluster_router
 from llm_d_lens.infrastructure.network import hostinfo as _hostinfo
+from llm_d_lens.mcp.router import router as mcp_router
 from llm_d_lens.model_cache.router import router as model_cache_router
 from llm_d_lens.model_service.router import admin_router as model_service_admin_router
 from llm_d_lens.model_service.router import internal_router as model_service_internal_router
@@ -55,7 +63,9 @@ from llm_d_lens.monitoring.cluster_stack import router as cluster_monitoring_sta
 from llm_d_lens.monitoring.deployment import router as deployment_monitoring_router
 from llm_d_lens.monitoring.gpu_driver import router as gpu_driver_router
 from llm_d_lens.monitoring.profiling import router as profiling_router
+from llm_d_lens.playground.chat import router as playground_router
 from llm_d_lens.simulation import router as simulation_router
+from llm_d_lens.simulation.candidate_search import router as candidate_search_router
 from llm_d_lens.storage.router import router as storage_router
 from llm_d_lens.versions.router import router as versions_router
 
@@ -70,6 +80,8 @@ app = FastAPI(
 )
 install_problem_handlers(app)
 app.add_middleware(AuthContextMiddleware)
+app.add_middleware(WebEntryMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 @app.middleware("http")
@@ -308,6 +320,7 @@ async def _auth_shutdown() -> None:
 
 
 app.include_router(simulation_router)
+app.include_router(candidate_search_router)
 app.include_router(agentic_deployment_router)
 app.include_router(capacity_router)
 app.include_router(auth_router)
@@ -318,7 +331,14 @@ app.include_router(cluster_management_router)
 app.include_router(cluster_bootstrap_router)
 app.include_router(legacy_router)
 app.include_router(configuration_router)
+app.include_router(legacy_configuration_router)
 app.include_router(deploy_router)
+app.include_router(legacy_poc_router)
+app.include_router(guide_planning_router)
+app.include_router(mcp_router)
+app.include_router(playground_router)
+app.include_router(web_router)
+app.include_router(remote_deploy_router)
 app.include_router(dashboard_router)
 app.include_router(speech_models_router)
 app.include_router(evaluate_router)

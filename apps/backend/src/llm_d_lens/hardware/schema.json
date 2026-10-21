@@ -151,6 +151,7 @@
       "properties": {
         "overlay_root": { "type": "string", "minLength": 1 },
         "arch": { "type": "string", "minLength": 1 },
+        "legacy_cli": { "$ref": "#/$defs/string_map" },
         "device_class": { "type": "string" },
         "claim_request_name": { "type": "string" },
         "node_selector": { "$ref": "#/$defs/string_map" },

@@ -171,6 +171,23 @@ def test_matrix_workload_yaml_is_exact_length_and_closed_loop():
     assert parsed["report"]["request_lifecycle"]["per_stage"] is True
 
 
+def test_matrix_workload_yaml_uses_served_model_for_tokenizer():
+    point = WorkloadMatrixPoint(isl=128, osl=32)
+    stages = [ConcurrencyStage(concurrency=1, num_requests=4)]
+
+    content = router._matrix_workload_yaml(
+        point,
+        stages,
+        "qwen3-0.6b",
+        "http://endpoint.local",
+        tokenizer_model="Qwen/Qwen3-0.6B",
+    )
+    parsed = yaml.safe_load(content)
+
+    assert parsed["server"]["model_name"] == "qwen3-0.6b"
+    assert parsed["tokenizer"]["pretrained_model_name_or_path"] == "Qwen/Qwen3-0.6B"
+
+
 def _write_stage_metrics(
     directory, stage_index, *, output_tokens_per_sec, ttft_mean_s, ttft_p99_s, total_output_tokens, duration_s
 ):

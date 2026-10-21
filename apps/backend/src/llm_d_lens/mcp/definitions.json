@@ -1,0 +1,1987 @@
+{
+  "specialTools": [
+    {
+      "name": "list_deploy_poc_configs",
+      "description": "List the built-in Lens Deploy PoC configuration presets. Use this to discover the supported local smoke or known-good deploy modes before starting a PoC deployment.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "start_deploy_poc",
+      "description": "Start a local Lens Deploy PoC deployment. Use config=smoke-pause for a tiny smoke deployment or the known-good preset for the legacy llm-d guide path.",
+      "riskTier": "approve",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "config": {
+            "description": "PoC configuration id to start. Omit to use the known-good preset.",
+            "type": "string",
+            "minLength": 1
+          },
+          "namespace": {
+            "description": "Kubernetes namespace to deploy into. Defaults to the preset's namespace.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "clusterSessionId": {
+            "description": "Optional active Lens cluster session id whose kubeconfig should be used.",
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36
+          }
+        }
+      }
+    },
+    {
+      "name": "teardown_deploy_poc",
+      "description": "Tear down a local Lens Deploy PoC deployment and optionally delete its namespace. Use this for cleanup of legacy PoC runs.",
+      "riskTier": "approve",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "config": {
+            "description": "PoC configuration id that was originally started. Omit to use the known-good preset.",
+            "type": "string",
+            "minLength": 1
+          },
+          "namespace": {
+            "description": "Kubernetes namespace to delete or destroy.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          },
+          "clusterSessionId": {
+            "description": "Optional active Lens cluster session id whose kubeconfig should be used.",
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36
+          }
+        }
+      }
+    },
+    {
+      "name": "resolve_configurations",
+      "description": "Resolve one or more candidate configurations into Lens candidate config objects and validations. This uses the local Lens proxy route that the frontend calls.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "candidate_source": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "enum": [
+                  "aic",
+                  "baseline_search",
+                  "pd_search",
+                  "epd_search",
+                  "tiered_cache_search",
+                  "historical",
+                  "manual"
+                ],
+                "description": "How the candidate configuration was sourced."
+              },
+              "run_id": {
+                "description": "Optional originating run id for a historical or search-derived candidate.",
+                "type": "string"
+              },
+              "result_id": {
+                "description": "Optional originating result id for a historical or search-derived candidate.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": {},
+            "description": "Provenance descriptor for the candidate configurations being resolved."
+          },
+          "configurations": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "configuration_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Identifier for the source configuration being resolved."
+                },
+                "result_id": {
+                  "description": "Optional originating benchmark result id tied to this configuration.",
+                  "type": "string"
+                },
+                "input_mode": {
+                  "description": "Whether the payload came from an existing result, form input, or raw YAML.",
+                  "type": "string",
+                  "enum": [
+                    "source_result",
+                    "form",
+                    "yaml"
+                  ]
+                },
+                "payload": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "description": "Configuration payload to resolve. Use an object for structured form data or a string for YAML text."
+                }
+              },
+              "required": [
+                "configuration_id",
+                "payload"
+              ],
+              "additionalProperties": {},
+              "description": "One input configuration to resolve into a Lens candidate config."
+            },
+            "description": "Source configuration payloads to resolve."
+          },
+          "target": {
+            "description": "Optional target cluster context for configuration resolution.",
+            "type": "object",
+            "properties": {
+              "cluster_id": {
+                "description": "Optional target cluster id used during resolution.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "candidate_source",
+          "configurations"
+        ]
+      }
+    },
+    {
+      "name": "render_configuration",
+      "description": "Render a resolved candidate configuration into a deployable Lens manifest. Use this after resolve_configurations or guide planning when you want an immutable deployment artifact.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "candidate_config": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "Resolved candidate configuration object to render."
+          },
+          "render": {
+            "type": "object",
+            "properties": {
+              "format": {
+                "description": "Render output format. Lens currently expects manifest.",
+                "type": "string",
+                "const": "manifest"
+              },
+              "guide_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Guide identifier used to produce the rendered deployment."
+              },
+              "template_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Template or provider reference used during rendering."
+              },
+              "guide_source": {
+                "type": "object",
+                "properties": {
+                  "repository": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Source repository for the guide."
+                  },
+                  "requestedRef": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Requested Git ref for the guide source."
+                  },
+                  "commit": {
+                    "type": "string",
+                    "minLength": 40,
+                    "maxLength": 40,
+                    "description": "Resolved guide source commit SHA."
+                  },
+                  "guide": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Guide name used for rendering."
+                  },
+                  "accelerator": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Accelerator family for the guide."
+                  },
+                  "modelServer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Model server selected for the guide."
+                  },
+                  "variant": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Guide variant name."
+                  },
+                  "files": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Manifest file paths included in the rendered guide source."
+                  }
+                },
+                "required": [
+                  "repository",
+                  "requestedRef",
+                  "commit",
+                  "guide",
+                  "accelerator",
+                  "modelServer",
+                  "variant",
+                  "files"
+                ],
+                "additionalProperties": {},
+                "description": "Guide source metadata tied to the rendered artifact."
+              },
+              "rendered_manifest": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Rendered Kubernetes manifest YAML."
+              },
+              "cluster_ref": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Target cluster id."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Target cluster display name."
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "minLength": 36,
+                    "maxLength": 36,
+                    "description": "Target cluster session id."
+                  },
+                  "connection": {
+                    "description": "Cluster connection type.",
+                    "type": "string",
+                    "const": "managed-kubeconfig"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "session_id"
+                ],
+                "additionalProperties": {},
+                "description": "Resolved cluster reference for the deployment target."
+              },
+              "deployment": {
+                "type": "object",
+                "properties": {
+                  "readinessDeployments": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Deployment names Lens should watch for readiness."
+                  },
+                  "endpoint": {
+                    "type": "object",
+                    "properties": {
+                      "protocol": {
+                        "type": "string",
+                        "enum": [
+                          "http",
+                          "https"
+                        ],
+                        "description": "Protocol used by the exposed deployment endpoint."
+                      },
+                      "serviceName": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Kubernetes Service name that exposes the deployment."
+                      },
+                      "port": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535,
+                        "description": "Service port for the deployment endpoint."
+                      }
+                    },
+                    "required": [
+                      "protocol",
+                      "serviceName",
+                      "port"
+                    ],
+                    "description": "Endpoint contract for the deployment."
+                  }
+                },
+                "required": [
+                  "readinessDeployments",
+                  "endpoint"
+                ],
+                "additionalProperties": {},
+                "description": "Deployment readiness and endpoint contract."
+              },
+              "modelSecret": {
+                "description": "Model secret binding to attach during rendering.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "description": "How runtime Hugging Face credentials should be sourced.",
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "host",
+                      "existing-secret"
+                    ]
+                  },
+                  "sourceNamespace": {
+                    "description": "Source namespace when mode is existing-secret.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "sourceName": {
+                    "description": "Source Secret name when mode is existing-secret.",
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": {}
+              },
+              "deploymentName": {
+                "description": "Optional deployment display name for the final artifact.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "guide_ref",
+              "template_ref",
+              "guide_source",
+              "rendered_manifest",
+              "cluster_ref",
+              "deployment"
+            ],
+            "additionalProperties": {},
+            "description": "Render contract describing source guide, cluster, and endpoint expectations."
+          }
+        },
+        "required": [
+          "candidate_config",
+          "render"
+        ]
+      }
+    },
+    {
+      "name": "save_configuration",
+      "description": "Publish a deployable configuration as a Lens configuration artifact. Use this when you want a stable artifact id that other deployment or evaluation flows can reference.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "deployable_configuration": {
+            "type": "object",
+            "properties": {
+              "schema_version": {
+                "description": "Optional deployable configuration schema version.",
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Deployment configuration type, such as baseline or pd."
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Deployment artifact format, usually helm."
+              },
+              "content": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {},
+                "description": "Deployment content object exactly as emitted by Lens Configuration."
+              },
+              "provider_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Deployment provider reference that should consume this configuration."
+              },
+              "checksum": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Checksum Lens uses to identify identical configurations."
+              },
+              "provenance": {
+                "description": "Optional provenance metadata attached to the configuration.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "type",
+              "format",
+              "content",
+              "provider_ref",
+              "checksum"
+            ],
+            "additionalProperties": {},
+            "description": "Deployable configuration to save as a published artifact."
+          },
+          "file": {
+            "description": "Optional saved-file settings.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Optional output filename to use for the saved configuration artifact.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "deployable_configuration"
+        ]
+      }
+    },
+    {
+      "name": "get_storage_volume_resource_status",
+      "description": "Get Kubernetes-side resource status for one or more storage volumes. Use this to inspect PVC, PV, or hostPath backing health for registered volumes.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "volumeIds": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "One or more storage volume ids to inspect."
+          }
+        },
+        "required": [
+          "volumeIds"
+        ]
+      }
+    },
+    {
+      "name": "get_remote_deploy_defaults",
+      "description": "Get the server-side default repository, branch, proxy, and model-mount settings Lens will use for remote SSH deployments.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "get_remote_deploy_fingerprint",
+      "description": "Fetch the SSH host fingerprint for a remote deployment target without authenticating. Use this before test or start calls so the fingerprint can be pinned explicitly.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SSH hostname or IP address to probe."
+              },
+              "port": {
+                "description": "SSH port to probe. Defaults to 22.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "username": {
+                "description": "Optional probe username. Defaults to probe on the backend.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": {},
+            "description": "Remote SSH target to fingerprint."
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "test_remote_deploy_target",
+      "description": "Test SSH connectivity and basic remote prerequisites for a remote deployment target. Use this before attempting a real remote deployment.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SSH hostname or IP address of the remote control-plane machine."
+              },
+              "port": {
+                "description": "SSH port. Defaults to 22.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "username": {
+                "description": "SSH username Lens should connect as.",
+                "type": "string",
+                "minLength": 1
+              },
+              "authMethod": {
+                "description": "SSH authentication method Lens should use.",
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "key",
+                  "password"
+                ]
+              },
+              "keyPath": {
+                "description": "Server-side private key path when authMethod is key.",
+                "type": "string",
+                "minLength": 1
+              },
+              "hostFingerprint": {
+                "description": "Expected SSH host fingerprint in SHA256:... form.",
+                "type": "string",
+                "minLength": 1
+              },
+              "cards": {
+                "description": "Remote accelerator card ids Lens may use for deployment.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": {},
+            "description": "Remote SSH target to test."
+          },
+          "credentials": {
+            "description": "Optional runtime credentials for the remote target.",
+            "type": "object",
+            "properties": {
+              "password": {
+                "description": "SSH password when the target uses password authentication.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    },
+    {
+      "name": "start_remote_deploy",
+      "description": "Start a remote SSH-driven deployment using the remote deploy backend. Use this when Lens should run llm-d-bench on a remote control-plane machine instead of the local cluster session.",
+      "riskTier": "approve",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SSH hostname or IP address of the remote control-plane machine."
+              },
+              "port": {
+                "description": "SSH port. Defaults to 22.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "username": {
+                "description": "SSH username Lens should connect as.",
+                "type": "string",
+                "minLength": 1
+              },
+              "authMethod": {
+                "description": "SSH authentication method Lens should use.",
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "key",
+                  "password"
+                ]
+              },
+              "keyPath": {
+                "description": "Server-side private key path when authMethod is key.",
+                "type": "string",
+                "minLength": 1
+              },
+              "hostFingerprint": {
+                "description": "Expected SSH host fingerprint in SHA256:... form.",
+                "type": "string",
+                "minLength": 1
+              },
+              "cards": {
+                "description": "Remote accelerator card ids Lens may use for deployment.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": {},
+            "description": "Remote SSH target to deploy onto."
+          },
+          "credentials": {
+            "description": "Optional runtime credentials for the remote target.",
+            "type": "object",
+            "properties": {
+              "password": {
+                "description": "SSH password when the target uses password authentication.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "plan": {
+            "type": "object",
+            "properties": {
+              "guide": {
+                "description": "Optional explicit guide name to deploy on the remote cluster.",
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "description": "Optional candidate source label used to infer a guide when guide is omitted.",
+                "type": "string",
+                "minLength": 1
+              },
+              "candidateId": {
+                "description": "Optional source candidate id to preserve in the remote deployment record.",
+                "type": "string"
+              },
+              "candidateName": {
+                "description": "Optional source candidate display name to preserve in the remote deployment record.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Release postfix or service name for the deployment.",
+                "type": "string",
+                "minLength": 1
+              },
+              "namespace": {
+                "description": "Kubernetes namespace to deploy into on the remote cluster.",
+                "type": "string",
+                "minLength": 1
+              },
+              "model": {
+                "description": "Model name or hf:// reference to deploy.",
+                "type": "string",
+                "minLength": 1
+              },
+              "accelerator": {
+                "description": "Accelerator descriptor. The current backend expects Intel Data Center GPU/XPU.",
+                "type": "string",
+                "minLength": 1
+              },
+              "machineType": {
+                "description": "Optional machine type label for UI context.",
+                "type": "string"
+              },
+              "nodes": {
+                "description": "Number of remote nodes. The current backend only supports 1.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "replicas": {
+                "description": "Decode replica count for aggregate topologies.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "prefillTp": {
+                "description": "Prefill tensor parallel size for disaggregated topologies.",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "prefillReplicas": {
+                "description": "Prefill replica count for disaggregated topologies.",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "decodeTp": {
+                "description": "Decode tensor parallel size.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "decodeReplicas": {
+                "description": "Decode replica count.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "httpProxy": {
+                "description": "Optional HTTP proxy override for the remote deployment command.",
+                "type": "string"
+              },
+              "httpsProxy": {
+                "description": "Optional HTTPS proxy override for the remote deployment command.",
+                "type": "string"
+              },
+              "noProxy": {
+                "description": "Optional NO_PROXY override for the remote deployment command.",
+                "type": "string"
+              },
+              "deploymentTarget": {
+                "description": "Repository and cache settings for the remote deployment target.",
+                "type": "object",
+                "properties": {
+                  "repository": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Local path or GitHub repository URL for the llm-d source checkout."
+                  },
+                  "branch": {
+                    "description": "Git branch, tag, or ref to check out remotely.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "mountPath": {
+                    "description": "Optional host path to mount as a model cache on the remote host.",
+                    "type": "string"
+                  },
+                  "mountModelName": {
+                    "description": "Mounted model directory name to pair with mountPath.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "repository"
+                ],
+                "additionalProperties": {}
+              }
+            },
+            "additionalProperties": {},
+            "description": "Remote deployment plan describing model, topology, repository, and namespace choices."
+          }
+        },
+        "required": [
+          "target",
+          "plan"
+        ]
+      }
+    },
+    {
+      "name": "get_remote_deploy_status",
+      "description": "Get the live pod and endpoint status for a remote SSH deployment namespace.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SSH hostname or IP address of the remote control-plane machine."
+              },
+              "port": {
+                "description": "SSH port. Defaults to 22.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "username": {
+                "description": "SSH username Lens should connect as.",
+                "type": "string",
+                "minLength": 1
+              },
+              "authMethod": {
+                "description": "SSH authentication method Lens should use.",
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "key",
+                  "password"
+                ]
+              },
+              "keyPath": {
+                "description": "Server-side private key path when authMethod is key.",
+                "type": "string",
+                "minLength": 1
+              },
+              "hostFingerprint": {
+                "description": "Expected SSH host fingerprint in SHA256:... form.",
+                "type": "string",
+                "minLength": 1
+              },
+              "cards": {
+                "description": "Remote accelerator card ids Lens may use for deployment.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": {},
+            "description": "Remote SSH target whose cluster status should be queried."
+          },
+          "credentials": {
+            "description": "Optional runtime credentials for the remote target.",
+            "type": "object",
+            "properties": {
+              "password": {
+                "description": "SSH password when the target uses password authentication.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "namespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "description": "Remote Kubernetes namespace to inspect."
+          }
+        },
+        "required": [
+          "target",
+          "namespace"
+        ]
+      }
+    },
+    {
+      "name": "get_remote_deploy_logs",
+      "description": "Get logs from a remote SSH deployment namespace, optionally scoped to one pod.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SSH hostname or IP address of the remote control-plane machine."
+              },
+              "port": {
+                "description": "SSH port. Defaults to 22.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "username": {
+                "description": "SSH username Lens should connect as.",
+                "type": "string",
+                "minLength": 1
+              },
+              "authMethod": {
+                "description": "SSH authentication method Lens should use.",
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "key",
+                  "password"
+                ]
+              },
+              "keyPath": {
+                "description": "Server-side private key path when authMethod is key.",
+                "type": "string",
+                "minLength": 1
+              },
+              "hostFingerprint": {
+                "description": "Expected SSH host fingerprint in SHA256:... form.",
+                "type": "string",
+                "minLength": 1
+              },
+              "cards": {
+                "description": "Remote accelerator card ids Lens may use for deployment.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": {},
+            "description": "Remote SSH target whose deployment logs should be queried."
+          },
+          "credentials": {
+            "description": "Optional runtime credentials for the remote target.",
+            "type": "object",
+            "properties": {
+              "password": {
+                "description": "SSH password when the target uses password authentication.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "namespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "description": "Remote Kubernetes namespace to inspect."
+          },
+          "pod": {
+            "description": "Optional pod name to restrict logs to one pod.",
+            "type": "string",
+            "minLength": 1
+          },
+          "tail": {
+            "description": "Maximum number of log lines to return.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "target",
+          "namespace"
+        ]
+      }
+    },
+    {
+      "name": "teardown_remote_deploy",
+      "description": "Tear down a remote SSH deployment namespace and its llm-d resources.",
+      "riskTier": "approve",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1,
+                "description": "SSH hostname or IP address of the remote control-plane machine."
+              },
+              "port": {
+                "description": "SSH port. Defaults to 22.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "username": {
+                "description": "SSH username Lens should connect as.",
+                "type": "string",
+                "minLength": 1
+              },
+              "authMethod": {
+                "description": "SSH authentication method Lens should use.",
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "key",
+                  "password"
+                ]
+              },
+              "keyPath": {
+                "description": "Server-side private key path when authMethod is key.",
+                "type": "string",
+                "minLength": 1
+              },
+              "hostFingerprint": {
+                "description": "Expected SSH host fingerprint in SHA256:... form.",
+                "type": "string",
+                "minLength": 1
+              },
+              "cards": {
+                "description": "Remote accelerator card ids Lens may use for deployment.",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "host"
+            ],
+            "additionalProperties": {},
+            "description": "Remote SSH target whose deployment should be torn down."
+          },
+          "credentials": {
+            "description": "Optional runtime credentials for the remote target.",
+            "type": "object",
+            "properties": {
+              "password": {
+                "description": "SSH password when the target uses password authentication.",
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "namespace": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "description": "Remote Kubernetes namespace to destroy."
+          }
+        },
+        "required": [
+          "target",
+          "namespace"
+        ]
+      }
+    },
+    {
+      "name": "prepare_guide_plan",
+      "description": "Prefetch and validate the manifest set for a selected guide, accelerator, model server, and optional variant. Use this as a lightweight readiness check before full planning.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "guide": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Guide name to prefetch."
+          },
+          "accelerator": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Accelerator family for the selected guide."
+          },
+          "modelServer": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model server for the selected guide."
+          },
+          "guideVariant": {
+            "description": "Optional guide variant name to prefetch.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "guide",
+          "accelerator",
+          "modelServer"
+        ]
+      }
+    },
+    {
+      "name": "plan_guide_deployment",
+      "description": "Render, adapt, and validate a guide-backed deployment plan for a specific model and environment. Use this to generate deployment-ready manifests plus planning metadata.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "guide": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Guide name to render and plan."
+          },
+          "accelerator": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Accelerator family for the selected guide."
+          },
+          "modelServer": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model server for the selected guide."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Model name or repo id the guide should serve."
+          },
+          "clusterSessionId": {
+            "description": "Optional active cluster session id to validate against.",
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "guideVariant": {
+            "description": "Optional guide variant to select within the catalog.",
+            "type": "string"
+          },
+          "environment": {
+            "description": "Execution environment Lens should inspect while planning.",
+            "type": "object",
+            "properties": {
+              "mode": {
+                "description": "Whether to inspect the current machine or a remote target.",
+                "type": "string",
+                "enum": [
+                  "current",
+                  "remote"
+                ]
+              },
+              "kubernetesMode": {
+                "description": "How strongly the planner should require a reachable Kubernetes cluster.",
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "required",
+                  "disabled"
+                ]
+              },
+              "target": {
+                "description": "Remote target to inspect when environment.mode is remote.",
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "SSH hostname or IP address of the remote control-plane machine."
+                  },
+                  "port": {
+                    "description": "SSH port. Defaults to 22.",
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "username": {
+                    "description": "SSH username Lens should connect as.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "authMethod": {
+                    "description": "SSH authentication method Lens should use.",
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "key",
+                      "password"
+                    ]
+                  },
+                  "keyPath": {
+                    "description": "Server-side private key path when authMethod is key.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "hostFingerprint": {
+                    "description": "Expected SSH host fingerprint in SHA256:... form.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "cards": {
+                    "description": "Remote accelerator card ids Lens may use for deployment.",
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": [
+                  "host"
+                ],
+                "additionalProperties": {}
+              },
+              "credentials": {
+                "description": "Optional credentials to use when environment.mode is remote.",
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "description": "SSH password when the target uses password authentication.",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": {}
+              }
+            },
+            "additionalProperties": {}
+          },
+          "source": {
+            "description": "Optional custom guide source instead of the official catalog.",
+            "type": "object",
+            "properties": {
+              "mode": {
+                "description": "Where the guide manifests should be loaded from.",
+                "type": "string",
+                "enum": [
+                  "official",
+                  "local",
+                  "remote"
+                ]
+              },
+              "ref": {
+                "description": "Optional local or remote source ref.",
+                "type": "string"
+              },
+              "repository": {
+                "description": "Optional local path or repository URL for a custom guide source.",
+                "type": "string"
+              },
+              "url": {
+                "description": "Optional remote manifest URL when using a remote guide source.",
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "customPatches": {
+            "description": "Optional custom patch objects to apply to the rendered manifests before validation.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": [
+          "guide",
+          "accelerator",
+          "modelServer",
+          "model"
+        ]
+      }
+    },
+    {
+      "name": "check_candidate_support",
+      "description": "Check whether AIConfigurator supports a workload on the requested hardware profile. This calls Lens's local candidate-support wrapper rather than the raw backend endpoint.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "workload": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Model name to check."
+              },
+              "isl": {
+                "description": "Mean input sequence length in tokens.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "osl": {
+                "description": "Mean output sequence length in tokens.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "concurrency": {
+                "description": "Target concurrent requests; mutually exclusive with request_rate.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "request_rate": {
+                "description": "Target requests per second (QPS); mutually exclusive with concurrency.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "ttftMs": {
+                "description": "Optional TTFT target in milliseconds.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "tpotMs": {
+                "description": "Optional TPOT target in milliseconds.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "model"
+            ],
+            "additionalProperties": {},
+            "description": "Workload description used to check AIConfigurator support."
+          },
+          "searchConfig": {
+            "type": "object",
+            "properties": {
+              "totalGpus": {
+                "description": "Total accelerator count to search against.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "aicSystemName": {
+                "description": "AIConfigurator system name, such as b60.",
+                "type": "string",
+                "minLength": 1
+              },
+              "aicBackendName": {
+                "description": "AIConfigurator backend name, such as vllm.",
+                "type": "string",
+                "minLength": 1
+              },
+              "aicDatabaseMode": {
+                "description": "AIConfigurator database mode, such as SILICON.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": {},
+            "description": "Hardware and search settings for the AIConfigurator support check."
+          }
+        },
+        "required": [
+          "workload",
+          "searchConfig"
+        ]
+      }
+    },
+    {
+      "name": "search_candidates",
+      "description": "Generate candidate serving configurations from one or more search sources, including AIC predictions, manual estimates, and local grid heuristics. This calls Lens's local candidate-search wrapper.",
+      "riskTier": "write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "workload": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Model name to check."
+              },
+              "isl": {
+                "description": "Mean input sequence length in tokens.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "osl": {
+                "description": "Mean output sequence length in tokens.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "concurrency": {
+                "description": "Target concurrent requests; mutually exclusive with request_rate.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "request_rate": {
+                "description": "Target requests per second (QPS); mutually exclusive with concurrency.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "ttftMs": {
+                "description": "Optional TTFT target in milliseconds.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "tpotMs": {
+                "description": "Optional TPOT target in milliseconds.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "model"
+            ],
+            "additionalProperties": {},
+            "description": "Workload description used to check AIConfigurator support."
+          },
+          "searchConfig": {
+            "type": "object",
+            "properties": {
+              "totalGpus": {
+                "description": "Total accelerator count to search against.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "maxCandidatesPerMode": {
+                "description": "Maximum number of candidates to keep per source or topology mode.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "aicSystemName": {
+                "description": "AIConfigurator system name, such as b60.",
+                "type": "string",
+                "minLength": 1
+              },
+              "aicBackendName": {
+                "description": "AIConfigurator backend name, such as vllm.",
+                "type": "string",
+                "minLength": 1
+              },
+              "aicDatabaseMode": {
+                "description": "AIConfigurator database mode, such as SILICON.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": {},
+            "description": "Hardware and search settings for candidate generation."
+          },
+          "sourceIds": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "aic",
+                "manual",
+                "baseline",
+                "pd",
+                "epd",
+                "tiered-cache",
+                "precise-prefix-cache"
+              ]
+            },
+            "description": "Candidate source ids Lens should include in the search."
+          },
+          "manualConfig": {
+            "description": "Optional manual candidate or YAML experiment input.",
+            "type": "object",
+            "properties": {
+              "inputMode": {
+                "description": "Whether the manual candidate comes from structured form fields or an AIConfigurator YAML file.",
+                "type": "string",
+                "enum": [
+                  "form",
+                  "yaml"
+                ]
+              },
+              "yamlText": {
+                "description": "AIConfigurator experiment YAML text when inputMode is yaml.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional display name for a manual estimate.",
+                "type": "string"
+              },
+              "servingMode": {
+                "description": "Manual serving mode for AIConfigurator estimate requests.",
+                "type": "string",
+                "enum": [
+                  "agg",
+                  "disagg"
+                ]
+              },
+              "tp": {
+                "description": "Aggregate tensor parallel size.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "pp": {
+                "description": "Aggregate pipeline parallel size.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "replicas": {
+                "description": "Aggregate replica count.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "batchSize": {
+                "description": "Aggregate batch size.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "prefillTp": {
+                "description": "Prefill tensor parallel size for disaggregated estimates.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "prefillReplicas": {
+                "description": "Prefill replica count for disaggregated estimates.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "prefillBatchSize": {
+                "description": "Prefill batch size for disaggregated estimates.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "decodeTp": {
+                "description": "Decode tensor parallel size for disaggregated estimates.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "decodeReplicas": {
+                "description": "Decode replica count for disaggregated estimates.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "decodeBatchSize": {
+                "description": "Decode batch size for disaggregated estimates.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "workload",
+          "searchConfig",
+          "sourceIds"
+        ]
+      }
+    },
+    {
+      "name": "estimate_vllm_capacity",
+      "description": "Estimate vLLM GPU memory breakdown (weights, activation, CUDA graph, KV cache), verify tensor parallel compatibility, and calculate maximum concurrent requests for a model on target accelerator hardware.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "HuggingFace model ID or local model cache path (e.g. meta-llama/Llama-3-8B)."
+          },
+          "gpu_memory_gib": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Per-device GPU VRAM in GiB (e.g. 80 for H100/A100, 32 for B60)."
+          },
+          "tensor_parallel_size": {
+            "description": "Tensor parallelism degree (default 1).",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "max_model_len": {
+            "description": "Maximum sequence context length in tokens (default 4096).",
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 9007199254740991
+          },
+          "gpu_memory_utilization": {
+            "description": "GPU memory utilization factor between 0.0 and 1.0 (default 0.9).",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "pipeline_parallel_size": {
+            "description": "Pipeline parallelism degree (default 1).",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "replicas": {
+            "description": "Number of model replicas (default 1).",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "model_weight_gib": {
+            "description": "Optional known model weight in GiB if not inferable from config.",
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "model",
+          "gpu_memory_gib"
+        ]
+      }
+    },
+    {
+      "name": "search_aic_with_relaxation",
+      "description": "Search AIC at original latency targets, then relax to 1.25x, 1.5x, 1.75x and 2x (at most five attempts) until a complete anchor using exactly the selected GPU capacity is found. Returns attempts and the closest anchor; estimates are not SLO proof.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "clusterId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "workload": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Model name to check."
+              },
+              "isl": {
+                "description": "Mean input sequence length in tokens.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "osl": {
+                "description": "Mean output sequence length in tokens.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "concurrency": {
+                "description": "Target concurrent requests; mutually exclusive with request_rate.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "request_rate": {
+                "description": "Target requests per second (QPS); mutually exclusive with concurrency.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "ttftMs": {
+                "description": "Optional TTFT target in milliseconds.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "tpotMs": {
+                "description": "Optional TPOT target in milliseconds.",
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "model"
+            ],
+            "additionalProperties": {},
+            "description": "Workload description used to check AIConfigurator support."
+          },
+          "searchConfig": {
+            "type": "object",
+            "properties": {
+              "totalGpus": {
+                "description": "Total accelerator count to search against.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "maxCandidatesPerMode": {
+                "description": "Maximum number of candidates to keep per source or topology mode.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "aicSystemName": {
+                "description": "AIConfigurator system name, such as b60.",
+                "type": "string",
+                "minLength": 1
+              },
+              "aicBackendName": {
+                "description": "AIConfigurator backend name, such as vllm.",
+                "type": "string",
+                "minLength": 1
+              },
+              "aicDatabaseMode": {
+                "description": "AIConfigurator database mode, such as SILICON.",
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": {},
+            "description": "Hardware and search settings for candidate generation."
+          }
+        },
+        "required": [
+          "clusterId",
+          "workload",
+          "searchConfig"
+        ]
+      }
+    },
+    {
+      "name": "get_deploy_status",
+      "description": "Get the live job + Kubernetes status of a Lens Deploy PoC deployment by namespace (merges the local deploy job phase with real pod status from the OptimalBench service).",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "description": "Kubernetes namespace of the deployment. Defaults to the known-good PoC namespace.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        }
+      }
+    },
+    {
+      "name": "get_deploy_validation",
+      "description": "Check whether a Lens Deploy PoC deployment is fully ready (all pods Ready, gateway endpoint present) and return its OpenAI-compatible gateway endpoint if so.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "namespace": {
+            "description": "Kubernetes namespace of the deployment. Defaults to the known-good PoC namespace.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63
+          }
+        }
+      }
+    },
+    {
+      "name": "list_ready_deployments",
+      "description": "List real Lens deployments (created via Model Market / Deploy) that are Ready and expose an OpenAI-compatible gateway endpoint. Optionally scope to one cluster. Use this to discover which Deployment can be selected as the model service for a Playground conversation.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "clusterId": {
+            "description": "Restrict results to deployments on this cluster id (as returned by /api/cluster/clusters).",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      }
+    },
+    {
+      "name": "get_guide_catalog",
+      "description": "List the deployable guide catalog (provider / accelerator / model server / variant combinations Lens knows how to deploy). Requires a cluster id (or an active cluster session id) whose llm-d Software Versions have already been downloaded -- the catalog is built from that cluster's downloaded repo, it is not global.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "clusterId": {
+            "description": "Cluster id (as returned by /api/cluster/clusters) whose downloaded Software Versions define the catalog.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "clusterSessionId": {
+            "description": "Optional active Lens cluster session id to use instead of clusterId.",
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36
+          }
+        }
+      }
+    },
+    {
+      "name": "wait_for_status",
+      "description": "Repeatedly poll another READ-tier status-check tool (e.g. get_cluster_bootstrap_status, get_remote_deploy_status, get_deployment_execution, get_accelerator_monitoring_operation, get_cluster_stack_operation, get_deploy_status, get_deploy_validation, get_model_cache_entry, get_evaluate_run, get_simulation_task, get_evaluation_workflow) SERVER-SIDE until it reaches a terminal state (ready/succeeded/failed/error/...) or a timeout elapses, instead of you calling that tool yourself over and over across many separate turns. Always prefer this over manually re-invoking a status tool in a loop while waiting for a deploy, install, bootstrap, evaluation, or similar long-running operation to finish. If it times out before reaching a terminal state, call wait_for_status again with the same arguments to keep waiting from where it left off. If the polled resource looks \"pending\"/\"queued\"/\"unschedulable\" (e.g. a Kubernetes pod phase of \"Pending\"), this tool returns immediately (pending: true) instead of consuming the whole timeout -- this usually means the cluster does not yet have free resources to schedule the workload, so tell the user it looks resource-constrained and the request is queued right away rather than waiting for it to finish; only call wait_for_status again if they want you to keep monitoring.",
+      "riskTier": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "toolName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name of an existing READ-tier Lens tool that reports a status (e.g. \"get_cluster_bootstrap_status\")."
+          },
+          "toolArguments": {
+            "description": "Arguments to call that tool with, same shape as calling it directly. Omit if it takes none.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "timeoutSeconds": {
+            "description": "How long to keep polling before giving up and returning the latest status. Default 60, max 600.",
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "intervalSeconds": {
+            "description": "Seconds to wait between polls. Default 5, max 30.",
+            "type": "number",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "toolName"
+        ]
+      }
+    }
+  ],
+  "intentionalSkips": [
+    "DELETE /api/cluster/port-forwards/{forward_id}",
+    "DELETE /api/cluster/sessions/{session_id}/port-forwards",
+    "DELETE /api/v1/clusters/{cluster_id}/access/{binding_id}",
+    "DELETE /api/v1/groups/{group_id}",
+    "DELETE /api/v1/groups/{group_id}/role-bindings/{binding_id}",
+    "DELETE /api/v1/identity-providers/{provider_id}",
+    "DELETE /api/v1/roles/{role_id}",
+    "DELETE /api/v1/sessions/{session_id}",
+    "DELETE /api/v1/system/secret-key/old",
+    "DELETE /api/v1/users/{user_id}",
+    "DELETE /api/v1/users/{user_id}/role-bindings/{binding_id}",
+    "GET /api/cluster/endpoints",
+    "GET /api/cluster-overview/sessions/{session_id}",
+    "GET /api/cluster/sessions/{session_id}",
+    "GET /api/health",
+    "GET /api/v1/audit-logs",
+    "GET /api/v1/auth/permissions",
+    "GET /api/v1/auth/providers",
+    "GET /api/v1/auth/session",
+    "GET /api/v1/auth/sessions",
+    "GET /api/v1/clusters/{cluster_id}/access",
+    "GET /api/v1/groups",
+    "GET /api/v1/groups/{group_id}",
+    "GET /api/v1/groups/{group_id}/members",
+    "GET /api/v1/groups/{group_id}/role-bindings",
+    "GET /api/v1/identity-providers",
+    "GET /api/v1/identity-providers/{provider_id}",
+    "GET /api/v1/internal/model-gateway/models",
+    "GET /api/v1/roles",
+    "GET /api/v1/roles/{role_id}",
+    "GET /api/v1/sessions",
+    "GET /api/v1/storage/volume-resource-status",
+    "GET /api/v1/system/database",
+    "GET /api/v1/system/secret-key",
+    "GET /api/v1/users",
+    "GET /api/v1/users/{user_id}",
+    "GET /api/v1/users/{user_id}/groups",
+    "GET /api/v1/users/{user_id}/role-bindings",
+    "GET /api/v1/welcome/issues",
+    "GET /api/v1/welcome/overview",
+    "GET /v1/models",
+    "PATCH /api/v1/groups/{group_id}",
+    "PATCH /api/v1/identity-providers/{provider_id}",
+    "PATCH /api/v1/roles/{role_id}",
+    "PATCH /api/v1/users/{user_id}",
+    "POST /api/agentic-deployments/{run_id}/refine/stream",
+    "POST /api/agentic-deployments/stream",
+    "POST /api/cluster-overview/sessions/{session_id}/disconnect",
+    "POST /api/cluster/port-forward",
+    "POST /api/v1/auth/bootstrap",
+    "POST /api/v1/auth/login",
+    "POST /api/v1/auth/logout",
+    "POST /api/v1/auth/password",
+    "POST /api/v1/capacity/estimate",
+    "POST /api/v1/clusters/{cluster_id}/access",
+    "POST /api/v1/configurations/render",
+    "POST /api/v1/configurations/resolve",
+    "POST /api/v1/configurations/save",
+    "POST /api/v1/groups",
+    "POST /api/v1/groups/{group_id}/role-bindings",
+    "POST /api/v1/identity-providers",
+    "POST /api/v1/identity-providers/{provider_id}/sync",
+    "POST /api/v1/identity-providers/{provider_id}/test",
+    "POST /api/v1/internal/model-gateway/authorize",
+    "POST /api/v1/internal/model-gateway/record-usage",
+    "POST /api/v1/model-service/admin/gateway/logs",
+    "POST /api/v1/model-service/admin/gateway/reconcile/stream",
+    "POST /api/v1/model-service/admin/gateway/stream",
+    "POST /api/v1/model-service/tokens",
+    "POST /api/v1/model-service/tokens/regenerate",
+    "POST /api/v1/roles",
+    "POST /api/v1/system/database",
+    "POST /api/v1/system/secret-key/rotate",
+    "POST /api/v1/users",
+    "POST /api/v1/users/{user_id}/password",
+    "POST /api/v1/users/{user_id}/role-bindings",
+    "PUT /api/v1/groups/{group_id}/members",
+    "PUT /api/v1/roles/{role_id}/permissions",
+    "PUT /api/v1/users/{user_id}/groups"
+  ],
+  "methodRiskTiers": {
+    "get": "read",
+    "head": "read",
+    "post": "write",
+    "put": "write",
+    "patch": "write",
+    "delete": "approve"
+  },
+  "riskTierOverrides": {
+    "approve_agentic_plan": "approve",
+    "probe_model_gateway": "read",
+    "preflight_model_gateway": "read"
+  }
+}

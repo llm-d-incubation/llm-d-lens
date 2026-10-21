@@ -18,9 +18,9 @@ from llm_d_lens.model_cache.contracts import (
 from llm_d_lens.model_cache.service import (
     ModelCacheEntryExistsError,
     ModelCacheInvalidStateError,
-    ModelCacheVolumePurposeError,
     ModelCacheNotFoundError,
     ModelCacheService,
+    ModelCacheVolumePurposeError,
     ModelCatalogNotSupportedError,
 )
 from llm_d_lens.model_cache.store import ModelCacheStore

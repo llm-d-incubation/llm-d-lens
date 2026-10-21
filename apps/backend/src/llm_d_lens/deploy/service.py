@@ -441,6 +441,7 @@ class GuideAdapterDeploymentService:
             overrides["_deployment_namespace"] = namespace
             overrides["_cluster_id"] = request.provenance.get("cluster_server_id")
             overrides["_placement"] = request.deployment_policy.value.get("placement")
+            overrides["_runtime_class_policy"] = request.deployment_policy.value.get("runtime_class", {"mode": "auto"})
             await require_cached_model(
                 overrides, cluster_id=overrides["_cluster_id"], provider_id=artifact_input.provider_ref
             )
@@ -789,15 +790,12 @@ class GuideAdapterDeploymentService:
             # briefly unreachable) says nothing about the workload itself --
             # leave the previously observed status (e.g. READY) untouched
             # instead of downgrading a healthy deployment.
-            if (
-                status == DeploymentStatus.FAILED
-                and (
-                    (
-                        "pending" in str(diagnostics.get("pods") or "").lower()
-                        and _resource_wait_reason([str(diagnostics.get("events") or "")])
-                    )
-                    or _pods_are_starting(diagnostics)
+            if status == DeploymentStatus.FAILED and (
+                (
+                    "pending" in str(diagnostics.get("pods") or "").lower()
+                    and _resource_wait_reason([str(diagnostics.get("events") or "")])
                 )
+                or _pods_are_starting(diagnostics)
             ):
                 status = DeploymentStatus.DEPLOYING
         elif execution.status not in {DeploymentStatus.CLEANED, DeploymentStatus.CLEANED_UP}:

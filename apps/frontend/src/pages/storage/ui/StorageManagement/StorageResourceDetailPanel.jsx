@@ -36,67 +36,67 @@ function PhaseDot({ phase }) {
 
 function ResourceFields({ resource }) {
     if (!resource) {
-        return <p className="text-xs text-slate-600">Not found</p>;
+        return <p className="text-xs text-[#9ca3af] dark:text-slate-600">Not found</p>;
     }
     const createdAt = formatTimestamp(resource.createdAt, { invalid: (value) => value });
     return (
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
             <div className="col-span-2">
-                <dt className="text-slate-600">Name</dt>
-                <dd className="mt-0.5 truncate font-mono text-slate-200" title={resource.name}>{resource.name}</dd>
+                <dt className="text-[#9ca3af] dark:text-slate-600">Name</dt>
+                <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-200" title={resource.name}>{resource.name}</dd>
             </div>
             {resource.namespace && (
                 <div className="col-span-2">
-                    <dt className="text-slate-600">Namespace</dt>
-                    <dd className="mt-0.5 truncate font-mono text-slate-300">{resource.namespace}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Namespace</dt>
+                    <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-300">{resource.namespace}</dd>
                 </div>
             )}
             <div>
-                <dt className="text-slate-600">Capacity</dt>
-                <dd className="mt-0.5 text-slate-300">{resource.capacity || '—'}</dd>
+                <dt className="text-[#9ca3af] dark:text-slate-600">Capacity</dt>
+                <dd className="mt-0.5 text-[#1f2937] dark:text-slate-300">{resource.capacity || '—'}</dd>
             </div>
             <div>
-                <dt className="text-slate-600">Access modes</dt>
-                <dd className="mt-0.5 text-slate-300">{(resource.accessModes || []).join(', ') || '—'}</dd>
+                <dt className="text-[#9ca3af] dark:text-slate-600">Access modes</dt>
+                <dd className="mt-0.5 text-[#1f2937] dark:text-slate-300">{(resource.accessModes || []).join(', ') || '—'}</dd>
             </div>
             <div>
-                <dt className="text-slate-600">Volume mode</dt>
-                <dd className="mt-0.5 text-slate-300">{resource.volumeMode || '—'}</dd>
+                <dt className="text-[#9ca3af] dark:text-slate-600">Volume mode</dt>
+                <dd className="mt-0.5 text-[#1f2937] dark:text-slate-300">{resource.volumeMode || '—'}</dd>
             </div>
             <div>
-                <dt className="text-slate-600">Storage class</dt>
-                <dd className="mt-0.5 truncate text-slate-300">{resource.storageClassName || '—'}</dd>
+                <dt className="text-[#9ca3af] dark:text-slate-600">Storage class</dt>
+                <dd className="mt-0.5 truncate text-[#1f2937] dark:text-slate-300">{resource.storageClassName || '—'}</dd>
             </div>
             {resource.reclaimPolicy && (
                 <div>
-                    <dt className="text-slate-600">Reclaim policy</dt>
-                    <dd className="mt-0.5 text-slate-300">{resource.reclaimPolicy}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Reclaim policy</dt>
+                    <dd className="mt-0.5 text-[#1f2937] dark:text-slate-300">{resource.reclaimPolicy}</dd>
                 </div>
             )}
             {resource.source && (
                 <div className="col-span-2">
-                    <dt className="text-slate-600">Source</dt>
-                    <dd className="mt-0.5 truncate font-mono text-slate-300" title={resource.source.detail}>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Source</dt>
+                    <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-300" title={resource.source.detail}>
                         {resource.source.type}: {resource.source.detail || '—'}
                     </dd>
                 </div>
             )}
             {resource.volumeName && (
                 <div className="col-span-2">
-                    <dt className="text-slate-600">Bound volume</dt>
-                    <dd className="mt-0.5 truncate font-mono text-slate-300" title={resource.volumeName}>{resource.volumeName}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Bound volume</dt>
+                    <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-300" title={resource.volumeName}>{resource.volumeName}</dd>
                 </div>
             )}
             {createdAt && (
                 <div className="col-span-2">
-                    <dt className="text-slate-600">Created</dt>
-                    <dd className="mt-0.5 text-slate-300">{createdAt}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Created</dt>
+                    <dd className="mt-0.5 text-[#1f2937] dark:text-slate-300">{createdAt}</dd>
                 </div>
             )}
             {resource.uid && (
                 <div className="col-span-2">
-                    <dt className="text-slate-600">UID</dt>
-                    <dd className="mt-0.5 truncate font-mono text-slate-500" title={resource.uid}>{resource.uid}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">UID</dt>
+                    <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-500" title={resource.uid}>{resource.uid}</dd>
                 </div>
             )}
         </dl>
@@ -121,7 +121,7 @@ function PurposeBadges({ purposes }) {
             {purposes.map((purpose) => (
                 <span
                     key={purpose}
-                    className="inline-flex items-center rounded-full border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-200"
+                    className="storage-purpose-tag inline-flex items-center rounded-full border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5 text-[10px] text-sky-200"
                 >
                     {purposeLabel(purpose)}
                 </span>
@@ -144,7 +144,7 @@ function VolumeSummary({ item, pvc, pv, clusterNameById, mutatingId, onAcknowled
         <div className="rounded-xl border border-slate-800/60 bg-slate-950/40 p-4">
             <div className="flex flex-wrap items-center gap-2">
                 <StatusDot status={effectiveStatus} title={statusTitle} />
-                <h2 className="truncate text-lg font-semibold text-slate-100" title={volumeTitle(item)}>
+                <h2 className="truncate text-lg font-semibold text-slate-900 dark:text-slate-100" title={volumeTitle(item)}>
                     {volumeTitle(item)}
                 </h2>
                 <span className="text-[11px] text-slate-500">{statusTitle ? statusLabel(effectiveStatus) : statusLabel(item.status)}</span>
@@ -170,22 +170,22 @@ function VolumeSummary({ item, pvc, pv, clusterNameById, mutatingId, onAcknowled
             )}
             <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
                 <div>
-                    <dt className="text-slate-600">ID</dt>
-                    <dd className="mt-0.5 truncate font-mono text-slate-300">#{shortId(item.id)}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">ID</dt>
+                    <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-300">#{shortId(item.id)}</dd>
                 </div>
                 <div>
-                    <dt className="text-slate-600">Type</dt>
-                    <dd className="mt-0.5 text-slate-300">{kindLabel(item.kind)}</dd>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Type</dt>
+                    <dd className="mt-0.5 text-[#1f2937] dark:text-slate-300">{kindLabel(item.kind)}</dd>
                 </div>
                 <div>
-                    <dt className="text-slate-600">Cluster</dt>
-                    <dd className="mt-0.5 truncate text-slate-300" title={item.clusterId || ''}>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Cluster</dt>
+                    <dd className="mt-0.5 truncate text-[#1f2937] dark:text-slate-300" title={item.clusterId || ''}>
                         {clusterNameById[item.clusterId] || item.clusterId || '—'}
                     </dd>
                 </div>
                 <div>
-                    <dt className="text-slate-600">Capacity</dt>
-                    <dd className="mt-0.5 flex items-center gap-1 text-slate-300">
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Capacity</dt>
+                    <dd className="mt-0.5 flex items-center gap-1 text-[#1f2937] dark:text-slate-300">
                         {capacityLabel(item)}
                         {isCapacityDeclaredOnly(item) && (
                             <span className="inline-flex shrink-0 items-center" title="Declared capacity, not enforced by the backend">
@@ -195,8 +195,8 @@ function VolumeSummary({ item, pvc, pv, clusterNameById, mutatingId, onAcknowled
                     </dd>
                 </div>
                 <div className="col-span-2 sm:col-span-4">
-                    <dt className="text-slate-600">Location</dt>
-                    <dd className="mt-0.5 truncate font-mono text-slate-300" title={volumeLocation(item)}>
+                    <dt className="text-[#9ca3af] dark:text-slate-600">Location</dt>
+                    <dd className="mt-0.5 truncate font-mono text-[#1f2937] dark:text-slate-300" title={volumeLocation(item)}>
                         {volumeLocation(item)}
                     </dd>
                 </div>
@@ -211,7 +211,7 @@ function ResourcePanel({ title, resource }) {
         <div className="flex h-full flex-col rounded-xl border border-slate-800/60 bg-slate-950/40 p-4">
             <div className="flex items-center gap-2">
                 <PhaseDot phase={phase} />
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">{title}</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[#037ffc] dark:text-slate-300">{title}</h3>
                 {resource?.phase && (
                     <span className="ml-auto text-[11px] text-slate-500">{resource.phase}</span>
                 )}

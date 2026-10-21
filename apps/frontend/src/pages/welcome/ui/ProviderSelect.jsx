@@ -105,7 +105,7 @@ export function ProviderSelect({
                 <div
                     ref={menuRef}
                     onKeyDown={onMenuKeyDown}
-                    className="absolute bottom-full left-0 z-[120] mb-2 max-h-64 w-72 overflow-y-auto rounded-xl border border-sky-500/20 bg-white/95 p-1.5 shadow-2xl shadow-sky-500/10 backdrop-blur-xl dark:bg-slate-900/95"
+                    className="absolute bottom-full left-0 z-[120] mb-2 max-h-64 w-72 overflow-y-auto rounded-xl border border-[#cbd5e1] bg-white/95 dark:border-sky-500/20 p-1.5 backdrop-blur-xl dark:bg-slate-900/95 dark:shadow-2xl dark:shadow-sky-500/10"
                 >
                     <div role="listbox" aria-label="AI provider">
                         {providers.length === 0 ? (

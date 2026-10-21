@@ -301,7 +301,7 @@ function ChatMessage({ message, onResolveConfirm }) {
             <div
                 className={
                     'max-w-2xl rounded-xl px-3.5 py-2 text-sm ' +
-                    (isUser ? 'whitespace-pre-wrap bg-sky-500/10 text-slate-100' : 'markdown-body bg-slate-800/70 text-slate-100')
+                    (isUser ? 'whitespace-pre-wrap bg-sky-500/10 text-slate-100' : 'assistant-message-bubble markdown-body bg-slate-800/70 text-slate-100')
                 }
             >
                 {isUser ? (
@@ -980,7 +980,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
                     >
                         {messages.length === 0 ? (
                             <div className="flex flex-col items-center gap-2 text-center">
-                                <div className="relative mb-2 flex h-24 w-24 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
+                                <div className="assistant-bot-badge relative mb-2 flex h-24 w-24 items-center justify-center rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-400">
                                     <AnimatedBotIcon className="h-12 w-12" />
                                     {BUBBLE_SUGGESTED_QUESTIONS.map((question, index) => (
                                         <button

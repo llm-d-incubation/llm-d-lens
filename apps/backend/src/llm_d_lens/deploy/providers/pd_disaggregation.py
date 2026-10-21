@@ -77,7 +77,8 @@ class PdDisaggregationAdapter:
                 "variants": sorted(self._sources),
                 "default_variant": (
                     default_guide_variant(self._sources, guide="pd-disaggregation", accelerator=self._accelerator)
-                    if any(name in self._sources for name in (".", "base")) else ""
+                    if any(name in self._sources for name in (".", "base"))
+                    else ""
                 ),
                 "structured_custom_parameters": True,
             },
@@ -525,9 +526,10 @@ class PdDisaggregationAdapter:
         # The variant id is accelerator-specific (XPU: vllm/vllm-rdma; NVIDIA GPU:
         # the vLLM infra-provider overlay such as base); the adapter validates it
         # against the overlays available for the active accelerator.
-        variant = str(overrides.get("guideVariant") or default_guide_variant(
-            self._sources, guide="pd-disaggregation", accelerator=self._accelerator
-        ))
+        variant = str(
+            overrides.get("guideVariant")
+            or default_guide_variant(self._sources, guide="pd-disaggregation", accelerator=self._accelerator)
+        )
         result: dict[str, Any] = {
             "variant": variant,
             "model": model["name"],

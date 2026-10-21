@@ -103,7 +103,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run check:stack
 
-  # Validate the actual frontend and Node API instead of the old Go placeholder.
+  # Keep the job identifier stable for existing branch-protection rules.
   frontend-and-server:
     runs-on: ubuntu-latest
     permissions:
@@ -131,11 +131,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Generate MCP catalog
+      - name: Validate Python MCP catalog and migrated API contracts
         run: |
           python -m venv .venv
-          .venv/bin/pip install -e "apps/backend[embedded-db]"
-          node scripts/generate-mcp-tools.mjs
+          .venv/bin/pip install -e "apps/backend[dev,embedded-db]"
+          node scripts/generate-mcp-tools.mjs --check
+          .venv/bin/python -m pytest apps/backend/tests/contract apps/backend/tests/unit/auth -q
 
       - name: Type check
         run: npm run type-check
@@ -229,10 +230,6 @@ jobs:
     needs: check-code-changes
     if: needs.check-code-changes.outputs.has_python_changes == 'true'
     env:
-      LENS_DATA_DIR: ${{ runner.temp }}/lens-tests/data
-      LENS_CACHE_DIR: ${{ runner.temp }}/lens-tests/cache
-      LENS_LOG_DIR: ${{ runner.temp }}/lens-tests/logs
-      LENS_SCRATCH_DIR: ${{ runner.temp }}/lens-tests/scratch
       LLM_D_BENCH_DB_ALLOW_SQLITE: '1'
     steps:
       - uses: actions/checkout@v7
@@ -244,4 +241,9 @@ jobs:
       - name: Install test dependencies
         run: pip install -e 'apps/backend[dev,embedded-db]'
       - name: Run backend regression tests
+        env:
+          LENS_DATA_DIR: ${{ runner.temp }}/lens-tests/data
+          LENS_CACHE_DIR: ${{ runner.temp }}/lens-tests/cache
+          LENS_LOG_DIR: ${{ runner.temp }}/lens-tests/logs
+          LENS_SCRATCH_DIR: ${{ runner.temp }}/lens-tests/scratch
         run: python -m pytest apps/backend/tests apps/backend/src/llm_d_lens -q

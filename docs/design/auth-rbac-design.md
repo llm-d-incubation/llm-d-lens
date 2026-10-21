@@ -1,5 +1,11 @@
 # Lens Login and Authorization System Design (Users / User Groups / LDAP / Fine-Grained RBAC)
 
+> Current runtime: browser APIs, MCP and Playground are consolidated in
+> `apps/backend/src/llm_d_lens/`. The Python auth middleware and route registry
+> enforce the same session, CSRF and permission contracts without a Node gateway.
+> Node-specific diagrams and implementation phases below are historical design
+> context, not instructions to deploy a separate service.
+
 > Status: **Design draft (proposal)**. This document defines only the solution and does not modify code.
 > Any table-structure (schema) change must be approved by a human before it can be
 > implemented following the process in

@@ -37,11 +37,11 @@ export default function BenchmarkScenario({ details, runs, selected, onCaseSelec
     return <div className="space-y-4">
         <section aria-label="Benchmark scenario" className="rounded-2xl border border-slate-800 bg-[#0b1324] p-5 lg:p-6">
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-wrap items-center gap-3"><h2 className="text-sm font-bold uppercase tracking-wider text-emerald-400">Benchmark scenario</h2>{cases.length > 1 ? <Select aria-label="Scenario" value={selected.caseId} onChange={event => onCaseSelect(event.target.value)} className="w-auto max-w-full text-xs">{cases.map(run => <option key={run.caseId} value={run.caseId}>{shortCase(run)}</option>)}</Select> : <span className="text-xs text-slate-300">{shortCase(selected)}</span>}</div>
+                <div className="flex min-w-0 flex-wrap items-center gap-3"><h2 className="text-sm font-bold uppercase tracking-wider text-[#037ffc] dark:text-emerald-400">Benchmark scenario</h2>{cases.length > 1 ? <Select aria-label="Scenario" value={selected.caseId} onChange={event => onCaseSelect(event.target.value)} className="w-auto max-w-full text-xs">{cases.map(run => <option key={run.caseId} value={run.caseId}>{shortCase(run)}</option>)}</Select> : <span className="text-xs text-slate-300">{shortCase(selected)}</span>}</div>
                 <ResultExports details={details} run={selected}/>
             </div>
             <div className="grid gap-6 md:grid-cols-3 md:divide-x md:divide-slate-800">{groups.map(([title, fields]) => <div key={title} className="min-w-0 md:pl-6 md:first:pl-0"><h3 className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</h3><dl className="space-y-4">{fields.map(([label, value]) => <div key={label}><dt className="text-xs text-slate-500">{label}</dt><dd className="mt-1 break-words font-mono text-xs font-semibold leading-5 text-slate-100">{valueText(value)}</dd></div>)}</dl></div>)}</div>
         </section>
-        <div className="min-w-0 rounded-2xl border border-slate-800 bg-[#0f1829] p-5"><h2 className="text-sm font-bold uppercase tracking-wider text-emerald-400">Primary outcomes</h2><BenchmarkOutcomes runs={runs} selected={selected}/></div>
+        <div className="min-w-0 rounded-2xl border border-slate-800 bg-[#0f1829] p-5"><h2 className="text-sm font-bold uppercase tracking-wider text-[#037ffc] dark:text-emerald-400">Primary outcomes</h2><BenchmarkOutcomes runs={runs} selected={selected}/></div>
     </div>;
 }

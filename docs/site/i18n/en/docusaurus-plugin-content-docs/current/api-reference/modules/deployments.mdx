@@ -43,14 +43,50 @@ artifact directly to this adapter and assume it supports it.
 when supplied, and provider state managed by that service before cleanup. It
 does not accept arbitrary resource selectors.
 
-Model-server renderers for baseline, optimized baseline, P/D disaggregation,
-tiered prefix cache and precise prefix cache routing share RuntimeClass selection.
-They resolve the hardware access mode from the model container's device requests
-and copy its optional `runtime_class_name` into the Pod's `runtimeClassName` only
-when no explicit RuntimeClass is present. The NVIDIA plugin mode declares `nvidia`,
-which must be registered on the target cluster; modes without this setting retain
-the cluster default. Router-only and CPU-only Pods are unchanged. This does not
-change accelerator resource requests or rewrite saved deployment artifacts.
+### RuntimeClass discovery and policy
+
+`GET /api/v1/deployments/runtime-classes?cluster_id=CLUSTER_ID` requires deployment
+read permission and access to the selected cluster. Optional `accelerator` and
+`access_mode` identify a registered profile suggestion. The response includes
+`items` (`name`, `handler`, `scheduling`, `overhead`, `matching_nodes`),
+`profile_suggestion`, `available_suggestion`, `requirement="unknown"`,
+`node_runtime_readiness="unknown"`, and `warnings`. Discovery or permission
+failures at Kubernetes return HTTP 503, not an empty successful list. Unknown
+hardware or access modes return HTTP 422; Lens authorization failures return 403.
+
+Set `runtime_binding.runtime_class` on `POST /api/v1/deployments/runs`:
+
+```json
+{"runtime_binding": {"runtime_class": {"mode": "named", "name": "custom-runtime"}}}
+```
+
+The Python equivalent is `RuntimeBinding(runtime_class=RuntimeClassPolicy(...))`
+from `llm_d_lens.deploy.contracts`. Standard and Agentic create requests expose
+the same policy as top-level `runtime_class`.
+
+- `auto`: preserve and validate an existing explicit manifest class; otherwise
+  use the access mode's optional profile suggestion only when the target cluster
+  advertises it. With no available suggestion, omit `runtimeClassName`.
+- `node-default`: explicitly remove `runtimeClassName`. This opt-out does not
+  require RuntimeClass discovery permission and does not verify device injection.
+- `named`: require a DNS-subdomain `name` and validate its availability. Missing
+  classes or conflicts with Pod node selectors/names fail before cluster writes.
+
+Omitting the runtime override preserves a saved configuration's
+`provenance.runtime_class`; without a saved preference the default is `auto`.
+Explicit `auto` overrides a saved preference. Choices are retained in deployment
+case policy for retry/restoration. The shared deployment adapter applies them
+across all five model providers, deriving a new deployment artifact without
+rewriting the supplied Configuration or existing executions. Router-only Pods
+are unchanged. Offline rendering no longer injects unverified profile defaults.
+The report is under `artifact.rendered_payload.value.deployment_contract.runtimeClass`.
+
+Class existence and matching selectors do not prove that a class is required,
+that its handler/CDI/drivers work on every eligible node, or that full scheduling
+constraints can be satisfied. Device-plugin versus DRA access alone is not proof
+either way. Select node default only when that cluster's default runtime already
+provides device access. Automatic and named modes require a resolvable explicit
+target cluster at deployment; offline provider rendering is not cluster validation.
 
 ### Execution, observation and evidence
 
@@ -160,7 +196,13 @@ print(sorted(variants))
 
 ## Backend API
 
-### Prepare Guide source (Node)
+Guide compatibility endpoints keep the `{ "error": "..." }` response shape.
+Expected validation failures retain their actionable message and status.
+Unexpected catalog/preparation failures return a generic `502` response; unexpected
+planning failures return a generic `500` response with `Server-Timing` preserved.
+Exception details are logged on the server, not returned to the browser.
+
+### Prepare Guide source
 
 `POST /api/guide-planning/prepare` accepts `guide`, `accelerator`, `modelServer`,
 `guideVariant` and the selected `clusterId`. It prepares the official source
@@ -172,7 +214,8 @@ without deploying and returns its commit plus manifest-derived controls:
 
 The booleans describe supported CPU-cache mutation and a matching profile NIC
 claim. They do not depend on variant names. This endpoint is owned by
-`apps/server/src/routes/guidePlanning.ts`; there is no Python callable for this Node operation.
+`llm_d_lens.deploy.guide_planning.prepare`; source loading is implemented in
+`llm_d_lens.deploy.guide_sources`.
 Python deployment providers use `guide_overlays` (above) and
 `llm_d_lens.hardware.resolver.deployment_mode(profile, access_mode)` for the
 corresponding source and hardware contracts.
@@ -1654,8 +1697,13 @@ asyncio.run(main())
 
 ## Remote SSH deployment
 
-These legacy endpoints are implemented by the Node BFF in
-`apps/server/src/routes/remoteDeploy.ts`, not the Python Deploy service. They
+SSH transport and remote command failures return `502` with
+`{ "error": "Remote deployment failed" }`; internal exception details and failing
+command output are logged server-side rather than exposed in error responses.
+Expected input and policy errors retain their existing status and actionable message.
+
+These legacy endpoints are implemented in the Python module
+`llm_d_lens.deploy.remote_deploy`. They
 execute commands over SSH rather than create v1 deployment runs. Their current
 single-node Intel Data Center GPU/XPU restriction is specific to this legacy
 implementation, not the capability limit of the profile-driven v1 API.

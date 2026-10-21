@@ -36,7 +36,7 @@ export function SideDrawer({ title, subtitle, onClose, children }) {
     }, []);
     if (typeof document === 'undefined') return null;
     return createPortal(<div className="fixed inset-0 z-[210]">
-        <div aria-hidden="true" onClick={onClose} className="absolute inset-0 bg-slate-950/20" />
+        <div aria-hidden="true" onClick={onClose} className="side-drawer-overlay absolute inset-0" />
         <section ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId} className="benchmark-inspector-drawer absolute inset-y-0 right-0 flex w-full flex-col border-l border-slate-700 bg-[#0b1423] text-slate-100 shadow-2xl shadow-black/50 outline-none sm:w-[480px] sm:max-w-[85vw]">
             <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-800 px-6 py-5">
                 <div className="min-w-0"><p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-sky-300">{subtitle || 'Recorded evidence'}</p><h2 id={titleId} className="break-words text-base font-semibold">{title}</h2></div>

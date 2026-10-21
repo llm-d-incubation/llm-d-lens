@@ -4,7 +4,6 @@ import { usePolling } from '../../../../shared/lib/usePolling';
 import { useClipboard } from '../../../../shared/lib/useClipboard';
 import { AsyncState } from '../../../../shared/ui/AsyncState';
 import { Button } from '../../../../shared/ui/Button';
-import { Badge } from '../../../../shared/ui/Badge';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
 import { Modal } from '../../../../shared/ui/Modal';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
@@ -94,7 +93,7 @@ export function ModelServicePage({ onToggleMobileNav }) {
     ] : [];
 
     return (
-        <ModulePage>
+        <ModulePage className="my-services-page">
             <div className="flex w-full flex-col gap-6">
                 <ModuleHeader
                     icon={Waypoints}
@@ -110,17 +109,17 @@ export function ModelServicePage({ onToggleMobileNav }) {
                 )}
 
                 {(connection.clusters || []).length > 0 && (
-                    <section className={cn(CARD, 'p-6')}>
-                        <SectionLabel>Gateway connections</SectionLabel>
-                        <div className="mt-3 flex flex-col divide-y divide-slate-800/80">
+                    <section className={cn(CARD, 'my-services-card p-6')}>
+                        <SectionLabel className="text-[#037ffc]">Gateway connections</SectionLabel>
+                        <div className="mt-3 flex flex-col divide-y divide-slate-200 dark:divide-slate-800/80">
                             {connection.clusters.map((cluster) => (
                                 <div key={cluster.clusterId} className="flex items-center justify-between gap-3 py-3">
                                     <div className="min-w-0">
-                                        <p className="truncate text-sm text-slate-100">{cluster.clusterName || cluster.clusterId}</p>
-                                        <p className="truncate font-mono text-xs text-slate-400">
+                                        <p className="truncate text-base font-semibold text-slate-100">{cluster.clusterName || cluster.clusterId}</p>
+                                        <p className="gateway-meta truncate font-mono text-xs text-slate-400">
                                             {cluster.baseUrl || (cluster.ready ? 'address pending' : 'Gateway not ready')}
                                         </p>
-                                        <p className="text-[10px] text-slate-500">
+                                        <p className="gateway-meta text-[10px] text-slate-500">
                                             {cluster.provider || 'gateway'}
                                             {cluster.port ? ` · port ${cluster.port}` : ''}
                                             {cluster.address ? ` · ${cluster.address}` : ''}
@@ -137,8 +136,8 @@ export function ModelServicePage({ onToggleMobileNav }) {
                     </section>
                 )}
 
-                <section className={cn(CARD, 'p-6')}>
-                    <SectionLabel>Available models</SectionLabel>
+                <section className={cn(CARD, 'my-services-card p-6')}>
+                    <SectionLabel className="text-[#037ffc]">Available models</SectionLabel>
                     <div className="mt-4">
                         <AsyncState loading={loading} error={null} empty={models.length === 0}
                             emptyContent={<EmptyState icon={<Waypoints size={22} />} title="No models available"
@@ -146,11 +145,11 @@ export function ModelServicePage({ onToggleMobileNav }) {
                             <div className="flex flex-col gap-5">
                                 {Object.entries(modelsByCluster).map(([clusterId, clusterModels]) => (
                                     <div key={clusterId}>
-                                        <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                        <p className="mb-2 text-base font-semibold text-slate-900 dark:text-slate-100">
                                             {clusterNameById[clusterId] || clusterId}
                                             {baseUrlFor(clusterId) ? ` · ${baseUrlFor(clusterId)}` : ''}
                                         </p>
-                                        <ul className="flex flex-col divide-y divide-slate-800/80">
+                                        <ul className="flex flex-col divide-y divide-slate-200 dark:divide-slate-800/80">
                                             {clusterModels.map((model) => (
                                                 <li key={model.id} className="flex items-center justify-between gap-3 py-3">
                                                     <div className="min-w-0">
@@ -161,7 +160,6 @@ export function ModelServicePage({ onToggleMobileNav }) {
                                                         <Button variant="ghost" size="xs" onClick={() => setExamplesFor(model)}>
                                                             <Terminal size={12} /> cURL
                                                         </Button>
-                                                        <Badge tone="brand">model</Badge>
                                                     </div>
                                                 </li>
                                             ))}

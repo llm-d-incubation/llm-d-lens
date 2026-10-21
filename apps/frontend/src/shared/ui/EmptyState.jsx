@@ -30,7 +30,7 @@ const ICON_STATUS_COLORS = {
     success: 'text-emerald-500 dark:text-emerald-300',
 };
 
-export function EmptyState({ icon, title, message, action, className, tone = 'info', variant = 'default' }) {
+export function EmptyState({ icon, title, message, action, className, iconClassName, tone = 'info', variant = 'default' }) {
     if (variant === 'status') {
         return (
             <div className={cn('relative flex flex-col items-center justify-center px-6 py-10 text-center', className)}>
@@ -49,7 +49,7 @@ export function EmptyState({ icon, title, message, action, className, tone = 'in
     return (
         <div className={cn('flex flex-col items-center justify-center text-center gap-2 py-12 px-6', className)}>
             {icon && (
-                <div className={cn('mb-2 flex h-14 w-14 items-center justify-center rounded-full border', ICON_TONES[tone])}>
+                <div className={cn('mb-2 flex h-14 w-14 items-center justify-center rounded-full border', ICON_TONES[tone], iconClassName)}>
                     {icon}
                 </div>
             )}

@@ -167,8 +167,10 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
                     "Reduce the load target, select more accelerator capacity, or relax the latency SLOs."
                 )
             compliant = [
-                item for item in fitting
-                if item.get("ttft_ms") is not None and item.get("tpot_ms") is not None
+                item
+                for item in fitting
+                if item.get("ttft_ms") is not None
+                and item.get("tpot_ms") is not None
                 and 0 < item["ttft_ms"] <= (request.ttft_target_ms or 2000)
                 and 0 < item["tpot_ms"] <= (request.tpot_target_ms or 30)
             ]

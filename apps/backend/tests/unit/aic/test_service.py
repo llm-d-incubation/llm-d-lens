@@ -14,8 +14,8 @@ def estimate_request(**kwargs):
 
 @pytest.mark.parametrize("target", ["target_concurrency", "target_request_rate"])
 def test_search_routes_load_target_to_recommend_and_scales_replicas(monkeypatch, target):
-    from aiconfigurator.cli import api
     import pandas as pd
+    from aiconfigurator.cli import api
 
     captured = {}
 
@@ -23,16 +23,18 @@ def test_search_routes_load_target_to_recommend_and_scales_replicas(monkeypatch,
         captured.update(kwargs)
         return SimpleNamespace(
             chosen_exp="agg",
-            best_configs={"agg": pd.DataFrame([
-                {"tp": 2, "num_total_gpus": 2, "replicas_needed": 3, "tokens/s": 100, "ttft": 100, "tpot": 10}
-            ])},
+            best_configs={
+                "agg": pd.DataFrame(
+                    [{"tp": 2, "num_total_gpus": 2, "replicas_needed": 3, "tokens/s": 100, "ttft": 100, "tpot": 10}]
+                )
+            },
         )
 
     monkeypatch.setattr(api, "cli_recommend", recommend)
     monkeypatch.setattr(service, "_cli", lambda: (lambda **kwargs: pytest.fail("default called"), None, None))
-    result = service.search_sync(service.AICRequest(
-        model_name="Qwen/Qwen3-8B", aic_system_name="test-system", gpu_count=8, **{target: 10}
-    ))
+    result = service.search_sync(
+        service.AICRequest(model_name="Qwen/Qwen3-8B", aic_system_name="test-system", gpu_count=8, **{target: 10})
+    )
     assert captured[target] == 10
     assert captured["isl"] == 4000
     assert captured["osl"] == 1000
@@ -45,13 +47,16 @@ def test_search_routes_load_target_to_recommend_and_scales_replicas(monkeypatch,
 def test_search_rejects_joint_load_targets():
     with pytest.raises(ValueError, match="choose one and clear the other"):
         service.AICRequest(
-            model_name="Qwen/Qwen3-8B", aic_system_name="test-system",
-            target_concurrency=10, target_request_rate=2,
+            model_name="Qwen/Qwen3-8B",
+            aic_system_name="test-system",
+            target_concurrency=10,
+            target_request_rate=2,
         )
 
 
 def test_search_defaults_match_native_search_and_recommend():
     from inspect import signature
+
     from aiconfigurator.cli.api import cli_default, cli_recommend
 
     request = service.AICRequest(model_name="Qwen/Qwen3-8B", aic_system_name="test-system")
@@ -75,10 +80,18 @@ def test_search_without_load_target_keeps_default_search(monkeypatch):
 
 
 def test_search_scales_both_pd_worker_pools():
-    result = service._candidate("disagg", {
-        "(p)tp": 2, "(p)workers": 1, "(d)tp": 1, "(d)workers": 2,
-        "num_total_gpus": 4, "replicas_needed": 3, "tokens/s": 100,
-    })
+    result = service._candidate(
+        "disagg",
+        {
+            "(p)tp": 2,
+            "(p)workers": 1,
+            "(d)tp": 1,
+            "(d)workers": 2,
+            "num_total_gpus": 4,
+            "replicas_needed": 3,
+            "tokens/s": 100,
+        },
+    )
     assert result["prefill_replicas"] == 3
     assert result["decode_replicas"] == 6
     assert result["num_total_gpus"] == 12
@@ -86,35 +99,51 @@ def test_search_scales_both_pd_worker_pools():
 
 
 def test_search_rejects_closest_recommendation_that_exceeds_slo(monkeypatch):
-    from aiconfigurator.cli import api
     import pandas as pd
+    from aiconfigurator.cli import api
 
     monkeypatch.setattr(service, "_cli", lambda: (None, None, None))
-    monkeypatch.setattr(api, "cli_recommend", lambda **kwargs: SimpleNamespace(
-        chosen_exp="agg", best_configs={"agg": pd.DataFrame([
-            {"tp": 1, "num_total_gpus": 1, "ttft": 3000, "tpot": 50}
-        ])},
-    ))
+    monkeypatch.setattr(
+        api,
+        "cli_recommend",
+        lambda **kwargs: SimpleNamespace(
+            chosen_exp="agg",
+            best_configs={"agg": pd.DataFrame([{"tp": 1, "num_total_gpus": 1, "ttft": 3000, "tpot": 50}])},
+        ),
+    )
     with pytest.raises(service.AICError, match="no configuration meeting the TTFT/TPOT"):
-        service.search_sync(service.AICRequest(
-            model_name="model", aic_system_name="system", gpu_count=4, target_concurrency=10,
-        ))
+        service.search_sync(
+            service.AICRequest(
+                model_name="model",
+                aic_system_name="system",
+                gpu_count=4,
+                target_concurrency=10,
+            )
+        )
 
 
 def test_search_rejects_recommendation_above_capacity(monkeypatch):
-    from aiconfigurator.cli import api
     import pandas as pd
+    from aiconfigurator.cli import api
 
     monkeypatch.setattr(service, "_cli", lambda: (None, None, None))
-    monkeypatch.setattr(api, "cli_recommend", lambda **kwargs: SimpleNamespace(
-        chosen_exp="agg", best_configs={"agg": pd.DataFrame([
-            {"tp": 2, "num_total_gpus": 2, "replicas_needed": 3}
-        ])},
-    ))
+    monkeypatch.setattr(
+        api,
+        "cli_recommend",
+        lambda **kwargs: SimpleNamespace(
+            chosen_exp="agg",
+            best_configs={"agg": pd.DataFrame([{"tp": 2, "num_total_gpus": 2, "replicas_needed": 3}])},
+        ),
+    )
     with pytest.raises(service.AICError, match="Minimum recommended GPUs: 6"):
-        service.search_sync(service.AICRequest(
-            model_name="Qwen/Qwen3-8B", aic_system_name="test-system", gpu_count=4, target_request_rate=10,
-        ))
+        service.search_sync(
+            service.AICRequest(
+                model_name="Qwen/Qwen3-8B",
+                aic_system_name="test-system",
+                gpu_count=4,
+                target_request_rate=10,
+            )
+        )
 
 
 def test_estimate_rejects_a_different_aggregated_topology(monkeypatch):

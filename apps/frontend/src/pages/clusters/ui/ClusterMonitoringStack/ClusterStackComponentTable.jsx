@@ -34,7 +34,7 @@ const KIND_LABELS = {
 export function ClusterStackComponentTable({ components = [], actions }) {
     return (
         <Panel
-            title={<span className="text-[11px] font-extrabold uppercase tracking-widest text-sky-400/90">Stack components</span>}
+            title={<span className="text-[11px] font-extrabold uppercase tracking-widest text-[#037ffc] dark:text-sky-400/90">Stack components</span>}
             actions={actions}
             padding="none"
             className="overflow-hidden border-slate-800/80 bg-gradient-to-br from-slate-900 to-slate-950 shadow-xl"
@@ -52,12 +52,12 @@ export function ClusterStackComponentTable({ components = [], actions }) {
                                 <th className="px-4 py-3 font-semibold">Source</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-800/60">
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60">
                             {components.map((component) => {
                                 return (
                                     <React.Fragment key={component.name}>
                                         <tr className="transition-colors hover:bg-slate-800/20">
-                                            <td className="px-4 py-3 font-medium text-slate-200">
+                                            <td className="px-4 py-3 font-medium text-[#4b5563] dark:text-slate-200">
                                                 <span className="inline-flex items-center gap-2">
                                                     <span
                                                         className={`h-1.5 w-1.5 shrink-0 rounded-full motion-safe:animate-pulse [animation-duration:2.4s] ${statusDotClass(component.status)}`}
@@ -68,7 +68,7 @@ export function ClusterStackComponentTable({ components = [], actions }) {
                                                 </span>
                                             </td>
                                             <td className="px-4 py-3">
-                                                <Badge tone={(KIND_LABELS[component.kind] || { tone: 'neutral' }).tone}>
+                                                <Badge tone={(KIND_LABELS[component.kind] || { tone: 'neutral' }).tone} className={`component-type-tag component-type-${component.kind || 'unknown'}`}>
                                                     {(KIND_LABELS[component.kind] || { label: label(component.kind) }).label}
                                                 </Badge>
                                             </td>

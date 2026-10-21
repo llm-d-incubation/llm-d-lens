@@ -448,10 +448,10 @@ export function DataPlaneTopology({
     };
 
     return (
-        <div className="flex w-full flex-col gap-3">
+        <div className="flex h-full min-h-0 w-full flex-col gap-3">
             <div role="region" aria-label="Service flow canvas" tabIndex={0}
                 aria-description="Drag with the left mouse button to pan, or use the scrollbars and arrow keys."
-                className="w-full min-h-64 max-h-[max(16rem,calc(100vh-18rem))] shrink-0 cursor-grab select-none overflow-auto focus-visible:outline-2 focus-visible:outline-theme-border active:cursor-grabbing"
+                className="min-h-0 w-full flex-1 cursor-grab select-none overflow-auto focus-visible:outline-2 focus-visible:outline-theme-border active:cursor-grabbing"
                 onPointerDown={startDrag} onPointerMove={moveDrag}
                 onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}>
                 <div className="mx-auto w-max">
@@ -559,7 +559,7 @@ export function DataPlaneTopology({
                                     const routedMember = row.members.find((member) => member.status !== 'disabled' && member.weight > 0);
                                     const routeState = routed ? componentName(routedMember || row.members[0], 'httpRoute') : 'stopped';
                                     return (
-                                        <Panel key={row.serviceId} padding="none" tone="soft" className="absolute shadow-none"
+                                        <Panel key={row.serviceId} padding="none" tone="soft" className="model-service-node absolute shadow-none"
                                             role="group" aria-label={`Model ${row.serviceName}`}
                                             style={{ left: MODEL.x, top: row.y, width: MODEL.w, height: row.height }}>
                                             <svg className="pointer-events-none absolute inset-0" width={MODEL.w} height={row.height}>
@@ -624,7 +624,7 @@ export function DataPlaneTopology({
                                                 const eppKey = `epp:${member.memberId}`;
                                                 const deploymentKey = `deployment:${member.memberId}`;
                                                 return (
-                                                    <Panel key={member.memberId} padding="none" tone="inset" className="absolute shadow-none"
+                                                    <Panel key={member.memberId} padding="none" tone="inset" className="model-service-node absolute shadow-none"
                                                         role="group" aria-label={`Deployment ${member.name}`}
                                                         style={{ left: DEPLOYMENT.x - MODEL.x, top: MODEL.header + index * (DEPLOYMENT_H + DEPLOYMENT_GAP), width: DEPLOYMENT.w, height: DEPLOYMENT_H }}>
                                                         <div className="flex h-9 items-center gap-2 px-4">

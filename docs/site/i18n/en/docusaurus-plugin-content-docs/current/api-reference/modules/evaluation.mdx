@@ -16,6 +16,25 @@ harness `OOMKilled` errors receive host-memory guidance; plain exit 137 remains
 unclassified.
 
 
+## Harness proxy compatibility
+
+Lens preserves HTTP(S) proxies for external downloads while forwarding cluster
+addresses and CIDRs through `NO_PROXY`. Kubernetes Python client 35.0.0 can
+discard that value, causing accelerator detection to send Kubernetes API requests
+through the proxy and fail certificate verification.
+
+Runtime preparation applies the known SDK correction to both the host CLI
+environment and the selected checkout's harness Pod template. Newly created Pods
+repair the affected client before starting the original harness command, including
+warmup and matrix runs. Already-fixed clients remain unchanged; TLS verification
+and download proxies remain enabled. An incompatible template or a failure to
+write the affected container package stops startup with an explicit error rather
+than running without the correction.
+
+Existing Pods are not modified. A backend process without automatic reload must
+load the updated code before starting a new evaluation; do not restart it while
+it owns an active evaluation.
+
 ## Concurrent backend instances
 
 Evaluation execution is protected by operating-system locks under

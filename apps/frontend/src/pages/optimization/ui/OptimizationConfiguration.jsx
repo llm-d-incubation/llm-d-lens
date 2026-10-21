@@ -1331,10 +1331,10 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             </div>}
 
             <div className="space-y-4">
-                    <section className="configuration-source rounded-xl border border-slate-800 bg-slate-950/40 p-5">
+                    <section className="configuration-source rounded-xl border border-slate-800 bg-white p-5 dark:bg-slate-950/40">
                         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
                             <div><h2 className="text-sm font-semibold">Configuration source</h2><p className="mt-1 text-[10px] text-slate-500">Choose a Guide or import YAML.</p></div>
-                            <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${uploadingConfiguration ? 'pointer-events-none border-slate-700 text-slate-500' : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400 hover:bg-cyan-500/15'}`}>
+                            <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${uploadingConfiguration ? 'pointer-events-none border-slate-700 text-slate-500' : 'benchmark-blue-button border-[#037ffc] bg-[#037ffc] text-white hover:border-[#037ffc] hover:bg-[#037ffc] dark:border-cyan-500/40 dark:bg-cyan-500/10 dark:text-cyan-200 dark:hover:border-cyan-400 dark:hover:bg-cyan-500/15'}`}>
                                 {uploadingConfiguration ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}{uploadingConfiguration ? 'Importing…' : 'Import YAML'}
                                 <input type="file" accept=".yaml,.yml,text/yaml,application/yaml" className="hidden" onChange={uploadConfiguration} disabled={operationBusy} />
                             </label>
@@ -1363,7 +1363,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                                 </div>
                             </section>
                         </div>}
-                        <div className="mb-4 border-l-2 border-emerald-400/70 bg-emerald-500/5 px-3 py-2">
+                        <div className="guide-template-bar mb-4 border-l-2 border-emerald-400/70 bg-emerald-500/5 px-3 py-2">
                             <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Guide template</h3>
                         </div>
                         {!['pd-disaggregation', 'tiered-prefix-cache'].includes(selection.guide) && guideVariants.length > 1 && <label className={labelClass}>Guide variant<select className={inputClass} value={guideVariant} onChange={event => setGuideVariant(event.target.value)}>{guideVariants.map(variant => <option key={variant} value={variant}>{variantLabel(variant)}</option>)}</select></label>}
@@ -1449,9 +1449,9 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
 
                             </> : <span>Model capacity estimate unavailable</span>}
                         </div>}
-                        {selection.guide === 'pd-disaggregation' && <section className="mt-4 rounded-lg border border-slate-800 p-3"><h3 className="mb-3 text-sm font-medium text-violet-200">Recommended topology</h3>
-                            <div className="flex items-center justify-between gap-3"><div><p className="text-xs text-violet-200">AIC P/D recommendation</p><p className="mt-1 text-[10px] text-violet-300">{clusterHardwareLoading ? 'Checking cluster XPU capacity…' : clusterHardware ? `${clusterHardware.usableGpuCount ?? clusterHardware.availableGpuCount} currently available · ${clusterHardware.configuredGpuLimit != null ? `${clusterHardware.configuredGpuLimit} in configured scope` : 'no device limit configured'} · ${clusterHardware.gpuCount} physical total` : 'Select a ready cluster to check XPU capacity.'}</p></div><button type="button" disabled={aicLoading || clusterHardwareLoading || !connectedCluster || budget < 1 || !model.trim()} onClick={() => { setPdRecommendation(true); runAic(true); }} className="inline-flex items-center gap-2 border border-violet-500 px-3 py-2 text-xs text-violet-200 disabled:opacity-40">{aicLoading || clusterHardwareLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}Use AIC for PD</button></div>
-                            {aicError && <div className="mt-3 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">{aicError}</div>}
+                        {selection.guide === 'pd-disaggregation' && <section className="aic-recommendation-box mt-4 rounded-lg border border-slate-800 p-3"><h3 className="mb-3 text-sm font-medium text-violet-200">Recommended topology</h3>
+                            <div className="flex items-center justify-between gap-3"><div><p className="text-xs text-violet-200">AIC P/D recommendation</p><p className="mt-1 text-[10px] text-violet-300">{clusterHardwareLoading ? 'Checking cluster XPU capacity…' : clusterHardware ? `${clusterHardware.usableGpuCount ?? clusterHardware.availableGpuCount} currently available · ${clusterHardware.configuredGpuLimit != null ? `${clusterHardware.configuredGpuLimit} in configured scope` : 'no device limit configured'} · ${clusterHardware.gpuCount} physical total` : 'Select a ready cluster to check XPU capacity.'}</p></div><button type="button" disabled={aicLoading || clusterHardwareLoading || !connectedCluster || budget < 1 || !model.trim()} onClick={() => { setPdRecommendation(true); runAic(true); }} className="benchmark-blue-button shadow-none inline-flex items-center justify-center gap-2 border border-[#037ffc] bg-[#037ffc] px-3 py-2 text-center text-xs text-white disabled:opacity-40 dark:border-violet-500 dark:bg-transparent dark:text-violet-200">{aicLoading || clusterHardwareLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}Use AIC for PD</button></div>
+                            {aicError && <div className="aic-error mt-3 border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">{aicError}</div>}
                             {aicCandidates && <div className="mt-3 space-y-2">
                                 {aicCandidates.length === 0 && <p className="text-xs text-slate-500">AIC returned no deployable P/D candidates.</p>}
                                 {aicCandidates.map((candidate) => <div key={candidate.id} className="flex flex-wrap items-center gap-3 border border-slate-800 bg-slate-950/60 p-3 text-xs">
@@ -1602,7 +1602,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             </section>}
             {embedded && planResult?.plannedDeployment?.content && <div className="flex justify-end gap-2">
                 {!deployOnPublish && <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate('another')} className="inline-flex h-9 items-center rounded-lg border border-slate-700 px-4 text-xs text-slate-200 hover:border-cyan-500/50 disabled:opacity-40">Save &amp; add another</button>}
-                <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate(true)} className="inline-flex h-9 items-center gap-1 rounded-lg bg-cyan-400 px-4 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:opacity-40">
+                <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate(true)} className="benchmark-deploy-button inline-flex h-9 items-center gap-1 rounded-lg bg-cyan-400 px-4 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:opacity-40">
                     {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{deployOnPublish ? 'Deploy' : 'Next'}<ChevronRight className="h-3.5 w-3.5" />
                 </button>
             </div>}

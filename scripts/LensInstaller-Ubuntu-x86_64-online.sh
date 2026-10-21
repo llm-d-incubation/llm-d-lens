@@ -21,7 +21,7 @@ Usage: bash LensInstaller-Ubuntu-x86_64-online.sh [options]
   --silent, -y          Install without prompts.
   --install-dir DIR     New install directory (default: \$HOME/llm-d-lens).
   --app-port PORT       Web app/API port (default: 3000).
-  --backend-port PORT   Internal backend port (default: 8081).
+    --backend-port PORT   Legacy alias for --app-port; the Python app serves both UI and API.
   --no-https            Use HTTP instead of self-signed HTTPS.
   --tls-host HOST       Host/IP for the HTTPS certificate.
   --no-start            Install without starting services.
@@ -321,8 +321,8 @@ print_logo() {
 SILENT=0
 INSTALL_DIR_DEFAULT="$HOME/llm-d-lens"
 INSTALL_DIR="${INSTALL_DIR:-$INSTALL_DIR_DEFAULT}"
-APP_PORT="${APP_PORT:-${SERVER_PORT:-3000}}"
-BACKEND_PORT="${BACKEND_PORT:-8081}"
+APP_PORT="${APP_PORT:-${BACKEND_PORT:-${SERVER_PORT:-3000}}}"
+BACKEND_PORT="$APP_PORT"
 START_AFTER_INSTALL=1
 ALLOW_APT=1
 FRESH_INSTALL=0
@@ -378,8 +378,8 @@ while [[ $# -gt 0 ]]; do
         --install-dir=*)   INSTALL_DIR="${1#*=}"; shift ;;
         --app-port)        APP_PORT="$2"; shift 2 ;;
         --app-port=*)      APP_PORT="${1#*=}"; shift ;;
-        --backend-port)    BACKEND_PORT="$2"; shift 2 ;;
-        --backend-port=*)  BACKEND_PORT="${1#*=}"; shift ;;
+        --backend-port)    APP_PORT="$2"; BACKEND_PORT="$APP_PORT"; shift 2 ;;
+        --backend-port=*)  APP_PORT="${1#*=}"; BACKEND_PORT="$APP_PORT"; shift ;;
         --no-https)        ENABLE_HTTPS=0; shift ;;
         --tls-host)        TLS_HOST="$2"; shift 2 ;;
         --tls-host=*)      TLS_HOST="${1#*=}"; shift ;;
@@ -523,17 +523,7 @@ resolve_ports_silently() {
         APP_PORT="$(find_free_port "$APP_PORT")"
         warn "switched app port to $APP_PORT instead."
     fi
-    if port_in_use "$BACKEND_PORT" || [[ "$BACKEND_PORT" == "$APP_PORT" ]]; then
-        original="$BACKEND_PORT"
-        if [[ "$BACKEND_PORT" == "$APP_PORT" ]]; then
-            warn "backend port $original collides with the app port."
-        else
-            warn "backend port $original is already held by $(describe_port_owner "$original")."
-        fi
-        BACKEND_PORT="$(find_free_port "$BACKEND_PORT")"
-        [[ "$BACKEND_PORT" == "$APP_PORT" ]] && BACKEND_PORT="$(find_free_port $((BACKEND_PORT + 1)))"
-        warn "switched backend port to $BACKEND_PORT instead."
-    fi
+    BACKEND_PORT="$APP_PORT"
 }
 
 # ---- Interactive prompts ---------------------------------------------------------
@@ -628,11 +618,7 @@ interactive_configure() {
         INSTALL_DIR="$(ask "Install directory" "$INSTALL_DIR")"
     fi
     APP_PORT="$(ask_port "Web app / API port" "$APP_PORT")"
-    BACKEND_PORT="$(ask_port "Internal backend port" "$BACKEND_PORT")"
-    while [[ "$BACKEND_PORT" == "$APP_PORT" ]]; do
-        warn "backend port can't be the same as the app port — pick another."
-        BACKEND_PORT="$(ask_port "Internal backend port" "$(find_free_port $((APP_PORT + 1)))")"
-    done
+    BACKEND_PORT="$APP_PORT"
     if confirm "Enable HTTPS (self-signed cert; needed for browser mic access etc. off localhost)" "Y"; then
         ENABLE_HTTPS=1
     else
@@ -645,7 +631,6 @@ interactive_configure() {
     info "Summary:"
     printf '    install dir     %s%s%s\n' "$BOLD" "$INSTALL_DIR" "$RESET"
     printf '    app port        %s%s%s\n' "$BOLD" "$APP_PORT" "$RESET"
-    printf '    backend port    %s%s%s\n' "$BOLD" "$BACKEND_PORT" "$RESET"
     printf '    https           %s%s%s\n' "$BOLD" "$([[ "$ENABLE_HTTPS" == "1" ]] && echo enabled || echo disabled)" "$RESET"
     printf '    database        %s%s%s\n' "$BOLD" "$([[ "$DB_MODE" == "embedded" ]] && echo "built-in embedded PostgreSQL" || echo "$DB_ENGINE at $DB_HOST:$DB_PORT/$DB_NAME")" "$RESET"
     echo
@@ -1012,7 +997,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 [[ -f .lens-install.env ]] && source .lens-install.env
 APP_PORT="${APP_PORT:-3000}"
-BACKEND_PORT="${BACKEND_PORT:-8081}"
+BACKEND_PORT="$APP_PORT"
 APP_HOST="${APP_HOST:-0.0.0.0}"
 LENS_IN_PLACE="${LENS_IN_PLACE:-0}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-1}"
@@ -1094,17 +1079,7 @@ resolve_ports() {
         APP_PORT="$(find_free_port "$APP_PORT")"
         warn "switched app port to $APP_PORT instead."
     fi
-    if ! is_running "backend" && { port_in_use "$BACKEND_PORT" || [[ "$BACKEND_PORT" == "$APP_PORT" ]]; }; then
-        original="$BACKEND_PORT"
-        if [[ "$BACKEND_PORT" == "$APP_PORT" ]]; then
-            warn "backend port $original collides with the app port."
-        else
-            warn "backend port $original is already held by $(describe_port_owner "$original")."
-        fi
-        BACKEND_PORT="$(find_free_port "$BACKEND_PORT")"
-        [[ "$BACKEND_PORT" == "$APP_PORT" ]] && BACKEND_PORT="$(find_free_port $((BACKEND_PORT + 1)))"
-        warn "switched backend port to $BACKEND_PORT instead."
-    fi
+    BACKEND_PORT="$APP_PORT"
 }
 # Writes any port change resolve_ports made back to .lens-install.env, so it
 # sticks across future stop/start/restart/status invocations instead of
@@ -1172,45 +1147,39 @@ print_initial_admin_credentials() {
     log "administrator credentials are stored in the mode-600 file $cred_file; removed after the password is changed"
 }
 
-# Regenerates apps/server/src/mcp/tools.ts from the FastAPI backend's live OpenAPI
-# schema before every start, so the MCP tool catalog can never drift from the
-# routes actually exposed by this installed backend. Non-fatal: if it fails
-# (e.g. venv/node_modules missing), fall back to whatever tools.ts already
-# ships with this install.
+# Validate the Python catalog before starting the unified service.
 regenerate_mcp_tools() {
-    if [[ ! -x .venv/bin/python || ! -f scripts/generate-mcp-tools.mjs ]]; then
-        return 0
-    fi
     mkdir -p "$LOG_DIR"
-    log "regenerating MCP tool catalog from the backend API..."
-    if ! node scripts/generate-mcp-tools.mjs >"$LOG_DIR/generate-mcp-tools.log" 2>&1; then
-        warn "MCP tool catalog regeneration failed — see $LOG_DIR/generate-mcp-tools.log (using existing apps/server/src/mcp/tools.ts)"
+    log "validating MCP tool catalog from the backend API..."
+    if ! .venv/bin/python -c 'from llm_d_lens.api.main import app; from llm_d_lens.mcp.catalog import catalog; print(f"Validated {len(catalog(app))} MCP tools")' >"$LOG_DIR/generate-mcp-tools.log" 2>&1; then
+        fail "MCP tool catalog validation failed; see $LOG_DIR/generate-mcp-tools.log"
+        return 1
     fi
 }
 cmd_start() {
+    if is_running backend; then
+        fail "The legacy backend is still running; use restart to switch to the unified service."
+        return 1
+    fi
     resolve_ports
     persist_ports
     ensure_tls
     regenerate_mcp_tools
     local scheme="http"
     [[ "$ENABLE_HTTPS" == "1" ]] && scheme="https"
-    start_one backend env \
+    start_one app env NODE_ENV=production BACKEND_HOST="$APP_HOST" BACKEND_PORT="$APP_PORT" \
         PRISM_MCP_URL="$scheme://127.0.0.1:$APP_PORT/api/mcp" \
         PRISM_MCP_CA_FILE="${TLS_CERT_FILE:-}" \
-        .venv/bin/python -m uvicorn llm_d_lens.api:app --host "${BACKEND_HOST:-0.0.0.0}" --port "$BACKEND_PORT"
-    start_one app env NODE_ENV=production HOST="$APP_HOST" SERVER_PORT="$APP_PORT" PORT="$APP_PORT" \
-        SIMULATION_API_URL="http://127.0.0.1:$BACKEND_PORT" \
         TLS_CERT_FILE="$TLS_CERT_FILE" TLS_KEY_FILE="$TLS_KEY_FILE" \
-        ./node_modules/.bin/tsx apps/server/src/server.js
+        bash scripts/run-backend.sh
     log "waiting for services to become ready..."
-    wait_for_http backend "http://127.0.0.1:$BACKEND_PORT/api/health"
+    wait_for_http app     "$scheme://127.0.0.1:$APP_PORT/api/health"
     wait_for_http app     "$scheme://127.0.0.1:$APP_PORT/api/config"
     local lan_ip
     lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     log "llm-d Lens is running:"
     log "  app       $scheme://localhost:$APP_PORT  (bound to $APP_HOST)"
     [[ -n "$lan_ip" && "$APP_HOST" == "0.0.0.0" ]] && log "             $scheme://$lan_ip:$APP_PORT  (LAN)"
-    log "  backend   http://127.0.0.1:$BACKEND_PORT (internal)"
     if [[ "$ENABLE_HTTPS" == "1" ]]; then
         log "  HTTPS uses a self-signed cert — your browser will warn once; accept it to proceed. Needed for mic access etc. off localhost."
     fi
@@ -1275,13 +1244,16 @@ cmd_stop() {
 }
 
 cmd_status() {
-    for svc in backend app; do
+    for svc in app; do
         if is_running "$svc"; then
             log "  $svc: running (pid $(cat "$(pid_file "$svc")"))"
         else
             log "  $svc: stopped"
         fi
     done
+    if is_running backend; then
+        warn "legacy backend: running; use restart to switch to the unified service."
+    fi
 }
 
 # cmd_uninstall — stop services and remove the installation. By default, user
@@ -1421,7 +1393,7 @@ install_from_source() {
         interactive_configure
     else
         resolve_ports_silently
-        info "silent mode — install dir: $INSTALL_DIR, app port: $APP_PORT, backend port: $BACKEND_PORT"
+        info "silent mode — install dir: $INSTALL_DIR, app/API port: $APP_PORT"
     fi
 
     ensure_system_packages

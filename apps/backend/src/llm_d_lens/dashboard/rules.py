@@ -376,8 +376,8 @@ def service_issues(row: ServiceRow) -> list[DashboardIssue]:
                 resource_id=row.group_id,
                 resource_name=row.name,
                 evidence={"providers": row.providers.model_dump()},
-                primary=primary,
-                secondary=secondary,
+                primary=secondary,
+                secondary=None,
             )
         )
     elif active_positive == 0:

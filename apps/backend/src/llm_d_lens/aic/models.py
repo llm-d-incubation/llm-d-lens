@@ -12,7 +12,6 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
-
 DEFAULT_INPUT_TOKENS = 4000
 DEFAULT_OUTPUT_TOKENS = 1000
 

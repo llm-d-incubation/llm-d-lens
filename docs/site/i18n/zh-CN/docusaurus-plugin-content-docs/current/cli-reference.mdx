@@ -8,15 +8,16 @@ description: 用于运行、安装和管理 Lens 的命令行工具。
 | 命令 | 用途 |
 | --- | --- |
 | `scripts/lens-local.sh check` | 在不启动任何服务的情况下校验环境。 |
-| `scripts/lens-local.sh start` | 准备依赖并在后台启动前端、Node API 和 Python 后端。日志位于 `$LENS_LOG_DIR/dev/`，默认是 `~/.local/state/lens/logs/dev/`。会先重新生成并校验复用地图。 |
+| `scripts/lens-local.sh start` | 准备依赖并在后台启动 Vite 和统一 Python 后端。日志位于 `$LENS_LOG_DIR/dev/`，默认是 `~/.local/state/lens/logs/dev/`。会先校验复用地图和 MCP 目录。 |
 | `scripts/lens-local.sh stop` | 停止由本脚本启动的所有服务。 |
 | `scripts/lens-local.sh restart` | 启用目标节点模式时先检查节点，再准备依赖并校验复用地图，全部通过后才停止并重启服务。 |
 | `scripts/lens-local.sh status` | 显示哪些服务正在运行及其 PID。 |
 | `scripts/lens-local.sh clean [-y\|--yes]` | 停止服务，并删除内嵌数据库以及 `~/.llm-d-lens` 下的所有本地应用数据。 |
 | `scripts/lens-local.sh install-node` | 将受支持的 Node.js 安装到 `.dev-tools/`（当系统的 Node 缺失或版本过旧时会自动使用）。 |
 
-端口可以通过 `FRONTEND_PORT`、`SERVER_PORT` 和 `BACKEND_PORT`
-环境变量来配置；参见[环境变量](/environment-variables)。
+端口可以通过 `FRONTEND_PORT`（默认 `5173`）和 `BACKEND_PORT`（默认 `3000`）配置。
+`SERVER_PORT` 仍作为 Python 端口的后备值。旧的 `restart server` 目标会选择 `backend`；
+从旧版三进程结构切换时请使用 `restart all`。参见[环境变量](/environment-variables)。
 
 ### 目标节点与 kubeconfig
 
@@ -37,7 +38,7 @@ TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" scripts/lens-local.sh check
 处于 Ready 状态且未被 cordon。这不保证某个具体工作负载的资源请求、
 亲和性或污点容忍条件一定能够满足。
 
-节点名称会导出为后端和 Node 已有的 `PRISM_K8S_TARGET_NODE`。
+节点名称会导出为后端已有的 `PRISM_K8S_TARGET_NODE`。
 未设置 `TARGET_NODE` 时仍兼容该变量。未设置 `KUBECONFIG` 时使用 Kubernetes
 正常的配置查找方式。`stop`、`status`、`clean` 和 `install-node` 不检查目标节点，
 也不接受目标节点相关参数。
@@ -67,7 +68,7 @@ TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" scripts/lens-local.sh check
 | --- | --- |
 | `--install-dir DIR` | 安装位置（默认 `$HOME/llm-d-lens`）。 |
 | `--app-port PORT` | Web 应用/API 端口（默认 `3000`）。 |
-| `--backend-port PORT` | 内部 FastAPI 后端端口（默认 `8081`）。 |
+| `--backend-port PORT` | `--app-port` 的旧版别名；两者配置同一个监听端口。 |
 | `--silent` | 仅使用默认值/标志进行非交互式安装。 |
 | `--no-https` | 提供纯 HTTP 服务，而不是自动 HTTPS。 |
 | `--no-start` | 安装但不启动服务。 |
@@ -79,10 +80,10 @@ TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" scripts/lens-local.sh check
 
 ## `node scripts/generate-mcp-tools.mjs`
 
-根据后端当前的 API 接口，重新生成 Node BFF 暴露给
-[Lens Assistant](/user-guide/lens-assistant) 的 MCP 工具目录。
-每当后端路由发生变化时运行它；`scripts/lens-local.sh start`/`restart`
-以及 Docker 构建会自动执行此操作。
+根据当前 REST schema 校验 Python MCP 目录，遇到非预期跳过的操作时失败。
+`--check` 执行相同校验，`--json` 导出目录，不再生成 Node 服务端文件。
+本地 `start`/`restart` 和安装后的启动器直接校验同一目录。
+纯 Python 等价命令为 `.venv/bin/python -m llm_d_lens.mcp.catalog`。
 
 ## `alembic`
 

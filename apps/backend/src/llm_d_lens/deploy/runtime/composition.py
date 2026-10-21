@@ -882,9 +882,7 @@ def _build_optimized_baseline_provider(settings: RuntimeEnvironment) -> Optimize
     sources = guide_overlays(guide_root, "optimized-baseline", accelerator=settings.accelerator)
     source_error = None
     try:
-        variant = default_guide_variant(
-            sources, guide="optimized-baseline", accelerator=settings.accelerator
-        )
+        variant = default_guide_variant(sources, guide="optimized-baseline", accelerator=settings.accelerator)
         overlay_path = sources[variant]
     except ValueError as error:
         source_error = str(error)

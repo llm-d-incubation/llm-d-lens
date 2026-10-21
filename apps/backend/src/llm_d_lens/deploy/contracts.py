@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -118,6 +118,20 @@ class DeployableConfiguration(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
+class RuntimeClassPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["auto", "node-default", "named"] = "auto"
+    name: str | None = None
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> RuntimeClassPolicy:
+        from llm_d_lens.deploy.providers.hardware_profile import validate_runtime_class_policy
+
+        validate_runtime_class_policy(self.model_dump(exclude_none=True))
+        return self
+
+
 class RuntimeBinding(BaseModel):
     """Environment-specific values bound by Deploy without changing Configuration ownership."""
 
@@ -125,6 +139,7 @@ class RuntimeBinding(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
     cluster_session_id: str | None = None
     placement: dict[str, Any] | None = None
+    runtime_class: RuntimeClassPolicy | None = None
 
 
 class DeploymentRunCreateRequest(BaseModel):

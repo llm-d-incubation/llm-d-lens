@@ -29,7 +29,9 @@ def test_tiered_cache_variant_preserves_cache_semantics(requested, entries, expe
     assert resolve_tiered_cache_variant(entries, requested, accelerator="nvidia") == expected
 
 
-@pytest.mark.parametrize("entries", [[], ["base"], ["native/fs/base"], ["lmcache-connector/cpu/base"], ["native/cpu/gke"]])
+@pytest.mark.parametrize(
+    "entries", [[], ["base"], ["native/fs/base"], ["lmcache-connector/cpu/base"], ["native/cpu/gke"]]
+)
 def test_tiered_cache_variant_does_not_select_a_different_cache_or_platform(entries):
     with pytest.raises(ValueError) as failure:
         resolve_tiered_cache_variant(entries, accelerator="nvidia")
@@ -122,7 +124,7 @@ def test_patch_documents_applies_hardware_runtime_class(tmp_path, existing):
 
     adapter._patch_documents(documents, parameters)
 
-    assert pod["runtimeClassName"] == (existing or "nvidia")
+    assert pod.get("runtimeClassName") == existing
     assert pod["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "2"
 
 
@@ -297,7 +299,7 @@ def test_patch_documents_sets_xpu_startup_budget_and_model_length(invocation):
 
 @pytest.mark.parametrize("value", [4096, 2048])
 def test_shell_arguments_preserve_quoted_values_and_replace_old_context(value):
-    command = "exec vllm serve org/model --max-model-len 32000 --kv-transfer-config '{\"kv_role\": \"kv_both\"}'"
+    command = 'exec vllm serve org/model --max-model-len 32000 --kv-transfer-config \'{"kv_role": "kv_both"}\''
     result = HelmKustomizeGuideAdapter._set_shell_argument(command, "max-model-len", value)
     tokens = shlex.split(result)
     assert f"--max-model-len={value}" in tokens

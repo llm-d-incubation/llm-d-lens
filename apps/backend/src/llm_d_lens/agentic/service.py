@@ -567,10 +567,14 @@ class AgenticDeploymentService:
                     + ("; ".join(reasons) or "AIC returned no matching prediction")
                     + ". Reduce the load target or select more compatible accelerator capacity."
                 )
-            await self._emit_progress(on_progress, {
-                "phase": "generation", "status": "complete",
-                "message": f"Validated {len(validated.accepted)} AIC load-target recommendation(s).",
-            })
+            await self._emit_progress(
+                on_progress,
+                {
+                    "phase": "generation",
+                    "status": "complete",
+                    "message": f"Validated {len(validated.accepted)} AIC load-target recommendation(s).",
+                },
+            )
             return validated.accepted, generation, resolved
         if provider is None or not hasattr(provider, "settings"):
             await self._emit_progress(
@@ -1150,7 +1154,7 @@ class AgenticDeploymentService:
         deployment = await deployment_run_manager.start_run(
             DeploymentRunCreateRequest(
                 configurations=[configuration],
-                runtime_binding=RuntimeBinding(placement=placement),
+                runtime_binding=RuntimeBinding(placement=placement, runtime_class=run.request.runtime_class),
                 provenance={
                     "deployment_source": {"kind": "agentic-deployment"},
                     "cluster_session_id": session.id,

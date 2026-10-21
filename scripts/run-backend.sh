@@ -14,6 +14,19 @@ if ! "$PYTHON" -c 'import uvicorn' >/dev/null 2>&1; then
   echo "Create a virtualenv and install the project requirements before starting Prism." >&2
   exit 1
 fi
+"$PYTHON" -m llm_d_lens.db.bootstrap_cli
+BACKEND_PORT="${BACKEND_PORT:-${SERVER_PORT:-${PORT:-3000}}}"
+SCHEME=http
+TLS_ARGS=()
+if [[ -n "${TLS_CERT_FILE:-}" && -n "${TLS_KEY_FILE:-}" ]]; then
+  SCHEME=https
+  export PRISM_MCP_CA_FILE="${PRISM_MCP_CA_FILE:-$TLS_CERT_FILE}"
+  TLS_ARGS=(--ssl-certfile "$TLS_CERT_FILE" --ssl-keyfile "$TLS_KEY_FILE")
+  if [[ -n "${TLS_CA_FILE:-}" ]]; then
+    TLS_ARGS+=(--ssl-ca-certs "$TLS_CA_FILE")
+  fi
+fi
+export PRISM_MCP_URL="${PRISM_MCP_URL:-$SCHEME://127.0.0.1:$BACKEND_PORT/api/mcp}"
 exec "$PYTHON" -m uvicorn llm_d_lens.api:app \
-  --host "${BACKEND_HOST:-0.0.0.0}" \
-  --port "${BACKEND_PORT:-8081}"
+  --host "${BACKEND_HOST:-${SERVER_HOST:-${HOST:-0.0.0.0}}}" \
+  --port "$BACKEND_PORT" "${TLS_ARGS[@]}"
