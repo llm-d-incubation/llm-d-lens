@@ -14,7 +14,7 @@ valid page URL and its filters; a fresh sign-in starts at the landing page inste
 
 ## Switch color mode
 
-Use the sun/moon button at the bottom of the sidebar to switch between dark
+Use the sun/moon button at the right of the top bar to switch between dark
 and light mode. Light mode uses an airy sky-blue-white workspace, white surfaces,
 ink text, and Intel sky-blue primary actions inspired by modern finance dashboards.
 Dark mode, chart series, and status colors
@@ -24,11 +24,24 @@ applies to the sign-in screen.
 ## Create a user
 
 1. Open the **Users** page.
-2. Click **Add user**.
+2. Click **Add user** at the right of the **Users** table heading.
 3. In the **Add user** drawer, fill in **Username**, **Display name**, **Email**, **Password**, and **Confirm password**.
 4. Optional: in **Roles**, preselect one or more roles.
 5. If you assign roles and want cluster scope, change **Scope** from **All clusters (global)** to **Specific cluster**, then choose **Cluster**.
 6. Click **Add user**.
+
+## Page controls
+
+**Roles** places **Refresh** (icon and text) and **Add role** to the right of
+the **Roles** list heading, below search. Refresh buttons appear at the right of **Stored-secret master key**,
+**Events**, and **Your sessions** on the Master key, Audit log, and Active
+sessions pages. Controls remain available when a list is empty; refresh is
+disabled while loading.
+
+Under **Platform**, open **Model Usage** for cross-user model usage analytics.
+Audit log distributes event, result, action, source and actor filters across
+the first row. **Start** and **End** share the row below, with **Clear Filters**
+when a filter is active. Controls wrap on narrow screens.
 
 ## Assign or remove a user's roles
 
@@ -67,6 +80,10 @@ applies to the sign-in screen.
 5. Click **Add role** for a new role, or **Save permissions** when editing an existing one.
 
 ## Configure an identity provider
+
+**Refresh** and **Add provider** appear to the right of the **Providers** list
+heading, including when the list is empty. Adding providers requires configuration
+permission.
 
 1. Open the **Identity providers** page.
 2. Click **Add provider**.

@@ -46,13 +46,10 @@ export function Modal({
     className,
     inline = false,
     // 'center' (default) is the classic centered dialog; 'drawer' slides in
-    // from the right edge of the screen as a full-height panel. Drawer
-    // panels never close on a backdrop click, regardless of
-    // `closeOnBackdrop` -- the only ways out are the explicit close
-    // button/Escape/an in-panel Cancel action.
+    // from the right edge of the screen as a full-height panel.
     variant = 'center',
-    // Drawers normally still render a full-screen dimmed backdrop (it just
-    // doesn't close on click). Pass `overlay={false}` for a drawer that
+    // Drawers normally render a full-screen dimmed backdrop.
+    // Pass `overlay={false}` for a drawer that
     // should leave the rest of the page fully visible and interactive
     // (e.g. a live log panel the user keeps open while working elsewhere).
     overlay = true,
@@ -88,7 +85,7 @@ export function Modal({
         <div className={inline ? 'w-full' : 'fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none'}>
             {showOverlay && <div
                 className="modal-overlay absolute inset-0 backdrop-blur-sm pointer-events-auto"
-                onClick={isDrawer ? undefined : (closeOnBackdrop ? onClose : undefined)}
+                onClick={closeOnBackdrop ? onClose : undefined}
                 aria-hidden="true"
             />}
             <div

@@ -142,8 +142,8 @@ function VolumeSummary({ item, pvc, clusterNameById, mutatingId, onAcknowledgeNo
     const storageClass = pvc?.storageClassName || pvc?.persistentVolume?.storageClassName || '—';
 
     return (
-        <div className="storage-detail-card overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800/60 dark:bg-slate-950/40">
-            <div className="p-4">
+        <div className="storage-detail-card shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800/60 dark:bg-slate-950/40">
+            <div className="p-4 pb-6">
                 <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge status={effectiveStatus} />
                     <PurposeBadges purposes={item.purposes} />
@@ -249,7 +249,7 @@ export function StorageResourceDetailPanel({ item, resourceStatuses = {}, cluste
                 mutatingId={mutatingId}
                 onAcknowledgeNodes={onAcknowledgeNodes}
             />
-            <section className="storage-detail-card overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800/60 dark:bg-slate-950/40">
+            <section className="storage-detail-card shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800/60 dark:bg-slate-950/40">
                 <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800/60 dark:bg-transparent">
                     <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Storage binding</h3>
                     <span className="text-[11px] text-slate-500">PVC → PV</span>

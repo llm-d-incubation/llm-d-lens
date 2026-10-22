@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import React from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/cn';
 
 const VARIANTS = {
@@ -37,7 +37,7 @@ const VARIANTS = {
 
 const SIZES = {
     xs: 'px-2.5 py-1 text-[11px] rounded-md gap-1',
-    sm: 'px-3.5 py-1.5 text-xs rounded-lg gap-1.5',
+    sm: 'h-8 px-3.5 py-1.5 text-xs rounded-lg gap-1.5',
     md: 'px-4 py-2 text-sm rounded-lg gap-2',
     icon: 'p-1.5 rounded-lg',
 };
@@ -65,3 +65,12 @@ export const Button = React.forwardRef(function Button(
         </button>
     );
 });
+
+export function RefreshButton({ refreshing = false, label = 'Refresh', className, ...props }) {
+    return (
+        <Button variant="secondary" size="icon" title={label} aria-label={label}
+            className={cn('h-8 w-8 shrink-0', className)} {...props}>
+            <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} aria-hidden="true" />
+        </Button>
+    );
+}

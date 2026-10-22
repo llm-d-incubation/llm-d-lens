@@ -4,8 +4,10 @@ import { usePolling } from '../../../shared/lib/usePolling';
 import { useResourceList } from '../../../shared/lib/useResourceList';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, AlertCircle, ChevronDown, ChevronUp, Cpu, Gpu, HardDrive, MemoryStick, MoreVertical, Network, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Server, Trash2, Upload, Webcam } from 'lucide-react';
-import { Button, EmptyState, Input, Label, Modal, SectionLabel, Select, Textarea, ModuleHeader, ModulePage } from '../../../shared/ui';
+import { Activity, AlertCircle, Boxes, ChevronDown, ChevronUp, Cpu, Gpu, HardDrive, MemoryStick, MoreVertical, Network, Pencil, Plus, Rocket, Server, Trash2, Upload, Webcam } from 'lucide-react';
+import { cn } from '../../../shared/lib/cn';
+import { Button, EmptyState, Input, Label, Modal, Panel, SectionLabel, Select, Textarea, ModuleHeader, ModulePage } from '../../../shared/ui';
+import { HelpTooltip } from '../../../shared/ui/FormControls';
 import { CreateClusterWizard } from './CreateClusterWizard';
 import { EditClusterModal } from './EditClusterModal';
 import { storePendingModelMarketCluster } from '../../model-market';
@@ -231,7 +233,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     const [showCreate, setShowCreate] = useState(false);
     const [openActions, setOpenActions] = useState(null);
     const [clusterSearch, setClusterSearch] = useState('');
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [deleting, setDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState('');
@@ -551,53 +552,43 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                     title="Clusters"
                     description="Register Kubernetes clusters and keep their connectivity, capacity, and readiness up to date."
                     onToggleMobileNav={onToggleMobileNav}
-                    className="mb-6"
                 />
-                {selectedId && (
-                    <div className="mb-6 flex w-full items-end justify-between gap-4">
-                        <Button variant="secondary" size="icon" onClick={() => setSidebarCollapsed((current) => !current)} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-                            {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-                        </Button>
-                        <div className="min-w-0 text-right">
-                            <div className="flex items-center justify-end gap-2.5">
-                                <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-700/60 bg-slate-900/60 px-2.5 py-0.5 text-xs font-semibold text-slate-300">
-                                    <span className={`h-2 w-2 rounded-full motion-safe:animate-pulse [animation-duration:2.4s] ${statusDotClass(selectedClusterStatus)}`} aria-hidden="true" />
-                                    {selectedClusterStatusLabel}
-                                </span>
-                                <h3 className="truncate text-3xl font-bold text-white">{selectedCluster?.name || selectedId}</h3>
-                                {selectedCluster && (
-                                    <Button variant="secondary" size="icon" onClick={() => setEditTarget(selectedCluster)} title="Edit cluster" aria-label="Edit cluster">
-                                        <Pencil size={14} />
-                                    </Button>
-                                )}
-                            </div>
-                            {selectedCluster?.description && <p className="mt-2 text-sm text-slate-400">{selectedCluster.description}</p>}
-                        </div>
-                    </div>
-                )}
-                <div className={`grid gap-6 ${sidebarCollapsed ? 'lg:grid-cols-1' : 'lg:grid-cols-[260px_1fr]'}`}>
-                    {!sidebarCollapsed && <aside className="space-y-6">
-                        <section className="relative overflow-hidden border border-slate-800/80 rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
-                            <div className="flex items-center gap-2 text-[#037ffc] font-semibold text-sm mb-3 dark:text-cyan-400">
-                                <Upload size={16} />
-                                <span className="tracking-wide">Target cluster</span>
-                            </div>
-                            <div className="flex flex-col gap-2">
+                <div className="grid items-start gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
+                    <section className="min-w-0 space-y-6" aria-label="Cluster selection and management">
+                        <Panel className="space-y-2 shadow-none">
+                            <Label htmlFor="overview-cluster" className="mb-3 flex items-center gap-2">
+                                <Upload size={16} aria-hidden="true" />Target cluster
+                            </Label>
                                 <Select
                                     id="overview-cluster"
                                     value={selectedId}
                                     onChange={(event) => setSelectedId(event.target.value)}
                                     disabled={!readyClusters.length}
+                                    className="w-full min-w-0 text-sm"
                                 >
                                     {!readyClusters.length && <option value="">No ready clusters</option>}
                                     {readyClusters.map((cluster) => (
                                         <option key={cluster.id} value={cluster.id}>{cluster.name || cluster.id}</option>
                                     ))}
                                 </Select>
+                                {(selectedId || selectedCluster) && (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                    {selectedId && <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-theme-muted">
+                                        <span className={cn('h-2 w-2 rounded-full', statusDotClass(selectedClusterStatus))} aria-hidden="true" />
+                                        {selectedClusterStatusLabel}
+                                    </span>}
+                                {selectedCluster && (
+                                    <Button variant="secondary" size="icon" className="h-8 w-8" onClick={() => setEditTarget(selectedCluster)} title="Edit cluster" aria-label="Edit cluster">
+                                        <Pencil size={14} />
+                                    </Button>
+                                )}
+                                {selectedCluster?.description && <HelpTooltip label="Cluster description">{selectedCluster.description}</HelpTooltip>}
+                                    </div>
+                                )}
                                 <Button
                                     variant="sky"
-                                    size="md"
-                                    className="shrink-0"
+                                    size="sm"
+                                    className="w-full"
                                     disabled={!selectedId}
                                     onClick={() => {
                                         storePendingModelMarketCluster(selectedId);
@@ -607,35 +598,36 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                     Deploy a model
                                 </Button>
                                 <PermissionGate permission="deployment:run:read">
-                                    <Button variant="secondary" size="md" className="shrink-0" disabled={!selectedId}
+                                    <Button variant="secondary" size="sm" className="w-full" disabled={!selectedId}
                                         title="View deployments in the selected cluster"
+                                        aria-label="View deployments in the selected cluster"
                                         onClick={() => onNavigate?.('optimization-deployments', { clusterId: selectedId })}>
-                                        Deployments
+                                        <Rocket size={14} /><span>Deployments</span>
                                     </Button>
                                 </PermissionGate>
                                 <PermissionGate permission={VIEW_PERMISSIONS['admin/model-service']}>
-                                    <Button variant="secondary" size="md" className="shrink-0" disabled={!selectedId}
+                                    <Button variant="secondary" size="sm" className="w-full" disabled={!selectedId}
                                         title="View model services in the selected cluster"
+                                        aria-label="View model services in the selected cluster"
                                         onClick={() => onNavigate?.('admin/model-service', { clusterId: selectedId })}>
-                                        Model services
+                                        <Boxes size={14} /><span>Model services</span>
                                     </Button>
                                 </PermissionGate>
-                            </div>
-                        </section>
+                        </Panel>
 
-                <section className="relative overflow-hidden border border-slate-800/80 rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl">
-                    <div className="relative p-6">
-                        <SectionLabel className="text-[#037ffc] text-sm font-semibold normal-case tracking-normal">{`Clusters (${clusters.length})`}</SectionLabel>
-                        <div className="mt-3 flex items-center gap-2">
+                <Panel className="shadow-none">
+                    <SectionLabel>{`Clusters (${clusters.length})`}</SectionLabel>
+                            <div className="flex min-w-0 items-center gap-2">
                             <Input
                                 value={clusterSearch}
                                 onChange={(event) => setClusterSearch(event.target.value)}
                                 placeholder="Search cluster name…"
                                 aria-label="Search clusters by name"
-                                className="flex-1 py-1.5 text-xs"
+                                className="h-8 min-w-0 flex-1 py-1 text-xs"
                             />
-                            <Button variant="sky" size="sm" onClick={openCreate}><Plus size={14} />Add</Button>
+                            <Button variant="sky" size="sm" className="shrink-0" onClick={openCreate}><Plus size={14} />Add</Button>
                         </div>
+                    <div className="mt-4">
                         {!clusters.length && !clustersLoading ? (
                             <EmptyState
                                 icon={<Server size={28} />}
@@ -648,7 +640,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                 No clusters match “{clusterSearch.trim()}”.
                             </p>
                         ) : (
-                            <div className="mt-4 space-y-2">
+                            <div className="grid gap-2">
                                 {orderedClusters.map((cluster) => {
                                     const isSelected = cluster.id === selectedId;
                                     return (
@@ -733,9 +725,9 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                             </div>
                         )}
                     </div>
-                </section>
-                    </aside>}
-                    <div className="space-y-6 min-w-0">
+                </Panel>
+                    </section>
+                    <div className="min-w-0 space-y-4">
                 {(clusterListError || error) && (
                     <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-300 flex items-start gap-2">
                         <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />

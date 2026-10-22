@@ -3,6 +3,8 @@ import { evaluationApi as api } from '../model/client';
 import { TERMINAL_EVALUATION_STATUSES as terminalStatuses, evaluationStatusTone } from '../model/domain';
 import { usePolling } from '../../../shared/lib/usePolling';
 import { confirmDelete } from "../../../shared/ui/confirmDelete";
+import { PageHeading } from "../../../shared/ui/PageHeader";
+import { Panel } from "../../../shared/ui/Panel";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { historicalFlows } from "./benchmark-results/historicalFlow.js";
 import { liveDeployments } from "./benchmark-results/deploymentEvidence.js";
@@ -332,11 +334,13 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
             setCaseActions((current) => ({ ...current, [key]: "" }));
         }
     };
-    return <section className="evaluation-details-page mx-auto flex w-full min-w-0 max-w-[1560px] flex-col gap-4 px-4 py-5 text-slate-100 sm:px-6">
-        <header className="grid gap-4 border-b border-slate-800/70 pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+    return <section className="evaluation-details-page mx-auto flex w-full min-w-0 max-w-[1560px] flex-col gap-4 px-4 py-6 text-slate-100 sm:px-6 lg:px-12 lg:py-10">
+        <PageHeading title={details?.workflow.name || details?.workflow.id || evaluationId || "Benchmark details"} subtitle="Benchmark" />
+        <Panel padding="none" className="rounded-b-none border-b-0 shadow-none">
+        <header className="grid gap-4 border-b border-theme-border p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
             <div className="flex min-w-0 flex-1 items-start gap-3">
                 <button title="Back to evaluations" onClick={() => onNavigate("optimization-evaluate")} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-500 hover:text-cyan-200"><ArrowLeft className="h-4 w-4" /></button>
-                <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-400">Benchmark</p><h1 className="mt-1 break-words text-2xl font-semibold tracking-tight">{details?.workflow.name || details?.workflow.id || evaluationId || "Benchmark details"}</h1>{details && <><div className="mt-3 flex flex-wrap items-center gap-3 text-xs"><span data-status={details.workflow.status} className={`evaluation-status-label rounded-full border px-2.5 py-1 ${evaluationStatusTone(details.workflow.status)}`}>{details.workflow.status}</span><span className="text-slate-400">{details.cases?.length ?? cases.length} cases</span><span className="text-slate-500">{guideProfile.label}</span></div><dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500"><div className="flex min-w-0 gap-2"><dt>Task ID</dt><dd className="break-all font-mono text-slate-400">{details.workflow.id}</dd></div><div className="flex gap-2"><dt>Created</dt><dd className="text-slate-400">{details.workflow.created_at || '—'}</dd></div></dl></>}</div>
+                <div className="min-w-0">{details && <><div className="flex flex-wrap items-center gap-3 text-xs"><span data-status={details.workflow.status} className={`evaluation-status-label rounded-full border px-2.5 py-1 ${evaluationStatusTone(details.workflow.status)}`}>{details.workflow.status}</span><span className="text-slate-400">{details.cases?.length ?? cases.length} cases</span><span className="text-slate-500">{guideProfile.label}</span></div><dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500"><div className="flex min-w-0 gap-2"><dt>Task ID</dt><dd className="break-all font-mono text-slate-400">{details.workflow.id}</dd></div><div className="flex gap-2"><dt>Created</dt><dd className="text-slate-400">{details.workflow.created_at || '—'}</dd></div></dl></>}</div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
                 <button title="Download the complete benchmark report" disabled={!details} onClick={downloadReport} className="details-header-action inline-flex h-9 items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 text-xs font-semibold text-cyan-100 hover:border-cyan-300 disabled:opacity-40"><Download className="h-4 w-4" /> Download Report</button>
@@ -344,19 +348,20 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
                 <button title="Refresh deployment status and details" onClick={() => loadDetails({ refreshDeployments: true })} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-500 hover:text-cyan-200"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
             </div>
         </header>
-        {details?.workflow?.endpoint_used && <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/[0.04] p-3 text-[10px] text-slate-400">
+        {details?.workflow?.endpoint_used && <div className="border-b border-theme-border p-4 text-[10px] text-slate-400">
             <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold uppercase tracking-wider text-cyan-300">Actual benchmark target</span><span>{details.workflow.endpoint_preflight?.status === "reachable" ? `Reachable (HTTP ${details.workflow.endpoint_preflight.http_status})` : "Target recorded by benchmark runner"}</span></div>
             <p className="mt-1 break-all font-mono text-slate-300">{details.workflow.endpoint_used}</p>
             {details.workflow.workload_summary && <p className="mt-2">{details.workflow.workload_summary.matrix_points || 0} matrix points · {(details.workflow.workload_summary.concurrency_stages || []).length} concurrency stages · {details.workflow.workload_summary.parallelism ?? 1} worker(s) · timeout {details.workflow.workload_summary.wait_timeout_seconds ?? "—"}s</p>}
         </div>}
-        {details?.workflow && <div className="grid gap-3 rounded-xl border border-slate-800/80 bg-slate-900/45 p-3 text-[10px] text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
+        {details?.workflow && <div className="grid gap-3 p-4 text-[10px] text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
             <div><span className="block uppercase tracking-wider text-slate-600">Phase</span><b className="mt-1 block text-sm text-[#037ffc] dark:text-cyan-200">{details.workflow.phase || details.workflow.status || "—"}</b></div>
             <div title={details.workflow.phase_started_at || details.workflow.started_at || ""}><span className="block uppercase tracking-wider text-slate-600">Started</span><b className="mt-1 block truncate text-slate-300">{details.workflow.phase_started_at || details.workflow.started_at || "—"}</b></div>
             <div title="Heartbeat shows runner liveness; it does not represent request progress"><span className="block uppercase tracking-wider text-slate-600">Runner heartbeat</span><b className="mt-1 block truncate text-slate-300">{details.workflow.heartbeat_at || "—"}</b></div>
             <div title={details.workflow.last_log_at || ""}><span className="block uppercase tracking-wider text-slate-600">Last output</span><b className="mt-1 block truncate text-slate-300">{details.workflow.last_log_at || "—"}</b></div>
         </div>}
-        {details && <div className="flex flex-wrap items-center gap-2">{(details.cases ? details.cases.map(entry => entry.evaluation).filter(Boolean) : [details.evaluation || details.workflow]).map(run => <BenchmarkTiming key={run.id} run={run} compact />)}</div>}
-        <nav aria-label="Benchmark detail sections" className="sticky top-0 z-30 flex gap-0 overflow-x-auto rounded-xl border border-slate-800/70 bg-[#080d17]/95 p-1 shadow-xl backdrop-blur-xl">{[
+        {details && <div className="flex flex-wrap items-center gap-2 border-t border-theme-border p-4 empty:hidden">{(details.cases ? details.cases.map(entry => entry.evaluation).filter(Boolean) : [details.evaluation || details.workflow]).map(run => <BenchmarkTiming key={run.id} run={run} compact />)}</div>}
+        </Panel>
+        <nav aria-label="Benchmark detail sections" className="sticky top-0 z-30 -mt-4 flex gap-0 overflow-x-auto rounded-b-xl border border-theme-border bg-theme-card p-1">{[
             ["overview", "Benchmark results", <Gauge key="overview-icon" className="h-3.5 w-3.5" />],
             ["compare", "Compare", <Gauge key="compare-icon" className="h-3.5 w-3.5" />],
             ["live", hasLiveDeployment ? "Live monitoring" : "Recorded monitoring", <Activity key="live-icon" className="h-3.5 w-3.5" />],

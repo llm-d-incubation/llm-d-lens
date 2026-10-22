@@ -18,7 +18,8 @@ import {
 import { manageDeploymentMonitoring } from '../../../clusters';
 import { MultiSelectDropdown } from '../../../../shared/ui/MultiSelectDropdown';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
-import { Button } from '../../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../../shared/ui/Button';
+import { StatCardRow } from '../../../../shared/ui/StatCard';
 import { Input, Select } from '../../../../shared/ui/FormControls';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
@@ -196,6 +197,8 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                 icon={Rocket}
                 title="Deployments"
                 description="Track active model serving deployments, inspect endpoints, and update or remove existing services."
+            />
+            <StatCardRow
                 actions={(
                     <>
                         {notice && (
@@ -204,6 +207,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                                 {notice}
                             </span>
                         )}
+                        <RefreshButton onClick={load} disabled={refreshing} refreshing={refreshing} label="Refresh deployments" />
                         {can('deployment:run:create') && (
                             <Button variant="sky" size="sm" onClick={() => onNavigate?.('model-market')}>
                                 <Plus size={14} /> Create
@@ -211,9 +215,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                         )}
                     </>
                 )}
-            />
-
-            <section className="flex flex-col gap-3">
+            >
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.Ready} />
@@ -221,7 +223,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                     <StatCard label="Failed" value={summary.Failed} tone={summary.Failed > 0 ? 'text-rose-500 font-extrabold' : 'text-white'} />
                     <StatCard label="Cleaned" value={summary.Cleaned} />
                 </div>
-            </section>
+            </StatCardRow>
 
             <section
                 aria-busy={loading || refreshing}

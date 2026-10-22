@@ -354,7 +354,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
         return true;
     }), [records, keyFilter, bounds]);
 
-    const title = mode === 'admin' ? 'Model usage' : 'My model usage';
+    const title = mode === 'admin' ? 'Model Usage' : 'My model usage';
 
     // --- admin: cross-user analytics ----------------------------------------
     if (mode === 'admin') {
@@ -392,13 +392,27 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                     )}
 
                     <section className={cn(CARD, 'usage-card overflow-visible p-6')}>
-                        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
-                            <label className="text-xs text-slate-400">
+                        <div className="flex flex-wrap items-end gap-3">
+                            <label className="w-36 text-xs text-slate-400">
                                 Time range
                                 <Select value={range} onChange={(event) => setRange(event.target.value)} className="mt-1 h-9">
                                     {RANGE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                                 </Select>
                             </label>
+                            <div className="flex flex-col text-xs text-slate-400">
+                                Group by
+                                <ToggleGroup
+                                    className="mt-1 h-9"
+                                    options={[
+                                        { value: 'model', label: 'Model' },
+                                        { value: 'user', label: 'User' },
+                                        { value: 'cluster', label: 'Cluster' },
+                                    ]}
+                                    value={groupBy}
+                                    onChange={setGroupBy}
+                                    activeClassName="usage-toggle-active"
+                                />
+                            </div>
                             {range === 'custom' && (
                                 <>
                                     <label className="text-xs text-slate-400">
@@ -411,22 +425,8 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                     </label>
                                 </>
                             )}
-                            <div className="text-xs text-slate-400">
-                                Group by
-                                <ToggleGroup
-                                    className="mt-3 h-9 gap-2"
-                                    options={[
-                                        { value: 'model', label: 'Model' },
-                                        { value: 'user', label: 'User' },
-                                        { value: 'cluster', label: 'Cluster' },
-                                    ]}
-                                    value={groupBy}
-                                    onChange={setGroupBy}
-                                    activeClassName="usage-toggle-active"
-                                />
-                            </div>
                             <MultiSelectDropdown
-                                className="h-9 w-44"
+                                className="h-9 w-36"
                                 label="User"
                                 emptyLabel="All users"
                                 clearLabel="All users"
@@ -438,7 +438,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                 onChange={(value) => toggleDim('user', value)}
                             />
                             <MultiSelectDropdown
-                                className="h-9 w-44"
+                                className="h-9 w-36"
                                 label="Model"
                                 emptyLabel="All models"
                                 clearLabel="All models"
@@ -450,7 +450,7 @@ export function ModelUsagePage({ mode = 'self', onToggleMobileNav, initialCluste
                                 onChange={(value) => toggleDim('model', value)}
                             />
                             <MultiSelectDropdown
-                                className="h-9 w-44"
+                                className="h-9 w-36"
                                 label="Cluster"
                                 emptyLabel="All clusters"
                                 clearLabel="All clusters"

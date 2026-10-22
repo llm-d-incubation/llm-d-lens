@@ -7,7 +7,7 @@ import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { AsyncState } from '../../../../shared/ui/AsyncState';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePolling } from '../../../../shared/lib/usePolling';
-import { CheckCircle2, HardDrive, Info, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, RotateCcw, Search, Server, ServerCog, Tags } from 'lucide-react';
+import { CheckCircle2, HardDrive, Info, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Search, Server, ServerCog, Tags } from 'lucide-react';
 import {
     createStorageVolume,
     acknowledgeStorageVolumeNodes,
@@ -16,7 +16,8 @@ import {
     listStorageVolumes,
 } from './storageManagementBackend';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
-import { Button } from '../../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../../shared/ui/Button';
+import { StatCardRow } from '../../../../shared/ui/StatCard';
 import { Input, Select } from '../../../../shared/ui/FormControls';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
@@ -239,6 +240,8 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                 icon={HardDrive}
                 title="Storage"
                 description="Manage registered storage volumes for model cache, datasets, and deployment artifacts across clusters."
+            />
+            <StatCardRow
                 actions={(
                     <>
                         {notice && (
@@ -247,9 +250,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                                 {notice}
                             </span>
                         )}
-                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh storage volumes">
-                            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                        </Button>
+                        <RefreshButton onClick={load} disabled={refreshing} refreshing={refreshing} label="Refresh storage volumes" />
                         <PermissionGate permission="storage:volume:create">
                             <Button variant="sky" size="sm" onClick={openCreate}>
                                 <Plus size={14} aria-hidden="true" /> New storage volume
@@ -257,9 +258,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                         </PermissionGate>
                     </>
                 )}
-            />
-
-            <section className="flex flex-col gap-3">
+            >
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.ready} />
@@ -271,9 +270,9 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                     <StatCard label="Attention" value={summary.attention} tone={summary.attention > 0 ? 'text-orange-300' : 'text-white'} />
                     <StatCard label="Failed" value={summary.failed} tone={summary.failed > 0 ? 'text-rose-300' : 'text-white'} />
                 </div>
-            </section>
+            </StatCardRow>
 
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch lg:h-[calc(100vh-17rem)] lg:min-h-[28rem]">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch lg:h-[calc(var(--workspace-height)-19rem)] lg:min-h-[28rem]">
             <div className={`flex flex-col gap-3 transition-all duration-200 lg:h-full ${sidebarOpen ? 'lg:w-80 lg:shrink-0' : 'lg:w-auto'}`}>
                 <div className="flex shrink-0 items-center gap-2">
                     {sidebarOpen && (

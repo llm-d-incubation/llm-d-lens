@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePolling } from '../../../shared/lib/usePolling';
-import { Monitor, RefreshCw, Trash2 } from 'lucide-react';
+import { Monitor, Trash2 } from 'lucide-react';
 import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../shared/ui/ModulePage';
-import { Button } from '../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../shared/ui/Button';
 import { Badge } from '../../../shared/ui/Badge';
 import { AsyncState } from '../../../shared/ui/AsyncState';
 import { EmptyState } from '../../../shared/ui/EmptyState';
@@ -64,16 +64,13 @@ export default function SessionsPage({ onToggleMobileNav }) {
                     title="Active sessions"
                     description="Sessions signed in with your account. Revoke any you do not recognize."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading}>
-                            <RefreshCw size={14} /> Refresh
-                        </Button>
-                    }
                 />
 
                 <AdminAlert tone="success">{notice}</AdminAlert>
                 {error && sessions.length > 0 && <AdminAlert>{error}</AdminAlert>}
 
+                <AdminPanel icon={Monitor} title="Your sessions" count={sessions.length}
+                    actions={<RefreshButton onClick={load} refreshing={refreshing} disabled={loading || refreshing} label="Refresh active sessions" />}>
                 <AsyncState
                     loading={loading}
                     error={sessions.length === 0 ? error : null}
@@ -81,7 +78,6 @@ export default function SessionsPage({ onToggleMobileNav }) {
                     onRetry={load}
                     emptyContent={<EmptyState icon={<Monitor size={22} />} title="No active sessions" message="You have no other active sessions." />}
                 >
-                    <AdminPanel icon={Monitor} title="Your sessions" count={sessions.length}>
                         <div className="overflow-x-auto">
                             <table className="w-full min-w-[44rem] text-left text-sm">
                                 <thead className="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-500">
@@ -124,8 +120,8 @@ export default function SessionsPage({ onToggleMobileNav }) {
                                 </tbody>
                             </table>
                         </div>
-                    </AdminPanel>
                 </AsyncState>
+                </AdminPanel>
             </div>
         </ModulePage>
     );

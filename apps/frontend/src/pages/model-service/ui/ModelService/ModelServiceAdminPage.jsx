@@ -625,33 +625,31 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
     ].find((item) => item.message);
 
     return (
-        <ModulePage className="model-services-page" contentClassName="flex h-screen flex-col pb-4">
-            <div className="flex w-full flex-1 flex-col gap-6">
+        <ModulePage className="model-services-page" contentClassName="flex h-[var(--workspace-height)] flex-col pb-4">
+            <div className="flex min-h-0 w-full flex-1 flex-col">
                 <ModuleHeader
                     className="[&>div:first-child]:flex-1"
                     icon={Boxes}
                     title="Model services"
-                    description="Add a public model name and its ready deployment together. The cluster-shared Gateway and per-model HTTPRoute are reconciled automatically; callers use the public model name with an API key."
+                    description="Publish models and manage their serving routes."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <>
+                />
+
+                <section className={cn(CARD, 'model-services-card flex min-h-0 flex-1 flex-col p-4')}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <SectionLabel className="mb-0 mr-2">Service Flow</SectionLabel>
                             <PermissionGate permission="model-service:member:manage">
                                 <Button variant="sky" size="sm" onClick={openAddModel}>
                                     <Plus size={14} /> Add model
                                 </Button>
                             </PermissionGate>
                             <PermissionGate permission="model-service:gateway:reconcile">
-                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">
+                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending}>
                                     <Repeat size={14} /> Reconcile
                                 </Button>
                             </PermissionGate>
-                        </>
-                    }
-                />
-
-                <section className={cn(CARD, 'model-services-card flex min-h-0 flex-1 flex-col p-4')}>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <SectionLabel className="mb-0 text-[#037ffc]">service flow</SectionLabel>
+                        </div>
                         <Panel padding="none" tone="subtle"
                             className="flex w-full flex-wrap items-center gap-1 p-1 shadow-none sm:w-auto"
                             role="search" aria-label="Filter service flow">

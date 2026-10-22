@@ -11,6 +11,7 @@ import { StorageVolumeSelect } from '../../../shared/ui/StorageVolumeSelect';
 import { AgenticDeploymentWorkspace } from '../../deployment';
 import { storeEvaluationIntent } from '../../evaluation';
 import { consumePendingModelMarketCluster } from '../model/transfer';
+import { standardRecommendation } from '../model/standardRecommendation';
 import { useAuth } from '../../auth';
 import { recommendationBudget } from '../../evaluation';
 
@@ -20,7 +21,6 @@ function formatDefaultName(model) {
     const base = String(model.id || 'model').slice(0, Math.max(1, 63 - suffix.length - 1));
     return `${base}-${suffix}`;
 }
-const GiB = 1024 ** 3;
 const VLLM_ARGUMENT_NAME = /^[a-z][a-z0-9-]*$/;
 
 function parseVllmArguments(input) {
@@ -34,25 +34,6 @@ function parseVllmArguments(input) {
         argumentsByName.set(match[1], match[2]?.trim() || 'true');
     }
     return { arguments: [...argumentsByName].map(([name, value]) => ({ name, value })), error: '' };
-}
-
-export function standardRecommendation(model, hardware, resourceBasis = 'available') {
-    const availableGpus = recommendationBudget(hardware, resourceBasis);
-    const totalVramGiB = (hardware?.vramBytes || 0) / GiB;
-    const vramPerGpuGiB = availableGpus > 0 ? totalVramGiB / availableGpus : 0;
-    const requiredVramGiB = Number.isFinite(model.sizeGiB) && model.sizeGiB > 0 ? model.sizeGiB * 1.2 : 0;
-    const tensorParallelism = vramPerGpuGiB > 0 ? Math.max(1, Math.ceil(requiredVramGiB / vramPerGpuGiB)) : 1;
-    const replicas = availableGpus >= tensorParallelism
-        ? Math.min(4, Math.floor(availableGpus / tensorParallelism))
-        : 1;
-    return {
-        tensorParallelism,
-        replicas,
-        maxModelLen: model.contextLength ?? 4096,
-        cpuOffload: requiredVramGiB > totalVramGiB && totalVramGiB > 0,
-        availableGpus,
-        vramPerGpuGiB,
-    };
 }
 
 export function ModelCard({ model, onSelect }) {
@@ -417,20 +398,19 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
 
     if (!selected) {
         return (
-            <ModulePage contentClassName="flex flex-col gap-5">
-                <ModuleHeader icon={Database} title="Model Market" />
-                <div className="flex items-center justify-between gap-4">
-                    <div><h1 className="text-xl font-semibold text-white">Select a model</h1><p className="mt-1 text-sm text-slate-400">Popular open models across language, vision, image, speech, retrieval, and diffusion.</p></div>
-                    <span role="status" className="shrink-0 text-xs text-theme-muted">{visibleModels.length} models</span>
-                </div>
+            <ModulePage contentClassName="flex flex-col gap-4 py-4 lg:py-5">
+                <ModuleHeader icon={Database} title="Model Catalog" />
                 <div className="flex flex-wrap items-center gap-3">
-                    <div className="min-w-0 flex-1 basis-64">
+                    <div className="flex min-w-0 w-full flex-wrap gap-2 lg:w-auto lg:flex-1" role="tablist" aria-label="Model categories">{CATEGORIES.map((item) => <button key={item} type="button" role="tab" aria-selected={category === item} onClick={() => setCategory(item)} className={`rounded-md border px-3 py-1.5 text-xs ${category === item ? 'border-[#037ffc] bg-[#037ffc] text-white dark:border-cyan-400 dark:bg-cyan-400/10 dark:text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>{item}</button>)}</div>
+                    <div className="ml-auto flex max-w-full flex-wrap items-center gap-2">
+                        <span role="status" className="text-xs text-theme-muted">{visibleModels.length} models</span>
+                        <div className="w-52 sm:w-64">
                         <Input type="search" icon={Search} value={search} onChange={(event) => setSearch(event.target.value)}
                             aria-label="Search models" placeholder="Search models, publishers, repositories, types, or precision..." />
+                        </div>
+                        {(search || category !== 'All') && <Button type="button" variant="secondary" size="sm" onClick={() => { setSearch(''); setCategory('All'); }}>Clear filters</Button>}
                     </div>
-                    {(search || category !== 'All') && <Button type="button" variant="secondary" onClick={() => { setSearch(''); setCategory('All'); }}>Clear filters</Button>}
                 </div>
-                <div className="flex flex-wrap gap-2" role="tablist" aria-label="Model categories">{CATEGORIES.map((item) => <button key={item} type="button" role="tab" aria-selected={category === item} onClick={() => setCategory(item)} className={`rounded-md border px-3 py-1.5 text-xs ${category === item ? 'border-[#037ffc] bg-[#037ffc] text-white dark:border-cyan-400 dark:bg-cyan-400/10 dark:text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}>{item}</button>)}</div>
                 <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {visibleModels.map((model) => <ModelCard key={model.id} model={model} onSelect={chooseModel} />)}
                     {!visibleModels.length && <EmptyState className="col-span-full" icon={<Search size={22} aria-hidden="true" />}
@@ -440,10 +420,13 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
         );
     }
 
+    const catalogBackButton = <Button variant="secondary" onClick={() => setSelected(null)} className="self-start"><ArrowLeft size={15} aria-hidden="true" />Model Catalog</Button>;
+
     if (!canDeploy) {
         return (
             <ModulePage contentClassName="flex flex-col gap-5">
-                <ModuleHeader icon={Rocket} title="One-click deployment" actions={<Button variant="secondary" onClick={() => setSelected(null)} className="not-dark:bg-transparent not-dark:hover:bg-[#f3f4f6]"><ArrowLeft size={15} aria-hidden="true" />Model Market</Button>} />
+                <ModuleHeader icon={Rocket} title="One-click deployment" />
+                {catalogBackButton}
                 <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-6">
                     <p className="text-sm font-medium text-slate-200">Your role cannot create deployments.</p>
                     <p className="mt-2 text-sm leading-6 text-slate-400">You can use deployments that already exist or were shared with you. Open the Deployments page to view them, or ask an administrator to grant you the deployment-create permission.</p>
@@ -455,7 +438,8 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
 
     return (
         <ModulePage contentClassName="flex flex-col gap-5">
-            <ModuleHeader icon={Rocket} title="One-click deployment" actions={<Button variant="secondary" onClick={() => setSelected(null)} className="not-dark:bg-transparent not-dark:hover:bg-[#f3f4f6]"><ArrowLeft size={15} aria-hidden="true" />Model Market</Button>} />
+            <ModuleHeader icon={Rocket} title="One-click deployment" />
+            {catalogBackButton}
             <div className="grid grid-cols-1 gap-5">
                 <form id="model-market-deployment-form" className="rounded-lg border border-slate-800 bg-slate-900/70 p-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
                     <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-5"><div><p className="text-xs uppercase text-cyan-300">{selected.family}</p><h1 className="mt-1 text-xl font-semibold text-white">{selected.name}</h1></div><span className="text-sm text-slate-400">{selected.sizeGiB} GiB</span></div>

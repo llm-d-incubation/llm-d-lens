@@ -640,7 +640,7 @@ html:not(.dark) .lens-navigation {
   --brand-accent-bg: #e6f6fe;
   --nav-on-accent: #ffffff;
   background-color: #ffffff;
-  border: 1px solid #d1d5db;
+  border-right: 1px solid var(--border-color);
   color: var(--text-primary);
   box-shadow: none;
 }
@@ -1469,7 +1469,7 @@ html:not(.dark) .simulation-page {
 html:not(.dark) .simulation-page [class*="shadow-"] {
   box-shadow: none !important;
 }
-html:not(.dark) .simulation-page section {
+html:not(.dark) .simulation-page section:not([aria-label="Simulation task summary"]) {
   background-color: #ffffff !important;
   background-image: none !important;
 }
@@ -1861,12 +1861,6 @@ html:not(.dark) .observability-page section {
   background-image: none !important;
 }
 
-/* Light mode: Observability control panels have no white fill. */
-html:not(.dark) .observability-page .observability-control-panel {
-  background-color: transparent !important;
-  background-image: none !important;
-}
-
 /* Light mode: selected accelerator tabs use solid brand blue. */
 html:not(.dark) .observability-page .accelerator-tab-active {
   background-color: #037ffc !important;
@@ -1882,16 +1876,6 @@ html:not(.dark) .observability-page .observability-service-tab-active {
 }
 html:not(.dark) .observability-page .observability-service-tab-active svg {
   color: #ffffff !important;
-}
-
-/* Light mode: Namespace control panel is white with a light-gray input. */
-html:not(.dark) .observability-page .namespace-panel {
-  background-color: #ffffff !important;
-}
-
-/* Light mode: GUIs control panel is white. */
-html:not(.dark) .observability-page .guis-panel {
-  background-color: #ffffff !important;
 }
 
 /* Light mode: Stack component type tags use solid colors. */

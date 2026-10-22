@@ -43,12 +43,12 @@ Update those clients with the replacement key.
 ## Create a model service
 
 1. Open **Model services**.
-2. Click the sky-blue **Add model** button in the upper-right page header, beside **Reconcile**, to open the full-height drawer from the right side of the page.
+2. Click the sky-blue **Add model** button beside **Service Flow** and **Reconcile** in the content area to open the full-height drawer from the right side of the page.
 3. Choose the **Cluster** containing your deployment.
 4. Choose a **Provider**. Only ready llm-d deployments with a deployment-owned InferencePool and EPP that have not already been added to a model are listed. Plain vLLM deployments are excluded because they cannot back a Model Service; existing providers are excluded even when disabled or assigned weight 0.
 5. Under **Model name mapping**, check the read-only **Provider model name**, filled from the selected deployment.
 6. Below **Exposed to users as**, choose an existing **Public model name** from the dropdown or type a name, for example `team-chat`. The dropdown only suggests names from the selected cluster. A name that does not exist creates a new model when you click **Add**. Applications use this value in the `model` field of Chat Completions API requests, rather than the provider model name.
-7. Click **Add**. A new public name creates the model service and its model server together. An existing public name in the same cluster adds the deployment to that model and reuses its HTTPRoute; it does not create another service. Click **Cancel** to discard the form.
+7. Click **Add**. A new public name creates the model service and its model server together. An existing public name in the same cluster adds the deployment to that model and reuses its HTTPRoute; it does not create another service. Click **Cancel** or the dimmed backdrop to discard the form before submission.
 8. Check the service's status in **Service flow**, then open **My services** and send a copied **cURL** request.
 
 When the public name differs from the provider model name, Lens creates an

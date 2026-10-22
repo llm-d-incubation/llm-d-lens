@@ -15,19 +15,17 @@
 import React from 'react';
 import { cn } from '../lib/cn';
 
-// The canonical page shell for workspace modules: full-bleed (no max-width
-// centering, only a small left gutter that keeps content clear of the sidebar)
-// on the same flat slate backdrop the benchmark browser uses. Pair with
-// ModuleHeader as the first child. Do not hand-roll this per module.
+// Workspace content sits below the app bar with balanced responsive gutters.
+// Pair with ModuleHeader as the first child.
 export function ModulePage({ children, className, contentClassName }) {
     return (
         <div
             className={cn(
-                'min-h-screen w-full bg-slate-950 text-slate-100 font-sans antialiased relative overflow-x-hidden',
+                'min-h-[var(--workspace-height,100dvh)] w-full shrink-0 bg-theme-bg text-theme-text font-sans antialiased relative overflow-x-hidden',
                 className
             )}
         >
-            <main className={cn('relative z-10 w-full py-6 pl-8 pr-6', contentClassName)}>{children}</main>
+            <main className={cn('relative z-10 w-full px-4 py-6 sm:px-6 lg:px-12 lg:py-10', contentClassName)}>{children}</main>
         </div>
     );
 }

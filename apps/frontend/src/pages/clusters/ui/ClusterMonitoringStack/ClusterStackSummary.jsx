@@ -38,7 +38,7 @@ function StackStatusLabel({ status, label }) {
 
 function StackMetricCard({ icon, title, value, unit, status, detail }) {
     return (
-        <div className="flex h-full flex-col gap-3 rounded-xl border border-slate-700/60 bg-slate-800/60 p-4 text-left shadow-lg backdrop-blur-xl">
+        <div className="flex h-full flex-col gap-2 rounded-lg border border-slate-700/60 bg-slate-800/60 p-3 text-left">
             <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-slate-400">
                     <span className="shrink-0 text-slate-400">{icon}</span>
@@ -46,7 +46,7 @@ function StackMetricCard({ icon, title, value, unit, status, detail }) {
                 </div>
                 {status && <StackStatusLabel status={status.status} label={status.label} />}
             </div>
-            <h3 className="truncate text-3xl font-bold leading-none text-white">
+            <h3 className="truncate text-2xl font-bold leading-none text-white">
                 {value}
                 {unit && <span className="ml-1 align-baseline text-sm font-semibold text-slate-400">{unit}</span>}
             </h3>
@@ -64,7 +64,7 @@ export function ClusterStackSummary({ snapshot }) {
 
     return (
         <section>
-            <div className="mb-3 text-[10px] font-extrabold uppercase tracking-widest text-[#037ffc] dark:text-sky-400/90">Live state</div>
+            <div className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-[#037ffc] dark:text-sky-400/90">Live state</div>
             <div className="grid gap-3 sm:grid-cols-2">
                 <StackMetricCard
                     icon={<Boxes size={13} />}

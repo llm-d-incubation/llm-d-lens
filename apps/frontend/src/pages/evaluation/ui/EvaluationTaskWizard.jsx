@@ -17,6 +17,7 @@ import BenchmarkInputs from "./evaluation/BenchmarkInputs";
 import EvaluationPlan from "./evaluation/EvaluationPlan";
 import { benchmarkIssues, benchmarkScenario, configurationContextLimit } from "../model/benchmarkSettings";
 import { Badge, Button, Modal } from "../../../shared/ui";
+import { PageHeading } from "../../../shared/ui/PageHeader";
 import { StorageVolumeSelect } from "../../../shared/ui/StorageVolumeSelect";
 import { listStorageVolumes } from "../../storage";
 import { listModelCacheEntries } from "../../model-cache";
@@ -763,16 +764,16 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         onNavigate("model-market");
     };
 
-    return <section className="benchmark-task-page compact-evaluation-wizard relative isolate mx-auto w-full max-w-[1500px] space-y-5 overflow-hidden px-6 py-6 text-slate-100 lg:px-8">
+    return <section className="benchmark-task-page compact-evaluation-wizard relative isolate mx-auto w-full max-w-[1500px] shrink-0 space-y-5 overflow-hidden px-4 py-6 text-slate-100 sm:px-6 lg:px-12 lg:py-10">
         <div aria-hidden="true" className="pointer-events-none absolute -right-32 top-24 -z-10 hidden h-80 w-80 rounded-full bg-cyan-500/[0.07] blur-3xl dark:block" />
         <div aria-hidden="true" className="pointer-events-none absolute -left-40 top-96 -z-10 hidden h-96 w-96 rounded-full bg-blue-600/[0.05] blur-3xl dark:block" />
-        <header className="flex items-center justify-between rounded-2xl border border-slate-800/70 bg-white px-5 py-4 shadow-lg shadow-black/10 backdrop-blur-sm dark:bg-slate-950/35">
-            <div>
-                <button disabled={editorBusy || busy} onClick={() => deployOnPublish ? leaveDeployOnly() : onNavigate("optimization-evaluate")} className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 transition hover:text-cyan-300"><ArrowLeft className="h-3.5 w-3.5" />{deployOnPublish ? "Back to model card" : "Evaluation tasks"}</button>
-                <h1 className="text-2xl font-bold tracking-tight">{deployOnly ? "Configure deployment" : "New Benchmark Task"}</h1>
-                <p className="mt-1 text-xs leading-5 text-slate-400">{deployOnly ? `Advanced-edit the deployment configuration for ${sharedModel}, then deploy it directly.` : "Design the complete experiment before deployment starts."}</p>
-            </div>
-        </header>
+        <PageHeading
+            title={deployOnly ? "Configure deployment" : "New Benchmark Task"}
+            subtitle={deployOnly ? `Advanced-edit the deployment configuration for ${sharedModel}, then deploy it directly.` : "Design the complete experiment before deployment starts."}
+        />
+        <Button variant="ghost" size="sm" disabled={editorBusy || busy} onClick={() => deployOnPublish ? leaveDeployOnly() : onNavigate("optimization-evaluate")}>
+            <ArrowLeft className="h-3.5 w-3.5" />{deployOnPublish ? "Back to model card" : "Evaluation tasks"}
+        </Button>
         {error && <div role="alert" className="flex min-w-0 items-start gap-3 rounded-xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" /><div className="min-w-0"><p className="font-semibold">{step === 3 ? 'Evaluation could not start' : 'Unable to continue'}</p><p className="mt-1 break-words text-xs leading-6">{error}</p>
             {(!selectedClusterId || !clusters.some(item => item.id === selectedClusterId && item.ready) || error.includes('Software Versions')) && (
                 <Button type="button" variant="link" size="xs" className="mt-2" onClick={() => onNavigate('clusters')}>

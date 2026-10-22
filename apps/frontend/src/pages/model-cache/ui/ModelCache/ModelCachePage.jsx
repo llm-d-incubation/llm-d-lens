@@ -11,7 +11,8 @@ import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Download, Plus, Ref
 import { createModelCacheEntry, deleteModelCacheEntry, listModelCacheEntries, retryModelCacheEntry, syncAllModelCacheEntryNodes, syncModelCacheEntryNodes } from './modelCacheBackend';
 import { listStorageVolumes } from '../../../storage';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
-import { Button } from '../../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../../shared/ui/Button';
+import { StatCardRow } from '../../../../shared/ui/StatCard';
 import { Input, Select } from '../../../../shared/ui/FormControls';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
@@ -292,11 +293,13 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
     };
 
     return (
-        <ModulePage className="model-cache-page" contentClassName="flex flex-col gap-4 lg:h-screen lg:pb-4">
+        <ModulePage className="model-cache-page" contentClassName="flex flex-col gap-4 lg:h-[var(--workspace-height)] lg:pb-4">
             <ModuleHeader
                 icon={Download}
                 title="Model cache"
                 description="Download, monitor, and reuse cached model files on registered storage volumes before deployment."
+            />
+            <StatCardRow
                 actions={(
                     <>
                         {onNavigateBack && (
@@ -310,9 +313,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                                 {notice}
                             </span>
                         )}
-                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh model cache entries" className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
-                            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                        </Button>
+                        <RefreshButton onClick={load} disabled={refreshing} refreshing={refreshing} label="Refresh model cache entries" />
                         {pendingSyncCount > 0 && (
                             <PermissionGate permission="model-cache:entry:sync">
                                 <Button
@@ -335,9 +336,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                         </PermissionGate>
                     </>
                 )}
-            />
-
-            <section className="flex flex-col gap-3">
+            >
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.ready} />
@@ -345,7 +344,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                     <StatCard label="Failed" value={summary.failed} tone={summary.failed > 0 ? 'text-rose-300' : 'text-white'} />
                     <StatCard label="Deleting" value={summary.deleting} />
                 </div>
-            </section>
+            </StatCardRow>
 
             <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:items-stretch">
               <div className="flex flex-col gap-3 lg:h-full lg:w-72 lg:shrink-0">

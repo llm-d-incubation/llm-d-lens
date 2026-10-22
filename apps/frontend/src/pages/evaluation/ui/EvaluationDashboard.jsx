@@ -34,6 +34,8 @@ import { MultiSelectDropdown } from "../../../shared/ui/MultiSelectDropdown";
 import { Modal } from "../../../shared/ui/Modal";
 import { ModuleHeader } from "../../../shared/ui/ModuleHeader";
 import { ModulePage } from "../../../shared/ui/ModulePage";
+import { Button, RefreshButton } from "../../../shared/ui/Button";
+import { StatCard, StatCardRow } from "../../../shared/ui/StatCard";
 import { useAuth } from "../../auth";
 import { usePolling } from "../../../shared/lib/usePolling";
 import { returnedEvaluationArtifactIds } from "../../../shared/lib/evaluationArtifactSelection";
@@ -708,19 +710,31 @@ export default function EvaluationDashboard({ onNavigate }) {
                 icon={Gauge}
                 title="Evaluation"
                 description="Deploy, benchmark, and compare serving configurations with reproducible evidence."
-                actions={<><button onClick={() => loadAll()} disabled={loading} title="Refresh" aria-label="Refresh evaluations" className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-600"><RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /></button>{canCreateEvaluation && <button onClick={openNewTask} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-sky-500 px-3 text-[10px] font-bold text-white hover:bg-sky-400 not-dark:bg-[#037ffc] not-dark:hover:bg-[#037ffc]"><Plus className="h-3.5 w-3.5" />New Task</button>}</>}
             />
 
             {error && <div className="relative flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><AlertTriangle className="h-4 w-4 shrink-0" />{error}<button onClick={() => setError("")} className="ml-auto text-xs text-rose-300">Dismiss</button></div>}
 
-            <section aria-label="Evaluation task summary" className="grid gap-2 rounded-xl border border-slate-900/80 bg-slate-900/40 p-2.5 sm:grid-cols-2 lg:grid-cols-[180px_repeat(5,minmax(0,1fr))]">
-                <button type="button" onClick={() => setStatusFilter("")} className={`flex min-h-12 items-center justify-between rounded-lg border px-3.5 py-2 text-left transition ${!statusFilter ? "border-cyan-500/40 bg-slate-900 shadow-[0_0_12px_rgba(6,182,212,.08)]" : "border-slate-800 bg-slate-900/40 hover:border-slate-700"}`}><span><span className="block text-[9px] font-bold uppercase tracking-wider text-slate-400">Evaluation Tasks</span><span className="mt-0.5 block text-[8px] text-slate-600">All recorded runs</span></span><span className={`text-xl font-black ${!statusFilter ? "text-cyan-400" : "text-slate-300"}`}>{summary.total}</span></button>{[
-                    ["succeeded", "Succeeded", statusCounts.succeeded, "text-emerald-300"],
-                    ["running", "Running", statusCounts.running, "text-cyan-300"],
-                    ["queued", "Queued", statusCounts.queued, "text-amber-300"],
-                    ["failed", "Failed", statusCounts.failed, "text-rose-300"],
-                    ["cancelled", "Cancelled", statusCounts.cancelled, "text-slate-300"],
-                ].map(([key, label, value, color]) => <button key={key} onClick={() => setStatusFilter(statusFilter === key ? "" : key)} className={`flex min-h-12 items-center justify-between rounded-lg border px-3 py-2 text-left transition ${statusFilter === key ? "border-cyan-500/35 bg-cyan-500/5" : "border-slate-800 bg-slate-950/30 hover:border-slate-700"}`}><span className={`text-[9px] font-bold uppercase tracking-wide ${color}`}>{label}</span><span className="text-base font-black text-slate-300">{value}</span></button>)}
+            <section aria-label="Evaluation task summary">
+                <StatCardRow actions={<>
+                    <RefreshButton onClick={() => loadAll()} disabled={loading} refreshing={loading} label="Refresh evaluations" />
+                    {canCreateEvaluation && <Button variant="sky" size="sm" onClick={openNewTask}><Plus size={14} />New Task</Button>}
+                </>}>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                        <StatCard compact title="Evaluation Tasks" value={summary.total} active={!statusFilter} onClick={() => setStatusFilter("")} className="h-full p-3 shadow-none">
+                            <p className="text-[10px] text-theme-muted">All recorded runs</p>
+                        </StatCard>
+                        {[
+                            ["succeeded", "Succeeded", statusCounts.succeeded, "success"],
+                            ["running", "Running", statusCounts.running, "info"],
+                            ["queued", "Queued", statusCounts.queued, "warning"],
+                            ["failed", "Failed", statusCounts.failed, "danger"],
+                            ["cancelled", "Cancelled", statusCounts.cancelled, "neutral"],
+                        ].map(([key, label, value, tone]) => (
+                            <StatCard key={key} compact title={label} value={value} tone={tone} active={statusFilter === key}
+                                onClick={() => setStatusFilter(statusFilter === key ? "" : key)} className="h-full p-3 shadow-none" />
+                        ))}
+                    </div>
+                </StatCardRow>
             </section>
 
             <section className="relative z-10 flex flex-col gap-3.5 rounded-3xl border border-slate-900/90 bg-[#070b13]/65 p-5 shadow-2xl backdrop-blur-md">

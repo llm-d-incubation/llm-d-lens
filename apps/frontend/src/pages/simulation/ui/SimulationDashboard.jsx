@@ -56,6 +56,9 @@ import {
 import {
     Badge,
     Button,
+    RefreshButton,
+    StatCard,
+    StatCardRow,
     EmptyState,
     Input,
     Label,
@@ -1066,30 +1069,10 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                 {!embedded && (
                     <ModuleHeader
                         icon={SimulationIcon}
-                        title="Simulation"
+                        title="Trace Replayer"
                         description="Replay production traces against an inference endpoint."
                         onToggleMobileNav={onToggleMobileNav}
-                        actions={
-                            <div className="flex items-center gap-2">
-                                <Button variant="outline" size="icon" onClick={refreshAll} disabled={catalogLoading || listLoading} title="Refresh" aria-label="Refresh simulation data">
-                                    <RefreshCw className={`h-4 w-4 ${catalogLoading || listLoading ? 'animate-spin' : ''}`} />
-                                </Button>
-                                <Button variant="sky" size="sm" onClick={openNewTask}>
-                                    <Plus className="h-3.5 w-3.5" /> New Task
-                                </Button>
-                            </div>
-                        }
                     />
-                )}
-                {embedded && (
-                    <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="icon" onClick={refreshAll} disabled={catalogLoading || listLoading} title="Refresh" aria-label="Refresh simulation data">
-                            <RefreshCw className={`h-4 w-4 ${catalogLoading || listLoading ? 'animate-spin' : ''}`} />
-                        </Button>
-                        <Button variant="sky" size="sm" onClick={openNewTask}>
-                            <Plus className="h-3.5 w-3.5" /> New Task
-                        </Button>
-                    </div>
                 )}
                 {catalogError && (
                     <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
@@ -1103,107 +1086,28 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                     </div>
                 )}
 
-                <section aria-label="Simulation task summary" className="flex flex-col gap-3 rounded-xl border border-slate-900/80 bg-slate-900/40 px-3 py-2 lg:flex-row">
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setPage(0);
-                            setStatusFilter('');
-                        }}
-                        className={`flex min-w-44 items-center justify-between rounded-lg border px-4 py-2 text-left transition-all duration-300 ${
-                            statusFilter === ''
-                                ? 'border-cyan-500/40 bg-slate-900 shadow-[0_0_12px_rgba(6,182,212,0.12)]'
-                                : 'border-slate-800/60 bg-slate-900/40 hover:border-slate-700/60 hover:bg-slate-800/40'
-                        }`}
-                    >
-                        <div>
-                            <div className="text-[10px] font-bold uppercase leading-none tracking-wider text-slate-400/90">Simulation Tasks</div>
-                            <div className="mt-1.5 text-[9px] leading-none text-slate-500">All recorded runs</div>
-                        </div>
-                        <span className={`text-xl font-black ${statusFilter === '' ? 'text-cyan-400' : 'text-slate-300'}`}>{formatNumber(total)}</span>
-                    </button>
-
-                    <div className="flex min-w-0 flex-1 flex-col justify-between rounded-xl border border-slate-900/80 bg-slate-900/40 px-3 py-2">
-                        <div className="pb-2 pt-0.5 text-[10px] font-bold uppercase leading-none tracking-wider text-slate-400/90">
-                            Simulation Pipeline — Task Status Tracking
-                        </div>
-                        <div className="flex items-center justify-between gap-1 rounded-lg border border-slate-900/60 p-1 select-none">
+                <section aria-label="Simulation task summary">
+                    <StatCardRow actions={<>
+                        <RefreshButton onClick={refreshAll} disabled={catalogLoading || listLoading} refreshing={catalogLoading || listLoading} label="Refresh simulation data" />
+                        <Button variant="sky" size="sm" onClick={openNewTask}><Plus size={14} /> New Task</Button>
+                    </>}>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                            <StatCard compact title="Simulation Tasks" value={formatNumber(total)} active={!statusFilter}
+                                onClick={() => { setPage(0); setStatusFilter(''); }} className="h-full p-3 shadow-none">
+                                <p className="text-[10px] text-theme-muted">All recorded runs</p>
+                            </StatCard>
                             {[
-                                {
-                                    key: 'completed', label: 'Completed', value: counts.completed,
-                                    active: '-translate-y-0.5 border-emerald-500/35 bg-emerald-500/5 shadow-[0_0_12px_rgba(16,185,129,0.08)]',
-                                    bar: 'bg-emerald-500/55', number: 'text-emerald-400',
-                                },
-                                {
-                                    key: 'running', label: 'Running', value: counts.running,
-                                    active: '-translate-y-0.5 border-blue-500/35 bg-blue-500/5 shadow-[0_0_12px_rgba(59,130,246,0.08)]',
-                                    bar: 'bg-blue-500/55', number: 'text-blue-400',
-                                },
-                                {
-                                    key: 'queued', label: 'Queued', value: counts.queued,
-                                    active: '-translate-y-0.5 border-amber-500/35 bg-amber-500/5 shadow-[0_0_12px_rgba(245,158,11,0.08)]',
-                                    bar: 'bg-amber-500/55', number: 'text-amber-400',
-                                },
-                            ].map((stage, index) => (
-                                <React.Fragment key={stage.key}>
-                                    {index > 0 && <ArrowRight className="h-3 w-3 shrink-0 text-slate-800" />}
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setPage(0);
-                                            setStatusFilter(statusFilter === stage.key ? '' : stage.key);
-                                        }}
-                                        className={`relative flex flex-1 items-center overflow-hidden rounded-md border py-1 pl-3 pr-2 transition-all duration-300 ${
-                                            statusFilter === stage.key
-                                                ? stage.active
-                                                : 'border-transparent bg-slate-900/25 hover:-translate-y-0.5 hover:border-slate-800/60 hover:bg-slate-900/40'
-                                        }`}
-                                    >
-                                        <span className={`absolute bottom-1 left-0 top-1 w-0.5 rounded-r ${stage.bar}`} />
-                                        <span className="flex flex-col items-start text-left leading-none">
-                                            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400/90">{stage.label}</span>
-                                            <span className={`mt-0.5 text-sm font-extrabold ${statusFilter === stage.key ? stage.number : 'text-slate-200'}`}>{formatNumber(stage.value)}</span>
-                                        </span>
-                                    </button>
-                                </React.Fragment>
-                            ))}
-
-                            <div className="mx-1 h-5 w-px shrink-0 self-center bg-slate-900" />
-
-                            {[
-                                {
-                                    key: 'failed', label: 'Failed', value: counts.failed,
-                                    active: '-translate-y-0.5 border-red-500/35 bg-red-500/5',
-                                    bar: 'bg-red-500/55', number: 'text-red-400',
-                                },
-                                {
-                                    key: 'cancelled', label: 'Cancelled', value: counts.cancelled,
-                                    active: '-translate-y-0.5 border-slate-500/35 bg-slate-500/5',
-                                    bar: 'bg-slate-500/55', number: 'text-slate-300',
-                                },
-                            ].map((stage) => (
-                                <button
-                                    key={stage.key}
-                                    type="button"
-                                    onClick={() => {
-                                        setPage(0);
-                                        setStatusFilter(statusFilter === stage.key ? '' : stage.key);
-                                    }}
-                                    className={`relative flex flex-1 items-center overflow-hidden rounded-md border py-1 pl-3 pr-2 transition-all duration-300 ${
-                                        statusFilter === stage.key
-                                            ? stage.active
-                                            : 'border-transparent bg-slate-900/25 hover:-translate-y-0.5 hover:border-slate-800/60 hover:bg-slate-900/40'
-                                    }`}
-                                >
-                                    <span className={`absolute bottom-1 left-0 top-1 w-0.5 rounded-r ${stage.bar}`} />
-                                    <span className="flex flex-col items-start text-left leading-none">
-                                        <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400/90">{stage.label}</span>
-                                        <span className={`mt-0.5 text-sm font-extrabold ${statusFilter === stage.key ? stage.number : 'text-slate-200'}`}>{formatNumber(stage.value)}</span>
-                                    </span>
-                                </button>
+                                ['completed', 'Completed', counts.completed, 'success'],
+                                ['running', 'Running', counts.running, 'info'],
+                                ['queued', 'Queued', counts.queued, 'warning'],
+                                ['failed', 'Failed', counts.failed, 'danger'],
+                                ['cancelled', 'Cancelled', counts.cancelled, 'neutral'],
+                            ].map(([key, label, value, tone]) => (
+                                <StatCard key={key} compact title={label} value={formatNumber(value)} tone={tone} active={statusFilter === key}
+                                    onClick={() => { setPage(0); setStatusFilter(statusFilter === key ? '' : key); }} className="h-full p-3 shadow-none" />
                             ))}
                         </div>
-                    </div>
+                    </StatCardRow>
                 </section>
 
                 <section

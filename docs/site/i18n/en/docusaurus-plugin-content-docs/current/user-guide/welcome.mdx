@@ -3,7 +3,7 @@ title: Welcome
 description: Start a Lens Assistant conversation, review current cluster issues and open common operator tasks.
 ---
 
-Welcome is the operator landing page. It combines a greeting, a Lens Assistant
+Welcome is the operator landing page. It opens directly with a Lens Assistant
 prompt starter, current cluster issues and a small set of quick actions. It does
 not duplicate cluster capacity, model-service tables, deployment history or
 token usage; those remain on their owning pages.
@@ -16,27 +16,71 @@ The page always filters issues and actions to the clusters and permissions your
 account can use. If no cluster is accessible and your role can create clusters,
 Welcome offers to open the create-cluster wizard.
 
+## Workspace layout
+
+The sidebar meets the top bar without an outer gap. Each page's title and short
+description appear on the left of the top bar. Page controls, including
+**Create**, **Refresh**, filters and back buttons, stay in the content area
+below it, with balanced side margins. The top bar stays visible while content
+scrolls and always shows
+**Documentation**, **Join Slack**, **Star on GitHub** and the theme switch,
+regardless of the page. The page title is not repeated above the content.
+On smaller screens, the links appear as labeled icon buttons.
+Use the top-right sun or moon button to switch themes; scrollbars, including
+the Model Services canvas, follow the selected theme. The sidebar collapse
+control and account menu remain in the sidebar. When expanded, **Lens Assistant**
+and the icon-only account menu share the bottom row; hover over the account icon
+to see its label and username. When collapsed, their icons are stacked.
+Administration sections can be expanded or collapsed even while viewing a
+page in another section. Navigating to an administration page opens its section.
+
+Right-side drawers close when you click the dimmed backdrop, unless the form is
+submitting or the drawer explicitly requires an in-panel action.
+
+Benchmark details group the task header, runtime status and section tabs on one
+surface with dividers. Observability similarly groups its service controls and
+the Namespace/GUIs row. **Platform → Model Usage** places **Time range**,
+**Group by**, **User**, **Model**, **Cluster** and **Clear filters** together in
+one row when space permits; controls wrap on narrow screens.
+
+Page actions share compact buttons and icon-only refresh controls:
+
+| Page | Control location |
+| --- | --- |
+| Deployments | Create and refresh at the right of the Total-through-Cleaned cards |
+| Evaluation and Trace Replayer | New Task and refresh at the right of the task-status cards; click a card to filter |
+| Storage | New storage volume and refresh after the Failed card |
+| Model cache | Download model and refresh after the Deleting card; synchronization and back controls stay alongside |
+| Clusters | Cluster selection, readiness, edit, navigation, search and Add share one desktop toolbar; the description is available from its help icon |
+| Observability | Service tabs, context, target cluster and refresh share one desktop toolbar |
+
+Controls wrap on narrow screens instead of clipping.
+
 ## Join Slack
 
-Click **Join Slack** in the Welcome header to open the llm-d Slack
+Click **Join Slack** in the global top bar to open the llm-d Slack
 workspace in a new tab.
 
 ## Open the documentation
 
-Click **Documentation** in the Welcome header to open the Lens documentation
+Click **Documentation** in the global top bar to open the Lens documentation
 in a new tab.
 
 ## Star the project
 
-Click **Star on GitHub** in the Welcome header. Lens opens GitHub sign-in and
+Click **Star on GitHub** in the global top bar. Lens opens GitHub sign-in and
 returns to the `llm-d-incubation/llm-d-lens` repository after you sign in. Click
 **Star** on GitHub to finish.
 
 ## Ask Lens Assistant
 
-1. Type a message in **Ask Lens Assistant**.
+Welcome uses a compact fleet-status card so that issues and the assistant remain
+easy to scan. The assistant's **Message** field has a visible border and can be
+resized vertically.
+
+1. Type a message in the **Message** field under **Ask Lens Assistant**.
 2. Choose an AI provider in the lower-left of the composer.
-3. Click **Send**, or press `Ctrl+Enter` / `Cmd+Enter`.
+3. Click **Send**, or press `Enter`. Use `Shift+Enter` for a new line.
 
 Sending opens Lens Assistant, selects the provider you chose, and submits the
 message automatically once the provider is ready. Tool calls keep the assistant's

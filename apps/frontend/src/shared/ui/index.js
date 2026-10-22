@@ -15,12 +15,12 @@
 // Prism UI primitives. The contract for using (and extending) these lives in
 // .agents/skills/ui/SKILL.md — read it before adding UI.
 
-export { Button } from './Button';
+export { Button, RefreshButton } from './Button';
 export { Badge, StatusChip } from './Badge';
 export { Modal } from './Modal';
 export { Input, Select, Textarea, Checkbox, Label } from './FormControls';
 export { Panel } from './Panel';
-export { StatCard } from './StatCard';
+export { StatCard, StatCardRow } from './StatCard';
 export { Spinner, LoadingState } from './Spinner';
 export { EmptyState } from './EmptyState';
 export { PageHeader, ShareLinkButton } from './PageHeader';

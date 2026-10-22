@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePolling } from '../../../shared/lib/usePolling';
-import { RefreshCw, ScrollText } from 'lucide-react';
+import { ScrollText } from 'lucide-react';
 import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../shared/ui/ModulePage';
-import { Button } from '../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../shared/ui/Button';
 import { Input, Select } from '../../../shared/ui/FormControls';
 import { Badge } from '../../../shared/ui/Badge';
 import { AsyncState } from '../../../shared/ui/AsyncState';
@@ -143,29 +143,19 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                     title="Audit log"
                     description="Authentication and authorization events, newest first."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading}>
-                            <RefreshCw size={14} /> Refresh
-                        </Button>
-                    }
                 />
 
                 {error && logs.length > 0 && <AdminAlert>{error}</AdminAlert>}
 
-                <AsyncState
-                    loading={loading}
-                    error={logs.length === 0 ? error : null}
-                    empty={logs.length === 0 && !hasFilters}
-                    onRetry={load}
-                    emptyContent={<EmptyState icon={<ScrollText size={22} />} title="No events" message="Authentication and authorization events appear here." />}
-                >
                     <AdminPanel
                         icon={ScrollText}
                         title="Events"
+                        actions={<RefreshButton onClick={load} refreshing={refreshing} disabled={loading || refreshing} label="Refresh audit events" />}
                         count={total}
                         toolbar={
                             <AdminToolbar>
-                                <div className="w-48 shrink-0">
+                                <div className="grid w-full gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                                <div className="min-w-0">
                                     <Select value={eventType} onChange={(event) => update(setEventType)(event.target.value)} aria-label="Event filter">
                                         <option value="">All events</option>
                                         {eventOptions.map((event) => (
@@ -173,7 +163,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         ))}
                                     </Select>
                                 </div>
-                                <div className="w-40 shrink-0">
+                                <div className="min-w-0">
                                     <Select value={result} onChange={(event) => update(setResult)(event.target.value)} aria-label="Result filter">
                                         <option value="">All results</option>
                                         {RESULT_OPTIONS.map((value) => (
@@ -181,7 +171,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         ))}
                                     </Select>
                                 </div>
-                                <div className="w-36 shrink-0">
+                                <div className="min-w-0">
                                     <Select value={action} onChange={(event) => update(setAction)(event.target.value)} aria-label="Action filter">
                                         <option value="">All actions</option>
                                         {ACTION_OPTIONS.map((value) => (
@@ -189,7 +179,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         ))}
                                     </Select>
                                 </div>
-                                <div className="w-36 shrink-0">
+                                <div className="min-w-0">
                                     <Select value={source} onChange={(event) => update(setSource)(event.target.value)} aria-label="Source filter">
                                         <option value="">All sources</option>
                                         {SOURCE_OPTIONS.map((value) => (
@@ -197,7 +187,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         ))}
                                     </Select>
                                 </div>
-                                <div className="w-56 shrink-0">
+                                <div className="min-w-0">
                                     <Input
                                         list="audit-actor-options"
                                         value={actorText}
@@ -209,7 +199,9 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         {users.map((user) => <option key={user.id} value={user.username} />)}
                                     </datalist>
                                 </div>
-                                <label className="flex shrink-0 items-center gap-2 text-xs text-slate-400">
+                                </div>
+                                <div className="flex w-full flex-wrap items-center gap-x-6 gap-y-3">
+                                <label className="flex items-center gap-2 text-xs text-slate-400">
                                     <span className="whitespace-nowrap">Start</span>
                                     <Input
                                         type="datetime-local"
@@ -221,7 +213,7 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                         className="w-52"
                                     />
                                 </label>
-                                <label className="flex shrink-0 items-center gap-2 text-xs text-slate-400">
+                                <label className="flex items-center gap-2 text-xs text-slate-400">
                                     <span className="whitespace-nowrap">End</span>
                                     <Input
                                         type="datetime-local"
@@ -234,9 +226,12 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                     />
                                 </label>
                                 <AdminClearButton show={hasFilters} onClick={clearFilters} />
+                                </div>
                             </AdminToolbar>
                         }
                     >
+                        <AsyncState loading={loading} error={logs.length === 0 ? error : null} empty={logs.length === 0 && !hasFilters} onRetry={load}
+                            emptyContent={<EmptyState icon={<ScrollText size={22} />} title="No events" message="Authentication and authorization events appear here." />}>
                         {logs.length === 0 ? (
                             <EmptyState title="No matching events" />
                         ) : (
@@ -288,8 +283,8 @@ export default function AuditLogsPage({ onToggleMobileNav }) {
                                 <PaginationControls page={page} totalPages={totalPages} onPageChange={setPage} />
                             </div>
                         </div>
+                        </AsyncState>
                     </AdminPanel>
-                </AsyncState>
             </div>
         </ModulePage>
     );

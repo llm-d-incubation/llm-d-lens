@@ -3,11 +3,11 @@ import { Search as SearchIcon } from 'lucide-react';
 
 // Shared dark panel shell for Administration pages, matching the AIProviders
 // page chrome (rounded slate card + toolbar row + titled table header).
-export function AdminPanel({ icon: Icon, title, count, toolbar, children }) {
+export function AdminPanel({ icon: Icon, title, count, toolbar, actions, children }) {
     return (
         <section className="relative z-10 flex flex-col gap-3.5 rounded-3xl border border-slate-900/90 bg-[#070b13]/65 p-5 shadow-2xl backdrop-blur-md">
             {toolbar}
-            <div className="flex min-h-[52px] items-center justify-between border-b border-slate-800/60 px-1 py-2.5">
+            <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 border-b border-slate-800/60 px-1 py-2.5">
                 <div className="flex items-center gap-2">
                     {Icon && <Icon className="h-4 w-4 text-[#037ffc] dark:text-cyan-400" />}
                     <h2 className="text-sm font-bold text-slate-900 dark:text-slate-300">{title}</h2>
@@ -15,6 +15,7 @@ export function AdminPanel({ icon: Icon, title, count, toolbar, children }) {
                         <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[9px] text-slate-500">{count} shown</span>
                     )}
                 </div>
+                {actions && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
             </div>
             {children}
         </section>

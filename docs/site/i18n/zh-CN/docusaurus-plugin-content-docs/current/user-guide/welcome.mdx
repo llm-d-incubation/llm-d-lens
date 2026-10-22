@@ -3,7 +3,7 @@ title: 欢迎页
 description: 发起 Lens Assistant 对话、查看当前集群问题并打开常用运维操作。
 ---
 
-欢迎页是运维人员的落地页。它包含欢迎语、Lens Assistant 输入框、当前集群问题和一组快捷操作。
+欢迎页是运维人员的落地页。它直接展示 Lens Assistant 输入框、当前集群问题和一组快捷操作，不再显示欢迎语。
 它不再重复展示集群容量、模型服务列表、部署历史或 Token 使用量；这些内容仍由各自页面负责。
 
 ## 谁可以看到欢迎页
@@ -12,24 +12,59 @@ description: 发起 Lens Assistant 对话、查看当前集群问题并打开常
 仅面向模型消费者的角色保留原有落地页。页面中的问题和操作始终按当前账号可访问的集群和权限过滤。
 如果当前账号没有可访问集群且拥有创建集群权限，欢迎页会提示打开创建集群向导。
 
+## 工作区布局
+
+侧边栏与顶栏无缝衔接，不保留外侧空隙。各页面的标题和简短说明显示在顶栏左侧。
+**Create**、**Refresh**、筛选器和返回按钮等页面操作仍位于顶栏下方的内容区，
+左右留白保持均衡。内容滚动时，全局顶栏始终可见，并固定显示 **Documentation**、
+**Join Slack**、**Star on GitHub** 和主题切换按钮。内容区上方不再重复显示页面标题。
+小屏幕上，入口以带有可访问名称的图标按钮显示。
+使用右上角的太阳或月亮按钮切换主题；滚动条（包括 Model Services 画布）跟随所选主题。
+侧边栏展开/收起按钮和账号菜单仍位于侧边栏。展开时，**Lens Assistant** 和仅图标的账号入口
+位于底部同一行；悬停账号图标可查看入口名称和用户名。收起时，两个图标上下排列。
+即使正在查看其他管理分组的页面，也可以展开或收起 Administration 下的分组；进入管理页面时会展开其所属分组。
+
+点击右侧抽屉外的遮罩可关闭抽屉；表单正在提交或明确要求在面板内操作时除外。
+
+Benchmark 详情将任务信息、运行状态和分区标签合并在同一背景内，以分割线区分。
+Observability 同样将服务控件和 Namespace/GUIs 行合并显示。
+**Platform → Model Usage** 将 **Time range**、**Group by**、**User**、**Model**、
+**Cluster** 和 **Clear filters** 放在同一行；空间不足时控件会自动换行。
+
+页面操作统一使用紧凑按钮和仅图标的刷新按钮：
+
+| 页面 | 控件位置 |
+| --- | --- |
+| Deployments | Create 和刷新位于 Total 至 Cleaned 统计卡片行的右侧 |
+| Evaluation 和 Trace Replayer | New Task 和刷新位于任务状态卡片行的右侧；点击卡片可筛选 |
+| Storage | New storage volume 和刷新位于 Failed 卡片之后 |
+| Model cache | Download model 和刷新位于 Deleting 卡片之后；同步与返回操作保留在旁边 |
+| Clusters | 桌面端将集群选择、就绪状态、编辑、导航、搜索和 Add 合并为一行；通过帮助图标查看描述 |
+| Observability | 桌面端将服务标签、上下文、目标集群和刷新合并为一行 |
+
+小屏幕上控件会换行，避免被截断。
+
 ## 加入 Slack
 
-点击欢迎页右上角的 **Join Slack** 在新标签页中打开 llm-d Slack 工作区。
+点击全局顶栏的 **Join Slack** 在新标签页中打开 llm-d Slack 工作区。
 
 ## 打开文档
 
-点击欢迎页右上角的 **Documentation** 在新标签页中打开 Lens 文档。
+点击全局顶栏的 **Documentation** 在新标签页中打开 Lens 文档。
 
 ## 为项目点亮 Star
 
-点击欢迎页右上角的 **Star on GitHub**。Lens 会打开 GitHub 登录页，登录后进入
+点击全局顶栏的 **Star on GitHub**。Lens 会打开 GitHub 登录页，登录后进入
 `llm-d-incubation/llm-d-lens` 仓库。在 GitHub 页面上点击 **Star** 即可。
 
 ## 使用 Lens Assistant
 
-1. 在 **Ask Lens Assistant** 中输入消息。
+欢迎页使用紧凑的集群状态卡片，方便同时查看问题和助手。助手的 **Message** 输入框
+带有清晰边框，并可垂直调整大小。
+
+1. 在 **Ask Lens Assistant** 下的 **Message** 输入框中输入消息。
 2. 在输入框左下角选择 AI provider。
-3. 点击 **Send**，或按 `Ctrl+Enter` / `Cmd+Enter`。
+3. 点击 **Send**，或按 `Enter`；使用 `Shift+Enter` 换行。
 
 点击发送后会打开 Lens Assistant，自动选择你选择的 provider，并在 provider 就绪后
 自动提交消息。工具调用仍遵循 Assistant 原有的确认规则。消息只通过浏览器临时

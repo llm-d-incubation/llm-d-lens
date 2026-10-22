@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { KeyRound, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
+import { KeyRound, RotateCcw, Trash2 } from 'lucide-react';
 import { usePolling } from '../../../shared/lib/usePolling';
 import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../shared/ui/ModulePage';
-import { Button } from '../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../shared/ui/Button';
 import { Modal } from '../../../shared/ui/Modal';
 import { Badge } from '../../../shared/ui/Badge';
 import { Input, Label } from '../../../shared/ui/FormControls';
@@ -136,28 +136,25 @@ export default function SecretKeyPage({ onToggleMobileNav }) {
                     title="Master key"
                     description="Encrypts stored external-provider secrets such as LDAP bind passwords. Rotate it here; previous keys are kept only as decryption fallback."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <Button variant="secondary" size="sm" onClick={() => load()} isLoading={refreshing} disabled={loading}>
-                            <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Refresh
-                        </Button>
-                    }
                 />
 
                 <AdminAlert tone="success">{notice}</AdminAlert>
                 <AdminAlert tone="error">{error}</AdminAlert>
 
+                <AdminPanel icon={KeyRound} title="Stored-secret master key"
+                    actions={<RefreshButton onClick={() => load()} refreshing={refreshing} disabled={loading || refreshing} label="Refresh master key status" />}>
                 {loading && !status ? (
                     <div className="flex justify-center py-16">
                         <Spinner size="lg" />
                     </div>
                 ) : !status ? (
                     <EmptyState
-                        icon={KeyRound}
+                        icon={<KeyRound size={22} aria-hidden="true" />}
                         title="Master key status unavailable"
                         message="The backend did not return a master-key status."
                     />
                 ) : (
-                    <AdminPanel icon={KeyRound} title="Stored-secret master key">
+                    <>
                         <div className="flex flex-col px-1">
                             <InfoRow label="Source">
                                 <Badge tone={status.envLocked ? 'warning' : 'neutral'}>
@@ -204,8 +201,9 @@ export default function SecretKeyPage({ onToggleMobileNav }) {
                                 </div>
                             </PermissionGate>
                         )}
-                    </AdminPanel>
+                    </>
                 )}
+                </AdminPanel>
             </div>
 
             {rotateOpen && <RotateKeyModal onCancel={() => setRotateOpen(false)} onRotated={onRotated} />}

@@ -1,22 +1,92 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canAccessView } from '../../pages/auth/permissions.js';
-import { firstAccessibleView, NAVIGATION_GROUPS, resolveView } from './views.js';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { AuthContext } from '../../pages/auth/AuthContext.js';
+import { canAccessView, VIEW_PERMISSIONS } from '../../pages/auth/permissions.js';
+import LeftNavigation from '../ui/LeftNavigation.jsx';
+import { firstAccessibleView, NAVIGATION_GROUPS, resolveView, viewTitle } from './views.js';
+
+test('loading pages use their own navigation or detail title', () => {
+  for (const item of NAVIGATION_GROUPS.flatMap(group => group.items)) {
+    assert.equal(viewTitle(item.view), item.label);
+  }
+  assert.equal(viewTitle('welcome/issues'), 'Issues');
+  assert.equal(viewTitle('optimization-evaluate-new'), 'New Benchmark Task');
+  assert.equal(viewTitle('optimization-evaluation-details'), 'Benchmark details');
+  assert.equal(viewTitle('optimization-simulate-details'), 'Simulation task details');
+  assert.equal(viewTitle(''), 'Lens');
+});
 
 test('landing page follows the first accessible sidebar entry, including custom grants', () => {
   for (const [permissions, expected] of [
     [['*:*:*'], 'welcome'],
     [['deployment:run:read', 'cluster:cluster:read'], 'welcome'],
+    [['deployment:run:read'], 'optimization-deployments'],
     [['model-service:group:read', 'model-service:usage:read'], 'admin/model-service'],
     [['evaluate:run:read', 'model-service:usage:read'], 'optimization-evaluate'],
-    [['model-service:usage:read', 'model-service:token:manage', 'model-service:inference:use'], 'usage'],
+    [['model-service:usage:read', 'model-service:token:manage', 'model-service:inference:use'], 'model-service'],
     [['model-service:token:manage'], 'api-keys'],
     [['cluster:cluster:read', 'user:user:read'], 'welcome'],
     [['user:user:read'], 'admin/users'],
+    [['playground:chat:use'], 'playground'],
+    [['ai-provider:provider:read', 'model-service:usage:read'], 'usage'],
     [[], ''],
   ]) {
     assert.equal(firstAccessibleView(view => canAccessView(permissions, view)), expected);
   }
+});
+
+test('sidebar preserves every destination once in the requested group and order', () => {
+  assert.deepEqual(NAVIGATION_GROUPS.map(group => [group.title || '', group.items.map(item => [item.label, item.view])]), [
+    ['', [['Welcome', 'welcome']]],
+    ['Inference', [['Deployments', 'optimization-deployments'], ['Model Services', 'admin/model-service'], ['Model Catalog', 'model-market']]],
+    ['Performance', [['Evaluation', 'optimization-evaluate'], ['Trace Replayer', 'optimization-simulate']]],
+    ['Infrastructure', [['Clusters', 'clusters'], ['Observability', 'cluster-monitoring-stack'], ['Storage', 'storage-management'], ['Model Cache', 'model-cache']]],
+    ['My Resources', [['Services', 'model-service'], ['API Keys', 'api-keys'], ['Usage', 'usage']]],
+    ['Administration', [
+      ['Model Usage', 'admin/usage'], ['External Providers', 'ai-providers'],
+      ['Users', 'admin/users'], ['Groups', 'admin/groups'], ['Roles', 'admin/roles'], ['Identity Providers', 'admin/identity-providers'],
+      ['Master Key', 'admin/master-key'], ['Audit Log', 'admin/audit'], ['Sessions', 'admin/sessions'],
+    ]],
+    ['', [['Lens Assistant', 'playground']]],
+  ]);
+  const views = NAVIGATION_GROUPS.flatMap(group => group.items.map(item => item.view));
+  assert.equal(views.length, 23);
+  assert.equal(new Set(views).size, views.length);
+});
+
+test('sidebar renders the administration accordions and fixed footer controls', (t) => {
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => null,
+      setItem() {},
+      removeItem() {},
+    },
+  });
+  t.after(() => {
+    if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
+    else delete globalThis.localStorage;
+  });
+  const html = renderToStaticMarkup(
+    createElement(AuthContext.Provider, {
+      value: {
+        canView: view => canAccessView(['*:*:*'], view),
+        principal: { username: 'sidebar-test' },
+        logout() {},
+      },
+    }, createElement(LeftNavigation, { currentView: 'welcome', isExpanded: true })),
+  );
+  assert.match(html, /id="nav-group-administration"/);
+  assert.match(html, />Platform</);
+  assert.match(html, />Model Usage</);
+  assert.match(html, /id="navigation-footer"/);
+  assert.match(html, /Account menu/);
+  assert.doesNotMatch(html, />Account</);
+  assert.match(html, /Collapse sidebar/);
+  assert.doesNotMatch(html, /Switch to (light|dark) mode/);
 });
 
 test('every sidebar entry can be the first accessible destination without a separate priority list', () => {
@@ -46,9 +116,18 @@ test('legacy configuration URLs use the destination permissions', () => {
   assert.equal(canAccessView(['evaluate:run:create'], view), true);
 });
 
-test('other optimization views and existing aliases remain available', () => {
+test('retired optimization URLs use the accessible landing page and have no permission entries', () => {
+  const fallback = firstAccessibleView(view => canAccessView(['model-service:usage:read'], view));
   for (const view of ['optimization-deploy', 'optimization-workspace', 'opt-define', 'opt-search', 'opt-deploy', 'opt-benchmark', 'opt-performance']) {
-    assert.equal(resolveView(view), view);
+    assert.equal(resolveView(view, fallback), 'usage');
+    assert.equal(resolveView(view, ''), '');
+    assert.equal(Object.hasOwn(VIEW_PERMISSIONS, view), false);
+  }
+});
+
+test('active detail pages and existing aliases remain available', () => {
+  for (const view of ['optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-simulate-details', 'welcome/issues']) {
+    assert.equal(resolveView(view, 'usage'), view);
   }
   assert.equal(resolveView('home'), 'clusters');
   assert.equal(resolveView('dashboard'), 'welcome');

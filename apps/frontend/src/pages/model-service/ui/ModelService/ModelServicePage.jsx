@@ -9,6 +9,8 @@ import { Modal } from '../../../../shared/ui/Modal';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../../shared/ui/ModulePage';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
+import { Panel } from '../../../../shared/ui/Panel';
+import { Badge } from '../../../../shared/ui/Badge';
 import { cn } from '../../../../shared/lib/cn';
 import { getModelServiceConnection, listModelNames } from './modelServiceBackend';
 import { CARD } from './modelServiceStyles';
@@ -109,28 +111,31 @@ export function ModelServicePage({ onToggleMobileNav }) {
                 )}
 
                 {(connection.clusters || []).length > 0 && (
-                    <section className={cn(CARD, 'my-services-card p-6')}>
+                    <section className={cn(CARD, 'my-services-card w-full max-w-4xl self-start p-5')}>
                         <SectionLabel className="text-[#037ffc]">Gateway connections</SectionLabel>
-                        <div className="mt-3 flex flex-col divide-y divide-slate-200 dark:divide-slate-800/80">
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
                             {connection.clusters.map((cluster) => (
-                                <div key={cluster.clusterId} className="flex items-center justify-between gap-3 py-3">
-                                    <div className="min-w-0">
-                                        <p className="truncate text-base font-semibold text-slate-100">{cluster.clusterName || cluster.clusterId}</p>
-                                        <p className="gateway-meta truncate font-mono text-xs text-slate-400">
+                                <Panel key={cluster.clusterId} padding="sm" tone="subtle" className="min-w-0 shadow-none">
+                                    <div className="mb-3 flex min-w-0 items-center gap-2">
+                                        <Waypoints size={18} className="shrink-0 text-sky-500" aria-hidden="true" />
+                                        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-theme-text">{cluster.clusterName || cluster.clusterId}</p>
+                                        <Badge tone="info" size="xs">{cluster.provider || 'gateway'}</Badge>
+                                    </div>
+                                    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-theme-border bg-theme-bg p-2.5">
+                                        <p className="min-w-0 flex-1 break-all font-mono text-xs text-theme-text">
                                             {cluster.baseUrl || (cluster.ready ? 'address pending' : 'Gateway not ready')}
                                         </p>
-                                        <p className="gateway-meta text-[10px] text-slate-500">
-                                            {cluster.provider || 'gateway'}
-                                            {cluster.port ? ` · port ${cluster.port}` : ''}
-                                            {cluster.address ? ` · ${cluster.address}` : ''}
-                                        </p>
+                                        {cluster.baseUrl && (
+                                            <Button variant="ghost" size="xs" onClick={() => endpointClipboard.copy(cluster.baseUrl)}>
+                                                {endpointClipboard.copiedValue === cluster.baseUrl ? 'Copied' : 'Copy'}
+                                            </Button>
+                                        )}
                                     </div>
-                                    {cluster.baseUrl && (
-                                        <Button variant="ghost" size="xs" onClick={() => endpointClipboard.copy(cluster.baseUrl)}>
-                                            {endpointClipboard.copiedValue === cluster.baseUrl ? 'Copied' : 'Copy'}
-                                        </Button>
-                                    )}
-                                </div>
+                                    <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-theme-muted">
+                                        {!!cluster.port && <Badge tone="neutral" size="xs">Port {cluster.port}</Badge>}
+                                        {cluster.address && <span className="break-all font-mono">{cluster.address}</span>}
+                                    </div>
+                                </Panel>
                             ))}
                         </div>
                     </section>

@@ -6,6 +6,12 @@ description: Connect a Kubernetes cluster, prepare it for models and manage its 
 Add a cluster before creating storage or deploying a model.
 Use its kubeconfig to connect an existing cluster, or use Kubespray to create one on your machines.
 
+On wide screens, a left column contains **Target cluster** and its deployment
+shortcuts above the searchable **Clusters** list. The selected cluster's health
+and edit action stay with the selector; its overview appears on the right.
+On narrow screens, these panels stack above the overview. Cluster cards retain
+their per-cluster action menus.
+
 ## Before you begin: proxy exclusions
 
 If Kubernetes components use an HTTP(S) proxy, keep cluster-internal traffic off it.

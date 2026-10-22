@@ -1,16 +1,19 @@
 ---
-title: 模型市场
+title: 模型目录
 description: 选择模型，创建手动或 AI 辅助部署。
 ---
 
-打开 **Model Market（模型市场）**，选择模型并部署到集群。
+打开 **Model Catalog（模型目录）**，选择模型并部署到集群。
 首次使用建议选择 **Manual（手动）**模式。
 
-使用分类上方的 **Search models（搜索模型）**，按模型名称、发布者、仓库、模型类型、分类或精度筛选。
+使用分类标签旁的紧凑 **Search models（搜索模型）**输入框，按模型名称、发布者、仓库、模型类型、分类或精度筛选。
 搜索不区分大小写，并与所选分类共同生效；输入多个词时，每个词都必须匹配。
 模型数量会随输入更新。点击 **Clear filters（清空筛选）**可同时重置搜索和分类。
 
 ## 选择部署模式
+
+在 **One-click deployment** 中，**Model Catalog** 返回按钮位于部署配置上方的内容区，
+不再放在全局顶栏中。
 
 | 模式 | 适用目标 |
 | --- | --- |
@@ -25,7 +28,7 @@ Agentic 推荐也使用该值。例如，Qwen3-0.6B 使用 `40960`，而不是 `
 
 ## 创建手动部署
 
-1. 打开 **Model Market**，用 **Model categories（模型分类）**筛选，点击模型卡片。
+1. 打开 **Model Catalog**，用 **Model categories（模型分类）**筛选，点击模型卡片。
 2. 在 **One-click deployment（一键部署）**中填写 **Deployment name（部署名称）**，选择就绪的 **Cluster（集群）**。
 3. 选择包含该模型的 **Model cache storage（模型缓存存储）**，等待显示 **This model is ready in the selected cache.（模型已在所选缓存中就绪）**。**Manual** 模式下模型缓存存储是可选的。
 4. **Mode（模式）**保持 **Manual**，点击 **Configure deployment（配置部署）**。检查预填的模型和部署设置；需要修改时点击 **Edit setup（编辑设置）**。

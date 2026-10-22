@@ -992,7 +992,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     }, []);
 
     return (
-        <ModulePage className="h-screen overflow-hidden" contentClassName="flex h-full min-h-0 flex-col">
+        <ModulePage className="h-[var(--workspace-height)] overflow-hidden" contentClassName="flex h-full min-h-0 flex-col">
             <ModuleHeader
                 icon={AnimatedBotIcon}
                 title="Lens Assistant"

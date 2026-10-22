@@ -12,23 +12,71 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React from 'react';
+import React, { createContext, useContext } from 'react';
+import { createPortal } from 'react-dom';
 import { useClipboard } from '../lib/useClipboard';
 import { ArrowLeft, Menu, Share2 } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { Button } from './Button';
 
-// Standard dashboard header chrome: mobile nav toggle, back arrow, title block,
-// and a right-hand action cluster (Share link, Export, etc.).
+const PageHeadingTarget = createContext(null);
+
+export function PageHeadingProvider({ target, children }) {
+    return <PageHeadingTarget.Provider value={target}>{children}</PageHeadingTarget.Provider>;
+}
+
+// Only the heading moves into the app bar; page actions keep their original owners.
+export function PageHeading({ title, subtitle, badge, icon: Icon }) {
+    const target = useContext(PageHeadingTarget);
+    const heading = (
+        <div className="flex min-w-0 items-center gap-3">
+            {Icon && (
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                    <Icon className="h-4 w-4" aria-hidden="true" />
+                </div>
+            )}
+            <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                    {title && <h1 className="truncate text-base font-bold text-theme-text sm:text-lg" title={typeof title === 'string' ? title : undefined}>{title}</h1>}
+                    {badge}
+                </div>
+                {subtitle && <p className="truncate text-xs text-theme-muted" title={typeof subtitle === 'string' ? subtitle : undefined}>{subtitle}</p>}
+            </div>
+        </div>
+    );
+    return target ? createPortal(heading, target) : heading;
+}
+
 export function PageHeader({
     title,
     subtitle,
     badge,
+    icon,
+    heading,
     onNavigateBack,
     onToggleMobileNav,
     actions,
     className,
 }) {
+    const target = useContext(PageHeadingTarget);
+    const pageHeading = heading || <PageHeading title={title} subtitle={subtitle} badge={badge} icon={icon} />;
+    if (target) {
+        return (
+            <>
+                {pageHeading}
+                {(onNavigateBack || actions) && (
+                    <div className={cn('flex min-w-0 flex-wrap items-center justify-between gap-3', className)}>
+                        {onNavigateBack && (
+                            <Button variant="ghost" size="icon" onClick={onNavigateBack} aria-label="Back">
+                                <ArrowLeft className="h-5 w-5" />
+                            </Button>
+                        )}
+                        {actions && <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center gap-2">{actions}</div>}
+                    </div>
+                )}
+            </>
+        );
+    }
     return (
         <header
             className={cn(
@@ -37,7 +85,7 @@ export function PageHeader({
                 className
             )}
         >
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
                 {onToggleMobileNav && (
                     <button
                         onClick={onToggleMobileNav}
@@ -56,13 +104,7 @@ export function PageHeader({
                         <ArrowLeft className="h-5 w-5" />
                     </button>
                 )}
-                <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                        <h1 className="text-base sm:text-lg font-bold text-theme-text truncate">{title}</h1>
-                        {badge}
-                    </div>
-                    {subtitle && <p className="text-xs text-theme-muted truncate">{subtitle}</p>}
-                </div>
+                <div className="min-w-0 flex-1">{pageHeading}</div>
             </div>
             {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
         </header>

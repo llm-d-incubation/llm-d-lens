@@ -1,14 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, BookOpen, CheckCircle2, ChevronLeft, Plug, Plus, RefreshCw, Send, Server, Slack, Sparkles, Star } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronLeft, Plug, Plus, RefreshCw, Send, Server } from 'lucide-react';
 import { usePolling } from '../../../shared/lib/usePolling';
 import { errorMessage } from '../../../shared/lib/errorMessage';
-import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
 import { cn } from '../../../shared/lib/cn';
 import { Button } from '../../../shared/ui/Button';
 import { Panel } from '../../../shared/ui/Panel';
 import { Modal } from '../../../shared/ui/Modal';
 import { AnimatedBotIcon } from '../../../shared/ui/AnimatedBotIcon';
-import { HelpTooltip, Select, Textarea } from '../../../shared/ui/FormControls';
+import { HelpTooltip, Label, Select, Textarea } from '../../../shared/ui/FormControls';
 import { Spinner } from '../../../shared/ui/Spinner';
 import { useAuth } from '../../auth';
 import { listAIProviders } from '../../ai-providers';
@@ -21,9 +20,6 @@ import { QuickActions } from './QuickActions';
 import { WELCOME_CARD } from './welcomeStyles';
 import { visibleWelcomeActions } from '../model/quickActions';
 import { formatAge } from '../model/welcomePresentation';
-
-const LENS_DOCUMENTATION_URL = 'https://llm-d-incubation.github.io/llm-d-lens/';
-const LENS_SLACK_URL = 'https://llm-d.slack.com/';
 
 function scopeOptions(scope) {
     return [
@@ -48,34 +44,34 @@ function SystemBrief({ clusters, clusterId, issueCounts, clusterIssueCounts, las
     return (
         <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800/70 dark:bg-slate-900/70">
             <span className={`absolute inset-y-0 left-0 w-1 ${stateColor}`} aria-hidden="true" />
-            <div className="flex flex-col gap-5 p-5 pl-6 sm:p-6 sm:pl-7 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex flex-col gap-4 p-4 pl-5 xl:flex-row xl:items-center xl:justify-between">
                 <div className="min-w-0">
                     <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
                         <span className={`h-1.5 w-1.5 rounded-full ${stateColor} motion-safe:animate-pulse [animation-duration:2.4s]`} aria-hidden="true" />
                         {loading ? 'Checking fleet status' : `Live · checked ${formatAge(lastChecked)}`}
                     </div>
-                    <h2 className="mt-2 max-w-3xl text-3xl font-semibold leading-tight tracking-[-0.03em] text-slate-950 dark:text-slate-50 sm:text-4xl">
+                    <h2 className="mt-1.5 text-lg font-semibold leading-snug tracking-tight text-theme-text">
                         {headline}
                     </h2>
-                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">{detail}</p>
+                    <p className="mt-1 max-w-2xl text-xs leading-5 text-theme-muted">{detail}</p>
                 </div>
-                <div className="grid shrink-0 grid-cols-3 gap-5 border-t border-slate-200 pt-4 dark:border-slate-800/70 lg:border-t-0 lg:pt-0">
+                <div className="grid shrink-0 grid-cols-3 gap-4 border-t border-theme-border pt-3 xl:border-t-0 xl:pt-0">
                     <div>
-                        <div className="text-2xl font-semibold tabular-nums text-slate-950 dark:text-slate-50">{clusters.length}</div>
+                        <div className="text-xl font-semibold tabular-nums text-theme-text">{clusters.length}</div>
                         <div className="mt-0.5 text-[11px] text-slate-500">clusters</div>
                     </div>
                     <div>
-                        <div className="text-2xl font-semibold tabular-nums text-slate-950 dark:text-slate-50">{total}</div>
+                        <div className="text-xl font-semibold tabular-nums text-theme-text">{total}</div>
                         <div className="mt-0.5 text-[11px] text-slate-500">signals</div>
                     </div>
                     <div>
-                        <div className={`text-2xl font-semibold tabular-nums ${critical ? 'text-rose-600 dark:text-rose-300' : 'text-slate-950 dark:text-slate-50'}`}>{critical}</div>
+                        <div className={cn('text-xl font-semibold tabular-nums', critical ? 'text-rose-600 dark:text-rose-300' : 'text-theme-text')}>{critical}</div>
                         <div className="mt-0.5 text-[11px] text-slate-500">critical</div>
                     </div>
                 </div>
             </div>
             {clusters.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200 px-5 pb-4 pt-3 dark:border-slate-800/70 sm:px-6 lg:pl-7">
+                <div className="flex flex-wrap items-center gap-1.5 border-t border-theme-border px-4 py-3 pl-5">
                     <button
                         type="button"
                         onClick={() => onSelectCluster('')}
@@ -110,7 +106,6 @@ function SystemBrief({ clusters, clusterId, issueCounts, clusterIssueCounts, las
 
 export default function WelcomePage({
     onNavigate,
-    onToggleMobileNav,
     initialClusterId = '',
     isActive = true,
 }) {
@@ -319,14 +314,15 @@ export default function WelcomePage({
                     </HelpTooltip>
                 </span>
             )}
-            padding="md"
-            className="flex w-full flex-col bg-transparent pb-3 shadow-none backdrop-blur-none not-dark:border-[#cbd5e1]"
+            padding="sm"
+            className="flex w-full flex-col shadow-none"
         >
             <div>
+                <Label htmlFor="welcome-assistant-prompt">Message</Label>
                 <Textarea
                     id="welcome-assistant-prompt"
                     aria-label="Message Lens Assistant"
-                    rows={7}
+                    rows={5}
                     value={prompt}
                     maxLength={MAX_PROMPT_LENGTH}
                     onChange={(event) => setPrompt(event.target.value)}
@@ -337,9 +333,9 @@ export default function WelcomePage({
                         }
                     }}
                     placeholder="Ask anything"
-                    className="resize-none rounded-none border-0 bg-transparent px-3 pb-3 pt-3 text-sm focus:bg-transparent focus:ring-0 dark:bg-transparent"
+                    className="min-h-32 resize-y font-sans text-sm"
                 />
-                <div className="flex items-center justify-between gap-2 border-t border-[#e5e7eb] pt-2 dark:border-slate-800">
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-theme-border pt-3">
                     <div className="min-w-0">
                         <ProviderSelect
                             providers={providers}
@@ -407,45 +403,8 @@ export default function WelcomePage({
                 <div className="absolute -top-40 left-1/4 h-96 w-[42rem] rounded-full bg-sky-400/10 blur-3xl dark:bg-sky-500/10" />
                 <div className="absolute -bottom-48 right-0 h-80 w-[32rem] rounded-full bg-cyan-400/10 blur-3xl dark:bg-cyan-400/5" />
             </div>
-            <div className="relative z-10 w-full p-4 sm:p-6">
-                <ModuleHeader
-                    icon={Sparkles}
-                    title={`Welcome, ${principal?.username || 'operator'}`}
-                    description="Review the latest cluster and service status, and take action when needed."
-                    onToggleMobileNav={onToggleMobileNav}
-                    actions={(
-                        <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => window.open('https://github.com/login?return_to=%2Fllm-d-incubation%2Fllm-d-lens', '_blank', 'noopener,noreferrer')}
-                                title="Star llm-d-lens on GitHub"
-                            >
-                                <Star size={14} aria-hidden="true" />
-                                Star on GitHub
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => window.open(LENS_SLACK_URL, '_blank', 'noopener,noreferrer')}
-                                title="Join the llm-d Slack"
-                            >
-                                <Slack size={14} aria-hidden="true" />
-                                Join Slack
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => window.open(LENS_DOCUMENTATION_URL, '_blank', 'noopener,noreferrer')}
-                                title="Open Lens documentation"
-                            >
-                                <BookOpen size={14} aria-hidden="true" />
-                                Documentation
-                            </Button>
-                        </div>
-                    )}
-                />
-                <div className={cn('mt-4 grid gap-4', hasRightRail && (rightRailCollapsed ? 'lg:min-h-[calc(100vh-9.5rem)] lg:grid-cols-[minmax(0,1fr)_2.5rem]' : 'lg:min-h-[calc(100vh-9.5rem)] lg:grid-cols-[minmax(0,1fr)_28rem]'))}>
+            <div className="relative z-10 w-full px-4 py-6 sm:px-6 lg:px-12 lg:py-10">
+                <div className={cn('grid items-start gap-4', hasRightRail && (rightRailCollapsed ? 'lg:grid-cols-[minmax(0,1fr)_2.5rem]' : 'lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]'))}>
                     <div className={cn('flex min-h-0 flex-col gap-4')}>
                         <SystemBrief
                             clusters={overview?.scope?.clusters || []}
@@ -592,7 +551,7 @@ export default function WelcomePage({
             </div>
 
             <Modal
-                isOpen={showCreateClusterPrompt}
+                isOpen={isActive && showCreateClusterPrompt}
                 onClose={dismissCreateClusterPrompt}
                 title="Connect your first cluster"
                 subtitle="This takes about a minute."

@@ -753,7 +753,6 @@
         "apps/frontend/src/pages/deployment/ui/DeploymentManagement/DeploymentDetailsModal.jsx",
         "apps/frontend/src/pages/deployment/ui/DeploymentManagement/DeploymentPodsLogsModal.jsx",
         "apps/frontend/src/pages/clusters/ui/OptimizationClusterOverview.jsx",
-        "apps/frontend/src/pages/optimization/ui/OptimizationWorkspace/OptimizationWorkspace.jsx",
         "apps/frontend/src/shared/ui/PageHeader.jsx"
       ],
       "tests": [

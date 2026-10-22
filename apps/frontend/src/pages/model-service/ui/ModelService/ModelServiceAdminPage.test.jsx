@@ -145,7 +145,7 @@ describe("Add model", () => {
         assert.deepEqual(availableModelProviders(deployments, [], defaults.form.clusterId), deployments);
     });
 
-    test('page header exposes sky Add model and Reconcile with their existing permissions', () => {
+    test('Service Flow exposes Add model and Reconcile with their existing permissions', () => {
         const renderPage = (permissions) => renderToStaticMarkup(createElement(
             AuthContext.Provider,
             { value: { can: (permission) => permissions.includes(permission) } },
@@ -153,8 +153,12 @@ describe("Add model", () => {
         ));
         const html = renderPage(['model-service:member:manage', 'model-service:gateway:reconcile']);
         const header = html.match(/<header[^]*?<\/header>/)[0];
-        assert.match(header, /<button[^>]*bg-sky-500[^>]*>[^]*?Add model<\/button>/);
-        assert.match(header, /Reconcile<\/button>/);
+        assert.doesNotMatch(header, /Add model<\/button>|Reconcile<\/button>/);
+        assert.match(header, /Publish models and manage their serving routes\./);
+        const flow = html.slice(html.indexOf('>Service Flow</'));
+        assert.match(flow, /<button[^>]*bg-sky-500[^>]*>[^]*?Add model<\/button>/);
+        assert.match(flow, /Reconcile<\/button>/);
+        assert.ok(flow.indexOf('Add model</button>') < flow.indexOf('aria-label="Filter service flow"'));
         assert.equal((html.match(/Add model<\/button>/g) || []).length, 1);
         assert.equal((html.match(/Reconcile<\/button>/g) || []).length, 1);
         assert.doesNotMatch(html, /Add model service|Add model server/);

@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MODELS } from '@repo/shared/catalog';
 import { AuthContext } from '../../auth/AuthContext.js';
 import AgenticDeploymentWorkspace from '../../deployment/ui/AgenticDeploymentWorkspace.jsx';
-import ModelMarketPage, { standardRecommendation } from './ModelMarketPage.jsx';
+import ModelMarketPage from './ModelMarketPage.jsx';
+import { standardRecommendation } from '../model/standardRecommendation.js';
 
 test('deployment context uses the exact model card metadata for every listed context', () => {
     for (const model of MODELS.filter((model) => model.contextLength != null)) {
@@ -103,12 +104,13 @@ test('Agentic deployment submits empty SLO and workload fields as null, not plac
     });
 });
 
-test('model cards offer Manual mode and an explicit Configure deployment action', (testContext) => {
+test('model catalog keeps search with category filters and preserves model configuration actions', (testContext) => {
+    let hasReturnDraft = false;
     const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
     Object.defineProperty(globalThis, 'sessionStorage', {
         configurable: true,
         value: {
-            getItem: (key) => key === 'prism_model_market_return_draft'
+            getItem: (key) => hasReturnDraft && key === 'prism_model_market_return_draft'
                 ? JSON.stringify({ model: MODELS[0].repository }) : null,
             removeItem() {},
         },
@@ -117,8 +119,21 @@ test('model cards offer Manual mode and an explicit Configure deployment action'
         if (originalStorage) Object.defineProperty(globalThis, 'sessionStorage', originalStorage);
         else delete globalThis.sessionStorage;
     });
-    const html = renderToStaticMarkup(createElement(AuthContext.Provider, { value: { can: () => true } },
+    const renderPage = (canDeploy = true) => renderToStaticMarkup(createElement(AuthContext.Provider, { value: { can: () => canDeploy } },
         createElement(ModelMarketPage, { onNavigate() {} })));
+    const catalog = renderPage();
+    const header = catalog.match(/<header\b[\s\S]*?<\/header>/)?.[0] || '';
+    assert.match(header, />Model Catalog<\/h1>/);
+    assert.doesNotMatch(header, /aria-label="Search models"/);
+    assert.match(catalog, /role="tablist" aria-label="Model categories"[\s\S]*aria-label="Search models"[\s\S]*<section/);
+    assert.doesNotMatch(catalog, /Select a model|Popular open models across/);
+    hasReturnDraft = true;
+    const html = renderPage();
+    assert.match(html, />Model Catalog<\/button>/);
+    for (const page of [html, renderPage(false)]) {
+        assert.doesNotMatch(page.match(/<header\b[\s\S]*?<\/header>/)?.[0] || '', />Model Catalog<\/button>/);
+        assert.match(page, /<\/header>[\s\S]*>Model Catalog<\/button>[\s\S]*<(?:form|div)/);
+    }
     assert.match(html, />Manual</);
     assert.match(html, /Template-based deployment/);
     assert.match(html, /Configure deployment/);

@@ -6,6 +6,13 @@ description: 压测模型服务或比较部署配置，查看并导出结果。
 使用 **Evaluation（评估）**测量模型的响应速度和吞吐量。
 第一次建议对已发布的模型服务运行一个小负载，先确认流程可用。
 
+独立的 Optimization 原型（`optimization-workspace`、`opt-define`、
+`opt-search`、`opt-deploy`、`opt-benchmark`、`opt-performance`）及
+`optimization-deploy` 工作区已移除。旧链接现在会打开当前用户有权限访问的
+第一个侧边栏页面。部署配置请使用 **Inference → Model Catalog（推理 → 模型目录）**，基准测试请使用
+**Evaluation → New Task（评估 → 新建任务）**。评估和仿真任务详情仍可从各自的
+任务列表进入；已有配置、部署和结果不受影响。
+
 ## 压测已有模型服务
 
 1. 打开 **Evaluation**，点击 **New Task（新建任务）**。
