@@ -38,21 +38,29 @@ test('Agentic deployment shows reference placeholders without setting latency or
     assert.doesNotMatch(html, /End-to-end latency/);
 });
 
-test('Agentic deployment keeps workload expanded below preference and vLLM parameters collapsed below workload', () => {
+test('Agentic deployment expands SLO and workload sections and keeps vLLM parameters collapsed', () => {
     const html = renderToStaticMarkup(createElement(AgenticDeploymentWorkspace, {
         draft: {}, embedded: true,
         vllmParameterControls: createElement('span', null, 'Parameter controls'),
     }));
     const sections = [...html.matchAll(/<details\b([^>]*)><summary[^>]*>(.*?)<\/summary>/g)];
+    const slo = sections.findIndex(([, , summary]) => summary.includes('SLO'));
     const preference = sections.findIndex(([, , summary]) => summary.includes('Preference'));
     const workload = sections.findIndex(([, , summary]) => summary.includes('Workload estimate'));
     const vllm = sections.findIndex(([, , summary]) => summary.includes('vLLM parameters'));
-    assert.notEqual(preference, -1);
+    assert.notEqual(slo, -1);
+    assert.equal(preference, slo + 1);
     assert.equal(workload, preference + 1);
     assert.equal(vllm, workload + 1);
+    assert.match(sections[slo][1], /\bopen=""/);
+    assert.match(sections[slo][2], /Optional target/);
     assert.match(sections[workload][1], /\bopen=""/);
     assert.doesNotMatch(sections[vllm][1], /\bopen\b/);
     assert.match(html, /Parameter controls/);
+    const sloSection = html.match(/<details\b[^>]*><summary[^>]*>.*?SLO .*?<\/summary>(.*?)<\/details>/)?.[1];
+    assert.ok(sloSection);
+    assert.match(sloSection, /^<div class="[^"]*\bgrid-cols-2\b[^"]*"><label[^>]*>TTFT SLO/);
+    assert.match(sloSection, /<\/label><label[^>]*>TPOT SLO/);
 });
 
 test('Agentic deployment submits empty SLO and workload fields as null, not placeholder examples', async (t) => {

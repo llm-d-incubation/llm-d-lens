@@ -334,8 +334,6 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                                 <option value="summarization">Document summarization</option>
                             </Select>
                         </label>
-                        {input('TTFT SLO (ms)', 'ttftSloMs', { min: '1', placeholder: 'e.g. 2000' })}
-                        {input('TPOT SLO (ms)', 'tpotSloMs', { min: '1', placeholder: 'e.g. 30' })}
                         <label className="text-xs text-slate-400">GPU capacity for planning
                             <Select className="mt-1" value={requirements.hardwareCapacityMode} onChange={updateRequirement('hardwareCapacityMode')}>
                                 <option value="free">Currently free GPUs</option>
@@ -345,6 +343,13 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                         </label>
                         {requirements.hardwareCapacityMode === 'custom' && input('Custom GPU count', 'customGpuCount', { min: '1', step: '1', required: true })}
                     </div>
+                    <details open className="mt-4 border-t border-slate-800 pt-3">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />SLO <span className="font-normal text-slate-500">Optional target.</span></summary>
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                            {input('TTFT SLO (ms)', 'ttftSloMs', { min: '1', placeholder: 'e.g. 2000' })}
+                            {input('TPOT SLO (ms)', 'tpotSloMs', { min: '1', placeholder: 'e.g. 30' })}
+                        </div>
+                    </details>
                     <details open className="mt-4 border-t border-slate-800 pt-3">
                         <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />Preference <span className="font-normal text-slate-500">Optional deployment preference.</span></summary>
                         <textarea className="mt-3 min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-200" value={plannerPrompt} onChange={(event) => setPlannerPrompt(event.target.value)} maxLength={2000} placeholder="Describe your deployment preference." />
