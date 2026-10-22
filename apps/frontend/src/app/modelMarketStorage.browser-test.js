@@ -59,7 +59,7 @@ export async function verifyModelMarketCacheReturn(page) {
     await page.getByRole('button', { name: 'Manage model cache', exact: true }).click();
     const destination = await page.evaluate(() => new URL(window.location.href).searchParams.get('view'));
     if (destination !== 'model-cache') throw new Error('Expected Model Cache destination');
-    await page.getByRole('heading', { name: 'Model cache', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Model Cache', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Back to model', exact: true }).waitFor();
     if (!await page.getByLabel('Deployment name', { exact: true }).isHidden()) {
         throw new Error('Model form should be hidden in Model Cache');

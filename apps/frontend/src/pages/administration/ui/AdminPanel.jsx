@@ -1,5 +1,6 @@
 import React from 'react';
 import { Search as SearchIcon } from 'lucide-react';
+import { cn } from '../../../shared/lib/cn';
 
 // Shared dark panel shell for Administration pages, matching the AIProviders
 // page chrome (rounded slate card + toolbar row + titled table header).
@@ -23,9 +24,9 @@ export function AdminPanel({ icon: Icon, title, count, toolbar, actions, childre
 }
 
 /** Toolbar row used above a panel's table (search + filters + clear). */
-export function AdminToolbar({ children }) {
+export function AdminToolbar({ children, plain = false }) {
     return (
-        <div className="relative z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800/60 bg-[#0a0f1d] p-3 shadow-md">
+        <div className={cn('relative z-20 flex flex-wrap items-center gap-3', !plain && 'rounded-2xl border border-slate-800/60 bg-[#0a0f1d] p-3 shadow-md')}>
             {children}
         </div>
     );

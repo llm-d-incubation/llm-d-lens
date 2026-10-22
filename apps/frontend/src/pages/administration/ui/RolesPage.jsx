@@ -80,7 +80,7 @@ export default function RolesPage({ onToggleMobileNav }) {
                         title="Roles"
                         count={filtered.length}
                         toolbar={
-                            <AdminToolbar>
+                            <AdminToolbar plain>
                                 <AdminSearch value={query} onChange={setQuery} placeholder="Search role name or description..." />
                                 <AdminClearButton show={Boolean(query)} onClick={() => setQuery('')} />
                             </AdminToolbar>

@@ -4,8 +4,7 @@ import { usePolling } from '../../../shared/lib/usePolling';
 import { useResourceList } from '../../../shared/lib/useResourceList';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, AlertCircle, Boxes, ChevronDown, ChevronUp, Cpu, Gpu, HardDrive, MemoryStick, MoreVertical, Network, Pencil, Plus, Rocket, Server, Trash2, Upload, Webcam } from 'lucide-react';
-import { cn } from '../../../shared/lib/cn';
+import { Activity, AlertCircle, Boxes, ChevronDown, ChevronUp, Cpu, Gpu, HardDrive, MemoryStick, MoreVertical, Network, Pencil, Plus, Rocket, Server, Trash2, Webcam } from 'lucide-react';
 import { Button, EmptyState, Input, Label, Modal, Panel, SectionLabel, Select, Textarea, ModuleHeader, ModulePage } from '../../../shared/ui';
 import { HelpTooltip } from '../../../shared/ui/FormControls';
 import { CreateClusterWizard } from './CreateClusterWizard';
@@ -542,9 +541,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
         return 'Ready';
     };
 
-    const selectedClusterStatus = selectedCluster ? getClusterStatus(selectedCluster) : 'ready';
-    const selectedClusterStatusLabel = selectedCluster ? getClusterStatusLabel(selectedCluster) : 'Ready';
-
     return (
         <ModulePage className="cluster-page">
                 <ModuleHeader
@@ -556,9 +552,12 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                 <div className="grid items-start gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
                     <section className="min-w-0 space-y-6" aria-label="Cluster selection and management">
                         <Panel className="space-y-2 shadow-none">
-                            <Label htmlFor="overview-cluster" className="mb-3 flex items-center gap-2">
-                                <Upload size={16} aria-hidden="true" />Target cluster
-                            </Label>
+                            <div className="flex items-center gap-2">
+                                <Label htmlFor="overview-cluster" className="mb-0 text-xs font-normal text-theme-muted">
+                                    Target cluster
+                                </Label>
+                                {selectedCluster?.description && <HelpTooltip label="Cluster description">{selectedCluster.description}</HelpTooltip>}
+                            </div>
                                 <Select
                                     id="overview-cluster"
                                     value={selectedId}
@@ -571,20 +570,6 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                                         <option key={cluster.id} value={cluster.id}>{cluster.name || cluster.id}</option>
                                     ))}
                                 </Select>
-                                {(selectedId || selectedCluster) && (
-                                    <div className="flex flex-wrap items-center gap-2">
-                                    {selectedId && <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-theme-muted">
-                                        <span className={cn('h-2 w-2 rounded-full', statusDotClass(selectedClusterStatus))} aria-hidden="true" />
-                                        {selectedClusterStatusLabel}
-                                    </span>}
-                                {selectedCluster && (
-                                    <Button variant="secondary" size="icon" className="h-8 w-8" onClick={() => setEditTarget(selectedCluster)} title="Edit cluster" aria-label="Edit cluster">
-                                        <Pencil size={14} />
-                                    </Button>
-                                )}
-                                {selectedCluster?.description && <HelpTooltip label="Cluster description">{selectedCluster.description}</HelpTooltip>}
-                                    </div>
-                                )}
                                 <Button
                                     variant="sky"
                                     size="sm"

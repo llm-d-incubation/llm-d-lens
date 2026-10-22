@@ -1087,10 +1087,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                 )}
 
                 <section aria-label="Simulation task summary">
-                    <StatCardRow actions={<>
-                        <RefreshButton onClick={refreshAll} disabled={catalogLoading || listLoading} refreshing={catalogLoading || listLoading} label="Refresh simulation data" />
-                        <Button variant="sky" size="sm" onClick={openNewTask}><Plus size={14} /> New Task</Button>
-                    </>}>
+                    <StatCardRow>
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                             <StatCard compact title="Simulation Tasks" value={formatNumber(total)} active={!statusFilter}
                                 onClick={() => { setPage(0); setStatusFilter(''); }} className="h-full p-3 shadow-none">
@@ -1114,21 +1111,31 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                     aria-labelledby="simulation-tasks-heading"
                     className="relative z-10 flex flex-col gap-3.5 rounded-3xl border border-slate-900/90 bg-[#070b13]/65 p-5 shadow-2xl backdrop-blur-md"
                 >
-                    <div className="relative z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800/60 bg-[#0a0f1d] p-3 shadow-md">
-                        <div className="min-w-[240px] flex-1">
-                            <div className="relative">
-                                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                    <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 border-b border-theme-border py-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Server className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                            <h2 id="simulation-tasks-heading" className="text-sm font-bold text-theme-text">Matching Tasks</h2>
+                            <span className="rounded-md bg-theme-bg px-2 py-0.5 text-[9px] text-theme-muted">{formatNumber(total)} matched</span>
+                        </div>
+                        <div className="ml-auto flex items-center gap-2">
+                            <RefreshButton onClick={refreshAll} disabled={catalogLoading || listLoading} refreshing={catalogLoading || listLoading} label="Refresh simulation data" />
+                            <Button variant="sky" size="sm" onClick={openNewTask}><Plus size={14} /> New Task</Button>
+                        </div>
+                    </div>
+                    <div className="relative z-20 flex flex-wrap items-center gap-3" role="group" aria-label="Trace Replayer filters">
+                        <div className="min-w-0 flex-[1_1_15rem]">
                                 <Input
+                                    icon={Search}
                                     id="simulation-task-search"
-                                    className="rounded-xl pl-9 pr-4 text-xs font-medium"
+                                    className="h-9 text-xs"
                                     type="search"
+                                    aria-label="Search replay tasks"
                                     placeholder="Search task name, scenario, backend, or dataset..."
                                     value={searchInput}
                                     onChange={(event) => setSearchInput(event.target.value)}
                                 />
-                            </div>
                         </div>
-                        <div id="simulation-model-filter" className="w-48 shrink-0">
+                        <div id="simulation-model-filter" className="w-full shrink-0 sm:w-48">
                             <MultiSelectDropdown
                                 label="Model"
                                 options={facets.models}
@@ -1143,7 +1150,7 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                 formatLabel={(value) => value}
                             />
                         </div>
-                        <div id="simulation-dataset-filter" className="w-48 shrink-0 border-r border-slate-800/40 pr-3">
+                        <div id="simulation-dataset-filter" className="w-full shrink-0 sm:w-48">
                             <MultiSelectDropdown
                                 label="Dataset"
                                 options={facets.datasets}
@@ -1162,19 +1169,6 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                             <SlidersHorizontal className="h-3.5 w-3.5" />
                             Advanced Filters{activeAdvancedFilterCount > 0 ? ` (${activeAdvancedFilterCount})` : ''}
                         </Button>
-                    </div>
-
-                    <div className="flex min-h-[52px] flex-col items-start justify-between gap-3 border-b border-slate-800/60 px-4 py-2.5 sm:flex-row sm:items-center">
-                        <div className="flex items-center gap-2">
-                            <Server className="h-[15px] w-[15px] text-cyan-400" />
-                            <h2 id="simulation-tasks-heading" className="text-sm font-bold text-slate-300">
-                                {formatNumber(total)} Matching Task{total === 1 ? '' : 's'}
-                            </h2>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Button variant="secondary" size="sm" onClick={() => loadTasks()}>
-                                <RefreshCw className="h-3 w-3" /> Refresh
-                            </Button>
                             {(statusFilter || searchInput || activeAdvancedFilterCount > 0) && (
                                 <Button
                                     variant="secondary"
@@ -1184,7 +1178,6 @@ export default function SimulationDashboard({ onNavigate, onToggleMobileNav, emb
                                     Clear Filters
                                 </Button>
                             )}
-                        </div>
                     </div>
                     {listLoading ? (
                         <div className="flex items-center justify-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/80 py-12 text-sm text-slate-400">

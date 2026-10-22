@@ -112,7 +112,7 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
                             </PermissionGate>
                         }
                         toolbar={
-                            <AdminToolbar>
+                            <AdminToolbar plain>
                                 <AdminSearch value={query} onChange={setQuery} placeholder="Search username, name, or email..." />
                                 <div className="w-40 shrink-0">
                                     <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Status filter">

@@ -128,8 +128,8 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                 <table className="w-full table-fixed border-collapse text-left text-xs">
                     <thead className="bg-slate-950/60 text-slate-400">
                         <tr>
-                            <th scope="col" className="w-auto px-4 py-3 text-[10px] font-semibold uppercase tracking-wider">Name</th>
-                            <th scope="col" className="w-20 px-4 pr-7 py-3 text-right text-[10px] font-semibold uppercase tracking-wider">Actions</th>
+                            <th scope="col" className="w-auto px-4 py-2 text-[9px] font-medium">Name</th>
+                            <th scope="col" className="w-16 px-3 py-2 text-right text-[9px] font-medium">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="storage-volume-rows divide-y divide-slate-800/70">
@@ -170,7 +170,7 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                                             </div>
                                         )}
                                     </td>
-                                    <td className="border-l-2 border-l-transparent px-4 pr-7 py-3.5">
+                                    <td className="border-l-2 border-l-transparent px-3 py-3.5">
                                         <RowActions item={item} busy={busy} onDelete={onDelete} />
                                     </td>
                                 </tr>

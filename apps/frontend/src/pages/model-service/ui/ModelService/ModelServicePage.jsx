@@ -111,9 +111,9 @@ export function ModelServicePage({ onToggleMobileNav }) {
                 )}
 
                 {(connection.clusters || []).length > 0 && (
-                    <section className={cn(CARD, 'my-services-card w-full max-w-4xl self-start p-5')}>
+                    <section className={cn(CARD, 'my-services-card w-full p-5')}>
                         <SectionLabel className="text-[#037ffc]">Gateway connections</SectionLabel>
-                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <div className="mt-3 grid max-w-4xl gap-3 md:grid-cols-2">
                             {connection.clusters.map((cluster) => (
                                 <Panel key={cluster.clusterId} padding="sm" tone="subtle" className="min-w-0 shadow-none">
                                     <div className="mb-3 flex min-w-0 items-center gap-2">

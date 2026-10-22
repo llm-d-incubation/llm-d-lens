@@ -20,8 +20,10 @@ description: 发起 Lens Assistant 对话、查看当前集群问题并打开常
 **Join Slack**、**Star on GitHub** 和主题切换按钮。内容区上方不再重复显示页面标题。
 小屏幕上，入口以带有可访问名称的图标按钮显示。
 使用右上角的太阳或月亮按钮切换主题；滚动条（包括 Model Services 画布）跟随所选主题。
-侧边栏展开/收起按钮和账号菜单仍位于侧边栏。展开时，**Lens Assistant** 和仅图标的账号入口
-位于底部同一行；悬停账号图标可查看入口名称和用户名。收起时，两个图标上下排列。
+侧边栏展开/收起按钮和账号菜单仍位于侧边栏。展开时，**Account** 位于底部左侧，
+**Lens Assistant** 以紧凑图标显示在右侧。悬停 Account 可查看用户名；悬停或用键盘聚焦助手图标可查看入口名称，
+选中 Lens Assistant 时图标按钮显示蓝色背景。
+收起时，两个图标上下排列，Account 在前。
 即使正在查看其他管理分组的页面，也可以展开或收起 Administration 下的分组；进入管理页面时会展开其所属分组。
 
 点击右侧抽屉外的遮罩可关闭抽屉；表单正在提交或明确要求在面板内操作时除外。
@@ -35,14 +37,31 @@ Observability 同样将服务控件和 Namespace/GUIs 行合并显示。
 
 | 页面 | 控件位置 |
 | --- | --- |
-| Deployments | Create 和刷新位于 Total 至 Cleaned 统计卡片行的右侧 |
-| Evaluation 和 Trace Replayer | New Task 和刷新位于任务状态卡片行的右侧；点击卡片可筛选 |
-| Storage | New storage volume 和刷新位于 Failed 卡片之后 |
-| Model cache | Download model 和刷新位于 Deleting 卡片之后；同步与返回操作保留在旁边 |
-| Clusters | 桌面端将集群选择、就绪状态、编辑、导航、搜索和 Add 合并为一行；通过帮助图标查看描述 |
+| Deployments | Create 和刷新位于 Deployments 列表标题右侧 |
+| Evaluation | Evaluation evidence、New Task 和刷新位于搜索筛选行上方，筛选行不再额外加外框；点击状态卡片可筛选 |
+| Trace Replayer | Matching Tasks、后方小字匹配数量、New Task 和唯一的刷新按钮位于无额外外框的搜索筛选行上方 |
+| Storage | New storage volume 和刷新位于 Storage volumes 右侧，下方为统一的筛选器和列表/详情区域 |
+| Model cache | Download model 和刷新位于 Cached models 右侧；分页摘要和控件保留在面板底部，位于可滚动的模型列表下方 |
+| Clusters | Target cluster 和导航位于 Clusters 列表上方；状态和编辑保留在列表中，通过集群选择旁的帮助图标查看描述 |
 | Observability | 桌面端将服务标签、上下文、目标集群和刷新合并为一行 |
 
 小屏幕上控件会换行，避免被截断。
+
+Model cache 的 **Showing 1–1 of 1 cached models** 表示当前页显示的条目范围和筛选后的总数。
+桌面端列表占满面板剩余高度，模型卡片滚动时底部分页栏仍然可见。
+同步与返回操作保留在统计卡片旁。
+
+Storage 使用统一面板，以分隔线区分存储卷列表和详情，不再使用独立侧栏。
+**Storage volumes** 旁的按钮可以收起或展开列表；收起时详情占满面板宽度，当前选择和筛选条件保持不变。
+只有超过一页时才显示分页控件。Clusters 中的 **Target cluster** 使用弱化标签，
+作为下方选择框的说明。
+
+Evaluation Tasks 卡片内还显示 **multi-configuration comparisons**：
+即一次比较两个或更多配置的已记录评估任务数。零表示没有此类任务，并非错误；
+此计数覆盖全部已记录任务，不随列表筛选变化。
+
+**My services** 的 Gateway connections 外层面板保持全宽，内部连接卡片较窄。
+**Users** 和 **Roles** 的搜索与筛选直接放在主面板中，不再额外嵌套带边框的工具栏。
 
 ## 加入 Slack
 

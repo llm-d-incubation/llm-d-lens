@@ -8,7 +8,7 @@ to manage the downloaded models, not the volume itself.
 
 ## Create a storage volume
 
-1. Open **Storage** and click **New storage volume**.
+1. Open **Storage** and click **New storage volume** beside **Storage volumes**.
 2. In **New storage volume**, choose the target **Cluster**.
 3. Choose **Type** using the table below, then fill in its connection fields.
 4. To store model downloads, set **Purpose (optional)** to **Model cache** and use **hostPath** or **NFS**.
@@ -25,6 +25,15 @@ to manage the downloaded models, not the volume itself.
 Model-cache volumes must be writable; selecting that purpose turns off **Read-only when mounted**.
 
 ## Filter the volume list and inspect live status
+
+The filters, volume list and details share one panel. On desktop, a divider
+separates the list from the details; on smaller screens, details appear below
+the list. The list scrolls within its available space. Pagination appears only
+when there are more than 10 matching volumes.
+
+Use the collapse/expand button beside **Storage volumes** to hide or restore
+the list. Details fill the panel while the list is hidden. The current volume,
+filters and list page are preserved.
 
 1. Open **Storage**.
 2. Use **All clusters**, **Search by name**, **All types**, and **All purposes** to narrow the list.

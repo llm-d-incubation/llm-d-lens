@@ -84,9 +84,31 @@ test('sidebar renders the administration accordions and fixed footer controls', 
   assert.match(html, />Model Usage</);
   assert.match(html, /id="navigation-footer"/);
   assert.match(html, /Account menu/);
-  assert.doesNotMatch(html, />Account</);
+  assert.match(html, />Account</);
+  assert.match(html, /aria-label="Lens Assistant"/);
+  assert.match(html, /role="tooltip"[^>]*>Lens Assistant<\/span>/);
+  assert.doesNotMatch(html.match(/<button[^>]*aria-label="Lens Assistant"[\s\S]*?<\/button>/)[0], />Lens Assistant</);
+  assert.ok(html.indexOf('aria-label="Account menu"') < html.indexOf('aria-label="Lens Assistant"'));
   assert.match(html, /Collapse sidebar/);
   assert.doesNotMatch(html, /Switch to (light|dark) mode/);
+
+  const collapsed = renderToStaticMarkup(
+    createElement(AuthContext.Provider, {
+      value: {
+        canView: view => canAccessView(['*:*:*'], view),
+        principal: { username: 'sidebar-test' },
+        logout() {},
+      },
+    }, createElement(LeftNavigation, { currentView: 'playground', isExpanded: false })),
+  );
+  assert.match(collapsed, /aria-label="Account menu"/);
+  assert.match(collapsed, /aria-label="Lens Assistant"/);
+  assert.doesNotMatch(collapsed, />Account</);
+  assert.match(collapsed, /role="tooltip"[^>]*>Lens Assistant<\/span>/);
+  const activeAssistant = collapsed.match(/<button[^>]*aria-label="Lens Assistant"[\s\S]*?<\/button>/)[0];
+  assert.match(activeAssistant, /aria-current="page"/);
+  assert.match(activeAssistant, /bg-sky-500/);
+  assert.ok(collapsed.indexOf('aria-label="Account menu"') < collapsed.indexOf('aria-label="Lens Assistant"'));
 });
 
 test('every sidebar entry can be the first accessible destination without a separate priority list', () => {

@@ -5,6 +5,8 @@ import { Database, Webcam, Rocket, Gauge, Network, HardDrive, Download, Plug, Bo
     UsersRound
 } from 'lucide-react';
 import { cn } from '../../shared/lib/cn';
+import { Button } from '../../shared/ui/Button';
+import { HelpTooltip } from '../../shared/ui/FormControls';
 import { SimulationIcon } from '../../pages/simulation';
 import { ChangePasswordModal, useAuth } from '../../pages/auth';
 import { NAVIGATION_GROUPS } from '../routes/views';
@@ -252,35 +254,15 @@ export default function LeftNavigation({ currentView, onNavigate, isMobileOpen, 
                 'flex gap-1.5 p-2',
                 isExpanded ? 'flex-row items-center' : 'flex-col'
             )} id="navigation-footer">
-                {assistantItem && (
-                    <button
-                        type="button"
-                        onClick={() => handleItemClick(assistantItem.view, assistantItem.disabled)}
-                        aria-current={currentView === assistantItem.view ? 'page' : undefined}
-                        aria-label={assistantItem.label}
-                        title={assistantItem.label}
-                        className={cn(
-                            'relative z-50 flex items-center justify-center rounded-xl border border-theme-border text-theme-muted transition-colors hover:bg-theme-bg hover:text-theme-text',
-                            isExpanded ? 'h-10 min-w-0 flex-1 gap-1.5 px-1.5' : 'h-10 w-full',
-                            currentView === assistantItem.view && 'bg-theme-bg text-theme-text'
-                        )}
-                    >
-                        <Bot size={16} className="shrink-0" />
-                        {isExpanded && (
-                            <span className="min-w-0 truncate text-xs font-semibold">{assistantItem.label}</span>
-                        )}
-                    </button>
-                )}
-                <div className={cn('flex h-10 items-center', isExpanded ? 'shrink-0' : 'w-full')}>
+                <div className={cn('flex h-10 min-w-0 items-center', isExpanded ? 'flex-1' : 'w-full')}>
                     {principal && (
                         <div ref={accountMenuRef} className="relative z-50 min-w-0 flex-1">
                             <button
                                 type="button"
                                 onClick={() => setAccountMenuOpen((open) => !open)}
                                 className={cn(
-                                    'flex h-10 min-w-0 items-center rounded-lg text-theme-muted transition-colors hover:bg-theme-bg hover:text-theme-text',
-                                    'justify-center',
-                                    isExpanded ? 'w-10' : 'w-full'
+                                    'flex h-10 w-full min-w-0 items-center rounded-xl border border-theme-border text-theme-muted transition-colors hover:bg-theme-bg hover:text-theme-text',
+                                    isExpanded ? 'gap-2 px-2.5' : 'justify-center'
                                 )}
                                 title={`Account: ${principal.username}`}
                                 aria-label="Account menu"
@@ -290,11 +272,17 @@ export default function LeftNavigation({ currentView, onNavigate, isMobileOpen, 
                                 <span className="sidebar-account-avatar flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-theme-border bg-theme-bg text-xs font-semibold uppercase text-theme-text">
                                     {(principal.username || '?').slice(0, 1)}
                                 </span>
+                                {isExpanded && (
+                                    <>
+                                        <span className="min-w-0 flex-1 truncate text-left text-xs font-semibold">Account</span>
+                                        <ChevronDown size={14} className={cn('shrink-0 transition-transform', accountMenuOpen && 'rotate-180')} />
+                                    </>
+                                )}
                             </button>
                             {accountMenuOpen && (
                                 <div
                                     role="menu"
-                                    className={cn('absolute bottom-full z-50 mb-1 w-44 overflow-hidden rounded-xl border border-theme-border bg-theme-card shadow-2xl', isExpanded ? 'right-0' : 'left-0')}
+                                    className="absolute bottom-full left-0 z-50 mb-1 w-44 overflow-hidden rounded-xl border border-theme-border bg-theme-card shadow-2xl"
                                 >
                                     <button
                                         type="button"
@@ -317,6 +305,26 @@ export default function LeftNavigation({ currentView, onNavigate, isMobileOpen, 
                         </div>
                     )}
                 </div>
+                {assistantItem && (
+                    <HelpTooltip
+                        className={cn('relative z-50 shrink-0', isExpanded ? 'w-10' : 'w-full')}
+                        tooltipClassName={cn('bottom-full pb-2 whitespace-nowrap', isExpanded ? 'right-0' : 'left-0')}
+                        trigger={(
+                            <Button
+                                variant={currentView === assistantItem.view ? 'sky' : 'ghost'}
+                                size="icon"
+                                onClick={() => handleItemClick(assistantItem.view, assistantItem.disabled)}
+                                aria-current={currentView === assistantItem.view ? 'page' : undefined}
+                                aria-label={assistantItem.label}
+                                className="h-10 w-full rounded-xl transition-[scale,box-shadow,background-color,color] duration-200 hover:shadow-md focus-visible:shadow-md motion-safe:hover:scale-110 motion-safe:active:scale-95 motion-reduce:transition-none"
+                            >
+                                <Bot size={16} aria-hidden="true" />
+                            </Button>
+                        )}
+                    >
+                        {assistantItem.label}
+                    </HelpTooltip>
+                )}
             </div>
         </aside>
         {showChangePassword && (

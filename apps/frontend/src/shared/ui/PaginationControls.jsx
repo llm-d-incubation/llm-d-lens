@@ -12,7 +12,7 @@ export function PaginationControls({ page, totalPages, onPageChange, total, page
     const controls = <>
         {onPageSizeChange && <>
             <label htmlFor={selectId} className="text-theme-muted">Rows per page</label>
-            <Select id={selectId} className="h-8 w-20 text-xs" value={String(pageSize)}
+            <Select id={selectId} className="h-8 w-24 shrink-0 py-1 text-xs leading-4" value={String(pageSize)}
                 onChange={event => { onPageSizeChange(Number(event.target.value)); onPageChange(0); }}>
                 {pageSizeOptions.map(size => <option key={size} value={size}>{size}</option>)}
             </Select>
@@ -30,6 +30,6 @@ export function PaginationControls({ page, totalPages, onPageChange, total, page
     if (total === undefined) return controls;
     return <div className={cn('flex flex-col gap-3 border-t border-theme-border px-1 pt-4 text-xs text-theme-muted sm:flex-row sm:items-center sm:justify-between', className)}>
         <span>Showing {formatValue(pageStart)}–{formatValue(pageEnd)} of {formatValue(total)} {itemLabel}</span>
-        <div className="flex items-center gap-2">{controls}</div>
+        <div className="flex flex-wrap items-center gap-2">{controls}</div>
     </div>;
 }
