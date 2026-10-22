@@ -1,5 +1,32 @@
 import { formatTimestamp } from '../../../shared/lib/formatTimestamp.js';
 
+export function publicRagMatchSummary(match) {
+    if (!match) return [];
+    const lines = Object.entries(match.workload?.fields || {}).map(([name, field]) =>
+        `${name}: requested ${field.requested}, reported ${field.reported}, difference ${field.difference}; ${field.basis}.`);
+    if (match.workload?.unknown_fields?.length) {
+        lines.push(`Unknown workload fields: ${match.workload.unknown_fields.join(', ')}.`);
+    }
+    if (match.workload?.similarity !== null && match.workload?.similarity !== undefined) {
+        lines.push(`Workload similarity: ${Math.round(match.workload.similarity * 100)}%; coverage: ${Math.round(match.workload.coverage * 100)}%. Not performance confidence.`);
+    }
+    if (match.workload?.nominal_prompt_shape) {
+        lines.push(`Reported nominal prompt shape: ${JSON.stringify(match.workload.nominal_prompt_shape)}. Not a measured mean or P95.`);
+    }
+    if (match.latency) {
+        lines.push(`Published latency target status: ${match.latency.status.replaceAll('_', ' ')}. Not current deployment SLO compliance.`);
+        for (const [metric, field] of Object.entries(match.latency.fields || {})) {
+            lines.push(`${metric.toUpperCase()} target ${field.target_ms} ms: ${field.observations.length
+                ? field.observations.map((item) => `${item.value_ms} ms (${item.statistic || 'unspecified statistic'}; deviation ${(item.relative_deviation * 100).toFixed(1)}%)`).join('; ')
+                : 'unknown'}.`);
+        }
+    }
+    if (match.configuration_basis) {
+        lines.push(`Configuration basis: ${JSON.stringify(match.configuration_basis)}.`);
+    }
+    return lines;
+}
+
 export function historicalEvidenceSummary(samples) {
     const history = Array.isArray(samples) ? samples : [];
     if (!history.length) return null;

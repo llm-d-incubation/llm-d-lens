@@ -35,6 +35,20 @@ class QuerySlice:
 
 
 class RagQueryDao(RagPublicationDao):
+    def hardware_options(self, filters: QueryFilters) -> tuple[str, ...]:
+        """Published model-specific hardware labels for authorized query orchestration."""
+        with self._read_only() as session:
+            self._require_postgres(session)
+            published = union_all(*(self._published_members(origin) for origin in filters.origins)).cte()
+            experiment = aliased(RagItemRow, published)
+            statement = select(experiment.hardware).where(
+                experiment.kind == "experiment",
+                experiment.hardware.is_not(None),
+            )
+            if filters.model is not None:
+                statement = statement.where(func.lower(experiment.model) == filters.model.lower())
+            return tuple(name for name in session.scalars(statement.distinct().order_by(experiment.hardware)) if name)
+
     @staticmethod
     def _conditions(experiment: AliasedClass[RagItemRow], filters: QueryFilters) -> list[ColumnElement[bool]]:
         conditions = []
@@ -50,9 +64,14 @@ class RagQueryDao(RagPublicationDao):
             conditions.append(experiment.workload.cast(JSONB).contains(filters.workload))
         return conditions
 
-    def search(self, filters: QueryFilters, *, intent: str, text_query: str, limit: int) -> QuerySlice:
-        if intent not in ("numeric", "comparison", "definition", "figure") or not 1 <= limit <= 50:
-            raise PublicationError("retrieval needs a resolved intent and a bounded limit")
+    def search(self, filters: QueryFilters, *, intent: str, text_query: str, limit: int | None) -> QuerySlice:
+        if intent not in ("numeric", "comparison", "definition", "figure"):
+            raise PublicationError("retrieval needs a resolved intent")
+        if limit is None:
+            if intent not in ("numeric", "comparison") or not filters.model or not filters.hardware:
+                raise PublicationError("complete retrieval requires exact model and hardware scope")
+        elif not 1 <= limit <= 50:
+            raise PublicationError("retrieval needs a bounded limit")
         if intent == "definition" and not text_query:
             return QuerySlice(matches=(), total=0)
         with self._read_only() as session:

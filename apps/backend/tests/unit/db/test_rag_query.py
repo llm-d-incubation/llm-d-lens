@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from pydantic import ValidationError
 from sqlalchemy import Engine, event
 from sqlalchemy.orm import sessionmaker
@@ -31,7 +34,7 @@ from llm_d_lens.benchmark_rag.service import (
     plan_query,
 )
 from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRISM_ORIGIN, allowed_paths
-from llm_d_lens.core.exceptions import ConflictError, ForbiddenError, UnauthenticatedError
+from llm_d_lens.core.exceptions import ConflictError, DomainValidationError, ForbiddenError, UnauthenticatedError
 from llm_d_lens.db.dao.rag_query import QueryMatch, RagQueryDao
 
 _PATH = "archives/llm-d-benchmarks.json"
@@ -63,7 +66,9 @@ def approval(origin: str) -> SourceApproval:
     )
 
 
-def publish_numeric(publication: RagPublicationService, revision: str = _REVISION, *, activate: bool = True):
+def publish_numeric(
+    publication: RagPublicationService, revision: str = _REVISION, *, activate: bool = True, measurement_copies: int = 1
+):
     digest = publication.archive.put(_RAW)
     file = InventoryFile(path=_PATH, sha256=digest, format="json")
     inventory = PinnedInventory(origin_id=PRISM_ORIGIN, revision=revision, complete=True, files=(file,))
@@ -94,8 +99,14 @@ def publish_numeric(publication: RagPublicationService, revision: str = _REVISIO
             source_pointer={"record_id": identity, "json_pointer": f"/runs/{index}"},
         )
         items.append(experiment)
-        for metric, value, measurement_unit in (("throughput", throughput, unit), ("latency", latency, "s")):
+        for metric, value, measurement_unit, copy in (
+            (metric, value, measurement_unit, copy)
+            for copy in range(measurement_copies)
+            for metric, value, measurement_unit in (("throughput", throughput, unit), ("latency", latency, "s"))
+        ):
             key = f"{_PATH}#measurement:{identity}:{metric}"
+            if measurement_copies > 1:
+                key += f":copy:{copy}"
             normalized = normalize_unit(value, measurement_unit)
             items.append(
                 RagItem(
@@ -128,7 +139,7 @@ def publish_numeric(publication: RagPublicationService, revision: str = _REVISIO
     manifest = publication.stage(
         inventory,
         (ParsedFile(path=_PATH, items=tuple(items)),),
-        expected_counts={"source": 1, "experiment": 2, "measurement": 4},
+        expected_counts={"source": 1, "experiment": 2, "measurement": 4 * measurement_copies},
     )
     return publication.activate(PRISM_ORIGIN, manifest.item_id) if activate else manifest
 
@@ -235,6 +246,23 @@ def numeric(**fields) -> QueryRequest:
     )
 
 
+def test_migration_environment_preserves_existing_loggers(postgres_config: Config, monkeypatch: pytest.MonkeyPatch):
+    logger = logging.getLogger("llm_d_lens.db.migration_logging_regression")
+    monkeypatch.setattr(logger, "disabled", False)
+
+    command.current(postgres_config)
+
+    assert not logger.disabled
+
+
+def test_hardware_options_are_model_specific_and_published_only(query_service):
+    assert query_service.dao.hardware_options(QueryFilters(model="qwen3-0.6b")) == ("H100", "H200")
+    assert query_service.dao.hardware_options(QueryFilters(model="unreported-model")) == ()
+    publish_numeric(RagPublicationService(dao=query_service.dao), revision="2026-10-14", activate=False)
+    assert query_service.dao.hardware_options(QueryFilters(model="Qwen3-0.6B")) == ("H100", "H200")
+    assert query_service.dao.hardware_options(QueryFilters(model="Qwen3-0.6B", origins=(LLM_D_ORIGIN,))) == ()
+
+
 @pytest.mark.parametrize(
     "principal",
     [
@@ -323,6 +351,35 @@ def test_required_unknown_condition_and_denominators_do_not_match(query_service)
     assert query_service.query(numeric(series={"scenario": "run-a"}), reader()).matched_items == 1
     result = query_service.query(numeric(source_revision="2026-10-20"), reader())
     assert result.status == "abstained" and not result.evidence
+
+
+def test_complete_public_retrieval_preserves_all_observations_and_exact_identity(query_service):
+    publication = RagPublicationService(dao=query_service.dao, archive=query_service.archive)
+    publish_numeric(publication, revision="2026-10-15", measurement_copies=40)
+    request = QueryRequest(
+        question="Published deployment benchmark evidence",
+        intent="comparison",
+        limit=1,
+        filters=QueryFilters(model="Qwen3-0.6B", hardware="H100"),
+    )
+    result = query_service.query(request, reader(), all_matches=True)
+    assert result.returned_observations == result.matched_items == len(result.evidence) == 80
+    assert result.truncated is False
+    assert {item.experiment.hardware for item in result.evidence} == {"H100"}
+    assert {item.experiment.model for item in result.evidence} == {"Qwen3-0.6B"}
+    assert all(item.citation.source_revision == "2026-10-15" for item in result.evidence)
+    assert "all 80" in result.answer
+    bounded = query_service.query(request, reader())
+    assert len(bounded.evidence) == 1
+    assert bounded.truncated
+    assert bounded.matched_items == 80
+
+
+@pytest.mark.parametrize("filters", [QueryFilters(), QueryFilters(model="Qwen3-0.6B"), QueryFilters(hardware="H100")])
+def test_complete_public_retrieval_requires_exact_model_and_hardware(filters):
+    request = QueryRequest(question="Published deployment benchmark evidence", intent="comparison", filters=filters)
+    with pytest.raises(DomainValidationError, match="exact model and hardware"):
+        PublicRagQueryService(dao=object()).query(request, reader(), all_matches=True)
 
 
 @pytest.mark.parametrize(

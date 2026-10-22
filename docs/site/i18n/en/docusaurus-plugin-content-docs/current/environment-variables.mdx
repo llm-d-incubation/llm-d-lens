@@ -64,6 +64,14 @@ and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
 
 ## Evaluation, simulation and agentic planning
 
+For temporary backend-only cluster validation, `AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES`
+accepts a JSON map from cluster registration IDs to exact published hardware
+models (default: `{}`). Only mapped clusters
+inherit a simulated target for RAG, the private planning overview, AIC and ranking.
+Measured capacity and physical hardware are unchanged; simulated plans cannot deploy.
+This is test configuration, not a product form or request option. Remove a map
+entry and restart the backend to undo the temporary override.
+
 | Variable | Description | Default |
 | --- | --- | --- |
 | `LLM_D_BENCH_EVALUATE_STORE` | Root directory for evaluation task artifacts. | `~/.llm_d_lens/run_store/evaluate` (legacy import fallback) |

@@ -207,6 +207,67 @@ Guide 兼容端点保留 `{ "error": "..." }` 响应结构。
 校准和模型发现共享惰性的 modelserver 调用遍历逻辑，同时各自保留了
 自己的"取最后一个值"和"取第一个模型"选择规则。
 
+### Agentic 计划中的公共 RAG 证据
+
+检索前从目标会话对应集群的实时概览获取加速卡型号，并传入与其匹配的已发布
+`filters.hardware` 精确名称；不会丢弃显存大小或 PCIe/SXM 差异。
+未知或混合硬件记录为 `unavailable`，代码为 `rag_hardware_unresolved`；
+没有硬件匹配时记录 `no_matches`，不会跨硬件回退。
+证据详情包含 `target_hardware`（集群 ID、profile ID、型号）和实际查询条件。
+
+临时的后端集群测试配置可为 RAG、私有规划概览、AIC 搜索/估算与排序提供仅供验证的目标身份，
+包括回退和细化。模拟型号须唯一匹配所发现硬件 profile 中的 AIC 系统。
+服务端设置 `PlanningFacts.planning_hardware_model`，忽略客户端传入的值；不提供请求级硬件覆盖参数。
+`target_hardware.model` 为有效身份，`actual_model` 为真实观测型号，`simulation=true` 标记模拟计划。
+无匹配时也会持久保存这些信息；观测不再仅作跨硬件参考。
+模型精确匹配、显式负载约束和配置不确定性检查仍保留，资源容量实测值及真实集群状态不变。
+批准接口会在产生部署副作用前拒绝模拟计划。
+
+`AgenticDeploymentService.create()` 和 `.refine()` 除 MCP 的 `principal_id` 外，还接受实际请求
+`principal`，普通 REST 和流式路由均显式传入。在生成候选前，服务端执行已授权公共查询，
+设置 `filters.model=request.model`、精确硬件、`intent="comparison"` 和
+`include_internal=false`，通过内部 `all_matches=True` 获取全部匹配的公共观测。
+普通公共查询 API 仍保留结果数量上限。客户端不能通过 `planning_facts` 注入可信公共证据，
+每次规划都会清空并由服务端重新检索。
+
+规划保持 `filters.workload={}`，保留模型和硬件精确匹配的全部观测。
+显式提供 `planning_facts.workload_profile` 非空字段时，按近似负载相似度和已知字段覆盖率
+排序，再辅助比较所给 TTFT/TPOT；显式零值参与比较。只有延迟目标时，按源实验的延迟状态和
+偏差排序；两者均未提供时，返回全部观测及条件，不因字段缺失过滤。现有偏好解析器识别的
+负载和延迟数值要求在创建、细化检索前生效；用例启发式值和 AIC 默认值不算显式负载。
+表单负载及延迟初始值为空，不再将平均输入长度复制成 P95。
+
+`details.retrieval` 记录模式、输入、匹配数、返回数及截断状态；
+`details.matches` 按证据 ID 记录已知差异、未知字段、相似度、覆盖率、配置依据及源实验延迟状态
+（`satisfied`、`not_satisfied`、`unknown`、`not_requested`），保留原始统计口径和目标偏差。
+相似度为已知字段 min/max 比值的平均数，不是性能置信度。报告中的名义长度明确标注为代理，
+不是实测均值或 P95；不会跨实验或 series 拼接延迟，不会将 ITL/NTPOT 当成 TPOT，
+空直方图的零值仍视为未知。这些标注既不证明当前部署满足 SLO，也不剔除观测。
+普通公共查询接口的精确负载匹配语义保持不变。
+
+两个 AI 阶段通过 `explicit_workload` 接收这些字段。该对象为空时，不以负载作为 RAG
+适用性门槛，不能因为默认 `shared_prefix_ratio=0`、`general-chat` 或缺少 QPS/自动扩缩容
+信号排除证据。公开 TTFT/TPOT 及其对应配置用于在实时资源约束内，围绕延迟目标反向生成和
+排序候选。公开拓扑无需先匹配初始最小资源方案，而是待考虑的配置；调整后的性能仍未验证，
+不能直接迁移精确延迟值或覆盖服务端计算的 SLO 状态。
+
+`AgenticDeploymentService.create()` 校验所选模型缓存存储卷，但不检查模型文件是否存在或下载是否就绪；
+`.refine()` 同样不要求模型已下载。`.approve()` 在开始部署前要求模型已在该卷中就绪，
+并解析当前凭据策略。已注册存储卷的要求和非 Agentic 检查保持不变。
+
+计划的 `planning_evidence` 包含 `id="public-rag:query"`，状态为 `available`、
+`no_matches`、`forbidden` 或 `unavailable`；`details` 保存查询、明确提示及成功查询的原始
+`QueryResponse`。相同结果会通过进度事件返回并保存到规划快照。无权限和查询失败不会中断推荐。
+包含已检索公共观测的计划，其读取和修改响应要求现有的已认证全局
+`benchmark-rag:query:read` 权限；无权限调用者的列表响应不包含此类计划。
+
+`PlanningFacts.public_rag_evidence` 将全部已检索、带引用的观测及 `planning_match` 标注提供给两个 AI 阶段。
+相关公共证据优先于 AIC；排序器通过 `public_rag_evidence_ids` 返回实际使用的已检索观测，
+未知 ID 会被拒绝。使用时，相关引用和 `public-rag:query` 会进入 `decision_evidence_ids`。
+引用公共证据的排序不会仅因 AIC 的延迟排序而被否决，但资源校验及计算出的 SLO 状态不变。
+检索本身不会产生确定性性能聚合；没有 AI 时观测仅为上下文。负载目标候选生成仍校验
+AIC 原生精确拓扑，不会从条件缺失或不同的公共观测推断容量。
+
 智能体规划会针对每个经过校验的 baseline-vllm、optimized-baseline 和
 pd-disaggregation 候选方案，根据其工作负载和 GPU 拓扑结构，分别估算
 缺失的精确 AIC 预测值。候选方案的估算值会以 `aic_estimate` 的形式

@@ -236,6 +236,13 @@ PD deployments apply that utilization to both prefill and decode vLLM roles.
 The estimate uses GPU capacity and model overhead, not vLLM's measured free KV
 cache at startup.
 
+`AgenticDeploymentService.create()` validates the selected model-cache storage
+volume but does not inspect model-file presence or download readiness.
+`.refine()` likewise does not require a downloaded model. `.approve()` requires
+a ready model in that volume and resolves its current credential policy before
+starting deployment. The registered-storage requirement and non-Agentic checks
+are unchanged.
+
 Deployments live under the FastAPI router in `llm_d_lens/deploy/router.py` with the `/api/v1/deployments` prefix.
 
 Use the [installation instructions](/installation) and
@@ -261,6 +268,85 @@ external clients should use authenticated HTTP so route permissions and resource
 scope checks apply.
 
 Optimized and precise routing capability metadata reuse `shared_prefix_routing_workload()` in `llm_d_lens.deploy.capabilities`. Each scenario and recommended workload receives independent nested values; provider-specific baselines and goals are unchanged. Precise-provider calibration and model discovery share lazy modelserver invocation traversal while retaining their respective last-value and first-model selection rules.
+
+### Public RAG evidence in Agentic plans
+
+The target session's live cluster overview supplies the accelerator model before
+retrieval. The query includes an exact published `filters.hardware` label, matched
+to that model without discarding memory-size or PCIe/SXM variants. Unknown/mixed
+hardware is reported as `unavailable` with `rag_hardware_unresolved`; no hardware
+matches produce `no_matches`, without cross-hardware fallback. Evidence details
+include `target_hardware` (cluster ID, profile ID and model) and the actual query.
+
+Temporary backend-only cluster test configuration can supply a validation-only target identity to RAG,
+the private planning overview, AIC search/estimates and ranking, including fallback
+and refinement. The model must map uniquely to an AIC system in the discovered
+hardware profile. The server sets `PlanningFacts.planning_hardware_model` and
+ignores client-supplied values. There is no request-level hardware override.
+`target_hardware.model` is effective,
+`actual_model` is observed, and `simulation=true` marks the plan.
+These details persist even for no matches; observations are not reference-only.
+Exact model matching, explicit workload constraints and configuration uncertainty remain. Measured resource capacity and physical
+cluster state are unchanged. Approval rejects simulated plans before deployment effects.
+
+`AgenticDeploymentService.create()` and `.refine()` accept the actual request
+`principal` in addition to the MCP `principal_id`. Both REST and streaming routes
+pass it explicitly. Before generation, the service calls the authorized public
+query with `filters.model=request.model`, exact hardware, `intent="comparison"`
+and `include_internal=false`. Internal `all_matches=True` retrieves every matching
+public observation; the normal public query API remains bounded. Clients cannot supply trusted public evidence through
+`planning_facts`; it is cleared and resolved by the server on each planning pass.
+
+Planning leaves `filters.workload={}` and retains all exact-model/hardware
+observations. With explicit non-null `planning_facts.workload_profile` fields,
+including explicit zero, it ranks by approximate workload similarity and coverage,
+then supplied TTFT/TPOT targets. With only latency targets, it ranks by source
+latency status and violation. With neither, it returns all observations and their
+conditions without absent-field filtering. Recognized numeric workload and latency
+preferences are applied first on creation and refinement. Use-case heuristics and
+AIC defaults are not explicit traffic. Workload and latency form defaults are blank;
+mean input is never copied into P95.
+
+`details.retrieval` records mode, inputs, matched/returned counts and truncation.
+`details.matches` records each evidence ID's known differences, unknown fields,
+similarity/coverage, configuration basis and source latency status
+(`satisfied`, `not_satisfied`, `unknown`, `not_requested`), with original statistics
+and target deviations. Similarity is the mean known-field min/max ratio, not
+performance confidence. Nominal report prompt lengths are labelled proxies, not
+measured means/P95. Latency comparisons never combine different experiments or
+series, substitute ITL/NTPOT for TPOT, or treat empty histograms as zero latency.
+These annotations do not establish current deployment SLO compliance or remove
+observations. The normal public query endpoint's exact workload semantics are unchanged.
+
+Both AI stages receive these fields as `explicit_workload`. If empty, workload
+must not gate RAG applicability, including default `shared_prefix_ratio=0`,
+`general-chat`, or missing QPS/autoscaling signals. Published TTFT/TPOT and their
+associated configurations guide candidate generation and ranking toward the
+requested latency targets, within live resource constraints. Published topology
+need not match the initial minimum-resource topology: it is a configuration to
+consider. Adaptations remain unverified and cannot transfer exact latency values
+or override server-computed SLO status.
+
+The run's `planning_evidence` includes `id="public-rag:query"` with status
+`available`, `no_matches`, `forbidden` or `unavailable`; `details` retains the
+query, an explicit message and, when successful, the original `QueryResponse`.
+The same outcome is emitted as progress and saved in the planning snapshot.
+Permission failures and query failures do not abort recommendation generation.
+Plans containing retrieved public observations require the existing authenticated
+global `benchmark-rag:query:read` permission for read and mutation responses; list
+responses omit such plans for callers without that permission.
+
+`PlanningFacts.public_rag_evidence` carries all retrieved, cited observations and
+their `planning_match` annotations to both AI
+stages. Relevant public evidence takes precedence over AIC; the selector returns
+`public_rag_evidence_ids` for the retrieved observations it used. Unknown IDs are
+rejected. These references and `public-rag:query` appear in `decision_evidence_ids`
+when used. A cited public-evidence ranking is not vetoed solely by the AIC-only
+latency ordering, but resource validation and computed SLO status are unchanged.
+Public retrieval alone never creates deterministic performance aggregates.
+Without AI the observations remain context only. Load-target candidate generation
+still validates exact native AIC topologies rather than inventing capacity from
+public observations with different or missing conditions.
 
 Agentic candidate generation requires its first tool batch to contain exactly
 `get_cluster_overview` and `search_candidates`. An invalid first batch is not executed;

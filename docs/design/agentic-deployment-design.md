@@ -102,7 +102,9 @@ flowchart TD
    SLO, workload profile, and preference are optional inputs.
 2. When creating a plan, the backend validates the active cluster session, and verifies that the
    selected storage is ready for the current cluster, has purpose `model-cache`, is not a
-   dynamic-PVC volume, and already has a ready cache entry for the target model.
+   dynamic-PVC volume. Planning and refinement do not require the target model to be
+   downloaded. Approval checks the ready cache entry and resolves its current
+   credential policy before starting deployment.
 3. When external AI is configured, AI Generator starts from deployment intent and uses native tool
    calling to query cluster and AIC in parallel first; only after that may it query allowlisted
    historical evidence. Before submission it must obtain cluster overview and attempt at least one
@@ -617,6 +619,107 @@ This document describes how Agentic Deploy handles structured and unstructured e
 Structured data consists of `BenchmarkRecord`: model, hardware, runtime, workload, candidate configuration, measured performance metrics, outcome, and failure reason. Records reside in `agentic_benchmark_records` and are authoritative for performance numbers, failure facts, and candidate-level predictions.
 
 Live cluster overview is also structured evidence, with the highest authority: it determines whether candidates satisfy current VRAM, GPU, CPU-buffer, and other hard constraints. Historical benchmarks, AIC, and AI cannot override live-resource conclusions.
+
+#### Public benchmark RAG in recommendations
+
+Create and refinement automatically query `PublicRagQueryService` before candidate
+generation, with exact model/hardware filters and `include_internal=false`,
+retrieving all matching published observations. After permission checks, the live target-cluster overview
+supplies the hardware profile and concrete accelerator model. Profile-declared
+family labels are not device models. Published hardware labels are matched by
+model tokens, ignoring only profile-declared vendor/accelerator decoration and
+separator/case differences; memory size and PCIe/SXM distinctions are retained.
+The selected published hardware label is an exact query filter, applied before
+the observation limit. Unknown or mixed models produce `rag_hardware_unresolved`;
+no matching hardware produces `no_matches`, never an unfiltered or cross-hardware
+fallback. `planning_evidence.details.target_hardware` records the target cluster,
+profile and detected model; `details.query.filters.hardware` records the queried
+label. Refinement resolves live hardware again.
+A temporary backend-only test override replaces the target hardware identity in
+the private planning view without modifying the cluster.
+`AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES` maps cluster registration IDs to test
+models; there is no form control or per-request override. Model matching stays exact.
+RAG applicability, the generator's cluster overview, AIC search and estimates,
+fallback planning and ranking all use that effective model. It must map to one
+AIC system in the discovered hardware profile. Measured GPU counts and memory
+remain unchanged. The server sets `planning_hardware_model`; client values are cleared.
+Evidence records the effective `model`, observed `actual_model` and `simulation=true`,
+including no matches. This is identity simulation, not cross-hardware prediction:
+observations have no reference-only restriction. Explicit workload constraints and
+configuration changes still limit performance certainty. Simulated plans cannot
+be approved for deployment.
+Remove the cluster map entry and restart to undo the temporary override.
+The actual request principal must pass the existing
+authenticated global `benchmark-rag:query:read` gate before any corpus access.
+Missing permission, no matches and retrieval errors are recorded as distinct
+outcomes in progress events, `planning_evidence` and the append-only snapshot.
+Planning continues with existing evidence when public RAG is unavailable.
+
+Planning keeps `filters.workload={}` and uses the internal `all_matches=True`
+query option, restricted to public numeric/comparison queries with exact model
+and hardware scope. The normal public query API retains its bounded results
+and exact workload-filter semantics. Planning has three retrieval modes:
+
+- Explicit workload: approximately rank all observations using the non-null
+  `planning_facts.workload_profile` fields, then use supplied TTFT/TPOT targets.
+- No workload, with TTFT/TPOT: retain all observations and rank by published
+  latency target status and violation.
+- Neither workload nor latency targets: return all model/hardware observations
+  with their original configuration, experiment conditions and citations.
+
+Numeric ISL, OSL, concurrency and latency preferences recognized by the existing
+parser are applied before retrieval on both creation and refinement. Missing
+fields do not constrain matching. Use-case defaults, derived `prefill_heavy`,
+default `shared_prefix_ratio=0` and AIC token lengths are not measured traffic;
+explicit profile zero values still participate in approximate comparison.
+The form starts with blank workload and latency fields and does not fabricate
+input P95 from the mean.
+
+`details.retrieval` records the mode, inputs, matched/returned counts and
+truncation; `details.matches` records each observation's known workload
+differences, unknown fields, similarity, coverage and configuration basis.
+Similarity averages min/max ratios over known numeric fields; coverage is the
+fraction of requested fields reported. These are not performance confidence.
+Explicit shared-prefix/question/output lengths in a report can provide labelled
+nominal proxies for mean-length comparison, never measured means or P95.
+Latency status is `satisfied`, `not_satisfied`, `unknown` or `not_requested`,
+with original statistics, target deviations and missing metrics. Metrics are
+combined only within the same pinned source, experiment and series; ITL/NTPOT
+are not substituted for TPOT, and zero values from empty latency histograms
+remain unknown. These statuses describe source observations, not current SLO
+compliance. No workload difference, latency miss or unknown metric removes an
+observation from planning.
+
+Both the AI generator and selector receive original metric/statistic/value/unit,
+experiment conditions, matching annotations and pinned citations as `public_rag_evidence`.
+Repeated report bodies are shared once in `public_rag_reports`, with references
+from individual observations; every retrieved observation remains available.
+Applicable
+public observations take precedence over AIC estimates; unrelated or incomplete
+observations do not establish current performance. Retrieved text is untrusted
+data, never instructions. Both AI stages also receive `explicit_workload`, the
+same non-null operator-supplied profile fields. When empty, workload is not an
+applicability gate: `general-chat`, default zero prefix reuse and missing QPS or
+autoscaling signals cannot exclude public evidence. Published TTFT/TPOT and the
+associated configurations guide reverse selection toward the requested latency
+targets. The generator may propose an evidenced provider, TP and replica topology
+within live resource constraints, rather than requiring evidence to match an
+initial minimum-resource topology. The selector compares validated candidates
+using that evidence before falling back to AIC or resource minimization.
+Changed configurations and unknown experiment conditions must be disclosed;
+they do not transfer exact latency values or establish current SLO compliance.
+The selector returns the known `public_rag_evidence_ids`
+it actually used. Only a ranking citing retrieved public evidence may override
+the AIC-only ordering of latency misses; hard validation and server SLO assessment
+are unchanged. Uncited or invented public IDs do not bypass that ordering check.
+
+Public observations are not silently converted into internal `BenchmarkRecord`
+aggregates or deterministic predictions. Without AI they remain context only.
+The UI and snapshot distinguish retrieved context from evidence used for selection.
+Read and mutation responses for a plan containing public observations retain the
+public-query permission gate, preventing plan APIs from becoming an alternate
+unauthorized corpus reader. Refinement queries again rather than reusing stale
+observations or a previous caller's access.
 
 #### Unstructured data
 

@@ -7,15 +7,16 @@ import { AuthContext } from '../../auth/AuthContext.js';
 import AgenticDeploymentWorkspace from '../../deployment/ui/AgenticDeploymentWorkspace.jsx';
 import ModelMarketPage from './ModelMarketPage.jsx';
 
-test('Agentic deployment prefills AIC latency defaults without an end-to-end latency input', () => {
+test('Agentic deployment leaves optional workload and latency requirements blank', () => {
     const html = renderToStaticMarkup(createElement(AgenticDeploymentWorkspace, {
         draft: {}, embedded: true,
     }));
-    assert.match(html, /TTFT SLO \(ms\)<input[^>]*value="2000"/);
-    assert.match(html, /TPOT SLO \(ms\)<input[^>]*value="30"/);
-    assert.match(html, /Input tokens[^<]*<input[^>]*value="4000"/);
-    assert.match(html, /Output tokens[^<]*<input[^>]*value="1000"/);
+    assert.match(html, /TTFT SLO \(ms\)<input[^>]*value=""/);
+    assert.match(html, /TPOT SLO \(ms\)<input[^>]*value=""/);
+    assert.match(html, /Mean input tokens per request<input[^>]*value=""/);
+    assert.match(html, /Mean output tokens per request<input[^>]*value=""/);
     assert.doesNotMatch(html, /End-to-end latency/);
+    assert.doesNotMatch(html, /Planning hardware identity|Simulated target hardware model|Cluster default \(may include a test override\)/);
 });
 
 test('model cards offer Manual mode and an explicit Configure deployment action', (testContext) => {

@@ -1,6 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, relaxedAicCandidates } from './agenticPresentation.js';
+import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, publicRagMatchSummary, relaxedAicCandidates } from './agenticPresentation.js';
+
+test('public RAG match presentation preserves differences, unknowns, statistics and configuration basis', () => {
+    assert.deepEqual(publicRagMatchSummary(null), []);
+    const lines = publicRagMatchSummary({
+        workload: {
+            fields: { mean_input_tokens: { requested: 4000, reported: 7200, difference: 3200, basis: 'nominal_length_proxy' } },
+            unknown_fields: ['p95_input_tokens'], similarity: 0.75, coverage: 2 / 3,
+            nominal_prompt_shape: { shared_prefix_tokens: 6000, question_tokens: 1200, output_tokens: 1000 },
+        },
+        latency: { status: 'unknown', fields: {
+            ttft: { target_ms: 2000, observations: [{ value_ms: 900, statistic: 'p90', relative_deviation: -0.55 }] },
+            tpot: { target_ms: 30, observations: [] },
+        } },
+        configuration_basis: { configuration: { tp: 2, replicas: 8 } },
+    }).join('\n');
+    assert.match(lines, /requested 4000, reported 7200, difference 3200/);
+    assert.match(lines, /Unknown workload fields: p95_input_tokens/);
+    assert.match(lines, /coverage: 67%/);
+    assert.match(lines, /Not a measured mean or P95/);
+    assert.match(lines, /900 ms \(p90; deviation -55.0%\)/);
+    assert.match(lines, /TPOT target 30 ms: unknown/);
+    assert.match(lines, /Not current deployment SLO compliance/);
+    assert.match(lines, /"tp":2,"replicas":8/);
+});
 
 test('historical evidence presentation distinguishes empty, successful, and failed records', () => {
     assert.equal(historicalEvidenceSummary([]), null);

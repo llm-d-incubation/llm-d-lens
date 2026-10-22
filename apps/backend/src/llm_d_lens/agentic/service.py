@@ -13,6 +13,7 @@ from typing import Any
 from llm_d_lens.ai_providers.client import AIProviderClientError
 from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
 from llm_d_lens.aic.service import AICError, estimate
+from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.capacity import ValidationParams, evaluate_capacity
 from llm_d_lens.cluster.sessions import require_active_session
 from llm_d_lens.configuration.models import ModelSecretConfiguration
@@ -23,7 +24,13 @@ from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.infrastructure.kubernetes import list_resources
 
 from .configuration import build_agentic_configuration
-from .facts import resolve_planning_facts
+from .facts import (
+    PlanningEvidence,
+    ResolvedPlanningFacts,
+    resolve_planning_facts,
+    resolve_public_rag_evidence,
+    with_public_rag_evidence,
+)
 from .generator import AICandidateGenerator, CandidateGenerationError, CandidateProposal, CandidateValidator
 from .historical_candidate_seeds import HistoricalCandidateSeedRetriever
 from .models import (
@@ -40,6 +47,7 @@ from .planner import (
     DeterministicPlanner,
     OpenAICompatiblePlanner,
     OpenAIPlannerError,
+    PlanningFacts,
     resolve_workload_signals,
 )
 from .planning_snapshot import PlanningSnapshotStore
@@ -73,6 +81,7 @@ class AgenticDeploymentService:
         on_progress: ProgressCallback | None = None,
         *,
         principal_id: str | None = None,
+        principal: Principal | None = None,
     ) -> AgenticDeploymentRun:
         profile = request.planning_facts.workload_profile
         if profile and profile.concurrency is not None and profile.request_rate is not None:
@@ -86,22 +95,21 @@ class AgenticDeploymentService:
             {
                 "phase": "validation",
                 "status": "running",
-                "message": "Validating deployment inputs and model cache.",
+                "message": (
+                    "Validating deployment inputs and model cache storage; model readiness is deferred until approval."
+                ),
             },
         )
         session = require_active_session(request.cluster_session_id)
         if request.execution_policy.mode == "automatic":
             raise ValueError("automatic Agentic execution is not enabled")
-        # Validation also returns the cache entry's credential policy.  Keep it
-        # with the plan because approval runs later and must not lose the
-        # Secret source that made this model-cache selection valid.
-        model_secret = await self._validate_model_cache(request, session.server_id)
+        model_secret = await self._validate_model_cache(request, session.server_id, require_model_ready=False)
         await self._emit_progress(
             on_progress,
             {
                 "phase": "validation",
                 "status": "complete",
-                "message": "Deployment inputs and model cache are valid.",
+                "message": "Deployment inputs and cache storage are valid; model download readiness was not checked.",
             },
         )
         planning_facts = self._planning_only_facts(
@@ -109,6 +117,13 @@ class AgenticDeploymentService:
             max_model_len=request.max_model_len,
             gpu_memory_utilization=request.gpu_memory_utilization,
             operator_preference=request.planner_prompt or "",
+        )
+        planning_facts, public_rag = await self._public_rag_context(
+            session.server_id,
+            request.model,
+            planning_facts,
+            principal,
+            on_progress,
         )
         deterministic = DeterministicPlanner()
         provider = OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
@@ -122,6 +137,7 @@ class AgenticDeploymentService:
             on_progress=on_progress,
             principal_id=principal_id,
         )
+        resolved = with_public_rag_evidence(resolved, public_rag)
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
         rejection_reasons = sorted(
@@ -272,7 +288,7 @@ class AgenticDeploymentService:
             candidates=scored_candidates,
             decision=decision,
             planning_evidence=resolved.evidence,
-            decision_evidence_ids=self._decision_evidence_ids(decision_facts, selected),
+            decision_evidence_ids=self._decision_evidence_ids(decision_facts, selected, decision),
             decision_metadata=self._decision_metadata(planner_name, planner_model, scored_candidate_count),
             planning_cluster_snapshot=resolved.cluster_snapshot,
             generator=generation["name"],
@@ -395,18 +411,16 @@ class AgenticDeploymentService:
     async def _validate_model_cache(
         request: AgenticDeploymentCreateRequest,
         cluster_id: str,
+        *,
+        require_model_ready: bool = True,
     ) -> ModelSecretConfiguration | None:
-        """Validate the selected cache and return its deployment credential policy.
+        """Validate storage, optionally requiring ready model files and credentials.
 
-        Model files and model credentials have separate lifecycles: a ready
-        cache does not make llm-d's required ``llm-d-hf-token`` reference
-        optional.  Returning the policy here lets Agentic preserve the exact
-        source instead of treating validation as a boolean gate.
+        Planning only needs a valid storage destination. Approval checks model
+        readiness and resolves the current token source before deployment.
         """
         if request.storage_type != "model-cache" or not request.storage_volume_id:
             raise ValueError("Agentic deployment requires a model cache storage volume")
-        from llm_d_lens.deploy.router import _ready_model_cache_entry_exists
-        from llm_d_lens.model_cache.service import default_service as model_cache_service
         from llm_d_lens.storage.contracts import StorageVolumeKind, StorageVolumePurpose
         from llm_d_lens.storage.service import get_ready_volume
 
@@ -415,6 +429,11 @@ class AgenticDeploymentService:
             raise ValueError("selected storage volume is not designated for model cache use")
         if volume.kind == StorageVolumeKind.DYNAMIC_PVC:
             raise ValueError("model-cache storage for deployments cannot use dynamic-pvc volumes")
+        if not require_model_ready:
+            return None
+        from llm_d_lens.deploy.router import _ready_model_cache_entry_exists
+        from llm_d_lens.model_cache.service import default_service as model_cache_service
+
         entries = await model_cache_service().list(
             cluster_id=cluster_id,
             storage_volume_id=request.storage_volume_id,
@@ -449,7 +468,7 @@ class AgenticDeploymentService:
         return None
 
     @staticmethod
-    def _decision_evidence_ids(facts, candidate) -> list[str]:
+    def _decision_evidence_ids(facts, candidate, decision=None) -> list[str]:
         evidence_ids = [
             evidence_id for evidence_id in facts.evidence_ids if evidence_id.startswith("cluster-overview:")
         ]
@@ -457,6 +476,10 @@ class AgenticDeploymentService:
             evidence_ids.append("aic:search")
         evidence_ids.extend(candidate.evidence_ids)
         evidence_ids.extend(f"benchmark:{sample['benchmark_id']}" for sample in candidate.historical_benchmarks)
+        if decision is not None:
+            evidence_ids.extend(decision.evidence_ids)
+        if any(reference.startswith("public-rag:") for reference in evidence_ids):
+            evidence_ids.append("public-rag:query")
         return list(dict.fromkeys(evidence_ids))
 
     @staticmethod
@@ -835,6 +858,7 @@ class AgenticDeploymentService:
         on_progress: ProgressCallback | None = None,
         *,
         principal_id: str | None = None,
+        principal: Principal | None = None,
     ) -> AgenticDeploymentRun:
         await self._emit_progress(
             on_progress,
@@ -866,6 +890,13 @@ class AgenticDeploymentService:
             gpu_memory_utilization=run.request.gpu_memory_utilization,
             operator_preference=request.planner_prompt,
         )
+        planning_facts, public_rag = await self._public_rag_context(
+            session.server_id,
+            run.request.model,
+            planning_facts,
+            principal,
+            on_progress,
+        )
         deterministic = DeterministicPlanner()
         candidates, generation, refreshed = await self._generate_candidates(
             provider,
@@ -877,6 +908,7 @@ class AgenticDeploymentService:
             on_progress=on_progress,
             principal_id=principal_id,
         )
+        refreshed = with_public_rag_evidence(refreshed, public_rag)
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
         rejection_reasons = sorted(
@@ -971,7 +1003,7 @@ class AgenticDeploymentService:
         run.candidates = scored_candidates
         run.decision = decision
         run.planning_evidence = refreshed.evidence
-        run.decision_evidence_ids = self._decision_evidence_ids(refreshed.facts, selected)
+        run.decision_evidence_ids = self._decision_evidence_ids(refreshed.facts, selected, decision)
         run.decision_metadata = self._decision_metadata(
             planner_name,
             planner_model,
@@ -1043,7 +1075,43 @@ class AgenticDeploymentService:
             gpu_memory_utilization=gpu_memory_utilization,
             operator_preference=operator_preference,
             vllm_arguments=(),
+            public_rag_evidence=(),
+            planning_hardware_model=None,
+            evidence_ids=tuple(
+                reference for reference in facts.evidence_ids if not reference.startswith("public-rag:")
+            ),
         )
+
+    async def _public_rag_context(
+        self,
+        cluster_server_id: str,
+        model: str,
+        facts: PlanningFacts,
+        principal: Principal | None,
+        on_progress: ProgressCallback | None,
+    ) -> tuple[PlanningFacts, PlanningEvidence]:
+        await self._emit_progress(
+            on_progress,
+            {
+                "phase": "generation",
+                "status": "running",
+                "message": "Resolving target cluster hardware and querying matching public RAG before AIC planning.",
+            },
+        )
+        facts = AICandidateGenerator._apply_preference_constraints(facts, facts.operator_preference)
+        evidence = await resolve_public_rag_evidence(
+            model, principal, cluster_server_id=cluster_server_id, planning_facts=facts
+        )
+        context = with_public_rag_evidence(ResolvedPlanningFacts(facts=facts, cluster_snapshot={}), evidence)
+        await self._emit_progress(
+            on_progress,
+            {
+                "phase": "generation",
+                "status": "running" if evidence.status == "available" else "fallback",
+                "message": evidence.details["message"],
+            },
+        )
+        return context.facts, evidence
 
     def list(self) -> list[AgenticDeploymentRun]:
         return sorted(self._runs.values(), key=lambda run: run.created_at, reverse=True)
@@ -1077,8 +1145,18 @@ class AgenticDeploymentService:
             raise KeyError("agentic deployment run not found")
         if run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
             raise ValueError("only an awaiting approval Agentic deployment can be approved")
+        if any(
+            item.details.get("target_hardware", {}).get("simulation")
+            for item in run.planning_evidence
+            if item.source == "public-benchmark-rag"
+        ):
+            raise ValueError(
+                "Hardware identity simulation is validation-only and cannot be deployed. "
+                "Generate a new plan with actual hardware before approval."
+            )
 
         session = require_active_session(run.request.cluster_session_id)
+        model_secret = await self._validate_model_cache(run.request, session.server_id)
         placement = {"replicas": run.request.placement_replicas}
         if run.request.placement_node_label:
             placement["nodeLabel"] = run.request.placement_node_label
@@ -1140,9 +1218,7 @@ class AgenticDeploymentService:
                 + "; ".join(capacity_res.rejection_reasons)
             )
 
-        # Use the credential policy captured during planning.  This keeps the
-        # approve path deterministic and ensures ConfigurationAdapter can turn
-        # ``modelSecret`` into the provider's deployment policy.
+        run.model_secret = model_secret or ModelSecretConfiguration()
         accelerator = cluster_accelerator(refreshed.cluster_snapshot.get("hardware") or {})
         configuration = build_agentic_configuration(run.request, selected, run.model_secret, accelerator=accelerator)
         configuration.provenance["cluster_ref"] = {

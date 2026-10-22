@@ -204,6 +204,7 @@
           }
         },
         "model_label_keys": { "$ref": "#/$defs/string_list" },
+        "model_family_names": { "$ref": "#/$defs/string_list" },
         "default_backend": { "type": "string" },
         "device_class_allow_pattern": { "type": "string" },
         "discovery": { "type": "object" },

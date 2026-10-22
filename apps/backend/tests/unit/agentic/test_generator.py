@@ -211,14 +211,18 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
 
 
 @pytest.mark.parametrize(
-    "accelerators,expected_system",
+    "accelerators,simulated,expected_system",
     [
-        (None, "a100"),
-        ([{"id": "nvidia", "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "a100_sxm"),
-        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], "a100"),
+        (None, None, "a100"),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], None, "a100_sxm"),
+        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], None, "a100"),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "H100", "h100_sxm"),
     ],
 )
-def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeypatch, accelerators, expected_system):
+@pytest.mark.parametrize("profile", [None, WorkloadProfile(), WorkloadProfile(shared_prefix_ratio=0)])
+def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
+    monkeypatch, accelerators, simulated, expected_system, profile
+):
     captured = {"tool_args": []}
 
     class Tools:
@@ -284,6 +288,9 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeyp
         vram_per_gpu_gib=32,
         free_gpu_count=4,
         evidence_ids=("aic:search",),
+        public_rag_evidence=({"evidence_id": "public-rag:published-1", "citation": {"source_revision": "rev-1"}},),
+        planning_hardware_model=simulated,
+        workload_profile=profile,
     )
 
     proposals = asyncio.run(generator.generate("cluster-a", "Qwen/Qwen3-8B", facts, "prefer throughput"))
@@ -299,13 +306,25 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(monkeyp
     assert "Do not score, select, render, approve, or deploy" in captured["system_prompt"]
     user_context = json.loads(captured["messages"][0]["content"])
     assert user_context["operator_preference"] == "prefer throughput"
+    assert user_context["public_rag_evidence"] == list(facts.public_rag_evidence)
+    assert user_context["explicit_workload"] == (
+        {"shared_prefix_ratio": 0} if profile and profile.shared_prefix_ratio == 0 else {}
+    )
+    assert "takes precedence over AIC estimates" in captured["system_prompt"]
+    assert "hardware identity simulation" in captured["system_prompt"]
+    assert proposals.resolved.facts.planning_hardware_model == simulated
+    if simulated:
+        assert proposals.resolved.cluster_snapshot["hardware"]["accelerators"][0]["models"] == ["H100"]
+        assert "NVIDIA-A100" not in json.dumps(captured["messages"])
+    assert proposals.resolved.facts.public_rag_evidence == facts.public_rag_evidence
     assert "validated_planning_facts" not in user_context
     assert proposals.proposals.candidates[0].provider_ref == "baseline-vllm"
     assert proposals.resolved.facts.vram_per_gpu_gib == 32
     assert proposals.resolved.facts.free_gpu_count == 4
 
 
-def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_targets(monkeypatch):
+@pytest.mark.parametrize("simulated", [None, "H100"])
+def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_targets(monkeypatch, simulated):
     calls = []
 
     class Tools:
@@ -315,7 +334,12 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         async def call(self, name, arguments):
             calls.append((name, arguments))
             if name == "get_cluster_overview":
-                return _cluster_result()
+                cluster = _cluster_result()
+                if simulated:
+                    cluster["hardware"]["accelerators"] = [
+                        {"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}
+                    ]
+                return cluster
             if name == "search_candidates":
                 return {"candidates": []}
             anchor = {**_aic_result(ttft_ms=600)["candidates"][0], "decodeTp": 2, "totalGpus": 2}
@@ -381,19 +405,25 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         AICandidateGenerator(
             OpenAIPlannerSettings(base_url="http://provider", model="planner"),
             tools=Tools(),
-        ).generate("cluster-a", "model", PlanningFacts(8, 32, 4, ttft_slo_ms=500), None)
+        ).generate(
+            "cluster-a",
+            "model",
+            PlanningFacts(8, 32, 4, ttft_slo_ms=500, planning_hardware_model=simulated),
+            None,
+        )
     )
 
     assert calls[1] == (
         "search_candidates",
         _aic_arguments()
         | {
+            "searchConfig": {"totalGpus": 4, **({"aicSystemName": "h100_sxm"} if simulated else {})},
             "workload": {
                 "model": "model",
                 "isl": 4000,
                 "osl": 1000,
                 "ttftMs": 500,
-            }
+            },
         },
     )
     assert calls[2] == (
@@ -401,7 +431,11 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         {
             "clusterId": "cluster-a",
             "workload": {"model": "model", "isl": 4000, "osl": 1000, "ttftMs": 500},
-            "searchConfig": {"capacityMode": "free", "customGpuCount": None},
+            "searchConfig": {
+                "capacityMode": "free",
+                "customGpuCount": None,
+                **({"aicSystemName": "h100_sxm"} if simulated else {}),
+            },
         },
     )
     assert result.resolved.facts.aic_predictions == ()
@@ -1690,6 +1724,10 @@ def test_ai_generator_prompt_encodes_candidate_priorities_and_tool_policy():
     assert "If the initial search is empty, use the relaxed anchor" in prompt
     assert "operator_preference may select a provider but does not justify additional resources by itself" in prompt
     assert "Relaxed-anchor scaling remains unverified" in prompt
+    assert "When explicit_workload is empty, do not use workload as an applicability gate" in prompt
+    assert "Work backward from published TTFT/TPOT observations and their associated configurations" in prompt
+    assert "cited public TTFT/TPOT configuration evidence supports additional resources" in prompt
+    assert "shared_prefix_ratio of zero and the general-chat use case do not establish zero prefix reuse" in prompt
     assert "baseline-vllm: direct standard vLLM deployment" in prompt
     assert "optimized-baseline: vLLM with llm-d prefix-affinity" in prompt
     assert "pd-disaggregation: separate prefill and decode roles" in prompt

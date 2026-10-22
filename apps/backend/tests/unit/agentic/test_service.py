@@ -153,6 +153,7 @@ def test_create_generates_an_approval_plan_without_deploying(monkeypatch):
     assert "Relative rank" in run.decision_metadata.score_method
     assert [item["phase"] for item in run.planning_trace] == [
         "input",
+        "public_rag",
         "generation",
         "candidate_validation",
         "deterministic_ranking",
@@ -160,7 +161,7 @@ def test_create_generates_an_approval_plan_without_deploying(monkeypatch):
         "selection",
     ]
     assert run.planning_trace[-1]["candidate_id"] == run.selected_candidate.id
-    assert run.planning_trace[3]["ranking"][0]["candidate_id"] == run.selected_candidate.id
+    assert run.planning_trace[4]["ranking"][0]["candidate_id"] == run.selected_candidate.id
 
 
 def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp_path):
@@ -183,8 +184,134 @@ def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp
     assert payload["selected_candidate"]["id"] == run.selected_candidate.id
 
 
+def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(monkeypatch, tmp_path):
+    from llm_d_lens.agentic.generator import CandidateGenerationResult
+    from llm_d_lens.agentic.planner import PlannerDecision
+    from llm_d_lens.auth.contracts import Principal, RoleBinding
+
+    calls = []
+    observations = []
+    principal = Principal("admin-user", "admin", bindings=(RoleBinding("admin"),))
+
+    async def query(model, caller, *, cluster_server_id, planning_facts):
+        assert model == "Qwen/Qwen3-8B"
+        assert caller is principal
+        assert cluster_server_id == "cluster-a"
+        assert planning_facts.workload_profile.mean_input_tokens == (2048 if not observations else 1024)
+        assert planning_facts.workload_profile.mean_output_tokens == 256
+        assert planning_facts.ttft_slo_ms == (100 if not observations else 50)
+        calls.append("rag")
+        item_id = f"observation-{len(observations) + 1}"
+        observation = {
+            "item_id": item_id,
+            "metric": "ttft",
+            "value": "125.50",
+            "unit": "ms",
+            "citation": {"source_revision": f"rev-{len(observations) + 1}", "sha256": "a" * 64},
+        }
+        observations.append(observation)
+        return PlanningEvidence(
+            id="public-rag:query",
+            source="public-benchmark-rag",
+            status="available",
+            details={
+                "response": {"evidence": [observation]},
+                "message": "Public evidence precedes AIC.",
+                "target_hardware": {"model": "H100", "actual_model": "A100", "simulation": True, "override": True},
+            },
+        )
+
+    async def generate(_self, _cluster, _model, facts, _prompt, **kwargs):
+        calls.append("generation")
+        assert facts.planning_hardware_model == "H100"
+        assert facts.public_rag_evidence[0]["item_id"] == observations[-1]["item_id"]
+        return CandidateGenerationResult(
+            proposals={
+                "candidates": [
+                    {"provider_ref": "baseline-vllm", "replicas": 1, "tensor_parallel_size": 1, "rationale": "Fits."}
+                ]
+            },
+            resolved=_resolved_facts(),
+        )
+
+    class Provider:
+        settings = SimpleNamespace(model="planner")
+
+        async def recommend(self, facts, candidates, **kwargs):
+            calls.append("ranking")
+            assert facts.planning_hardware_model == "H100"
+            reference = f"public-rag:{observations[-1]['item_id']}"
+            assert facts.public_rag_evidence[0]["evidence_id"] == reference
+            return PlannerDecision(
+                action="select_candidate",
+                candidate_id=candidates[0].id,
+                confidence=0.8,
+                rationale="Published evidence is primary.",
+                evidence_ids=[reference],
+            ), candidates[:1]
+
+    async def estimate(_self, _model, candidates, facts, _trace):
+        return candidates, facts
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_public_rag_evidence", query)
+    monkeypatch.setattr("llm_d_lens.agentic.service.AICandidateGenerator.generate", generate)
+    monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_provider_id", lambda _id: Provider())
+    monkeypatch.setattr(AgenticDeploymentService, "_estimate_missing_topologies", estimate)
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session", lambda _id: SimpleNamespace(server_id="cluster-a")
+    )
+    service = AgenticDeploymentService(snapshot_store=PlanningSnapshotStore(tmp_path))
+    events = []
+
+    async def progress(event):
+        events.append(event)
+
+    create_request = _request(ai_provider_id="provider", planner_prompt="ISL 2048 OSL 256 TTFT 100")
+    create_request.planning_facts = replace(
+        create_request.planning_facts, workload_profile=WorkloadProfile(mean_input_tokens=4096)
+    )
+    run = asyncio.run(
+        service.create(
+            create_request,
+            principal=principal,
+            on_progress=progress,
+        )
+    )
+    created = json.loads((tmp_path / run.planning_snapshot_path).read_text())
+    assert (
+        created["planning_evidence"][-1]["details"]["response"]["evidence"][0]["citation"]["source_revision"] == "rev-1"
+    )
+    assert "public-rag:observation-1" in created["decision_evidence_ids"]
+    assert "public-rag:query" in created["decision_evidence_ids"]
+    assert any("Public evidence" in event.get("message", "") for event in events)
+
+    refined = asyncio.run(
+        service.refine(
+            run.id,
+            AgenticCandidateRefinementRequest(planner_prompt="ISL 1024 OSL 256 TTFT 50 prefer latency"),
+            principal=principal,
+        )
+    )
+    assert calls == ["rag", "generation", "ranking", "rag", "generation", "ranking"]
+    assert "public-rag:observation-2" in refined.decision_evidence_ids
+    assert "public-rag:observation-1" not in refined.decision_evidence_ids
+    snapshot = json.loads((tmp_path / refined.planning_snapshot_path).read_text())
+    assert snapshot["resolved_planning_facts"]["public_rag_evidence"][0]["citation"]["source_revision"] == "rev-2"
+
+
 def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch):
+    from llm_d_lens.configuration.models import ModelSecretConfiguration
+
     service = AgenticDeploymentService()
+    cache_checks = []
+
+    async def validate_cache(_request, _cluster_id, *, require_model_ready=True):
+        cache_checks.append(require_model_ready)
+        if require_model_ready:
+            return ModelSecretConfiguration(mode="existing-secret", sourceNamespace="models", sourceName="hf-token")
+        return None
+
+    monkeypatch.setattr(service, "_validate_model_cache", validate_cache)
     monkeypatch.setenv("PRISM_DEPLOY_ACCELERATOR", "intel-xpu")
     session = SimpleNamespace(id="a" * 36, server_id="cluster-a")
     monkeypatch.setattr("llm_d_lens.agentic.service.require_active_session", lambda _session_id: session)
@@ -232,6 +359,9 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
     assert approved.status == AgenticDeploymentStatus.DEPLOYING
     assert approved.configuration_artifact_id is None
     assert approved.deployment_run_id == "deploy-run-1"
+    assert cache_checks == [False, True]
+    assert approved.model_secret.mode == "existing-secret"
+    assert approved.model_secret.source_name == "hf-token"
     assert planning_lengths == [32768, 32768]
     assert planning_utilizations == [0.6, 0.6]
     assert run.selected_candidate.gpu_memory_utilization == 0.6
@@ -245,6 +375,41 @@ def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch
         "nodeLabel": {"key": "kubernetes.io/hostname", "value": "smc-22"},
     }
     assert saved["deployment"].provenance["agentic_deployment_run_id"] == run.id
+
+
+def test_simulated_plan_cannot_enter_deployment(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    run = asyncio.run(service.create(_request()))
+    run.planning_evidence.append(
+        PlanningEvidence(
+            id="public-rag:query",
+            source="public-benchmark-rag",
+            status="no_matches",
+            details={"target_hardware": {"model": "H100", "simulation": True}},
+        )
+    )
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda _session_id: pytest.fail("Simulation must fail before deployment preflight or mutations"),
+    )
+    with pytest.raises(ValueError, match="validation-only and cannot be deployed"):
+        asyncio.run(service.approve(run.id))
+    assert run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+    assert run.deployment_run_id is None
+
+
+def test_client_cannot_inject_a_planning_hardware_identity():
+    facts = AgenticDeploymentService._planning_only_facts(
+        PlanningFacts(8, 80, 4, planning_hardware_model="H100"),
+        max_model_len=4096,
+        gpu_memory_utilization=0.9,
+    )
+    assert facts.planning_hardware_model is None
 
 
 def test_select_candidate_only_allows_a_validated_alternative(monkeypatch):
@@ -1146,7 +1311,7 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     assert refined.generator_model == "generator-model"
     assert refined.generator_fallback_reason is None
     assert refined.planning_trace[-1]["candidate_id"] == refined.selected_candidate.id
-    assert refined.planning_trace[3]["ranking"]
+    assert refined.planning_trace[4]["ranking"]
 
 
 def test_refine_falls_back_to_deterministic_planning_when_provider_fails(monkeypatch):
@@ -1337,6 +1502,55 @@ def test_create_requires_a_model_cache_volume(monkeypatch):
 
     with pytest.raises(ValidationError, match="storage_volume_id"):
         asyncio.run(service.create(_request(storage_volume_id="")))
+
+
+@pytest.mark.parametrize("cache_status", [None, "downloading"])
+def test_planning_defers_model_readiness_until_approval(monkeypatch, cache_status):
+    from llm_d_lens.model_cache.contracts import ModelCacheEntry
+    from llm_d_lens.storage.contracts import StorageVolumeKind, StorageVolumePurpose
+
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(service, "_validate_model_cache", _ORIGINAL_VALIDATE_MODEL_CACHE)
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_environment", lambda: None)
+    calls = []
+
+    async def get_ready_volume(*_args, **_kwargs):
+        return SimpleNamespace(purposes=[StorageVolumePurpose.MODEL_CACHE], kind=StorageVolumeKind.NFS)
+
+    class CacheService:
+        async def list(self, **kwargs):
+            calls.append(kwargs)
+            if cache_status is None:
+                return []
+            return [
+                ModelCacheEntry.model_validate(
+                    {
+                        "clusterId": "cluster-a",
+                        "storageVolumeId": "storage-model-cache",
+                        "status": cache_status,
+                        "cachePath": "hub/models--Qwen--Qwen3-8B",
+                        "source": {"kind": "huggingface", "huggingface": {"repoId": "Qwen/Qwen3-8B"}},
+                    }
+                )
+            ]
+
+    monkeypatch.setattr("llm_d_lens.storage.service.get_ready_volume", get_ready_volume)
+    monkeypatch.setattr("llm_d_lens.model_cache.service.default_service", lambda: CacheService())
+    run = asyncio.run(service.create(_request()))
+    assert run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+    assert calls == []
+    asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer fewer GPUs")))
+    assert calls == []
+    with pytest.raises(ValueError, match="selected model is not ready"):
+        asyncio.run(service.approve(run.id))
+    assert calls == [{"cluster_id": "cluster-a", "storage_volume_id": "storage-model-cache"}]
+    assert run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+    assert run.deployment_run_id is None
 
 
 @pytest.mark.parametrize(

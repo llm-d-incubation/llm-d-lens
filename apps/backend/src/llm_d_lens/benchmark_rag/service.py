@@ -452,11 +452,18 @@ class PublicRagQueryService:
         self.archive = archive if archive is not None else SourceArchive()
         self.agentic_dao = agentic_dao
 
-    def query(self, request: QueryRequest, principal: Principal | None) -> QueryResponse:
+    def query(self, request: QueryRequest, principal: Principal | None, *, all_matches: bool = False) -> QueryResponse:
         require_query_access(principal)
         assert principal is not None
         request = QueryRequest.model_validate(request.model_dump(exclude_unset=True))
         plan = plan_query(request)
+        if all_matches and (
+            request.include_internal
+            or plan.intent not in ("numeric", "comparison")
+            or not plan.filters.model
+            or not plan.filters.hardware
+        ):
+            raise DomainValidationError("Complete public retrieval requires exact model and hardware scope")
         if plan.precondition is not None:
             return QueryResponse(
                 question=request.question,
@@ -482,7 +489,7 @@ class PublicRagQueryService:
             plan.filters,
             intent=plan.intent,
             text_query=plan.text_query,
-            limit=50 if request.include_internal else request.limit,
+            limit=None if all_matches else 50 if request.include_internal else request.limit,
         )
         evidence: list[QueryEvidence] = []
         identities: dict[str, str] = {}
@@ -556,9 +563,10 @@ class PublicRagQueryService:
         window_truncated = (
             result.total > len(result.matches)
             or (internal_result is not None and internal_result.total > len(internal_result.matches))
-            or len(evidence) > request.limit
+            or (not all_matches and len(evidence) > request.limit)
         )
-        evidence = evidence[: request.limit]
+        if not all_matches:
+            evidence = evidence[: request.limit]
         self.dao.assert_current(result.matches)
         if internal_result is not None and internal_dao is not None:
             internal_dao.assert_current(internal_result.matches, principal)
@@ -602,7 +610,7 @@ class PublicRagQueryService:
                 )
             )
         lines = []
-        for entry in evidence:
+        for entry in () if all_matches else evidence:
             citation = entry.citation
             source_label = (
                 f"{citation.origin_id} / {citation.benchmark_id} / {citation.metric_field} "
@@ -672,7 +680,12 @@ class PublicRagQueryService:
             else "partial"
             if abstentions or truncated
             else "answered",
-            answer="\n\n".join(lines),
+            answer=(
+                f"Retrieved all {len(evidence)} published observations for the exact model and hardware; "
+                "original metrics, conditions and citations are in evidence."
+                if all_matches and evidence
+                else "\n\n".join(lines)
+            ),
             evidence=tuple(evidence),
             matched_items=candidate_total,
             truncated=truncated,

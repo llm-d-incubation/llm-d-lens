@@ -72,6 +72,7 @@ Inference Payload Processor 的 Helm chart 和版本无法通过环境变量配�
 | `SIMULATION_TASK_ROOT` | 模拟任务状态和轨迹的根目录。 | `~/.cache/llm-d-bench/simulations`（遗留导入回退路径） |
 | `SIMULATION_MAX_CONCURRENT_DOWNLOADS` | 限制模拟过程中并发下载轨迹/资源的数量上限。 | `1` |
 | `AGENTIC_OPENAI_BASE_URL` / `AGENTIC_OPENAI_API_KEY` / `AGENTIC_OPENAI_MODEL` / `AGENTIC_OPENAI_TIMEOUT_SECONDS` | 当某次请求未选择特定提供方时，智能体式部署规划所使用的默认聊天模型。 | `AGENTIC_OPENAI_BASE_URL`：`""`<br />`AGENTIC_OPENAI_API_KEY`：`""`<br />`AGENTIC_OPENAI_MODEL`：`""`<br />`AGENTIC_OPENAI_TIMEOUT_SECONDS`：`30` |
+| `AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES` | 临时后端集群验证：集群注册 ID 到精确测试型号的 JSON 映射，仅对映射内集群生效。RAG、私有规划概览、AIC 与排序统一使用测试身份，资源实测值和真实硬件不变；测试计划禁止部署。不提供产品表单或请求级选项；删除映射条目并重启后端可撤销临时覆盖。 | `{}` |
 | `LLM_D_BENCHMARK_ROOT` / `LLM_D_BENCH_SPECIFICATION_FILE` | 用于驱动基准测试运行的 `llm-d-benchmark` 检出目录及其规格文件的位置。 | `LLM_D_BENCHMARK_ROOT`：`""`<br />`LLM_D_BENCH_SPECIFICATION_FILE`：基线/默认运行时为 `guides/optimized-baseline`；未设置时则根据所选指南计算得出 |
 
 ## Kubernetes 与网络
