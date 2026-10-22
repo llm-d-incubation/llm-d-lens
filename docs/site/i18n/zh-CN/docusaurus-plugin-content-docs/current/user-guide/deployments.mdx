@@ -11,6 +11,11 @@ description: 查找部署、确认就绪状态、查看日志并删除不再使�
 2. 在页面标题栏，点击**创建**。
 3. 按[创建部署](/user-guide/model-market)完成操作。提交后，新部署会出现在列表中。
 
+在 **Agentic** 模式下，TTFT、TPOT SLO 和每请求输入/输出 token 数（ISL/OSL）
+默认均未设置，留空提交时为 `null`。灰色示例占位文字仅供参考，不会作为默认值提交。
+**Workload estimate（工作负载估计）**位于 **Preference（偏好）**正下方，默认展开；
+**vLLM parameters（vLLM 参数）**位于工作负载下方，默认收起。
+
 ## Guide 入口选择
 
 自动选择通用入口时，优先使用根目录（`.`），其次使用 `base`。如果两者都不存在，

@@ -21,15 +21,78 @@ test('deployment context keeps the default only when model card context is missi
     }
 });
 
-test('Agentic deployment prefills AIC latency defaults without an end-to-end latency input', () => {
+test('Agentic deployment shows reference placeholders without setting latency or workload defaults', () => {
     const html = renderToStaticMarkup(createElement(AgenticDeploymentWorkspace, {
         draft: {}, embedded: true,
     }));
-    assert.match(html, /TTFT SLO \(ms\)<input[^>]*value="2000"/);
-    assert.match(html, /TPOT SLO \(ms\)<input[^>]*value="30"/);
-    assert.match(html, /Input tokens[^<]*<input[^>]*value="4000"/);
-    assert.match(html, /Output tokens[^<]*<input[^>]*value="1000"/);
+    for (const [label, example] of [
+        ['TTFT SLO \\(ms\\)', '2000'],
+        ['TPOT SLO \\(ms\\)', '30'],
+        ['Input tokens per request', '4000'],
+        ['Output tokens per request', '1000'],
+    ]) {
+        assert.match(html, new RegExp(`${label}<input[^>]*placeholder:text-theme-muted[^>]*placeholder="e.g. ${example}"[^>]*value=""`));
+    }
+    assert.match(html, /Concurrent requests<input[^>]*value=""/);
+    assert.match(html, /Request rate \(QPS\)<input[^>]*value=""/);
     assert.doesNotMatch(html, /End-to-end latency/);
+});
+
+test('Agentic deployment keeps workload expanded below preference and vLLM parameters collapsed below workload', () => {
+    const html = renderToStaticMarkup(createElement(AgenticDeploymentWorkspace, {
+        draft: {}, embedded: true,
+        vllmParameterControls: createElement('span', null, 'Parameter controls'),
+    }));
+    const sections = [...html.matchAll(/<details\b([^>]*)><summary[^>]*>(.*?)<\/summary>/g)];
+    const preference = sections.findIndex(([, , summary]) => summary.includes('Preference'));
+    const workload = sections.findIndex(([, , summary]) => summary.includes('Workload estimate'));
+    const vllm = sections.findIndex(([, , summary]) => summary.includes('vLLM parameters'));
+    assert.notEqual(preference, -1);
+    assert.equal(workload, preference + 1);
+    assert.equal(vllm, workload + 1);
+    assert.match(sections[workload][1], /\bopen=""/);
+    assert.doesNotMatch(sections[vllm][1], /\bopen\b/);
+    assert.match(html, /Parameter controls/);
+});
+
+test('Agentic deployment submits empty SLO and workload fields as null, not placeholder examples', async (t) => {
+    let tree;
+    function Capture() {
+        tree = AgenticDeploymentWorkspace({
+            draft: { clusterId: 'cluster-1', storageVolumeId: 'cache-1', model: 'Qwen/test' },
+            embedded: true,
+        });
+        return tree;
+    }
+    renderToStaticMarkup(createElement(Capture));
+    function findGenerate(node) {
+        if (!node || typeof node !== 'object') return undefined;
+        if (node.props?.onClick?.name === 'createPlan') return node;
+        return [node.props?.children].flat(Infinity).map(findGenerate).find(Boolean);
+    }
+    const payloads = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        if (url === '/api/cluster/session?clusterId=cluster-1') {
+            return Response.json({ sessionId: 'session-1' });
+        }
+        assert.equal(url, '/api/agentic-deployments/stream');
+        payloads.push(JSON.parse(options.body));
+        return new Response('event: complete\ndata: {"id":"run-1"}\n\n', {
+            headers: { 'Content-Type': 'text/event-stream' },
+        });
+    });
+    await findGenerate(tree).props.onClick();
+    assert.equal(payloads.length, 1);
+    const facts = payloads[0].planning_facts;
+    assert.equal(facts.ttft_slo_ms, null);
+    assert.equal(facts.tpot_slo_ms, null);
+    assert.deepEqual(facts.workload_profile, {
+        mean_input_tokens: null,
+        p95_input_tokens: null,
+        mean_output_tokens: null,
+        concurrency: null,
+        request_rate: null,
+    });
 });
 
 test('model cards offer Manual mode and an explicit Configure deployment action', (testContext) => {

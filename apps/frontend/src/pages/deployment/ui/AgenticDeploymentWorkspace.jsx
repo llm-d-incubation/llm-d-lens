@@ -18,9 +18,9 @@ function api(path, options = {}) {
 }
 
 const DEFAULT_REQUIREMENTS = {
-    ttftSloMs: '2000', tpotSloMs: '30',
+    ttftSloMs: '', tpotSloMs: '',
     hardwareCapacityMode: 'free', customGpuCount: '',
-    useCase: 'general-chat', inputTokens: '4000', outputTokens: '1000', concurrency: '', requestRate: '',
+    useCase: 'general-chat', inputTokens: '', outputTokens: '', concurrency: '', requestRate: '',
 };
 
 const GENERATION_STAGES = [
@@ -296,7 +296,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
 
     const input = (label, name, props = {}) => (
         <label className="text-xs text-slate-400">{label}
-            <input className="mt-1 h-9 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-200" type="number" placeholder="Optional" value={requirements[name]} onChange={updateRequirement(name)} {...props} />
+            <input className="mt-1 h-9 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-200 placeholder:text-theme-muted" type="number" placeholder="Optional" value={requirements[name]} onChange={updateRequirement(name)} {...props} />
         </label>
     );
     const hasAicPrediction = run?.planning_evidence?.some((item) => item.id === 'aic:search' && item.status === 'available');
@@ -334,8 +334,8 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                                 <option value="summarization">Document summarization</option>
                             </Select>
                         </label>
-                        {input('TTFT SLO (ms)', 'ttftSloMs', { min: '1' })}
-                        {input('TPOT SLO (ms)', 'tpotSloMs', { min: '1' })}
+                        {input('TTFT SLO (ms)', 'ttftSloMs', { min: '1', placeholder: 'e.g. 2000' })}
+                        {input('TPOT SLO (ms)', 'tpotSloMs', { min: '1', placeholder: 'e.g. 30' })}
                         <label className="text-xs text-slate-400">GPU capacity for planning
                             <Select className="mt-1" value={requirements.hardwareCapacityMode} onChange={updateRequirement('hardwareCapacityMode')}>
                                 <option value="free">Currently free GPUs</option>
@@ -349,19 +349,19 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
                         <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />Preference <span className="font-normal text-slate-500">Optional deployment preference.</span></summary>
                         <textarea className="mt-3 min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-200" value={plannerPrompt} onChange={(event) => setPlannerPrompt(event.target.value)} maxLength={2000} placeholder="Describe your deployment preference." />
                     </details>
-                    {vllmParameterControls && <details className="mt-4 border-t border-slate-800 pt-3">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />vLLM parameters</summary>
-                        <div className="mt-3 grid gap-3">{vllmParameterControls}</div>
-                    </details>}
-                    <details className="mt-4 border-t border-slate-800 pt-3">
+                    <details open className="mt-4 border-t border-slate-800 pt-3">
                         <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />Workload estimate <span className="font-normal text-slate-500">Optional request shape and demand.</span></summary>
                         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            {input('Input tokens per request', 'inputTokens', { min: '1', step: '1' })}
-                            {input('Output tokens per request', 'outputTokens', { min: '1', step: '1' })}
+                            {input('Input tokens per request', 'inputTokens', { min: '1', step: '1', placeholder: 'e.g. 4000' })}
+                            {input('Output tokens per request', 'outputTokens', { min: '1', step: '1', placeholder: 'e.g. 1000' })}
                             {input('Concurrent requests', 'concurrency', { min: '1', step: '1' })}
                             {input('Request rate (QPS)', 'requestRate', { min: '0.01', step: 'any' })}
                         </div>
                     </details>
+                    {vllmParameterControls && <details className="mt-4 border-t border-slate-800 pt-3">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />vLLM parameters</summary>
+                        <div className="mt-3 grid gap-3">{vllmParameterControls}</div>
+                    </details>}
                     <PodPlacementControl compact className="mt-4 border-t border-slate-800 pt-3" value={placementReplicas} onChange={setPlacementReplicas} clusterId={draft?.clusterId} nodeName={placementNodeName} onNodeChange={setPlacementNodeName} listNodeLabels={listDeploymentNodeLabels} />
                     {creating && <GenerationProgress events={generationEvents} />}
                     <div className="mt-5 flex justify-end"><Button onClick={createPlan} isLoading={creating}><Sparkles size={16} />Generate recommendation</Button></div>
