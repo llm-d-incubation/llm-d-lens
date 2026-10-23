@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from llm_d_lens.agentic import benchmark_context
 from llm_d_lens.agentic.benchmark_evidence import BenchmarkEvidenceRetriever
 from llm_d_lens.db.dao.agentic_benchmark_record import BenchmarkRecordDao, BenchmarkRecordDaoError
 from llm_d_lens.db.dao.simulation_task import SimulationTaskDao
@@ -736,6 +737,178 @@ async def test_route_change_invalidates_context_instead_of_relabeling_history(ta
     assert "routing changed" in task.benchmark_evidence["benchmark_context_error"]
     assert "verified_at" not in task.benchmark_evidence["benchmark_context"]
     verify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", [["/bin/bash", "-c"], ["/opt/serve-model"]])
+@pytest.mark.parametrize("probe_exit", [0, 1])
+@pytest.mark.parametrize("model_service", [False, True])
+async def test_validated_identity_does_not_require_parsing_serving_command(
+    task, monkeypatch, command, probe_exit, model_service
+):
+    saved = deepcopy(task.benchmark_evidence)
+    if model_service:
+        task.model_service_group_id = "msg-1"
+        task.model_name = "published-model"
+    routing = {
+        "group_id": "msg-1",
+        "member_id": "member-1",
+        "execution_id": "execution-1",
+        "model_ref": "org/model",
+        "served_name": "published-model",
+        "pod_selector": "app=serving",
+    }
+    monkeypatch.setattr(evidence, "_routing_snapshot", AsyncMock(return_value=routing if model_service else None))
+    configuration = SimpleNamespace(
+        content=saved["deployment_configuration"]["content"],
+        model_dump=lambda **_: deepcopy(saved["deployment_configuration"]),
+    )
+    context = SimpleNamespace(cluster_id="cluster1", namespace="serving", run_id="run-1", case_id="case-1")
+    run = SimpleNamespace(
+        cases=[SimpleNamespace(id="case-1", execution_id="execution-1", source_configuration_ordinal=0)],
+        source_configurations=[configuration],
+    )
+    monkeypatch.setattr(evidence, "get_execution_context", lambda _: context)
+    monkeypatch.setattr(evidence.deployment_run_manager.store, "get_run", lambda _: run)
+    container = {
+        "name": "modelserver",
+        "command": command,
+        "args": ["exec vllm serve org/model --tensor-parallel-size=1"] if command[0] == "/bin/bash" else [],
+    }
+    pod = {
+        "metadata": {"name": "model-0", "uid": "pod-uid"},
+        "status": {
+            "containerStatuses": [
+                {"name": "modelserver", "ready": True, "imageID": "sha256:actual-image", "restartCount": 0}
+            ]
+        },
+    }
+    probe = {
+        "model": {"model_id": "org/model"},
+        "hardware": saved["benchmark_context"]["hardware"],
+        "runtime": saved["benchmark_context"]["runtime"],
+        "warnings": ["model:ValueError"],
+    }
+    execute = AsyncMock(return_value=SimpleNamespace(returncode=probe_exit, stdout=json.dumps(probe)))
+    monkeypatch.setattr(
+        benchmark_context, "_model_pods", AsyncMock(return_value=(SimpleNamespace(run=execute), [(pod, container)]))
+    )
+    monkeypatch.setattr(benchmark_context, "enrich_model_metadata", AsyncMock())
+    monkeypatch.setattr(
+        benchmark_context,
+        "_argument",
+        lambda *_: pytest.fail("Validated Simulation identity must not parse serving argv"),
+    )
+
+    await evidence.capture_simulation_context(task)
+    snapshot = task.benchmark_evidence["benchmark_context"]
+    assert snapshot["model"]["model_id"] == "org/model"
+    expected_identity = {
+        "source": "deployment-configuration",
+        "model_id": "org/model",
+        "execution_id": "execution-1",
+    }
+    if model_service:
+        expected_identity.update(source="model-service-routing", group_id="msg-1", member_id="member-1")
+    assert snapshot["model_identity"] == expected_identity
+    assert snapshot["serving_configuration"][0]["model_source"] is None
+    assert snapshot["serving_configuration"][0]["arguments"]["--tensor-parallel-size"] is None
+    assert snapshot["warnings"]
+    execute.assert_awaited_once()
+    assert execute.call_args.args[0][7:9] == ["--", "python3"]
+    assert execute.call_args.args[0][-4:] == ["", "org/model", "", ""]
+
+    await evidence.verify_simulation_context(task)
+    assert snapshot["verified_at"]
+    snapshot["captured_at"] = saved["benchmark_context"]["captured_at"]
+    snapshot["verified_at"] = saved["benchmark_context"]["verified_at"]
+    report = evidence.ingest_simulation_task(task)
+    assert report["status"] == "stored"
+    record = BenchmarkRecordDao().get("simulation:abcdef12")
+    assert record.model.model_id == "org/model"
+    assert record.model.quantization is None
+    assert record.model.revision is None
+    assert record.provenance["serving_snapshot"]["model_identity"] == snapshot["model_identity"]
+    assert record.hardware.accelerator == (None if probe_exit else "Actual XPU")
+    assert record.runtime.backend == (None if probe_exit else "vllm")
+    assert record.configuration.decode_tp == 1
+    assert not BenchmarkRecordDao().find_compatible(
+        accelerator="Actual XPU",
+        backend="vllm",
+        quantization="none",
+        topology=record.configuration.topology,
+        minimum_vram_per_gpu_gib=1,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("conflict", "reason"),
+    [
+        ("model_ref", "identity does not match"),
+        ("group_id", "identity does not match"),
+        ("execution_id", "identity does not match"),
+        ("allocation", "saved deployment allocation"),
+        ("replicas", "saved deployment topology"),
+        ("per-replica-allocation", "saved deployment topology"),
+    ],
+)
+async def test_validated_identity_does_not_allow_attribution_or_allocation_conflicts(
+    task, monkeypatch, conflict, reason
+):
+    source = deepcopy(task.benchmark_evidence)
+    source.pop("benchmark_context")
+    source["model_service_group_id"] = "msg-1"
+    source["routing"] = {
+        "group_id": "msg-1",
+        "member_id": "member-1",
+        "execution_id": "execution-1",
+        "model_ref": "org/model",
+    }
+    if conflict in source["routing"]:
+        source["routing"][conflict] = "different"
+    counts = [1]
+    if conflict == "allocation":
+        counts = [2]
+    elif conflict == "replicas":
+        counts = [None, None]
+    elif conflict == "per-replica-allocation":
+        counts = [1, 3]
+        content = source["deployment_configuration"]["content"]
+        content["decode"].update(tensorParallelSize=2, replicaCount=2)
+        source["deployment_configuration"]["checksum"] = configuration_checksum(content)
+    targets = [
+        (
+            {
+                "metadata": {"name": f"model-{index}", "uid": f"pod-{index}"},
+                "status": {
+                    "containerStatuses": [
+                        {"name": "modelserver", "ready": True, "imageID": "sha256:actual-image", "restartCount": 0}
+                    ]
+                },
+            },
+            {"name": "modelserver"},
+        )
+        for index in range(len(counts))
+    ]
+    responses = [
+        SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {"model": {"model_id": "org/model"}, "hardware": {"gpu_count": count}, "runtime": {}, "warnings": []}
+            ),
+        )
+        for count in counts
+    ]
+    monkeypatch.setattr(
+        benchmark_context,
+        "_model_pods",
+        AsyncMock(return_value=(SimpleNamespace(run=AsyncMock(side_effect=responses)), targets)),
+    )
+    monkeypatch.setattr(benchmark_context, "enrich_model_metadata", AsyncMock())
+    await benchmark_context.capture_benchmark_context(source)
+    assert "benchmark_context" not in source
+    assert reason in source["benchmark_context_error"]
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,15 @@ verification fails, and terminal `ingestion` diagnostics. No new request metadat
 is required. These facts are captured before traffic and verified after completion.
 Reruns collect their own snapshot.
 
+`benchmark_context.model_identity` identifies the authoritative model and its
+source (`deployment-configuration` or `model-service-routing`), including the
+deployment execution and, for Model Services, group/member IDs. Simulation reuses
+this validated identity without parsing container startup commands. Hardware and
+runtime facts are still probed independently, and container/route stability checks
+remain required. Unobserved `serving_configuration` fields and auxiliary metadata
+stay null with `warnings`; they are not replaced with configured values. Missing
+hard compatibility fields exclude a record from predictive matching, not archival.
+
 The ingestion report has `schema_version`, `status`, `record_ids`, `existing_ids`,
 `inserted_ids` and `issues`. Status is `stored`, `partial`, `skipped` or `error`;
 read-only preview uses `eligible` and `eligible_ids` for pending valid evidence.

@@ -41,6 +41,10 @@ checks still apply. Existing plans and deployments are not rewritten.
 9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Deploy**.
 10. On **Deployments**, wait for **Ready**. The deployment is retained without running a benchmark; stop or clean it up explicitly when no longer needed.
 
+YAML generation supports both device-plugin and DRA clusters. Missing DRA device
+details do not prevent hardware variant detection from registered Kubernetes
+accelerator resources; normal capacity and configuration checks still apply.
+
 Use **Back to model card** to return to the selected model.
 To measure performance, see [Run an evaluation](/user-guide/evaluation).
 

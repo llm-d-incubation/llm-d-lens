@@ -275,7 +275,10 @@ def test_standalone_random_workload_is_supported_but_mixed_stages_are_not(run):
 
 
 @pytest.mark.parametrize("probe_exit", [0, 1])
-def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it(run, monkeypatch, probe_exit):
+@pytest.mark.parametrize("model_source", ["org/model", "other/model"])
+def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it(
+    run, monkeypatch, probe_exit, model_source
+):
     metadata = deepcopy(run.pop("benchmark_context"))
     probe = {key: metadata[key] for key in ("model", "hardware", "runtime")}
     pod = {
@@ -285,7 +288,7 @@ def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it
                 {
                     "name": "modelserver",
                     "command": ["vllm", "serve"],
-                    "args": ["org/model", "--revision", "pinned-revision", "--tensor-parallel-size=1"],
+                    "args": [model_source, "--revision", "pinned-revision", "--tensor-parallel-size=1"],
                     "resources": {"limits": {"test.example/accelerator": "1"}},
                 }
             ]
@@ -314,6 +317,11 @@ def test_metadata_is_collected_from_serving_container_and_restart_invalidates_it
     monkeypatch.setattr(benchmark_context, "resolve_by_resource", lambda key: True)
     monkeypatch.setattr(benchmark_context, "enrich_model_metadata", AsyncMock())
     asyncio.run(evidence.capture_benchmark_context(run))
+    if model_source != "org/model":
+        assert "benchmark_context" not in run
+        assert "identity does not match" in run["benchmark_context_error"]
+        assert not any("exec" in argv for argv in calls)
+        return
     if not probe_exit:
         assert run["benchmark_context"]["model"] == probe["model"]
         assert run["benchmark_context"]["hardware"] == probe["hardware"]
@@ -363,6 +371,26 @@ def test_probe_never_substitutes_latest_cached_revision_for_unpinned_serving_mod
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=unexpected_download))
     monkeypatch.setattr(sys, "argv", ["probe", "org/model", "org/model", "", ""])
     exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+
+
+def test_missing_model_source_does_not_inspect_working_directory_or_block_runtime(tmp_path, monkeypatch, capsys):
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "unrelated-model"}))
+    monkeypatch.chdir(tmp_path)
+    device = SimpleNamespace(
+        __name__="torch.test_device",
+        device_count=lambda: 1,
+        get_device_properties=lambda i: SimpleNamespace(name="Actual accelerator", total_memory=80 * 1024**3),
+    )
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(get_device_module=lambda: device, __version__="2.8.0"))
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "0.11.0")
+    monkeypatch.setattr(sys, "argv", ["probe", "", "org/model", "", ""])
+    exec(compile(benchmark_context._MODEL_PROBE, "<model-probe>", "exec"), {})  # noqa: S102
+    result = json.loads(capsys.readouterr().out)
+    assert result["model"] == {"model_id": "org/model", "revision": None}
+    assert result["hardware"]["gpu_count"] == 1
+    assert result["runtime"]["backend"] == "vllm"
+    assert result["runtime"]["backend_version"] == "0.11.0"
+    assert result["warnings"] == ["model:ValueError"]
 
 
 def test_batch_failure_rolls_back_every_new_record(run):

@@ -35,8 +35,10 @@ from pathlib import Path
 
 source, model_id, revision, quantization = sys.argv[1:]
 model = {"model_id": model_id, "revision": revision or None}
-runtime, hardware, warnings = {"backend": "vllm"}, {}, []
+runtime, hardware, warnings = {}, {}, []
 try:
+    if not source:
+        raise ValueError("Serving model source is unavailable")
     root = Path(source)
     if not root.is_dir():
         if not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -68,7 +70,7 @@ except (ImportError, OSError, RuntimeError, ValueError, KeyError, TypeError) as 
 if quantization:
     model["quantization"] = quantization
 try:
-    runtime["backend_version"] = version("vllm")
+    runtime.update(backend="vllm", backend_version=version("vllm"))
 except ImportError as error:
     warnings.append("vllm:" + type(error).__name__)
 try:
@@ -256,28 +258,67 @@ async def _capture(run: dict) -> None:
     expected_model = configuration.content.get("model", {}).get("name")
     if not expected_model:
         raise ValueError("The deployment snapshot does not identify the underlying model")
+    routing = run.get("routing")
+    model_identity = None
+    if run.get("source") == "simulation":
+        if not run.get("deployment_execution_id"):
+            raise ValueError("Simulation model identity requires an attributable deployment execution")
+        model_identity = {
+            "source": "deployment-configuration",
+            "model_id": expected_model,
+            "execution_id": run["deployment_execution_id"],
+        }
+    if routing:
+        if (
+            run.get("source") != "simulation"
+            or routing.get("model_ref") != expected_model
+            or not routing.get("group_id")
+            or routing["group_id"] != run.get("model_service_group_id")
+            or routing.get("execution_id") != run.get("deployment_execution_id")
+        ):
+            raise ValueError("Model Service identity does not match the deployment snapshot")
+        model_identity = {
+            "source": "model-service-routing",
+            "model_id": expected_model,
+            **{key: routing[key] for key in ("group_id", "member_id", "execution_id")},
+        }
     snapshots, identities, parallel_sizes, serving = [], [], [], []
     for pod, container in targets:
-        arguments = container.get("command", []) + container.get("args", [])
-        if not any("vllm" in arg for arg in arguments):
-            raise ValueError("Automatic runtime metadata currently requires an identifiable vLLM container")
-        source = _argument(arguments, "--model")
-        if source is None and "serve" in arguments:
-            source = arguments[arguments.index("serve") + 1]
-        if not source:
-            raise ValueError("The serving container does not expose its actual model source")
-        if expected_model not in (source, _argument(arguments, "--served-model-name")):
-            raise ValueError("Serving model identity does not match the deployment snapshot")
-        if _argument(arguments, "--tokenizer") not in (None, source, expected_model):
-            raise ValueError("A separate tokenizer needs explicit provenance before evidence ingestion")
-        if _argument(arguments, "--tokenizer-revision") not in (None, _argument(arguments, "--revision")):
-            raise ValueError("A separate tokenizer revision needs explicit provenance before evidence ingestion")
-        if _argument(arguments, "--pipeline-parallel-size") not in (None, "1"):
-            raise ValueError("Pipeline-parallel topology is not representable by this benchmark schema")
-        tp = _argument(arguments, "--tensor-parallel-size")
-        if tp is None:
-            raise ValueError("Actual serving tensor parallelism is not recorded in the container arguments")
-        parallel_sizes.append(int(tp))
+        source, tp = None, None
+        arguments = []
+        if not model_identity:
+            arguments = container.get("command", []) + container.get("args", [])
+            if not any("vllm" in arg for arg in arguments):
+                raise ValueError("Automatic runtime metadata currently requires an identifiable vLLM container")
+            source = _argument(arguments, "--model")
+            if source is None and "serve" in arguments:
+                source = arguments[arguments.index("serve") + 1]
+            if not source:
+                raise ValueError("The serving container does not expose its actual model source")
+            if expected_model not in (source, _argument(arguments, "--served-model-name")):
+                raise ValueError("Serving model identity does not match the deployment snapshot")
+            if _argument(arguments, "--tokenizer") not in (None, source, expected_model):
+                raise ValueError("A separate tokenizer needs explicit provenance before evidence ingestion")
+            if _argument(arguments, "--tokenizer-revision") not in (None, _argument(arguments, "--revision")):
+                raise ValueError("A separate tokenizer revision needs explicit provenance before evidence ingestion")
+            if _argument(arguments, "--pipeline-parallel-size") not in (None, "1"):
+                raise ValueError("Pipeline-parallel topology is not representable by this benchmark schema")
+            tp = _argument(arguments, "--tensor-parallel-size")
+            if tp is None:
+                raise ValueError("Actual serving tensor parallelism is not recorded in the container arguments")
+            parallel_sizes.append(int(tp))
+        observed_arguments = {
+            name: _argument(arguments, name) if not model_identity else None
+            for name in (
+                "--revision",
+                "--quantization",
+                "--tensor-parallel-size",
+                "--max-model-len",
+                "--gpu-memory-utilization",
+                "--max-num-seqs",
+                "--max-num-batched-tokens",
+            )
+        }
         response = await runner.run(
             [
                 "kubectl",
@@ -288,27 +329,31 @@ async def _capture(run: dict) -> None:
                 "-c",
                 container["name"],
                 "--",
-                "python",
+                "python3",
                 "-c",
                 _MODEL_PROBE,
-                source,
+                source or "",
                 expected_model,
-                _argument(arguments, "--revision") or "",
-                _argument(arguments, "--quantization") or "",
+                observed_arguments["--revision"] or "",
+                observed_arguments["--quantization"] or "",
             ],
             timeout=30,
         )
         if response.returncode:
             logger.warning("Benchmark %s serving metadata probe exited %s", run["id"], response.returncode)
             snapshot = {
-                "model": {"model_id": expected_model, "revision": _argument(arguments, "--revision")},
+                "model": {"model_id": expected_model, "revision": observed_arguments["--revision"]},
                 "hardware": {},
-                "runtime": {"backend": "vllm"},
+                "runtime": {} if model_identity else {"backend": "vllm"},
                 "warnings": [f"metadata probe exit {response.returncode}"],
             }
         else:
             snapshot = json.loads(response.stdout)
-        if snapshot["hardware"].get("gpu_count") is not None and snapshot["hardware"]["gpu_count"] != int(tp):
+        if (
+            tp is not None
+            and snapshot["hardware"].get("gpu_count") is not None
+            and snapshot["hardware"]["gpu_count"] != int(tp)
+        ):
             raise ValueError("Visible devices in a serving container do not match its tensor parallelism")
         snapshots.append(snapshot)
         identities.append(_pod_identity(pod, container))
@@ -317,18 +362,7 @@ async def _capture(run: dict) -> None:
                 "pod": pod["metadata"]["name"],
                 "container": container["name"],
                 "model_source": source,
-                "arguments": {
-                    name: _argument(arguments, name)
-                    for name in (
-                        "--revision",
-                        "--quantization",
-                        "--tensor-parallel-size",
-                        "--max-model-len",
-                        "--gpu-memory-utilization",
-                        "--max-num-seqs",
-                        "--max-num-batched-tokens",
-                    )
-                },
+                "arguments": observed_arguments,
                 "enable_prefix_caching": True
                 if "--enable-prefix-caching" in arguments
                 else (False if "--no-enable-prefix-caching" in arguments else None),
@@ -347,7 +381,12 @@ async def _capture(run: dict) -> None:
         expected_tps += [candidate.prefill_tp] * candidate.prefill_replicas
     if hardware["gpu_count"] is not None and hardware["gpu_count"] != sum(expected_tps):
         raise ValueError("Visible model devices do not match the saved deployment allocation")
-    if sorted(parallel_sizes) != sorted(expected_tps):
+    if model_identity:
+        if len(targets) != len(expected_tps) or (
+            all(count is not None for count in counts) and sorted(counts) != sorted(expected_tps)
+        ):
+            raise ValueError("Serving containers and visible devices do not match the saved deployment topology")
+    elif sorted(parallel_sizes) != sorted(expected_tps):
         raise ValueError("Actual serving tensor parallelism does not match the deployment configuration")
     digests = {identity["image_id"] for identity in identities}
     if len(digests) == 1:
@@ -367,6 +406,12 @@ async def _capture(run: dict) -> None:
         "replica_metadata": snapshots,
         "warnings": [warning for snapshot in snapshots for warning in snapshot.get("warnings", [])],
     }
+    if model_identity:
+        run["benchmark_context"]["model_identity"] = model_identity
+        run["benchmark_context"]["warnings"].append(
+            "Model identity comes from validated deployment attribution; "
+            "serving model source and command options are unknown"
+        )
     run.pop("benchmark_context_error", None)
 
 

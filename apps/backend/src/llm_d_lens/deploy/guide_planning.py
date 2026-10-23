@@ -275,7 +275,7 @@ def resolve_accelerator_variant(requested: str, cluster: dict | None) -> str:
         return requested
     resource_keys = cluster.get("allocatable", {}).get("accelerators", {})
     profiles = {profile.id for key in resource_keys if (profile := resolve_by_resource(key))}
-    devices = cluster.get("accelerator", {}).get("devices") or [{}]
+    devices = (cluster.get("accelerator") or {}).get("devices") or [{}]
     for device_class in [*cluster.get("deviceClasses", []), devices[0].get("driver", "")]:
         profile = resolve_by_device_class(device_class)
         if profile:

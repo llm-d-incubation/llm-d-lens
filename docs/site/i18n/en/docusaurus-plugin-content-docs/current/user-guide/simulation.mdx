@@ -58,11 +58,19 @@ it checks that serving containers and any Model Service route/pool are unchanged
 Eligible terminal results are stored once as `simulation:<task-id>` benchmark
 records, never relabeled as Evaluate runs or filled with current planning facts.
 
-Automatic enrichment currently supports attributable vLLM deployments with
-identifiable serving arguments and local safetensors metadata (cached Hub sources
-need an immutable serving revision). A Model Service must route to one deployment
-in the selected cluster; mixed targets, ambiguous layouts, packed quantized weights,
-or external endpoints without verifiable environment metadata are explicitly skipped.
+Model identity comes from the validated deployment configuration, or from the
+Model Service identity after checking that its underlying model matches that
+configuration. A Model Service must route to one deployment in the selected
+cluster. Shell wrappers and custom entrypoints do not need to expose vLLM arguments
+for archival: runtime and accelerator collection is independent of model identity.
+The snapshot records identity provenance separately from observed container facts.
+Unobserved model source, command options, revision and quantization remain null;
+the saved configuration is not presented as measured serving arguments.
+Missing auxiliary metadata produces explicit warnings rather than discarding an
+otherwise attributable measured result. Records missing hard compatibility fields,
+such as accelerator, backend or quantization, are not used for predictive matching.
+Mixed targets, inconsistent device allocations, changed containers or routes,
+and external endpoints without verifiable attribution are explicitly skipped.
 The Simulation itself still retains its result if evidence is unavailable.
 
 Normalization requires complete request artifacts and matching measured counts.

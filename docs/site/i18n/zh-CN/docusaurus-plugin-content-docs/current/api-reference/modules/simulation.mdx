@@ -19,6 +19,13 @@ import TabItem from '@theme/TabItem';
 `routing`、采集或校验失败时的 `benchmark_context_error`，以及终态 `ingestion` 诊断。
 请求不需要新增元数据参数。事实在流量开始前采集，完成后校验；重跑重新获取自己的快照。
 
+`benchmark_context.model_identity` 记录权威模型标识及来源（`deployment-configuration`
+或 `model-service-routing`），包括部署执行 ID；Model Service 路径还包含组和成员 ID。
+Simulation 直接复用已验证身份，不解析容器启动命令。硬件和运行时事实仍独立探测，
+并保留容器及路由稳定性检查。未观测到的 `serving_configuration` 字段及辅助元数据
+保持 null，并记录 `warnings`，不以配置值代替。硬兼容字段缺失的记录仍可归档，
+但不参与预测匹配。
+
 入库报告包含 `schema_version`、`status`、`record_ids`、`existing_ids`、
 `inserted_ids` 和 `issues`。状态为 `stored`、`partial`、`skipped` 或 `error`；
 只读预览对待入库的有效记录返回 `eligible` 和 `eligible_ids`。
