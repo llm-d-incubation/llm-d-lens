@@ -241,6 +241,23 @@ for (const command of ['stop', 'status', 'clean', 'install-node', '--help']) tes
   if (command === 'clean') assert.equal(readFileSync(join(root, 'events'), 'utf8'), 'clean:--yes\n');
 });
 
+for (const [args, expected] of [
+  [['--yes'], 'clean:--yes:default'],
+  [['--cache', '--yes'], 'clean:--yes:cache'],
+  [['--hard'], 'clean::hard'],
+  [['--all', '--yes'], 'clean:--yes:all'],
+]) test(`clean forwards ${args.join(' ')} without target-node checks`, t => {
+  const { root, run } = setup(t);
+  const result = run('clean', {
+    args,
+    env: { TARGET_NODE: 'INVALID_NODE', LLM_D_BENCH_KUBECTL_PATH: '/missing' },
+    overrides: 'cmd_clean() { printf "clean:%s:%s\\n" "$1" "$2" >> "$ROOT_DIR/events"; }',
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(!existsSync(join(root, 'kubectl-calls')));
+  assert.equal(readFileSync(join(root, 'events'), 'utf8'), `${expected}\n`);
+});
+
 test('invalid registration stops restart before touching running services', t => {
   const { root, put, run } = setup(t);
   put('src/a.js', 'export const other = 1;');

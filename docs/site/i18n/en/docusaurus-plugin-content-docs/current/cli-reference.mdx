@@ -12,7 +12,7 @@ description: Command-line tools for running, installing and managing Lens.
 | `scripts/lens-local.sh stop` | Stop all services started by this script. |
 | `scripts/lens-local.sh restart` | Complete target-node checks when enabled, prepare dependencies and validate the reuse map before stopping and restarting services. |
 | `scripts/lens-local.sh status` | Show which services are running and their PIDs. |
-| `scripts/lens-local.sh clean [-y\|--yes]` | Stop services and delete the embedded database plus all local app data under `~/.llm-d-lens`. |
+| `scripts/lens-local.sh clean [-y\|--yes] [--cache\|--hard\|--all]` | Stop services and delete app data/logs. `--cache` also removes source checkouts and benchmark venvs; `--hard` also removes the dev venv, toolchain, TLS certs, node_modules and build outputs; `--all` removes both. |
 | `scripts/lens-local.sh install-node` | Install a supported Node.js into `.dev-tools/` (used automatically if the system Node is missing or too old). |
 
 Ports are configurable via `FRONTEND_PORT` (default `5173`) and `BACKEND_PORT`

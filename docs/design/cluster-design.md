@@ -708,9 +708,10 @@ llm-d-benchmark version/commit [87d03da…] (default = current _BENCHMARK_REVISI
 ── Model-service data plane (pinned version set per cluster; optional) ──────────
 Gateway provider             [istio ▾]  (istio | gke | agentgateway | envoy-ai-gateway)
 Gateway / provider version   [1.29.4]
-GIE / Gateway API CRD        [v1.5.0]
-llm-d Router version         [v0.11.0]  (EPP / Proxy chart or image)
-IPP version                  [v0.1.0-rc.4]  (payload-processor chart or image)
+GIE / Gateway API CRD        [v1.6.2]
+LeaderWorkerSet              [v1.0.0]  (DisaggregatedSet API for P/D)
+llm-d Router version         [v1.0.0]  (EPP / Proxy chart or image)
+IPP version                  [v1.0.0]  (payload-processor chart or image)
 ```
 
 **Backend changes (reuse + generalize the two existing repository caches rather

@@ -140,6 +140,8 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/images/prepull", "cluster:cluster:update"),
     RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/crds", "cluster:cluster:read"),
     RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/crds", "cluster:cluster:update"),
+    RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/lws", "cluster:cluster:read"),
+    RoutePermission("POST", "/api/cluster/clusters/{cluster_id}/lws", "cluster:cluster:update"),
     RoutePermission("GET", "/api/cluster/clusters/{cluster_id}/kubernetes-version", "cluster:cluster:read"),
     RoutePermission("GET", "/api/cluster/endpoints", "cluster:endpoint:read"),
     RoutePermission("GET", "/api/cluster/lens-hosts", "cluster:cluster:read"),

@@ -6,7 +6,7 @@ import { PaginationControls } from '../../../../shared/ui/PaginationControls';
 import { useClusterNames } from '../../../optimization';
 import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Plus, Rocket, Search, ServerCog } from 'lucide-react';
+import { ChevronDown, Plus, Rocket, Search, ServerCog } from 'lucide-react';
 import {
     deleteDeploymentExecution,
     connectDeploymentExecution,
@@ -29,6 +29,7 @@ import { DeploymentDetailsModal } from './DeploymentDetailsModal';
 import { EditDeploymentModal } from './EditDeploymentModal';
 import { DeleteDeploymentModal } from './DeleteDeploymentModal';
 import { DeploymentPodsLogsModal } from './DeploymentPodsLogsModal';
+import { Toast } from '../../../../shared/ui/Toast';
 import { useAuth } from '../../../auth';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import {
@@ -198,14 +199,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                 title="Deployments"
                 description="Track active model serving deployments, inspect endpoints, and update or remove existing services."
             />
-            <StatCardRow
-                actions={notice && (
-                            <span role="status" className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1.5 text-[11px] text-emerald-200">
-                                <CheckCircle2 size={13} aria-hidden="true" />
-                                {notice}
-                            </span>
-                )}
-            >
+            <StatCardRow>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.Ready} />
@@ -251,17 +245,20 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                         formatLabel={statusLabel}
                         className="h-10"
                     />
-                    <select
-                        value={clusterId}
-                        onChange={(event) => setClusterId(event.target.value)}
-                        aria-label="Filter by cluster"
-                        className="h-10 w-full rounded-xl border border-slate-800/40 bg-[#0b0f17] px-3 text-xs text-slate-300 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/10"
-                    >
-                        <option value="">All clusters</option>
-                        {clusters.map((cluster) => (
-                            <option key={cluster} value={cluster}>{clusterNameById[cluster] || cluster}</option>
-                        ))}
-                    </select>
+                    <div className="relative">
+                        <select
+                            value={clusterId}
+                            onChange={(event) => setClusterId(event.target.value)}
+                            aria-label="Filter by cluster"
+                            className="h-10 w-full appearance-none rounded-xl border border-[#cbd5e1] bg-white px-3 pr-8 text-xs text-[#33475b] outline-none transition hover:border-[#94a3b8] hover:bg-[#e6f6fe] focus:border-[#037ffc] focus:ring-2 focus:ring-[#037ffc]/20 dark:border-slate-800/40 dark:bg-[#0b0f17] dark:text-slate-300 dark:hover:border-slate-700/45 dark:hover:bg-[#101622] dark:focus:border-cyan-400 dark:focus:ring-cyan-500/10"
+                        >
+                            <option value="">All clusters</option>
+                            {clusters.map((cluster) => (
+                                <option key={cluster} value={cluster}>{clusterNameById[cluster] || cluster}</option>
+                            ))}
+                        </select>
+                        <ChevronDown size={12} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 dark:text-slate-500" aria-hidden="true" />
+                    </div>
                 </div>
                 <div className="mt-3">
                 <AsyncState loading={loading} error={error} empty={items.length === 0}
@@ -330,6 +327,12 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
             {dialog === 'edit' && <EditDeploymentModal deployment={selected} onCancel={closeDialog} onSave={handleSave} />}
             {dialog === 'delete' && <DeleteDeploymentModal deployment={selected} clusterNameById={clusterNameById} onCancel={closeDialog} onDelete={handleDelete} />}
             {dialog === 'pods-logs' && <DeploymentPodsLogsModal deployment={selected} onClose={closeDialog} />}
+            <Toast
+                message={notice}
+                title="Deployments"
+                tone="info"
+                onDismiss={() => setNotice('')}
+            />
         </ModulePage>
     );
 }

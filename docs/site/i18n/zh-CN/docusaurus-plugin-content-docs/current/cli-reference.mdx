@@ -12,7 +12,7 @@ description: 用于运行、安装和管理 Lens 的命令行工具。
 | `scripts/lens-local.sh stop` | 停止由本脚本启动的所有服务。 |
 | `scripts/lens-local.sh restart` | 启用目标节点模式时先检查节点，再准备依赖并校验复用地图，全部通过后才停止并重启服务。 |
 | `scripts/lens-local.sh status` | 显示哪些服务正在运行及其 PID。 |
-| `scripts/lens-local.sh clean [-y\|--yes]` | 停止服务，并删除内嵌数据库以及 `~/.llm-d-lens` 下的所有本地应用数据。 |
+| `scripts/lens-local.sh clean [-y\|--yes] [--cache\|--hard\|--all]` | 停止服务并删除应用数据和日志。`--cache` 还会删除源码 checkout 和 benchmark venv；`--hard` 还会删除开发 venv、工具链、TLS 证书、node_modules 和构建产物；`--all` 同时删除两者。 |
 | `scripts/lens-local.sh install-node` | 将受支持的 Node.js 安装到 `.dev-tools/`（当系统的 Node 缺失或版本过旧时会自动使用）。 |
 
 端口可以通过 `FRONTEND_PORT`（默认 `5173`）和 `BACKEND_PORT`（默认 `3000`）配置。
