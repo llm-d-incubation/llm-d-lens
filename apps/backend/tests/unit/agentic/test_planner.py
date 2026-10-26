@@ -83,7 +83,7 @@ def test_public_rag_precedes_aic_ordering_only_with_verified_used_citations(monk
     )
     candidates = [
         PlannedCandidate(
-            id=f"baseline-vllm-tp{tp}-r1",
+            id=f"optimized-baseline-tp{tp}-r1",
             replicas=1,
             tensor_parallel_size=tp,
             required_gpus=tp,
@@ -119,7 +119,7 @@ def test_public_rag_precedes_aic_ordering_only_with_verified_used_citations(monk
     assert "public-rag:observation-1" in decision.evidence_ids
     assert "public-rag:query" in decision.evidence_ids
     assert decision.slo_status == ranked[0].slo_status == "not_satisfied"
-    context = json.loads(captured["user_content"].partition("\n\n")[0])
+    context = json.loads(captured["user_content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0])
     assert context["public_rag_evidence"][0]["citation"]["source_revision"] == "rev-1"
     assert context["explicit_workload"] == (
         {"shared_prefix_ratio": 0} if profile and profile.shared_prefix_ratio == 0 else {}
@@ -147,12 +147,41 @@ def test_planner_selects_the_smallest_feasible_standard_vllm_topology():
     assert decision.candidate_id == "optimized-baseline-tp1-r1"
 
 
+def test_planners_exclude_legacy_direct_vllm_candidates_from_ranking():
+    facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=4)
+    planner = DeterministicPlanner()
+    candidates = planner.candidates(facts)
+    assert {candidate.provider_ref for candidate in candidates} == {
+        "optimized-baseline",
+        "pd-disaggregation",
+        "tiered-prefix-cache",
+        "precise-prefix-cache-routing",
+    }
+    optimized = next(candidate for candidate in candidates if candidate.id == "optimized-baseline-tp1-r1")
+    legacy = PlannedCandidate.model_validate(
+        {**optimized.model_dump(), "id": "baseline-vllm-tp1-r1", "provider_ref": "baseline-vllm"}
+    )
+    mixed = [legacy, optimized]
+
+    assert planner.decide(facts, mixed).candidate_id == optimized.id
+    assert [candidate.id for candidate in planner.score(facts, mixed)] == [optimized.id]
+    assert [entry["candidate_id"] for entry in planner.ranking_trace(facts, mixed)] == [optimized.id]
+    assert [candidate.id for candidate in OpenAICompatiblePlanner._diverse_candidate_catalog(facts, mixed)] == [
+        optimized.id
+    ]
+    assert planner.decide(facts, [legacy]).action == "cannot_satisfy"
+    assert planner.score(facts, [legacy]) == []
+    assert OpenAICompatiblePlanner._diverse_candidate_catalog(facts, [legacy]) == []
+
+
 def test_candidates_use_requested_utilization_for_capacity_and_configuration():
     planner = DeterministicPlanner()
     low = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=4, gpu_memory_utilization=0.6)
     high = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=4, gpu_memory_utilization=0.9)
 
-    low_candidate = next(candidate for candidate in planner.candidates(low) if candidate.id == "baseline-vllm-tp1-r1")
+    low_candidate = next(
+        candidate for candidate in planner.candidates(low) if candidate.id == "optimized-baseline-tp1-r1"
+    )
     high_candidate = next(candidate for candidate in planner.candidates(high) if candidate.id == low_candidate.id)
     pd_candidate = next(
         candidate for candidate in planner.candidates(low) if candidate.provider_ref == "pd-disaggregation"
@@ -205,10 +234,10 @@ def test_balanced_policy_selects_the_smallest_resource_candidate_when_extra_capa
     planner = DeterministicPlanner()
 
     baseline_candidates = [
-        candidate for candidate in planner.candidates(facts) if candidate.provider_ref == "baseline-vllm"
+        candidate for candidate in planner.candidates(facts) if candidate.provider_ref == "optimized-baseline"
     ]
 
-    assert planner.decide(facts, baseline_candidates).candidate_id == "baseline-vllm-tp1-r1"
+    assert planner.decide(facts, baseline_candidates).candidate_id == "optimized-baseline-tp1-r1"
 
 
 def test_balanced_goal_only_uses_more_resources_for_proportional_predicted_gain():
@@ -234,14 +263,18 @@ def test_balanced_goal_only_uses_more_resources_for_proportional_predicted_gain(
     )
 
     insufficient_candidates = [
-        candidate for candidate in planner.candidates(insufficient_gain) if candidate.provider_ref == "baseline-vllm"
+        candidate
+        for candidate in planner.candidates(insufficient_gain)
+        if candidate.provider_ref == "optimized-baseline"
     ]
     proportional_candidates = [
-        candidate for candidate in planner.candidates(proportional_gain) if candidate.provider_ref == "baseline-vllm"
+        candidate
+        for candidate in planner.candidates(proportional_gain)
+        if candidate.provider_ref == "optimized-baseline"
     ]
 
-    assert planner.decide(insufficient_gain, insufficient_candidates).candidate_id == "baseline-vllm-tp1-r1"
-    assert planner.decide(proportional_gain, proportional_candidates).candidate_id == "baseline-vllm-tp2-r1"
+    assert planner.decide(insufficient_gain, insufficient_candidates).candidate_id == "optimized-baseline-tp1-r1"
+    assert planner.decide(proportional_gain, proportional_candidates).candidate_id == "optimized-baseline-tp2-r1"
 
 
 def test_prefill_heavy_workload_prioritizes_pd_over_default_minimum_gpu_policy():
@@ -287,10 +320,10 @@ def test_balanced_and_economic_policies_prefer_lower_tp_before_aic_metrics_for_e
     candidates = [
         candidate
         for candidate in planner.candidates(facts)
-        if candidate.provider_ref == "baseline-vllm" and candidate.required_gpus == 2
+        if candidate.provider_ref == "optimized-baseline" and candidate.required_gpus == 2
     ]
 
-    assert planner.decide(facts, candidates).candidate_id == "baseline-vllm-tp1-r2"
+    assert planner.decide(facts, candidates).candidate_id == "optimized-baseline-tp1-r2"
 
 
 def test_planner_rejects_topologies_when_no_free_cards_meet_the_memory_bound():
@@ -321,7 +354,6 @@ def test_planner_disables_only_tiered_prefix_cache_when_cpu_buffer_is_insufficie
 
     assert decision.action == "select_candidate"
     assert {candidate.provider_ref for candidate in candidates if candidate.deployable} >= {
-        "baseline-vllm",
         "optimized-baseline",
         "precise-prefix-cache-routing",
         "pd-disaggregation",
@@ -343,7 +375,6 @@ def test_planner_generates_registered_guides_independently_of_workload_shape():
     )
 
     assert {candidate.provider_ref for candidate in general} >= {
-        "baseline-vllm",
         "optimized-baseline",
         "tiered-prefix-cache",
         "precise-prefix-cache-routing",
@@ -536,11 +567,11 @@ def test_planner_prefers_exact_aic_prediction_that_meets_slos():
     planner = DeterministicPlanner()
 
     applicable_candidates = [
-        candidate for candidate in planner.candidates(facts) if candidate.provider_ref == "baseline-vllm"
+        candidate for candidate in planner.candidates(facts) if candidate.provider_ref == "optimized-baseline"
     ]
     decision = planner.decide(facts, applicable_candidates)
 
-    assert decision.candidate_id == "baseline-vllm-tp1-r1"
+    assert decision.candidate_id == "optimized-baseline-tp1-r1"
     assert "AIC-predicted" in decision.rationale
     ranking = planner.ranking_trace(facts, applicable_candidates)
     assert ranking[0]["candidate_id"] == decision.candidate_id
@@ -585,7 +616,7 @@ def test_planner_ranks_aic_slo_failure_after_candidates_without_prediction():
 
     scored = planner.score(facts, planner.candidates(facts))
 
-    assert scored.index(next(candidate for candidate in scored if candidate.id == "baseline-vllm-tp1-r1")) > 0
+    assert scored.index(next(candidate for candidate in scored if candidate.id == "optimized-baseline-tp1-r1")) > 0
 
 
 def test_planner_prefers_closer_unmet_slo_over_smaller_topology():
@@ -600,10 +631,10 @@ def test_planner_prefers_closer_unmet_slo_over_smaller_topology():
         ),
     )
     planner = DeterministicPlanner()
-    minimum = next(candidate for candidate in planner.candidates(facts) if candidate.id == "baseline-vllm-tp1-r1")
+    minimum = next(candidate for candidate in planner.candidates(facts) if candidate.id == "optimized-baseline-tp1-r1")
     anchor = minimum.model_copy(
         update={
-            "id": "baseline-vllm-tp8-r1",
+            "id": "optimized-baseline-tp8-r1",
             "tensor_parallel_size": 8,
             "required_gpus": 8,
         }
@@ -631,11 +662,13 @@ def test_ai_planner_rejects_worse_known_slo_miss_even_when_closer_candidate_is_o
         ),
     )
     minimum = next(
-        candidate for candidate in DeterministicPlanner().candidates(facts) if candidate.id == "baseline-vllm-tp1-r1"
+        candidate
+        for candidate in DeterministicPlanner().candidates(facts)
+        if candidate.id == "optimized-baseline-tp1-r1"
     )
     anchor = minimum.model_copy(
         update={
-            "id": "baseline-vllm-tp8-r1",
+            "id": "optimized-baseline-tp8-r1",
             "tensor_parallel_size": 8,
             "required_gpus": 8,
         }
@@ -778,7 +811,7 @@ def test_deterministic_planner_only_uses_evidence_that_meets_policy_thresholds(
     expected,
 ):
     evidence = PerformanceScoreInput(
-        candidate_id="baseline-vllm-tp1-r1",
+        candidate_id="optimized-baseline-tp1-r1",
         source="benchmark",
         status=status,
         confidence=confidence,
@@ -799,7 +832,7 @@ def test_deterministic_score_uses_evidence_slo_then_confidence_and_preserves_unk
         tpot_slo_ms=50,
         performance_score_inputs=(
             PerformanceScoreInput(
-                candidate_id="baseline-vllm-tp1-r1",
+                candidate_id="optimized-baseline-tp1-r2",
                 source="benchmark",
                 status="measured",
                 ttft_p95_ms=550,
@@ -841,8 +874,8 @@ def test_deterministic_score_uses_evidence_slo_then_confidence_and_preserves_unk
     assert scored[0].id == "optimized-baseline-tp1-r1"
     assert scored_by_id["optimized-baseline-tp1-r1"].slo_status == "satisfied"
     assert scored_by_id["optimized-baseline-tp1-r1"].slo_confidence == 0.5
-    assert scored_by_id["baseline-vllm-tp1-r1"].slo_status == "not_satisfied"
-    assert scored_by_id["baseline-vllm-tp1-r1"].slo_confidence == 0.95
+    assert scored_by_id["optimized-baseline-tp1-r2"].slo_status == "not_satisfied"
+    assert scored_by_id["optimized-baseline-tp1-r2"].slo_confidence == 0.95
     assert scored_by_id["tiered-prefix-cache-tp1-r1"].slo_status == "unknown"
     assert scored_by_id["precise-prefix-cache-routing-tp1-r1"].slo_status == "unknown"
 
@@ -878,7 +911,7 @@ def test_openai_planner_receives_all_deployable_candidates_regardless_of_slo(mon
                 ),
             ),
             PerformanceScoreInput(
-                candidate_id="baseline-vllm-tp1-r1",
+                candidate_id="optimized-baseline-tp1-r2",
                 source="benchmark",
                 status="measured",
                 ttft_p95_ms=600,
@@ -925,8 +958,9 @@ def test_openai_planner_receives_all_deployable_candidates_regardless_of_slo(mon
 
     decision, _ = asyncio.run(planner.recommend(facts, candidates))
 
-    context, _separator, _use_case = captured["json"]["messages"][1]["content"].partition("\n\n")
-    payload = json.loads(context)
+    payload = json.loads(
+        captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0]
+    )
     provider_candidate_ids = {item["id"] for item in payload["valid_candidates"]}
     deployable_candidate_ids = {candidate.id for candidate in candidates if candidate.deployable}
     assert len(provider_candidate_ids) == min(10, len(deployable_candidate_ids))
@@ -966,7 +1000,7 @@ def test_openai_compatible_planner_rejects_an_unvalidated_candidate(monkeypatch)
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=1)
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -985,8 +1019,8 @@ def test_openai_compatible_planner_rejects_an_unvalidated_candidate(monkeypatch)
                     {
                         "message": {
                             "content": (
-                                '{"candidate_id":"invented","candidate_ids":["baseline-vllm-tp1-r1"],"scores":{'
-                                '"baseline-vllm-tp1-r1":0.9},'
+                                '{"candidate_id":"invented","candidate_ids":["optimized-baseline-tp1-r1"],"scores":{'
+                                '"optimized-baseline-tp1-r1":0.9},'
                                 '"confidence":0.9,"rationale":"invalid"}'
                             )
                         }
@@ -1034,9 +1068,9 @@ def test_openai_compatible_planner_sends_all_validated_candidates_without_resour
                     {
                         "message": {
                             "content": (
-                                '{"candidate_id":"baseline-vllm-tp2-r1",'
-                                '"candidate_ids":["baseline-vllm-tp2-r1","baseline-vllm-tp1-r1"],'
-                                '"scores":{"baseline-vllm-tp2-r1":0.9,"baseline-vllm-tp1-r1":0.8},'
+                                '{"candidate_id":"optimized-baseline-tp2-r1",'
+                                '"candidate_ids":["optimized-baseline-tp2-r1","optimized-baseline-tp1-r1"],'
+                                '"scores":{"optimized-baseline-tp2-r1":0.9,"optimized-baseline-tp1-r1":0.8},'
                                 '"confidence":0.9,"rationale":"AIC-backed choice"}'
                             )
                         }
@@ -1063,20 +1097,22 @@ def test_openai_compatible_planner_sends_all_validated_candidates_without_resour
             [
                 candidate
                 for candidate in candidates
-                if candidate.deployable and candidate.provider_ref == "baseline-vllm"
+                if candidate.deployable and candidate.provider_ref == "optimized-baseline"
             ],
             operator_prompt="prioritize AIC recommendation",
         )
     )
     assert "name every other returned candidate ID" in captured["json"]["messages"][0]["content"]
-    supplied = json.loads(captured["json"]["messages"][1]["content"].partition("\n\n")[0])["valid_candidates"]
+    supplied = json.loads(
+        captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0]
+    )["valid_candidates"]
     supplied_by_id = {candidate["id"]: candidate for candidate in supplied}
-    assert decision.candidate_id == "baseline-vllm-tp2-r1"
+    assert decision.candidate_id == "optimized-baseline-tp2-r1"
     assert "not_applicable" in captured["json"]["messages"][0]["content"]
-    assert "Return exactly 3 candidate ID(s)" in captured["json"]["messages"][0]["content"]
-    assert "resource_policy" not in supplied_by_id["baseline-vllm-tp1-r1"]
-    assert "resource_policy" not in supplied_by_id["baseline-vllm-tp2-r1"]
-    assert supplied_by_id["baseline-vllm-tp1-r1"]["performance_estimate_applicability"] == "applicable"
+    assert "Return up to 3 candidate ID(s)" in captured["json"]["messages"][0]["content"]
+    assert "resource_policy" not in supplied_by_id["optimized-baseline-tp1-r1"]
+    assert "resource_policy" not in supplied_by_id["optimized-baseline-tp2-r1"]
+    assert supplied_by_id["optimized-baseline-tp1-r1"]["performance_estimate_applicability"] == "applicable"
 
 
 def test_planner_with_model_config_populates_capacity_metrics_and_filters_invalid_tp():
@@ -1103,7 +1139,7 @@ def test_planner_with_model_config_populates_capacity_metrics_and_filters_invali
     candidates = planner.candidates(facts)
 
     # TP=1 candidates should be deployable and have positive allocatable KV cache
-    tp1_cand = next(c for c in candidates if c.provider_ref == "baseline-vllm" and c.tensor_parallel_size == 1)
+    tp1_cand = next(c for c in candidates if c.provider_ref == "optimized-baseline" and c.tensor_parallel_size == 1)
     assert tp1_cand.deployable is True
     assert tp1_cand.allocatable_kv_cache_gib is not None and tp1_cand.allocatable_kv_cache_gib > 40.0
     assert tp1_cand.per_request_kv_cache_gib is not None and tp1_cand.per_request_kv_cache_gib > 0.4
@@ -1134,7 +1170,7 @@ def test_planner_with_model_config_rejects_oom_topology():
     planner = DeterministicPlanner()
     candidates = planner.candidates(facts)
 
-    tp1_cand = next(c for c in candidates if c.provider_ref == "baseline-vllm" and c.tensor_parallel_size == 1)
+    tp1_cand = next(c for c in candidates if c.provider_ref == "optimized-baseline" and c.tensor_parallel_size == 1)
     assert tp1_cand.deployable is False
     assert any("insufficient GPU memory" in r for r in tp1_cand.rejection_reasons)
 
@@ -1155,7 +1191,7 @@ def test_openai_compatible_planner_emits_scoring_progress(monkeypatch):
         ),
     )
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -1175,9 +1211,9 @@ def test_openai_compatible_planner_emits_scoring_progress(monkeypatch):
                     {
                         "message": {
                             "content": (
-                                '{"candidate_id":"baseline-vllm-tp1-r1",'
-                                '"candidate_ids":["baseline-vllm-tp1-r1"],'
-                                '"scores":{"baseline-vllm-tp1-r1":0.9},'
+                                '{"candidate_id":"optimized-baseline-tp1-r1",'
+                                '"candidate_ids":["optimized-baseline-tp1-r1"],'
+                                '"scores":{"optimized-baseline-tp1-r1":0.9},'
                                 '"confidence":0.9,"rationale":"AIC-backed choice"}'
                             )
                         }
@@ -1236,7 +1272,7 @@ def test_openai_compatible_planner_accepts_a_valid_candidate(monkeypatch):
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=2)
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -1255,8 +1291,8 @@ def test_openai_compatible_planner_accepts_a_valid_candidate(monkeypatch):
                     {
                         "message": {
                             "content": (
-                                '{"candidate_id":"baseline-vllm-tp1-r1","candidate_ids":["baseline-vllm-tp1-r1"],"scores":{'
-                                '"baseline-vllm-tp1-r1":0.8},'
+                                '{"candidate_id":"optimized-baseline-tp1-r1","candidate_ids":["optimized-baseline-tp1-r1"],"scores":{'
+                                '"optimized-baseline-tp1-r1":0.8},'
                                 '"confidence":0.8,"rationale":"valid"}'
                             )
                         }
@@ -1286,7 +1322,7 @@ def test_openai_compatible_planner_extracts_final_valid_json_from_reasoning_text
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=1)
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -1299,9 +1335,9 @@ def test_openai_compatible_planner_extracts_final_valid_json_from_reasoning_text
         async def complete(self, **_kwargs):
             return (
                 'Draft {"candidate_id":"broken"} final answer: '
-                '{"candidate_id":"baseline-vllm-tp1-r1",'
-                '"candidate_ids":["baseline-vllm-tp1-r1"],'
-                '"scores":{"baseline-vllm-tp1-r1":0.9},'
+                '{"candidate_id":"optimized-baseline-tp1-r1",'
+                '"candidate_ids":["optimized-baseline-tp1-r1"],'
+                '"scores":{"optimized-baseline-tp1-r1":0.9},'
                 '"confidence":0.8,"rationale":"Smallest valid topology."}'
             )
 
@@ -1313,13 +1349,52 @@ def test_openai_compatible_planner_extracts_final_valid_json_from_reasoning_text
     assert scored[0].score == 1.0
 
 
+@pytest.mark.parametrize("operator_prompt", [None, "", "single GPU, no PD"])
+def test_planner_keeps_prompt_and_nested_preference_consistent(monkeypatch, operator_prompt):
+    captured = {}
+    facts = PlanningFacts(8, 32, 4, operator_preference="prefer existing cache")
+    candidates = DeterministicPlanner().candidates(facts)
+    candidate = candidates[0]
+    assert len([item for item in candidates if item.deployable]) >= 3
+
+    class Client:
+        async def complete(self, **kwargs):
+            captured.update(kwargs)
+            return json.dumps(
+                {
+                    "candidate_id": candidate.id,
+                    "candidate_ids": [candidate.id],
+                    "scores": {candidate.id: 1.0},
+                    "confidence": 0.8,
+                    "rationale": "Matches the supplied preference.",
+                }
+            )
+
+    monkeypatch.setattr("llm_d_lens.agentic.planner.client_for", lambda **_kwargs: Client())
+    decision, ranked = asyncio.run(
+        OpenAICompatiblePlanner("http://provider", "planner").recommend(
+            facts, candidates, operator_prompt=operator_prompt
+        )
+    )
+    assert decision.candidate_id == candidate.id
+    assert len(ranked) == 1
+    preference = facts.operator_preference if operator_prompt is None else operator_prompt
+    prefix, context = captured["user_content"].split("\n\nPlanning context (JSON):\n", 1)
+    assert prefix.startswith("Operator preference")
+    assert prefix.endswith(preference or "(not provided)")
+    payload = json.loads(context.partition("\n\n")[0])
+    assert payload["operator_preference"] == preference
+    assert payload["planning_facts"]["operator_preference"] == preference
+    assert facts.operator_preference == "prefer existing cache"
+
+
 def test_openai_compatible_planner_accepts_a_valid_preference_choice(monkeypatch):
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=1)
     candidates = [
         PlannedCandidate(
-            id="baseline-vllm-tp1-r1",
-            provider_ref="baseline-vllm",
+            id="optimized-baseline-tp1-r1",
+            provider_ref="optimized-baseline",
             replicas=1,
             tensor_parallel_size=1,
             max_model_len=4096,
@@ -1350,8 +1425,8 @@ def test_openai_compatible_planner_accepts_a_valid_preference_choice(monkeypatch
                         "message": {
                             "content": (
                                 '{"candidate_id":"tiered-prefix-cache-tp1-r1",'
-                                '"candidate_ids":["tiered-prefix-cache-tp1-r1","baseline-vllm-tp1-r1"],'
-                                '"scores":{"tiered-prefix-cache-tp1-r1":0.9,"baseline-vllm-tp1-r1":0.8},'
+                                '"candidate_ids":["tiered-prefix-cache-tp1-r1","optimized-baseline-tp1-r1"],'
+                                '"scores":{"tiered-prefix-cache-tp1-r1":0.9,"optimized-baseline-tp1-r1":0.8},'
                                 '"confidence":0.9,"rationale":"preference"}'
                             )
                         }
@@ -1384,7 +1459,7 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
     planner = OpenAICompatiblePlanner("http://provider", "planner", "sk-ant-abc", provider_type="anthropic")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=2)
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -1404,8 +1479,8 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
                     {
                         "type": "text",
                         "text": (
-                            '{"candidate_id":"baseline-vllm-tp1-r1","candidate_ids":["baseline-vllm-tp1-r1"],"scores":{'
-                            '"baseline-vllm-tp1-r1":0.8},'
+                            '{"candidate_id":"optimized-baseline-tp1-r1","candidate_ids":["optimized-baseline-tp1-r1"],"scores":{'
+                            '"optimized-baseline-tp1-r1":0.8},'
                             '"confidence":0.8,"rationale":"valid"}'
                         ),
                     }
@@ -1450,7 +1525,7 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
         aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=1, ttft_ms=300),),
     )
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -1470,8 +1545,8 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
                     {
                         "message": {
                             "content": (
-                                '{"candidate_id":"baseline-vllm-tp1-r1","candidate_ids":["baseline-vllm-tp1-r1"],"scores":{'
-                                '"baseline-vllm-tp1-r1":0.8},'
+                                '{"candidate_id":"optimized-baseline-tp1-r1","candidate_ids":["optimized-baseline-tp1-r1"],"scores":{'
+                                '"optimized-baseline-tp1-r1":0.8},'
                                 '"confidence":0.8,"rationale":"valid"}'
                             )
                         }
@@ -1503,6 +1578,8 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
     assert captured["json"]["response_format"]["json_schema"]["strict"] is True
     system_prompt = captured["json"]["messages"][0]["content"]
     assert "Follow this priority order" in system_prompt
+    assert system_prompt.index("explicit operator requirements") < system_prompt.index("Provider semantics:")
+    assert "Never pad the result with a forbidden topology" in system_prompt
     assert "operator_preference must be the primary scoring criterion" in system_prompt
     assert "deployment use case and planning_facts workload signals" in system_prompt
     assert (
@@ -1525,7 +1602,7 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
     assert "explicitly prioritizes performance, throughput, or lower latency" in system_prompt
     assert "rank a feasible higher-replica candidate above the resource-preferred candidate" in system_prompt
     assert "GPU memory pressure" in system_prompt
-    assert "baseline-vllm: direct standard vLLM deployment" in system_prompt
+    assert "baseline-vllm" not in system_prompt
     assert "optimized-baseline: vLLM with llm-d prefix-affinity" in system_prompt
     assert "pd-disaggregation: separate prefill and decode roles" in system_prompt
     assert "tiered-prefix-cache: vLLM with tiered prefix caching that uses available CPU buffer" in system_prompt
@@ -1542,6 +1619,10 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
         "uniqueItems" not in captured["json"]["response_format"]["json_schema"]["schema"]["properties"]["candidate_ids"]
     )
     assert captured["json"]["messages"][1]["content"]
+    assert captured["json"]["messages"][1]["content"].startswith("Operator preference")
+    assert captured["json"]["messages"][1]["content"].index("Prefer prefix cache routing when feasible.") < captured[
+        "json"
+    ]["messages"][1]["content"].index("Planning context (JSON):")
     assert "Operator preference" in captured["json"]["messages"][1]["content"]
     assert "primary scoring criterion after hard constraints" in captured["json"]["messages"][1]["content"]
     assert "Prefer prefix cache routing when feasible." in captured["json"]["messages"][1]["content"]
@@ -1550,7 +1631,9 @@ def test_openai_compatible_planner_uses_anthropic_messages_api_when_configured(m
         in captured["json"]["messages"][1]["content"]
     )
     assert "general-chat" in captured["json"]["messages"][1]["content"]
-    facts_content, _separator, _preference = captured["json"]["messages"][1]["content"].partition("\n\n")
+    facts_content = (
+        captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0]
+    )
     valid_candidate = json.loads(facts_content)["valid_candidates"][0]
     assert valid_candidate["id"] == candidate.id
     assert "resource_policy" not in valid_candidate
@@ -1567,7 +1650,7 @@ def test_openai_compatible_planner_retries_groq_structured_output_validation_fai
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=1)
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,
@@ -1614,8 +1697,8 @@ def test_openai_compatible_planner_retries_groq_structured_output_validation_fai
                         {
                             "message": {
                                 "content": (
-                                    '{"candidate_id":"baseline-vllm-tp1-r1","candidate_ids":["baseline-vllm-tp1-r1"],"scores":{'
-                                    '"baseline-vllm-tp1-r1":0.8},"confidence":0.8,"rationale":"valid"}'
+                                    '{"candidate_id":"optimized-baseline-tp1-r1","candidate_ids":["optimized-baseline-tp1-r1"],"scores":{'
+                                    '"optimized-baseline-tp1-r1":0.8},"confidence":0.8,"rationale":"valid"}'
                                 )
                             }
                         }
@@ -1651,8 +1734,8 @@ def test_openai_compatible_planner_sends_every_deployable_candidate(monkeypatch)
             pass
 
         def json(self):
-            context, _separator, _use_case = captured["json"]["messages"][1]["content"].partition("\n\n")
-            provider_candidates = json.loads(context)["valid_candidates"]
+            context = captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1]
+            provider_candidates = json.loads(context.partition("\n\n")[0])["valid_candidates"]
             candidate_id = provider_candidates[0]["id"]
             return {
                 "choices": [
@@ -1687,12 +1770,11 @@ def test_openai_compatible_planner_sends_every_deployable_candidate(monkeypatch)
 
     _decision, scored_candidates = asyncio.run(planner.recommend(facts, candidates))
 
-    context, _separator, _use_case = captured["json"]["messages"][1]["content"].partition("\n\n")
-    provider_candidates = json.loads(context)["valid_candidates"]
+    context = captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1]
+    provider_candidates = json.loads(context.partition("\n\n")[0])["valid_candidates"]
     assert len(provider_candidates) == 10
     assert len(provider_candidates) == min(10, len([candidate for candidate in candidates if candidate.deployable]))
     assert {candidate["provider_ref"] for candidate in provider_candidates} == {
-        "baseline-vllm",
         "optimized-baseline",
         "pd-disaggregation",
         "tiered-prefix-cache",
@@ -1705,7 +1787,7 @@ def test_openai_compatible_planner_rejects_missing_response_content(monkeypatch)
     planner = OpenAICompatiblePlanner("http://provider", "planner")
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=1)
     candidate = PlannedCandidate(
-        id="baseline-vllm-tp1-r1",
+        id="optimized-baseline-tp1-r1",
         replicas=1,
         tensor_parallel_size=1,
         max_model_len=4096,

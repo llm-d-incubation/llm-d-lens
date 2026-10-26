@@ -1,4 +1,5 @@
 import json
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -57,6 +58,44 @@ async def test_authorization_failure_stops_siblings(monkeypatch):
     invoke.assert_awaited_once()
     assert len(conversation) == 2
     assert "not executed" in conversation[-1]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [None, "", "provider-2"])
+async def test_agentic_plan_inherits_assistant_provider(monkeypatch, explicit):
+    seen = {}
+    call = tool_call("create_agentic_plan")
+    call["function"]["arguments"] = json.dumps(
+        {"model": "qwen3", **({"ai_provider_id": explicit} if explicit is not None else {})}
+    )
+
+    async def invoke(_request, name, arguments):
+        seen.update({"name": name, "arguments": arguments})
+        return {"content": [{"type": "text", "text": "{}"}]}, False
+
+    monkeypatch.setattr(chat, "call_tool_safely", invoke)
+    outcome = await chat.process_pending_tool_calls(
+        [call], [], SimpleNamespace(app=app), AsyncMock(), default_ai_provider_id="provider-1"
+    )
+
+    assert outcome == "continue"
+    assert seen == {
+        "name": "create_agentic_plan",
+        "arguments": {"model": "qwen3", "ai_provider_id": explicit or "provider-1"},
+    }
+
+
+@pytest.mark.parametrize("tool", ["create_agentic_plan", "create_standard_vllm_deployment_run"])
+def test_assistant_deployment_names_get_a_short_uuid(tool):
+    prepared = chat.prepare_tool_arguments(tool, {"deployment_name": "qwen3-serving"}, None)
+    assert re.fullmatch(r"qwen3-serving-[0-9a-f]{8}", prepared["deployment_name"])
+
+    explicit = chat.prepare_tool_arguments(tool, {"deployment_name": "qwen3-serving-deadbeef"}, None)
+    assert explicit["deployment_name"] == "qwen3-serving-deadbeef"
+
+    long_name = chat.prepare_tool_arguments(tool, {"deployment_name": "x" * 200}, None)["deployment_name"]
+    assert len(long_name) == 120
+    assert re.fullmatch(r"x+-[0-9a-f]{8}", long_name)
 
 
 def test_system_prompt_distinguishes_deploy_and_model_service_publish():

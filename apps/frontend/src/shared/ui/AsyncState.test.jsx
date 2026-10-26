@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AsyncState } from './AsyncState.jsx';
 import { Toast } from './Toast.jsx';
 import { Boxes, Search } from 'lucide-react';
-import { Input, Select } from './FormControls.jsx';
+import { HelpTooltip, Input, Select } from './FormControls.jsx';
 
 describe("Async states", () => {
     test('state precedence is loading, error, empty, content with domain slots', () => {
@@ -75,6 +75,20 @@ describe("Notifications", () => {
 });
 
 describe("Form controls", () => {
+    test('help tooltips support an accessible custom trigger without nesting buttons', () => {
+        const html = renderToStaticMarkup(
+            <HelpTooltip trigger={<button aria-label="Lens Assistant">Icon</button>}>Lens Assistant</HelpTooltip>,
+        );
+        assert.equal((html.match(/<button/g) || []).length, 1);
+        const tooltipId = html.match(/id="([^"]+)" role="tooltip"/)[1];
+        assert.ok(html.includes(`aria-describedby="${tooltipId}"`));
+        assert.match(html, /group-hover:visible group-focus-within:visible/);
+        assert.match(html, /aria-label="Lens Assistant"/);
+        const defaultHelp = renderToStaticMarkup(<HelpTooltip label="Field help">Explanation</HelpTooltip>);
+        assert.match(defaultHelp, /aria-label="Field help"/);
+        assert.match(defaultHelp, /role="tooltip"[^>]*>Explanation/);
+    });
+
     test('ordinary fields retain their original surfaces and native select markup', () => {
         const input = renderToStaticMarkup(<Input aria-label="Name" value="chat" readOnly />);
         assert.match(input, /bg-white dark:bg-slate-900/);

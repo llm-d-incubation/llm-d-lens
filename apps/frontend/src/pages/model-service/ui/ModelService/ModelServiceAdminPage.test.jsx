@@ -4,14 +4,14 @@ import React, { createElement, Children } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AddModelForm, ModelServiceAdminPage, TrafficDistributionForm } from './ModelServiceAdminPage.jsx';
 import { AuthContext } from '../../../auth/AuthContext.js';
-import { availableModelProviders, filterServiceFlow, parseTrafficWeight, trafficDistributionError, trafficShare, trafficTotal } from '../../model/modelService.js';
+import { availableModelProviders, effectiveTrafficShare, filterServiceFlow, memberIsRoutable, parseTrafficWeight, routedTrafficTotal, trafficDistributionError, trafficShare, trafficTotal } from '../../model/modelService.js';
 import { ComponentLogAction, DataPlaneTopology, ManageDeploymentAction, PublicationToggleAction, ProvidersToggleAction, Flow as FlowConnector } from './DataPlaneTopology.jsx';
 import { ComponentLogViewer } from './GatewayOperationLogDrawer.jsx';
 import { addModel, deleteGroup, getModelAccess, grantModelAccess, revokeModelAccess, setProvidersStatus } from './modelServiceBackend.js';
 import { DeploymentManagementPage } from '../../../deployment/ui/DeploymentManagement/DeploymentManagementPage.jsx';
 
 describe("Add model", () => {
-    const deployment = { executionId: 'exec-a', name: 'deployment-a', model: 'Qwen/Qwen3-8B' };
+    const deployment = { executionId: 'exec-a', name: 'deployment-a', model: 'Qwen/Qwen3-8B', endpointKind: 'llm-d-epp' };
     const defaults = {
         form: { clusterId: 'cluster-a', name: 'public-chat', executionId: 'exec-a' },
         clusters: [{ id: 'cluster-a', name: 'Cluster A' }, { id: 'cluster-b', name: 'Cluster B' }],
@@ -90,7 +90,7 @@ describe("Add model", () => {
         clusterControl.props.onChange({ target: { value: 'cluster-b' } });
         assert.deepEqual(next, { clusterId: 'cluster-b', name: 'public-chat', executionId: '' });
         const html = render({ form: next, deployments: [], selectedDeployment: undefined });
-        assert.match(html, /No available ready deployments in this cluster/);
+        assert.match(html, /No available ready llm-d deployments in this cluster/);
         assert.doesNotMatch(html, /Qwen\/Qwen3-8B|value="exec-a"/);
     });
 
@@ -107,6 +107,7 @@ describe("Add model", () => {
             ...deployment, executionId: id, clusterId: 'cluster-a', status: id === 'not-ready' ? 'running' : 'ready',
         }));
         deployments.push({ ...deployment, executionId: 'other-cluster', clusterId: 'cluster-b', status: 'ready' });
+        deployments.push({ ...deployment, executionId: 'plain-vllm', clusterId: 'cluster-a', status: 'ready', endpointKind: 'vllm' });
         const members = ['active', 'disabled', 'staged', 'unhealthy'].map((id) => ({
             executionId: id, groupId: `group-${id}`, clusterId: 'cluster-a',
             status: id === 'staged' ? 'active' : id, weight: id === 'staged' ? 0 : 1,
@@ -122,6 +123,15 @@ describe("Add model", () => {
         assert.equal(availableModelProviders(deployments, members, '').length, 0);
     });
 
+    test('plain vLLM deployments are never offered as Model Service providers', () => {
+        const plain = { ...deployment, executionId: 'plain-vllm', clusterId: 'cluster-a', status: 'ready', endpointKind: 'vllm' };
+        const epp = { ...deployment, clusterId: 'cluster-a', status: 'ready' };
+        assert.deepEqual(
+            availableModelProviders([plain, epp], [], 'cluster-a').map((item) => item.executionId),
+            ['exec-a'],
+        );
+    });
+
     test('a provider added while the drawer is open becomes unselectable and returns after removal', () => {
         const deployments = [{ ...deployment, clusterId: 'cluster-a', status: 'ready' }];
         const members = [{ executionId: deployment.executionId, clusterId: 'cluster-a', status: 'active' }];
@@ -131,11 +141,11 @@ describe("Add model", () => {
         const html = render({ deployments: available, selectedDeployment: selected });
         assert.doesNotMatch(html, /value="exec-a"|value="Qwen\/Qwen3-8B"/);
         assert.match(html, /id="add-model-provider" disabled=""/);
-        assert.match(html, /Deployments already added to a model are excluded/);
+        assert.match(html, /deployments already added to a model are excluded/);
         assert.deepEqual(availableModelProviders(deployments, [], defaults.form.clusterId), deployments);
     });
 
-    test('page header exposes sky Add model and Reconcile with their existing permissions', () => {
+    test('Service Flow exposes Add model and Reconcile with their existing permissions', () => {
         const renderPage = (permissions) => renderToStaticMarkup(createElement(
             AuthContext.Provider,
             { value: { can: (permission) => permissions.includes(permission) } },
@@ -143,8 +153,12 @@ describe("Add model", () => {
         ));
         const html = renderPage(['model-service:member:manage', 'model-service:gateway:reconcile']);
         const header = html.match(/<header[^]*?<\/header>/)[0];
-        assert.match(header, /<button[^>]*bg-sky-500[^>]*>[^]*?Add model<\/button>/);
-        assert.match(header, /Reconcile<\/button>/);
+        assert.doesNotMatch(header, /Add model<\/button>|Reconcile<\/button>/);
+        assert.match(header, /Publish models and manage their serving routes\./);
+        const flow = html.slice(html.indexOf('>Service Flow</'));
+        assert.match(flow, /<button[^>]*bg-sky-500[^>]*>[^]*?Add model<\/button>/);
+        assert.match(flow, /Reconcile<\/button>/);
+        assert.ok(flow.indexOf('Add model</button>') < flow.indexOf('aria-label="Filter service flow"'));
         assert.equal((html.match(/Add model<\/button>/g) || []).length, 1);
         assert.equal((html.match(/Reconcile<\/button>/g) || []).length, 1);
         assert.doesNotMatch(html, /Add model service|Add model server/);
@@ -253,7 +267,7 @@ describe("Service flow", () => {
                             name: `deployment-${service.id}-${index}`, poolName: `pool-${service.id}-${index}`,
                             eppRef: `epp-${service.id}-${index}`, status: 'active',
                             weight: index === 0 ? 90 : 10,
-                            components: { httpRoute: 'ready', inferencePool: 'ready', epp: 'missing', modelServer: 'ready' },
+                            components: { httpRoute: 'ready', inferencePool: 'ready', epp: 'ready', modelServer: 'ready' },
                             ...memberOverrides,
                         })),
                     }],
@@ -274,7 +288,7 @@ describe("Service flow", () => {
         assert.doesNotMatch(html, />Traffic distribution<\/button>/);
         assert.match(html, /90%<\/text>/);
         assert.match(html, /10%<\/text>/);
-        assert.match(html, /Configured request share; not measured traffic/);
+        assert.match(html, /Effective request share after unavailable providers leave the route; not measured traffic/);
         assert.match(html, /aria-label="chat-0 traffic distribution"/);
         assert.match(html, /title="Configure relative traffic weights[^"]*Weight 0[^"]*offline providers receive no traffic/);
         assert.match(html, /bg-sky-500[^"]*rounded-full/);
@@ -386,7 +400,7 @@ describe("Service flow", () => {
         assert.match(html, />Stopped<\/span>/);
         assert.match(html, />Online<\/span>/);
         assert.match(html, /HTTPRoute: stopped/);
-        assert.match(html, /90%<\/text>/);
+        assert.match(html, /0%<\/text>/);
         const frame = html.split('role="group" aria-label="Model chat-0"')[1];
         assert.doesNotMatch(frame, /lens-chain-flow/);
         assert.match(frame, /stroke-slate-600/);
@@ -486,7 +500,7 @@ describe("Service flow", () => {
                 assert.ok(frame.includes(`>${component}</span>`));
             }
             assert.match(frame, /title="HTTPRoute: active"/);
-            assert.match(frame, /title="EPP: unhealthy"/);
+            assert.match(frame, /title="EPP: active"/);
             assert.match(frame, /aria-label="HTTPRoute actions"/);
             assert.match(frame, /aria-label="EPP actions"/);
             const [route, deployment] = frame.split('role="group" aria-label="Deployment ');
@@ -1059,6 +1073,18 @@ describe("Model state", () => {
         assert.equal(trafficDistributionError(rows), '');
         assert.equal(trafficTotal([{ weight: '' }]), null);
         assert.equal(trafficShare({ weight: '' }, null), 'Unknown');
+    });
+
+    test('unavailable providers leave the effective route but keep their configured weight', () => {
+        const members = [
+            { executionId: 'healthy', status: 'active', weight: 1, endpointKind: 'llm-d-epp', components: { modelServer: 'ready', epp: 'ready', inferencePool: 'ready' } },
+            { executionId: 'failed', status: 'unhealthy', weight: 1, endpointKind: 'llm-d-epp', components: { modelServer: 'missing', epp: 'missing', inferencePool: 'degraded' } },
+        ];
+        assert.equal(memberIsRoutable(members[0]), true);
+        assert.equal(memberIsRoutable(members[1]), false);
+        assert.equal(routedTrafficTotal(members), 1);
+        assert.deepEqual(members.map((member) => effectiveTrafficShare(member, 1)), ['100%', '0%']);
+        assert.equal(members[1].weight, 1);
     });
 
     test('allocations reject all-zero, duplicate, empty and oversized provider lists', () => {

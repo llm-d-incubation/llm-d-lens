@@ -1,5 +1,4 @@
-// Remote deployment API client. Passwords are accepted only as per-request
-// credentials and are never returned by the server or persisted by the workflow.
+// Deployment API client shared by configuration, monitoring and task pages.
 
 import { requestJson, postJson as post } from '../../../../shared/api/httpClient';
 
@@ -9,11 +8,6 @@ async function rebindLocalDeploymentRun(runId) {
     await post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cluster-session`, {
         cluster_session_id: clusterSessionId,
     });
-}
-
-export async function getRemoteDeploymentDefaults() {
-    const payload = await requestJson('/api/remote-deploy/defaults');
-    return payload;
 }
 
 export async function listDeploymentNodeLabels(clusterId, signal) {
@@ -27,19 +21,6 @@ export async function startLocalDeployment(configurations, provenance, placement
         provenance,
         ...(placement ? { runtime_binding: { placement } } : {}),
     });
-}
-
-export async function startLocalEvaluation(deploymentExecutionId, options = {}) {
-    return post('/api/v1/evaluate/runs', {
-        deployment_execution_id: deploymentExecutionId,
-        cluster_session_id: sessionStorage.getItem('prism_cluster_session_id') || undefined,
-        ...options,
-    });
-}
-
-export async function getLocalEvaluationRun(runId) {
-    const payload = await requestJson(`/api/v1/evaluate/runs/${encodeURIComponent(runId)}`);
-    return payload;
 }
 
 export async function getLocalDeploymentRun(runId) {
@@ -216,44 +197,4 @@ export function pendingDeploymentExecutions(runs, executionIds = new Set()) {
                 updated_at: run.started_at || run.created_at,
             };
         }));
-}
-
-export function fetchHostFingerprint(target) {
-    return post('/api/remote-deploy/fingerprint', { target });
-}
-
-export function testRemoteTarget(target, password) {
-    return post('/api/remote-deploy/test', {
-        target,
-        credentials: target.authMethod === 'password' ? { password } : {},
-    });
-}
-
-export function deployRemote(plan, target, password) {
-    return post('/api/remote-deploy/start', {
-        plan,
-        target,
-        credentials: target.authMethod === 'password' ? { password } : {},
-    });
-}
-
-function authenticated(path, namespace, target, password, extra = {}) {
-    return post(path, {
-        namespace,
-        target,
-        credentials: target.authMethod === 'password' ? { password } : {},
-        ...extra,
-    });
-}
-
-export function getRemoteDeploymentStatus(namespace, target, password) {
-    return authenticated('/api/remote-deploy/status', namespace, target, password);
-}
-
-export function getRemoteDeploymentLogs(namespace, target, password, pod = '', tail = 100) {
-    return authenticated('/api/remote-deploy/logs', namespace, target, password, { pod, tail });
-}
-
-export function teardownRemoteDeployment(namespace, target, password) {
-    return authenticated('/api/remote-deploy/teardown', namespace, target, password);
 }

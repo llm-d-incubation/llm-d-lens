@@ -86,15 +86,32 @@ def test_capacity_includes_restartable_init_and_init_peak():
     assert errors
 
 
-def test_hardware_variant_and_runtime_use_registered_profiles():
+@pytest.mark.parametrize("accelerator", [None, {}, {"devices": None}, {"devices": []}])
+def test_hardware_variant_and_runtime_use_registered_profiles(accelerator):
     cluster = {
         "allocatable": {"accelerators": {"nvidia.com/gpu": 4}},
+        "accelerator": accelerator,
         "runtimeClasses": [{"name": "nvidia", "handler": "nvidia"}],
     }
     assert guide.resolve_accelerator_variant("xpu", cluster) == "gpu"
     assert guide.runtime_class_for_accelerator(cluster, "gpu") == "nvidia"
     assert guide.runtime_class_for_accelerator(cluster, "xpu") is None
-    assert guide.resolve_accelerator_variant("xpu", {"allocatable": {"accelerators": {"unknown/gpu": 4}}}) == "xpu"
+    assert (
+        guide.resolve_accelerator_variant(
+            "xpu", {"allocatable": {"accelerators": {"unknown/gpu": 4}}, "accelerator": accelerator}
+        )
+        == "xpu"
+    )
+
+
+def test_device_plugin_cluster_without_dra_inventory_keeps_accelerator_resources():
+    cluster = sources.cluster_profile(
+        {"serverVersion": {"gitVersion": "v1.35.0"}},
+        {"items": [{"metadata": {"name": "worker"}, "status": {"allocatable": {"nvidia.com/gpu": "4"}}}]},
+    )
+    assert cluster["accelerator"] is None
+    assert cluster["allocatable"]["accelerators"] == {"nvidia.com/gpu": 4}
+    assert guide.resolve_accelerator_variant("xpu", cluster) == "gpu"
 
 
 def test_shell_model_rewrite_preserves_unmodified_expansions():
@@ -235,7 +252,8 @@ async def test_local_source_cannot_escape_allowed_root(monkeypatch, tmp_path):
         await sources.load_selected_manifests(None, {"source": {"mode": "local", "path": str(allowed / "link.yaml")}})
 
 
-def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, tmp_path):
+@pytest.mark.parametrize("kubernetes_mode", ["disabled", "required"])
+def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, tmp_path, kubernetes_mode):
     from unittest.mock import AsyncMock
 
     import yaml
@@ -257,6 +275,16 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
     monkeypatch.setattr(sources, "command_output", AsyncMock(return_value=""))
     monkeypatch.setattr(
         sources,
+        "discover_local_cluster",
+        AsyncMock(
+            return_value=sources.cluster_profile(
+                {"serverVersion": {"gitVersion": "v1.35.0"}},
+                {"items": [{"metadata": {"name": "worker"}, "status": {"allocatable": {"nvidia.com/gpu": "4"}}}]},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        sources,
         "machine_profile",
         AsyncMock(
             return_value={
@@ -273,7 +301,7 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
             "accelerator": "gpu",
             "modelServer": "vllm",
             "model": "example/model",
-            "environment": {"kubernetesMode": "disabled"},
+            "environment": {"kubernetesMode": kubernetes_mode},
             "replicas": 1,
             "tensorParallelSize": 1,
             "source": {"mode": "local", "path": str(manifest_path)},
@@ -281,7 +309,10 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
     )
     assert response.status_code == 200, response.text
     result = response.json()
-    assert result["status"] == "PLANNED"
+    assert result["status"] == ("VERIFIED" if kubernetes_mode == "required" else "PLANNED")
+    if kubernetes_mode == "required":
+        assert result["clusterProfile"]["accelerator"] is None
+        assert result["summary"]["availableAccelerators"] == 4
     assert result["validation"]["errors"] == []
     assert result["plannedDeployment"]["format"] == "yaml"
     assert "total;dur=" in response.headers["server-timing"]

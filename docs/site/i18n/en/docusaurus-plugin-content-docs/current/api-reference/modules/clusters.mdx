@@ -253,7 +253,7 @@ of `service.update_cluster_settings(..., gateway_namespace="custom")`.
     - `proxy` (`ProxyConfigDTO`, optional)
     - `llmDRef` (`string`, optional)
     - `llmDBenchmarkRef` (`string`, optional)
-    - `gatewayProvider` (`string`, optional)
+    - `gatewayProvider` (`string`, optional): may be assigned once when the cluster has no provider yet; after that it is immutable and a different value returns `422 gateway_provider_immutable`.
     - `gatewayNamespace` (`string`, optional): namespace prefix, at most 63 characters; receives the registration's stable short-ID suffix.
     - `gatewayPort` (`integer`, optional)
     - `gatewayPublicUrl` (`string`, optional): externally reachable Gateway host/IP — Lens adds the exposed port; empty derives it.

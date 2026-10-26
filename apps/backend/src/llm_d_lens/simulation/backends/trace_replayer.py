@@ -596,6 +596,7 @@ class TraceReplayerBackend(CommandBackend):
                     ),
                     ttft_ms=finite(_number(record.get("first_token_time"), float("nan"))),
                     tpot_ms=finite(tpot),
+                    tpot_is_measured=math.isfinite(_number(record.get("avg_time_between_tokens"), float("nan"))),
                 )
             )
 

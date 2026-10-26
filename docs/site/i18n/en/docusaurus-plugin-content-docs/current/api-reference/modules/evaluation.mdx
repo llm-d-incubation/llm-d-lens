@@ -63,6 +63,57 @@ Run, workflow, case, and detail responses preserve additional stored fields. Opt
 
 Errors use the application's `application/problem+json` response with `type`, `status`, `title`, `detail`, `code`, and an optional `requestId`. Client-error `detail` can contain structured validation errors; server-error `detail` is generic to avoid exposing internal exceptions. Authentication and resource permissions still apply; declaring a response model does not grant access.
 
+### Agentic benchmark evidence
+
+Existing run/detail REST responses and Python route dictionaries may include:
+
+- `benchmark_context`: versioned test-time model, hardware and runtime metadata,
+  source configuration checksum, capture/verification times and serving Pod identities.
+- `benchmark_context_error`: why collection or topology verification was unavailable.
+- `benchmark_model_metadata`: public descriptive model facts, API revision, lookup time
+  and whether that revision was pinned by the serving snapshot.
+- `benchmark_model_metadata_error`: best-effort public lookup failure, without failing archival.
+- `benchmark_hardware_metadata`: explicit historical operator declaration, declaration
+  time, configuration checksum and configured-card-count source; never a live observation.
+- `benchmark_evidence`: ingestion status (`stored`, `partial`, `skipped`, `error`),
+  eligible `record_ids`, `inserted_ids`, `existing_ids` and per-sample `issues`.
+  Missing/invalid evidence is not reported as stored. An evidence-storage error does
+  not change the original benchmark outcome.
+  Its `metadata` section reports missing descriptors, snapshot availability and lookup errors.
+
+No request fields are added. Both standalone and workflow benchmarks use the same
+terminal ingestion path. Cancelled/setup-only runs are ineligible. Failed samples
+require measured metrics, valid saved configuration/timestamps and an explicit failure reason.
+Each matrix point/stage has its own stable evidence ID. Missing optional performance
+metrics remain null; P95 values are read only from measured P95 distributions.
+Family, architecture, parameter counts, device details and runtime versions are optional.
+Each permanent record retains `provenance`; saved-configuration-only records are archived
+but excluded from predictive matching. Unknown hardware/quantization never matches another
+unknown value; missing runtime versions reduce similarity and confidence.
+
+Python normalization and ingestion use the same saved run dictionary:
+
+```python
+from llm_d_lens.evaluation.benchmark_evidence import ingest_evaluate_run, normalize_evaluate_run
+
+records, issues = normalize_evaluate_run(saved_run)
+preview = ingest_evaluate_run(saved_run, apply=False)
+```
+
+Neither call fetches current metadata or substitutes planning estimates. Only
+`ingest_evaluate_run(saved_run, apply=True)` appends eligible records. The administrator
+CLI `python -m llm_d_lens.evaluation.benchmark_evidence` defaults to preview, supports
+repeated `--run-id <uuid>` filters and requires `--apply` for writes. Preview reports
+`eligible` rather than `stored` for new valid records and uses `eligible_ids` instead
+of `inserted_ids`.
+Add `--enrich` for public model API/config lookup before normalization; failures are
+reported but do not block archival. Native lifecycle summaries are preferred over
+standardized YAML, including exact sibling members in `workspace.tar.zst`.
+Explicit historical hardware declarations require `--run-id` and all of
+`--hardware-accelerator`, `--hardware-vram-per-gpu-gib` and
+`--hardware-count-from-configuration`. Preview remains read-only; `--apply` persists
+the declaration and normalized records without changing their archive-only attribution.
+
 ### Get benchmark defaults
 
 Get llm-d-benchmark default repository and runtime settings Lens Evaluate will use.

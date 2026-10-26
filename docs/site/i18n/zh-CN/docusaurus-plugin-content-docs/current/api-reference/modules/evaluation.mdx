@@ -28,6 +28,53 @@ Pod 模板。新建 Pod 会在执行原有 harness 命令之前修复受影响�
 
 错误使用应用的 `application/problem+json` 响应格式，包含 `type`、`status`、`title`、`detail`、`code` 以及可选的 `requestId`。`detail` 字段可以包含结构化的校验错误。认证和资源权限仍然适用；声明一个响应模型并不会授予访问权限。
 
+### Agentic 基准测试证据
+
+现有运行/详情 REST 响应和 Python 路由返回的字典可能包含：
+
+- `benchmark_context`：带版本号的测试时模型、硬件及运行时元数据，
+  以及配置校验和、采集/验证时间和服务 Pod 身份。
+- `benchmark_context_error`：元数据采集或拓扑验证不可用的原因。
+- `benchmark_model_metadata`：公开模型描述信息、API revision、查询时间，
+  以及该 revision 是否由服务快照固定。
+- `benchmark_model_metadata_error`：公开信息查询失败原因，不会因此使存档失败。
+- `benchmark_hardware_metadata`：显式人工历史硬件声明、声明时间、配置校验和与配置卡数来源，
+  不代表测试时探测结果。
+- `benchmark_evidence`：入库状态（`stored`、`partial`、`skipped`、`error`），
+  符合条件的 `record_ids`、`inserted_ids`、`existing_ids`，以及逐样本的 `issues`。
+  缺失或无效证据不会报告为已入库。证据存储错误不会改变原始压测结果状态。
+  其中 `metadata` 报告缺失描述字段、快照可用性及查询错误。
+
+不增加请求字段。独立运行与工作流基准测试共用同一终态入库路径。
+取消或只完成准备阶段的运行不符合条件。失败样本需要实测指标、
+有效的已保存配置/时间戳和明确失败原因。每个矩阵点/阶段都有独立的稳定证据 ID。
+缺失的可选性能指标保持 null，P95 值只取实测 P95 分布。
+family、架构、参数量、设备详情和运行时版本均可缺失。永久记录中的 `provenance`
+保留来源；仅有已保存配置的记录可存档但不参与预测匹配。未知硬件/量化方式不会
+因双方都未知而匹配；缺失运行时版本会降低相似度与置信度。
+
+Python 标准化和入库函数使用同一份已保存的运行字典：
+
+```python
+from llm_d_lens.evaluation.benchmark_evidence import ingest_evaluate_run, normalize_evaluate_run
+
+records, issues = normalize_evaluate_run(saved_run)
+preview = ingest_evaluate_run(saved_run, apply=False)
+```
+
+两个函数均不会查询当前元数据，也不会使用规划估算替代历史事实。
+只有 `ingest_evaluate_run(saved_run, apply=True)` 才会追加符合条件的记录。
+管理员命令 `python -m llm_d_lens.evaluation.benchmark_evidence` 默认只预览，
+可重复传入 `--run-id <uuid>` 筛选记录，写入需要显式添加 `--apply`。
+预览时，新符合条件的记录报告为 `eligible` 而非 `stored`，
+并使用 `eligible_ids` 而非 `inserted_ids`。
+添加 `--enrich` 可在标准化前查询公开模型 API/config，查询失败会报告但不阻塞存档。
+优先读取原始 lifecycle 汇总而非标准化 YAML，也支持从同一样本目录的
+`workspace.tar.zst` 精确读取对应成员。
+人工历史硬件补录必须显式指定 `--run-id`，并同时提供 `--hardware-accelerator`、
+`--hardware-vram-per-gpu-gib` 和 `--hardware-count-from-configuration`。
+预览仍不写入；`--apply` 保存声明及标准化记录，不改变仅存档的来源属性。
+
 ### 获取基准测试默认值
 
 获取 Lens Evaluate 将使用的 llm-d-benchmark 默认仓库和运行时设置。

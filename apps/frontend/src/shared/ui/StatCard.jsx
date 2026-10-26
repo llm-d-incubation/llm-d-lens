@@ -38,6 +38,15 @@ const TONES = {
     },
 };
 
+export function StatCardRow({ children, actions }) {
+    return (
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+            <div className="min-w-0 flex-1">{children}</div>
+            {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        </div>
+    );
+}
+
 // KPI / stat tile. Supersedes common/Card and the hand-rolled Results Store
 // summary cards. Pass onClick + active to use it as a filter toggle. Dark mode
 // uses the translucent well-lit "glass" surface (matches old common/Card
@@ -49,6 +58,7 @@ export function StatCard({ icon, title, value, details, onClick, active = false,
         <Root
             onClick={onClick}
             type={onClick ? 'button' : undefined}
+            aria-pressed={onClick ? active : undefined}
             className={cn(
                 'bg-theme-card dark:bg-slate-800/60 border border-theme-border dark:border-slate-700/60',
                 'backdrop-blur-xl rounded-xl shadow-lg flex items-start text-left transition-all',

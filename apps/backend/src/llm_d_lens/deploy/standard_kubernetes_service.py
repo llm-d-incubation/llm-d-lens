@@ -29,7 +29,7 @@ class StandardKubernetesServiceRequest(BaseModel):
     storage_volume_id: str = Field(min_length=1, max_length=120)
     model_cache_path: str = Field(default_factory=lambda: str(Path.home() / ".cache"), min_length=1, max_length=1024)
     pvc_name: str = Field(default="", max_length=253, pattern=r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$")
-    max_model_len: int = Field(default=4096, ge=256, le=131072)
+    max_model_len: int = Field(default=4096, ge=256, le=1_048_576)
     gpu_memory_utilization: float = Field(default=0.9, ge=0.5, le=0.98)
     max_num_seqs: int = Field(default=256, ge=1, le=4096)
     max_num_batched_tokens: int = Field(default=8192, ge=256, le=131072)

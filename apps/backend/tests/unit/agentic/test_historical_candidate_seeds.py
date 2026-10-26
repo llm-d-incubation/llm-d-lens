@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
 from llm_d_lens.agentic.benchmark_evidence import (
     BenchmarkMetrics,
     BenchmarkRecord,
@@ -80,14 +82,15 @@ def test_retriever_returns_qualified_cross_topology_configuration_as_seed(tmp_pa
     assert seeds[0].evidence_refs == ("benchmark:pd-0", "benchmark:pd-1", "benchmark:pd-2")
 
 
-def test_retriever_handles_mixed_nullable_prefill_configurations(tmp_path):
+@pytest.mark.parametrize("topology", ["optimized-baseline", "baseline-vllm"])
+def test_retriever_handles_mixed_nullable_prefill_configurations(tmp_path, topology):
     store = JsonBenchmarkRecordStore(tmp_path)
     for index in range(3):
         store.save(
             _record(
                 f"baseline-{index}",
                 CandidateConfiguration(
-                    topology="baseline-vllm",
+                    topology=topology,
                     decode_tp=1,
                     decode_replicas=1,
                 ),
@@ -97,7 +100,7 @@ def test_retriever_handles_mixed_nullable_prefill_configurations(tmp_path):
             _record(
                 f"configured-{index}",
                 CandidateConfiguration(
-                    topology="baseline-vllm",
+                    topology=topology,
                     decode_tp=1,
                     decode_replicas=1,
                     prefill_tp=1,
@@ -121,4 +124,7 @@ def test_retriever_handles_mixed_nullable_prefill_configurations(tmp_path):
 
     seeds = HistoricalCandidateSeedRetriever(store).retrieve("Qwen/Qwen3-8B", facts)
 
-    assert seeds[0].proposal.provider_ref == "baseline-vllm"
+    if topology == "baseline-vllm":
+        assert seeds == ()
+    else:
+        assert seeds[0].proposal.provider_ref == "optimized-baseline"

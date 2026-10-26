@@ -25,7 +25,7 @@ to set the auth and gateway groups explicitly.
 | Variable | Description | Default |
 | --- | --- | --- |
 | `LLM_D_BENCH_DB_MODE` | `embedded` (bundled Postgres) or `external`. | `embedded` when `LLM_D_BENCH_DATABASE_URL` is unset; otherwise `external` |
-| `LLM_D_BENCH_DATABASE_URL` | Connection string when using an external database. | — (required, no default) |
+| `LLM_D_BENCH_DATABASE_URL` | Connection string when using an external database. It must include an explicit TCP port (for example `:5432`); Unix-socket DSNs are exempt. | — (required, no default) |
 | `LLM_D_BENCH_EMBEDDED_DB_DIR` / `LLM_D_BENCH_EMBEDDED_DB_PASSWORD` | Data directory and password for the embedded database. | `LLM_D_BENCH_EMBEDDED_DB_DIR`: `~/.llm-d-lens/db/data`<br />`LLM_D_BENCH_EMBEDDED_DB_PASSWORD`: — (required, no default) |
 | `LLM_D_BENCH_DB_BOOTSTRAP_FILE` | Optional SQL/seed file applied on first bootstrap. | `~/.llm-d-lens/db-bootstrap.json` |
 

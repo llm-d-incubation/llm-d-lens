@@ -44,6 +44,12 @@ are no longer supported.
 
 ## Open the deployment creation flow
 
+In **Agentic** mode, TTFT and TPOT SLOs and input/output tokens per request (ISL/OSL)
+start unset (`null` when submitted empty). Gray example placeholders are references,
+not submitted defaults. The **SLO** section (**Optional target.**) is expanded by
+default, with TTFT and TPOT side by side. **Workload estimate** appears directly below **Preference**
+and is expanded by default; **vLLM parameters** follows it and is collapsed by default.
+
 Deployment creation requires models registered in [Model Cache](/user-guide/model-cache).
 Select a registered cache volume containing the ready model and its revision on the
 same cluster. The Advanced configuration editor has only the **Model Cache** source.
@@ -101,6 +107,8 @@ policy modes and request examples.
 4. If the deployment failed, read the failure banner before making changes.
 
 Wait for **Ready** before calling the deployment. For **In progress**, check the pod logs for startup progress. For **Failed**, read the failure banner and the affected pod's logs.
+
+The status dot also reflects live model-server Pods. A yellow dot means fewer ready model-server Pods than requested, so serving capacity is reduced. A red dot means no ready model-server Pods remain, so the service is unavailable. These conditions are also reported under **Needs attention**.
 
 **Failed** is not final. A rollout that ran past its progress deadline is recorded
 as failed, but the workload often recovers on its own -- a pod that kept crashing

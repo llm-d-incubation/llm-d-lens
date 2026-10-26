@@ -58,12 +58,7 @@ def startup_snapshot(*, elapsed=90, restart_count=0, waiting=None, probe="startu
         "context deadline exceeded",
         "kubectl command timed out",
         "helm command timed out",
-        "endpoint smoke test timed out",
         'Error from server (NotFound): deployments.apps "optimized-baseline-xpu-vllm-decode" not found',
-        # The model server still loading rejects connections (not yet
-        # listening); the smoke test embeds that detail in its reason string
-        # (see composition.py's `_smoke_test_failure_detail`).
-        "endpoint smoke test failed: urllib.error.URLError: <urlopen error [Errno 111] Connection refused>",
     ],
 )
 def test_connectivity_and_timeout_reasons_are_transient(reason):
@@ -76,9 +71,6 @@ def test_connectivity_and_timeout_reasons_are_transient(reason):
         "pod modelserver-0 is in CrashLoopBackOff",
         "ImagePullBackOff: repository does not exist",
         'Error from server (NotFound): secrets "llm-d-hf-token" not found',
-        # A response arrived but failed the smoke test's assertion -- a real
-        # workload problem, not a startup race.
-        "endpoint smoke test failed: AssertionError",
     ],
 )
 def test_workload_failure_reasons_are_not_transient(reason):
@@ -187,7 +179,7 @@ def test_old_allocation_event_does_not_extend_expired_or_failed_startup(startup_
 
 def test_startup_does_not_mask_other_readiness_errors_or_pod_failures():
     snapshot = startup_snapshot()
-    assert not _readiness_is_transient(["endpoint smoke test failed: AssertionError"], snapshot)
+    assert not _readiness_is_transient(["ImagePullBackOff"], snapshot)
     snapshot["pods"] += "\ndecode-0 1/2 CrashLoopBackOff"
     assert not _readiness_is_transient(["deployment exceeded progress deadline"], snapshot)
 

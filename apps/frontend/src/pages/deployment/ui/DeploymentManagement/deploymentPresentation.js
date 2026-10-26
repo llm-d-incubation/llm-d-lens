@@ -30,6 +30,7 @@ const STATUS_TONES = {
     Ready: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200',
     'In progress': 'border-sky-400/30 bg-sky-400/10 text-sky-200',
     Failed: 'border-rose-400/30 bg-rose-400/10 text-rose-200',
+    Degraded: 'border-amber-400/30 bg-amber-400/10 text-amber-200',
     Cleaned: 'border-slate-400/30 bg-slate-400/10 text-slate-400',
     Unknown: 'border-slate-400/30 bg-slate-400/10 text-slate-400',
 };
@@ -39,6 +40,7 @@ const STATUS_DOT_CLASSES = {
     Ready: 'bg-emerald-400',
     'In progress': 'bg-sky-400',
     Failed: 'bg-red-400',
+    Degraded: 'bg-amber-400',
     Cleaned: 'bg-slate-500',
     Unknown: 'bg-slate-500',
 };
@@ -115,7 +117,20 @@ function isFailingPod(pod) {
 // deployment's own (potentially stale) `status` field. Returns null when the
 // pod list can't tell us anything conclusive (not yet fetched, or empty while
 // the deployment is still being created).
-export function derivePodStatusGroup(pods) {
+function isModelServerPod(pod) {
+    const labels = pod?.labels || {};
+    return labels['llm-d.ai/inference-serving'] === 'true'
+        || labels['llm-d.ai/role'] === 'decode'
+        || labels['llm-d.ai/role'] === 'prefill';
+}
+
+function isGatewayPod(pod) {
+    const labels = pod?.labels || {};
+    return Boolean(labels['llm-d-router-gateway'])
+        || /(^|-)epp(-|$)/.test(String(pod?.name || '').toLowerCase());
+}
+
+export function derivePodStatusGroup(pods, expectedModelPods = 1) {
     if (!Array.isArray(pods) || pods.length === 0) return null;
     // Completed pods (for example the precise-routing calibration Job) are
     // terminal successes, not part of the deployment's running workload, so they
@@ -123,22 +138,30 @@ export function derivePodStatusGroup(pods) {
     const livePods = pods.filter((pod) => pod && pod.phase !== 'Succeeded');
     if (livePods.length === 0) return null;
     if (livePods.some(isFailingPod)) return 'Failed';
-    if (livePods.some((pod) => !pod.ready)) return 'In progress';
+    const modelPods = livePods.filter(isModelServerPod);
+    const expected = Math.max(1, Number(expectedModelPods) || 1);
+    // A gateway/EPP-only namespace means the model server is gone even though
+    // the remaining pod is healthy.
+    if (modelPods.length === 0 && livePods.every(isGatewayPod)) return 'Failed';
+    const workload = modelPods.length ? modelPods : livePods;
+    const ready = workload.filter((pod) => pod.ready && !pod.deleting).length;
+    if (ready === 0) return 'Failed';
+    if (ready < expected || ready < workload.length) return 'In progress';
     return 'Ready';
 }
 
 // Combine the deployment's own status with what its pods currently report.
-// A pod-level failure always wins (surfaces crashes even if the deployment
-// record still says "ready"). Pods that are merely not-ready-yet downgrade a
-// "ready" deployment to "in progress" instead of silently staying green.
+// A missing model server is unavailable (red); a partially ready model server
+// is degraded (amber); a pod-level failure wins over a stale Ready record.
 // Terminal states (Cleaned) are never overridden by transient pod snapshots.
 export function effectiveStatusGroup(item, pods) {
     const backendGroup = statusGroup(item?.status);
-    const podGroup = derivePodStatusGroup(pods);
-    if (!podGroup) return backendGroup;
     if (backendGroup === 'Cleaned') return backendGroup;
+    if (Array.isArray(pods) && pods.length === 0 && backendGroup === 'Ready') return 'Failed';
+    const podGroup = derivePodStatusGroup(pods, item?.replicas || 1);
+    if (!podGroup) return backendGroup;
     if (podGroup === 'Failed') return 'Failed';
-    if (podGroup === 'In progress' && backendGroup === 'Ready') return 'In progress';
+    if (podGroup === 'In progress' && backendGroup === 'Ready') return 'Degraded';
     return backendGroup;
 }
 
@@ -146,8 +169,11 @@ export function effectiveStatusLabel(item, pods) {
     const backendGroup = statusGroup(item?.status);
     const effective = effectiveStatusGroup(item, pods);
     if (effective === backendGroup) return statusLabel(item?.status);
-    if (effective === 'Failed') return `${statusLabel(item?.status)} · POD ERROR`;
-    if (effective === 'In progress') return `${statusLabel(item?.status)} · POD NOT READY`;
+    if (effective === 'Failed') {
+        const podError = Array.isArray(pods) && pods.some(isFailingPod);
+        return `${statusLabel(item?.status)} · ${podError ? 'POD ERROR' : 'POD UNAVAILABLE'}`;
+    }
+    if (effective === 'Degraded') return `${statusLabel(item?.status)} · CAPACITY REDUCED`;
     return statusLabel(item?.status);
 }
 

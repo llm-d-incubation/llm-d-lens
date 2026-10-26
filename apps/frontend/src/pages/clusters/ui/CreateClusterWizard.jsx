@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertTriangle,
     ArrowRight,
+    BookOpen,
     Check,
     CheckCircle2,
     Cpu,
@@ -37,6 +38,8 @@ import { createModelCacheEntry } from '../../model-cache';
 import { getGpuDriverStatus, installGpuDriver, waitForGpuDriverReady } from './ClusterMonitoringStack/gpuDriverBackend';
 import { getHardwareProfiles, acceleratorVendorsFromProfiles, accessModesForVendor } from './ClusterMonitoringStack/hardwareProfilesBackend';
 import { BootstrapNodesPanel } from './ClusterBootstrap/BootstrapNodesPanel';
+
+const KUBECONFIG_GUIDE_URL = 'https://llm-d-incubation.github.io/llm-d-lens/user-guide/clusters#kubeconfig-permissions';
 
 const STEPS = [
     { id: 'basics', label: 'Basic Info', icon: Server },
@@ -785,12 +788,28 @@ export function CreateClusterWizard({ onClose, onCreated }) {
                             />
                         )}
                         {(kubeconfigSource === 'upload' || file) && (
-                            <div className="flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
-                                <Upload size={15} className="shrink-0 text-slate-400 dark:text-slate-500" />
-                                <span className="flex-1 truncate text-sm text-theme-muted">{file ? file.name : 'Choose a kubeconfig file'}</span>
-                                <input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} className="hidden" id="wizard-kubeconfig-file" />
-                                <label htmlFor="wizard-kubeconfig-file" className="cursor-pointer rounded-md border border-emerald-500/40 px-2 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10">Browse</label>
-                            </div>
+                            <>
+                                <div className="flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2">
+                                    <Upload size={15} className="shrink-0 text-slate-400 dark:text-slate-500" />
+                                    <span className="flex-1 truncate text-sm text-theme-muted">{file ? file.name : 'Choose a kubeconfig file'}</span>
+                                    <input type="file" onChange={(event) => setFile(event.target.files?.[0] || null)} className="hidden" id="wizard-kubeconfig-file" />
+                                    <label htmlFor="wizard-kubeconfig-file" className="cursor-pointer rounded-md border border-emerald-500/40 px-2 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10">Browse</label>
+                                </div>
+                                <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-4 text-theme-muted">
+                                    <BookOpen size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+                                    <span>
+                                        <a
+                                            href={KUBECONFIG_GUIDE_URL}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="font-medium text-[#037ffc] underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#037ffc]/50 dark:text-cyan-300"
+                                        >
+                                            How to create a kubeconfig for Lens?
+                                        </a>{' '}
+                                        Use a cluster-admin identity for the simplest setup, or the least-privilege option in the guide.
+                                    </span>
+                                </p>
+                            </>
                         )}
                     </div>
                 </div>

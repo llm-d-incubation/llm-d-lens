@@ -711,8 +711,26 @@ print_initial_admin_credentials() {
     log "administrator credentials are stored in the mode-600 file $cred_file; removed after the password is changed"
 }
 
+# Load the last ports written by start_one. Restart/start then keeps the same
+# backend port when it is still free; an occupied port is shifted by
+# resolve_free_port and the new value is written back to $PID_DIR/<svc>.port.
+load_saved_ports() {
+    local svc saved_port
+    for svc in "${SERVICES[@]}"; do
+        saved_port="$(cat "$PID_DIR/$svc.port" 2>/dev/null || true)"
+        [[ "$saved_port" =~ ^[0-9]+$ ]] || continue
+        (( 10#$saved_port >= 1 && 10#$saved_port <= 65535 )) || continue
+        case "$svc" in
+            frontend) FRONTEND_PORT="$saved_port" ;;
+            server) SERVER_PORT="$saved_port" ;;
+            backend) BACKEND_PORT="$saved_port" ;;
+        esac
+    done
+}
+
 cmd_start() {
     prepare_start || return $?
+    load_saved_ports
     start_services
 }
 
@@ -720,6 +738,10 @@ cmd_restart() {
     local target="${1:-all}"
     case "$target" in all|frontend|server|backend) ;; *) fail "Unknown service: $target"; return 1 ;; esac
     if [[ "$target" == server ]]; then target=backend; fi
+    # Load recorded ports for the target even when it is currently stopped, so
+    # `restart backend` keeps 3001 instead of falling back to 3000 and failing
+    # the "port changed" guard.
+    load_saved_ports
     if [[ "$target" != all ]]; then
         local svc saved_port
         for svc in "${SERVICES[@]}"; do
@@ -729,11 +751,6 @@ cmd_restart() {
                     fail "Missing port state for $svc; run restart all once before targeted restarts."
                     return 1
                 fi
-                case "$svc" in
-                    frontend) FRONTEND_PORT="$saved_port" ;;
-                    server) SERVER_PORT="$saved_port" ;;
-                    backend) BACKEND_PORT="$saved_port" ;;
-                esac
             fi
         done
     fi
@@ -754,7 +771,9 @@ start_services() {
     # Remember what was requested so we can report any port that got shifted.
     local requested_frontend="$FRONTEND_PORT" requested_backend="$BACKEND_PORT"
 
-    # Shift off any port already occupied by another process.
+    # Local development may share a host: shift an occupied port and record the
+    # result in $PID_DIR/<svc>.port. `start` and `restart all` load those files
+    # first, so a restart keeps the same port whenever it is still free.
     if [[ "$target" == all || "$target" == backend ]]; then BACKEND_PORT="$(resolve_free_port backend "$BACKEND_PORT")"; fi
     if [[ "$target" == backend && "$BACKEND_PORT" != "$requested_backend" ]]; then fail "Port changed for backend; use restart all to update dependent proxies."; return 1; fi
     if [[ "$target" == all || "$target" == frontend ]]; then FRONTEND_PORT="$(resolve_free_port frontend "$FRONTEND_PORT")"; fi

@@ -1184,7 +1184,12 @@ await GatewayOpsService().reconcile_cluster("cluster-a")
   IPP-injected `X-Gateway-Base-Model-Name = base_model`. When `served_name`
   differs from the public name, Lens also renders one
   `InferenceModelRewrite` per pool in the pool namespace so the EPP rewrites the
-  request-body `model` to the engine name. `backendRefs` contains
+  request-body `model` to the engine name. Rewrites use the dedicated
+  `lens.llm-d.ai/rewrite-managed=true` label plus
+  `lens.llm-d.ai/cluster-id=<cluster>`; stale-rewrite cleanup lists only that
+  dedicated label and filters by cluster ID. This keeps one Lens instance from
+  deleting another instance's rewrites, including older instances that still
+  list only `app.kubernetes.io/part-of=lens-inference-gateway`. `backendRefs` contains
   up to 16 entries for enabled positive-weight members. Each entry contains
   `group: inference.networking.k8s.io`, `kind: InferencePool`, `name`,
   `weight`, and an optional `namespace`. **Do not set `port`:**

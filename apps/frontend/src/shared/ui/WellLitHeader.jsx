@@ -18,9 +18,8 @@ import { PageHeader, ShareLinkButton } from './PageHeader';
 import { Badge } from './Badge';
 
 // The canonical header for well-lit path dashboards (see .agents/skills/ui/SKILL.md):
-// fixed at the top, llm-d logo + Prism wordmark, page title, "Guided path"
-// badge, Contact us link, Share link. Pair with pt-16 on the page root so
-// content clears the fixed bar. Do not hand-roll this per dashboard.
+// in the workspace content, with branding, page title, "Guided path"
+// badge, Contact us link and Share link. Do not hand-roll this per dashboard.
 export function WellLitHeader({
     pageTitle,
     badgeLabel = 'Guided path',
@@ -29,11 +28,10 @@ export function WellLitHeader({
     onNavigateBack,
     onToggleMobileNav,
     extraActions,
-    isPrototype = false,
 }) {
     return (
         <PageHeader
-            className="fixed top-0 left-0 right-0 z-[49] h-16 px-6 border-slate-900/65 bg-slate-950/20 backdrop-blur-md"
+            className="relative min-h-16 flex-wrap bg-transparent px-4 sm:px-6 lg:px-12"
             onNavigateBack={onNavigateBack}
             onToggleMobileNav={onToggleMobileNav}
             title={
@@ -61,11 +59,6 @@ export function WellLitHeader({
                     {badgeLabel && (
                         <Badge tone="brand" size="sm" className="hidden sm:inline-flex font-mono">
                             {badgeLabel}
-                        </Badge>
-                    )}
-                    {isPrototype && (
-                        <Badge tone="warning" size="sm" className="hidden sm:inline-flex font-mono">
-                            Prototype
                         </Badge>
                     )}
                 </div>

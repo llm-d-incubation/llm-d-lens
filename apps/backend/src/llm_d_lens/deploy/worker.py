@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import UTC, datetime
 
@@ -17,6 +18,8 @@ from llm_d_lens.deploy.contracts import (
 )
 from llm_d_lens.deploy.run_store import JsonDeploymentRunStore
 from llm_d_lens.deploy.service import DeploymentCreationCancelled, DeploymentService
+
+logger = logging.getLogger(__name__)
 
 # A durable 'enabling' record without an active task is an interrupted attempt.
 _monitoring_inflight: set[str] = set()
@@ -569,6 +572,7 @@ class DeploymentRunWorker:
             case.status = DeploymentCaseStatus.CANCELLED
             raise
         except Exception as error:
+            logger.exception("Deployment case %s in run %s failed", case.id, run.id)
             case.status = DeploymentCaseStatus.FAILED
             case.failure = ProblemDetails(
                 status=500,

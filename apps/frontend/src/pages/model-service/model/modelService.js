@@ -6,6 +6,7 @@ export function availableModelProviders(deployments, members, clusterId) {
     );
     return deployments.filter((deployment) => (
         deployment.clusterId === clusterId && deployment.status === 'ready'
+        && deployment.endpointKind === 'llm-d-epp'
         && !published.has(deployment.executionId)
     ));
 }
@@ -28,6 +29,27 @@ export function filterServiceFlow(clusters, memberGroups, { clusterId = '', mode
             : selectedClusters,
         memberGroups: groups,
     };
+}
+
+export function memberIsRoutable(member) {
+    if (!member || member.status === 'disabled' || Number(member.weight) <= 0) return false;
+    if (member.endpointKind && member.endpointKind !== 'llm-d-epp') return false;
+    const components = member.components || {};
+    return !['epp', 'inferencePool', 'modelServer'].some((key) => components[key] === 'missing');
+}
+
+export function routedTrafficTotal(members) {
+    if (!Array.isArray(members)) return 0;
+    return members.reduce((sum, member) => (
+        memberIsRoutable(member) ? sum + Number(member.weight || 0) : sum
+    ), 0);
+}
+
+export function effectiveTrafficShare(member, total) {
+    if (!memberIsRoutable(member) || !total) return '0%';
+    const weight = Number(member.weight || 0);
+    const share = weight / total * 100;
+    return share < 0.01 ? '<0.01%' : `${Number(share.toFixed(2))}%`;
 }
 
 export function parseTrafficWeight(value) {

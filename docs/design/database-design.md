@@ -210,7 +210,7 @@ Other common conventions:
 Before expanding each table, clarify two easy-to-confuse points that will appear in the field tables below:
 
 1. **Two different things both named `ConfigurationArtifact`**: `llm_d_lens.deploy.contracts.ConfigurationArtifact` (a **temporary reference** embedded in `DeploymentCreateRequest` / `DeploymentExecution`, with only a few fields such as `artifact_id`, matching Rule 6 and stored as `JSONVariant`) and `llm_d_lens.configuration.models.ConfigurationArtifactRecord` (a **saved configuration-artifact catalog entry**, corresponding to the standalone `configuration_artifacts` table, whose primary key is also `artifact_id`). The foreign key `evaluate_runs.configuration_artifact_id` points to the **latter** (the saved catalog entry), not the former.
-2. **`agentic_benchmark_records.evaluate_run_id` is a best-effort derived column, not a strict `FOREIGN KEY`**: in the current code, `benchmark_id = f"evaluate:{task_id}"` (`agentic/facts.py`), meaning the namespace of `benchmark_id` currently has only one source (evaluate tasks), but the `BenchmarkRecord` DTO itself does not declare any field pointing to evaluate — future prefixes are entirely possible (for example, manually submitted benchmark tests). Therefore, this column is derived in the application layer by parsing whether `benchmark_id` looks like `evaluate:<id>`, and **does not create a database-level foreign-key constraint** (no `ON DELETE` semantics; it is purely a nullable auxiliary indexed column). In the field table it is marked as "(soft reference, not FK)".
+2. **`agentic_benchmark_records.evaluate_run_id` is a best-effort derived column, not a strict `FOREIGN KEY`**: `evaluation/benchmark_evidence.py` emits IDs beginning with `evaluate:<uuid>`, optionally followed by matrix/stage suffixes. The column retains only that UUID. The `BenchmarkRecord` DTO itself does not require an Evaluate reference; future prefixes may identify other benchmark sources. This is **not a database-level foreign-key constraint**: deleting Evaluate history does not delete permanent benchmark evidence. In the field table it is marked as "(soft reference, not FK)".
 3. **`monitoring_*_operations.cluster_id` is likewise a best-effort derived column**: `AcceleratorStatusResponse.context` / `namespace` is only a kubeconfig context-name string. The application layer must match it against the kubeconfig of registered clusters in the `clusters` table to reverse-lookup a `cluster_id`; if no match is found, it remains null. This is the Rule-2 case of "cross-module reference where the source has no direct ID": it becomes a nullable real foreign key (`SET NULL`), but the write timing is "after the application layer completes the matching," rather than being expanded directly from the DTO.
 
 #### 5.4 Per-table field design
@@ -531,9 +531,80 @@ Indexes: `(workflow_id)`, `(status)`.
 
 ##### 5.4.12 `agentic_benchmark_records`
 
-**Function**: append-only storage of a complete snapshot of model/hardware/runtime/load/configuration/metrics for each benchmark test, for later retrieval of historical benchmark data (such as Agentic intelligent configuration recommendations).
+**Function**: append-only storage of validated benchmark measurements and their available model/hardware/runtime/load/configuration context. Archival does not require complete predictive metadata.
 
 Corresponds to `llm_d_lens.agentic.benchmark_evidence.BenchmarkRecord`. All 6 nested submodels (`model` / `hardware` / `runtime` / `workload` / `configuration` / `metrics`) are expanded according to Rule 2, making this one of the 15 tables with many fields (the table with the most columns is the newly added `simulation_tasks`; see §5.4.15).
+
+Evaluate terminal persistence calls `evaluation.benchmark_evidence.ingest_evaluate_run`.
+It validates the saved configuration checksum, available test-time model/device/runtime snapshot,
+measurement window, workload and measured metrics before appending evidence. Matrix
+points and load stages have separate deterministic IDs (`evaluate:<uuid>:matrix:<i>:stage:<j>`
+or `evaluate:<uuid>:stage:<j>`); `evaluate_run_id` retains only the source UUID.
+Repeated ingestion never updates an existing record. Missing evidence is reported in
+the source Evaluate record's `benchmark_evidence`, not replaced with planning-time facts.
+Simulation terminal persistence uses `simulation.benchmark_evidence.ingest_simulation_task`
+with the same context collector/validator and atomic append-only DAO. Its IDs are
+`simulation:<task-id>`, never `evaluate:` IDs; its Evaluate soft reference remains null.
+Evaluate may archive a measurement with only the checksummed saved deployment configuration
+and valid measurement timestamps. Such records have unknown hardware and
+`provenance.attribution = "saved-configuration"`; they are excluded from predictive matching.
+Planning-time history normalization consumes only verified saved serving facts,
+not a freshly queried deployment topology or the current planning workload.
+
+Metadata enrichment uses bounded, read-only Kubernetes queries and serving-container
+introspection before traffic. Local model config and safetensors headers establish model
+identity/architecture and serialized parameter count; accelerator properties and installed
+runtime metadata establish device memory and version. Pod UID, container image identity
+and restart count must remain stable through completion. Model config, safetensors,
+device properties and installed package versions are independent best-effort probes;
+packed quantized weights do not supply an uncompressed parameter count. Missing
+family/architecture/parameter counts, hardware details or runtime versions remain null,
+not invented defaults, and do not block archival. Public Hugging Face model API/config
+lookups supplement descriptive model fields without loading remote code or weights.
+The API revision and lookup time are retained separately from the serving revision.
+Unpinned public enrichment cannot enable cross-model predictions. Unknown hardware or
+quantization cannot establish predictive compatibility; absent runtime versions lower
+similarity and confidence. Hardware identities remain profile-driven, never inferred
+globally from a vendor key. Evaluate diagnostics live in `evaluate_runs.extra`;
+Simulation snapshots live in the nullable `simulation_tasks.benchmark_evidence` column.
+Permanent `provenance` retains serving snapshots, configuration checksums and enrichment
+sources independently of source-record retention. These optional descriptors and JSON
+provenance require migration `7f2a9c4d1e80`; the earlier Simulation changes use `4e241d008b19`.
+
+For generated random workloads, the configured shared-prefix ratio is zero; generated
+single-turn shared-prefix workloads use system-prompt length divided by total input
+length. `prefill_fraction` records the measured input-token share of input plus output
+tokens, not a fabricated compute-time measurement. Mean/P95 input lengths and mean output
+lengths come from lifecycle token distributions. Concurrency is the closed-loop stage
+setting or measured request lifetimes divided by the measurement duration. Evaluate can
+derive that sum from each native stage's measured count and mean request latency without
+guessing stage labels on unlabeled request rows. Native lifecycle artifacts are read from
+their exact sample directory, loose or in `workspace.tar.zst`, without extraction.
+Native `prompt_tokens` supplies input statistics; client `output_len` remains consistent
+with native throughput even when server usage differs. Request
+rate is measured request throughput. P95 latency is never replaced by the median, and
+error rate is a fraction derived from explicit success/failure counts, not a percentage.
+Simulation uses complete per-request artifacts, exact request/outcome parity and
+measured request-time overlap. Unknown shared-prefix ratios remain null rather than
+defaulting to zero, and earn no similarity credit even against another unknown ratio.
+
+Historical ingestion uses exactly the same normalizer, without querying the current
+cluster to invent historical state. From the configured backend environment, run
+`python -m llm_d_lens.evaluation.benchmark_evidence` for a read-only preview; optionally
+select source records with repeated `--run-id <uuid>`. Add `--apply` to append eligible
+records and save the per-run ingestion report. Add `--enrich` for best-effort public model
+metadata lookup (no live cluster queries); the default normalizer performs no network
+lookup. Missing essential configuration/measurements/artifacts produce
+explicit skip reasons; infrastructure errors produce a nonzero exit. Never run migrations
+or metadata probes as part of this backfill.
+
+Operators may explicitly declare historical hardware with scoped `--run-id` filters
+and all three `--hardware-accelerator`, `--hardware-vram-per-gpu-gib` and
+`--hardware-count-from-configuration` options. `evaluate_runs.extra.benchmark_hardware_metadata`
+and permanent `provenance.hardware_enrichment` record operator source, declaration time,
+configuration checksum, and configured rather than observed card-count semantics.
+Declarations never override serving snapshots or upgrade saved-configuration attribution
+to predictive evidence. No hardware model is hardcoded in the normalizer.
 
 | Column name | SQLAlchemy type | Nullable | PK | FK | Default | Description |
 |---|---|---|---|---|---|---|
@@ -541,19 +612,19 @@ Corresponds to `llm_d_lens.agentic.benchmark_evidence.BenchmarkRecord`. All 6 ne
 | `timestamp` | DateTime(timezone=True) | NOT NULL |  |  | - | `timestamp` |
 | `outcome` | String(16) | NOT NULL |  |  | - | `outcome`; `CHECK IN ('succeeded','failed')` |
 | `model_model_id` | String(255) | NOT NULL |  |  | - | `model.model_id` |
-| `model_family` | String(64) | NOT NULL |  |  | - | `model.family` |
-| `model_architecture` | String(16) | NOT NULL |  |  | - | `model.architecture`; `CHECK IN ('dense','moe')` |
-| `model_parameter_count_b` | Float | NOT NULL |  |  | - | `model.parameter_count_b` |
+| `model_family` | String(64) | NULL |  |  | - | `model.family` |
+| `model_architecture` | String(16) | NULL |  |  | - | `model.architecture`; `CHECK IN ('dense','moe')` |
+| `model_parameter_count_b` | Float | NULL |  |  | - | `model.parameter_count_b` |
 | `model_active_parameter_count_b` | Float | NULL |  |  | - | `model.active_parameter_count_b` (MoE only) |
-| `model_quantization` | String(64) | NOT NULL |  |  | - | `model.quantization` |
-| `model_tokenizer_id` | String(255) | NOT NULL |  |  | - | `model.tokenizer_id` |
+| `model_quantization` | String(64) | NULL |  |  | - | `model.quantization` |
+| `model_tokenizer_id` | String(255) | NULL |  |  | - | `model.tokenizer_id` |
 | `model_revision` | String(128) | NULL |  |  | - | `model.revision` |
-| `hardware_accelerator` | String(64) | NOT NULL |  |  | - | `hardware.accelerator` |
-| `hardware_vram_per_gpu_gib` | Float | NOT NULL |  |  | - | `hardware.vram_per_gpu_gib` |
-| `hardware_gpu_count` | Integer | NOT NULL |  |  | - | `hardware.gpu_count` |
-| `runtime_backend` | String(64) | NOT NULL |  |  | - | `runtime.backend` |
-| `runtime_backend_version` | String(64) | NOT NULL |  |  | - | `runtime.backend_version` |
-| `runtime_accelerator_runtime` | String(64) | NOT NULL |  |  | - | `runtime.accelerator_runtime` |
+| `hardware_accelerator` | String(64) | NULL |  |  | - | `hardware.accelerator` |
+| `hardware_vram_per_gpu_gib` | Float | NULL |  |  | - | `hardware.vram_per_gpu_gib` |
+| `hardware_gpu_count` | Integer | NULL |  |  | - | `hardware.gpu_count` |
+| `runtime_backend` | String(64) | NULL |  |  | - | `runtime.backend` |
+| `runtime_backend_version` | String(64) | NULL |  |  | - | `runtime.backend_version` |
+| `runtime_accelerator_runtime` | String(64) | NULL |  |  | - | `runtime.accelerator_runtime` |
 | `runtime_driver_version` | String(64) | NULL |  |  | - | `runtime.driver_version` |
 | `runtime_container_digest` | String(128) | NULL |  |  | - | `runtime.container_digest` |
 | `runtime_git_revision` | String(64) | NULL |  |  | - | `runtime.git_revision` |
@@ -562,7 +633,7 @@ Corresponds to `llm_d_lens.agentic.benchmark_evidence.BenchmarkRecord`. All 6 ne
 | `workload_mean_output_tokens` | Float | NOT NULL |  |  | - | `workload.mean_output_tokens` |
 | `workload_concurrency` | Float | NOT NULL |  |  | - | `workload.concurrency` |
 | `workload_request_rate` | Float | NOT NULL |  |  | - | `workload.request_rate` |
-| `workload_shared_prefix_ratio` | Float | NOT NULL |  |  | - | `workload.shared_prefix_ratio` |
+| `workload_shared_prefix_ratio` | Float | NULL |  |  | - | `workload.shared_prefix_ratio`; unknown earns no matching credit |
 | `workload_prefill_fraction` | Float | NOT NULL |  |  | - | `workload.prefill_fraction` |
 | `configuration_topology` | String(64) | NOT NULL |  |  | - | `configuration.topology` |
 | `configuration_decode_tp` | Integer | NOT NULL |  |  | - | `configuration.decode_tp` |
@@ -576,6 +647,7 @@ Corresponds to `llm_d_lens.agentic.benchmark_evidence.BenchmarkRecord`. All 6 ne
 | `metrics_throughput_tokens_per_s` | Float | NULL |  |  | - | `metrics.throughput_tokens_per_s` |
 | `metrics_error_rate` | Float | NULL |  |  | - | `metrics.error_rate` |
 | `failure_reason` | Text | NULL |  |  | - | `failure_reason` |
+| `provenance` | JSONVariant | NULL |  |  | - | Attribution, serving snapshot and public-model enrichment sources |
 | `evaluate_run_id` | String(36) | NULL |  | Soft reference, not FK (see §5.3) | - | Parsed from `benchmark_id` |
 
 Indexes: `(timestamp)`, `(model_model_id)`, `(evaluate_run_id)`.
@@ -640,6 +712,20 @@ Corresponds to `llm_d_lens.simulation.models.SimulationTask` (the module itself 
 
 `result.per_request: list[SimulationRequestResult]` contains **one detail row per load-test request** (reaching tens of thousands under high concurrency), so it does not meet the Rule-6 assumption of a "bounded-size snapshot array" — putting the whole thing into one JSONVariant array column would make the row too large, and even reads that only need `summary` would have to move the entire detail payload. Therefore it is handled separately: **stored in an independent file, with only a path reference stored in the database** (`result_per_request_ref`), using the same strategy as "Evaluate harness raw artifacts are not stored in the database, only their paths" (see §9); `task.result.summary` (the aggregate metrics actually read by the frontend) is still stored as a Rule-3 JSONVariant column and is unaffected.
 
+`benchmark_evidence` is a bounded, versioned provenance snapshot persisted before
+benchmark traffic, even when `result` is null. It freezes the deployment source
+configuration/checksum, task workload, target identity and API-enriched serving facts.
+For a Model Service, one positive-weight deployment must be attributable in the selected
+cluster: the live HTTPRoute must reference exactly its InferencePool, whose selector
+scopes serving-pod collection. Route/pool specs and pod identities are rechecked after
+traffic. Multi-target or unverified external routing is not guessed. The Model Service
+group binding is also retained here for queued-task recovery. Reruns clear prior
+measurements and recollect their own context. Terminal persistence commits the source
+result first, then saves append-only evidence and explicit ingestion diagnostics.
+`python -m llm_d_lens.simulation.benchmark_evidence` previews historical eligibility;
+`--task-id <id>` selects tasks and `--apply` writes eligible records/reports. Backfill
+never queries today's cluster to complete an unverified historical snapshot.
+
 The `live_summary` field is a transient progress snapshot of a running task (the code already explicitly excludes it via `model_dump(..., exclude={"live_summary"})` inside `save_task()`), and **is not persisted**; semantically it belongs in the same category as the pure in-memory runtime state in `cluster/bootstrap` and `monitoring` (see §9).
 
 `endpoint_deployment_run_id` / `endpoint_deployment_case_id` are legacy field names kept in the DTO for compatibility with old records (created before the rename to `deployment_batches` / `deployment_jobs`); the persisted column names are correspondingly updated to `endpoint_deployment_batch_id` / `endpoint_deployment_job_id` to match the new table names.
@@ -678,6 +764,7 @@ The `live_summary` field is a transient progress snapshot of a running task (the
 | `prompt_trace_start_seconds` | Float | NOT NULL |  |  | `0` | `prompt.trace.start_seconds` |
 | `prompt_trace_end_seconds` | Float | NULL |  |  | - | `prompt.trace.end_seconds` |
 | `task_dir` | Text | NOT NULL |  |  | - | `task_dir` |
+| `benchmark_evidence` | JSONVariant | NULL |  |  | - | Test-time context, routing/group binding and ingestion diagnostics |
 | `progress_percent` | Float | NOT NULL |  |  | `0` | `progress_percent`; `CHECK (0 <= x <= 100)` |
 | `progress_message` | Text | NOT NULL |  |  | `''` | `progress_message` |
 | `logs` | ARRAY(Text) | NOT NULL |  |  | `'{}'` | `logs` (Rule 4) |
@@ -1104,6 +1191,16 @@ def mark_job_scheduled(self, job_id: str) -> DeploymentJob:
 ```
 
 `with_for_update()` locks this row against other transactions' `SELECT ... FOR UPDATE` / `UPDATE` until the current transaction commits (`SELECT` without locking is unaffected, consistent with `READ COMMITTED` semantics), ensuring that the composite operation of "check `status == 'queued'` and then change it to `'rendering'`" is strictly serialized for the same `job_id`. Use it in scenarios such as "multiple workers competing to claim the same schedulable work item," where duplicate scheduling must be avoided (corresponding to the state-transition entry points of `deployment_jobs` / `simulation_tasks`). Pessimistic locking is used only in such narrow on-demand scenarios, not as the general default (it increases lock waiting; the default remains the optimistic locking in §6.7.4).
+
+Deployment run/job saves and execution lifecycle, metadata, and deletion writes
+also lock the owning run or execution row within their short DAO transaction.
+This serializes scheduler/reconciliation writes and metadata updates without
+holding database locks during Kubernetes calls or monitoring setup. Run and
+execution saves retry only `ConcurrentUpdateError`, for at most three total
+attempts, each in a fresh transaction. Retries re-read database-owned ownership,
+user metadata, and monitoring state; they never repeat deployment side effects.
+Exhausted conflicts and unrelated database failures still propagate. Deployment
+worker failures retain a stack trace in the backend log.
 
 ##### 6.7.6 Differences in the SQLite test backend
 

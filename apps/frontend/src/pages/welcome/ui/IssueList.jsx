@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Clock, Info, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Clock, Info, ShieldAlert, Sparkles } from 'lucide-react';
 import { Badge } from '../../../shared/ui/Badge';
 import { Button } from '../../../shared/ui/Button';
 import { cn } from '../../../shared/lib/cn';
@@ -30,25 +30,30 @@ function IssueActions({ issue, onNavigate, canView, can }) {
     if (!actions.length) return null;
     return (
         <div className="flex flex-wrap gap-2">
-            {actions.map((action) => (
-                <Button
-                    key={`${action.view}:${action.intent}`}
-                    variant={action === issue.primaryAction ? 'secondary' : 'ghost'}
-                    size="xs"
-                    className="w-20 not-dark:border-[#d1d5db] not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:border-[#9ca3af] not-dark:hover:bg-[#e5e7eb] not-dark:hover:text-[#374151]"
-                    onClick={() => onNavigate?.(action.view, {
-                        ...(issue.clusterId ? { clusterId: issue.clusterId } : {}),
-                        ...action.params,
-                    })}
-                >
-                    {actionLabel(action.intent)}
-                </Button>
-            ))}
+            {actions.map((action) => {
+                const primary = action === issue.primaryAction;
+                return (
+                    <Button
+                        key={`${action.view}:${action.intent}`}
+                        variant={primary ? 'secondary' : 'ghost'}
+                        size="xs"
+                        className={primary
+                            ? 'w-20 not-dark:border-[#037ffc] not-dark:bg-[#037ffc] not-dark:text-white not-dark:hover:border-[#036fe0] not-dark:hover:bg-[#036fe0] dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300 dark:hover:bg-sky-500/25'
+                            : 'w-20 not-dark:border-[#037ffc] not-dark:bg-[#037ffc] not-dark:text-white not-dark:hover:border-[#036fe0] not-dark:hover:bg-[#036fe0] dark:border-slate-700 dark:bg-transparent dark:text-slate-300 dark:hover:bg-slate-800/60'}
+                        onClick={() => onNavigate?.(action.view, {
+                            ...(issue.clusterId ? { clusterId: issue.clusterId } : {}),
+                            ...action.params,
+                        })}
+                    >
+                        {actionLabel(action.intent)}
+                    </Button>
+                );
+            })}
         </div>
     );
 }
 
-export function IssueRow({ issue, onNavigate, expandable = false, expanded = false, onToggle }) {
+export function IssueRow({ issue, onNavigate, onAskAI, expandable = false, expanded = false, onToggle }) {
     const { canView, can } = useAuth();
     const SeverityIcon = SEVERITY_ICON[issue.severity] || Info;
     const rows = evidenceRows(issue, expandable && expanded ? 8 : 2);
@@ -125,6 +130,17 @@ export function IssueRow({ issue, onNavigate, expandable = false, expanded = fal
                             ))}
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
+                            {onAskAI && (
+                                <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={() => onAskAI(issue)}
+                                    className="gap-1 text-[11px] font-medium text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-800/60 dark:hover:text-slate-300"
+                                >
+                                    <Sparkles size={11} className="opacity-70" aria-hidden="true" />
+                                    Ask AI
+                                </Button>
+                            )}
                             <IssueActions issue={issue} onNavigate={onNavigate} canView={canView} can={can} />
                             {expandable && (
                                 <Button variant="ghost" size="xs" onClick={() => onToggle?.(issue.id)}>
@@ -143,6 +159,7 @@ export function IssueRow({ issue, onNavigate, expandable = false, expanded = fal
 export function IssueList({
     issues,
     onNavigate,
+    onAskAI,
     emptyTitle = 'All systems operational',
     emptyMessage = 'Health checks and telemetry across monitored clusters are reporting normally. No action is required.',
     expandable = false,
@@ -169,6 +186,7 @@ export function IssueList({
                     key={issue.id}
                     issue={issue}
                     onNavigate={onNavigate}
+                    onAskAI={onAskAI}
                     expandable={expandable}
                     expanded={expandedIds.has(issue.id)}
                     onToggle={onToggle}

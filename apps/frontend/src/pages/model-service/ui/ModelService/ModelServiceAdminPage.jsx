@@ -44,7 +44,7 @@ import {
 import { DataPlaneTopology } from './DataPlaneTopology';
 import { loadCluster, listLensHosts } from '../../../optimization';
 import { ComponentLogViewer, GatewayOperationLogDrawer } from './GatewayOperationLogDrawer';
-import { availableModelProviders, filterServiceFlow, MAX_TRAFFIC_WEIGHT, trafficDistributionError, trafficShare, trafficTotal } from '../../model/modelService';
+import { availableModelProviders, filterServiceFlow, memberIsRoutable, MAX_TRAFFIC_WEIGHT, trafficDistributionError, trafficShare, trafficTotal } from '../../model/modelService';
 import { CARD } from './modelServiceStyles';
 
 
@@ -117,9 +117,16 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                             name: deployments.find((item) => item.executionId === member.executionId)?.name || member.executionId,
                             status: member.status,
                             weight: member.weight,
+                            endpointKind: member.endpointKind,
                             components: member.healthJson?.components || null,
                             poolName: member.poolName,
                             eppRef: member.eppRef,
+                            routable: memberIsRoutable({
+                                status: member.status,
+                                weight: member.weight,
+                                endpointKind: member.endpointKind,
+                                components: member.healthJson?.components || {},
+                            }),
                             namespace: member.targetNamespace,
                             targetService: member.targetService,
                             target: `${member.targetService}.${member.targetNamespace}:${member.targetPort}`,
@@ -216,6 +223,8 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
                 executionId: member.executionId,
                 name: deployments.find((deployment) => deployment.executionId === member.executionId)?.name || member.executionId,
                 status: member.status, weight: String(member.weight),
+                endpointKind: member.endpointKind,
+                components: member.healthJson?.components || null,
             })),
         });
     };
@@ -233,6 +242,8 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
             rows: result.items.map((member) => ({
                 executionId: member.executionId, status: member.status, weight: String(member.weight),
                 name: trafficDraft.rows.find((row) => row.executionId === member.executionId)?.name || member.executionId,
+                endpointKind: trafficDraft.rows.find((row) => row.executionId === member.executionId)?.endpointKind,
+                components: trafficDraft.rows.find((row) => row.executionId === member.executionId)?.components,
             })),
         });
         await load({ quiet: true });
@@ -614,33 +625,31 @@ export function ModelServiceAdminPage({ onToggleMobileNav, onNavigate, initialCl
     ].find((item) => item.message);
 
     return (
-        <ModulePage className="model-services-page" contentClassName="flex h-screen flex-col pb-4">
-            <div className="flex w-full flex-1 flex-col gap-6">
+        <ModulePage className="model-services-page" contentClassName="flex h-[var(--workspace-height)] flex-col pb-4">
+            <div className="flex min-h-0 w-full flex-1 flex-col">
                 <ModuleHeader
                     className="[&>div:first-child]:flex-1"
                     icon={Boxes}
                     title="Model services"
-                    description="Add a public model name and its ready deployment together. The cluster-shared Gateway and per-model HTTPRoute are reconciled automatically; callers use the public model name with an API key."
+                    description="Publish models and manage their serving routes."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <>
+                />
+
+                <section className={cn(CARD, 'model-services-card flex min-h-0 flex-1 flex-col p-4')}>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <SectionLabel className="mb-0 mr-2">Service Flow</SectionLabel>
                             <PermissionGate permission="model-service:member:manage">
                                 <Button variant="sky" size="sm" onClick={openAddModel}>
                                     <Plus size={14} /> Add model
                                 </Button>
                             </PermissionGate>
                             <PermissionGate permission="model-service:gateway:reconcile">
-                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending} className="not-dark:bg-transparent not-dark:text-[#33475b] not-dark:hover:bg-[#e6f6fe]">
+                                <Button variant="secondary" size="sm" onClick={handleSync} isLoading={syncSubmission.pending}>
                                     <Repeat size={14} /> Reconcile
                                 </Button>
                             </PermissionGate>
-                        </>
-                    }
-                />
-
-                <section className={cn(CARD, 'model-services-card flex min-h-0 flex-1 flex-col p-4')}>
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <SectionLabel className="mb-0 text-[#037ffc]">service flow</SectionLabel>
+                        </div>
                         <Panel padding="none" tone="subtle"
                             className="flex w-full flex-wrap items-center gap-1 p-1 shadow-none sm:w-auto"
                             role="search" aria-label="Filter service flow">
@@ -1222,7 +1231,7 @@ export function AddModelForm({ form, onChange, clusters, deployments, models = [
             </div>
             <div>
                 <Label htmlFor="add-model-provider"
-                    help="The deployment that provides inference for this model. Only ready deployments in the selected cluster that have not already been added to a model are listed, regardless of existing provider status or weight.">
+                    help="The deployment that provides inference for this model. Only ready llm-d deployments with a deployment-owned InferencePool and EPP in the selected cluster that have not already been added to a model are listed; plain vLLM deployments cannot back a Model Service.">
                     Provider
                 </Label>
                 <Select id="add-model-provider" value={selectedDeployment?.executionId || ''}
@@ -1237,7 +1246,7 @@ export function AddModelForm({ form, onChange, clusters, deployments, models = [
                 </Select>
                 {form.clusterId && deployments.length === 0 && (
                     <p role="status" className="mt-1 text-xs text-theme-muted">
-                        No available ready deployments in this cluster. Deployments already added to a model are excluded.
+                        No available ready llm-d deployments in this cluster. Plain vLLM deployments and deployments already added to a model are excluded.
                     </p>
                 )}
             </div>
@@ -1324,6 +1333,11 @@ export function TrafficDistributionForm({ draft, onChange, deployments, members 
                         <output className="w-16 shrink-0 text-right text-sm font-semibold text-theme-text"
                             aria-label={`${row.name} configured traffic share`}>{trafficShare(row, total)}</output>
                     </div>
+                    {row.status !== 'disabled' && Number(row.weight) > 0 && !memberIsRoutable(row) && (
+                        <p className="mt-2 text-[11px] leading-5 text-rose-600 dark:text-rose-300">
+                            Unavailable: excluded from routing as 0% effective until it recovers. Its configured weight is retained.
+                        </p>
+                    )}
                 </Panel>
             ))}
             <div>

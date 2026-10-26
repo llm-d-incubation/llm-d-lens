@@ -3,7 +3,7 @@ title: Welcome
 description: Start a Lens Assistant conversation, review current cluster issues and open common operator tasks.
 ---
 
-Welcome is the operator landing page. It combines a greeting, a Lens Assistant
+Welcome is the operator landing page. It opens directly with a Lens Assistant
 prompt starter, current cluster issues and a small set of quick actions. It does
 not duplicate cluster capacity, model-service tables, deployment history or
 token usage; those remain on their owning pages.
@@ -16,27 +16,95 @@ The page always filters issues and actions to the clusters and permissions your
 account can use. If no cluster is accessible and your role can create clusters,
 Welcome offers to open the create-cluster wizard.
 
+## Workspace layout
+
+The sidebar meets the top bar without an outer gap. Each page's title and short
+description appear on the left of the top bar. Page controls, including
+**Create**, **Refresh**, filters and back buttons, stay in the content area
+below it, with balanced side margins. The top bar stays visible while content
+scrolls and always shows
+**Documentation**, **Join Slack**, **Star on GitHub** and the theme switch,
+regardless of the page. The page title is not repeated above the content.
+On smaller screens, the links appear as labeled icon buttons.
+Use the top-right sun or moon button to switch themes; scrollbars, including
+the Model Services canvas, follow the selected theme. The sidebar collapse
+control and account menu remain in the sidebar. When expanded, **Account** occupies
+the left of the bottom row and **Lens Assistant** is a compact icon on the right.
+Hover over Account to see the username. Hover over or keyboard-focus the assistant
+icon for its label; it has a blue background while Lens Assistant is selected.
+When collapsed, their icons are stacked with Account first.
+Administration sections can be expanded or collapsed even while viewing a
+page in another section. Navigating to an administration page opens its section.
+
+Right-side drawers close when you click the dimmed backdrop, unless the form is
+submitting or the drawer explicitly requires an in-panel action.
+
+Benchmark details group the task header, runtime status and section tabs on one
+surface with dividers. Observability similarly groups its service controls and
+the Namespace/GUIs row. **Platform → Model Usage** places **Time range**,
+**Group by**, **User**, **Model**, **Cluster** and **Clear filters** together in
+one row when space permits; controls wrap on narrow screens.
+
+Page actions share compact buttons and icon-only refresh controls:
+
+| Page | Control location |
+| --- | --- |
+| Deployments | Create and refresh at the right of the Deployments list heading |
+| Evaluation | Evaluation evidence, New Task and refresh above the unframed search/filter row; click a status card to filter |
+| Trace Replayer | Matching Tasks, a small matching-count label, New Task and a single refresh control above the unframed search/filter row |
+| Storage | New storage volume and refresh at the right of Storage volumes, above the shared filters and list/detail area |
+| Model cache | Download model and refresh at the right of Cached models; the pagination summary and controls stay at the bottom of the panel, below the scrolling model list |
+| Clusters | Target cluster and navigation sit above the Clusters list; status and edit remain in the list, and the description is available from the selection's help icon |
+| Observability | Service tabs, context, target cluster and refresh share one desktop toolbar |
+
+Controls wrap on narrow screens instead of clipping.
+
+Model cache's **Showing 1–1 of 1 cached models** summarizes the current page's
+range and the filtered total. The list fills the available desktop panel height;
+its pagination footer remains visible even when the model cards scroll.
+Synchronization and back controls remain beside the summary cards.
+
+Storage uses one panel with a divider between its volume list and details,
+rather than a separate sidebar. The button beside **Storage volumes** collapses
+or expands the list; details use the full panel width while it is collapsed,
+and the selected volume and filters are retained. Pagination appears only when there
+is more than one page. In Clusters, **Target cluster** is a muted label for the
+selection below it.
+
+The Evaluation Tasks card also counts **multi-configuration comparisons**:
+recorded evaluation tasks that compare two or more configurations. Zero means
+there are no such tasks, not an error; this count covers all recorded runs,
+independently of the list filters.
+
+**My services** keeps a full-width Gateway connections panel with narrower
+connection cards inside. **Users** and **Roles** place search and filters
+directly inside the main panel without a second bordered toolbar.
+
 ## Join Slack
 
-Click **Join Slack** in the Welcome header to open the llm-d Slack
+Click **Join Slack** in the global top bar to open the llm-d Slack
 workspace in a new tab.
 
 ## Open the documentation
 
-Click **Documentation** in the Welcome header to open the Lens documentation
+Click **Documentation** in the global top bar to open the Lens documentation
 in a new tab.
 
 ## Star the project
 
-Click **Star on GitHub** in the Welcome header. Lens opens GitHub sign-in and
+Click **Star on GitHub** in the global top bar. Lens opens GitHub sign-in and
 returns to the `llm-d-incubation/llm-d-lens` repository after you sign in. Click
 **Star** on GitHub to finish.
 
 ## Ask Lens Assistant
 
-1. Type a message in **Ask Lens Assistant**.
+Welcome uses a compact fleet-status card so that issues and the assistant remain
+easy to scan. The assistant's **Message** field has a visible border and can be
+resized vertically.
+
+1. Type a message in the **Message** field under **Ask Lens Assistant**.
 2. Choose an AI provider in the lower-left of the composer.
-3. Click **Send**, or press `Ctrl+Enter` / `Cmd+Enter`.
+3. Click **Send**, or press `Enter`. Use `Shift+Enter` for a new line.
 
 Sending opens Lens Assistant, selects the provider you chose, and submits the
 message automatically once the provider is ready. Tool calls keep the assistant's

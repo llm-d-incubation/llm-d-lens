@@ -90,7 +90,7 @@ Organized by runtime layer, with actual locations and hardcoded values forming t
 | `llm_d_lens/evaluation/router.py:2674-2702` | `driver_profiles = {"gpu.intel.com": "intel-xpu"}`; infer profile from deviceClassName extracted by regex from renderedManifest; fallback `"intel-xpu"` |
 | `llm_d_lens/evaluation/router.py:2972, 3185` | Pass to benchmark chart: `--set accelerator.profile=intel-xpu` |
 | `llm_d_lens/evaluation/router.py:2634-2674` | Adjust smoke workload by accelerator profile |
-| `src/components/OptimizationEvaluateWorkspaceV2.jsx:708` | Hardcoded frontend message "For this Intel XPU cluster the resolved runtime profile is intel-xpu." |
+| Retired standalone deployment/evaluation workspace | The hardcoded Intel XPU profile message was removed with the page. |
 
 ### 2.6 Configuration/planning: capability and guide validation
 
@@ -130,7 +130,7 @@ Organized by runtime layer, with actual locations and hardcoded values forming t
 | `src/components/ClusterMonitoringStack/AcceleratorObservabilityPanel.jsx` | default `activeType='intel_gpu'`, default namespace `intel-xpumd` |
 | `src/components/ClusterMonitoringStack/acceleratorObservabilityBackend.js` | default `accelerator || 'intel_gpu'` |
 | `src/components/OptimizationClusterOverview.jsx:71, 663` | check `components.intelDevicePlugin` |
-| `src/components/OptimizationEvaluateWorkspaceV2.jsx:708` | Intel XPU message |
+| Retired standalone deployment/evaluation workspace | Intel XPU message removed with the page |
 | `src/components/benchmark-results/guideProfiles.js`, `ResourceExplorer.jsx` | Chart titles "GPU / XPU Utilization", `gpu_utilization_percent` and other metric names |
 
 ---
@@ -526,7 +526,7 @@ This table is the core deliverable: integration point → current location → h
 | 39 | UI | Vendor tabs | `CreateClusterWizard.jsx:52` | `ACCELERATOR_VENDORS=[intel]` | `all_profiles()` |
 | 40 | UI | Accelerator-panel defaults | `AcceleratorObservabilityPanel.jsx:46` | `'intel_gpu'`/`intel-xpumd` | profile `id`/`ui` |
 | 41 | UI | Device-plugin card | `OptimizationClusterOverview.jsx:71` | `intelDevicePlugin` | resolver component key |
-| 42 | UI | Evaluation profile label | `OptimizationEvaluateWorkspaceV2.jsx:708` | hardcoded intel-xpu | `benchmark_profile` |
+| 42 | UI | Evaluation profile label | Retired standalone workspace | hardcoded intel-xpu | Removed with the page |
 | 43 | UI | Chart metric titles | `guideProfiles.js`, `ResourceExplorer.jsx` | "GPU / XPU", `gpu_utilization_percent` | `ui.labels` + `telemetry.*_metrics` key |
 | 44 | Gateway | `KNOWN_GOOD` | `server/deploy.ts:48` | `accelerator: 'xpu'` | resolver + `accelerator_keys` |
 | 45 | Gateway | planning device class | `server/guidePlanning.ts:472` | `/gpu\|gaudi\|xpu\|tpu/` | resolver via `/api/v1/hardware/capabilities` |

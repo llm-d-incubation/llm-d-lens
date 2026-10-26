@@ -56,7 +56,8 @@ def test_registered_guide_candidate_maps_to_deployable_configuration(provider_re
         assert configuration.content["guideVariant"] == "native/cpu"
 
 
-def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval():
+@pytest.mark.parametrize("max_model_len", [32768, 40960, 262144, 1048576])
+def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval(max_model_len):
     request = StandardKubernetesServiceRequest(
         model="Qwen/Qwen3-8B",
         deployment_name="agentic",
@@ -64,7 +65,7 @@ def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval(
         replicas=1,
         tensor_parallel_size=1,
         storage_volume_id="storage-model-cache",
-        max_model_len=32768,
+        max_model_len=max_model_len,
         gpu_memory_utilization=0.72,
         max_num_seqs=64,
         max_num_batched_tokens=4096,
@@ -85,9 +86,9 @@ def test_runtime_vllm_parameters_override_candidate_placeholders_after_approval(
 
     configuration = build_agentic_configuration(request, candidate)
 
-    assert configuration.content["decode"]["maxModelLen"] == 32768
+    assert configuration.content["decode"]["maxModelLen"] == max_model_len
     assert configuration.content["decode"]["gpuMemoryUtilization"] == 0.72
-    assert configuration.content["prefill"]["maxModelLen"] == 32768
+    assert configuration.content["prefill"]["maxModelLen"] == max_model_len
     parameters = {item["name"]: item["value"] for item in configuration.content["customParameters"]}
     assert parameters["gpu-memory-utilization"] == "0.72"
     assert (

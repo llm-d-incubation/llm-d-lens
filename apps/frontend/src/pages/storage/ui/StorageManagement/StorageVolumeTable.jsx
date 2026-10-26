@@ -1,10 +1,8 @@
 import { Database, HardDrive, Info, Loader2, Network, Trash2 } from 'lucide-react';
 import { PermissionGate } from '../../../auth';
 import {
-    capacityLabel,
     deletionBlockedReason,
     effectiveStorageStatus,
-    isCapacityDeclaredOnly,
     kindLabel,
     nodeDriftMessage,
     purposeLabel,
@@ -24,27 +22,6 @@ const KIND_ICONS = {
 function KindIcon({ kind }) {
     const Icon = KIND_ICONS[kind] || HardDrive;
     return <Icon size={13} className="shrink-0 text-slate-500" aria-hidden="true" />;
-}
-
-function CapacityBadge({ item }) {
-    return (
-        <span className="storage-capacity-tag inline-flex items-center gap-1 rounded-full border border-slate-700/60 bg-slate-800/40 px-1.5 py-0.5 text-[10px] text-slate-300">
-            {capacityLabel(item)}
-            {isCapacityDeclaredOnly(item) && (
-                <span
-                    className="inline-flex shrink-0 items-center"
-                    title="Declared capacity, not enforced by the backend"
-                >
-                    <Info
-                        size={12}
-                        className="text-slate-500"
-                        aria-hidden="true"
-                    />
-                    <span className="sr-only">Declared capacity, not enforced by the backend</span>
-                </span>
-            )}
-        </span>
-    );
 }
 
 function InUseBadge({ item }) {
@@ -77,7 +54,6 @@ function PurposeBadges({ item, purposes, inline = false }) {
     if (!item && !hasPurposes) return null;
     return (
         <div className={`flex flex-wrap items-center gap-1 ${inline ? 'mt-1.5' : 'mt-1'}`}>
-            {item && <CapacityBadge item={item} />}
             {hasPurposes && purposes.map((purpose) => (
                 <span
                     key={purpose}
@@ -148,15 +124,15 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
     return (
         <>
             {/* Desktop table */}
-            <div className="hidden rounded-xl border border-slate-800/60 lg:block">
+            <div className="hidden overflow-hidden rounded-xl border border-slate-800/60 lg:block">
                 <table className="w-full table-fixed border-collapse text-left text-xs">
                     <thead className="bg-slate-950/60 text-slate-400">
                         <tr>
-                            <th scope="col" className="w-auto px-4 py-3 text-[10px] font-semibold uppercase tracking-wider">Name</th>
-                            <th scope="col" className="w-16 px-4 py-3 text-right text-[10px] font-semibold uppercase tracking-wider">Actions</th>
+                            <th scope="col" className="w-auto px-4 py-2 text-[9px] font-medium">Name</th>
+                            <th scope="col" className="w-16 px-3 py-2 text-right text-[9px] font-medium">Actions</th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/70">
+                    <tbody className="storage-volume-rows divide-y divide-slate-800/70">
                         {items.map((item) => {
                             const busy = mutatingId === item.id;
                             const claims = (resourceStatuses[item.id] || {}).persistentVolumeClaims || [];
@@ -173,7 +149,7 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                                         isSelected ? 'bg-cyan-500/10 hover:bg-cyan-500/15' : 'hover:bg-slate-800/40'
                                     }`}
                                 >
-                                    <td className="min-w-0 px-4 py-3">
+                                    <td className={`min-w-0 border-l-2 px-4 py-3.5 ${isSelected ? 'border-l-[#037ffc]' : 'border-l-transparent'}`}>
                                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                                             <StatusDot
                                                 status={effectiveStorageStatus(item, pvc, pv)}
@@ -181,7 +157,7 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                                             />
                                             <KindIcon kind={item.kind} />
                                             <span
-                                                className="min-w-0 truncate font-semibold text-slate-100"
+                                                className="min-w-0 truncate text-sm font-semibold text-slate-100"
                                                 title={`${volumeTitle(item)} (${kindLabel(item.kind)})`}
                                             >
                                                 {volumeTitle(item)}
@@ -194,7 +170,7 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                                             </div>
                                         )}
                                     </td>
-                                    <td className="px-4 py-3">
+                                    <td className="border-l-2 border-l-transparent px-3 py-3.5">
                                         <RowActions item={item} busy={busy} onDelete={onDelete} />
                                     </td>
                                 </tr>
@@ -212,7 +188,7 @@ export function StorageVolumeTable({ items, resourceStatuses = {}, mutatingId, c
                     const pvc = claims.length ? claims[0] : null;
                     const pv = pvc ? pvc.persistentVolume : null;
                     return (
-                        <div key={item.id} aria-busy={busy} className="rounded-xl border border-slate-800/60 bg-slate-950/40 p-3">
+                        <div key={item.id} aria-busy={busy} className={`rounded-xl border bg-slate-950/40 p-3 ${item.id === selectedId ? 'border-[#037ffc]' : 'border-slate-800/60'}`}>
                             <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-2">

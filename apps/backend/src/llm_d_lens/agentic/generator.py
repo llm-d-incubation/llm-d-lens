@@ -80,7 +80,6 @@ logger = logging.getLogger(__name__)
 
 
 ProviderRef = Literal[
-    "baseline-vllm",
     "optimized-baseline",
     "pd-disaggregation",
     "tiered-prefix-cache",
@@ -269,6 +268,8 @@ class AICandidateGenerator:
         on_progress: ProgressCallback | None = None,
     ) -> CandidateGenerationResult:
         try:
+            operator_prompt = facts.operator_preference if operator_prompt is None else operator_prompt
+            facts = replace(facts, operator_preference=operator_prompt)
             facts = self._apply_preference_constraints(facts, operator_prompt)
             available_tools = await self.tools.available_tools()
             available_names = {tool["name"] for tool in available_tools}
@@ -293,16 +294,20 @@ class AICandidateGenerator:
                     "role": "user",
                     "content": json.dumps(
                         {
+                            "operator_preference": operator_prompt,
                             **public_rag_context(facts),
                             "explicit_workload": public_rag_workload(facts),
                             "cluster_id": cluster_id,
                             "model": model,
-                            "operator_preference": operator_prompt or "",
                             "deployment_intent": intent,
                         }
                     ),
                 }
             ]
+            messages[0]["content"] = (
+                "Operator preference (explicit requirements constrain candidates; soft preferences guide ranking):\n"
+                f"{operator_prompt or '(not provided)'}\n\nPlanning context (JSON):\n" + messages[0]["content"]
+            )
             provider_tools = self._provider_tools(available_tools)
             total_calls = 0
             remaining_result_bytes = _MAX_TOOL_RESULT_BYTES
@@ -424,7 +429,7 @@ class AICandidateGenerator:
                         mode = anchor.get("topologyMode")
                         try:
                             topology = {
-                                "provider_ref": "pd-disaggregation" if mode == "disagg" else "baseline-vllm",
+                                "provider_ref": "pd-disaggregation" if mode == "disagg" else "optimized-baseline",
                                 "replicas": anchor["decodeReplicas"],
                                 "tensor_parallel_size": anchor["decodeTp"],
                                 "rationale": "Validated relaxed AIC anchor; original latency SLO remains unverified.",
@@ -932,20 +937,25 @@ class AICandidateGenerator:
             "duration_ms": round((time.monotonic() - started) * 1_000),
             "status": status,
         }
-        if name in {"search_candidates", _RELAXED_AIC_TOOL}:
-            trace["arguments"] = json.loads(arguments_json)
-            try:
-                trace["result"] = json.loads(result_text)
-            except json.JSONDecodeError:
-                trace["result"] = result_text
+        trace["arguments"] = json.loads(arguments_json)
+        try:
+            trace["result"] = json.loads(result_text)
+        except json.JSONDecodeError:
+            trace["result"] = result_text
         return trace
 
     @staticmethod
     def _system_prompt() -> str:
         return (
             "You are Prism's candidate generator. Use the provided tools to gather evidence, then submit candidates.\n"
+            "Priority order: platform validity and hardware constraints; explicit operator requirements; "
+            "operator soft preferences; performance evidence and candidate diversity. "
+            "Never relax an explicit operator requirement to satisfy SLO, AIC, or diversity guidance. "
+            "Treat requirements such as single GPU, TP=1, one replica, or no prefill/decode separation as "
+            "candidate eligibility constraints when explicitly requested. "
+            "Soft preferences only rank eligible options.\n"
             "Generate 1 to 10 materially useful deployment candidates using only these provider_ref values: "
-            "baseline-vllm, optimized-baseline, pd-disaggregation, tiered-prefix-cache, "
+            "optimized-baseline, pd-disaggregation, tiered-prefix-cache, "
             "precise-prefix-cache-routing.\n"
             "Provider semantics:\n"
             f"{provider_guidance()}\n"
@@ -988,10 +998,12 @@ class AICandidateGenerator:
             "Keep explicit workload constraints and metric semantics. Such plans cannot be deployed.\n"
             "If operator_preference states numeric ISL, OSL, TTFT or TPOT limits, prefer those values over the "
             "corresponding deployment_intent fields when requesting AIC predictions and evaluating SLOs.\n"
-            "3. Cluster resource constraints are hard constraints; Prefer AIC results meeting the original SLOs. "
+            "3. Cluster resource constraints and explicit operator requirements are hard constraints; "
+            "Prefer AIC results meeting the original SLOs within those constraints. "
             "If the initial search is empty, use the relaxed anchor to scale replicas first (prefill for TTFT, "
             "decode for TPOT "
-            "in PD), then supported TP. Keep the mode, do not shrink below the anchor or exceed GPU/VRAM limits. "
+            "in PD), then supported TP, only when the operator's explicit requirements permit scaling. "
+            "Keep the mode, do not shrink below the anchor or exceed GPU/VRAM limits. "
             "Cite the anchor; scaling is unverified, not an AIC prediction or SLO guarantee. No anchor means no "
             "AIC-grounded estimate.\n"
             "4. After hard constraints, use operator_preference as the primary recommendation criterion. Use valid AIC "
@@ -1008,10 +1020,12 @@ class AICandidateGenerator:
             "explicit SLO, complete AIC prediction, or cited public TTFT/TPOT configuration evidence supports "
             "additional resources; operator_preference may select a "
             "provider but does not justify additional resources by itself. Relaxed-anchor scaling remains unverified.\n"
-            "7. Before submitting, enumerate feasible provider choices. Produce materially diverse "
+            "7. Before submitting, enumerate provider choices that satisfy explicit operator requirements. "
+            "Produce materially diverse "
             "candidates: include at "
             "least one candidate for each feasible provider_ref. Omit a provider only when a reported hard resource "
-            "constraint or explicit SLO makes it infeasible; avoid token diversity.\n"
+            "constraint, explicit operator requirement, or explicit SLO makes it infeasible. "
+            "Diversity never requires an operator-forbidden provider or topology; avoid token diversity.\n"
             "8. required_gpus is replicas * tensor_parallel_size for single-role candidates. For PD it is the sum of "
             "prefill_replicas * prefill_tensor_parallel_size and replicas * tensor_parallel_size; replicas and "
             "tensor_parallel_size are the decode-role fields, so never return separate decode_* fields.\n"

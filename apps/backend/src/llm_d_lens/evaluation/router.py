@@ -56,6 +56,13 @@ from llm_d_lens.evaluation.api_models import (
     EvaluationWorkflowResponse,
     evaluation_problem_responses,
 )
+from llm_d_lens.evaluation.benchmark_evidence import (
+    capture_benchmark_context,
+    ingest_evaluate_run,
+    read_lifecycle_artifact,
+    summarize_lifecycle,
+    verify_benchmark_context,
+)
 from llm_d_lens.evaluation.comparison import (
     matrix_comparison as _matrix_comparison,
 )
@@ -1959,6 +1966,10 @@ def _save(record: dict) -> None:
     payload = dict(record, id=record_id)
     if kind == "benchmark":
         _benchmark_records.save(EvaluateRunRecord.model_validate(payload))
+        if record.get("status") in _TERMINAL_EVALUATE_STATUSES:
+            report = ingest_evaluate_run(payload)
+            record["benchmark_evidence"] = report
+            _benchmark_records.save(EvaluateRunRecord.model_validate(dict(record, id=record_id)))
         return
     if kind == "workflow":
         _workflow_records.save(EvaluateWorkflowRecord.model_validate(payload))
@@ -2199,6 +2210,7 @@ def _standardized_lifecycle_payload(report: dict) -> dict:
 
 
 def _metric_summary(result_root: Path, pattern: str = "summary_lifecycle_metrics.json") -> dict:
+    """Read one native loose/archived lifecycle report before falling back to standardized YAML."""
     summaries = list(result_root.rglob(pattern))
     if summaries:
         summary_file = max(summaries, key=lambda item: item.stat().st_mtime)
@@ -2217,91 +2229,17 @@ def _metric_summary(result_root: Path, pattern: str = "summary_lifecycle_metrics
         )
         payload = {}
         for summary_file in reports:
-            payload = _standardized_lifecycle_payload(yaml.safe_load(summary_file.read_text(encoding="utf-8")) or {})
+            native = read_lifecycle_artifact(summary_file, pattern)
+            payload = (
+                json.loads(native)
+                if native is not None
+                else _standardized_lifecycle_payload(yaml.safe_load(summary_file.read_text(encoding="utf-8")) or {})
+            )
             if payload:
                 break
         if not payload:
             return {}
-    successes = payload.get("successes") or {}
-    failures = payload.get("failures") or {}
-    load = payload.get("load_summary") or {}
-    latency = successes.get("latency") or {}
-    throughput = successes.get("throughput") or {}
-    token_lengths = {
-        name: {
-            key: value
-            for key, source in {
-                "mean": "mean",
-                "min": "min",
-                "max": "max",
-                "p50": "median",
-                "p75": "p75",
-                "p90": "p90",
-                "p95": "p95",
-                "p99": "p99",
-            }.items()
-            if isinstance((value := (successes.get(source_name) or {}).get(source)), (int, float))
-        }
-        for name, source_name in {"input": "prompt_len", "output": "output_len"}.items()
-    }
-    success_count = successes.get("count") if isinstance(successes.get("count"), int) else 0
-    failure_count = failures.get("count") if isinstance(failures.get("count"), int) else 0
-    total_count = success_count + failure_count
-    distributions = {
-        name: _latency_distribution(latency.get(source) or {})
-        for name, source in {
-            "request_latency": "request_latency",
-            "ttft": "time_to_first_token",
-            "itl": "inter_token_latency",
-            "tpot": "time_per_output_token",
-            "ntpot": "normalized_time_per_output_token",
-        }.items()
-    }
-    return {
-        "throughput_tps": throughput.get("output_tokens_per_sec"),
-        "input_throughput_tps": throughput.get("input_tokens_per_sec"),
-        "total_throughput_tps": throughput.get("total_tokens_per_sec"),
-        "throughput_rps": throughput.get("requests_per_sec"),
-        "ttft_ms": distributions["ttft"].get("p50_ms"),
-        "tpot_ms": distributions["tpot"].get("p50_ms"),
-        "itl_ms": distributions["itl"].get("p50_ms"),
-        "ntpot_ms": distributions["ntpot"].get("p50_ms"),
-        "request_latency_ms": distributions["request_latency"].get("p50_ms"),
-        "latency_distributions": distributions,
-        "token_distributions": token_lengths,
-        "total_input_tokens": (successes.get("prompt_tokens") or {}).get("total"),
-        "total_output_tokens": (successes.get("output_tokens") or {}).get("total"),
-        "success_count": success_count,
-        "failure_count": failure_count,
-        "request_count": total_count,
-        "success_rate": round(success_count / total_count * 100, 3) if total_count else None,
-        "error_rate": round(failure_count / total_count * 100, 3) if total_count else None,
-        "scheduled_request_count": load.get("count"),
-        "schedule_delay": _latency_distribution(load.get("schedule_delay") or {}),
-        "benchmark_time_seconds": payload.get("benchmark_time_seconds"),
-        "summary_path": str(summary_file),
-    }
-
-
-def _seconds_to_ms(value):
-    return round(float(value) * 1000, 3) if isinstance(value, (int, float)) else None
-
-
-def _latency_distribution(values: dict) -> dict:
-    return {
-        key: converted
-        for key, source in {
-            "mean_ms": "mean",
-            "min_ms": "min",
-            "max_ms": "max",
-            "p50_ms": "median",
-            "p75_ms": "p75",
-            "p90_ms": "p90",
-            "p95_ms": "p95",
-            "p99_ms": "p99",
-        }.items()
-        if (converted := _seconds_to_ms(values.get(source))) is not None
-    }
+    return summarize_lifecycle(payload, summary_file)
 
 
 def _backfill_metric_summary(record: dict) -> bool:
@@ -3244,6 +3182,8 @@ async def _execute_owned(run_id: str) -> None:
         selected_hardware = resolve_by_accelerator_key(accelerator_profile) if accelerator_profile else None
         if selected_hardware:
             run["hardware_profile"] = selected_hardware.to_dict()
+        await capture_benchmark_context(run)
+        _save(run)
         observability_started_at = _now()
 
         def _base_command(workspace: Path) -> list[str]:
@@ -3892,6 +3832,7 @@ async def _execute_owned(run_id: str) -> None:
             except Exception as snapshot_error:
                 run["resource_snapshot_error"] = str(snapshot_error) or "Resource snapshot timed out"
         _enrich_benchmark_result(run)
+        await verify_benchmark_context(run)
         _save(run)
         if benchmark_namespace and environment:
             await _cleanup_benchmark_storage(benchmark_namespace, benchmark_volume, environment)

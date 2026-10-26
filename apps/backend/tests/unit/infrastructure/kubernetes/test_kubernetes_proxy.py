@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.request import getproxies_environment, proxy_bypass_environment
 
 import pytest
 
@@ -66,6 +67,39 @@ def test_ensure_bypass_adds_exact_host_when_proxy_configured(monkeypatch):
     assert ensure_api_server_proxy_bypass("10.112.110.140") is False
 
 
+@pytest.mark.parametrize(
+    ("uppercase", "lowercase", "expected"),
+    [
+        ("localhost,127.0.0.1", None, "localhost,127.0.0.1,10.112.110.140"),
+        (None, "localhost,127.0.0.1", "localhost,127.0.0.1,10.112.110.140"),
+        (
+            " localhost,127.0.0.1,localhost, ",
+            "127.0.0.1,.example.com",
+            "localhost,127.0.0.1,.example.com,10.112.110.140",
+        ),
+        (
+            "localhost,10.112.110.140",
+            "127.0.0.1,10.112.110.140",
+            "localhost,10.112.110.140,127.0.0.1",
+        ),
+    ],
+)
+def test_ensure_bypass_merges_case_variants_and_preserves_loopback(monkeypatch, uppercase, lowercase, expected):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:912")
+    for name, value in (("NO_PROXY", uppercase), ("no_proxy", lowercase)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    assert ensure_api_server_proxy_bypass("10.112.110.140") is True
+    assert os.environ["NO_PROXY"] == os.environ["no_proxy"] == expected
+    proxies = getproxies_environment()
+    for host in ("localhost", "127.0.0.1", "10.112.110.140"):
+        assert proxy_bypass_environment(host, proxies)
+    assert ensure_api_server_proxy_bypass("10.112.110.140") is False
+
+
 @pytest.mark.parametrize("host", [None, ""])
 def test_ensure_bypass_noop_without_host(monkeypatch, host):
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:912")
@@ -95,3 +129,17 @@ async def test_load_configuration_bypasses_kubeconfig_api_server(tmp_path, monke
     assert context["name"] == "smc-16"
     assert "10.112.110.140" in os.environ["NO_PROXY"].split(",")
     assert "10.112.110.140" in os.environ["no_proxy"].split(",")
+
+
+@pytest.mark.asyncio
+async def test_load_configuration_preserves_uppercase_only_loopback_bypass(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:912")
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    monkeypatch.delenv("no_proxy", raising=False)
+    kubeconfig = tmp_path / "config"
+    kubeconfig.write_text(_KUBECONFIG)
+
+    await load_configuration(str(kubeconfig))
+
+    assert os.environ["NO_PROXY"] == os.environ["no_proxy"] == "localhost,127.0.0.1,10.112.110.140"
+    assert proxy_bypass_environment("127.0.0.1", getproxies_environment())

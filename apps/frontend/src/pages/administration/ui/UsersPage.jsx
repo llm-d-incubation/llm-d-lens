@@ -95,40 +95,24 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
                     title="Users"
                     description="Manage Lens accounts, their status, and passwords."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <>
-                            <PermissionGate permission="user:user:create">
-                                <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
-                                    <Plus size={14} /> Add user
-                                </Button>
-                            </PermissionGate>
-                        </>
-                    }
                 />
 
                 <AdminAlert tone="success">{notice}</AdminAlert>
                 {error && users.length > 0 && <AdminAlert>{error}</AdminAlert>}
 
-                <AsyncState
-                    loading={loading}
-                    error={users.length === 0 ? error : null}
-                    empty={users.length === 0}
-                    onRetry={load}
-                    emptyContent={
-                        <EmptyState
-                            icon={<Users size={22} />}
-                            title="No users yet"
-                            message="Create a local account, or connect an external identity provider for directory users."
-                            action={<PermissionGate permission="user:user:create"><Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}><Plus size={14} /> Add user</Button></PermissionGate>}
-                        />
-                    }
-                >
                     <AdminPanel
                         icon={Users}
                         title="Users"
                         count={filtered.length}
+                        actions={
+                            <PermissionGate permission="user:user:create">
+                                <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
+                                    <Plus size={14} /> Add user
+                                </Button>
+                            </PermissionGate>
+                        }
                         toolbar={
-                            <AdminToolbar>
+                            <AdminToolbar plain>
                                 <AdminSearch value={query} onChange={setQuery} placeholder="Search username, name, or email..." />
                                 <div className="w-40 shrink-0">
                                     <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Status filter">
@@ -142,6 +126,9 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
                             </AdminToolbar>
                         }
                     >
+                        <AsyncState loading={loading} error={users.length === 0 ? error : null} empty={users.length === 0} onRetry={load}
+                            emptyContent={<EmptyState icon={<Users size={22} />} title="No users yet"
+                                message="Create a local account, or connect an external identity provider for directory users." />}>
                         {filtered.length === 0 ? (
                             <EmptyState title="No matching users" message="Adjust the filters to see more." />
                         ) : (
@@ -243,8 +230,8 @@ export default function UsersPage({ onToggleMobileNav, initialUserId = '' }) {
                                 </table>
                             </div>
                         )}
+                        </AsyncState>
                     </AdminPanel>
-                </AsyncState>
             </div>
 
             {dialog?.mode === 'add' && (

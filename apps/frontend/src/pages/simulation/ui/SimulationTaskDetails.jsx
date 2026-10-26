@@ -25,6 +25,7 @@ import {
     Trash2,
 } from 'lucide-react';
 import { Button, EmptyState, Modal, Panel, Spinner, StatusChip } from '../../../shared/ui';
+import { PageHeading } from '../../../shared/ui/PageHeader';
 import { confirmDelete } from '../../../shared/ui/confirmDelete';
 import { downloadFile } from '../../../shared/lib/download';
 import { formatTimestamp } from '../../../shared/lib/formatTimestamp';
@@ -427,17 +428,15 @@ export default function SimulationTaskDetails({ onNavigate }) {
         : [];
 
     return (
-        <section className="simulation-details-page mx-auto flex w-full min-w-0 max-w-[1560px] flex-col gap-4 px-4 py-5 text-slate-100 sm:px-6">
+        <section className="simulation-details-page mx-auto flex w-full min-w-0 max-w-[1560px] flex-col gap-4 px-4 py-6 text-slate-100 sm:px-6 lg:px-12 lg:py-10">
+            <PageHeading title={task?.name || routeTaskId || 'Simulation task details'} subtitle={task?.description || 'Simulation'} />
             <header className="grid gap-4 border-b border-slate-800/70 pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                 <div className="flex min-w-0 flex-1 items-start gap-3">
                     <button title="Back to simulations" onClick={() => onNavigate('optimization-simulate')} className="simulation-back-button inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-500 hover:text-cyan-200"><ArrowLeft className="h-4 w-4" /></button>
                     <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#037ffc] dark:text-cyan-400">Simulation</p>
-                        <h1 className="mt-1 break-words text-2xl font-semibold tracking-tight">{task?.name || routeTaskId || 'Simulation task details'}</h1>
-                        {task?.description && <p className="mt-2 text-sm text-slate-400">{task.description}</p>}
                         {task && (
                             <>
-                                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                                <div className="flex flex-wrap items-center gap-3 text-xs">
                                     <StatusChip status={statusForChip} label={displayName(taskStatus)} pulse={taskStatus === 'running'} />
                                 </div>
                                 <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500">

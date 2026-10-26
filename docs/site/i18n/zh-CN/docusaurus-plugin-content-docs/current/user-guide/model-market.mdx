@@ -1,25 +1,34 @@
 ---
-title: 模型市场
+title: 模型目录
 description: 选择模型，创建手动或 AI 辅助部署。
 ---
 
-打开 **Model Market（模型市场）**，选择模型并部署到集群。
+打开 **Model Catalog（模型目录）**，选择模型并部署到集群。
 首次使用建议选择 **Manual（手动）**模式。
 
-使用分类上方的 **Search models（搜索模型）**，按模型名称、发布者、仓库、模型类型、分类或精度筛选。
+使用分类标签旁的紧凑 **Search models（搜索模型）**输入框，按模型名称、发布者、仓库、模型类型、分类或精度筛选。
 搜索不区分大小写，并与所选分类共同生效；输入多个词时，每个词都必须匹配。
 模型数量会随输入更新。点击 **Clear filters（清空筛选）**可同时重置搜索和分类。
 
 ## 选择部署模式
+
+在 **One-click deployment** 中，**Model Catalog** 返回按钮位于部署配置上方的内容区，
+不再放在全局顶栏中。
 
 | 模式 | 适用目标 |
 | --- | --- |
 | **Manual（手动）** | 选择 llm-d Guide 模板、配置资源或检查生成的 YAML |
 | **Agentic（智能体，实验性）** | 让 Lens 根据负载和性能目标推荐配置 |
 
+部署设置会使用模型卡片的 **Context（上下文）**元数据作为初始最大上下文长度，
+Agentic 推荐也使用该值。例如，Qwen3-0.6B 使用 `40960`，而不是 `4096`。
+仅当卡片未提供上下文时，才使用 `4096` 默认值。Standard 和 Agentic 请求接受
+`256` 到 `1048576` 个 token，不会静默缩短卡片值；资源和模型兼容性检查仍然生效。
+已有计划和部署不会被自动修改。
+
 ## 创建手动部署
 
-1. 打开 **Model Market**，用 **Model categories（模型分类）**筛选，点击模型卡片。
+1. 打开 **Model Catalog**，用 **Model categories（模型分类）**筛选，点击模型卡片。
 2. 在 **One-click deployment（一键部署）**中填写 **Deployment name（部署名称）**，选择就绪的 **Cluster（集群）**。
 3. 选择包含该模型的 **Model cache storage（模型缓存存储）**，等待显示 **This model is ready in the selected cache.（模型已在所选缓存中就绪）**。**Manual** 模式下模型缓存存储是可选的。
 4. **Mode（模式）**保持 **Manual**，点击 **Configure deployment（配置部署）**。检查预填的模型和部署设置；需要修改时点击 **Edit setup（编辑设置）**。
@@ -29,6 +38,9 @@ description: 选择模型，创建手动或 AI 辅助部署。
 8. 点击 **Generate YAML（生成 YAML）**。如果当前可用卡不足但物理卡总量足够，查看 Pending 提示后点击 **Continue & generate（继续并生成）**；如果物理卡总量也不足，请减少副本数 / TP。
 9. 检查 **Generated deployable configuration（生成的部署配置）**，修正标出的错误后点击 **Deploy（部署）**。
 10. 在 **Deployments（部署）**页等待 **Ready（就绪）**。部署会保留，不会运行基准测试；不再使用时请手动停止或清理。
+
+生成 YAML 同时支持设备插件和 DRA 集群。缺少 DRA 设备明细时，仍可根据已注册的
+Kubernetes 加速器资源识别硬件变体；容量和配置校验保持生效。
 
 点击 **Back to model card（返回模型卡片）**可返回所选模型。
 如需测量性能，参阅[运行评估](/user-guide/evaluation)。
@@ -47,7 +59,7 @@ description: 选择模型，创建手动或 AI 辅助部署。
 
 1. 打开模型，填写部署名称，选择集群和缓存存储。
 2. 将 **Mode** 改为 **Agentic**。
-3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**Input tokens per request（ISL）**默认填入 `4000`，**Output tokens per request（OSL）**默认填入 `1000`，与 AIC 原生 search/recommend 默认值一致。**TTFT SLO (ms)** 默认填入 `2000`，**TPOT SLO (ms)** 默认填入 `30`，均可修改；不提供端到端延迟输入框。
+3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**Mean input tokens per request（平均输入长度，ISL）**、**Mean output tokens per request（平均输出长度，OSL）**、**TTFT SLO (ms)** 和 **TPOT SLO (ms)** 初始为空。占位示例 `4000`、`1000`、`2000` 和 `30` 不会作为要求提交，也不会将平均输入长度复制成 P95；不提供端到端延迟输入框。
 4. **AI provider** 可保持 **Default (no external AI provider)（不使用外部 AI）**，也可选择已配置的提供方辅助排序。
 5. 可选：展开 **Preference（偏好）**，用英文填写，例如 `use fewer GPU resources`（少用 GPU）或 `prefer prefix cache`（优先前缀缓存）。
 6. 点击 **Generate recommendation（生成推荐）**。
@@ -60,6 +72,10 @@ Agentic 生成与重新计算推荐时跳过模型文件是否存在、下载是
 模型缺失或下载未完成会阻止部署，不再阻止生成推荐。Manual 和 Standard 部署检查保持不变。
 
 可选：生成推荐前展开 **Pod placement（Pod 放置）**，选择部署运行的位置。
+
+Agentic 生成和选择使用 `optimized-baseline`，不再提供直接部署的 `baseline-vllm`，
+包括内置回退和 AIC 推荐；历史 direct-vLLM 配置也不会重新进入候选集。
+已有计划和手动 Standard vLLM 部署不受影响。
 
 按负载估算容量时，填写 **Concurrent requests（并发请求数）**或 **Request rate (QPS)（每秒请求数）**之一，不能同时填写。
 两项均为可选，不预填目标值。提供其中一项时调用 AIC 原生推荐模式；两项留空时保留固定 GPU 数搜索。
@@ -83,6 +99,14 @@ AIC 估算；公共证据缺失或不适用时，AIC 作为补充。实时资源
 `benchmark-rag:query:read` 权限时，页面会明确提示，并继续使用原有证据规划。
 包含公共 RAG 观测数据的计划仍要求相同的读取权限。
 没有外部 AI 时，检索结果仅作为上下文保留，不会自动转换为确定性性能预测，也不会改写显示的 SLO 判断。
+
+使用外部 AI 提供方时，生成和选择阶段的提示词都会将完整偏好放在规划上下文之前。
+在平台与硬件有效性约束内，单卡、不做 P/D 分离等明确要求优先于候选多样性和性能建议。
+这是对 AI 的指引，不代表系统能通过通用自然语言解析器强制校验所有要求。
+
+新的规划审计会保留完整偏好，以及每次实际 AI 请求与响应，包括工具上下文和重试。
+不记录提供方认证头和 API Key。请将审计文件作为私有数据保护；
+旧决策无法补回此前没有记录的交互。
 
 **AI score（AI 评分）**只用于方案排序，不是性能实测结果，也不是成功概率。
 显示 **SLO not met（未满足性能目标）**时，应调整目标或资源。

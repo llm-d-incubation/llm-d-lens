@@ -89,6 +89,21 @@ def test_post_rejects_embedded_mode_with_non_postgresql_engine():
     assert response.status_code == 422
 
 
+def test_post_rejects_external_url_without_explicit_port():
+    response = client.post(
+        "/api/v1/system/database",
+        json={"mode": "external", "databaseUrl": "postgresql://a:b@localhost/mydb"},
+    )
+    assert response.status_code == 422
+    assert "explicit port" in response.json()["detail"]
+
+
+def test_external_database_url_accepts_unix_socket_without_port():
+    from llm_d_lens.db.settings import validate_external_database_url
+
+    validate_external_database_url("postgresql://a:b@/mydb?host=/var/run/postgresql")
+
+
 def test_post_rejects_engine_mismatched_with_url_scheme():
     response = client.post(
         "/api/v1/system/database",

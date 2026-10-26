@@ -676,7 +676,8 @@ async def admin_list_members(request: Request, group_id: str | None = None) -> d
     "/deployments",
     summary="Ready deployments that can be published as members.",
     description=(
-        "List ready deployments that can be published to a Model Service. This does not publish anything: use "
+        "List ready llm-d deployments with a deployment-owned InferencePool and EPP that can be published to a "
+        "Model Service. Plain vLLM deployments are excluded. This does not publish anything: use "
         "publish_model_service for a new public model name or create_model_service_member to add a provider to an "
         "existing one."
     ),

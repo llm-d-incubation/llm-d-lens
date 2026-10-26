@@ -70,41 +70,36 @@ export default function RolesPage({ onToggleMobileNav }) {
                     title="Roles"
                     description="Roles bundle permissions. Assign them to users or groups at a scope."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <>
-                            <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading}>
-                                <RefreshCw size={14} /> Refresh
-                            </Button>
-                            <PermissionGate permission="role:role:create">
-                                <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
-                                    <Plus size={14} /> Add role
-                                </Button>
-                            </PermissionGate>
-                        </>
-                    }
                 />
 
                 <AdminAlert tone="success">{notice}</AdminAlert>
                 {error && roles.length > 0 && <AdminAlert>{error}</AdminAlert>}
 
-                <AsyncState
-                    loading={loading}
-                    error={roles.length === 0 ? error : null}
-                    empty={roles.length === 0}
-                    onRetry={load}
-                    emptyContent={<EmptyState icon={<ShieldCheck size={22} />} title="No roles" message="Built-in roles are seeded automatically." />}
-                >
                     <AdminPanel
                         icon={ShieldCheck}
                         title="Roles"
                         count={filtered.length}
                         toolbar={
-                            <AdminToolbar>
+                            <AdminToolbar plain>
                                 <AdminSearch value={query} onChange={setQuery} placeholder="Search role name or description..." />
                                 <AdminClearButton show={Boolean(query)} onClick={() => setQuery('')} />
                             </AdminToolbar>
                         }
+                        actions={
+                            <>
+                                <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading || refreshing} aria-label="Refresh roles">
+                                    <RefreshCw size={14} /> Refresh
+                                </Button>
+                                <PermissionGate permission="role:role:create">
+                                    <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
+                                        <Plus size={14} /> Add role
+                                    </Button>
+                                </PermissionGate>
+                            </>
+                        }
                     >
+                        <AsyncState loading={loading} error={roles.length === 0 ? error : null} empty={roles.length === 0} onRetry={load}
+                            emptyContent={<EmptyState icon={<ShieldCheck size={22} />} title="No roles" message="Built-in roles are seeded automatically." />}>
                         {filtered.length === 0 ? (
                             <EmptyState title="No matching roles" message="Adjust the search to see more." />
                         ) : (
@@ -148,8 +143,8 @@ export default function RolesPage({ onToggleMobileNav }) {
                                 </table>
                             </div>
                         )}
+                        </AsyncState>
                     </AdminPanel>
-                </AsyncState>
             </div>
 
             {dialog && (

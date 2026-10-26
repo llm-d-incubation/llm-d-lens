@@ -556,6 +556,44 @@ def deployment_issues(panel: DeploymentPanel) -> list[DashboardIssue]:
     return issues
 
 
+def deployment_pod_issue(
+    *,
+    execution_id: str,
+    execution_name: str,
+    cluster_id: str | None,
+    cluster_name: str,
+    ready: int,
+    expected: int,
+    observed_at: datetime | None,
+) -> DashboardIssue:
+    unavailable = ready == 0
+    state = "model server is unavailable" if unavailable else "model server capacity is reduced"
+    return _issue(
+        code="deployment.pods_unavailable" if unavailable else "deployment.pods_degraded",
+        severity="critical" if unavailable else "warning",
+        category="deployment",
+        title=f"{execution_name}: {state}",
+        message=(
+            "No ready model-server Pods are serving this deployment."
+            if unavailable
+            else f"{ready} of {expected} requested model-server Pods are ready."
+        ),
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        resource_type="deployment_execution",
+        resource_id=execution_id,
+        resource_name=execution_name,
+        evidence={"readyPods": ready, "expectedPods": expected},
+        observed_at=observed_at,
+        primary=_action(
+            "view_deployment",
+            "optimization-deployments",
+            {"deploymentSearch": execution_id},
+            "deployment:run:read",
+        ),
+    )
+
+
 def _deployment_failure_issue(item: DeploymentActivityItem) -> DashboardIssue:
     return _issue(
         code="deployment.recent_failure",

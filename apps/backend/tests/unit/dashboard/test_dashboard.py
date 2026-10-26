@@ -260,6 +260,34 @@ def test_ready_deployment_without_a_model_service_is_flagged():
     assert unpublished_deployment_issues([context], set(), {"a": "Cluster A"}) == []
 
 
+def test_deployment_pod_health_maps_to_critical_and_warning_issues():
+    from llm_d_lens.dashboard.rules import deployment_pod_issue
+
+    unavailable = deployment_pod_issue(
+        execution_id="exec-a",
+        execution_name="qwen-a",
+        cluster_id="a",
+        cluster_name="Cluster A",
+        ready=0,
+        expected=1,
+        observed_at=datetime.now(UTC),
+    )
+    degraded = deployment_pod_issue(
+        execution_id="exec-a",
+        execution_name="qwen-a",
+        cluster_id="a",
+        cluster_name="Cluster A",
+        ready=1,
+        expected=2,
+        observed_at=datetime.now(UTC),
+    )
+
+    assert unavailable.severity == "critical"
+    assert unavailable.code == "deployment.pods_unavailable"
+    assert degraded.severity == "warning"
+    assert degraded.code == "deployment.pods_degraded"
+
+
 def test_stopped_gateway_and_ipp_are_cluster_level_issues():
     from llm_d_lens.dashboard.rules import gateway_cluster_issues
 

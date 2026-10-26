@@ -640,7 +640,7 @@ html:not(.dark) .lens-navigation {
   --brand-accent-bg: #e6f6fe;
   --nav-on-accent: #ffffff;
   background-color: #ffffff;
-  border: 1px solid #d1d5db;
+  border-right: 1px solid var(--border-color);
   color: var(--text-primary);
   box-shadow: none;
 }
@@ -1128,10 +1128,50 @@ html:not(.dark) .model-services-page .model-services-card {
   background: #ffffff !important;
 }
 
+/* Light mode: Storage volume rows use light gray separators. */
+html:not(.dark) .storage-page .storage-volume-rows > tr {
+  border-color: #e5e7eb !important;
+}
+
+/* Light mode: GPU cards stay white and their tracks use a visible gray. */
+html:not(.dark) .cluster-page .gpu-card {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+}
+html:not(.dark) .cluster-page .gpu-card .utilization-track {
+  background-color: #e5e7eb !important;
+}
+
+/* Light mode: utilization tracks use a very light neutral surface. */
+html:not(.dark) .cluster-page .utilization-track {
+  background-color: #f8fafc !important;
+}
+
+/* Light mode: Workers table row separators use a light gray line. */
+html:not(.dark) .cluster-page .workers-table-body > tr {
+  border-color: #e5e7eb !important;
+}
+
 /* Light mode: model-service topology boxes use white surfaces and gray borders. */
 html:not(.dark) .model-services-page .model-service-node {
   background: #ffffff !important;
   border-color: #d1d5db !important;
+}
+
+/* A deployment that cannot serve gets a red halo so its failed state is visible
+   even when the provider remains in the configured traffic allocation. */
+.model-service-node-error {
+  border-color: rgb(244 63 94 / 0.65) !important;
+  box-shadow:
+    0 0 0 1px rgb(244 63 94 / 0.45),
+    0 0 22px rgb(244 63 94 / 0.28) !important;
+}
+html:not(.dark) .model-services-page .model-service-node-error {
+  background: transparent !important;
+  border-color: #f43f5e !important;
+  box-shadow:
+    0 0 0 1px rgb(244 63 94 / 0.35),
+    0 0 20px rgb(244 63 94 / 0.22) !important;
 }
 
 /* Shared dialog backdrops stay semi-transparent in both themes. */
@@ -1429,7 +1469,7 @@ html:not(.dark) .simulation-page {
 html:not(.dark) .simulation-page [class*="shadow-"] {
   box-shadow: none !important;
 }
-html:not(.dark) .simulation-page section {
+html:not(.dark) .simulation-page section:not([aria-label="Simulation task summary"]) {
   background-color: #ffffff !important;
   background-image: none !important;
 }
@@ -1821,12 +1861,6 @@ html:not(.dark) .observability-page section {
   background-image: none !important;
 }
 
-/* Light mode: Observability control panels have no white fill. */
-html:not(.dark) .observability-page .observability-control-panel {
-  background-color: transparent !important;
-  background-image: none !important;
-}
-
 /* Light mode: selected accelerator tabs use solid brand blue. */
 html:not(.dark) .observability-page .accelerator-tab-active {
   background-color: #037ffc !important;
@@ -1842,16 +1876,6 @@ html:not(.dark) .observability-page .observability-service-tab-active {
 }
 html:not(.dark) .observability-page .observability-service-tab-active svg {
   color: #ffffff !important;
-}
-
-/* Light mode: Namespace control panel is white with a light-gray input. */
-html:not(.dark) .observability-page .namespace-panel {
-  background-color: #ffffff !important;
-}
-
-/* Light mode: GUIs control panel is white. */
-html:not(.dark) .observability-page .guis-panel {
-  background-color: #ffffff !important;
 }
 
 /* Light mode: Stack component type tags use solid colors. */
@@ -2046,4 +2070,23 @@ html:not(.dark) .assistant-chat-scroll::-webkit-scrollbar-thumb {
 }
 html:not(.dark) .assistant-chat-scroll::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+
+/* Light mode: external-providers empty-state icon uses brand blue and white ink. */
+html:not(.dark) .ai-providers-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: Simulation empty-state icon uses brand blue and white ink. */
+html:not(.dark) .simulation-empty-icon {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+
+/* Light mode: selected cluster scope chips keep white ink on Intel blue. */
+html:not(.dark) .welcome-page .cluster-scope-chip[aria-pressed="true"] {
+  color: #ffffff !important;
 }

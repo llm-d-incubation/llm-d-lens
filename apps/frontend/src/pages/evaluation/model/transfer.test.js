@@ -5,10 +5,7 @@ import {
     EVALUATION_TRANSFER_KEYS,
     clearEvaluationIntent,
     consumeEvaluationTransfer,
-    readEvaluationArtifact,
     readEvaluationIntent,
-    readEvaluationPlans,
-    storeEvaluationArtifact,
     storeEvaluationIntent,
     storeEvaluationTransfer,
     storeSimulationBenchmarks,
@@ -57,12 +54,12 @@ test("supports symmetric transfer reads, writes, consumption, and clearing", () 
         artifact: { artifact_id: "artifact" },
     }, storage);
     assert.deepEqual(readEvaluationIntent(storage), { name: "evaluation" });
-    assert.deepEqual(readEvaluationPlans(storage), [{ id: "plan" }]);
-    assert.deepEqual(readEvaluationPlans(storage, { consume: true }), [{ id: "plan" }]);
-    assert.equal(readEvaluationPlans(storage), null);
-    assert.deepEqual(readEvaluationArtifact(storage), { artifact_id: "artifact" });
     clearEvaluationIntent(storage);
     assert.equal(readEvaluationIntent(storage), null);
-    storeEvaluationArtifact(null, storage);
-    assert.equal(readEvaluationArtifact(storage), null);
+    assert.deepEqual(consumeEvaluationTransfer(storage), {
+        intent: null,
+        plans: [{ id: "plan" }],
+        artifact: { artifact_id: "artifact" },
+    });
+    assert.deepEqual(consumeEvaluationTransfer(storage), { intent: null, plans: null, artifact: null });
 });

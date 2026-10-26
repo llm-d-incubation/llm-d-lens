@@ -50,18 +50,6 @@ export function storeEvaluationTransfer({ intent, plans, artifact }, storage = s
     if (artifact !== undefined) writeJson(storage, EVALUATION_TRANSFER_KEYS.ARTIFACT, artifact);
 }
 
-export function readEvaluationPlans(storage = sessionStorage, { consume = false } = {}) {
-    return readJson(storage, EVALUATION_TRANSFER_KEYS.PREFILL, { remove: consume });
-}
-
-export function readEvaluationArtifact(storage = sessionStorage) {
-    return readJson(storage, EVALUATION_TRANSFER_KEYS.ARTIFACT);
-}
-
-export function storeEvaluationArtifact(artifact, storage = sessionStorage) {
-    writeJson(storage, EVALUATION_TRANSFER_KEYS.ARTIFACT, artifact);
-}
-
 export function storeSimulationBenchmarks(benchmarks, storage = sessionStorage) {
     writeJson(storage, EVALUATION_TRANSFER_KEYS.SIMULATION_BENCHMARKS, benchmarks);
 }

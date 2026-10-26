@@ -13,10 +13,6 @@ async function postConfiguration(operation, body) {
     return postJson(`/api/v1/configurations/${operation}`, body);
 }
 
-export function resolveConfigurations(request) {
-    return postConfiguration('resolve', request);
-}
-
 export function renderConfiguration(candidateConfig, render = {}) {
     return postConfiguration('render', {
         candidate_config: candidateConfig,

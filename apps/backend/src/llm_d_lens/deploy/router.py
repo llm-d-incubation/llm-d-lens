@@ -691,6 +691,7 @@ async def get_execution_pods(execution_id: str, request: Request = None):
             {
                 "name": metadata.get("name"),
                 "namespace": metadata.get("namespace"),
+                "labels": metadata.get("labels") or {},
                 "phase": status.get("phase", "Unknown"),
                 "ready": ready,
                 "pod_ip": status.get("podIP"),

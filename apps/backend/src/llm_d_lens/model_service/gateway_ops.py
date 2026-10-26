@@ -44,11 +44,13 @@ from llm_d_lens.model_service.gateway_contracts import (
 )
 from llm_d_lens.model_service.gateway_providers import (
     AUTHZ_TLS_DR_NAME,
+    CLUSTER_LABEL,
     DEFAULT_PROVIDER,
     INFERENCE_MODEL_REWRITE_CRD,
     MANAGED_LABEL,
     MANAGED_VALUE,
     MODEL_SERVICE_LABEL,
+    REWRITE_MANAGED_LABEL,
     PoolBinding,
     authz_tls_insecure_enabled,
     default_pool_name,
@@ -85,21 +87,22 @@ DEFAULT_GATEWAY_NAME = "lens-inference-gateway"
 DEFAULT_IPP_NAME = "lens-ipp"
 #: IPP gRPC (ext_proc) port the gateway connects to.
 IPP_GRPC_PORT = 9004
-#: Fallback ext_authz port used only before the backend has served any request
-#: (so its real listening port is not yet known).
-DEFAULT_AUTHZ_PORT = 8081
 
 
-def resolve_authz_endpoint(value: str | None) -> tuple[str | None, int]:
+def resolve_authz_endpoint(value: str | None) -> tuple[str | None, int | None]:
     """Resolve a per-cluster Lens address into ``(host, destination_port)``.
 
     ``gateway_authz_host`` is the host/IP the cluster can reach Lens on (auto-filled
     in the create/edit form); the destination port is *not* a user setting — Lens
     uses its own live serving port
-    (:func:`llm_d_lens.infrastructure.network.hostinfo.current_serving_port`), falling back to
-    :data:`DEFAULT_AUTHZ_PORT` before the first request. The in-cluster
-    ``lens-authz`` Service keeps a stable port (8081) and its
-    Endpoints route there. An unset host disables ext_authz.
+    (:func:`llm_d_lens.infrastructure.network.hostinfo.current_serving_port`). The
+    in-cluster ``lens-authz`` Service keeps a stable port (8081) and its Endpoints
+    route to that live port. An unset host disables ext_authz.
+
+    The live port is deliberately *not* guessed. A caller that has not observed
+    the backend's listening port (for example a one-off maintenance script) must
+    not rewrite an existing Gateway to the stable Service port: doing so makes
+    Envoy bypass the Service and connect to whatever happens to listen on 8081.
     """
     host = (value or "").strip()
     head, sep, tail = host.rpartition(":")
@@ -107,8 +110,8 @@ def resolve_authz_endpoint(value: str | None) -> tuple[str | None, int]:
         host = head
     host = host or None
     if host is None:
-        return None, DEFAULT_AUTHZ_PORT
-    return host, hostinfo.current_serving_port() or DEFAULT_AUTHZ_PORT
+        return None, None
+    return host, hostinfo.current_serving_port()
 
 
 class GatewayOpsError(Exception):
@@ -125,6 +128,22 @@ def member_pool_name(member) -> str | None:
     if name:
         return name
     return default_pool_name(member.epp_ref or member.target_service)
+
+
+def member_is_routable(member) -> bool:
+    """Whether a provider should currently appear in the shared HTTPRoute.
+
+    A provider with a missing model server, EPP, or InferencePool is completely
+    unavailable: keeping it in the route would send traffic to a dead pool.
+    A provider whose route is merely missing stays routable so the next
+    reconcile can recreate the route and heal its health.
+    """
+    if member.status == "disabled" or member.weight <= 0 or not member_pool_name(member):
+        return False
+    if member.endpoint_kind != "llm-d-epp":
+        return False
+    components = (member.health_json or {}).get("components") or {}
+    return not any(components.get(key) == "missing" for key in ("epp", "inferencePool", "modelServer"))
 
 
 def local_public_ip() -> str:
@@ -434,6 +453,13 @@ class GatewayOpsService:
         return result.returncode == 0 and INFERENCE_MODEL_REWRITE_CRD in (result.stdout or "")
 
     async def _managed_model_rewrites(self, cluster_id: str) -> set[tuple[str, str]]:
+        """Managed rewrites owned by *this* Lens cluster only.
+
+        Rewrites use a dedicated label instead of the shared Gateway label. Older
+        Lens instances only list the shared label, so they cannot see (and cannot
+        delete) rewrites written by this version. The cluster label keeps cleanup
+        scoped even between current instances sharing one Kubernetes cluster.
+        """
         try:
             result = await self._kubectl(
                 cluster_id,
@@ -442,7 +468,7 @@ class GatewayOpsService:
                     "inferencemodelrewrite",
                     "-A",
                     "-l",
-                    f"{MANAGED_LABEL}={MANAGED_VALUE}",
+                    f"{REWRITE_MANAGED_LABEL}=true",
                     "-o",
                     "json",
                 ],
@@ -456,11 +482,14 @@ class GatewayOpsService:
             payload = json.loads(result.stdout or "{}")
         except json.JSONDecodeError:
             return set()
-        return {
-            ((item.get("metadata") or {}).get("namespace", ""), (item.get("metadata") or {}).get("name", ""))
-            for item in payload.get("items") or []
-            if (item.get("metadata") or {}).get("name")
-        }
+        owned: set[tuple[str, str]] = set()
+        for item in payload.get("items") or []:
+            metadata = item.get("metadata") or {}
+            name = metadata.get("name")
+            labels = metadata.get("labels") or {}
+            if name and labels.get(CLUSTER_LABEL) == cluster_id:
+                owned.add((metadata.get("namespace", ""), name))
+        return owned
 
     async def _delete_model_rewrites_for_group(self, cluster_id: str, group_id: str) -> None:
         if not await self._model_rewrite_available(cluster_id):
@@ -932,6 +961,15 @@ class GatewayOpsService:
         # Per-cluster ext_authz host (auto-filled in the wizard/edit form) plus
         # Lens' own live serving port. Unset host = ext_authz disabled.
         authz_host, authz_port = resolve_authz_endpoint(getattr(cluster, "gateway_authz_host", None))
+        if authz_host and authz_port is None:
+            return self._finish(
+                operation,
+                ok=False,
+                message=(
+                    "cannot configure Gateway ext_authz: the Lens serving port is unknown; "
+                    "start the backend with an explicit --port and retry"
+                ),
+            )
         authz_tls_insecure = authz_tls_insecure_enabled()
         if install_prerequisites:
             # Apply the pinned Gateway API / Gateway API Inference Extension CRDs
@@ -1513,7 +1551,7 @@ class GatewayOpsService:
             # Include every published member, not only healthy ones: the health
             # probe marks a member unhealthy when its route is missing, so routing
             # only "active" members would never create the route that heals it.
-            published = [m for m in cluster_members if m.status != "disabled" and m.weight > 0 and member_pool_name(m)]
+            published = [m for m in cluster_members if member_is_routable(m)]
             if not published:
                 continue
             bindings = [
@@ -1551,6 +1589,7 @@ class GatewayOpsService:
                 public_model=public_model,
                 served_model=group.served_name,
                 pools=bindings,
+                cluster_id=cluster_id,
             )
             if rewrites:
                 rewrite_documents.append(rewrites)
@@ -1758,14 +1797,17 @@ class GatewayOpsService:
         """
         updated = 0
         heal: set[str] = set()
+        reconcile: set[str] = set()
         for member in self.members.list_all():
             group = self.groups.get(member.group_id)
             if member.status == "disabled" or group is None or group.status == "disabled":
                 continue
+            was_routable = member_is_routable(member)
             try:
                 self._target_resolver(member.execution_id)
             except ExecutionMissingError:
                 self.members.delete(member.id)
+                reconcile.add(member.cluster_id)
                 continue
             except ExecutionTargetError:
                 pass  # not publishable yet; fall through to record health
@@ -1778,10 +1820,14 @@ class GatewayOpsService:
             member.status = "active" if healthy else "unhealthy"
             member = self.members.save_health(member)
             updated += 1
+            if was_routable != member_is_routable(member):
+                reconcile.add(member.cluster_id)
             if member.status != "disabled" and not healthy and _data_plane_degraded(detail.get("components") or {}):
                 heal.add(member.cluster_id)
         for cluster_id in heal:
             await self._heal_data_plane(cluster_id)
+        for cluster_id in reconcile:
+            await self.reconcile_cluster(cluster_id)
         return updated
 
     async def _heal_data_plane(self, cluster_id: str) -> None:

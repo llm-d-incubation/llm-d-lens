@@ -9,7 +9,8 @@ deliberately no update/delete method. The six nested one-to-one sub-models
 
 ``evaluate_run_id`` is a *soft reference* (not a real foreign key) per the
 design doc section 5.3: it's derived by parsing the ``"evaluate:<uuid>"``
-convention out of ``benchmark_id`` (see ``llm_d_lens/agentic/facts.py``),
+convention (optionally followed by a matrix/stage suffix) out of ``benchmark_id``
+(see ``llm_d_lens/evaluation/benchmark_evidence.py``),
 and evaluate runs may be deleted/pruned independently of this permanent
 audit trail, so it must never cascade or block on a live ``evaluate_runs``
 row.
@@ -23,7 +24,7 @@ from sqlalchemy import Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from llm_d_lens.agentic.benchmark_evidence import BenchmarkRecord
-from llm_d_lens.db.base import ArrayVariant, Base, DeclarativeDtoMixin, UTCDateTime
+from llm_d_lens.db.base import ArrayVariant, Base, DeclarativeDtoMixin, JSONVariant, UTCDateTime
 
 _EVALUATE_BENCHMARK_ID_PREFIX = "evaluate:"
 
@@ -70,25 +71,26 @@ class BenchmarkRecordRow(Base, DeclarativeDtoMixin):
         "metrics_throughput_tokens_per_s": "metrics.throughput_tokens_per_s",
         "metrics_error_rate": "metrics.error_rate",
         "failure_reason": "failure_reason",
+        "provenance": "provenance",
     }
 
     benchmark_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     outcome: Mapped[str] = mapped_column(String(16), nullable=False)
     model_model_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    model_family: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_architecture: Mapped[str] = mapped_column(String(16), nullable=False)
-    model_parameter_count_b: Mapped[float] = mapped_column(Float, nullable=False)
+    model_family: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_architecture: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    model_parameter_count_b: Mapped[float | None] = mapped_column(Float, nullable=True)
     model_active_parameter_count_b: Mapped[float | None] = mapped_column(Float, nullable=True)
-    model_quantization: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_tokenizer_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    model_quantization: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_tokenizer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     model_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    hardware_accelerator: Mapped[str] = mapped_column(String(64), nullable=False)
-    hardware_vram_per_gpu_gib: Mapped[float] = mapped_column(Float, nullable=False)
-    hardware_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    runtime_backend: Mapped[str] = mapped_column(String(64), nullable=False)
-    runtime_backend_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    runtime_accelerator_runtime: Mapped[str] = mapped_column(String(64), nullable=False)
+    hardware_accelerator: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hardware_vram_per_gpu_gib: Mapped[float | None] = mapped_column(Float, nullable=True)
+    hardware_gpu_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runtime_backend_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runtime_accelerator_runtime: Mapped[str | None] = mapped_column(String(64), nullable=True)
     runtime_driver_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     runtime_container_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
     runtime_git_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -97,7 +99,7 @@ class BenchmarkRecordRow(Base, DeclarativeDtoMixin):
     workload_mean_output_tokens: Mapped[float] = mapped_column(Float, nullable=False)
     workload_concurrency: Mapped[float] = mapped_column(Float, nullable=False)
     workload_request_rate: Mapped[float] = mapped_column(Float, nullable=False)
-    workload_shared_prefix_ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    workload_shared_prefix_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     workload_prefill_fraction: Mapped[float] = mapped_column(Float, nullable=False)
     configuration_topology: Mapped[str] = mapped_column(String(64), nullable=False)
     configuration_decode_tp: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -111,6 +113,7 @@ class BenchmarkRecordRow(Base, DeclarativeDtoMixin):
     metrics_throughput_tokens_per_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     metrics_error_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provenance: Mapped[dict[str, object] | None] = mapped_column(JSONVariant, nullable=True)
     evaluate_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
     __table_args__ = (
@@ -130,7 +133,7 @@ class BenchmarkRecordRow(Base, DeclarativeDtoMixin):
     def to_dto(self) -> BenchmarkRecord:
         values: dict[str, object] = {}
         for col, path in self.column_map.items():
-            _dset(values, path, getattr(self, col))
+            _dset(values, path, (getattr(self, col) or {}) if col == "provenance" else getattr(self, col))
         values["benchmark_id"] = self.benchmark_id
         values["configuration"]["optimizations"] = tuple(self.configuration_optimizations)
         return BenchmarkRecord.model_validate(values)
@@ -153,5 +156,5 @@ def _dset(root: dict[str, object], path: str, value: object) -> None:
 
 def _evaluate_run_id(benchmark_id: str) -> str | None:
     if benchmark_id.startswith(_EVALUATE_BENCHMARK_ID_PREFIX):
-        return benchmark_id[len(_EVALUATE_BENCHMARK_ID_PREFIX) :]
+        return benchmark_id[len(_EVALUATE_BENCHMARK_ID_PREFIX) :].split(":", 1)[0]
     return None

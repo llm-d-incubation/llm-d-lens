@@ -118,6 +118,10 @@ class ModelService:
                         raise ForbiddenError(f"permission denied: {permission}")
             if target.status != "ready" or not target.model:
                 raise ModelServiceConflictError("provider must be ready and have a deployment model name")
+            if target.endpoint_kind != "llm-d-epp":
+                raise ModelServiceConflictError(
+                    "plain vLLM deployments cannot back a Model Service; use a deployment with an InferencePool and EPP"
+                )
         model_ref = (target.model_ref or target.model) if target else (request.model_ref or request.name)
         group = ModelServiceGroup(
             name=request.name,
@@ -349,6 +353,10 @@ class ModelService:
             raise ModelServiceNotFoundError(str(error)) from error
         if target.cluster_id != group.cluster_id:
             raise ModelServiceConflictError(f"provider must be in the model service's cluster ({group.cluster_id})")
+        if target.endpoint_kind != "llm-d-epp":
+            raise ModelServiceConflictError(
+                "plain vLLM deployments cannot back a Model Service; use a deployment with an InferencePool and EPP"
+            )
         if principal is not None:
             from llm_d_lens.auth.access import require_cluster_access  # noqa: PLC0415
 
@@ -396,6 +404,8 @@ class ModelService:
             except ExecutionTargetError:
                 continue
             if allowed is not None and target.cluster_id not in allowed:
+                continue
+            if target.endpoint_kind != "llm-d-epp":
                 continue
             items.append(
                 PublishableDeployment(

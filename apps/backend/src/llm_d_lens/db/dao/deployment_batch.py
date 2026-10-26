@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
-from llm_d_lens.db.dao.base import BaseDao
+from llm_d_lens.db.dao.base import BaseDao, ConcurrentUpdateError
 from llm_d_lens.db.models.deployment_batch import DeploymentRunRow
 from llm_d_lens.db.models.deployment_evidence import DeploymentExecutionRow
 from llm_d_lens.db.models.deployment_job import DeploymentCaseRow
@@ -16,6 +18,8 @@ from llm_d_lens.deploy.contracts import (
     DeploymentRun,
     utcnow,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DeploymentDaoError(Exception):
@@ -53,23 +57,38 @@ class DeploymentBatchDao(BaseDao):
             return [row.to_dto() for row in session.scalars(stmt)]
 
     def save(self, run: DeploymentRun) -> DeploymentRun:
-        with self._transaction() as session:
-            stmt = (
-                select(DeploymentRunRow)
-                .options(selectinload(DeploymentRunRow.jobs))
-                .where(DeploymentRunRow.id == run.id)
-            )
-            row = session.scalars(stmt).one_or_none()
-            if row is None:
-                raise DeploymentDaoError(f"deployment run not found: {run.id}")
-            row.sync_from_dto(run, cluster_id=_resolve_cluster_id(run.provenance))
-            _sync_jobs_collection(row, run)
-            session.flush()
-            return row.to_dto()
+        """Serialize run/job writes and retry version conflicts in fresh transactions.
+
+        At most three attempts are made. Ownership remains database-owned, and
+        deployment side effects are never replayed by a persistence retry.
+        Exhausted conflicts and other database errors propagate to the caller.
+        """
+        attempt = 1
+        while True:
+            try:
+                with self._transaction() as session:
+                    stmt = (
+                        select(DeploymentRunRow)
+                        .options(selectinload(DeploymentRunRow.jobs))
+                        .where(DeploymentRunRow.id == run.id)
+                        .with_for_update()
+                    )
+                    row = session.scalars(stmt).one_or_none()
+                    if row is None:
+                        raise DeploymentDaoError(f"deployment run not found: {run.id}")
+                    row.sync_from_dto(run, cluster_id=_resolve_cluster_id(run.provenance))
+                    _sync_jobs_collection(row, run)
+                    session.flush()
+                    return row.to_dto()
+            except ConcurrentUpdateError:
+                if attempt == 3:
+                    raise
+                attempt += 1
+                logger.debug("Retrying deployment run %s after a concurrent update (attempt %d/3)", run.id, attempt)
 
     def set_owner(self, run_id: str, *, owner_user_id: str, owner_group_id: str | None = None) -> None:
         with self._transaction() as session:
-            row = session.get(DeploymentRunRow, run_id)
+            row = session.get(DeploymentRunRow, run_id, with_for_update=True)
             if row is None:
                 raise DeploymentDaoError(f"deployment run not found: {run_id}")
             row.owner_user_id = owner_user_id
@@ -100,6 +119,7 @@ class DeploymentBatchDao(BaseDao):
                 select(DeploymentRunRow)
                 .options(selectinload(DeploymentRunRow.jobs))
                 .where(DeploymentRunRow.id == run_id)
+                .with_for_update()
             )
             row = session.scalars(stmt).one_or_none()
             if row is None:
@@ -126,23 +146,45 @@ class DeploymentEvidenceDao(BaseDao):
             return [row.to_dto() for row in session.scalars(stmt)]
 
     def save(self, execution: DeploymentExecution, *, preserve_metadata: bool = True) -> DeploymentExecution:
-        with self._transaction() as session:
-            row = session.get(DeploymentExecutionRow, execution.execution_id)
-            effective = _apply_preserved_execution_fields(
-                execution,
-                row.to_dto() if row and preserve_metadata else None,
-            )
-            if row is None:
-                row = DeploymentExecutionRow.from_dto(effective, cluster_id=_resolve_cluster_id(effective.provenance))
-                session.add(row)
-            else:
-                row.sync_from_dto(effective, cluster_id=_resolve_cluster_id(effective.provenance))
-            session.flush()
-            return row.to_dto()
+        """Save lifecycle output, serializing updates and retrying version conflicts.
+
+        Each attempt uses a fresh transaction and re-reads preserved metadata and
+        monitoring state. Only optimistic-lock conflicts are retried, at most
+        three times; exhaustion and all other persistence errors propagate.
+        No deployment or Kubernetes operation is repeated.
+        """
+        attempt = 1
+        while True:
+            try:
+                with self._transaction() as session:
+                    row = session.get(DeploymentExecutionRow, execution.execution_id, with_for_update=True)
+                    effective = _apply_preserved_execution_fields(
+                        execution,
+                        row.to_dto() if row and preserve_metadata else None,
+                    )
+                    if row is None:
+                        row = DeploymentExecutionRow.from_dto(
+                            effective, cluster_id=_resolve_cluster_id(effective.provenance)
+                        )
+                        session.add(row)
+                    else:
+                        row.sync_from_dto(effective, cluster_id=_resolve_cluster_id(effective.provenance))
+                    session.flush()
+                    return row.to_dto()
+            except ConcurrentUpdateError:
+                if attempt == 3:
+                    raise
+                attempt += 1
+                logger.debug(
+                    "Retrying deployment execution %s after a concurrent update (attempt %d/3)",
+                    execution.execution_id,
+                    attempt,
+                )
 
     def update_metadata(self, execution_id: str, request: DeploymentMetadataUpdateRequest) -> DeploymentExecution:
+        """Patch user metadata under the same row lock as lifecycle saves."""
         with self._transaction() as session:
-            row = session.get(DeploymentExecutionRow, execution_id)
+            row = session.get(DeploymentExecutionRow, execution_id, with_for_update=True)
             if row is None:
                 raise DeploymentDaoError(f"deployment execution not found: {execution_id}")
             current = row.to_dto()
@@ -154,7 +196,7 @@ class DeploymentEvidenceDao(BaseDao):
 
     def delete(self, execution_id: str) -> None:
         with self._transaction() as session:
-            row = session.get(DeploymentExecutionRow, execution_id)
+            row = session.get(DeploymentExecutionRow, execution_id, with_for_update=True)
             if row is not None:
                 session.delete(row)
 

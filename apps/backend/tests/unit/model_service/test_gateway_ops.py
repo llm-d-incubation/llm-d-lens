@@ -16,6 +16,13 @@ from llm_d_lens.model_service import gateway_ops as gateway_ops_module
 from llm_d_lens.model_service.contracts import ModelServiceGroup, ModelServiceMember
 from llm_d_lens.model_service.gateway_contracts import GatewayOperation
 from llm_d_lens.model_service.gateway_ops import GatewayOpsService
+from llm_d_lens.model_service.gateway_providers import (
+    CLUSTER_LABEL,
+    MANAGED_LABEL,
+    MANAGED_VALUE,
+    MODEL_SERVICE_LABEL,
+    REWRITE_MANAGED_LABEL,
+)
 from llm_d_lens.model_service.targets import ExecutionMissingError
 
 
@@ -247,6 +254,7 @@ async def test_gateway_install_does_not_register_a_global_istio_auth_provider(mo
         "get_cluster",
         lambda _: SimpleNamespace(gateway_authz_host="10.0.0.9", gateway_namespace="lens-gateway"),
     )
+    monkeypatch.setattr(gateway_ops_module.hostinfo, "current_serving_port", lambda: 8084)
     monkeypatch.setattr(gateway_ops_module, "apply_gateway_crds", AsyncMock(return_value={}))
     monkeypatch.setattr(gateway_ops_module, "ensure_istioctl", lambda _: "istioctl")
     operation = await _service(calls=calls).install_inference_gateway("cluster-a", "istio")
@@ -1111,6 +1119,51 @@ async def test_standby_provider_does_not_require_route_when_last_positive_provid
     heal.assert_not_awaited()
 
 
+def test_member_is_routable_excludes_only_fully_unavailable_providers():
+    from llm_d_lens.model_service.gateway_ops import member_is_routable
+
+    base = SimpleNamespace(
+        status="active",
+        weight=1,
+        endpoint_kind="llm-d-epp",
+        pool_name="ns/pool",
+        epp_ref="pool-epp",
+        target_namespace="ns",
+        target_service="pool-epp",
+        health_json={
+            "components": {"epp": "ready", "inferencePool": "ready", "modelServer": "ready", "serving": "ready"}
+        },
+    )
+    assert member_is_routable(base)
+    for component in ("epp", "inferencePool", "modelServer"):
+        assert not member_is_routable(
+            SimpleNamespace(
+                **{
+                    **vars(base),
+                    "health_json": {
+                        **base.health_json,
+                        "components": {**base.health_json["components"], component: "missing"},
+                    },
+                }
+            )
+        )
+    # A missing route is not a reason to drop the provider: the next reconcile
+    # must be able to recreate that route and heal the provider.
+    assert member_is_routable(
+        SimpleNamespace(
+            **{
+                **vars(base),
+                "health_json": {
+                    **base.health_json,
+                    "components": {**base.health_json["components"], "httpRoute": "missing"},
+                },
+            }
+        )
+    )
+    assert not member_is_routable(SimpleNamespace(**{**vars(base), "weight": 0}))
+    assert not member_is_routable(SimpleNamespace(**{**vars(base), "status": "disabled"}))
+
+
 def test_data_plane_degraded_detects_broken_paths():
     assert gateway_ops_module._data_plane_degraded({"ipp": "missing"})
     assert gateway_ops_module._data_plane_degraded({"serving": "degraded"})
@@ -1287,8 +1340,11 @@ async def test_probe_members_flags_missing_model_server(monkeypatch):
         "get_cluster",
         lambda _cid: SimpleNamespace(gateway_namespace="lens-gateway", gateway_name="lens-inference-gateway"),
     )
+    reconcile = AsyncMock()
+    monkeypatch.setattr(service, "reconcile_cluster", reconcile)
     await service.probe_members()
 
+    reconcile.assert_awaited_once_with("cluster-a")
     saved = ModelServiceMemberDao().get(member.id)
     assert saved.status == "unhealthy"
     assert saved.health_json["components"]["modelServer"] == "missing"
@@ -1297,16 +1353,34 @@ async def test_probe_members_flags_missing_model_server(monkeypatch):
 
 def test_resolve_authz_endpoint_uses_live_serving_port(monkeypatch):
     monkeypatch.setattr(gateway_ops_module.hostinfo, "current_serving_port", lambda: 8084)
-    assert gateway_ops_module.resolve_authz_endpoint(None) == (None, 8081)
-    assert gateway_ops_module.resolve_authz_endpoint("  ") == (None, 8081)
+    assert gateway_ops_module.resolve_authz_endpoint(None) == (None, None)
+    assert gateway_ops_module.resolve_authz_endpoint("  ") == (None, None)
     assert gateway_ops_module.resolve_authz_endpoint("10.0.0.5") == ("10.0.0.5", 8084)
     # A stray user-supplied port is ignored: Lens always uses its own.
     assert gateway_ops_module.resolve_authz_endpoint("10.0.0.5:9999") == ("10.0.0.5", 8084)
 
 
-def test_resolve_authz_endpoint_falls_back_before_first_request(monkeypatch):
+def test_resolve_authz_endpoint_does_not_guess_before_first_request(monkeypatch):
     monkeypatch.setattr(gateway_ops_module.hostinfo, "current_serving_port", lambda: None)
-    assert gateway_ops_module.resolve_authz_endpoint("10.0.0.5") == ("10.0.0.5", 8081)
+    assert gateway_ops_module.resolve_authz_endpoint("10.0.0.5") == ("10.0.0.5", None)
+
+
+@pytest.mark.asyncio
+async def test_install_refuses_to_write_authz_endpoint_without_live_port(monkeypatch):
+    calls: list = []
+    service = _service(calls=calls)
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda _: SimpleNamespace(gateway_authz_host="10.0.0.9", gateway_namespace="lens-gateway"),
+    )
+    monkeypatch.setattr(gateway_ops_module.hostinfo, "current_serving_port", lambda: None)
+
+    operation = await service.install_inference_gateway("cluster-a", "istio", install_prerequisites=False)
+
+    assert operation.status == "failed"
+    assert "serving port is unknown" in operation.message
+    assert not [argv for argv, _ in calls if list(argv[:3]) == ["kubectl", "apply", "-f"]]
 
 
 @pytest.mark.asyncio
@@ -1335,6 +1409,50 @@ async def test_model_server_health_checks_pods_selected_by_the_inference_pool():
 
     assert await service._model_server_state("cluster-a", "ns", "llm-d.ai/guide=pool") == "ready"
     assert calls == [["get", "pods", "-n", "ns", "-l", "llm-d.ai/guide=pool", "-o", "json"]]
+
+
+@pytest.mark.asyncio
+async def test_managed_rewrites_are_scoped_to_this_lens_cluster():
+    service = GatewayOpsService(operations=GatewayOperationDao())
+    items = [
+        {
+            "metadata": {
+                "name": "new-own",
+                "namespace": "ns-own",
+                "labels": {
+                    REWRITE_MANAGED_LABEL: "true",
+                    MODEL_SERVICE_LABEL: "ours",
+                    CLUSTER_LABEL: "cluster-a",
+                },
+            }
+        },
+        {
+            "metadata": {
+                "name": "foreign-labeled",
+                "namespace": "ns-other",
+                "labels": {
+                    REWRITE_MANAGED_LABEL: "true",
+                    MODEL_SERVICE_LABEL: "theirs",
+                    CLUSTER_LABEL: "cluster-b",
+                },
+            }
+        },
+        {
+            "metadata": {
+                "name": "legacy-foreign",
+                "namespace": "ns-other",
+                "labels": {MANAGED_LABEL: MANAGED_VALUE, MODEL_SERVICE_LABEL: "theirs"},
+            }
+        },
+    ]
+
+    async def kubectl(_cluster_id, argv, **_kwargs):
+        assert list(argv[:2]) == ["get", "inferencemodelrewrite"]
+        return _Result(stdout=json.dumps({"items": items}))
+
+    service._kubectl = kubectl
+
+    assert await service._managed_model_rewrites("cluster-a") == {("ns-own", "new-own")}
 
 
 def test_automatic_gateway_operations_do_not_write_audit_events():
@@ -1405,3 +1523,5 @@ async def test_reconcile_maps_public_model_name_to_served_model_name(monkeypatch
     assert "value: qwen3-0.6b" in manifest
     assert "modelRewrite: Qwen/Qwen3-0.6B" in manifest
     assert "name: qwen-pool" in manifest
+    assert "lens.llm-d.ai/cluster-id: cluster-a" in manifest
+    assert "lens.llm-d.ai/rewrite-managed: 'true'" in manifest

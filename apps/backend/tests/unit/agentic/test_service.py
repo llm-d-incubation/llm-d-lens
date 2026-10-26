@@ -5,6 +5,7 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -73,6 +74,7 @@ def test_load_target_uses_exact_aic_replicas_without_plain_estimates(monkeypatch
         )
     )
     assert len(candidates) == 1
+    assert candidates[0].provider_ref == "optimized-baseline"
     assert candidates[0].replicas == 3
     assert candidates[0].required_gpus == 3
 
@@ -103,6 +105,25 @@ def _request(**overrides) -> AgenticDeploymentCreateRequest:
         planning_facts={"model_weight_gib": 8, "vram_per_gpu_gib": 32, "free_gpu_count": 4},
         **overrides,
     )
+
+
+@pytest.mark.parametrize("context_length", [40960, 262144, 1048576])
+def test_model_card_context_reaches_effective_planning_facts(context_length):
+    request = _request(max_model_len=context_length)
+    facts = AgenticDeploymentService._planning_only_facts(
+        request.planning_facts,
+        max_model_len=request.max_model_len,
+        gpu_memory_utilization=request.gpu_memory_utilization,
+    )
+
+    assert request.planning_facts.context_length == 4096
+    assert facts.context_length == context_length
+
+
+@pytest.mark.parametrize("context_length", [255, 1048577])
+def test_deployment_context_rejects_values_outside_supported_range(context_length):
+    with pytest.raises(ValidationError, match="max_model_len"):
+        _request(max_model_len=context_length)
 
 
 def _resolved_facts(*, free_gpu_count=4, aic_predictions=()) -> ResolvedPlanningFacts:
@@ -164,7 +185,7 @@ def test_create_generates_an_approval_plan_without_deploying(monkeypatch):
     assert run.planning_trace[4]["ranking"][0]["candidate_id"] == run.selected_candidate.id
 
 
-def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp_path):
+def test_create_preserves_full_prompt_in_append_only_planning_snapshot(monkeypatch, tmp_path):
     service = AgenticDeploymentService(snapshot_store=PlanningSnapshotStore(tmp_path))
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.require_active_session",
@@ -172,7 +193,7 @@ def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp
     )
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
 
-    run = asyncio.run(service.create(_request(planner_prompt="do not persist this prompt")))
+    run = asyncio.run(service.create(_request(planner_prompt="persist this complete prompt")))
 
     assert run.planning_snapshot_id is not None
     assert run.planning_snapshot_path is not None
@@ -180,7 +201,10 @@ def test_create_writes_a_redacted_append_only_planning_snapshot(monkeypatch, tmp
     assert payload["event"] == "created"
     assert payload["run_id"] == run.id
     assert payload["request"]["planner_prompt_present"] is True
-    assert "planner_prompt" not in payload["request"]
+    assert payload["schema_version"] == 2
+    assert payload["request"]["planner_prompt"] == "persist this complete prompt"
+    assert payload["generator"]["requests"] == []
+    assert payload["planner"]["requests"] == []
     assert payload["selected_candidate"]["id"] == run.selected_candidate.id
 
 
@@ -228,7 +252,7 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
         return CandidateGenerationResult(
             proposals={
                 "candidates": [
-                    {"provider_ref": "baseline-vllm", "replicas": 1, "tensor_parallel_size": 1, "rationale": "Fits."}
+                    {"provider_ref": "optimized-baseline", "replicas": 1, "tensor_parallel_size": 1, "rationale": "Fits."}
                 ]
             },
             resolved=_resolved_facts(),
@@ -535,7 +559,7 @@ def test_apply_mode_merges_only_validated_historical_candidate_seeds(monkeypatch
             ),
             HistoricalCandidateSeed(
                 proposal=CandidateProposal(
-                    provider_ref="baseline-vllm",
+                    provider_ref="optimized-baseline",
                     replicas=3,
                     tensor_parallel_size=1,
                     rationale="Exceeds available capacity.",
@@ -550,7 +574,7 @@ def test_apply_mode_merges_only_validated_historical_candidate_seeds(monkeypatch
     seeded = next(candidate for candidate in merged if candidate.id == "precise-prefix-cache-routing-tp1-r1")
     assert seed_count == 1
     assert "benchmark:seed-1" in seeded.evidence_ids
-    assert all(candidate.id != "baseline-vllm-tp1-r3" for candidate in merged)
+    assert all(candidate.id != "optimized-baseline-tp1-r3" for candidate in merged)
 
 
 def test_create_records_selected_benchmark_refs_in_decision_snapshot(monkeypatch, tmp_path):
@@ -756,7 +780,7 @@ def test_create_uses_valid_ai_generated_candidates_without_falling_back(monkeypa
             proposals={
                 "candidates": [
                     {
-                        "provider_ref": "baseline-vllm",
+                        "provider_ref": "optimized-baseline",
                         "replicas": 1,
                         "tensor_parallel_size": 1,
                         "rationale": "Fits.",
@@ -783,11 +807,11 @@ def test_create_uses_valid_ai_generated_candidates_without_falling_back(monkeypa
     assert run.generator_model == "generator-model"
     assert run.generator_fallback_reason is None
     assert [proposal["provider_ref"] for proposal in run.generator_candidate_proposals] == [
-        "baseline-vllm",
+        "optimized-baseline",
         "pd-disaggregation",
     ]
     assert run.generator_candidate_proposals[1]["rationale"] == "Too large."
-    assert [candidate.id for candidate in run.candidates] == ["baseline-vllm-tp1-r1"]
+    assert [candidate.id for candidate in run.candidates] == ["optimized-baseline-tp1-r1"]
     assert len(run.rejected_candidates) == 1
     assert run.rejected_candidates[0].rejection_reasons == ["insufficient free accelerator cards"]
 
@@ -803,6 +827,12 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
     original_score = DeterministicPlanner.score
 
     class Response:
+        status_code = 200
+
+        @property
+        def text(self):
+            return json.dumps(self.json())
+
         def raise_for_status(self):
             pass
 
@@ -812,9 +842,9 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
                     {
                         "message": {
                             "content": (
-                                '{"candidate_id":"baseline-vllm-tp2-r1",'
-                                '"candidate_ids":["baseline-vllm-tp2-r1","baseline-vllm-tp1-r1"],'
-                                '"scores":{"baseline-vllm-tp2-r1":0.9,"baseline-vllm-tp1-r1":0.8},'
+                                '{"candidate_id":"optimized-baseline-tp2-r1",'
+                                '"candidate_ids":["optimized-baseline-tp2-r1","optimized-baseline-tp1-r1"],'
+                                '"scores":{"optimized-baseline-tp2-r1":0.9,"optimized-baseline-tp1-r1":0.8},'
                                 '"confidence":0.9,"rationale":"AIC-backed choice"}'
                             )
                         }
@@ -839,8 +869,18 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
         return CandidateGenerationResult(
             proposals={
                 "candidates": [
-                    {"provider_ref": "baseline-vllm", "replicas": 1, "tensor_parallel_size": 1, "rationale": "Fits."},
-                    {"provider_ref": "baseline-vllm", "replicas": 1, "tensor_parallel_size": 2, "rationale": "Scales."},
+                    {
+                        "provider_ref": "optimized-baseline",
+                        "replicas": 1,
+                        "tensor_parallel_size": 1,
+                        "rationale": "Fits.",
+                    },
+                    {
+                        "provider_ref": "optimized-baseline",
+                        "replicas": 1,
+                        "tensor_parallel_size": 2,
+                        "rationale": "Scales.",
+                    },
                 ]
             },
             resolved=_resolved_facts(
@@ -875,16 +915,18 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
 
     run = asyncio.run(service.create(_request(ai_provider_id="provider-1")))
 
-    planner_context = captured["json"]["messages"][1]["content"].partition("\n\n")[0]
+    planner_context = (
+        captured["json"]["messages"][1]["content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0]
+    )
     supplied = json.loads(planner_context)["valid_candidates"]
     supplied_by_id = {candidate["id"]: candidate for candidate in supplied}
     assert run.generator == "ai-mcp"
     assert run.decision_metadata is not None
     assert run.decision_metadata.planner == "openai-compatible"
     assert score_calls
-    assert score_calls[0] == ["baseline-vllm-tp1-r1", "baseline-vllm-tp2-r1"]
-    assert "resource_policy" not in supplied_by_id["baseline-vllm-tp1-r1"]
-    assert "resource_policy" not in supplied_by_id["baseline-vllm-tp2-r1"]
+    assert score_calls[0] == ["optimized-baseline-tp1-r1", "optimized-baseline-tp2-r1"]
+    assert "resource_policy" not in supplied_by_id["optimized-baseline-tp1-r1"]
+    assert "resource_policy" not in supplied_by_id["optimized-baseline-tp2-r1"]
 
 
 def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatch):
@@ -900,13 +942,13 @@ def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatc
         async def recommend(self, facts, candidates, **_kwargs):
             captured["performance_score_inputs"] = facts.performance_score_inputs
             captured["baseline_deployable"] = next(
-                candidate.deployable for candidate in candidates if candidate.id == "baseline-vllm-tp1-r1"
+                candidate.deployable for candidate in candidates if candidate.id == "optimized-baseline-tp1-r1"
             )
             planner = DeterministicPlanner()
             return planner.decide(facts, candidates), planner.score(facts, candidates)
 
     def score_inputs(_self, _model, _facts, candidates):
-        baseline = next(candidate for candidate in candidates if candidate.id == "baseline-vllm-tp1-r1")
+        baseline = next(candidate for candidate in candidates if candidate.id == "optimized-baseline-tp1-r1")
         return (
             PerformanceScoreInput(
                 candidate_id=baseline.id,
@@ -952,8 +994,8 @@ def test_relaxed_candidate_gets_exact_estimate_before_scoring(monkeypatch):
         .candidates(facts)[0]
         .model_copy(
             update={
-                "id": "baseline-vllm-tp2-r1",
-                "provider_ref": "baseline-vllm",
+                "id": "optimized-baseline-tp2-r1",
+                "provider_ref": "optimized-baseline",
                 "tensor_parallel_size": 2,
                 "replicas": 1,
                 "required_gpus": 2,
@@ -1003,7 +1045,7 @@ def test_missing_aic_predictions_estimate_each_supported_candidate_for_ai_scorin
     candidates = DeterministicPlanner().candidates(facts)
     supported = [
         next(candidate for candidate in candidates if candidate.provider_ref == provider_ref)
-        for provider_ref in ("baseline-vllm", "optimized-baseline", "pd-disaggregation")
+        for provider_ref in ("optimized-baseline", "pd-disaggregation")
     ]
     enriched_candidates, enriched_facts = asyncio.run(
         AgenticDeploymentService._estimate_missing_topologies(
@@ -1089,7 +1131,7 @@ def test_create_falls_back_only_when_all_ai_generated_candidates_are_invalid(mon
             proposals={
                 "candidates": [
                     {
-                        "provider_ref": "baseline-vllm",
+                        "provider_ref": "optimized-baseline",
                         "replicas": 8,
                         "tensor_parallel_size": 8,
                         "rationale": "Exceeds capacity.",
@@ -1111,7 +1153,7 @@ def test_create_falls_back_only_when_all_ai_generated_candidates_are_invalid(mon
     assert run.generator == "deterministic"
     assert run.generator_fallback_reason == "all_ai_candidates_invalid"
     assert run.candidates
-    assert run.rejected_candidates[0].id == "baseline-vllm-tp8-r8"
+    assert run.rejected_candidates[0].id == "optimized-baseline-tp8-r8"
     assert any(
         event["phase"] == "generation"
         and event["status"] == "fallback"
@@ -1255,7 +1297,11 @@ def test_refine_keeps_provider_selected_candidates(monkeypatch, tmp_path):
     assert created_path.read_text(encoding="utf-8") == created_payload
 
 
-def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
+@pytest.mark.parametrize("planner_fails", [False, True])
+def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch, tmp_path, planner_fails):
+    from llm_d_lens.agentic.planner import OpenAIPlannerError
+    from llm_d_lens.ai_providers.client import OpenAICompatibleClient
+
     service = AgenticDeploymentService()
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.require_active_session",
@@ -1265,24 +1311,52 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     prompts = []
     planning_lengths = []
 
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def post(self, endpoint, *, json, headers):
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "complete raw response"}}]},
+                request=httpx.Request("POST", endpoint),
+            )
+
+    async def validate_endpoint(_url):
+        pass
+
+    monkeypatch.setattr("llm_d_lens.ai_providers.service.validate_provider_endpoint", validate_endpoint)
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: Client())
+
     class Provider:
         settings = OpenAIPlannerSettings(base_url="http://provider", model="generator-model")
 
         async def recommend(self, facts, candidates, **_kwargs):
             from llm_d_lens.agentic.planner import DeterministicPlanner
 
+            await OpenAICompatibleClient("https://api.openai.com/", "planner-model").complete(
+                system_prompt="full planner system", user_content=_kwargs["operator_prompt"]
+            )
+            if planner_fails:
+                raise OpenAIPlannerError("invalid recorded response")
             return DeterministicPlanner().decide(facts, candidates), DeterministicPlanner().score(facts, candidates)
 
     async def generate(_self, _cluster_id, _model, facts, operator_prompt, on_progress=None):
         from llm_d_lens.agentic.generator import CandidateGenerationResult
 
+        await OpenAICompatibleClient("https://api.openai.com/", "generator-model").complete(
+            system_prompt="full generator system", user_content=operator_prompt
+        )
         prompts.append(operator_prompt)
         planning_lengths.append(facts.context_length)
         return CandidateGenerationResult(
             proposals={
                 "candidates": [
                     {
-                        "provider_ref": "baseline-vllm",
+                        "provider_ref": "optimized-baseline",
                         "replicas": 1,
                         "tensor_parallel_size": 1,
                         "rationale": "Fits the refreshed preference.",
@@ -1298,6 +1372,10 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     run = asyncio.run(
         service.create(_request(ai_provider_id="provider-1", planner_prompt="balanced", max_model_len=32768))
     )
+    original_path = tmp_path / run.planning_snapshot_path
+    original_payload = original_path.read_text()
+    assert run.generator_requests[0].request["messages"][1]["content"] == "balanced"
+    assert run.planner_requests[0].request["messages"][1]["content"] == "balanced"
     refined = asyncio.run(
         service.refine(
             run.id,
@@ -1312,6 +1390,17 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch):
     assert refined.generator_fallback_reason is None
     assert refined.planning_trace[-1]["candidate_id"] == refined.selected_candidate.id
     assert refined.planning_trace[4]["ranking"]
+    payload = json.loads((tmp_path / refined.planning_snapshot_path).read_text())
+    assert payload["request"]["planner_prompt"] == "prefer fewer replicas"
+    for stage in ("generator", "planner"):
+        record = payload[stage]["requests"][0]
+        assert record["request"]["messages"][1]["content"] == "prefer fewer replicas"
+        assert "complete raw response" in record["response_body"]
+        assert record["response_status"] == 200
+        assert record["finished_at"] is not None
+    assert refined.planner_fallback_reason == ("invalid_response" if planner_fails else None)
+    assert original_path.read_text() == original_payload
+    assert len(list((tmp_path / run.id / "requests").glob("*.json"))) == 4
 
 
 def test_refine_falls_back_to_deterministic_planning_when_provider_fails(monkeypatch):
@@ -1483,7 +1572,7 @@ def test_create_allows_external_planning_when_an_exact_aic_recommendation_exists
     run = asyncio.run(service.create(_request()))
 
     assert run.planner == "openai-compatible"
-    assert run.selected_candidate.id == "baseline-vllm-tp1-r1"
+    assert run.selected_candidate.id == "optimized-baseline-tp1-r1"
     assert all(candidate.score_source == "openai-compatible" for candidate in run.candidates)
     assert len(run.candidates) == 2
 

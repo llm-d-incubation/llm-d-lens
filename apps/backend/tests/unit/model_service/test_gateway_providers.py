@@ -7,6 +7,7 @@ import yaml
 
 from llm_d_lens.model_service.gateway_providers import (
     BASE_MODEL_HEADER,
+    DEFAULT_PROVIDER,
     PROVIDER_SPECS,
     PoolBinding,
     available_providers,
@@ -25,6 +26,7 @@ def _docs(text: str) -> list[dict]:
 def test_available_providers_covers_the_supported_gateways():
     assert available_providers() == ["agentgateway", "envoy-ai-gateway", "gke", "istio"]
     assert set(PROVIDER_SPECS) == set(available_providers())
+    assert DEFAULT_PROVIDER == "istio"
 
 
 def test_provider_spec_rejects_unknown_provider():
@@ -230,6 +232,7 @@ def _ext_auth_docs(provider: str) -> list[dict]:
                 gateway_name="lens-inference-gateway",
                 provider=provider,
                 authz_host="10.0.0.9",
+                authz_port=8084,
             )
         )
         if doc
@@ -242,6 +245,7 @@ def test_ext_auth_renders_shared_backend_for_each_http_provider():
         assert any(doc["kind"] == "Service" and doc["metadata"]["name"] == "lens-authz" for doc in docs), provider
         endpoints = next(doc for doc in docs if doc["kind"] == "Endpoints" and doc["metadata"]["name"] == "lens-authz")
         assert endpoints["subsets"][0]["addresses"] == [{"ip": "10.0.0.9"}]
+        assert endpoints["subsets"][0]["ports"][0]["port"] == 8084
 
 
 def test_ext_auth_service_port_is_stable_while_endpoints_track_lens_port():
@@ -264,6 +268,16 @@ def test_ext_auth_service_port_is_stable_while_endpoints_track_lens_port():
     assert endpoints["subsets"][0]["ports"][0]["port"] == 8084
 
 
+def test_render_inference_gateway_requires_authz_port_when_host_is_set():
+    with pytest.raises(ValueError, match="authz_port is required"):
+        render_inference_gateway(
+            namespace="lens-gateway",
+            gateway_name="lens-inference-gateway",
+            provider="istio",
+            authz_host="10.0.0.9",
+        )
+
+
 def test_istio_authz_tls_insecure_renders_destination_rule():
     docs = _docs(
         render_inference_gateway(
@@ -271,6 +285,7 @@ def test_istio_authz_tls_insecure_renders_destination_rule():
             gateway_name="lens-inference-gateway",
             provider="istio",
             authz_host="10.0.0.9",
+            authz_port=8084,
             authz_tls_insecure=True,
         )
     )
@@ -380,6 +395,7 @@ def test_ext_auth_path_carries_cluster_id():
         namespace="lens-gateway",
         gateway_name="gw",
         authz_host="10.0.0.9",
+        authz_port=8084,
         authz_cluster_id="cluster-a",
     )
     policy = next(doc for doc in docs if doc["kind"] == "SecurityPolicy")

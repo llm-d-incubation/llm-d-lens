@@ -357,8 +357,29 @@ failure retains the round, observed call count, and limit in
 `generator_fallback_detail` on the run and `generator.fallback_detail` in its
 planning snapshot; `generator_fallback_reason` remains the stable category.
 
-Agentic planning estimates missing exact AIC predictions separately for each validated baseline-vllm,
-optimized-baseline, and pd-disaggregation candidate using its workload and GPU topology. The
+Agentic generator and planner user messages begin with the operator's full preference,
+before the JSON context. Their instructions prioritize platform/hardware validity,
+explicit user requirements, soft preferences, then evidence and diversity. Diversity
+must not introduce forbidden topologies; selection may return fewer than three options.
+This is prompt guidance, not a general server-side natural-language constraint parser.
+
+Planning snapshots (schema version 2) preserve `request.planner_prompt` without redaction.
+`planner_prompt_present` remains a compatibility indicator, not a substitute for the text.
+Run fields `generator_requests` and `planner_requests` contain the actual provider-native
+request bodies, raw responses, timestamps, HTTP status, and error type for every HTTP attempt,
+including retries. Snapshots expose these under `generator.requests` and `planner.requests`.
+Stage audit files under `session-artifacts/agentic-planning/<run_id>/requests/` are persisted
+before sending and after completion, including failed or cancelled planning with no final
+run. Authentication headers and API keys are excluded; full prompts and tool context are
+private application data. Auditing applies to new requests, not historical reconstruction.
+
+Agentic candidate submissions accept `optimized-baseline`, `pd-disaggregation`,
+`tiered-prefix-cache`, and `precise-prefix-cache-routing`; `baseline-vllm` is rejected
+by the generator schema and excluded from planner ranking. Aggregated AIC recommendations
+map to `optimized-baseline`, including load-target and relaxed-anchor paths.
+
+Agentic planning estimates missing exact AIC predictions separately for each validated
+optimized-baseline and pd-disaggregation candidate using its workload and GPU topology. The
 candidate's estimate is supplied to AI scoring as `aic_estimate`; an unavailable estimate remains
 unknown, not a performance or SLO guarantee. Agentic estimates do not pass the original search
 TTFT/TPOT targets; they verify the fixed topology and workload without an SLO filter. Generator
@@ -697,7 +718,8 @@ The generated run defaults to preferring replicas on one node without making it 
     - `storage_type` (`"model-cache"`, default `"model-cache"`)
     - `storage_volume_id` (`string`, required, nonempty registered Model Cache volume ID)
     - `model_cache_path`, `pvc_name` (legacy fields, no longer used for deployment storage)
-    - `max_model_len`, `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`
+    - `max_model_len` (`integer`, default `4096`, range `256` to `1048576`; also applies to Agentic requests)
+    - `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`
     - `enable_prefix_caching`, `enforce_eager`, `vllm_arguments`, `use_cluster_proxy`, `http_proxy`, `https_proxy`, `no_proxy`
 
     ```json

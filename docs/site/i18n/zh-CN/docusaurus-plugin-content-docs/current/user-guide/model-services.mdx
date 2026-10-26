@@ -3,6 +3,8 @@ title: 模型服务
 description: 发布部署、创建 API 密钥并调用模型。
 ---
 
+集群未配置 Gateway 提供方时，默认使用 Istio；已明确配置的提供方保持不变。
+
 将就绪的部署发布为模型服务，应用即可使用 API 密钥调用。
 调用已有服务从 **My services（我的服务）**开始；发布服务使用 **Model services（模型服务）**。
 
@@ -36,12 +38,12 @@ description: 发布部署、创建 API 密钥并调用模型。
 
 ## 创建模型服务
 
-1. 打开 **Model services**，点击页面右上角 **Reconcile** 旁的天蓝色 **Add model（添加模型）**，展开与页面等高的右侧抽屉。
+1. 打开 **Model services**，点击内容区 **Service Flow**、**Reconcile** 旁的天蓝色 **Add model（添加模型）**，展开与页面等高的右侧抽屉。
 2. 选择部署所在的 **Cluster（集群）**。
-3. 选择 **Provider**。仅列出当前集群中就绪且尚未添加到模型的部署；已有提供方即使离线或权重为 0，也不会再次列出。
+3. 选择 **Provider**。列表只显示当前集群中尚未加入任何模型、且带 deployment-owned InferencePool 和 EPP 的就绪 llm-d 部署；纯 vLLM 部署不能作为 Model Service 的后端，因此不会显示。已有提供方即使离线或权重为 0，也不会再次列出。
 4. 在 **Model name mapping** 中核对只读的 **Provider model name**，它由所选部署自动填充。
 5. 在 **Exposed to users as** 下方，从当前集群的建议列表选择已有的 **Public model name**，或输入新名称，例如 `team-chat`。应用在 Chat Completions API 的 `model` 字段中使用此公开名称，而不是提供方的模型名称。
-6. 点击 **Add**。新名称会同时创建模型服务和模型服务器；同一集群中的已有名称会向该模型添加部署并复用 HTTPRoute。点击 **Cancel** 放弃操作。
+6. 点击 **Add**。新名称会同时创建模型服务和模型服务器；同一集群中的已有名称会向该模型添加部署并复用 HTTPRoute。提交前可点击 **Cancel** 或抽屉外的遮罩放弃操作。
 7. 在 **Service flow（服务流程）**中检查状态，然后到 **My services** 复制 **cURL** 请求进行调用。
 
 当公开模型名与 provider 模型名不一致时，Lens 会为该服务的 InferencePool 创建

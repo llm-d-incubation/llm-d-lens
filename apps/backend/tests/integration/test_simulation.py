@@ -708,8 +708,7 @@ def test_simulation_config_backend_options_are_immutable():
 
 
 @pytest.mark.asyncio
-async def test_queued_tasks_run_in_creation_order(simulation_root, monkeypatch):
-    monkeypatch.setenv("SIMULATION_MAX_CONCURRENT_TASKS", "1")
+async def test_same_target_tasks_run_in_creation_order(simulation_root, monkeypatch):
     first = task_record(simulation_root, "11111111", "queued")
     second = task_record(simulation_root, "22222222", "queued")
     started = []
@@ -737,6 +736,34 @@ async def test_queued_tasks_run_in_creation_order(simulation_root, monkeypatch):
         await asyncio.sleep(0.01)
     assert started == ["11111111", "22222222"]
     second_release.set()
+    await asyncio.gather(*scheduled)
+
+
+@pytest.mark.asyncio
+async def test_different_targets_run_concurrently(simulation_root, monkeypatch):
+    first = task_record(simulation_root, "33333333", "queued")
+    second = task_record(simulation_root, "44444444", "queued").model_copy(
+        update={"endpoint_url": "http://127.0.0.1:8001"}
+    )
+    started = []
+    release = asyncio.Event()
+
+    async def fake_run(task):
+        task.status = "running"
+        started.append(task.id)
+        await release.wait()
+        task.status = "completed"
+
+    monkeypatch.setattr(simulation_service, "_run_task", fake_run)
+    simulation_service._schedule_task(first)
+    simulation_service._schedule_task(second)
+    scheduled = list(simulation_service.runners.values())
+    for _ in range(20):
+        if len(started) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert started == ["33333333", "44444444"]
+    release.set()
     await asyncio.gather(*scheduled)
 
 
@@ -2321,6 +2348,46 @@ async def test_create_task_resolves_a_model_service_group_to_its_healthy_member(
     assert task.prompt.dataset.tokenizer == (served_name or group.model_ref)
     assert task.endpoint_url == "http://gateway.model-service.svc:80"
     gateway.assert_awaited_once_with("cluster-123")
+
+
+@pytest.mark.asyncio
+async def test_model_service_task_repairs_gateway_by_public_name(monkeypatch, simulation_root):
+    """Reruns from before group ids were persisted still reconcile the Gateway."""
+    import types
+
+    group = types.SimpleNamespace(id="msg-1", cluster_id="cluster-1", name="qwen3")
+
+    class _Groups:
+        def get(self, _group_id):
+            return None
+
+        def list(self):
+            return [group]
+
+    monkeypatch.setattr(
+        "llm_d_lens.model_service.service.default_service",
+        lambda: types.SimpleNamespace(groups=_Groups()),
+    )
+    calls = []
+
+    class _GatewayOps:
+        async def reconcile_cluster_gateway(self, cluster_id):
+            calls.append(cluster_id)
+            return types.SimpleNamespace(status="succeeded", message="")
+
+    monkeypatch.setattr("llm_d_lens.model_service.gateway_ops.GatewayOpsService", _GatewayOps)
+    task = task_record(simulation_root, "aaaaaaaa", "queued").model_copy(
+        update={
+            "endpoint_mode": "deployment",
+            "endpoint_cluster_id": "cluster-1",
+            "model_name": "qwen3",
+            "model_service_group_id": None,
+        }
+    )
+
+    await simulation_service._ensure_model_service_gateway(task)
+
+    assert calls == ["cluster-1"]
 
 
 def test_model_service_group_id_requires_an_api_key():

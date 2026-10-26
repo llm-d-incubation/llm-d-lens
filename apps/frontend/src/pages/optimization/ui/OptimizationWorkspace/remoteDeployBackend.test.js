@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution, testRemoteTarget } from './remoteDeployBackend.js';
+import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution } from './remoteDeployBackend.js';
 
 test('Advanced deployment binds placement and loads labels for the selected cluster', async (t) => {
     const calls = [];
@@ -45,7 +44,7 @@ test('endpoint reconnection failure retains ready deployment', async (t) => {
     assert.deepEqual(await getDeploymentExecutions({ status: 'ready' }), [{ execution_id: 'one', endpoint: 'http://service', endpoint_health: 'unknown' }]);
 });
 
-test('stop binds session before action; remote credentials stay in per-request body', async (t) => {
+test('stop binds session before action', async (t) => {
     const original = globalThis.sessionStorage;
     globalThis.sessionStorage = { getItem: () => 'session-1' };
     t.after(() => { if (original === undefined) delete globalThis.sessionStorage; else globalThis.sessionStorage = original; });
@@ -55,11 +54,7 @@ test('stop binds session before action; remote credentials stay in per-request b
     assert.match(calls[0][0], /run%2Fa\/cluster-session$/);
     assert.deepEqual(calls[0][1], { cluster_session_id: 'session-1' });
     assert.match(calls[1][0], /case%2Fb\/stop$/);
-    const password = randomUUID();
-    await testRemoteTarget({ authMethod: 'password' }, password);
-    assert.deepEqual(calls[2][1].credentials, { password });
-    await testRemoteTarget({ authMethod: 'key' }, 'unused');
-    assert.deepEqual(calls[3][1].credentials, {});
+    assert.equal(calls.length, 2);
 });
 
 test('delete retains strict 204 contract and structured errors', async (t) => {

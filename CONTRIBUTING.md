@@ -4,7 +4,6 @@
 
 - A community of **contributors** who file issues and submit pull requests
 - A body of **core maintainers** who own `llm-d-lens` overall and drive its development
-- A **lead core maintainer** who is the catch-all decision maker when consensus cannot be reached by core maintainers
 
 All contributions are expected to follow `llm-d-lens` design principles and best practices, as enforced by core maintainers. While high-quality pull requests are appreciated and encouraged, all maintainers reserve the right to prioritize their own work over code reviews at-will, hence contributors should not expect their work to be reviewed promptly.
 
@@ -20,18 +19,6 @@ The core maintainers lead the development of `llm-d-lens` and define the benchma
 The core maintainers should publicly articulate their decision-making, and share the reasoning behind their decisions, vetoes, and dispute resolution.
 
 List of core maintainers can be found in the [OWNERS](https://github.com/llm-d-incubation/llm-d-lens/blob/main/OWNERS) file.
-
-### Lead core maintainer
-
-When core maintainers cannot come to a consensus, a publicly declared lead maintainer is expected to settle the debate and make executive decisions.
-
-The Lead Core Maintainer should publicly articulate their decision-making, and give a clear reasoning for their decisions.
-
-The Lead Core Maintainer is also responsible for confirming or removing core maintainers.
-
-#### Lead maintainer (as of 10/08/2026)
-
-- [Tyler Rimaldi](https://github.com/vezio)
 
 ### Decision Making
 

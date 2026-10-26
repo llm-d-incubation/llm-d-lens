@@ -1,4 +1,5 @@
 import { useDebouncedValue } from '../../../../shared/lib/useDebouncedValue';
+import { cn } from '../../../../shared/lib/cn';
 import { useNotice } from '../../../../shared/lib/useNotice';
 import { paginate } from '../../../../shared/lib/pagination';
 import { PaginationControls } from '../../../../shared/ui/PaginationControls';
@@ -7,7 +8,7 @@ import { useResourceList } from '../../../../shared/lib/useResourceList';
 import { AsyncState } from '../../../../shared/ui/AsyncState';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePolling } from '../../../../shared/lib/usePolling';
-import { CheckCircle2, HardDrive, Info, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, ServerCog, Server } from 'lucide-react';
+import { CheckCircle2, HardDrive, Info, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Search, Server, ServerCog, Tags } from 'lucide-react';
 import {
     createStorageVolume,
     acknowledgeStorageVolumeNodes,
@@ -16,11 +17,13 @@ import {
     listStorageVolumes,
 } from './storageManagementBackend';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
-import { Button } from '../../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../../shared/ui/Button';
+import { StatCardRow } from '../../../../shared/ui/StatCard';
 import { Input, Select } from '../../../../shared/ui/FormControls';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../../shared/ui/ModulePage';
+import { Panel } from '../../../../shared/ui/Panel';
 import { StorageVolumeTable } from './StorageVolumeTable';
 import { StorageResourceDetailPanel } from './StorageResourceDetailPanel';
 import { CreateStorageVolumeModal } from './CreateStorageVolumeModal';
@@ -63,7 +66,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
     const [mutatingId, setMutatingId] = useState(null);
     const [notice, setNotice] = useNotice();
     const [page, setPage] = useState(0);
-    const [sidebarOpen, setSidebarOpen] = useState(true);
+    const [listOpen, setListOpen] = useState(true);
     const pageSize = DEFAULT_PAGE_SIZE;
 
     const statusControllerRef = useRef(null);
@@ -150,6 +153,12 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
     }, [knownClusters, items, clusterId]);
 
     const hasFilters = Boolean(query || kind || purpose || clusterId);
+    const clearFilters = () => {
+        setSearchInput('');
+        setKind('');
+        setPurpose('');
+        setClusterId('');
+    };
 
     useEffect(() => {
         setPage(0);
@@ -228,32 +237,20 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
     };
 
     return (
-        <ModulePage className="storage-page" contentClassName="flex flex-col gap-4">
+        <ModulePage className="storage-page" contentClassName="flex flex-col gap-4 lg:h-[var(--workspace-height)] lg:pb-4">
             <ModuleHeader
                 icon={HardDrive}
                 title="Storage"
                 description="Manage registered storage volumes for model cache, datasets, and deployment artifacts across clusters."
-                actions={(
-                    <>
-                        {notice && (
+            />
+            <StatCardRow
+                actions={notice && (
                             <span role="status" className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1.5 text-[11px] text-emerald-200">
                                 <CheckCircle2 size={13} aria-hidden="true" />
                                 {notice}
                             </span>
-                        )}
-                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh storage volumes">
-                            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                        </Button>
-                        <PermissionGate permission="storage:volume:create">
-                            <Button variant="sky" size="sm" onClick={openCreate}>
-                                <Plus size={14} aria-hidden="true" /> New storage volume
-                            </Button>
-                        </PermissionGate>
-                    </>
                 )}
-            />
-
-            <section className="flex flex-col gap-3">
+            >
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.ready} />
@@ -265,85 +262,100 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                     <StatCard label="Attention" value={summary.attention} tone={summary.attention > 0 ? 'text-orange-300' : 'text-white'} />
                     <StatCard label="Failed" value={summary.failed} tone={summary.failed > 0 ? 'text-rose-300' : 'text-white'} />
                 </div>
-            </section>
+            </StatCardRow>
 
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch lg:h-[calc(100vh-17rem)] lg:min-h-[28rem]">
-            <div className={`flex flex-col gap-3 transition-all duration-200 lg:h-full ${sidebarOpen ? 'lg:w-80 lg:shrink-0' : 'lg:w-auto'}`}>
-                <div className="flex shrink-0 items-center gap-2">
-                    {sidebarOpen && (
-                        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-2xl border border-slate-800/80 bg-slate-900/50 p-1.5 pl-3 backdrop-blur-xl transition-colors hover:border-cyan-500/40">
-                            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold tracking-wide text-[#037ffc] dark:text-cyan-400">
-                                <Server size={14} />
-                                <span className="hidden sm:inline">Cluster</span>
-                            </span>
-                            <Select
-                                id="storage-cluster-filter"
-                                aria-label="Filter by cluster"
-                                value={clusterId}
-                                onChange={(event) => setClusterId(event.target.value)}
-                                className="w-full min-w-0"
-                            >
-                                <option value="">All clusters</option>
-                                {mergedClusters.map((cluster) => (
-                                    <option key={cluster} value={cluster}>{clusterNameById[cluster] || cluster}</option>
-                                ))}
-                            </Select>
-                        </div>
-                    )}
-                    <Button
-                        variant="secondary"
-                        size="icon"
-                        onClick={() => setSidebarOpen((current) => !current)}
-                        title={sidebarOpen ? 'Collapse storage list' : 'Expand storage list'}
-                        aria-label={sidebarOpen ? 'Collapse storage list' : 'Expand storage list'}
-                        className="hidden shrink-0 lg:inline-flex"
-                    >
-                        {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-                    </Button>
-                </div>
-            {sidebarOpen && (
-            <section
+            <Panel
+                padding="none"
                 aria-busy={loading || refreshing}
-                className="storage-card relative flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
+                className="storage-card flex flex-col lg:min-h-[28rem] lg:flex-1"
             >
-              <div className="flex min-h-0 flex-1 flex-col p-4">
-                <div className="mt-3 flex shrink-0 flex-col gap-2">
-                    <div className="relative">
-                        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true" />
+                <div className="shrink-0 space-y-3 border-b border-theme-border p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setListOpen((open) => !open)}
+                                aria-expanded={listOpen}
+                                aria-controls="storage-volume-list"
+                                aria-label={listOpen ? 'Collapse storage list' : 'Expand storage list'}
+                                title={listOpen ? 'Collapse storage list' : 'Expand storage list'}
+                            >
+                                {listOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+                            </Button>
+                            <SectionLabel className="mb-0 text-sm font-semibold normal-case tracking-normal">{`Storage volumes (${items.length})`}</SectionLabel>
+                        </div>
+                        <div className="ml-auto flex items-center gap-2">
+                            <RefreshButton onClick={load} disabled={refreshing} refreshing={refreshing} label="Refresh storage volumes" />
+                            <PermissionGate permission="storage:volume:create">
+                                <Button variant="sky" size="sm" onClick={openCreate}>
+                                    <Plus size={14} aria-hidden="true" /> New storage volume
+                                </Button>
+                            </PermissionGate>
+                        </div>
+                    </div>
+                    <div className="grid items-center gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_11rem_9rem_10rem_auto]">
                         <Input
+                            variant="toolbar"
+                            icon={Search}
                             type="search"
                             value={searchInput}
                             onChange={(event) => setSearchInput(event.target.value)}
                             placeholder="Search by name"
                             aria-label="Search storage volumes"
-                            className="h-10 py-2 pl-9 text-xs"
+                            className="h-9 min-w-0"
                         />
+                        <Select
+                            variant="toolbar"
+                            icon={Server}
+                            id="storage-cluster-filter"
+                            aria-label="Filter by cluster"
+                            value={clusterId}
+                            onChange={(event) => setClusterId(event.target.value)}
+                            className="h-9 min-w-0 text-xs"
+                        >
+                            <option value="">All clusters</option>
+                            {mergedClusters.map((cluster) => (
+                                <option key={cluster} value={cluster}>{clusterNameById[cluster] || cluster}</option>
+                            ))}
+                        </Select>
+                        <Select
+                            variant="toolbar"
+                            icon={HardDrive}
+                            value={kind}
+                            onChange={(event) => setKind(event.target.value)}
+                            aria-label="Filter by type"
+                            className="h-9 min-w-0 text-xs"
+                        >
+                            <option value="">All types</option>
+                            {STORAGE_KIND_OPTIONS.map((option) => (
+                                <option key={option} value={option}>{kindLabel(option)}</option>
+                            ))}
+                        </Select>
+                        <Select
+                            variant="toolbar"
+                            icon={Tags}
+                            value={purpose}
+                            onChange={(event) => setPurpose(event.target.value)}
+                            aria-label="Filter by purpose"
+                            className="h-9 min-w-0 text-xs"
+                        >
+                            <option value="">All purposes</option>
+                            {PURPOSE_OPTIONS.map((option) => (
+                                <option key={option} value={option}>{purposeLabel(option)}</option>
+                            ))}
+                        </Select>
+                        {hasFilters && (
+                            <Button variant="ghost" size="xs" onClick={clearFilters}>
+                                <RotateCcw size={11} aria-hidden="true" /> Clear filters
+                            </Button>
+                        )}
                     </div>
-                    <select
-                        value={kind}
-                        onChange={(event) => setKind(event.target.value)}
-                        aria-label="Filter by type"
-                        className="h-10 w-full rounded-xl border border-slate-800/40 bg-[#0b0f17] px-3 text-xs text-slate-300 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/10"
-                    >
-                        <option value="">All types</option>
-                        {STORAGE_KIND_OPTIONS.map((option) => (
-                            <option key={option} value={option}>{kindLabel(option)}</option>
-                        ))}
-                    </select>
-                    <select
-                        value={purpose}
-                        onChange={(event) => setPurpose(event.target.value)}
-                        aria-label="Filter by purpose"
-                        className="h-10 w-full rounded-xl border border-slate-800/40 bg-[#0b0f17] px-3 text-xs text-slate-300 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/10"
-                    >
-                        <option value="">All purposes</option>
-                        {PURPOSE_OPTIONS.map((option) => (
-                            <option key={option} value={option}>{purposeLabel(option)}</option>
-                        ))}
-                    </select>
                 </div>
-                <div className="mt-3 flex min-h-0 flex-1 flex-col">
-                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                <div className={cn('grid min-h-0 flex-1', listOpen && 'lg:grid-cols-[minmax(16rem,1fr)_minmax(0,2fr)]')}>
+                <section id="storage-volume-list" aria-label="Storage volume list" hidden={!listOpen}
+                    className={cn('min-h-0 min-w-0 flex-col border-b border-theme-border p-4 lg:border-b-0 lg:border-r', listOpen ? 'flex' : 'hidden')}>
+                <div className="max-h-96 min-h-0 flex-1 overflow-y-auto lg:max-h-none">
                 <AsyncState loading={loading} error={error} empty={items.length === 0}
                     loadingContent={(
                     <p className="px-4 py-12 text-center text-xs text-slate-500">Loading storage volumes…</p>
@@ -369,11 +381,7 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                             hasFilters ? (
                                 <Button
                                     variant="secondary"
-                                    onClick={() => {
-                                        setSearchInput('');
-                                        setKind('');
-                                        setClusterId('');
-                                    }}
+                                    onClick={clearFilters}
                                 >
                                     Clear filters
                                 </Button>
@@ -394,21 +402,15 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                     />
                 </AsyncState>
                 </div>
-                {!loading && !error && items.length > 0 && (
-                    <div className="mt-2 flex shrink-0 flex-col gap-3 border-t border-slate-800/60 px-1 pt-4 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-end">
-                        <div className="flex items-center gap-2">
+                {!loading && !error && totalPages > 1 && (
+                    <div className="mt-3 flex shrink-0 items-center justify-center gap-2 border-t border-theme-border pt-3 text-xs text-theme-muted">
                             <PaginationControls page={currentPage} totalPages={totalPages} onPageChange={setPage} />
-                        </div>
                     </div>
                 )}
-                </div>
-              </div>
-            </section>
-            )}
-            </div>
+                </section>
 
-            <section className="storage-card flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 p-6 shadow-2xl backdrop-blur-xl">
-                <SectionLabel className="shrink-0 text-[#037ffc]">Status</SectionLabel>
+            <section aria-label="Storage details" className="flex min-h-0 min-w-0 flex-col p-4">
+                <SectionLabel className="shrink-0 text-sm font-semibold normal-case tracking-normal">Storage details</SectionLabel>
                 <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
                     <StorageResourceDetailPanel
                         item={selectedResourceItem}
@@ -419,7 +421,8 @@ export function StorageManagementPage({ initialClusterId = '', initialVolumeId =
                     />
                 </div>
             </section>
-            </div>
+                </div>
+            </Panel>
 
             {dialog === 'create' && (
                 <CreateStorageVolumeModal

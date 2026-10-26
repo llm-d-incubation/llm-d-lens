@@ -216,10 +216,6 @@ async def test_published_readiness_and_stop_use_saved_deployment_names(tmp_path)
             return 1, "", 'Error from server (NotFound): deployments.apps "model" not found'
         return 0, "ok", ""
 
-    async def smoke_test(namespace, endpoint):
-        return None
-
-    runner.endpoint_smoke_test = smoke_test
     adapter._command_runner = runner
     artifact = GuideDeploymentArtifact(
         "optimized-baseline",
@@ -255,10 +251,6 @@ async def test_published_readiness_retries_transient_missing_deployment(monkeypa
     async def runner(_command):
         return next(responses)
 
-    async def smoke_test(_namespace, _endpoint):
-        return None
-
-    runner.endpoint_smoke_test = smoke_test
     adapter._command_runner = runner
     sleep = AsyncMock()
     monkeypatch.setattr("llm_d_lens.deploy.providers.optimized_baseline.asyncio.sleep", sleep)

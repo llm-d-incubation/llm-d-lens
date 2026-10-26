@@ -33,7 +33,7 @@ test('summary preserves server total and page-size selection resets the page', (
     let view;
     function Capture() {
         view = PaginationControls({ page: 2, totalPages: 21, total: 410, pageStart: 41, pageEnd: 60,
-            itemLabel: 'tasks', pageSize: 20, pageSizeOptions: [10, 20, 50], pageSizeId: 'tasks-size',
+            itemLabel: 'tasks', pageSize: 20, pageSizeOptions: [10, 20, 50, 100], pageSizeId: 'tasks-size',
             onPageChange: page => changes.push(['page', page]), onPageSizeChange: size => changes.push(['size', size]) });
         return null;
     }
@@ -42,6 +42,7 @@ test('summary preserves server total and page-size selection resets the page', (
     const sizeControls = view.props.children[1].props.children.props.children[0];
     const select = sizeControls.props.children[1];
     assert.equal(select.props.id, 'tasks-size');
-    select.props.onChange({ target: { value: '50' } });
-    assert.deepEqual(changes, [['size', 50], ['page', 0]]);
+    assert.match(renderToStaticMarkup(view), /<option value="100">100<\/option>/);
+    select.props.onChange({ target: { value: '100' } });
+    assert.deepEqual(changes, [['size', 100], ['page', 0]]);
 });

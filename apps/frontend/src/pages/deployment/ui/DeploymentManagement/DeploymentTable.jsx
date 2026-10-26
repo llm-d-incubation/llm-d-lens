@@ -220,15 +220,21 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
         });
     };
 
-    // Keep the expanded row's pod list live while it's open; pause entirely
-    // once collapsed so we don't poll pods for every deployment on the page.
+    // Poll pods for the visible page so the status dot reflects live service
+    // availability and reduced capacity, not only the slower backend record.
+    const executionIdsKey = items.filter((item) => !item.pending && item.execution_id)
+        .map((item) => item.execution_id).join('|');
     useEffect(() => {
         if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-        if (!expandedId) return undefined;
-        pollTimerRef.current = setInterval(() => fetchPodsFor(expandedId, true), PODS_POLL_INTERVAL_MS);
+        const executionIds = executionIdsKey ? executionIdsKey.split('|') : [];
+        if (!executionIds.length) return undefined;
+        const poll = () => Promise.all(executionIds.map((id) => fetchPodsFor(id, true)));
+        poll();
+        pollTimerRef.current = setInterval(poll, PODS_POLL_INTERVAL_MS);
         return () => clearInterval(pollTimerRef.current);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [expandedId]);
+        // Polling is keyed by the visible execution ids; fetchPodsFor closes
+        // over the current API client and is intentionally not a dependency.
+    }, [executionIdsKey]);
 
     return (
         <>

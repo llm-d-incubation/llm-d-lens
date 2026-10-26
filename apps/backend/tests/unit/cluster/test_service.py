@@ -1037,6 +1037,36 @@ def test_update_cluster_settings_rejects_empty_custom_proxy(monkeypatch):
     assert excinfo.value.code == "invalid_proxy_config"
 
 
+def test_update_cluster_settings_rejects_model_gateway_provider_change(monkeypatch):
+    cluster = registry.Cluster(
+        id="cluster-1",
+        name="c1",
+        description="",
+        created_at="2026-01-01T00:00:00Z",
+        gateway_provider="istio",
+    )
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+    monkeypatch.setattr(registry, "update_cluster", lambda *args, **kwargs: cluster)
+    with pytest.raises(ClusterOverviewError) as excinfo:
+        service.update_cluster_settings("cluster-1", gateway_provider="envoy-ai-gateway")
+    assert excinfo.value.code == "gateway_provider_immutable"
+    service.update_cluster_settings("cluster-1", gateway_provider="istio")
+
+
+def test_update_cluster_settings_allows_first_model_gateway_provider_assignment(monkeypatch):
+    cluster = registry.Cluster(id="cluster-1", name="c1", description="", created_at="2026-01-01T00:00:00Z")
+    captured = {}
+    monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
+
+    def fake_update(cluster_id, **kwargs):
+        captured.update(kwargs)
+        return cluster
+
+    monkeypatch.setattr(registry, "update_cluster", fake_update)
+    service.update_cluster_settings("cluster-1", gateway_provider="istio")
+    assert captured["gateway_provider"] == "istio"
+
+
 def test_create_cluster_rejects_duplicate_name(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "cluster_settings", ClusterSettings(tmp_path / "sessions", "llm-d-bench-", tmp_path))
     registry.create_cluster("prod-cluster", "", "kubeconfig: {}")

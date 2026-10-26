@@ -151,17 +151,18 @@ export default function WelcomeIssuesPage({
     };
 
     return (
-        <div className="welcome-page relative min-h-full bg-theme-bg">
+        <div className="welcome-page relative min-h-full bg-theme-bg px-4 py-6 sm:px-6 lg:px-12 lg:py-10">
             <div className="pointer-events-none absolute inset-0 hidden overflow-hidden dark:block" aria-hidden="true">
                 <div className="absolute -top-40 left-1/4 h-96 w-[42rem] rounded-full bg-sky-400/10 blur-3xl dark:bg-sky-500/10" />
             </div>
             <PageHeader
+                className="relative bg-transparent px-0 pt-0 sm:px-0"
                 title="Issues"
                 subtitle={`${total} current finding${total === 1 ? '' : 's'} in the selected scope`}
                 onNavigateBack={() => onNavigate('welcome', { clusterId })}
                 onToggleMobileNav={onToggleMobileNav}
             />
-            <div className="w-full space-y-4 p-4 sm:p-6">
+            <div className="relative w-full space-y-4 pt-6">
                 <Panel title="Filters" className={WELCOME_CARD}>
                     <div className="grid gap-3 md:grid-cols-4">
                         <Select

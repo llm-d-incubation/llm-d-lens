@@ -703,7 +703,7 @@ def test_load_prediction_failure_is_not_silently_discarded(monkeypatch):
         )
 
 
-def test_resolver_persists_similar_completed_history_as_benchmark_evidence(monkeypatch):
+def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkeypatch):
     monkeypatch.setattr(
         "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
     )
@@ -763,7 +763,7 @@ def test_resolver_persists_similar_completed_history_as_benchmark_evidence(monke
     assert captured == {"status": "completed", "model": "Qwen/Qwen3-8B", "limit": 20}
     simulation_evidence = next(item for item in resolved.evidence if item.id == "simulation-history")
     assert simulation_evidence.details["total"] == 1
-    assert simulation_evidence.details["benchmark_record_count"] >= 1
+    assert simulation_evidence.details["benchmark_record_count"] == 0
     assert "observations" not in simulation_evidence.details
 
 

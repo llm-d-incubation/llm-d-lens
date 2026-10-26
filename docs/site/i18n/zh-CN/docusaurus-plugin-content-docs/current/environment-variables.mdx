@@ -24,7 +24,7 @@ shell/Compose/Helm values 中导出它们。大多数变量在本地开发环境
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
 | `LLM_D_BENCH_DB_MODE` | `embedded`（内置 Postgres）或 `external`。 | 当未设置 `LLM_D_BENCH_DATABASE_URL` 时为 `embedded`；否则为 `external` |
-| `LLM_D_BENCH_DATABASE_URL` | 使用外部数据库时的连接字符串。 | —（必填，无默认值） |
+| `LLM_D_BENCH_DATABASE_URL` | 使用外部数据库时的连接字符串。必须显式包含 TCP 端口（例如 `:5432`）；Unix socket DSN 不受此限制。 | —（必填，无默认值） |
 | `LLM_D_BENCH_EMBEDDED_DB_DIR` / `LLM_D_BENCH_EMBEDDED_DB_PASSWORD` | 内置数据库的数据目录和密码。 | `LLM_D_BENCH_EMBEDDED_DB_DIR`：`~/.llm-d-lens/db/data`<br />`LLM_D_BENCH_EMBEDDED_DB_PASSWORD`：—（必填，无默认值） |
 | `LLM_D_BENCH_DB_BOOTSTRAP_FILE` | 首次启动引导时应用的可选 SQL/种子文件。 | `~/.llm-d-lens/db-bootstrap.json` |
 

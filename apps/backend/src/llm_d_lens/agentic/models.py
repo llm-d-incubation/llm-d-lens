@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from llm_d_lens.ai_providers.client import AIRequestRecord
 from llm_d_lens.configuration.models import ModelSecretConfiguration
 from llm_d_lens.deploy.standard_kubernetes_service import StandardKubernetesServiceRequest
 
@@ -95,6 +96,8 @@ class AgenticDeploymentRun(BaseModel):
     generator_fallback_reason: str | None = None
     generator_fallback_detail: str | None = None
     generator_tool_trace: list[dict[str, object]] = Field(default_factory=list)
+    generator_requests: list[AIRequestRecord] = Field(default_factory=list)
+    planner_requests: list[AIRequestRecord] = Field(default_factory=list)
     planning_trace: list[dict[str, object]] = Field(default_factory=list)
     generator_candidate_proposals: list[dict[str, object]] = Field(default_factory=list)
     rejected_candidates: list[PlannedCandidate] = Field(default_factory=list)

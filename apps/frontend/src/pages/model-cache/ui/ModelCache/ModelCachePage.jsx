@@ -11,7 +11,8 @@ import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Download, Plus, Ref
 import { createModelCacheEntry, deleteModelCacheEntry, listModelCacheEntries, retryModelCacheEntry, syncAllModelCacheEntryNodes, syncModelCacheEntryNodes } from './modelCacheBackend';
 import { listStorageVolumes } from '../../../storage';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
-import { Button } from '../../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../../shared/ui/Button';
+import { StatCardRow } from '../../../../shared/ui/StatCard';
 import { Input, Select } from '../../../../shared/ui/FormControls';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
@@ -292,12 +293,14 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
     };
 
     return (
-        <ModulePage className="model-cache-page" contentClassName="flex flex-col gap-4 lg:h-screen lg:pb-4">
+        <ModulePage className="model-cache-page" contentClassName="flex flex-col gap-4 lg:h-[var(--workspace-height)] lg:pb-4">
             <ModuleHeader
                 icon={Download}
-                title="Model cache"
+                title="Model Cache"
                 description="Download, monitor, and reuse cached model files on registered storage volumes before deployment."
-                actions={(
+            />
+            <StatCardRow
+                actions={(onNavigateBack || notice || pendingSyncCount > 0) && (
                     <>
                         {onNavigateBack && (
                             <Button variant="secondary" size="sm" onClick={onNavigateBack} title="Back to model" aria-label="Back to model" className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
@@ -310,9 +313,6 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                                 {notice}
                             </span>
                         )}
-                        <Button variant="secondary" size="icon" onClick={load} disabled={refreshing} title="Refresh" aria-label="Refresh model cache entries" className="not-dark:bg-[#f3f4f6] not-dark:text-[#4b5563] not-dark:hover:bg-[#e5e7eb]">
-                            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
-                        </Button>
                         {pendingSyncCount > 0 && (
                             <PermissionGate permission="model-cache:entry:sync">
                                 <Button
@@ -328,16 +328,9 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                                 </Button>
                             </PermissionGate>
                         )}
-                        <PermissionGate permission="model-cache:entry:create">
-                            <Button variant="sky" size="sm" onClick={() => setDialog('download')}>
-                                <Plus size={14} aria-hidden="true" /> Download model
-                            </Button>
-                        </PermissionGate>
                     </>
                 )}
-            />
-
-            <section className="flex flex-col gap-3">
+            >
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.ready} />
@@ -345,7 +338,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                     <StatCard label="Failed" value={summary.failed} tone={summary.failed > 0 ? 'text-rose-300' : 'text-white'} />
                     <StatCard label="Deleting" value={summary.deleting} />
                 </div>
-            </section>
+            </StatCardRow>
 
             <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:items-stretch">
               <div className="flex flex-col gap-3 lg:h-full lg:w-72 lg:shrink-0">
@@ -409,7 +402,17 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                 className="model-cache-card flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
               >
               <div className="flex min-h-0 flex-1 flex-col p-6">
-                <SectionLabel className="shrink-0 text-[#037ffc]">{`Cached models (${filteredItems.length})`}</SectionLabel>
+                <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
+                    <SectionLabel className="mb-0">{`Cached models (${filteredItems.length})`}</SectionLabel>
+                    <div className="ml-auto flex items-center gap-2">
+                        <RefreshButton onClick={load} disabled={refreshing} refreshing={refreshing} label="Refresh model cache entries" />
+                        <PermissionGate permission="model-cache:entry:create">
+                            <Button variant="sky" size="sm" onClick={() => setDialog('download')}>
+                                <Plus size={14} aria-hidden="true" /> Download model
+                            </Button>
+                        </PermissionGate>
+                    </div>
+                </div>
                 <div className="mt-3 flex shrink-0 flex-col gap-3">
                     <div className="relative">
                         <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true" />
@@ -487,7 +490,6 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                     )}
                 >
 
-                    <>
                     <ModelCacheCardGrid
                         items={pagedItems}
                         mutatingId={mutatingId}
@@ -499,12 +501,13 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                         onDelete={openDelete}
                         onSyncNodes={handleSyncNodes}
                     />
-                    <PaginationControls className="mt-4" page={currentPage} totalPages={totalPages} onPageChange={setPage}
-                        total={filteredItems.length} pageStart={pageStart} pageEnd={pageEnd} itemLabel="cached models"
-                        pageSize={pageSize} pageSizeOptions={PAGE_SIZE_OPTIONS} onPageSizeChange={setPageSize} pageSizeId="model-cache-page-size" />
-                    </>
                 </AsyncState>
                 </div>
+                {!loading && !error && filteredItems.length > 0 && (
+                    <PaginationControls className="mt-4 shrink-0" page={currentPage} totalPages={totalPages} onPageChange={setPage}
+                        total={filteredItems.length} pageStart={pageStart} pageEnd={pageEnd} itemLabel="cached models"
+                        pageSize={pageSize} pageSizeOptions={PAGE_SIZE_OPTIONS} onPageSizeChange={setPageSize} pageSizeId="model-cache-page-size" />
+                )}
               </div>
             </section>
             </div>

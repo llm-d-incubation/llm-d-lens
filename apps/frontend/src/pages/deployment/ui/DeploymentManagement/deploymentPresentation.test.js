@@ -32,7 +32,7 @@ test('a running not-ready pod still downgrades a ready deployment', () => {
     const pods = [pod(), pod({ name: 'epp', ready: false })];
 
     assert.equal(derivePodStatusGroup(pods), 'In progress');
-    assert.equal(effectiveStatusLabel({ status: 'ready' }, pods), 'READY · POD NOT READY');
+    assert.equal(effectiveStatusLabel({ status: 'ready' }, pods), 'READY · CAPACITY REDUCED');
 });
 
 test('a completed pod does not hide a genuine pod failure', () => {
@@ -43,4 +43,25 @@ test('a completed pod does not hide a genuine pod failure', () => {
 
     assert.equal(derivePodStatusGroup(pods), 'Failed');
     assert.equal(effectiveStatusLabel({ status: 'ready' }, pods), 'READY · POD ERROR');
+});
+
+test('no pods make a ready deployment unavailable', () => {
+    assert.equal(effectiveStatusGroup({ status: 'ready' }, []), 'Failed');
+    assert.equal(effectiveStatusLabel({ status: 'ready' }, []), 'READY · POD UNAVAILABLE');
+});
+
+test('an EPP-only namespace makes a ready deployment unavailable', () => {
+    const pods = [pod({ name: 'optimized-baseline-epp-abc', labels: { 'llm-d-router-gateway': 'optimized-baseline-epp' } })];
+
+    assert.equal(effectiveStatusGroup({ status: 'ready' }, pods), 'Failed');
+});
+
+test('fewer ready model-server pods than requested replicas is degraded', () => {
+    const pods = [
+        pod({ name: 'decode-a', labels: { 'llm-d.ai/role': 'decode', 'llm-d.ai/inference-serving': 'true' } }),
+        pod({ name: 'decode-b', phase: 'Pending', ready: false, labels: { 'llm-d.ai/role': 'decode' } }),
+    ];
+
+    assert.equal(effectiveStatusGroup({ status: 'ready', replicas: 2 }, pods), 'Degraded');
+    assert.equal(effectiveStatusLabel({ status: 'ready', replicas: 2 }, pods), 'READY · CAPACITY REDUCED');
 });

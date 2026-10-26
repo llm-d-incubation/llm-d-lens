@@ -35,7 +35,12 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
-from contextlib import asynccontextmanager
+from collections.abc import Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import httpx
@@ -47,6 +52,74 @@ from llm_d_lens.ai_providers.endpoints import normalize_provider_base_url
 logger = logging.getLogger(__name__)
 
 StructuredOutputMode = Literal["json_schema", "json_object", "none"]
+
+
+class AIRequestRecord(BaseModel):
+    attempt: int
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    finished_at: datetime | None = None
+    path: str
+    request: dict[str, Any]
+    response_status: int | None = None
+    response_body: str | None = None
+    error_type: str | None = None
+
+
+@dataclass
+class _RequestAudit:
+    records: list[AIRequestRecord]
+    on_update: Callable[[list[AIRequestRecord]], None] | None
+
+    def persist(self) -> None:
+        if self.on_update is not None:
+            self.on_update(self.records)
+
+
+_request_audit: ContextVar[_RequestAudit | None] = ContextVar("ai_request_audit", default=None)
+
+
+@contextmanager
+def capture_ai_requests(
+    on_update: Callable[[list[AIRequestRecord]], None] | None = None,
+) -> Iterator[list[AIRequestRecord]]:
+    records: list[AIRequestRecord] = []
+    token = _request_audit.set(_RequestAudit(records, on_update))
+    try:
+        yield records
+    finally:
+        _request_audit.reset(token)
+
+
+async def _post_provider_request(
+    client: httpx.AsyncClient,
+    *,
+    endpoint: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> httpx.Response:
+    audit = _request_audit.get()
+    if audit is None:
+        return await client.post(endpoint, json=payload, headers=headers)
+    record = AIRequestRecord(
+        attempt=len(audit.records) + 1,
+        path=httpx.URL(endpoint).path,
+        request=deepcopy(payload),
+    )
+    audit.records.append(record)
+    audit.persist()
+    try:
+        response = await client.post(endpoint, json=payload, headers=headers)
+        record.response_status = response.status_code
+        record.response_body = response.text
+        if not 200 <= response.status_code < 300:
+            record.error_type = "HTTPStatusError"
+        return response
+    except (httpx.HTTPError, asyncio.CancelledError) as error:
+        record.error_type = type(error).__name__
+        raise
+    finally:
+        record.finished_at = datetime.now(UTC)
+        audit.persist()
 
 
 class AIToolCall(BaseModel):
@@ -246,7 +319,7 @@ async def _post_tool_turn_with_retry(
     for attempt in range(1, _TOOL_TURN_TRANSPORT_ATTEMPTS + 1):
         started = time.monotonic()
         try:
-            return await client.post(endpoint, json=payload, headers=headers)
+            return await _post_provider_request(client, endpoint=endpoint, payload=payload, headers=headers)
         except httpx.TransportError as error:
             elapsed_ms = round((time.monotonic() - started) * 1000)
             detail = _transport_error_detail(error)
@@ -445,7 +518,9 @@ class OpenAICompatibleClient(AIProviderClient):
                     current_max_tokens = max_tokens
                     for attempt in range(2):
                         payload = self._build_payload(mode, messages, json_schema, current_max_tokens, temperature)
-                        response = await client.post(endpoint, json=payload, headers=headers)
+                        response = await _post_provider_request(
+                            client, endpoint=endpoint, payload=payload, headers=headers
+                        )
                         try:
                             response.raise_for_status()
                         except httpx.HTTPStatusError as error:
@@ -591,7 +666,7 @@ class AnthropicCompatibleClient(AIProviderClient):
         endpoint = f"{self.base_url}v1/messages"
         try:
             async with self._http_client() as client:
-                response = await client.post(endpoint, json=payload, headers=headers)
+                response = await _post_provider_request(client, endpoint=endpoint, payload=payload, headers=headers)
                 response.raise_for_status()
             return self._content(response.json())
         except httpx.HTTPError as error:

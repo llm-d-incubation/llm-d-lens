@@ -9,7 +9,7 @@ import { Button } from '../../../../shared/ui/Button';
 import { HelpTooltip } from '../../../../shared/ui/FormControls';
 import { Panel } from '../../../../shared/ui/Panel';
 import { PermissionGate, useAuth } from '../../../auth';
-import { trafficShare, trafficTotal } from '../../model/modelService';
+import { effectiveTrafficShare, routedTrafficTotal } from '../../model/modelService';
 
 // Canonical llm-d Gateway Mode data plane.
 //   Lens control plane           (config publishing)
@@ -494,8 +494,8 @@ export function DataPlaneTopology({
                                     {section.rows.length > 0 && <Flow width={1.4} d={`M ${gwRight} ${gwMid} H ${GW_BUS}`} />}
                                     {section.rows.map((row) => (
                                         <Flow key={row.serviceId} width={1.4}
-                                            dotted={row.serviceStatus === 'disabled' || trafficTotal(row.members) === 0}
-                                            tone={row.serviceStatus === 'disabled' || trafficTotal(row.members) === 0 ? 'slate' : 'blue'}
+                                            dotted={row.serviceStatus === 'disabled' || routedTrafficTotal(row.members) === 0}
+                                            tone={row.serviceStatus === 'disabled' || routedTrafficTotal(row.members) === 0 ? 'slate' : 'blue'}
                                             points={[[GW_BUS, gwMid], [GW_BUS, row.y + row.routeY + BOX_H / 2], [MODEL.x, row.y + row.routeY + BOX_H / 2]]} />
                                     ))}
                                 </g>
@@ -553,10 +553,10 @@ export function DataPlaneTopology({
                                 {section.rows.map((row) => {
                                     const routeKey = `route:${cluster.clusterId}:${row.serviceId}`;
                                     const modelKey = `model:${cluster.clusterId}:${row.serviceId}`;
-                                    const totalWeight = trafficTotal(row.members);
+                                    const totalWeight = routedTrafficTotal(row.members);
                                     const stopped = row.serviceStatus === 'disabled';
                                     const routed = !stopped && totalWeight !== 0;
-                                    const routedMember = row.members.find((member) => member.status !== 'disabled' && member.weight > 0);
+                                    const routedMember = row.members.find((member) => member.routable);
                                     const routeState = routed ? componentName(routedMember || row.members[0], 'httpRoute') : 'stopped';
                                     return (
                                         <Panel key={row.serviceId} padding="none" tone="soft" className="model-service-node absolute shadow-none"
@@ -567,15 +567,15 @@ export function DataPlaneTopology({
                                                     d={`M ${COL.httpRoute + WB.httpRoute - MODEL.x} ${row.routeY + BOX_H / 2} H ${ROUTE_BRANCH_X}`} />
                                                 {row.members.map((member, index) => (
                                                     <g key={member.memberId}>
-                                                        <Flow width={1.4} dotted={!routed || member.weight === 0 || member.status === 'disabled'}
-                                                            tone={!routed || member.weight === 0 || member.status === 'disabled' ? 'slate' : 'blue'}
+                                                        <Flow width={1.4} dotted={!routed || !member.routable}
+                                                            tone={!routed || !member.routable ? (member.status === 'unhealthy' ? 'red' : 'slate') : 'blue'}
                                                             points={[[ROUTE_BRANCH_X, row.routeY + BOX_H / 2], [ROUTE_BRANCH_X, COMPONENT_Y + index * (DEPLOYMENT_H + DEPLOYMENT_GAP) + BOX_H / 2], [DEPLOYMENT.x - MODEL.x, COMPONENT_Y + index * (DEPLOYMENT_H + DEPLOYMENT_GAP) + BOX_H / 2]]} />
                                                         {totalWeight !== null && <text
                                                             x={(ROUTE_BRANCH_X + DEPLOYMENT.x - MODEL.x) / 2}
                                                             y={COMPONENT_Y + index * (DEPLOYMENT_H + DEPLOYMENT_GAP) + BOX_H / 2 - 8}
                                                             textAnchor="middle" className="fill-current text-[10px] text-theme-muted">
-                                                            <title>Configured request share; not measured traffic</title>
-                                                            {trafficShare(member, totalWeight)}
+                                                            <title>Effective request share after unavailable providers leave the route; not measured traffic</title>
+                                                            {effectiveTrafficShare(member, totalWeight)}
                                                         </text>}
                                                     </g>
                                                 ))}
@@ -624,7 +624,10 @@ export function DataPlaneTopology({
                                                 const eppKey = `epp:${member.memberId}`;
                                                 const deploymentKey = `deployment:${member.memberId}`;
                                                 return (
-                                                    <Panel key={member.memberId} padding="none" tone="inset" className="model-service-node absolute shadow-none"
+                                                    <Panel key={member.memberId} padding="none" tone="inset" className={cn(
+                                                        'model-service-node absolute shadow-none',
+                                                        member.status === 'unhealthy' && !member.routable && 'model-service-node-error',
+                                                    )}
                                                         role="group" aria-label={`Deployment ${member.name}`}
                                                         style={{ left: DEPLOYMENT.x - MODEL.x, top: MODEL.header + index * (DEPLOYMENT_H + DEPLOYMENT_GAP), width: DEPLOYMENT.w, height: DEPLOYMENT_H }}>
                                                         <div className="flex h-9 items-center gap-2 px-4">
@@ -641,8 +644,24 @@ export function DataPlaneTopology({
                                                                 </Button>
                                                             </PermissionGate>}
                                                             <StatusChip variant="compact" className="ml-auto"
-                                                                status={member.status === 'disabled' || member.weight === 0 ? 'inactive' : 'active'}
-                                                                label={member.status === 'disabled' ? 'Offline' : member.weight === 0 ? 'Standby' : 'Online'} />
+                                                                status={
+                                                                    member.status === 'disabled' ? 'inactive'
+                                                                        : member.status === 'unhealthy'
+                                                                            ? (member.components?.modelServer === 'missing'
+                                                                                || member.components?.epp === 'missing'
+                                                                                || member.components?.inferencePool === 'missing'
+                                                                                ? 'failed' : 'degraded')
+                                                                            : member.weight === 0 ? 'inactive' : 'active'
+                                                                }
+                                                                label={
+                                                                    member.status === 'disabled' ? 'Offline'
+                                                                        : member.status === 'unhealthy'
+                                                                            ? (member.components?.modelServer === 'missing'
+                                                                                || member.components?.epp === 'missing'
+                                                                                || member.components?.inferencePool === 'missing'
+                                                                                ? 'Error' : 'Degraded')
+                                                                            : member.weight === 0 ? 'Standby' : 'Online'
+                                                                } />
                                                         </div>
                                                         <Box x={COL.pool - DEPLOYMENT.x} y={DEPLOYMENT.header} w={WB.pool} label="InferencePool" icon={<Layers size={13} className="shrink-0 text-slate-400" />} crd
                                                             help="The InferencePool API defines a group of Pods (containers) dedicated to serving AI models."
@@ -700,6 +719,11 @@ const FLOW_TONES = {
         base: 'stroke-emerald-500',
         trail: 'stroke-emerald-500 dark:stroke-emerald-400',
         head: 'stroke-emerald-600 dark:stroke-emerald-100',
+    },
+    red: {
+        base: 'stroke-rose-500',
+        trail: 'stroke-rose-500',
+        head: 'stroke-rose-600 dark:stroke-rose-200',
     },
     slate: {
         base: 'stroke-slate-600',

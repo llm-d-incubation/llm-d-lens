@@ -4,12 +4,73 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
-from llm_d_lens.deploy.contracts import DeployableConfiguration, DeploymentCaseStatus, DeploymentRun, DeploymentStatus
+from llm_d_lens.deploy.contracts import (
+    DeployableConfiguration,
+    DeploymentCaseStatus,
+    DeploymentMetadataUpdateRequest,
+    DeploymentRun,
+    DeploymentRunStatus,
+    DeploymentStatus,
+)
 from llm_d_lens.deploy.run_store import JsonDeploymentRunStore
 from llm_d_lens.deploy.worker import DeploymentRunWorker
 from llm_d_lens.monitoring.deployment import service as monitoring
 from tests.unit.deploy.test_deployment_management import _case, _execution
+
+
+@pytest.mark.asyncio
+async def test_ready_run_survives_concurrent_execution_write(tmp_path, monkeypatch) -> None:
+    """A database version race must not turn a successful deployment into a failure."""
+    store = JsonDeploymentRunStore(tmp_path)
+    initial = _execution("execution-race", DeploymentStatus.DEPLOYING, "serving")
+    store.save_execution(initial)
+    case = _case("run-race", 0, initial.execution_id, DeploymentCaseStatus.QUEUED)
+    run = DeploymentRun(
+        id="run-race",
+        cases=[case],
+        source_configurations=[
+            DeployableConfiguration(
+                type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="hash"
+            )
+        ],
+    )
+    store.create_run(run)
+    updates = []
+    creates = []
+
+    def concurrent_update(session: Session, row: object) -> None:
+        if getattr(row, "__tablename__", None) != "deployment_evidences" or updates:
+            return
+        updates.append(initial.execution_id)
+        store.update_execution_metadata(
+            initial.execution_id, DeploymentMetadataUpdateRequest(display_name="Concurrent edit")
+        )
+
+    async def create(*args, **kwargs):
+        creates.append(initial.execution_id)
+        event.listen(Session, "loaded_as_persistent", concurrent_update)
+        return _execution(initial.execution_id, DeploymentStatus.READY, "serving")
+
+    async def enable(execution_id):
+        assert store.get_execution(execution_id).status == DeploymentStatus.READY
+        return {"status": "enabled", "enabled": True}
+
+    monkeypatch.setattr(monitoring, "enable", enable)
+    try:
+        await DeploymentRunWorker(store, SimpleNamespace(create=create)).execute_run(run.id)
+    finally:
+        event.remove(Session, "loaded_as_persistent", concurrent_update)
+    saved = store.get_run(run.id)
+    assert saved.status == DeploymentRunStatus.SUCCEEDED
+    assert saved.cases[0].status == DeploymentCaseStatus.READY
+    assert saved.cases[0].failure is None
+    execution = store.get_execution(initial.execution_id)
+    assert execution.metadata.display_name == "Concurrent edit"
+    assert execution.monitoring_setup["status"] == "enabled"
+    assert creates == updates == [initial.execution_id]
 
 
 @pytest.mark.asyncio

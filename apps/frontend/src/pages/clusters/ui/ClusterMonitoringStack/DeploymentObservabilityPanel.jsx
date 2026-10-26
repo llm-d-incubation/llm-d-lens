@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, AlertTriangle, BarChart3, Boxes, CheckCircle2, ChevronDown, GitBranch, Loader2, Pause, Play, RefreshCw, Rocket, Trash2 } from 'lucide-react';
+import { AlertTriangle, Boxes, CheckCircle2, ChevronDown, GitBranch, Loader2, Pause, Play, RefreshCw, Rocket, Trash2 } from 'lucide-react';
 import { Badge, Button, EmptyState, LoadingState, SectionLabel } from '../../../../shared/ui';
 import {
     getDeploymentExecutions,
@@ -22,6 +22,7 @@ import {
     getClusterStackLinks,
     manageDeploymentMonitoring,
 } from './clusterMonitoringStackBackend';
+import { GrafanaLogo, PrometheusLogo } from './AcceleratorObservabilityPanel';
 
 const CENTRAL_NAMESPACE = 'llm-d-monitoring';
 const GRAFANA_PERFORMANCE_DASHBOARD = '/d/llm-d-performance/llm-d-performance-dashboard';
@@ -302,13 +303,13 @@ export function DeploymentObservabilityPanel({ clusterId, onOpenProfiling }) {
                                                                             <MonitoringMenuItem
                                                                                 onClick={() => { setOpenMenu(null); openStackLink('grafana', deployment); }}
                                                                                 disabled={!!openingLink}
-                                                                                icon={<BarChart3 size={14} className="shrink-0 text-blue-300" />}
+                                                                                icon={<GrafanaLogo className="h-3.5 w-3.5 shrink-0 text-[#F46800]" />}
                                                                                 label="Open Grafana"
                                                                             />
                                                                             <MonitoringMenuItem
                                                                                 onClick={() => { setOpenMenu(null); openStackLink('prometheus', deployment); }}
                                                                                 disabled={!!openingLink}
-                                                                                icon={<Activity size={14} className="shrink-0 text-orange-300" />}
+                                                                                icon={<PrometheusLogo className="h-3.5 w-3.5 shrink-0 text-[#E6522C]" />}
                                                                                 label="Open Prometheus"
                                                                             />
                                                                             <div className="h-px bg-slate-700/70" />

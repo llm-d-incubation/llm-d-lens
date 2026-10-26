@@ -86,16 +86,6 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                     title="External providers"
                     description="Manage external AI providers that power optional AI capabilities across Agentic components."
                     onToggleMobileNav={onToggleMobileNav}
-                    actions={
-                        <>
-                            <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading} className="providers-secondary-button">
-                                <RefreshCw size={14} /> Refresh
-                            </Button>
-                            <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
-                                <Plus size={14} /> Add provider
-                            </Button>
-                        </>
-                    }
                 />
 
                 {error && items.length > 0 && (
@@ -104,19 +94,8 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                     </p>
                 )}
 
-                <AsyncState
-                    loading={loading}
-                    error={items.length === 0 ? error : null}
-                    empty={items.length === 0}
-                    onRetry={load}
-                    emptyContent={<EmptyState
-                        icon={<Plug size={22} />}
-                        title="No AI providers configured"
-                        message="Add an OpenAI-compatible endpoint (OpenAI, Azure OpenAI, a self-hosted vLLM/Ollama server, etc.) so Agentic components can use it."
-                        action={<Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}><Plus size={14} /> Add provider</Button>}
-                    />}
-                >
                     <section className="external-providers-card relative z-10 flex flex-col gap-3.5 rounded-3xl border border-slate-900/90 bg-[#070b13]/65 p-5 shadow-2xl backdrop-blur-md">
+                        {items.length > 0 && (
                         <div className="relative z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800/60 bg-[#0a0f1d] p-3 shadow-md">
                             <div className="min-w-[240px] flex-1">
                                 <div className="relative">
@@ -145,15 +124,37 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                                 </button>
                             )}
                         </div>
+                        )}
 
-                        <div className="flex min-h-[52px] items-center justify-between border-b border-slate-800/60 px-1 py-2.5">
-                            <div className="flex items-center gap-2">
+                        <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 border-b border-slate-800/60 px-1 py-2.5">
+                            <div className="flex flex-wrap items-center gap-2">
                                 <Plug className="h-4 w-4 text-cyan-400" />
                                 <h2 className="text-sm font-bold text-slate-300">External providers</h2>
                                 <span className="rounded-md bg-slate-900 px-2 py-0.5 text-[9px] text-slate-500">{filteredItems.length} shown</span>
                             </div>
+                            <div className="ml-auto flex flex-wrap items-center gap-2">
+                                <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading} className="providers-secondary-button">
+                                    <RefreshCw size={14} /> Refresh
+                                </Button>
+                                <Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}>
+                                    <Plus size={14} /> Add provider
+                                </Button>
+                            </div>
                         </div>
 
+                <AsyncState
+                    loading={loading}
+                    error={items.length === 0 ? error : null}
+                    empty={items.length === 0}
+                    onRetry={load}
+                    emptyContent={<EmptyState
+                        icon={<Plug size={22} />}
+                        iconClassName="ai-providers-empty-icon"
+                        title="No AI providers configured"
+                        message="Add a publicly reachable OpenAI- or Anthropic-compatible endpoint over HTTPS (for example OpenAI, Azure OpenAI, or Anthropic) for Lens Assistant and Agentic deployment planning."
+                        action={<Button variant="sky" size="sm" onClick={() => setDialog({ mode: 'add' })}><Plus size={14} /> Add provider</Button>}
+                    />}
+                >
                         {filteredItems.length === 0 ? (
                             <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-6 py-12 text-center">
                                 <Plug className="mx-auto h-7 w-7 text-slate-600" />
@@ -220,8 +221,8 @@ export function AIProvidersPage({ onToggleMobileNav, initialAction = '' }) {
                                 </table>
                             </div>
                         )}
-                    </section>
                 </AsyncState>
+                    </section>
             </div>
 
             {dialog && (

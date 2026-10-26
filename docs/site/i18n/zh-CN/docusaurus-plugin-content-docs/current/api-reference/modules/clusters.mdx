@@ -252,7 +252,7 @@ Gateway 命名空间前缀会附加该 Lens 集群注册的稳定短 ID。注册
     - `proxy`（`ProxyConfigDTO`，可选）
     - `llmDRef`（`string`，可选）
     - `llmDBenchmarkRef`（`string`，可选）
-    - `gatewayProvider`（`string`，可选）
+    - `gatewayProvider`（`string`，可选）：当集群尚未设置供应商时可赋值一次；设置后不可更改，传入不同值会返回 `422 gateway_provider_immutable`。
     - `gatewayNamespace`（`string`，可选）：最多 63 个字符的命名空间前缀，会附加注册的稳定短 ID。
     - `gatewayPort`（`integer`，可选）
     - `gatewayPublicUrl`（`string`，可选）：外部可达的网关主机/IP —— Lens 会自动添加暴露端口；为空时将自动推导。

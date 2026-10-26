@@ -37,6 +37,8 @@ BASE_MODEL_HEADER = "X-Gateway-Base-Model-Name"
 MANAGED_LABEL = "app.kubernetes.io/part-of"
 MANAGED_VALUE = "lens-inference-gateway"
 MODEL_SERVICE_LABEL = "lens.llm-d.ai/model-service-id"
+CLUSTER_LABEL = "lens.llm-d.ai/cluster-id"
+REWRITE_MANAGED_LABEL = "lens.llm-d.ai/rewrite-managed"
 INFERENCE_MODEL_REWRITE_CRD = "inferencemodelrewrites.llm-d.ai"
 INFERENCE_MODEL_REWRITE_API = "llm-d.ai/v1alpha2"
 #: Records which Gateway provider (istio / gke / agentgateway / envoy-ai-gateway) a
@@ -196,7 +198,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     ),
 }
 
-DEFAULT_PROVIDER: GatewayProvider = "envoy-ai-gateway"
+DEFAULT_PROVIDER: GatewayProvider = "istio"
 
 
 def provider_spec(provider: str) -> ProviderSpec:
@@ -294,7 +296,7 @@ def render_inference_gateway(
     service_type: str | None = None,
     service_port: int | None = None,
     authz_host: str | None = None,
-    authz_port: int = AUTHZ_SERVICE_PORT,
+    authz_port: int | None = None,
     authz_cluster_id: str | None = None,
     authz_tls_insecure: bool = False,
 ) -> str:
@@ -383,6 +385,8 @@ def render_inference_gateway(
             }
         )
     if authz_host:
+        if authz_port is None:
+            raise ValueError("authz_port is required when authz_host is set")
         documents.extend(
             render_gateway_ext_auth(
                 provider=spec.key,
@@ -403,7 +407,7 @@ def render_gateway_ext_auth(
     namespace: str,
     gateway_name: str,
     authz_host: str,
-    authz_port: int = AUTHZ_SERVICE_PORT,
+    authz_port: int,
     authz_cluster_id: str | None = None,
     authz_tls_insecure: bool = False,
 ) -> list[dict]:
@@ -718,6 +722,7 @@ def render_model_rewrites(
     public_model: str,
     served_model: str | None,
     pools: Sequence[PoolBinding],
+    cluster_id: str,
 ) -> str:
     """Map a public model name to the engine-served name per InferencePool.
 
@@ -737,7 +742,11 @@ def render_model_rewrites(
                 "metadata": {
                     "name": model_rewrite_name(model_name, binding.pool_name),
                     "namespace": pool_namespace,
-                    "labels": {MANAGED_LABEL: MANAGED_VALUE, MODEL_SERVICE_LABEL: model_service_id},
+                    "labels": {
+                        REWRITE_MANAGED_LABEL: "true",
+                        MODEL_SERVICE_LABEL: model_service_id,
+                        CLUSTER_LABEL: cluster_id,
+                    },
                 },
                 "spec": {
                     "poolRef": {

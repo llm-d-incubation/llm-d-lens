@@ -3,6 +3,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DeleteConfirmation } from '../shared/ui/DeleteConfirmation';
+import { Modal } from '../shared/ui/Modal';
 import { DeleteAIProviderModal } from '../pages/ai-providers';
 import { DeleteModelCacheModal } from '../pages/model-cache';
 import { DeleteStorageVolumeModal } from '../pages/storage';
@@ -15,6 +16,31 @@ function capture(Component, props) {
     renderToStaticMarkup(<Capture />);
     return view;
 }
+
+test('centered dialogs and drawers honor backdrop close opt-outs', () => {
+    const previousDocument = globalThis.document;
+    globalThis.document = { body: { nodeType: 1 } };
+    try {
+        for (const variant of ['center', 'drawer']) {
+            let closes = 0;
+            const props = { isOpen: true, variant, onClose: () => { closes += 1; } };
+            const portal = capture(Modal, props);
+            const [backdrop, panel] = portal.children.props.children;
+            backdrop.props.onClick();
+            assert.equal(closes, 1);
+            assert.equal(panel.props.onClick, undefined);
+            const locked = capture(Modal, { ...props, closeOnBackdrop: false });
+            assert.equal(locked.children.props.children[0].props.onClick, undefined);
+        }
+        const noOverlay = capture(Modal, { isOpen: true, variant: 'drawer', overlay: false });
+        assert.equal(noOverlay.children.props.children[0], false);
+        const inline = capture(Modal, { isOpen: true, variant: 'drawer', inline: true });
+        assert.equal(inline.props.children[0], false);
+    } finally {
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+    }
+});
 
 test('legacy consent retains cancel/delete decisions and small dialog', () => {
     const decisions = [];

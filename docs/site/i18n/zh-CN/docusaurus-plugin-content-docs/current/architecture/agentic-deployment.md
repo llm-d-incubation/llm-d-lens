@@ -172,11 +172,14 @@ TTFT P95、TPOT P95、吞吐量，以及从已持久化部署配置中解析出�
 `llm_d_lens.agentic.planner.DeterministicPlanner` 只会生成可以映射到 Deploy 的
 已注册提供方：
 
-- `baseline-vllm`
 - `optimized-baseline`
 - `pd-disaggregation`
 - `tiered-prefix-cache`
 - `precise-prefix-cache-routing`
+
+AI 生成、确定性回退、AIC 负载目标推荐、历史候选种子和规划器排序均不再包含
+`baseline-vllm`。AIC 聚合推荐使用 `optimized-baseline`。已有保存配置仍可读取和
+部署；手动 Standard vLLM 部署不受影响。
 
 候选方案枚举使用固定的 TP 取值：`1, 2, 4, 8, 16`；以及固定的副本数量取值：
 `1, 2, 4`。每个候选方案都必须满足：
@@ -228,14 +231,14 @@ flowchart LR
     AR --> AS["AIC support + search"]
     AS --> N["Normalize AICCandidatePrediction"]
     N --> M{"Exact topology match?"}
-    M -->|"agg: same TP + replicas"| B["baseline-vllm candidate"]
+    M -->|"agg: same TP + replicas"| B["optimized-baseline candidate"]
     M -->|"disagg: same prefill/decode TP + replicas"| P["pd-disaggregation candidate"]
     M -->|"no"| E["Evidence only; no ranking effect"]
     B --> S["SLO pass -> TTFT -> TPOT -> throughput"]
     P --> S
 ```
 
-- AIC 的 `agg` 只与具有相同 TP 和副本数的 `baseline-vllm` 相匹配。
+- AIC 的 `agg` 与具有相同 TP 和副本数的 `optimized-baseline` 候选方案相匹配。
 - AIC 的 `disagg` 只与预填充/解码 TP 及副本数均完全一致的 `pd-disaggregation`
   相匹配。
 - 当未设置 TTFT/TPOT SLO 时，所有精确匹配 AIC 预测的候选方案都会排在纯粹基于

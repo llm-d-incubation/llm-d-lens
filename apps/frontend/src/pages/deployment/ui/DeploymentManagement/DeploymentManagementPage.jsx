@@ -18,7 +18,8 @@ import {
 import { manageDeploymentMonitoring } from '../../../clusters';
 import { MultiSelectDropdown } from '../../../../shared/ui/MultiSelectDropdown';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
-import { Button } from '../../../../shared/ui/Button';
+import { Button, RefreshButton } from '../../../../shared/ui/Button';
+import { StatCardRow } from '../../../../shared/ui/StatCard';
 import { Input, Select } from '../../../../shared/ui/FormControls';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
@@ -196,24 +197,15 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                 icon={Rocket}
                 title="Deployments"
                 description="Track active model serving deployments, inspect endpoints, and update or remove existing services."
-                actions={(
-                    <>
-                        {notice && (
+            />
+            <StatCardRow
+                actions={notice && (
                             <span role="status" className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1.5 text-[11px] text-emerald-200">
                                 <CheckCircle2 size={13} aria-hidden="true" />
                                 {notice}
                             </span>
-                        )}
-                        {can('deployment:run:create') && (
-                            <Button variant="sky" size="sm" onClick={() => onNavigate?.('model-market')}>
-                                <Plus size={14} /> Create
-                            </Button>
-                        )}
-                    </>
                 )}
-            />
-
-            <section className="flex flex-col gap-3">
+            >
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                     <StatCard label="Total" value={summary.total} />
                     <StatCard label="Ready" value={summary.Ready} />
@@ -221,14 +213,24 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                     <StatCard label="Failed" value={summary.Failed} tone={summary.Failed > 0 ? 'text-rose-500 font-extrabold' : 'text-white'} />
                     <StatCard label="Cleaned" value={summary.Cleaned} />
                 </div>
-            </section>
+            </StatCardRow>
 
             <section
                 aria-busy={loading || refreshing}
                 className="relative rounded-2xl border border-slate-800/80 bg-gradient-to-br from-slate-900/90 via-slate-900/50 to-slate-950/90 shadow-2xl backdrop-blur-xl"
             >
               <div className="relative overflow-visible p-6">
-                <SectionLabel className="text-[#037ffc] dark:text-cyan-400">{`Deployments (${items.length})`}</SectionLabel>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <SectionLabel className="mb-0">{`Deployments (${items.length})`}</SectionLabel>
+                    <div className="ml-auto flex items-center gap-2">
+                        <RefreshButton onClick={load} disabled={refreshing} refreshing={refreshing} label="Refresh deployments" />
+                        {can('deployment:run:create') && (
+                            <Button variant="sky" size="sm" onClick={() => onNavigate?.('model-market')}>
+                                <Plus size={14} /> Create
+                            </Button>
+                        )}
+                    </div>
+                </div>
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_220px_220px]">
                     <div className="relative">
                         <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true" />

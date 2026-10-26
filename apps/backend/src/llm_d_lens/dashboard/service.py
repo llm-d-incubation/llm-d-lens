@@ -26,6 +26,7 @@ from llm_d_lens.db.dao.role import UserRoleBindingDao
 from llm_d_lens.db.dao.user import UserDao
 from llm_d_lens.db.dao.welcome_issue_snapshot import WelcomeIssueSnapshotDao
 from llm_d_lens.deploy.executions import list_execution_contexts
+from llm_d_lens.infrastructure.kubernetes import run_kubectl
 from llm_d_lens.model_service.gateway_contracts import GatewayStatus, GatewayStatusCluster
 from llm_d_lens.model_service.service import default_service as default_model_service
 from llm_d_lens.monitoring.profiling.pressure import collect_pressure
@@ -55,6 +56,7 @@ from .rules import (
     cluster_issues,
     deployment_issues,
     deployment_monitoring_issue,
+    deployment_pod_issue,
     empty_model_cache_issue,
     empty_model_cache_storage_issue,
     gateway_cluster_issues,
@@ -311,6 +313,7 @@ class DashboardService:
                 )
         if deployment_panel is not None:
             issues.extend(deployment_issues(deployment_panel))
+        issues.extend(await self._deployment_pod_issues(contexts, {cluster.id: cluster.name for cluster in clusters}))
         issues.extend(deployment_monitoring_issues)
         if services_permitted:
             published_execution_ids = {member.execution_id for member in members if member.execution_id}
@@ -569,6 +572,98 @@ class DashboardService:
             ),
             "complete",
         )
+
+    async def _deployment_pod_issues(self, contexts: list[Any], cluster_names: dict[str, str]) -> list[DashboardIssue]:
+        """Flag ready deployments whose live model-server Pods disappeared or shrank."""
+        targets = [
+            context
+            for context in contexts
+            if context.status == "ready"
+            and not getattr(context, "evaluate_owned", False)
+            and getattr(context, "namespace", None)
+        ]
+        semaphore = asyncio.Semaphore(4)
+
+        async def inspect(context: Any) -> DashboardIssue | None:
+            async with semaphore:
+                try:
+                    result = await run_kubectl(
+                        ["get", "pods", "--namespace", context.namespace, "-o", "json"],
+                        cluster_id=context.cluster_id,
+                        timeout=10,
+                    )
+                except Exception:  # noqa: BLE001 - a failed observation is not an outage
+                    return None
+            if result.returncode != 0:
+                return None
+            try:
+                items = json.loads(result.stdout or "{}").get("items") or []
+            except (TypeError, ValueError):
+                return None
+            live = [item for item in items if (item.get("status") or {}).get("phase") != "Succeeded"]
+            name = context.display_name or context.name or context.execution_id
+            if not live:
+                return deployment_pod_issue(
+                    execution_id=context.execution_id,
+                    execution_name=name,
+                    cluster_id=context.cluster_id,
+                    cluster_name=cluster_names.get(context.cluster_id or "", ""),
+                    ready=0,
+                    expected=max(int(context.replicas or 1), 1),
+                    observed_at=_as_datetime(context.updated_at) or _as_datetime(context.created_at),
+                )
+
+            def labels(item: dict[str, Any]) -> dict[str, Any]:
+                return (item.get("metadata") or {}).get("labels") or {}
+
+            def is_gateway(item: dict[str, Any]) -> bool:
+                pod_labels = labels(item)
+                return (
+                    bool(pod_labels.get("llm-d-router-gateway"))
+                    or "-epp" in str((item.get("metadata") or {}).get("name") or "").lower()
+                )
+
+            model = [
+                item
+                for item in live
+                if labels(item).get("llm-d.ai/inference-serving") == "true"
+                or labels(item).get("llm-d.ai/role") in {"decode", "prefill"}
+            ]
+            if not model:
+                if all(is_gateway(item) for item in live):
+                    return deployment_pod_issue(
+                        execution_id=context.execution_id,
+                        execution_name=name,
+                        cluster_id=context.cluster_id,
+                        cluster_name=cluster_names.get(context.cluster_id or "", ""),
+                        ready=0,
+                        expected=max(int(context.replicas or 1), 1),
+                        observed_at=_as_datetime(context.updated_at) or _as_datetime(context.created_at),
+                    )
+                return None
+            ready = sum(
+                1
+                for item in model
+                if any(
+                    condition.get("type") == "Ready" and condition.get("status") == "True"
+                    for condition in (item.get("status") or {}).get("conditions") or []
+                )
+                and not (item.get("metadata") or {}).get("deletionTimestamp")
+            )
+            expected = max(int(context.replicas or 1), 1)
+            if ready == 0 or ready < expected:
+                return deployment_pod_issue(
+                    execution_id=context.execution_id,
+                    execution_name=name,
+                    cluster_id=context.cluster_id,
+                    cluster_name=cluster_names.get(context.cluster_id or "", ""),
+                    ready=ready,
+                    expected=expected,
+                    observed_at=_as_datetime(context.updated_at) or _as_datetime(context.created_at),
+                )
+            return None
+
+        return [issue for issue in await asyncio.gather(*(inspect(context) for context in targets)) if issue]
 
     async def _supporting_issues(
         self,

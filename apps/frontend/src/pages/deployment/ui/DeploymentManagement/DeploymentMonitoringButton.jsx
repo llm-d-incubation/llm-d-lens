@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Activity, BarChart3, ChevronDown, GitBranch, Loader2, Pause, Play, Rocket, Trash2, Webcam } from 'lucide-react';
+import { GitBranch, Loader2, Pause, Play, Rocket, Trash2, Webcam } from 'lucide-react';
 import {
     getClusterStackLinks,
     getDeploymentMonitoring,
+    GrafanaLogo,
     manageDeploymentMonitoring,
+    PrometheusLogo,
 } from '../../../clusters';
 import { isDeploymentReady } from './deploymentPresentation';
 
@@ -162,13 +164,13 @@ export function DeploymentMonitoringButton({ deployment, onNavigate }) {
                                 <MenuItem
                                     onClick={() => { setOpen(false); openStackLink('grafana'); }}
                                     disabled={busy}
-                                    icon={<BarChart3 size={14} className="shrink-0 text-blue-300" />}
+                                    icon={<GrafanaLogo className="h-3.5 w-3.5 shrink-0 text-[#F46800]" />}
                                     label="Open Grafana"
                                 />
                                 <MenuItem
                                     onClick={() => { setOpen(false); openStackLink('prometheus'); }}
                                     disabled={busy}
-                                    icon={<Activity size={14} className="shrink-0 text-orange-300" />}
+                                    icon={<PrometheusLogo className="h-3.5 w-3.5 shrink-0 text-[#E6522C]" />}
                                     label="Open Prometheus"
                                 />
                                 <div className="h-px bg-slate-700/70" />

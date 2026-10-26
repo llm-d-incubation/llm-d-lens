@@ -339,6 +339,35 @@ test('targeted restart restores the actual ports of running peer services', t =>
   assert.match(result.stdout, /backend=8099/);
 });
 
+test('restart all reloads previously recorded ports', t => {
+  const { root, put } = setup(t);
+  put('.dev-pids/backend.port', '8099\n');
+  put('.dev-pids/frontend.port', '5199\n');
+  const result = spawnSync('bash', ['-c', `
+    source scripts/lens-local.sh
+    prepare_start() { :; }
+    cmd_stop() { :; }
+    start_services() { echo "frontend=$FRONTEND_PORT backend=$BACKEND_PORT"; }
+    cmd_restart all
+  `], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /frontend=5199 backend=8099/);
+});
+
+test('targeted restart uses the recorded port for a stopped backend', t => {
+  const { root, put } = setup(t);
+  put('.dev-pids/backend.port', '8099\n');
+  const result = spawnSync('bash', ['-c', `
+    source scripts/lens-local.sh
+    prepare_start() { :; }
+    cmd_stop() { :; }
+    start_services() { echo "backend=$BACKEND_PORT"; }
+    cmd_restart backend
+  `], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /backend=8099/);
+});
+
 test('legacy running services without port state fail before stopping anything', t => {
   const { root } = setup(t);
   const result = spawnSync('bash', ['-c', `

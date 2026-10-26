@@ -90,6 +90,48 @@ def test_model_similarity_uses_architecture_quantization_and_parameter_scale():
     assert quantized == 0.0
 
 
+def test_archived_unknown_hardware_does_not_match_even_another_unknown_hardware():
+    query = _query()
+    record = _record("archive-only")
+    query.hardware = HardwareDescriptor()
+    record.hardware = HardwareDescriptor()
+    evidence = BenchmarkEvidenceRetriever().retrieve("candidate", query, [record], now=NOW)
+    assert evidence.matching_runs == 0
+
+
+def test_missing_versions_lower_similarity_but_do_not_block_compatible_measurement():
+    query = _query()
+    record = _record("version-unavailable")
+    record.runtime = RuntimeFingerprint(backend="vllm")
+    retriever = BenchmarkEvidenceRetriever()
+    assert 0 < retriever.runtime_similarity(record.runtime, query.runtime) < 1
+    assert retriever.retrieve("candidate", query, [record], now=NOW).matching_runs == 1
+
+
+def test_partial_model_descriptors_only_support_same_model_comparison():
+    retriever = BenchmarkEvidenceRetriever()
+    model = ModelDescriptor(model_id="org/model", quantization="bf16")
+    assert 0 < retriever.model_similarity(model, model) < 1
+    assert retriever.model_similarity(model, model.model_copy(update={"model_id": "other/model"})) == 0
+
+
+def test_unpinned_public_enrichment_cannot_enable_cross_model_predictions():
+    query = _query()
+    query.model = query.model.model_copy(update={"model_id": "different/model"})
+    record = _record("public-model-metadata")
+    record.provenance = {"model_enrichment": {"serving_revision_pinned": False}}
+    retriever = BenchmarkEvidenceRetriever()
+    assert retriever.retrieve("candidate", query, [record], now=NOW).matching_runs == 0
+    record.provenance = {"model_enrichment": {"serving_revision_pinned": True}}
+    assert retriever.retrieve("candidate", query, [record], now=NOW).matching_runs == 1
+
+
+def test_saved_configuration_attribution_cannot_be_promoted_by_filling_hardware():
+    record = _record("saved-configuration")
+    record.provenance = {"attribution": "saved-configuration"}
+    assert BenchmarkEvidenceRetriever().retrieve("candidate", _query(), [record], now=NOW).matching_runs == 0
+
+
 def test_model_similarity_distinguishes_family_tokenizer_and_moe_active_parameters():
     retriever = BenchmarkEvidenceRetriever()
     query = _query().model

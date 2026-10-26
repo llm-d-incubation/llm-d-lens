@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, useRef, useEffect } from 'react';
+import { createElement, useState, useRef, useEffect } from 'react';
+import { BookOpen, Moon, Slack, Star, Sun } from 'lucide-react';
 import ErrorBoundary from './providers/ErrorBoundary';
-import { firstAccessibleView, resolveView } from './routes/views';
+import { firstAccessibleView, resolveView, viewTitle } from './routes/views';
 import { ClusterMonitoringStackDashboard, OptimizationClusterOverview } from '../pages/clusters';
 import { WelcomeIssuesPage, WelcomePage } from '../pages/welcome';
 import { DeploymentManagementPage } from '../pages/deployment';
@@ -24,17 +25,13 @@ import { ModelCachePage } from '../pages/model-cache';
 import { AIProvidersPage } from '../pages/ai-providers';
 import { ApiKeysPage, ModelServiceAdminPage, ModelServicePage, ModelUsagePage } from '../pages/model-service';
 import { PlaygroundPage } from '../pages/playground';
-import {
-  OptimizationEvaluateWorkspace,
-  OptimizationOverview,
-  OptimizationStage,
-  WorkflowProvider,
-} from '../pages/optimization';
 import { EvaluationDashboardEntry, EvaluationTaskWizard, OptimizationEvaluationDetails } from '../pages/evaluation';
 import { SimulationDashboard, SimulationTaskDetails } from '../pages/simulation';
 
 import LeftNavigation from './ui/LeftNavigation';
-import { EmptyState, LoadingState } from '../shared/ui';
+import { Button, EmptyState, LoadingState, PageHeader } from '../shared/ui';
+import { PageHeading, PageHeadingProvider } from '../shared/ui/PageHeader';
+import { cn } from '../shared/lib/cn';
 import { AuthProvider, ChangePasswordPage, LoginPage, useAuth } from '../pages/auth';
 import { canAccessView } from '../pages/auth/permissions';
 import {
@@ -47,6 +44,27 @@ import {
   UsersPage,
 } from '../pages/administration';
 
+const GLOBAL_HEADER_LINKS = [
+  {
+    label: 'Documentation',
+    title: 'Open Lens documentation',
+    url: 'https://llm-d-incubation.github.io/llm-d-lens/',
+    icon: BookOpen,
+  },
+  {
+    label: 'Join Slack',
+    title: 'Join the llm-d Slack',
+    url: 'https://llm-d.slack.com/',
+    icon: Slack,
+  },
+  {
+    label: 'Star on GitHub',
+    title: 'Star llm-d-lens on GitHub',
+    url: 'https://github.com/login?return_to=%2Fllm-d-incubation%2Fllm-d-lens',
+    icon: Star,
+  },
+];
+
 function initialAppTheme() {
   return localStorage.getItem('app-theme') === 'light' ? 'light' : 'dark';
 }
@@ -54,6 +72,7 @@ function initialAppTheme() {
 function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
   const { canView } = useAuth();
   const mainRef = useRef(null);
+  const [pageHeadingTarget, setPageHeadingTarget] = useState(null);
   const [currentView, setCurrentView] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return initialView ?? resolveView(params.get('view'), firstAccessibleView(canView));
@@ -100,6 +119,13 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
     const saved = localStorage.getItem('prism_sidebar_expanded');
     return saved !== null ? saved === 'true' : true;
   });
+  const toggleSidebar = () => {
+    setIsSidebarExpanded((current) => {
+      const next = !current;
+      localStorage.setItem('prism_sidebar_expanded', String(next));
+      return next;
+    });
+  };
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if ((params.get('view') || '') === currentView) return;
@@ -251,30 +277,63 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
   const viewAllowed = Boolean(currentView) && canView(currentView);
 
   return (
-      <div className="min-h-screen bg-slate-950 w-full overflow-hidden font-sans relative flex flex-col">
-        <a
-          href="https://llm-d.ai"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`fixed left-4 top-5 z-[60] hidden md:inline-flex ${
-            isSidebarExpanded ? 'items-center gap-2' : 'flex-col items-start gap-0.5'
-          }`}
-          aria-label="llm-d"
-        >
-          <img src="https://llm-d.ai/img/llm-d-logotype-and-icon.png" alt="llm-d" className="h-6 w-auto object-contain" />
-          <span className="select-none bg-gradient-to-r from-sky-500 via-cyan-400 to-teal-400 bg-clip-text text-xl font-bold tracking-wide text-transparent">Lens</span>
-        </a>
-        <LeftNavigation currentView={currentView} onNavigate={handleNavigate} isMobileOpen={isMobileNavOpen} isExpanded={isSidebarExpanded} onExpandedChange={setIsSidebarExpanded} theme={theme} onToggleTheme={onToggleTheme} />
-        <main ref={mainRef} className={`relative flex h-screen min-w-0 flex-1 flex-col overflow-y-auto transition-[margin] duration-300 ${isSidebarExpanded ? 'md:ml-[18rem]' : 'md:ml-24'}`}>
+      <div className="h-dvh bg-theme-bg w-full overflow-hidden font-sans relative flex flex-col [--workspace-height:calc(100dvh-4rem)]">
+        <LeftNavigation
+          currentView={currentView}
+          onNavigate={handleNavigate}
+          isMobileOpen={isMobileNavOpen}
+          isExpanded={isSidebarExpanded}
+          onToggleExpanded={toggleSidebar}
+        />
+        <div className={cn('shrink-0 transition-[margin] duration-300', isSidebarExpanded ? 'md:ml-64' : 'md:ml-20')}>
+          <PageHeader
+            onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)}
+            className="h-16 bg-theme-card"
+            heading={<>
+              <div ref={setPageHeadingTarget} className="peer min-w-0" />
+              <div className="hidden peer-empty:block">
+                <PageHeading title={viewAllowed ? viewTitle(currentView) : 'Access denied'} />
+              </div>
+            </>}
+            actions={<>
+              {GLOBAL_HEADER_LINKS.map(({ label, title, url, icon }) => (
+              <Button
+                key={label}
+                variant="ghost"
+                size="sm"
+                className="px-2 lg:px-3.5"
+                aria-label={label}
+                title={title}
+                onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
+              >
+                {createElement(icon, { size: 16, 'aria-hidden': true })}
+                <span className="hidden lg:inline">{label}</span>
+              </Button>
+              ))}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onToggleTheme}
+                aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              >
+                {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+              </Button>
+            </>}
+          />
+        </div>
+        <PageHeadingProvider target={pageHeadingTarget}>
+        <main ref={mainRef} className={cn('relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto transition-[margin] duration-300', isSidebarExpanded ? 'md:ml-64' : 'md:ml-20')}>
           {canView('welcome') && (
+            <PageHeadingProvider target={currentView === 'welcome' ? pageHeadingTarget : null}>
             <div className={currentView === 'welcome' ? '' : 'hidden'} aria-hidden={currentView !== 'welcome'}>
               <WelcomePage
                 onNavigate={handleNavigate}
-                onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)}
                 initialClusterId={welcomeClusterId}
                 isActive={currentView === 'welcome'}
               />
             </div>
+            </PageHeadingProvider>
           )}
           {!viewAllowed ? (
             <div className="flex flex-1 items-center justify-center p-6">
@@ -284,7 +343,7 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
               />
             </div>
           ) : (
-          <WorkflowProvider>
+          <>
             {currentView === 'welcome/issues' && <WelcomeIssuesPage onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} initialClusterId={navigationParams.clusterId || ''} initialSeverity={navigationParams.severity || ''} initialCategory={navigationParams.category || ''} initialSearch={navigationParams.issueSearch || ''} />}
             {currentView === 'cluster-monitoring-stack' && <ClusterMonitoringStackDashboard onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} initialClusterId={navigationParams.clusterId} initialProfileDeployment={navigationParams.profileDeployment} />}
             {currentView === 'clusters' && <OptimizationClusterOverview onNavigate={handleNavigate} initialClusterId={navigationParams.clusterId || ''} initialAction={navigationParams.action || ''} onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
@@ -297,20 +356,17 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
             {currentView === 'playground' && <PlaygroundPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-deployments' && <DeploymentManagementPage key={JSON.stringify([navigationParams.deploymentSearch, navigationParams.clusterId])} initialSearch={navigationParams.deploymentSearch} initialClusterId={navigationParams.clusterId || ''} onNavigate={handleNavigate} />}
             {(currentView === 'model-market' || (currentView === 'model-cache' && cacheFromModelMarket)) && (
+              <PageHeadingProvider target={currentView === 'model-market' ? pageHeadingTarget : null}>
               <div hidden={currentView !== 'model-market'}>
                 <ModelMarketPage onNavigate={handleNavigate} isActive={currentView === 'model-market'} />
               </div>
+              </PageHeadingProvider>
             )}
             {currentView === 'optimization-evaluate' && <EvaluationDashboardEntry onNavigate={handleNavigate} />}
             {currentView === 'optimization-evaluate-new' && <EvaluationTaskWizard onNavigate={handleNavigate} />}
             {currentView === 'optimization-evaluation-details' && <OptimizationEvaluationDetails onNavigate={handleNavigate} />}
-            {currentView === 'optimization-deploy' && <OptimizationEvaluateWorkspace onNavigate={handleNavigate} />}
-            {currentView === 'optimization-workspace' && <OptimizationOverview onNavigateBack={() => handleNavigate('home')} onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-simulate' && <SimulationDashboard onNavigate={handleNavigate} onNavigateBack={() => handleNavigate('home')} initialAction={navigationParams.action || ''} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-simulate-details' && <SimulationTaskDetails onNavigate={handleNavigate} />}
-            {['opt-define', 'opt-search', 'opt-deploy', 'opt-benchmark', 'opt-performance'].includes(currentView) && (
-              <OptimizationStage stageView={currentView} onNavigateBack={() => handleNavigate('home')} onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />
-            )}
             {currentView === 'admin/users' && <UsersPage initialUserId={navigationParams.userId || ''} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/groups' && <GroupsPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/roles' && <RolesPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
@@ -320,10 +376,11 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
             {currentView === 'admin/audit' && <AuditLogsPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/model-service' && <ModelServiceAdminPage key={navigationParams.clusterId || ''} initialClusterId={navigationParams.clusterId || ''} initialGroupId={navigationParams.groupId || ''} initialAction={navigationParams.action || ''} initialExecutionId={navigationParams.executionId || ''} onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'admin/usage' && <ModelUsagePage mode="admin" initialClusterId={navigationParams.clusterId || ''} initialGroupId={navigationParams.groupId || ''} initialUserId={navigationParams.userId || ''} initialSince={navigationParams.since} initialUntil={navigationParams.until} initialUsageWindow={navigationParams.usageWindow || ''} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
-          </WorkflowProvider>
+          </>
           )}
 
         </main>
+        </PageHeadingProvider>
       </div>
   );
 }

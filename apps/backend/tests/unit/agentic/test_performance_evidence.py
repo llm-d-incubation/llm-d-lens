@@ -40,7 +40,9 @@ def test_benchmark_performance_evidence_maps_matching_records_to_candidate_input
             shared_prefix_ratio=0.7,
         ),
     )
-    candidate = next(item for item in DeterministicPlanner().candidates(facts) if item.id == "baseline-vllm-tp1-r1")
+    candidate = next(
+        item for item in DeterministicPlanner().candidates(facts) if item.id == "optimized-baseline-tp1-r1"
+    )
     record = BenchmarkRecord(
         benchmark_id="bench-1",
         timestamp=datetime.now(UTC),
@@ -65,7 +67,7 @@ def test_benchmark_performance_evidence_maps_matching_records_to_candidate_input
             prefill_fraction=0,
         ),
         configuration=CandidateConfiguration(
-            topology="baseline-vllm", decode_tp=1, decode_replicas=1, optimizations=("",)
+            topology="optimized-baseline", decode_tp=1, decode_replicas=1, optimizations=("",)
         ),
         metrics=BenchmarkMetrics(ttft_p95_ms=300, tpot_p95_ms=25, throughput_tokens_per_s=700, error_rate=0.01),
     )
@@ -83,10 +85,10 @@ def test_benchmark_performance_evidence_maps_matching_records_to_candidate_input
     assert evidence[0].evidence_refs == ("benchmark:bench-1",)
     sample = evidence[0].weighted_samples[0]
     assert sample.benchmark_id == "bench-1"
-    assert sample.match_confidence > 0.99
+    assert sample.match_confidence == pytest.approx(0.9, abs=0.001)
     assert sample.ttft_p95_ms == 300
     assert sample.outcome == "succeeded"
-    assert sample.topology == "baseline-vllm"
+    assert sample.topology == "optimized-baseline"
 
 
 def test_benchmark_performance_evidence_blocks_repeated_matching_failures(tmp_path):
@@ -96,7 +98,9 @@ def test_benchmark_performance_evidence_blocks_repeated_matching_failures(tmp_pa
         free_gpu_count=2,
         workload_profile=WorkloadProfile(mean_input_tokens=4096),
     )
-    candidate = next(item for item in DeterministicPlanner().candidates(facts) if item.id == "baseline-vllm-tp1-r1")
+    candidate = next(
+        item for item in DeterministicPlanner().candidates(facts) if item.id == "optimized-baseline-tp1-r1"
+    )
     common = {
         "timestamp": datetime.now(UTC),
         "outcome": "failed",
@@ -120,7 +124,7 @@ def test_benchmark_performance_evidence_blocks_repeated_matching_failures(tmp_pa
             prefill_fraction=0,
         ),
         "configuration": CandidateConfiguration(
-            topology="baseline-vllm", decode_tp=1, decode_replicas=1, optimizations=("",)
+            topology="optimized-baseline", decode_tp=1, decode_replicas=1, optimizations=("",)
         ),
         "failure_reason": "OOM",
     }
@@ -153,7 +157,7 @@ def test_persisted_benchmark_history_flows_to_planner_and_ai_context(tmp_path):
     )
     deterministic_planner = DeterministicPlanner()
     candidates = deterministic_planner.candidates(facts)
-    baseline = next(candidate for candidate in candidates if candidate.id == "baseline-vllm-tp1-r1")
+    baseline = next(candidate for candidate in candidates if candidate.id == "optimized-baseline-tp1-r1")
     pd = next(candidate for candidate in candidates if candidate.provider_ref == "pd-disaggregation")
     store = JsonBenchmarkRecordStore(tmp_path)
     common = {
@@ -271,4 +275,6 @@ def test_persisted_benchmark_history_flows_to_planner_and_ai_context(tmp_path):
     assert [sample["benchmark_id"] for sample in ai_context["historical_benchmarks"]] == [
         f"baseline-success-{index}" for index in range(3)
     ]
-    assert all(sample["match_confidence"] > 0.99 for sample in ai_context["historical_benchmarks"])
+    assert all(
+        sample["match_confidence"] == pytest.approx(0.9, abs=0.001) for sample in ai_context["historical_benchmarks"]
+    )

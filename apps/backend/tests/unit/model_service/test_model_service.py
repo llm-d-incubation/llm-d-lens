@@ -45,7 +45,7 @@ def _create_user(username: str) -> UserRecord:
 
 
 def _patch_target(
-    monkeypatch, *, execution_id: str = "exec-1", cluster_id: str = "cluster-a", kind: str = "vllm"
+    monkeypatch, *, execution_id: str = "exec-1", cluster_id: str = "cluster-a", kind: str = "llm-d-epp"
 ) -> None:
     from llm_d_lens.model_service import service as service_module
     from llm_d_lens.model_service.targets import ExecutionTarget
@@ -229,6 +229,20 @@ def test_stopped_publication_denies_new_inference_until_resumed(monkeypatch, sto
     else:
         service.update_member(member.id, MemberUpdateRequest(status="active"))
     assert service.authorize_request(request).execution_id == member.execution_id
+
+
+def test_plain_vllm_provider_is_rejected_for_a_model_service(monkeypatch):
+    _patch_target(monkeypatch, kind="vllm")
+    service = _service()
+    group = service.create_group(GroupCreateRequest(name="public", clusterId="cluster-a"), created_by=None)
+    with pytest.raises(ModelServiceConflictError, match="plain vLLM deployments cannot back a Model Service"):
+        service.create_member(MemberCreateRequest(group_id=group.id, execution_id="exec-1"), published_by=None)
+    with pytest.raises(ModelServiceConflictError, match="plain vLLM deployments cannot back a Model Service"):
+        service.create_group(
+            GroupCreateRequest(name="new-public", clusterId="cluster-a", executionId="exec-1"), created_by=None
+        )
+    assert service.list_members(group.id) == []
+    assert [item.name for item in service.list_groups()] == ["public"]
 
 
 def test_membership_conflict_and_update_delete(monkeypatch):

@@ -8,7 +8,11 @@ import TabItem from '@theme/TabItem';
 
 ## 后端 API
 
-模型市场**没有**专门的后端模块。它的目录是 `src/data/modelCatalog.js` 中的静态前端数据，因此没有需要文档化的后端目录 API。该页面只调用共享的集群和部署 API。
+模型市场**没有**专门的后端模块。它的目录是 `packages/shared/src/catalog/modelCatalog.js` 中的静态前端数据，因此没有需要文档化的后端目录 API。该页面只调用共享的集群和部署 API。
+
+页面使用卡片的数值型 `contextLength` 元数据初始化部署的 `max_model_len`，
+仅在缺少该元数据时使用 `4096`。Agentic 请求将同一值传给
+`planning_facts.context_length`；后端使用顶层 `max_model_len` 作为有效规划上下文。
 
 ### 列出 Lens 管理的集群
 
@@ -280,7 +284,7 @@ asyncio.run(main())
   - `storage_volume_id`（`string`，可选）
   - `model_cache_path`（`string`，可选）
   - `pvc_name`（`string`，可选）
-  - `max_model_len`（`integer`，可选）
+  - `max_model_len`（`integer`，可选，默认 `4096`，范围为 `256` 到 `1048576`）
   - `gpu_memory_utilization`（`number`，可选）
   - `max_num_seqs`（`integer`，可选）
   - `max_num_batched_tokens`（`integer`，可选）

@@ -9,8 +9,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
-from llm_d_lens.ai_providers.client import AIProviderClientError
+from llm_d_lens.ai_providers.client import AIProviderClientError, AIRequestRecord
 from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
 from llm_d_lens.aic.service import AICError, estimate
 from llm_d_lens.auth.contracts import Principal
@@ -127,17 +128,19 @@ class AgenticDeploymentService:
         )
         deterministic = DeterministicPlanner()
         provider = OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
-        candidates, generation, resolved = await self._generate_candidates(
-            provider,
-            session.server_id,
-            request.model,
-            planning_facts,
-            request.planner_prompt,
-            provider_requested=bool(request.ai_provider_id),
-            on_progress=on_progress,
-            principal_id=principal_id,
-        )
-        resolved = with_public_rag_evidence(resolved, public_rag)
+        run_id = str(uuid4())
+        with self._snapshot_store.capture_requests(run_id, "generator") as generator_requests:
+            candidates, generation, resolved = await self._generate_candidates(
+                provider,
+                session.server_id,
+                request.model,
+                planning_facts,
+                request.planner_prompt,
+                provider_requested=bool(request.ai_provider_id),
+                on_progress=on_progress,
+                principal_id=principal_id,
+            )
+            resolved = with_public_rag_evidence(resolved, public_rag)
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
         rejection_reasons = sorted(
@@ -194,18 +197,20 @@ class AgenticDeploymentService:
         scored_candidates = deterministic.score(deterministic_facts, deterministic_candidates)[:3]
         scored_candidate_count = len(scored_candidates)
         deterministic_ranking = deterministic.ranking_trace(deterministic_facts, deterministic_candidates)
+        planner_requests: list[AIRequestRecord] = []
         if (
             provider is not None
             and decision.action == "select_candidate"
             and any(candidate.deployable for candidate in ai_candidates)
         ):
             try:
-                decision, provider_candidates = await provider.recommend(
-                    resolved.facts,
-                    [candidate for candidate in ai_candidates if candidate.deployable],
-                    operator_prompt=request.planner_prompt,
-                    on_progress=on_progress,
-                )
+                with self._snapshot_store.capture_requests(run_id, "planner") as planner_requests:
+                    decision, provider_candidates = await provider.recommend(
+                        resolved.facts,
+                        [candidate for candidate in ai_candidates if candidate.deployable],
+                        operator_prompt=request.planner_prompt,
+                        on_progress=on_progress,
+                    )
                 validated_candidate_ids = {candidate.id for candidate in ai_candidates if candidate.deployable}
                 if decision.candidate_id not in validated_candidate_ids:
                     raise OpenAIPlannerError("external planner selected an unvalidated candidate")
@@ -281,6 +286,7 @@ class AgenticDeploymentService:
             evidence=selected.evidence_ids,
         )
         run = AgenticDeploymentRun(
+            id=run_id,
             status=AgenticDeploymentStatus.AWAITING_APPROVAL,
             request=request,
             selected_candidate=candidate,
@@ -296,6 +302,8 @@ class AgenticDeploymentService:
             generator_fallback_reason=generation["fallback_reason"],
             generator_fallback_detail=generation["fallback_detail"],
             generator_tool_trace=generation["tool_trace"],
+            generator_requests=generator_requests,
+            planner_requests=planner_requests,
             planning_trace=self._planning_trace(
                 request,
                 planning_facts,
@@ -570,7 +578,7 @@ class AgenticDeploymentService:
             resolved = await resolve_planning_facts(cluster_id, model, facts)
             proposals = [
                 CandidateProposal(
-                    provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "baseline-vllm",
+                    provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "optimized-baseline",
                     replicas=prediction.replicas,
                     tensor_parallel_size=prediction.tensor_parallel_size,
                     prefill_replicas=prediction.prefill_replicas,
@@ -798,7 +806,7 @@ class AgenticDeploymentService:
         predictions = list(facts.aic_predictions)
         updated = []
         for candidate in candidates:
-            if candidate.provider_ref not in {"baseline-vllm", "optimized-baseline", "pd-disaggregation"}:
+            if candidate.provider_ref not in {"optimized-baseline", "pd-disaggregation"}:
                 updated.append(candidate)
                 continue
             if DeterministicPlanner._aic_prediction(facts, candidate):
@@ -898,17 +906,18 @@ class AgenticDeploymentService:
             on_progress,
         )
         deterministic = DeterministicPlanner()
-        candidates, generation, refreshed = await self._generate_candidates(
-            provider,
-            session.server_id,
-            run.request.model,
-            planning_facts,
-            request.planner_prompt,
-            provider_requested=bool(run.request.ai_provider_id),
-            on_progress=on_progress,
-            principal_id=principal_id,
-        )
-        refreshed = with_public_rag_evidence(refreshed, public_rag)
+        with self._snapshot_store.capture_requests(run.id, "generator") as generator_requests:
+            candidates, generation, refreshed = await self._generate_candidates(
+                provider,
+                session.server_id,
+                run.request.model,
+                planning_facts,
+                request.planner_prompt,
+                provider_requested=bool(run.request.ai_provider_id),
+                on_progress=on_progress,
+                principal_id=principal_id,
+            )
+            refreshed = with_public_rag_evidence(refreshed, public_rag)
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
         rejection_reasons = sorted(
@@ -954,14 +963,16 @@ class AgenticDeploymentService:
         planner_fallback_reason: str | None = None
         planner_model = None
         scored_candidates = deterministic.score(refreshed.facts, candidates)[:3]
+        planner_requests: list[AIRequestRecord] = []
         if provider is not None:
             try:
-                decision, scored_candidates = await provider.recommend(
-                    refreshed.facts,
-                    [candidate for candidate in candidates if candidate.deployable],
-                    operator_prompt=request.planner_prompt,
-                    on_progress=on_progress,
-                )
+                with self._snapshot_store.capture_requests(run.id, "planner") as planner_requests:
+                    decision, scored_candidates = await provider.recommend(
+                        refreshed.facts,
+                        [candidate for candidate in candidates if candidate.deployable],
+                        operator_prompt=request.planner_prompt,
+                        on_progress=on_progress,
+                    )
                 validated_candidate_ids = {candidate.id for candidate in candidates if candidate.deployable}
                 if decision.candidate_id not in validated_candidate_ids:
                     raise OpenAIPlannerError("external planner selected an unvalidated candidate")
@@ -1015,6 +1026,8 @@ class AgenticDeploymentService:
         run.generator_fallback_reason = generation["fallback_reason"]
         run.generator_fallback_detail = generation["fallback_detail"]
         run.generator_tool_trace = generation["tool_trace"]
+        run.generator_requests = generator_requests
+        run.planner_requests = planner_requests
         run.planning_trace = self._planning_trace(
             run.request,
             planning_facts,

@@ -116,6 +116,15 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                     badge="Experimental"
                     description="Connect external directories (LDAP) so directory users can sign in to Lens. This integration is experimental; behavior and configuration may change."
                     onToggleMobileNav={onToggleMobileNav}
+                />
+
+                <AdminAlert tone="success">{notice}</AdminAlert>
+                {error && providers.length > 0 && <AdminAlert>{error}</AdminAlert>}
+
+                <AdminPanel
+                    icon={Fingerprint}
+                    title="Providers"
+                    count={providers.length}
                     actions={
                         <>
                             <Button variant="secondary" size="sm" onClick={load} isLoading={refreshing} disabled={loading}>
@@ -128,11 +137,7 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                             </PermissionGate>
                         </>
                     }
-                />
-
-                <AdminAlert tone="success">{notice}</AdminAlert>
-                {error && providers.length > 0 && <AdminAlert>{error}</AdminAlert>}
-
+                >
                 <AsyncState
                     loading={loading}
                     error={providers.length === 0 ? error : null}
@@ -148,7 +153,6 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                         />
                     }
                 >
-                    <AdminPanel icon={Fingerprint} title="Providers" count={providers.length}>
                         <div className="overflow-x-auto">
                             <table className="w-full min-w-[46rem] text-left text-sm">
                                 <thead className="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-500">
@@ -204,8 +208,8 @@ export default function IdentityProvidersPage({ onToggleMobileNav }) {
                                 </tbody>
                             </table>
                         </div>
-                    </AdminPanel>
                 </AsyncState>
+                </AdminPanel>
             </div>
 
             {dialog && (

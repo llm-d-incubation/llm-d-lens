@@ -111,7 +111,7 @@ export function AIProviderFormModal({ provider, onCancel, onSaved }) {
             isOpen
             onClose={saving ? undefined : onCancel}
             title={isEdit ? 'Edit AI provider' : 'Add AI provider'}
-            subtitle="Connect an OpenAI- or Anthropic-compatible completions endpoint (OpenAI, Azure OpenAI, Anthropic, vLLM, Ollama, etc.)."
+            subtitle="Connect a publicly reachable OpenAI- or Anthropic-compatible endpoint over HTTPS (for example OpenAI, Azure OpenAI, or Anthropic)."
             closeOnBackdrop={!saving}
             closeOnEscape={!saving}
             footer={

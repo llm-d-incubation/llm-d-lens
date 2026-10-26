@@ -29,6 +29,10 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
+
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 _DB_DATA_DIRECTORY_DEFAULT = Path("~/.llm-d-lens/db/data").expanduser()
 
@@ -101,10 +105,36 @@ class DatabaseSettings:
         )
 
 
+def validate_external_database_url(url: str) -> None:
+    """Reject an external DSN whose TCP target relies on a driver-default port.
+
+    A missing port makes the driver silently pick the engine default (for
+    example PostgreSQL's 5432), which may be a different database than the one
+    the operator intended. Unix-socket DSNs are exempt: they do not use a TCP
+    port at all.
+    """
+    try:
+        parsed = make_url(url)
+    except ArgumentError as exc:
+        raise DatabaseSettingsError(f"invalid external database URL: {exc}") from exc
+    socket_host = str(parsed.query.get("host") or "")
+    if socket_host.startswith("/"):
+        return
+    if not parsed.host:
+        raise DatabaseSettingsError("external database URL must include a host")
+    if parsed.port is None:
+        engine = urlsplit(url).scheme.split("+", 1)[0] or "database"
+        raise DatabaseSettingsError(
+            f"external {engine} database URL must include an explicit port "
+            f"(for example :5432 for PostgreSQL); refusing to guess a default port"
+        )
+
+
 def resolve_database_url(settings: DatabaseSettings) -> str:
     """Return the SQLAlchemy DSN to connect with, starting the embedded server if needed."""
     if settings.mode == "external":
         assert settings.external_url is not None
+        validate_external_database_url(settings.external_url)
         return _normalize_driver(settings.external_url)
     return _normalize_driver(_start_embedded_postgres(settings.embedded_data_directory, settings.embedded_password))
 

@@ -1,26 +1,36 @@
 ---
-title: Model Market
+title: Model Catalog
 description: Choose a model and create a manual or AI-assisted deployment.
 ---
 
-Open **Model Market** to choose a model and deploy it to a cluster.
+Open **Model Catalog** to choose a model and deploy it to a cluster.
 For your first deployment, use **Manual** mode.
 
-Use **Search models** above the categories to filter by model name, publisher,
+Use the compact **Search models** field beside the category tabs to filter by model name, publisher,
 repository, model type, category, or precision. Search ignores case and combines
 with the selected category; multiple words must all match. The model count updates
 as you type. Use **Clear filters** to reset both search and category.
 
 ## Choose a deployment mode
 
+In **One-click deployment**, the **Model Catalog** back button sits in the
+content area above the deployment configuration, not in the global top bar.
+
 | Mode | Choose it when |
 | --- | --- |
 | **Manual** | You want to choose an llm-d Guide template, configure resources or review generated YAML |
 | **Agentic** (Experimental) | You want Lens to recommend a configuration for a workload and performance target |
 
+Deployment setup uses the model card's **Context** metadata as its initial maximum
+context length, including Agentic recommendations. For example, Qwen3-0.6B starts
+with `40960`, not `4096`. Only models with no listed context use the `4096`
+default. Standard and Agentic requests accept `256` through `1048576` tokens
+without silently shortening the card value; resource and model compatibility
+checks still apply. Existing plans and deployments are not rewritten.
+
 ## Create a manual deployment
 
-1. Open **Model Market**, use **Model categories** to narrow the list, and click a model card.
+1. Open **Model Catalog**, use **Model categories** to narrow the list, and click a model card.
 2. In **One-click deployment**, enter **Deployment name** and choose a ready **Cluster**.
 3. Choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.** Model cache storage is optional in **Manual** mode.
 4. Keep **Mode** on **Manual** and click **Configure deployment**. Review the prefilled model and deployment settings; use **Edit setup** if needed.
@@ -30,6 +40,10 @@ as you type. Use **Clear filters** to reset both search and category.
 8. Click **Generate YAML**. If available cards are insufficient but the physical total is sufficient, review the Pending warning and click **Continue & generate**. If the physical total is insufficient, reduce replicas / TP.
 9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Deploy**.
 10. On **Deployments**, wait for **Ready**. The deployment is retained without running a benchmark; stop or clean it up explicitly when no longer needed.
+
+YAML generation supports both device-plugin and DRA clusters. Missing DRA device
+details do not prevent hardware variant detection from registered Kubernetes
+accelerator resources; normal capacity and configuration checks still apply.
 
 Use **Back to model card** to return to the selected model.
 To measure performance, see [Run an evaluation](/user-guide/evaluation).
@@ -54,7 +68,7 @@ again. A resource or network error during generation must be resolved before dep
 
 1. Open a model and fill in the deployment name, cluster and cache storage.
 2. Set **Mode** to **Agentic**.
-3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **Input tokens per request** (ISL) defaults to `4000` and **Output tokens per request** (OSL) to `1000`, matching native AIC search/recommend defaults. **TTFT SLO (ms)** defaults to `2000` and **TPOT SLO (ms)** to `30`; all are editable. There is no end-to-end latency input.
+3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **Mean input tokens per request** (ISL), **Mean output tokens per request** (OSL), **TTFT SLO (ms)** and **TPOT SLO (ms)** start blank. Their placeholder examples (`4000`, `1000`, `2000` and `30`) are not submitted as requirements. Mean input length is not copied into P95. There is no end-to-end latency input.
 4. Leave **AI provider** on **Default (no external AI provider)**, or select a configured provider to help rank the options.
 5. Optional: expand **Preference** and enter an English preference, such as `use fewer GPU resources` or `prefer prefix cache`.
 6. Click **Generate recommendation**.
@@ -70,6 +84,11 @@ Manual and Standard deployment checks are unchanged.
 
 Optionally, expand **Pod placement** before generating a recommendation to choose
 where the deployment runs.
+
+Agentic generation and selection offer `optimized-baseline` instead of direct
+`baseline-vllm`, including built-in fallback and AIC recommendations. Historical
+direct-vLLM configurations are not reintroduced as candidates. Existing plans
+and manual Standard vLLM deployments are unchanged.
 
 For load-based sizing, enter either **Concurrent requests** or **Request rate (QPS)**,
 not both. These are optional and have no prefilled target. A provided target selects
@@ -101,6 +120,17 @@ permission are explicitly reported, and planning continues with existing evidenc
 Plans containing public RAG observations retain that same read-permission requirement.
 Without external AI, retrieved observations remain context only: they do not silently
 become deterministic performance predictions or change the displayed SLO assessment.
+
+With an external AI provider, both generation and selection prompts put your full
+preference before the planning context. Explicit requirements such as one GPU or no
+P/D separation take precedence over candidate diversity and performance suggestions,
+subject to platform and hardware validity. This is AI guidance, not a guarantee that
+arbitrary natural-language requirements are mechanically enforced.
+
+New planning audits retain the full preference and each actual AI request/response,
+including tools and retries. They exclude provider authentication headers and API keys.
+Treat these audit files as private data; old decisions cannot recover previously
+unrecorded exchanges.
 
 **AI score** ranks the alternatives; it is not a measured performance result or
 a probability of success. Treat **SLO not met** as a reason to revise the target

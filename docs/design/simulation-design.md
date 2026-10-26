@@ -784,7 +784,6 @@ Status codes:
 | `TRACE_REPLAYER_EXECUTABLE` | Trace-Replayer command |
 | `TRACE_REPLAYER_TOKENIZER` | default Trace-Replayer tokenizer |
 | `SIMULATION_BACKEND_CACHE_DIR` | managed backend installations |
-| `SIMULATION_MAX_CONCURRENT_TASKS` | worker concurrency |
 | `SIMULATION_MAX_CONCURRENT_DOWNLOADS` | trace download concurrency |
 | `SIMULATION_MAX_TASK_LOG_LINES` | retained task log lines |
 
@@ -832,6 +831,12 @@ backends are supported:
 The `Backend` base validates the common trace replay and SLO contract. Each
 current backend is a `CommandBackend` responsible for its additional
 validation, CLI invocation, subprocess execution, and result parsing.
+
+Finalization drains queued progress and log saves while the task is still
+`running`, then sets its terminal status, verifies the saved serving and routing
+snapshot, and performs the final save and benchmark evidence ingestion. This
+ordering prevents an earlier save from replacing the snapshot while verification
+is awaiting cluster metadata and losing its `verified_at` marker.
 
 Backend components import the public Python API from
 `llm_d_lens.simulation`. Python calls return typed domain objects where a
@@ -1092,8 +1097,9 @@ prompt generation does not throttle the recorded request schedule. Explicit
 Validation is performed by the selected `CommandBackend` and may reject
 incompatible combinations of dataset, backend, scale factor, and trace range.
 The response is HTTP 202 with the new task's ID and initial state. The task
-enters `queued` status and is scheduled against a configurable concurrency
-semaphore (environment variable `SIMULATION_MAX_CONCURRENT_TASKS`, default 1).
+enters `queued` status and is scheduled against a per-target lock. Tasks that
+target the same deployment, Model Service, or endpoint URL wait for one another;
+tasks with different targets run concurrently.
 
 ### Task Stop
 
@@ -1455,8 +1461,9 @@ cluster state for these deployment execution snapshots.
 1. A task ID is immutable once assigned and never reused.
 2. A `running` task discovered after a service restart is marked `failed`
    with an appropriate error message.
-3. Only one task per ID may run at a time. The concurrency semaphore
-   (`SIMULATION_MAX_CONCURRENT_TASKS`) gates queued task dispatch.
+3. Only one task per ID may run at a time. Tasks targeting the same deployment,
+   Model Service, or endpoint URL are serialized by a per-target lock; different
+   targets may run concurrently.
 4. Cancelling a task sends a termination signal to the backend subprocess
    with a configurable grace period. If the subprocess does not exit, it is
    force-killed.

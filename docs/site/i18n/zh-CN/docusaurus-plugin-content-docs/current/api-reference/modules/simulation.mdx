@@ -12,6 +12,55 @@ import TabItem from '@theme/TabItem';
 
 模拟相关路由位于 `llm_d_lens/simulation/router.py`，前缀为 `/api/simulation`。
 
+### 测试时证据与历史入库
+
+任务的创建、查询、列表及重跑响应包含可选 `benchmark_evidence`：
+保存的任务和部署配置、通过 API 补全的 `benchmark_context`、可选的 Model Service
+`routing`、采集或校验失败时的 `benchmark_context_error`，以及终态 `ingestion` 诊断。
+请求不需要新增元数据参数。事实在流量开始前采集，完成后校验；重跑重新获取自己的快照。
+
+`benchmark_context.model_identity` 记录权威模型标识及来源（`deployment-configuration`
+或 `model-service-routing`），包括部署执行 ID；Model Service 路径还包含组和成员 ID。
+Simulation 直接复用已验证身份，不解析容器启动命令。硬件和运行时事实仍独立探测，
+并保留容器及路由稳定性检查。未观测到的 `serving_configuration` 字段及辅助元数据
+保持 null，并记录 `warnings`，不以配置值代替。硬兼容字段缺失的记录仍可归档，
+但不参与预测匹配。
+
+入库报告包含 `schema_version`、`status`、`record_ids`、`existing_ids`、
+`inserted_ids` 和 `issues`。状态为 `stored`、`partial`、`skipped` 或 `error`；
+只读预览对待入库的有效记录返回 `eligible` 和 `eligible_ids`。
+每条证据使用 `simulation:<task-id>` 及原始测试时间。先保存源测试结果，再写入证据，
+已有证据不覆盖。必需上下文缺失或工件不完整时返回明确原因，不使用当前环境替代。
+
+标准化将 AIPerf 的报告时长与成功请求窗口比较，将 Trace Replayer 的报告时长与全部
+请求窗口比较，均保留一秒容差；另行检查完整请求窗口不超过任务的实测执行时长。
+平均并发度使用全部请求存续时间之和除以完整请求窗口，不修改原始汇总时长和吞吐指标。
+证据记录的 provenance 包含 `measurement_windows`，字段为
+`reported_duration_seconds`、`reported_duration_scope`（`successful-requests` 或
+`all-requests`）、`all_requests_duration_seconds` 和
+`successful_requests_duration_seconds`。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    通过 **`GET /api/simulation/tasks/{task_id}`** 读取 `benchmark_evidence`。
+    多部署 Model Service 流量和无法验证的外部环境不会被归属到猜测的部署。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.simulation.benchmark_evidence import normalize_simulation_task, ingest_simulation_task
+
+records, issues = normalize_simulation_task(saved_task)  # saved facts/artifacts only
+preview = ingest_simulation_task(saved_task, apply=False)  # no writes
+```
+
+  </TabItem>
+</Tabs>
+
+在已配置的后端环境执行 `python -m llm_d_lens.simulation.benchmark_evidence` 进行预览。
+可重复使用 `--task-id <id>` 选择任务；加 `--apply` 才写入合格记录和源任务报告。
+回填不会重新采集当前集群状态。未知共享前缀比例保持 null，相似度计算不给该维度加分。
+
 ### 列出模拟后端
 
 列出 Lens 已知的模拟（Simulation）后端，以及每个后端在当前环境中是否可用。

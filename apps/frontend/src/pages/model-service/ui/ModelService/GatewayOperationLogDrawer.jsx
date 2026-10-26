@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CheckCircle2, Loader2, X, XCircle } from 'lucide-react';
-import { cn } from '../../../../shared/lib/cn';
 import { Button } from '../../../../shared/ui/Button';
 import { Badge } from '../../../../shared/ui/Badge';
 import { Checkbox } from '../../../../shared/ui/FormControls';
@@ -185,28 +184,23 @@ export function GatewayOperationLogDrawer({ isOpen, onClose, title, status = 'ru
             <aside
                 role="log"
                 aria-live="polite"
-                className="fixed inset-y-0 right-0 z-[100] flex h-full w-full max-w-xl flex-col border-l border-slate-700/70 bg-slate-950 shadow-2xl"
+                className="fixed inset-y-0 right-0 z-[100] flex h-full w-full max-w-xl flex-col border-l border-theme-border bg-theme-card shadow-2xl"
             >
-                <header className="flex items-center gap-2 border-b border-slate-800 px-4 py-3">
+                <header className="flex items-center gap-2 border-b border-theme-border px-4 py-3">
                     {icon}
-                    <span className="text-sm font-semibold text-slate-200">{title || 'Data-plane operation'}</span>
-                    <span className={cn(
-                        'rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                        status === 'running' ? 'bg-sky-500/15 text-sky-300'
-                            : status === 'succeeded' ? 'bg-emerald-500/15 text-emerald-300'
-                                : 'bg-rose-500/15 text-rose-300',
-                    )}>{status}</span>
+                    <span className="text-sm font-semibold text-theme-text">{title || 'Data-plane operation'}</span>
+                    <Badge tone={status === 'running' ? 'info' : status === 'succeeded' ? 'success' : 'danger'} size="xs" className="uppercase tracking-wide">{status}</Badge>
                     <Button variant="ghost" size="icon" className="ml-auto" aria-label="Close" onClick={onClose}><X size={14} /></Button>
                 </header>
-                <div className="flex-1 overflow-y-auto bg-black/40 px-4 py-3 font-mono text-[11px] leading-relaxed text-slate-300">
-                    {lines.length === 0 && <p className="text-slate-500">Starting…</p>}
+                <div className="flex-1 overflow-y-auto bg-theme-card px-4 py-3 font-mono text-[11px] leading-relaxed text-theme-text">
+                    {lines.length === 0 && <p className="text-theme-muted">Starting…</p>}
                     {lines.map((line, index) => (
                         <div key={index} className="whitespace-pre-wrap break-words">{line}</div>
                     ))}
                     <div ref={endRef} />
                 </div>
                 {message && (
-                    <footer className="border-t border-slate-800 px-4 py-3 text-xs text-slate-300">{message}</footer>
+                    <footer className="border-t border-theme-border px-4 py-3 text-xs text-theme-text">{message}</footer>
                 )}
             </aside>
         </>,

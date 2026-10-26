@@ -7,8 +7,9 @@ Go-based ``kubectl`` client -- does not understand CIDR notation in ``NO_PROXY``
 A backend whose ``NO_PROXY`` covers the cluster subnet only as ``10.112.0.0/16``
 still proxies the API server and fails with ``aiohttp.ClientHttpProxyError``.
 Adding the exact API server host to ``NO_PROXY``/``no_proxy`` closes that gap;
-the change is additive and idempotent, so every other host keeps its existing
-proxy behaviour and an explicit kubeconfig ``proxy-url`` is untouched.
+both case variants are merged so clients that prefer lowercase retain existing
+bypasses, including loopback MCP traffic. The change is additive and idempotent,
+and an explicit kubeconfig ``proxy-url`` is untouched.
 """
 
 from __future__ import annotations
@@ -49,23 +50,29 @@ def api_server_host(kubeconfig_path: str | None) -> str | None:
 
 
 def ensure_api_server_proxy_bypass(host: str | None) -> bool:
-    """Add ``host`` to the process ``NO_PROXY``/``no_proxy``.
+    """Merge process ``NO_PROXY``/``no_proxy`` entries and add ``host`` to both.
 
     Returns ``True`` when the environment changed. It is a no-op when no host is
-    known, no proxy is configured, or the host is already listed. The Kubernetes
-    aiohttp transport reads these variables at request time, so this runs in the
-    backend process before the API call (see ``kubernetes_auth.load_configuration``).
+    known, no proxy is configured, or both variables already match the merged
+    list containing the host. The Kubernetes aiohttp transport reads these
+    variables at request time, so this runs in the backend process before the
+    API call (see ``kubernetes_auth.load_configuration``).
     """
     if not host:
         return False
     if not any(os.environ.get(name) for name in _PROXY_NAMES):
         return False
+    entries = list(
+        dict.fromkeys(
+            entry.strip() for name in _NO_PROXY_NAMES for entry in os.environ.get(name, "").split(",") if entry.strip()
+        )
+    )
+    if host not in entries:
+        entries.append(host)
+    merged = ",".join(entries)
     changed = False
     for name in _NO_PROXY_NAMES:
-        entries = [entry.strip() for entry in os.environ.get(name, "").split(",") if entry.strip()]
-        if host in entries:
-            continue
-        entries.append(host)
-        os.environ[name] = ",".join(entries)
-        changed = True
+        if os.environ.get(name) != merged:
+            os.environ[name] = merged
+            changed = True
     return changed

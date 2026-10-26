@@ -9,7 +9,7 @@ import { requestJson } from '../../../shared/api/httpClient';
 // CreateClusterWizard's Proxy/Versions steps, so a ref change here actually
 // triggers a real (re-)download instead of just updating the pinned ref.
 import { useEffect, useState } from 'react';
-import { Button, Input, Label, Modal, Select, Textarea } from '../../../shared/ui';
+import { Button, Input, Label, Modal, Textarea } from '../../../shared/ui';
 
 function request(path, options = {}) {
     return requestJson(path, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -27,7 +27,7 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
     const [httpProxy, setHttpProxy] = useState('');
     const [httpsProxy, setHttpsProxy] = useState('');
     const [noProxy, setNoProxy] = useState('');
-    const [gatewayProvider, setGatewayProvider] = useState('istio');
+    const gatewayProvider = cluster.gatewayProvider || 'istio';
     const [gatewayPort, setGatewayPort] = useState('');
     // Optional externally reachable Gateway host/IP (or full URL); empty = derive.
     const [gatewayPublicUrl, setGatewayPublicUrl] = useState('');
@@ -53,7 +53,6 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
         setHttpProxy(cluster.proxy?.httpProxy || '');
         setHttpsProxy(cluster.proxy?.httpsProxy || '');
         setNoProxy(cluster.proxy?.noProxy || '');
-        setGatewayProvider(cluster.gatewayProvider || 'istio');
         setGatewayPort(cluster.gatewayPort ? String(cluster.gatewayPort) : '');
         setGatewayPublicUrl(cluster.gatewayPublicUrl || '');
         setGatewayAuthzHost(cluster.gatewayAuthzHost || '');
@@ -120,7 +119,6 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                             : { mode: 'auto' },
                     // Only send gateway fields that actually changed, so editing e.g.
                     // the Lens address never overwrites a provider the user didn't touch.
-                    ...(gatewayProvider !== (cluster.gatewayProvider || '') && { gatewayProvider: gatewayProvider || null }),
                     ...(gatewayPort.trim() !== (cluster.gatewayPort ? String(cluster.gatewayPort) : '') && { gatewayPort: gatewayPort.trim() ? Number(gatewayPort.trim()) : null }),
                     ...(gatewayPublicUrl.trim() !== (cluster.gatewayPublicUrl || '') && { gatewayPublicUrl: gatewayPublicUrl.trim() || null }),
                     ...(gatewayAuthzHost.trim() !== (cluster.gatewayAuthzHost || '') && { gatewayAuthzHost: gatewayAuthzHost.trim() || null }),
@@ -235,13 +233,9 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
                     {!cluster.hfTokenSecret && !hfTokenSaved && <p className="text-xs text-amber-300">This cluster has no HF_TOKEN secret yet. Enter a token to create one.</p>}
                 </div>
                 <div className="space-y-2">
-                    <Label htmlFor="edit-gateway-provider">Model gateway provider</Label>                    <Select id="edit-gateway-provider" value={gatewayProvider} onChange={(event) => setGatewayProvider(event.target.value)} disabled={busy}>
-                        <option value="">Not set</option>
-                        <option value="istio">Istio</option>
-                        <option value="envoy-ai-gateway" disabled>Envoy AI Gateway (not supported yet)</option>
-                        <option value="agentgateway" disabled>agentgateway (not supported yet)</option>
-                        <option value="gke" disabled>GKE Gateway (not supported yet)</option>
-                    </Select>
+                    <Label htmlFor="edit-gateway-provider">Model gateway provider</Label>
+                    <Input id="edit-gateway-provider" value={gatewayProvider} readOnly />
+                    <p className="text-xs text-slate-500">Fixed when the cluster was created. Recreate the cluster to use a different Gateway provider.</p>
                     <Label htmlFor="edit-gateway-port">Gateway exposed port (NodePort)</Label>
                     <Input id="edit-gateway-port" type="number" min="30000" max="32767" value={gatewayPort}
                         onChange={(event) => { setGatewayPort(event.target.value); setPortError(''); }}
