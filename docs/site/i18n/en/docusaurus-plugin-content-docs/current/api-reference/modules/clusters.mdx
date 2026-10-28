@@ -1,1303 +1,462 @@
 ---
 title: Clusters
-description: Backend endpoints and direct Python entry points for cluster registration, bootstrap, and Kubernetes reads.
+description: Register clusters, prepare their dependencies, and read live cluster status.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+## Overview
 
-Cluster management routes come from `llm_d_lens/cluster/router.py`, `llm_d_lens/cluster/bootstrap/router.py`, and `llm_d_lens/cluster/sdk_discovery.py`.
+Clusters connects Lens to the Kubernetes clusters you deploy and benchmark on.
+Register a cluster before caching models, starting deployments, or reading cluster
+health. Use this module to upload a kubeconfig, finish draft registrations, prepare
+Gateway, LeaderWorkerSet, CRD, and image dependencies, bootstrap new machines,
+rotate Hugging Face access, and inspect capacity, nodes, and versions.
 
-### List clusters
+## Quick start
 
-List Lens-managed clusters and optionally include draft records that have not been finalized yet. The route also computes a `ready` flag per cluster by probing its Kubernetes API reachability.
+List the clusters visible to you and confirm which are reachable.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters`**
 
-    Request: no request body.
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters"
+```
 
-    - `includeDrafts` (`boolean`, query, default `false`): include draft cluster records.
-
-    Response: `ClustersResponse` with one `ClusterRecord` per visible cluster.
-
-`hfTokenSecret` reports the namespace and name of the cluster's HF_TOKEN Secret, or `null` when the cluster has none. Only the location is returned; the token value stays on the target cluster and is never served by the API.
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "cluster-a",
-          "name": "Primary cluster",
-          "description": "Shared production GPU cluster",
-          "createdAt": "2026-09-20T10:15:00Z",
-          "ready": true,
-          "proxy": {
-            "mode": "custom",
-            "httpProxy": "http://proxy.example:3128",
-            "httpsProxy": "http://proxy.example:3128",
-            "noProxy": "127.0.0.1,localhost,.svc"
-          },
-          "llmDRef": "v0.3.0",
-          "llmDBenchmarkRef": "main",
-          "llmDRepoPath": "/cache/llm-d/v0.3.0",
-          "llmDBenchmarkRepoPath": "/cache/llm-d-benchmark/main",
-          "hfTokenSecret": {
-            "namespace": "llm-d-bench-storage-44395349",
-            "name": "hf-token-c758ced0"
-          },
-          "draft": false
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.cluster import service
+```python
+import asyncio
 
-    async def main() -> None:
-        clusters = service.list_clusters(include_drafts=True)
-        ready_flags = await asyncio.gather(*(service.cluster_is_ready(cluster) for cluster in clusters))
-        for cluster, ready in zip(clusters, ready_flags):
-            print(cluster.id, cluster.name, ready)
+from llm_d_lens.sdk import LensLocal
 
-    asyncio.run(main())
-    ```
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        clusters = await lens.clusters.list_clusters()
+        for cluster in clusters.items:
+            print(cluster.id, cluster.name, cluster.ready)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Get supported llm-d versions
+Draft clusters are hidden by default. Pass `includeDrafts=true` in REST or
+`include_drafts=True` in the SDK to include them.
 
-Return the llm-d component versions this Lens release supports (llm-d, llm-d-router, llm-d-benchmark, Inference Payload Processor, Gateway API / Gateway API Inference Extension CRDs, LeaderWorkerSet and the gateway providers). Read-only; the cluster wizard and every install path use these values.
+## Common tasks
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/versions`**
+### Register a cluster from a kubeconfig
 
-    Response:
-
-    ```json
-    {
-      "llm_d": "v1.0.0",
-      "min_k8s_version": "v1.32.0",
-      "llm_d_router": "v1.0.0",
-      "llm_d_lensmark": "v1.0.0",
-      "llm_d_inference_payload_processor": "v1.0.0",
-      "k8s_gateway_api": "v1.6.2",
-      "k8s_gateway_api_inference_extension": "v1.6.2",
-      "k8s_lws": "v1.0.0",
-      "gateway_providers": {
-        "istio": "1.29.4",
-        "envoy_gateway": "v1.8.1",
-        "envoy_ai_gateway": "v0.7.0",
-        "agentgateway": "v1.5.0"
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens import versions
-
-    stack = versions.describe()
-
-    print(stack["llm_d"], stack["llm_d_router"], stack["llm_d_lensmark"])
-    print(stack["gateway_providers"]["istio"])
-    ```
-  </TabItem>
-</Tabs>
-
-### List Lens host addresses
-
-Return this Lens host's candidate IP addresses/hostnames for the cluster create/edit form's "Lens address" dropdown and auto-fill. The port is Lens' own live serving port, added automatically.
+`POST /api/v1/cluster/clusters` uses multipart form data, not JSON. It returns `201`
+with the new cluster and, when a session is created, its `sessionId`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/lens-hosts`**
 
-    Request: no parameters.
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -F "name=<cluster-name>" \
+  -F "file=@<kubeconfig-path>" \
+  "$LENS_URL/api/v1/cluster/clusters"
+```
 
-    Response:
-
-    ```json
-    { "items": ["10.112.228.229"] }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.utils.hostinfo import local_host_addresses
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    print(local_host_addresses())
-    ```
-  </TabItem>
-</Tabs>
+```python
+import asyncio
+from io import BytesIO
+from pathlib import Path
 
-### Register a cluster
+from starlette.datastructures import UploadFile
 
-Register a cluster from an uploaded kubeconfig file. The route accepts multipart form data, stores the cluster record, and returns the new cluster plus any created Lens session id.
+from llm_d_lens.sdk import LensLocal
 
-llm-d component versions are fixed by the Lens stack profile (see [Get supported llm-d versions](#get-supported-llm-d-versions)); `llmDRef`, `llmDBenchmarkRef`, `routerVersion`, `gieVersion` and `ippVersion` are accepted for compatibility but ignored.
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters`**
-
-    Request: multipart form-data, not JSON.
-
-    - `name` (`string`, form): cluster display name.
-    - `description` (`string`, form, optional): free-form description.
-    - `file` (`file`, form): UTF-8 kubeconfig upload.
-    - `proxy` (`string`, form, optional): JSON string matching `ProxyConfigDTO`.
-    - `llmDRef` (`string`, form, optional): ignored — the `llm-d` version comes from the stack profile.
-    - `llmDBenchmarkRef` (`string`, form, optional): ignored — the `llm-d-benchmark` version comes from the stack profile.
-    - `gatewayProvider` (`string`, form, optional): shared Gateway provider (`envoy-ai-gateway` | `istio` | `agentgateway` | `gke`).
-    - `gatewayPublicUrl` (`string`, form, optional): externally reachable host/IP clients use for the Gateway — Lens adds `http://` + the exposed port + `/v1`. Empty derives it from the exposed port and the cluster node.
-    - `gatewayPort` (`integer`, form, optional): NodePort the shared Gateway is exposed on (30000–32767).
-    - `gatewayAuthzHost` (`string`, form): the host/IP this cluster uses to reach Lens (required for providers with a Lens address hook: `envoy-ai-gateway`/`istio`/`agentgateway`). Pick from `GET /api/cluster/lens-hosts`; Lens adds its own serving port, and when empty Lens fills in this host's address.
-    - `inotifyMaxUserInstances` (`integer`, form, default `8192`): per-uid inotify instance limit Lens applies to every node (`fs.inotify.max_user_instances`). Lift it above kind's 128 default on nodes running many pods.
-    - `draft` (`boolean`, form, default `false`): create as draft.
-
-    Example field values:
-
-    ```json
-    {
-      "name": "Primary cluster",
-      "description": "Shared production GPU cluster",
-      "file": "<uploaded kubeconfig.yaml UTF-8 file>",
-      "proxy": "{"mode":"custom","httpProxy":"http://proxy.example:3128","httpsProxy":"http://proxy.example:3128","noProxy":"127.0.0.1,localhost,.svc"}",
-      "llmDRef": "v0.3.0",
-      "llmDBenchmarkRef": "main",
-      "draft": true
-    }
-    ```
-
-    Response: `CreateClusterResponse`.
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": false,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "llmDRef": "v0.3.0",
-        "llmDBenchmarkRef": "main",
-        "draft": true
-      },
-      "sessionId": "f4c15c0a-8c1f-4eb7-b4d7-ef83f22c2e9b"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    kubeconfig_text = """
-    apiVersion: v1
-    kind: Config
-    clusters: []
-    contexts: []
-    current-context: ""
-    users: []
-    """.strip()
-
-    cluster, session = service.create_cluster(
-        "Primary cluster",
-        "Shared production GPU cluster",
-        kubeconfig_text,
-        proxy_mode="custom",
-        http_proxy="http://proxy.example:3128",
-        https_proxy="http://proxy.example:3128",
-        no_proxy="127.0.0.1,localhost,.svc",
-        llm_d_ref="v0.3.0",
-        llm_d_lensmark_ref="main",
-        draft=True,
-    )
-
-    print(cluster.id, session.id)
-    ```
-  </TabItem>
-</Tabs>
-
-### Update a cluster
-
-Patch a cluster's editable settings, including name, description, proxy settings, and draft status. The kubeconfig itself is not part of this patch contract. Version fields (`llmDRef`, `llmDBenchmarkRef`, `routerVersion`, `gieVersion`, `ippVersion`) are server-managed from the stack profile and ignored on input.
-Gateway namespace prefixes are scoped to the stable Lens cluster-registration
-short ID. For registration `1234abcd`, the default becomes
-`lens-gateway-1234abcd`; `gatewayNamespace: "custom"` resolves to
-`custom-1234abcd`. Passing that suffixed value again does not append it twice.
-Cluster responses report the effective namespace, including existing records
-that previously used the shared `lens-gateway` default. This is also the behavior
-of `service.update_cluster_settings(..., gateway_namespace="custom")`.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PATCH /api/cluster/clusters/{cluster_id}`**
-
-    Request body (`ClusterSettingsUpdateRequest`):
-
-    - `name` (`string`, optional)
-    - `description` (`string`, optional)
-    - `proxy` (`ProxyConfigDTO`, optional)
-    - `llmDRef` (`string`, optional)
-    - `llmDBenchmarkRef` (`string`, optional)
-    - `gatewayProvider` (`string`, optional): may be assigned once when the cluster has no provider yet; after that it is immutable and a different value returns `422 gateway_provider_immutable`.
-    - `gatewayNamespace` (`string`, optional): namespace prefix, at most 63 characters; receives the registration's stable short-ID suffix.
-    - `gatewayPort` (`integer`, optional)
-    - `gatewayPublicUrl` (`string`, optional): externally reachable Gateway host/IP — Lens adds the exposed port; empty derives it.
-    - `gatewayAuthzHost` (`string`): the host/IP this cluster uses to reach Lens (required for providers with a Lens address hook; Lens adds its own serving port; empty fills in this host's address).
-    - `inotifyMaxUserInstances` (`integer`, optional): per-uid inotify instance limit applied to every node (default `8192`).
-    - `draft` (`boolean`, optional)
-
-    ```json
-    {
-      "name": "Primary cluster",
-      "description": "Shared production GPU cluster",
-      "proxy": {
-        "mode": "custom",
-        "httpProxy": "http://proxy.example:3128",
-        "httpsProxy": "http://proxy.example:3128",
-        "noProxy": "127.0.0.1,localhost,.svc"
-      },
-      "llmDRef": "v0.3.0",
-      "llmDBenchmarkRef": "main",
-      "draft": false
-    }
-    ```
-
-    Response: `CreateClusterResponse` with the updated record.
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": true,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "llmDRef": "v0.3.0",
-        "llmDBenchmarkRef": "main",
-        "draft": false
-      },
-      "sessionId": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    cluster = service.update_cluster_settings(
-        "cluster-a",
-        name="Primary cluster",
-        description="Shared production GPU cluster",
-        proxy_mode="custom",
-        http_proxy="http://proxy.example:3128",
-        https_proxy="http://proxy.example:3128",
-        no_proxy="127.0.0.1,localhost,.svc",
-        llm_d_ref="v0.3.0",
-        llm_d_lensmark_ref="main",
-        gateway_authz_host="10.0.0.5",
-        draft=False,
-    )
-    print(cluster.id, cluster.name)
-    ```
-  </TabItem>
-</Tabs>
-
-### Create the cluster HF_TOKEN secret
-
-Create a standalone Kubernetes Secret holding a Hugging Face token on the target cluster, and record its coordinates on the Lens cluster record so Deployments and Model Cache downloads default to it. This is the Create cluster wizard's Model cache step. The token value is written to the cluster only; Lens stores just the namespace and name. The request fails with `409 secret_already_exists` when the Secret is already present — use the rotation endpoint below to replace an existing token.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/hf-token-secrets`**
-
-    Request body (`HfTokenSecretCreateRequest`):
-
-    - `namespace` (`string`, required): namespace to create the Secret in; created when missing.
-    - `name` (`string`, required): Secret name.
-    - `token` (`string`, required): Hugging Face token stored under the `HF_TOKEN` key.
-
-    ```json
-    {
-      "namespace": "llm-d-bench-storage-44395349",
-      "name": "hf-token-c758ced0",
-      "token": "hf_exampleTokenValue"
-    }
-    ```
-
-    Response: `HfTokenSecretRef`.
-
-    ```json
-    {
-      "namespace": "llm-d-bench-storage-44395349",
-      "name": "hf-token-c758ced0"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import registry, service
-
-    cluster = registry.get_cluster("cluster-a")
-    ref = asyncio.run(
-        service.create_hf_token_secret(
-            cluster,
-            "llm-d-bench-storage-44395349",
-            "hf-token-c758ced0",
-            "hf_exampleTokenValue",
-        )
-    )
-    print(ref["namespace"], ref["name"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Rotate the cluster HF_TOKEN secret
-
-Replace the Hugging Face token stored in the cluster's `HF_TOKEN` Secret, from the Edit cluster drawer. Unlike creation this applies the Secret, so an existing one is overwritten rather than rejected. `namespace` and `name` default to the coordinates already recorded on the cluster (`hfTokenSecret`), so rotating a token needs only the token; supplying different coordinates repoints the cluster at that Secret and creates it when absent.
-
-Rotation rewrites only this cluster-level Secret. The namespace-local `llm-d-hf-token` copies that Deployments and Model Cache downloads derive at run time are re-derived on the next deployment or download, so workloads that are already running keep the previous token until they are recreated.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PUT /api/cluster/clusters/{cluster_id}/hf-token-secret`**
-
-    Request body (`HfTokenSecretUpdateRequest`):
-
-    - `namespace` (`string`, optional): defaults to the cluster's recorded secret namespace.
-    - `name` (`string`, optional): defaults to the cluster's recorded secret name.
-    - `token` (`string`, required): new Hugging Face token; a blank value is rejected with `422 invalid_secret_token`.
-
-    ```json
-    {
-      "token": "hf_rotatedTokenValue"
-    }
-    ```
-
-    Response: `HfTokenSecretRef` with the coordinates that were written.
-
-    ```json
-    {
-      "namespace": "llm-d-bench-storage-44395349",
-      "name": "hf-token-c758ced0"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import registry, service
-
-    cluster = registry.get_cluster("cluster-a")
-    # Rotate in place, reusing the coordinates recorded on the cluster.
-    ref = asyncio.run(service.update_hf_token_secret(cluster, "hf_rotatedTokenValue"))
-    print(ref["namespace"], ref["name"])
-
-    # Or repoint the cluster at a different Secret.
-    ref = asyncio.run(
-        service.update_hf_token_secret(
-            cluster,
-            "hf_rotatedTokenValue",
-            namespace="llm-d-bench-storage-44395349",
-            name="hf-token-rotated",
-        )
-    )
-    ```
-  </TabItem>
-</Tabs>
-
-### Start cluster software downloads
-
-Start downloading the `llm-d` and `llm-d-benchmark` revisions pinned by the Lens stack profile for a cluster. The handler schedules background downloads and immediately returns the current status snapshot; the request body is ignored.
-
-Source checkouts are isolated by repository URL and resolved commit. Branch downloads refresh the remote ref; previously cached full commit SHAs can be reused offline. A per-source lock and atomic publication prevent concurrent requests from exposing incomplete checkouts or replacing an earlier snapshot.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/software-downloads`**
-
-    Request body (`SoftwareDownloadRequest`): optional and ignored — the profile-pinned revisions are downloaded.
-
-    ```json
-    {}
-    ```
-
-    Response: `SoftwareDownloadStatusResponse`.
-
-    ```json
-    {
-      "llmD": {
-        "ref": "v0.2.0",
-        "state": "downloading",
-        "path": null,
-        "error": null
-      },
-      "llmDBenchmark": {
-        "ref": "main",
-        "state": "downloading",
-        "path": null,
-        "error": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster.router import _download_and_record
-    from llm_d_lens.cluster import repo_downloads
-
-    async def main() -> None:
-        await _download_and_record("cluster-a", "llm-d", "v0.2.0")
-        await _download_and_record("cluster-a", "llm-d-benchmark", "main")
-        print(repo_downloads.get_status("cluster-a", "llm-d"))
-        print(repo_downloads.get_status("cluster-a", "llm-d-benchmark"))
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Get cluster software download status
-
-Return the current in-memory download status for the cluster's pinned `llm-d` and `llm-d-benchmark` refs. Use this endpoint to poll download progress.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/software-downloads`**
-
-    Request: no request body.
-
-    - `cluster_id` (`string`, path): target cluster id.
-
-    Response: `SoftwareDownloadStatusResponse`.
-
-    ```json
-    {
-      "llmD": {
-        "ref": "v0.2.0",
-        "state": "ready",
-        "path": "/cache/llm-d/v0.2.0",
-        "error": null
-      },
-      "llmDBenchmark": {
-        "ref": "main",
-        "state": "ready",
-        "path": "/cache/llm-d-benchmark/main",
-        "error": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import repo_downloads
-
-    llm_d = repo_downloads.get_status("cluster-a", "llm-d")
-    llm_d_lensmark = repo_downloads.get_status("cluster-a", "llm-d-benchmark")
-    print(llm_d)
-    print(llm_d_lensmark)
-    ```
-  </TabItem>
-</Tabs>
-
-### Start cluster image pre-pull
-
-Pre-pull the pinned llm-d images for the selected accelerators onto every cluster node. The images are the llm-d-router EPP and P/D sidecar plus the model-server image(s) for the accelerators; versions come from the Lens stack profile, not the request. A privileged DaemonSet runs the host's `crictl` per node; poll the GET below for per-node readiness.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/images/prepull`**
-
-    Request body:
-
-    - `accelerators` (`string[]`): accelerator ids whose model-server image should be pulled (e.g. `["nvidia","intel"]`).
-
-    ```json
-    {
-      "accelerators": ["nvidia", "intel"]
-    }
-    ```
-
-    Response: overall state, `ready`/`desired` node counts, the image list and per-node readiness.
-
-    ```json
-    {
-      "state": "pulling",
-      "desired": 2,
-      "ready": 1,
-      "images": [
-        { "name": "ghcr.io/llm-d/llm-d-router-endpoint-picker:v1.0.0", "ready": 2, "desired": 2, "state": "ready" },
-        { "name": "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v1.0.0", "ready": 2, "desired": 2, "state": "ready" },
-        { "name": "ghcr.io/llm-d/llm-d-cuda:v0.9.0", "ready": 1, "desired": 2, "state": "pulling" }
-      ],
-      "nodes": [{ "node": "worker-1", "phase": "Running", "ready": true, "restarts": 0 }]
-    }
-    ```
-
-    `images[].state` is `ready` when every node pulled that image, `pulling` while in progress and `failed` if a node's pull crash-loops.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import images
-
-    status = await images.start_image_prepull("cluster-a", ["nvidia", "intel"])
-    print(status["state"], status["ready"], status["desired"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Get cluster image pre-pull status
-
-Get the current image pre-pull status for a cluster: overall state, ready/desired node count and each puller pod's node readiness.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/images/prepull`**
-
-    Response: the same shape as the start response.
-
-    ```json
-    {
-      "state": "ready",
-      "desired": 2,
-      "ready": 2,
-      "images": [
-        { "name": "ghcr.io/llm-d/llm-d-cuda:v0.9.0", "ready": 2, "desired": 2, "state": "ready" }
-      ],
-      "nodes": [
-        { "node": "worker-1", "phase": "Running", "ready": true, "restarts": 0 },
-        { "node": "worker-2", "phase": "Running", "ready": true, "restarts": 0 }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import images
-
-    status = await images.image_prepull_status("cluster-a")
-    print(status["state"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Apply pinned Gateway API / Gateway API Inference Extension CRDs
-
-Apply the Gateway API (`gateway.networking.k8s.io`) and Gateway API Inference Extension (`inference.networking.k8s.io`) CRD bundles pinned by the Lens stack profile. Idempotent; also applied during cluster creation.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/crds`**
-
-    Response: a per-bundle result.
-
-    ```json
-    {
-      "gateway_api": { "ok": true, "message": "" },
-      "gateway_api_inference_extension": { "ok": true, "message": "" }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import gateway_crds
-
-    result = await gateway_crds.apply_gateway_crds("cluster-a")
-    print(result["gateway_api"]["ok"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Get Gateway API / GIE CRD status
-
-Report whether the pinned Gateway API and Gateway API Inference Extension CRDs are present on the cluster (`ready`/`missing` per bundle).
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/crds`**
-
-    ```json
-    {
-      "gateway_api": "ready",
-      "gateway_api_inference_extension": "ready"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import gateway_crds
-
-    status = await gateway_crds.gateway_crds_status("cluster-a")
-    print(status["gateway_api"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Install LeaderWorkerSet controller
-
-Install or upgrade the LeaderWorkerSet controller pinned by the Lens stack profile, enabling the `DisaggregatedSet` API used by the llm-d v1.0 P/D Guide. CRDs are applied server-side before the Helm release is upgraded. Idempotent; the create wizard also calls this after installing the Gateway CRDs.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/lws`**
-
-    ```json
-    {
-      "ok": true,
-      "ready": true,
-      "crd": "ready",
-      "controller": "ready",
-      "version": "v1.0.0",
-      "namespace": "lws-system",
-      "message": ""
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    result = await service.install_lws("cluster-a")
-    print(result["ready"], result["version"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Get LeaderWorkerSet status
-
-Report whether the pinned LeaderWorkerSet CRD and controller are present on the cluster.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/lws`**
-
-    ```json
-    {
-      "ready": true,
-      "crd": "ready",
-      "controller": "ready",
-      "version": "v1.0.0",
-      "namespace": "lws-system",
-      "message": ""
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    status = await service.lws_status("cluster-a")
-    print(status["crd"], status["controller"])
-    ```
-  </TabItem>
-</Tabs>
-
-### Check cluster Kubernetes version
-
-Probe the cluster's Kubernetes API for reachability and its server version, and compare it with the minimum Kubernetes version pinned by the Lens stack profile (`min_k8s_version`). The create wizard calls this after the kubeconfig upload and blocks progress when the cluster is unreachable or too old.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/kubernetes-version`**
-
-    ```json
-    {
-      "reachable": true,
-      "version": "1.34",
-      "min_k8s_version": "v1.32.0",
-      "supported": true
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.hardware.version import server_kubernetes_version
-    from llm_d_lens.versions import k8s_version_supports
-
-    parsed = await server_kubernetes_version("cluster-a")
-    version = f"{parsed[0]}.{parsed[1]}" if parsed else None
-    print(version, bool(version) and k8s_version_supports(version))
-    ```
-  </TabItem>
-</Tabs>
-
-### Delete a cluster
-
-Delete a Lens-managed cluster record and clean up related state. This should only be used when the cluster should be removed from Lens entirely.
-
-Remote cleanup performed by this endpoint:
-
-- The registration's isolated Gateway namespace, normally `lens-gateway-<cluster-id>`, is deleted with its Gateway, IPP, authorization resources and routes. A missing namespace is a successful no-op. The old shared `lens-gateway` namespace, other registrations' namespaces and shared Gateway controllers are not deleted.
-- The cluster's `HF_TOKEN` secret recorded in `hfTokenSecret` is deleted, and its namespace is deleted with it when the namespace has no reason to outlive the cluster. That is the case for the Lens-owned `llm-d-bench-storage-{cluster_id}` namespace, for any namespace Lens created for the secret (labelled `app.kubernetes.io/managed-by: llm-d-lens`), and for a namespace that, once the secret is gone, holds nothing but the objects Kubernetes and cluster add-ons inject into every namespace (the `default` service account, its token secret, and CA-bundle config maps such as `kube-root-ca.crt`). A namespace that still holds any other object -- including a custom resource -- is kept, and `default`, `kube-system`, `kube-public` and `kube-node-lease` are never deleted. If the namespace contents cannot be listed, the namespace is kept.
-- For a draft cluster, every Storage volume still attached to it is removed together with its `PersistentVolumeClaim` and `PersistentVolume` objects. Model files on the underlying NFS or host-path storage are kept, because the `PersistentVolume` uses the `Retain` reclaim policy.
-
-Gateway namespace cleanup is required: a failure or timeout returns `502` with code `cluster_gateway_cleanup_failed`, retaining the cluster record and kubeconfig so deletion can be retried. HF-token and draft-storage cleanup remain best-effort. A non-draft cluster that still has available deployments or Storage volumes is rejected with `409`; clean up those resources first.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/cluster/clusters/{cluster_id}`**
-
-    Request: no request body.
-
-    - `cluster_id` (`string`, path): target cluster id.
-
-    Response: `204 No Content`. This endpoint does not return a JSON body.
-
-    Failure: `502 cluster_gateway_cleanup_failed` if the isolated Gateway namespace could not be deleted; `409 cluster_has_available_deployments` or `cluster_has_storage_volumes` if a finalized cluster still has those resources.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    `service.delete_cluster()` raises `ClusterOverviewError` with the same status and code when required cleanup fails.
-
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import service
-
-    async def main() -> None:
-        await service.delete_cluster("cluster-a")
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Get a cluster session
-
-Get or create the active Lens session metadata for a cluster id. Use this when another API surface expects a session id instead of a cluster id.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/session`**
-
-    Request: no request body.
-
-    - `clusterId` (`string`, query): target cluster id.
-
-    Response: `ClusterSessionResponse`.
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": true,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "draft": false
-      },
-      "sessionId": "f4c15c0a-8c1f-4eb7-b4d7-ef83f22c2e9b"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    cluster, session = service.get_cluster_session("cluster-a")
-    print(cluster.id, session.id)
-    ```
-  </TabItem>
-</Tabs>
-
-### Get a cluster overview
-
-Return a live Kubernetes overview for one cluster, including node, GPU, namespace, cached-image, and component-health summaries. Accelerator models come from node product labels and DRA ResourceSlice device attributes when present. The route also reports the current cluster record alongside the live snapshot.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/overview`**
-
-    Request: no request body.
-
-    - `clusterId` (`string`, query): target cluster id.
-
-    Response: `OverviewResponse`.
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": true,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "draft": false
-      },
-      "fetchedAt": "2026-09-23T09:18:00Z",
-      "kubernetes": {
-        "components": {
-          "intelDevicePlugin": {
-            "installed": true,
-            "ready": 1,
-            "desired": 1,
-            "status": "ready"
-          },
-          "monitoring": {
-            "installed": true,
-            "ready": 3,
-            "desired": 3,
-            "status": "ready"
-          }
-        },
-        "nodes": [
-          {
-            "name": "worker-1",
-            "version": "v1.31.0",
-            "osImage": "Ubuntu 22.04 LTS",
-            "ready": true,
-            "schedulingDisabled": false,
-            "cpu": 64.0,
-            "gpu": true,
-            "gpuCount": 4,
-            "gpuByProfile": {
-              "intel-xpu": 4
-            },
-            "gpuModelsByProfile": {
-              "intel-xpu": ["B60"]
-            },
-            "vramBytes": 274877906944,
-            "role": "worker",
-            "cachedImages": [
-              "ghcr.io/llm-d/serving:latest"
-            ]
-          }
-        ],
-        "namespaces": [
-          {
-            "name": "default",
-            "deployments": [
-              {
-                "name": "example-deploy",
-                "desired": 1,
-                "ready": 1,
-                "available": 1
-              }
-            ],
-            "ready": 1
-          }
-        ],
-        "hardware": {
-          "nodes": 3,
-          "cpuCores": 192.0,
-          "memoryBytes": 824633720832,
-          "memoryUsagePercent": 25.0,
-          "memoryAvailableBytes": 618475290624,
-          "diskBytes": 7619773423616,
-          "diskUsedBytes": 4178392940544,
-          "diskAvailableBytes": 3441380483072,
-          "diskUsagePercent": 54.8,
-          "gpuNodes": 2,
-          "gpuCount": 8,
-          "totalGpuCount": 8,
-          "accelerators": [
-            {
-              "id": "intel-xpu",
-              "gpuCount": 8,
-              "models": ["B60"]
-            }
-          ],
-          "vramBytes": 549755813888,
-          "allocatedGpuCount": 4,
-          "availableGpuCount": 4,
-          "usableGpuCount": 8
-        }
-      }
-    }
-    ```
-
-    `hardware` reports free capacity alongside usage so callers do not have to
-    recompute it. `diskUsedBytes`/`diskAvailableBytes` come straight from each
-    node's kubelet Summary API, so they stay exact and remain reportable when this
-    cluster's own Prometheus is down. `memoryAvailableBytes` is derived from
-    `memoryUsagePercent` (the mean of the per-node percentages Prometheus reports),
-    because no byte-level source exists for it. All three are `null` when the
-    reading they rest on is unavailable -- `null` means unknown, not zero free.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import registry, service
-
-    async def main() -> None:
-        cluster = registry.require_cluster("cluster-a")
-        overview = await service.build_overview(cluster)
-        print(overview)
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Read a planning-discovery resource
-
-Read one allowlisted planning-discovery resource for an active cluster session. This endpoint is intentionally limited to fixed `kubectl` reads and returns `{"result": null}` when a read fails or yields unusable JSON.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/sessions/{session_id}/planning-discovery/{resource}`**
-
-    Request: no request body.
-
-    - `session_id` (`string`, path): active cluster session id.
-    - `resource` (`string`, path): one of `version`, `nodes`, `deviceclasses`, `resourceslices`, or `runtimeclasses`.
-
-    Response: wrapper object with a `result` key.
-
-    ```json
-    {
-      "result": {
-        "items": []
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-    import json
-
-    from llm_d_lens.cluster import sessions
-    from llm_d_lens.utils.kubernetes import run_kubectl
-
-    async def main() -> None:
-        session = sessions.require_active_session("f4c15c0a-8c1f-4eb7-b4d7-ef83f22c2e9b")
-        result = await run_kubectl(["get", "nodes", "-o", "json"], timeout=10, cluster_id=session.id)
-        payload = json.loads(result.stdout) if result.ok else None
-        print({"result": payload if isinstance(payload, dict) else None})
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Discover bootstrap SSH host keys
-
-Read the SSH host key from each target without authenticating or sending credentials. Host specifications and IP ranges are expanded server-side, so every response item identifies one exact `host:port`. Compare these SHA-256 fingerprints against a trusted source before confirming them in the UI.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap/host-keys`**
-
-    ```json
-    {
-      "nodes": [{ "host": "10.0.0.10-12", "port": 22 }]
-    }
-    ```
-
-    Each response item contains `host`, `port`, `algorithm`, and `fingerprint`; unreachable hosts contain an `error` instead.
-
-    ```json
-    {
-      "items": [
-        { "host": "10.0.0.10", "port": 22, "algorithm": "ssh-ed25519", "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-        { "host": "10.0.0.11", "port": 22, "algorithm": "ssh-ed25519", "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
-        { "host": "10.0.0.12", "port": 22, "error": "Connection timed out" }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### Run bootstrap preflight checks
-
-Run Kubespray bootstrap preflight checks against one or more target machines. The response reports per-node state plus the individual checks that passed, failed, or were skipped.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap/preflight`**
-
-    Request body (`BootstrapPreflightRequest`):
-
-    - `nodes` (`BootstrapNodeInput[]`): rows of host, SSH, and role information.
-    - `hostKeys` (`BootstrapHostKeyPin[]`): the exact confirmed fingerprint for every expanded `host:port`.
-
-    ```json
-    {
-      "nodes": [
-        {
-          "host": "10.0.0.1",
-          "port": 22,
-          "roles": [
-            "control-plane"
-          ],
-          "username": "root"
-        },
-        {
-          "host": "10.0.0.2",
-          "port": 22,
-          "roles": [
-            "worker"
-          ],
-          "username": "root"
-        }
-      ],
-      "hostKeys": [
-        { "host": "10.0.0.1", "port": 22, "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-        { "host": "10.0.0.2", "port": 22, "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" }
-      ]
-    }
-    ```
-
-    Response: `BootstrapPreflightResponse`.
-
-    ```json
-    {
-      "items": [
-        {
-          "host": "10.0.0.1",
-          "roles": [
-            "control-plane"
-          ],
-          "state": "passed",
-          "checks": [
-            {
-              "id": "ssh",
-              "label": "SSH connectivity",
-              "status": "passed",
-              "detail": "reachable"
-            },
-            {
-              "id": "sudo",
-              "label": "Passwordless sudo",
-              "status": "passed"
-            }
-          ]
-        },
-        {
-          "host": "10.0.0.2",
-          "roles": [
-            "worker"
-          ],
-          "state": "passed",
-          "checks": [
-            {
-              "id": "ssh",
-              "label": "SSH connectivity",
-              "status": "passed",
-              "detail": "reachable"
-            }
-          ]
-        }
-      ],
-      "allPassed": true
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster.bootstrap.dto import BootstrapHostKeyPin, BootstrapNodeInput
-    from llm_d_lens.cluster.bootstrap.service import run_preflight_check
-
-    async def main() -> None:
-      pins = [
-        BootstrapHostKeyPin(host="10.0.0.1", port=22, fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-        BootstrapHostKeyPin(host="10.0.0.2", port=22, fingerprint="SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
-      ]
-        nodes = await run_preflight_check([
-            BootstrapNodeInput(host="10.0.0.1", roles=["control-plane"]),
-            BootstrapNodeInput(host="10.0.0.2", roles=["worker"]),
-      ], pins)
-        for node in nodes:
-            print(node.host, node.preflight_state)
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Start a bootstrap job
-
-Start a long-running Kubespray-based cluster bootstrap job after preflight succeeds. The response returns the bootstrap job id immediately while the real provisioning continues in the background.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap`**
-
-    Request body (`BootstrapCreateRequest`):
-
-    - `nodes` (`BootstrapNodeInput[]`): the nodes to provision.
-    - `hostKeys` (`BootstrapHostKeyPin[]`): the exact confirmed fingerprint for every expanded `host:port`.
-    - `proxy` (`BootstrapProxyConfig`, optional): target-node proxy configuration.
-
-    ```json
-    {
-      "nodes": [
-        {
-          "host": "10.0.0.1",
-          "port": 22,
-          "roles": [
-            "control-plane"
-          ],
-          "username": "root"
-        },
-        {
-          "host": "10.0.0.2",
-          "port": 22,
-          "roles": [
-            "worker"
-          ],
-          "username": "root"
-        }
-      ],
-      "hostKeys": [
-        { "host": "10.0.0.1", "port": 22, "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-        { "host": "10.0.0.2", "port": 22, "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" }
-      ],
-      "proxy": {
-        "mode": "custom",
-        "httpProxy": "http://proxy.example:3128",
-        "httpsProxy": "http://proxy.example:3128",
-        "noProxy": "127.0.0.1,localhost,.svc"
-      }
-    }
-    ```
-
-    Response: `BootstrapCreateResponse`.
-
-    ```json
-    {
-      "bootstrapId": "bootstrap-5b7fd3a81290"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster.bootstrap.dto import BootstrapHostKeyPin, BootstrapNodeInput, BootstrapProxyConfig
-    from llm_d_lens.cluster.bootstrap import service
-
-    async def main() -> None:
-      pins = [
-        BootstrapHostKeyPin(host="10.0.0.1", port=22, fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-        BootstrapHostKeyPin(host="10.0.0.2", port=22, fingerprint="SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
-      ]
-        job = service.create_job(
-            [
-                BootstrapNodeInput(host="10.0.0.1", roles=["control-plane"]),
-                BootstrapNodeInput(host="10.0.0.2", roles=["worker"]),
-            ],
-            pins,
-            proxy=BootstrapProxyConfig(
-                mode="custom",
-                httpProxy="http://proxy.example:3128",
-                httpsProxy="http://proxy.example:3128",
-                noProxy="127.0.0.1,localhost,.svc",
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        response = await lens.clusters.create_cluster(
+            file=UploadFile(
+                filename="kubeconfig.yaml",
+                file=BytesIO(Path("<kubeconfig-path>").read_bytes()),
             ),
+            name="<cluster-name>",
         )
-        await service.run_bootstrap_job(job.id)
-        print(job.id)
+        print(response.cluster.id, response.session_id)
 
-    asyncio.run(main())
-    ```
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Get bootstrap status
+The kubeconfig must be a UTF-8 file. llm-d component versions come from the Lens
+release, not from the request, so `llmDRef` and `llmDBenchmarkRef` are ignored.
+Add `draft=true` to register the cluster before it is ready to use.
 
-Get the current status of a bootstrap job. When the job first reaches `succeeded`, this response can also carry the one-time kubeconfig handoff.
+### Complete or edit a registration
+
+Use `PATCH` to rename a cluster, change its description or proxy, or flip a draft
+to a finalized cluster. Only supplied fields change.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/bootstrap/{bootstrap_id}`**
 
-    Request: no request body.
+```bash
+curl -X PATCH -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"<cluster-name>","draft":false}' \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>"
+```
 
-    - `bootstrap_id` (`string`, path): bootstrap job id.
-
-    Response: `BootstrapStatusResponse`.
-
-    ```json
-    {
-      "id": "bootstrap-5b7fd3a81290",
-      "phase": "succeeded",
-      "logTail": "PLAY [all]
-ok: [10-0-0-1]",
-      "error": null,
-      "kubeconfig": "apiVersion: v1
-kind: Config
-clusters: []
-contexts: []
-users: []
-"
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster.bootstrap import service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    job = service.get_job("bootstrap-5b7fd3a81290")
-    kubeconfig = service.consume_kubeconfig(job.id) if job.phase == "succeeded" else None
-    print(job.phase, kubeconfig)
-    ```
+```python
+import asyncio
+
+from llm_d_lens.cluster.models import ClusterSettingsUpdateRequest
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        response = await lens.clusters.update_cluster(
+            "<cluster-id>",
+            ClusterSettingsUpdateRequest(name="<cluster-name>", draft=False),
+        )
+        print(response.cluster.id, response.cluster.ready)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Cancel a bootstrap job
+A Gateway provider can be assigned once. After that, changing it returns
+`422 gateway_provider_immutable`. The Gateway port must be in `30000`-`32767`.
 
-Cancel a running bootstrap job so it stops provisioning and does not continue. This endpoint returns immediately once cancellation has been requested.
+### Prepare Gateway and image dependencies
+
+Apply the pinned Gateway API CRDs and LeaderWorkerSet controller, then pre-pull
+the router and accelerator images. These operations are idempotent. Poll the
+matching `GET` endpoints for progress.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap/{bootstrap_id}/cancel`**
 
-    Request: no request body.
+```bash
+# Apply the pinned Gateway API / GIE CRDs.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/crds"
 
-    - `bootstrap_id` (`string`, path): bootstrap job id.
+# Install or upgrade LeaderWorkerSet.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/lws"
 
-    Response: `204 No Content`. This endpoint does not return a JSON body.
+# Pre-pull router and model-server images for the selected accelerators.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"accelerators":["nvidia"]}' \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/images/prepull"
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster.bootstrap import service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    service.cancel_job("bootstrap-5b7fd3a81290")
-    ```
+```python
+import asyncio
+
+from llm_d_lens.cluster.models import ImagePrepullRequest
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        await lens.clusters.create_cluster_crds("<cluster-id>")
+        await lens.clusters.install_cluster_lws("<cluster-id>")
+
+        status = await lens.clusters.create_cluster_image_prepull(
+            "<cluster-id>",
+            ImagePrepullRequest(accelerators=["nvidia"]),
+        )
+        print(status.state, status.ready, status.desired)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-Additional endpoints exist for the gateway port availability check, HF token secret creation, model secret listing, node cordon/uncordon, and legacy cluster-overview session disconnect routes — see the full OpenAPI reference.
+Image pre-pull uses a privileged DaemonSet and can take several minutes per node.
+A failed image state means at least one node is crash-looping its puller.
 
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
+### Set or rotate the Hugging Face token
+
+Store a Hugging Face token on the cluster so Model Cache downloads and private
+model deployments can use it. `PUT` rotates the token in place; omit `namespace`
+and `name` to reuse the Secret already recorded on the cluster.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -X PUT -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<hf-token>"}' \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/hf-token-secret"
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.cluster.models import HfTokenSecretUpdateRequest
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        ref = await lens.clusters.update_hf_token_secret(
+            "<cluster-id>",
+            HfTokenSecretUpdateRequest(token="<hf-token>"),
+        )
+        print(ref.namespace, ref.name)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+If the cluster has no Secret yet, create one with
+`POST /api/v1/cluster/clusters/{cluster_id}/hf-token-secrets`. Creating an existing
+Secret returns `409 secret_already_exists`; use `PUT` to rotate it instead. A
+blank token returns `422 invalid_secret_token`. Running workloads keep the old
+token until they are recreated.
+
+### Bootstrap bare-metal machines
+
+Discover and pin SSH host keys, run preflight, then start the Kubespray job.
+Preflight must pass before bootstrap starts. The job returns a `bootstrapId`
+immediately while provisioning continues in the background.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+# 1. Discover host keys without authenticating.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nodes":[{"host":"<ip>","port":22}]}' \
+  "$LENS_URL/api/v1/cluster/bootstrap/host-keys"
+
+# 2. Pin the returned fingerprints and run preflight.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nodes":[{"host":"<ip>","port":22,"roles":["worker"],"username":"root","password":"<ssh-password>"}],"hostKeys":[{"host":"<ip>","port":22,"fingerprint":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}' \
+  "$LENS_URL/api/v1/cluster/bootstrap/preflight"
+
+# 3. After allPassed is true, start the job.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nodes":[{"host":"<ip>","port":22,"roles":["worker"],"username":"root","password":"<ssh-password>"}],"hostKeys":[{"host":"<ip>","port":22,"fingerprint":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}' \
+  "$LENS_URL/api/v1/cluster/bootstrap"
+
+# 4. Poll until phase is succeeded; the response then carries the kubeconfig.
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/bootstrap/<bootstrap-id>"
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.cluster.bootstrap.dto import (
+    BootstrapCreateRequest,
+    BootstrapHostKeyPin,
+    BootstrapHostKeyRequest,
+    BootstrapHostAddress,
+    BootstrapNodeInput,
+    BootstrapPreflightRequest,
+)
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        keys = await lens.cluster_bootstrap.discover_host_keys(
+            BootstrapHostKeyRequest(nodes=[BootstrapHostAddress(host="<ip>", port=22)])
+        )
+        print([(item.host, item.fingerprint) for item in keys.items])
+
+        node = BootstrapNodeInput(
+            host="<ip>",
+            roles=["worker"],
+            username="root",
+            password="<ssh-password>",
+        )
+        pin = BootstrapHostKeyPin(
+            host="<ip>",
+            port=22,
+            fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        preflight = await lens.cluster_bootstrap.preflight(
+            BootstrapPreflightRequest(nodes=[node], host_keys=[pin])
+        )
+        if preflight.all_passed:
+            job = await lens.cluster_bootstrap.start_bootstrap(
+                BootstrapCreateRequest(nodes=[node], host_keys=[pin])
+            )
+            print(job.bootstrap_id)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+SSH credentials are used only for preflight and bootstrap. Compare host-key
+fingerprints with a trusted source before pinning them. Cancel a job with
+`POST /api/v1/cluster/bootstrap/{bootstrap_id}/cancel`.
+
+### Check cluster health
+
+Read the live node, accelerator, capacity, and component summary, plus the
+Kubernetes version check against the Lens minimum.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/overview?clusterId=<cluster-id>"
+
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/kubernetes-version"
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        overview = await lens.clusters.overview(cluster_id="<cluster-id>")
+        version = await lens.clusters.read_cluster_kubernetes_version("<cluster-id>")
+
+        print(overview.kubernetes.hardware.accelerators)
+        print(version.version, version.supported)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+Capacity fields can be `null` when a reading is unavailable; `null` means unknown,
+not zero. `ready` is a reachability probe and does not guarantee free GPUs.
+
+## Endpoints
+
+### Registration and inspection
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/cluster/lens-hosts` | `cluster:cluster:read` | List Lens host addresses a cluster can use for Gateway auth. |
+| GET | `/api/v1/cluster/clusters` | `cluster:cluster:read` | List visible clusters. |
+| POST | `/api/v1/cluster/clusters` | `cluster:cluster:create` | Register a cluster from a kubeconfig. |
+| PATCH | `/api/v1/cluster/clusters/{cluster_id}` | `cluster:cluster:update` | Edit cluster settings. |
+| DELETE | `/api/v1/cluster/clusters/{cluster_id}` | `cluster:cluster:delete` | Remove a registration and its Lens-managed resources. |
+| GET | `/api/v1/cluster/session` | `cluster:session:connect` | Get or create a session id for a cluster. |
+| GET | `/api/v1/cluster/overview` | `cluster:cluster:read` | Read live cluster health and capacity. |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/kubernetes-version` | `cluster:cluster:read` | Check reachability and the Kubernetes version. |
+| GET | `/api/v1/cluster/sessions/{session_id}/planning-discovery/{resource}` | `cluster:planning:read` | Read one planning-discovery resource. |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/gateway-port-check` | `cluster:cluster:update` | Check whether a Gateway NodePort is free. |
+| GET | `/api/v1/cluster/model-secrets` | `cluster:cluster:read` | List model-related Secrets for a cluster. |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/nodes/cordon` | `cluster:node:operate` | Stop new pods from scheduling on worker nodes. |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/nodes/uncordon` | `cluster:node:operate` | Make worker nodes schedulable again. |
+
+### Cluster preparation
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/hf-token-secrets` | `cluster:hf-token:create` | Create a Hugging Face token Secret. |
+| PUT | `/api/v1/cluster/clusters/{cluster_id}/hf-token-secret` | `cluster:hf-token:update` | Rotate or repoint the Hugging Face token Secret. |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/software-downloads` | `cluster:cluster:update` | Download the pinned llm-d source revisions. |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/software-downloads` | `cluster:cluster:read` | Read software download progress. |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/images/prepull` | `cluster:cluster:update` | Pre-pull images on every node. |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/images/prepull` | `cluster:cluster:read` | Read per-node image pre-pull status. |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/crds` | `cluster:cluster:update` | Apply pinned Gateway API and GIE CRDs. |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/crds` | `cluster:cluster:read` | Check CRD readiness. |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/lws` | `cluster:cluster:update` | Install or upgrade LeaderWorkerSet. |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/lws` | `cluster:cluster:read` | Check LeaderWorkerSet readiness. |
+
+### Bootstrap
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| POST | `/api/v1/cluster/bootstrap/host-keys` | `cluster:bootstrap:execute` | Discover SSH host keys for target machines. |
+| POST | `/api/v1/cluster/bootstrap/preflight` | `cluster:bootstrap:execute` | Validate SSH, sudo, and node prerequisites. |
+| POST | `/api/v1/cluster/bootstrap` | `cluster:bootstrap:execute` | Start a Kubespray bootstrap job. |
+| GET | `/api/v1/cluster/bootstrap/{bootstrap_id}` | `cluster:bootstrap:read` | Read job status and the kubeconfig handoff. |
+| POST | `/api/v1/cluster/bootstrap/{bootstrap_id}/cancel` | `cluster:bootstrap:execute` | Cancel a running bootstrap job. |
+
+Most reads return `200`. Registration and HF Secret creation return `201`;
+software-download and bootstrap creation return `202`; cluster deletion and
+bootstrap cancellation return `204`.
+
+## Errors and limits
+
+- **`401` / `403`** — missing authentication or no access to the cluster.
+  Administrators can manage every cluster; maintainers only assigned clusters.
+- **`404`** — unknown cluster, missing bootstrap job, or an inactive session.
+- **`409 cluster_has_available_deployments`** or
+  **`cluster_has_storage_volumes`** — the cluster still has resources. Delete
+  those first.
+- **`422 invalid_kubeconfig`** — the uploaded file is not UTF-8 text.
+- **`422 invalid_proxy_config`** — `proxy` is not valid JSON.
+- **`422 invalid_gateway_port`** or **`gateway_port_in_use`** — choose a free
+  NodePort in `30000`-`32767`.
+- **`422 gateway_provider_immutable`** — a Gateway provider can only be assigned
+  once.
+- **`422 invalid_secret_token`** — the Hugging Face token is blank.
+- **`409 secret_already_exists`** — the Secret exists; rotate it with `PUT`.
+- **`502 cluster_gateway_cleanup_failed`** — Gateway cleanup failed and the
+  registration was kept. Retry deletion.
+- **`503 kubectl_unavailable`** or **`504 kubectl_timeout`** — Lens cannot reach
+  the cluster API. Check the kubeconfig, network, and proxy.
+- Component versions are fixed by the Lens release. Request version fields do
+  not override them.
+- Cordon only blocks new pods. It does not evict or stop running pods.
+
+## Related
+
+- [Clusters guide](/user-guide/clusters)
+- [Storage guide](/user-guide/storage)
+- [Model Cache guide](/user-guide/model-cache)
+- [API conventions](/api-reference)
+- [Full OpenAPI schema](/api-reference)

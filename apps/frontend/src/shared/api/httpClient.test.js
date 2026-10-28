@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requestJson, postJson } from './httpClient.js';
+import { fetchWithAuthRetry, postJson, requestJson, setAuthToken, setUnauthorizedHandler } from './httpClient.js';
 
 test('JSON transport preserves Headers, signal and request payload', async (t) => {
     const signal = new AbortController().signal;
@@ -48,4 +48,40 @@ test('strict JSON clients reject malformed success but retain domain HTTP errors
     await assert.rejects(requestJson('/test', {}, {strictJson:true}), SyntaxError);
     t.mock.method(globalThis, 'fetch', async () => new Response('not JSON',{status:503}));
     await assert.rejects(requestJson('/test', {}, {strictJson:true,errorFactory:()=>new Error('Domain failure')}), /Domain failure/);
+});
+
+
+test('concurrent 401s share one refresh and retry once', async (t) => {
+    setAuthToken('old-token');
+    let refreshes = 0;
+    const seen = [];
+    setUnauthorizedHandler(async () => {
+        refreshes += 1;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        setAuthToken('new-token');
+        return true;
+    });
+    t.after(() => {
+        setAuthToken('');
+        setUnauthorizedHandler(null);
+    });
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        const authorization = options.headers.get('Authorization');
+        seen.push([url, authorization]);
+        if (authorization === 'Bearer old-token') {
+            return Response.json({ detail: 'expired' }, { status: 401 });
+        }
+        return Response.json({ ok: true });
+    });
+
+    const results = await Promise.all([
+        requestJson('/one'),
+        requestJson('/two'),
+        requestJson('/three'),
+        fetchWithAuthRetry('/raw').then((response) => response.json()),
+    ]);
+
+    assert.equal(refreshes, 1);
+    assert.deepEqual(results, [{ ok: true }, { ok: true }, { ok: true }, { ok: true }]);
+    assert.equal(seen.filter(([, authorization]) => authorization === 'Bearer new-token').length, 4);
 });

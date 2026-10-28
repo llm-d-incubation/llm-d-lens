@@ -1,1761 +1,379 @@
 ---
 title: Deployments
-description: The main deployment run, execution, and case APIs behind Lens Deploy.
+description: Start, inspect, and clean model deployments with the REST API or in-process Python SDK.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-When specifying an operator preference for deployment planning, use English, such as
-`prefer prefix cache`, `more GPU for performance`, or `use fewer GPU resources`.
-The deterministic planner matches English preference keywords; Chinese keyword aliases
-are no longer supported.
+Lens Deploy runs an already-rendered deployment configuration on a Kubernetes cluster and tracks each run, case, and execution. Use this module to deploy a saved configuration artifact, start a Standard vLLM service, follow rollout status, connect to a ready endpoint, and clean up resources. Configuration preparation endpoints are included because they produce the artifact that a deployment consumes.
 
-## Python domain contracts
+## Quick start
 
-The models in `llm_d_lens.deploy.contracts` and the
-`llm_d_lens.deploy.service.DeploymentService` protocol define the internal
-Configuration-to-Deploy boundary. They are not additional HTTP endpoints.
-Configuration owns validation/generation of immutable configuration artifacts;
-Deploy owns provider execution and lifecycle evidence. Evaluation owns workload
-validation and benchmark execution; Simulation does not own deployment lifecycle.
+Start a Standard vLLM service. The model must be ready in the registered Model Cache volume.
 
-### Commands and immutable artifacts
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
 
-| Contract | Fields and constraints |
-| --- | --- |
-| `VersionedPayload` | Nonempty `schema_version`; object `value` defaults to `{}`. The envelope does not prescribe producer-owned keys. |
-| `ConfigurationArtifact` | `artifact_id` defaults to a UUID; nonempty `schema_version`, `kind`, `provider_ref`, `checksum`; `media_type` defaults to `application/yaml`; at least one of `content` or `content_ref` is required. |
-| `DeploymentCreateRequest` | UUID `request_id`; `input_schema_version="v1"`; nonempty `configuration_artifacts`; `deployment_policy` defaults to a non-null `VersionedPayload(schema_version="v1", value={})`; optional `cluster_snapshot_ref`/`cluster_snapshot`; object `provenance`. |
-| `DeploymentKillRequest` | UUID `request_id`; `input_schema_version="v1"`; required nonempty `execution_id`; optional `expected_namespace`/`reason`; object `provenance`. |
-| `DeploymentArtifact` | UUID `artifact_id`; nonempty `artifact_hash` and `configuration_artifact_ids`; optional `source_ref`, `manifest_ref`, `manifest_checksum`, `values_checksum`; required `rendered_payload`; `created_at`. |
-
-`provider_ref` selects the deployment provider; it does not transfer configuration
-ownership to Deploy. The current `GuideAdapterDeploymentService` is narrower than
-the generic DTO: each create call requires **exactly one artifact containing an
-inline JSON object** with `media_type="application/json"`. The run planner splits
-the public run request into cases; do not pass a generic YAML/content-reference
-artifact directly to this adapter and assume it supports it.
-
-`create(request, *, model_token=None, on_initial_execution=None)` returns
-`DeploymentExecution`. Runtime binding does not change configuration ownership.
-`kill(request, execution)` verifies matching execution IDs, the expected namespace
-when supplied, and provider state managed by that service before cleanup. It
-does not accept arbitrary resource selectors.
-
-### RuntimeClass discovery and policy
-
-`GET /api/v1/deployments/runtime-classes?cluster_id=CLUSTER_ID` requires deployment
-read permission and access to the selected cluster. Optional `accelerator` and
-`access_mode` identify a registered profile suggestion. The response includes
-`items` (`name`, `handler`, `scheduling`, `overhead`, `matching_nodes`),
-`profile_suggestion`, `available_suggestion`, `requirement="unknown"`,
-`node_runtime_readiness="unknown"`, and `warnings`. Discovery or permission
-failures at Kubernetes return HTTP 503, not an empty successful list. Unknown
-hardware or access modes return HTTP 422; Lens authorization failures return 403.
-
-Set `runtime_binding.runtime_class` on `POST /api/v1/deployments/runs`:
+```bash
+curl -sX POST http://127.0.0.1:3000/api/v1/deployments/standard-vllm-runs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-8B",
+    "deployment_name": "qwen3-standard",
+    "cluster_session_id": "<cluster-session-id>",
+    "replicas": 1,
+    "tensor_parallel_size": 1,
+    "storage_volume_id": "<model-cache-volume-id>"
+  }'
+```
 
 ```json
-{"runtime_binding": {"runtime_class": {"mode": "named", "name": "custom-runtime"}}}
+{
+  "id": "<run-id>",
+  "status": "queued",
+  "cases": []
+}
 ```
 
-The Python equivalent is `RuntimeBinding(runtime_class=RuntimeClassPolicy(...))`
-from `llm_d_lens.deploy.contracts`. Standard and Agentic create requests expose
-the same policy as top-level `runtime_class`.
-
-- `auto`: preserve and validate an existing explicit manifest class; otherwise
-  use the access mode's optional profile suggestion only when the target cluster
-  advertises it. With no available suggestion, omit `runtimeClassName`.
-- `node-default`: explicitly remove `runtimeClassName`. This opt-out does not
-  require RuntimeClass discovery permission and does not verify device injection.
-- `named`: require a DNS-subdomain `name` and validate its availability. Missing
-  classes or conflicts with Pod node selectors/names fail before cluster writes.
-
-Omitting the runtime override preserves a saved configuration's
-`provenance.runtime_class`; without a saved preference the default is `auto`.
-Explicit `auto` overrides a saved preference. Choices are retained in deployment
-case policy for retry/restoration. The shared deployment adapter applies them
-across all five model providers, deriving a new deployment artifact without
-rewriting the supplied Configuration or existing executions. Router-only Pods
-are unchanged. Offline rendering no longer injects unverified profile defaults.
-The report is under `artifact.rendered_payload.value.deployment_contract.runtimeClass`.
-
-Class existence and matching selectors do not prove that a class is required,
-that its handler/CDI/drivers work on every eligible node, or that full scheduling
-constraints can be satisfied. Device-plugin versus DRA access alone is not proof
-either way. Select node default only when that cluster's default runtime already
-provides device access. Automatic and named modes require a resolvable explicit
-target cluster at deployment; offline provider rendering is not cluster validation.
-
-### Execution, observation and evidence
-
-Ordinary provider rendering maps `maxModelLen`, `maxNumSeqs`,
-`gpuMemoryUtilization`, `blockSize` and `maxNumBatchedTokens` from each role
-to the corresponding vLLM arguments. P/D uses separate `prefill` and `decode`
-values; other providers use `decode` (`precise-prefix-cache-routing` also accepts
-`serving`). `model.maxModelLen` supplies a fallback for missing role lengths.
-Explicit integer controls must be positive integers; `gpuMemoryUtilization`
-must be finite and greater than zero and at most one. Invalid values fail
-validation/rendering instead of silently falling back. Applicable
-`customParameters` override structured controls. Ordinary rendering replaces both
-`--name=value` and `--name value` forms; omitted controls preserve Guide defaults.
-Exact published `officialGuide` manifests remain on their existing validated
-manifest path rather than being rewritten by ordinary provider parameter mapping.
-
-`DeploymentExecution` carries `execution_id`, `request_id`, `status`, `artifact`,
-`configuration_artifacts`, optional `endpoint`/`namespace`/`resource_snapshot`,
-`provenance`, `evidence_refs`, optional versioned `diagnostics` and timestamps.
-Additional current fields are `forwarded_endpoint`, `monitoring_setup` (setup
-audit, not live monitoring status), `data_plane`, and editable descriptive
-`metadata` (`display_name`, `description`), separate from origin provenance.
-
-The complete run/case/execution state enums are listed below. A `ready` execution
-must contain `DeploymentEndpoint`: `url`, `protocol="http"` and optional
-`service_ref`, `model_ref`, `baseline_url`. Endpoint metadata must not carry
-credentials, kubeconfig or authorization values.
-
-Shared-memory preparation is recorded under
-`artifact.rendered_payload.value.deployment_contract.sharedMemory` and copied to
-`diagnostics.value.snapshot.shared_memory`. The report contains `defaultSizeLimit`
-(`4Gi`), `addedMounts`, per-container `mounts`, `warnings`, and `manifestChecksum`
-for the shared-memory preparation stage (before later placement or tracing).
-Ordinary renders complete missing model-server `/dev/shm` mounts; existing mounts
-and host IPC are retained. Published `officialGuide` manifests are checked without
-shared-memory mutation. Warnings are also logged; invalid or duplicate mount
-bindings fail rendering. This does not change the supplied Configuration artifact.
-
-`get(execution_id)` returns `DeploymentExecution`, not another status DTO.
-The concrete service looks up its in-memory execution state and raises `KeyError`
-for unknown IDs; it is not itself a database query. The worker/DAO boundary owns
-durable records and restores execution context when needed. The protocol also
-exposes `restore_execution`, `refresh_diagnostics`, `stop` and `clean`; use the
-authenticated REST operations below for external clients.
-
-`get_logs(DeploymentLogRequest(...))` returns a `DeploymentLogPage`, separate from
-execution metadata:
-
-- Request: `execution_id`, optional nonnegative integer-string `cursor`,
-  `limit` from 1 to 1000 (default 100), `follow=False`, and `sources=[]`.
-- Current sources are `workload` and `events`, not arbitrary Kubernetes selectors.
-  Entries contain `timestamp`, `source`, `message` and optional `severity`.
-- Response: `execution_id`, `entries`, `next_cursor`, `complete`, `evidence_refs`.
-  `follow=True` sets `complete=False`; this method still returns one page, not a
-  streaming iterator or a promise to wait for new logs.
-- Archived diagnostics use `ExecutionLogArchive` and
-  `deployment-log://<execution_id>/archive` references. Preserve evidence separately
-  from database records; see [storage settings](/environment-variables#storage-and-cache-paths).
-  Retained snapshots are partial diagnostics, not a complete cluster log history.
-
-### Consumer projections
-
-These are pure DTO helpers, not lifecycle calls or REST permission checks.
-`benchmark_input()` requires `ready` plus an endpoint and otherwise raises
-`ValueError`. It projects execution ID, artifact, endpoint, namespace and provenance.
-`simulation_input()` accepts any execution state and additionally projects
-deployment status and the optional resource snapshot/endpoint. It preserves
-execution evidence rather than substituting current mutable cluster state.
-The helpers exist, but current Evaluation/Simulation routes are not direct
-callers; do not describe these projections as their active request API.
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.deploy.contracts import (
-    BenchmarkDeploymentInput,
-    DeploymentExecution,
-    SimulationDeploymentInput,
-)
-
-
-def benchmark_projection(execution: DeploymentExecution) -> BenchmarkDeploymentInput:
-    return execution.benchmark_input()
-
-
-def simulation_projection(execution: DeploymentExecution) -> SimulationDeploymentInput:
-    return execution.simulation_input()
-```
-
-## Hardware rendering contract
-
-Deployment capability metadata describes provider behavior; its `variants` array is
-empty because variants belong to the selected source catalog. Rendering and
-Evaluation use the resolved hardware profile for images, accelerator resources and
-scheduling. Legacy configurations can resolve hardware from their rendered DRA or
-extended-resource requests; conflicting hardware evidence is rejected.
-
-Python callers can inspect the same source entry points before rendering:
-
-```python
-from pathlib import Path
-from llm_d_lens.deploy.providers.hardware_profile import guide_overlays
-
-variants = guide_overlays(
-    Path("/path/to/llm-d"), "optimized-baseline", accelerator="nvidia",
-)
-print(sorted(variants))
-```
-
-## Backend API
-
-Guide compatibility endpoints keep the `{ "error": "..." }` response shape.
-Expected validation failures retain their actionable message and status.
-Unexpected catalog/preparation failures return a generic `502` response; unexpected
-planning failures return a generic `500` response with `Server-Timing` preserved.
-Exception details are logged on the server, not returned to the browser.
-
-### Prepare Guide source
-
-`POST /api/guide-planning/prepare` accepts `guide`, `accelerator`, `modelServer`,
-`guideVariant` and the selected `clusterId`. It prepares the official source
-without deploying and returns its commit plus manifest-derived controls:
-
-```json
-{"ready": true, "commit": "selected-source-commit", "capabilities": {"cacheCpuGiB": false, "rdmaNicCount": true}}
-```
-
-The booleans describe supported CPU-cache mutation and a matching profile NIC
-claim. They do not depend on variant names. This endpoint is owned by
-`llm_d_lens.deploy.guide_planning.prepare`; source loading is implemented in
-`llm_d_lens.deploy.guide_sources`.
-Python deployment providers use `guide_overlays` (above) and
-`llm_d_lens.hardware.resolver.deployment_mode(profile, access_mode)` for the
-corresponding source and hardware contracts.
-
-Agentic create and refinement streams use `llm_d_lens.agentic.streaming.planning_stream_response`. The routes retain principal resolution, expected-error classification, and their existing generic error messages. Streams emit `progress` followed by `complete` or `error`; disconnect cleanup cancels and awaits unfinished planning. Gateway operation/log streams remain separate.
-
-Recalculating an Agentic plan does not require an AI provider. Without one,
-`AgenticDeploymentService.refine()` refreshes planning facts and uses deterministic
-candidate generation and scoring with the new preference. If an available AI
-scorer fails, recalculation keeps the validated candidates and returns
-deterministically scored alternatives instead.
-
-Agentic candidate planning and approval revalidation use the deployment request's
-`max_model_len` and `gpu_memory_utilization` for memory and KV-cache checks, even
-when the supplied `planning_facts` contains different values. Deterministic and
-AI-generated candidates use the same utilization as the deployed configuration.
-PD deployments apply that utilization to both prefill and decode vLLM roles.
-The estimate uses GPU capacity and model overhead, not vLLM's measured free KV
-cache at startup.
-
-Deployments live under the FastAPI router in `llm_d_lens/deploy/router.py` with the `/api/v1/deployments` prefix.
-
-Use the [installation instructions](/installation) and
-[storage environment settings](/environment-variables) for the current monorepo
-and Lens storage roots. The old `.llm-d-bench/deploy` and host-specific
-`/root/.llm_d_lens/run_store` paths are not the current storage contract.
-
-Execution discovery is read-only and uses `execution_id` as its cross-module
-reference; listing does not start port-forwards. Use the execution endpoint
-action to obtain a host-reachable URL rather than assuming a persisted
-in-cluster endpoint or old tunnel is reachable.
-
-| Record | Lifecycle states |
-| --- | --- |
-| Run | `queued`, `running`, `succeeded`, `partially_succeeded`, `failed`, `cleaned`, `cancelling`, `cancelled` |
-| Case | `queued`, `rendering`, `deploying`, `ready`, `failed`, `stopped`, `cancelling`, `cancelled`, `cleaned`, `cleaned_up` |
-| Execution | `draft`, `validated`, `rendered`, `deploying`, `ready`, `failed`, `rolling_back`, `rolled_back`, `cleaned`, `cleaned_up` |
-
-A stopped case has a `rolled_back` execution; these are different state enums.
-Benchmarking requires a ready execution with an endpoint and an active cluster
-session. Python worker examples below run inside a configured Lens backend;
-external clients should use authenticated HTTP so route permissions and resource
-scope checks apply.
-
-Optimized and precise routing capability metadata reuse `shared_prefix_routing_workload()` in `llm_d_lens.deploy.capabilities`. Each scenario and recommended workload receives independent nested values; provider-specific baselines and goals are unchanged. Precise-provider calibration and model discovery share lazy modelserver invocation traversal while retaining their respective last-value and first-model selection rules.
-
-Agentic candidate generation requires its first tool batch to contain exactly
-`get_cluster_overview` and `search_candidates`. An invalid first batch is not executed;
-the generator gives the AI one corrective retry before using built-in candidates. If
-the retry also violates the tool contract, the fallback is reported as an invalid
-generator response rather than a provider connectivity failure. A tool-call limit
-failure retains the round, observed call count, and limit in
-`generator_fallback_detail` on the run and `generator.fallback_detail` in its
-planning snapshot; `generator_fallback_reason` remains the stable category.
-
-Agentic generator and planner user messages begin with the operator's full preference,
-before the JSON context. Their instructions prioritize platform/hardware validity,
-explicit user requirements, soft preferences, then evidence and diversity. Diversity
-must not introduce forbidden topologies; selection may return fewer than three options.
-This is prompt guidance, not a general server-side natural-language constraint parser.
-
-Planning snapshots (schema version 2) preserve `request.planner_prompt` without redaction.
-`planner_prompt_present` remains a compatibility indicator, not a substitute for the text.
-Run fields `generator_requests` and `planner_requests` contain the actual provider-native
-request bodies, raw responses, timestamps, HTTP status, and error type for every HTTP attempt,
-including retries. Snapshots expose these under `generator.requests` and `planner.requests`.
-Stage audit files under `session-artifacts/agentic-planning/<run_id>/requests/` are persisted
-before sending and after completion, including failed or cancelled planning with no final
-run. Authentication headers and API keys are excluded; full prompts and tool context are
-private application data. Auditing applies to new requests, not historical reconstruction.
-
-Agentic candidate submissions accept `optimized-baseline`, `pd-disaggregation`,
-`tiered-prefix-cache`, and `precise-prefix-cache-routing`; `baseline-vllm` is rejected
-by the generator schema and excluded from planner ranking. Aggregated AIC recommendations
-map to `optimized-baseline`, including load-target and relaxed-anchor paths.
-
-Agentic planning estimates missing exact AIC predictions separately for each validated
-optimized-baseline and pd-disaggregation candidate using its workload and GPU topology. The
-candidate's estimate is supplied to AI scoring as `aic_estimate`; an unavailable estimate remains
-unknown, not a performance or SLO guarantee. Agentic estimates do not pass the original search
-TTFT/TPOT targets; they verify the fixed topology and workload without an SLO filter. Generator
-fallback also estimates the top three built-in candidates, using the resolved workload when the
-failed generator left no tool trace. Unsupported or unavailable topologies remain unknown. Relaxed AIC
-search accepts complete configurations using no more than the available GPU budget. Its predictions
-do not establish compliance with the original SLO. Agentic preserves the relaxed anchor as a
-validated candidate even when the generator suggests only a smaller topology, then estimates its
-exact topology and workload. Candidates with known estimates that miss the original latency targets
-are marked `not_satisfied`; among comparable misses, smaller relative target violations rank ahead
-of GPU savings. Unknown estimates are not treated as failures.
-When an external planner scores multiple candidates, its selection rationale explains why each
-lower-scored returned candidate ranks below the top choice using the supplied planning facts. Only
-the returned top three are scored; no reason is inferred for candidates outside that set.
-
-Planning-fact collection matches discovered accelerator models against registered hardware profiles
-to select one AIC system. Unknown, ambiguous, or mixed systems leave AIC evidence unavailable.
-
-AIC support checks and estimates use the SDK release pinned in `pyproject.toml`
-(currently 0.12.0), including its bundled support matrix and performance data.
-An unsupported P/D result describes that installed matrix, not a hardware-level
-prohibition. The 0.12.0 matrix passes Qwen/Qwen3-0.6B on B60/vLLM for P/D;
-candidate availability still depends on the requested workload and GPU budget.
-After changing the dependency pin, reinstall project dependencies and restart
-the backend so support checks and searches use the same SDK release.
-
-### Search or size an AIC workload
-
-The MCP generation and plain-estimate fallback behavior above applies when no load
-target is supplied. Agentic load-target planning instead validates the exact native
-AIC recommendations, including replica counts outside the ordinary candidate grid.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/aic/search`**
-
-    `mean_input_tokens` defaults to `4000` and `mean_output_tokens` to `1000`, matching
-    native AIC search/recommend. Supply either positive `target_concurrency` or
-    `target_request_rate` (requests/second), or omit both for fixed-GPU search.
-    Supplying both is rejected with an explanation that AIC does not support joint
-    load targets. Agentic maps `planning_facts.workload_profile.concurrency` and
-    `.request_rate` to these fields; QPS and request rate are the same quantity.
-
-    With a load target, `gpu_count` is an acceptance budget, not a native recommend
-    input. Lens scales the recommended worker pools and accepts only configurations
-    within that budget and the TTFT/TPOT targets (native defaults `2000`/`30` ms).
-    Unavailable predictions, insufficient capacity or unmet SLOs return an explicit
-    error instead of silently selecting a prediction without a load target.
-    Agentic forwards that reason to the frontend error alert.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.aic.models import AICRequest
-    from llm_d_lens.aic.service import search
-
-    result = await search(AICRequest(
-        model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
-        gpu_count=8, target_request_rate=10,
-    ))
-    ```
-
-    Use `target_concurrency` instead of `target_request_rate` for a concurrent-request
-    target. Leave both unset to retain the existing fixed-GPU search.
-  </TabItem>
-</Tabs>
-
-### Estimate an AIC topology
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/aic/estimate`**
-
-    Send `model_name`, `scenario` (`inference_scheduling` or `pd_disaggregation`),
-    `gpu_count`, `mean_input_tokens`, `mean_output_tokens`, the AIC system/backend/database
-    and the topology fields (`tp` and `replicas`, or prefill/decode TP and replicas).
-    Optional `ttft_target_ms` and `tpot_target_ms` retain the constrained experiment path;
-    omit both to estimate the fixed topology without an SLO filter.
-
-    ```json
-    {
-      "model_name": "Qwen/Qwen3-0.6B",
-      "scenario": "inference_scheduling",
-      "gpu_count": 1,
-      "mean_input_tokens": 1024,
-      "mean_output_tokens": 256,
-      "aic_system_name": "b60",
-      "aic_backend_name": "vllm",
-      "aic_database_mode": "SILICON",
-      "tp": 1,
-      "replicas": 1
-    }
-    ```
-
-    The response includes `mode`, topology fields, `ttft_ms`, `tpot_ms` and
-    `throughput_tokens_per_sec` when measurable. Estimates do not prove SLO compliance.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.aic.models import AICEstimateRequest
-    from llm_d_lens.aic.service import estimate
-
-    result = await estimate(AICEstimateRequest(
-        model_name="Qwen/Qwen3-0.6B", scenario="inference_scheduling",
-        gpu_count=1, mean_input_tokens=1024, mean_output_tokens=256,
-        aic_system_name="b60", aic_backend_name="vllm", tp=1, replicas=1,
-    ))
-    ```
-  </TabItem>
-</Tabs>
-
-### List deployment node labels
-
-List the distinct key/value labels on nodes of a cluster the caller can access. Advanced placement uses these values to populate its optional node-label selector.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/node-labels?cluster_id=cluster-a`**
-
-    Query: `cluster_id` (required cluster ID). Response:
-
-    ```json
-    {"items": [{"key": "pool", "value": "accelerator"}]}
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_bench.deploy.router import list_deployment_node_labels
-
-    labels = await list_deployment_node_labels(cluster_id="cluster-a", request=authenticated_request)
-    ```
-  </TabItem>
-</Tabs>
-
-### Start a deployment run
-
-Start a deployment run from one or more already-rendered deployable configurations.
-
-For Router 0.11 endpoint-picker images, planning and installation adapt legacy P/D
-plugin settings: `disagg-headers-handler` is handled by `disagg-profile-handler`,
-and `parameters.deciderPluginName` becomes `parameters.deciders.prefill`. This also
-applies when retrying saved bundles. Source assets and their checksums remain
-unchanged; deployment evidence records the derived values actually installed.
-Conflicting old/new deciders and custom legacy header parameters are rejected.
-Other Router versions and custom image repositories retain their own settings.
-
-The same pure Python transformation is shared by configuration validation and
-`llm_d_bench.deploy.providers.deployment_bundle.install_deployment_bundle`:
-
-```python
-import yaml
-from llm_d_bench.configuration.router_compatibility import compatible_router_values
-
-values = yaml.safe_load(saved_router_values_yaml)
-effective_values = compatible_router_values(values, chart_version="v0.11.0")
-```
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs`**
-
-    Request body: `DeploymentRunCreateRequest`
-    - `configurations` (`DeployableConfiguration[]`, required): rendered deployment payloads to execute.
-    - `failure_policy` (`"stop" | "continue"`, default `"continue"`): whether later cases should continue after a failure.
-    - `provenance` (`object`, optional): caller-owned origin metadata.
-    - `runtime_binding` (`RuntimeBinding`, optional): environment overrides, cluster session binding, and `placement` (`{"replicas":"prefer-same-node"|"same-node"|"balanced"|"spread"|"none","nodeLabel"?:{"key":string,"value":string}}`). Model-server Deployments in the same rendered manifest share a placement group, including PD Prefill and Decode; router Pods are excluded. `nodeLabel` is accepted only with `same-node` and must exist on a node in the cluster identified by `provenance.cluster_server_id`. LeaderWorkerSet cannot use `balanced` or `spread` because its leader/worker Pods are not separate replicas.
-      For optimized-baseline, placement is applied to the generated Kustomize overlay before deployment. Shared creation preflight requires a ready model and revision in registered Model Cache storage. Ordinary provider rendering sets Hugging Face offline flags; exact published manifests bypass that rendering and are not covered by the same final-manifest enforcement. Missing snapshots must be downloaded through Model Cache before deployment.
-
-    ```json
-    {
-      "configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "optimized-baseline",
-          "checksum": "sha256:0f4f7e4b",
-          "content": {
-            "model": {"name": "Qwen/Qwen3-8B"},
-            "decode": {
-              "replicaCount": 1,
-              "tensorParallelSize": 1,
-              "maxModelLen": 4096
-            },
-            "runtime": {
-              "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
-              "imageMode": "pull-existing"
-            }
-          },
-          "provenance": {
-            "deployment_name": "qwen3-8b-smoke",
-            "description": "Deploy one optimized baseline for evaluation"
-          }
-        }
-      ],
-      "failure_policy": "continue",
-      "provenance": {
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "deployment_source": {"kind": "manual"}
-      },
-      "runtime_binding": {
-        "schema_version": "runtime-binding.v1",
-        "environment": {
-          "HTTP_PROXY": "http://proxy.example:911"
-        },
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "placement": {"replicas": "same-node", "nodeLabel": {"key": "pool", "value": "accelerator"}}
-      }
-    }
-    ```
-
-    Response: `DeploymentRun`
-
-    ```json
-    {
-      "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-      "status": "queued",
-      "failure_policy": "continue",
-      "provenance": {
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "deployment_source": {"kind": "manual"}
-      },
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "started_at": null,
-      "finished_at": null,
-      "source_configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "optimized-baseline",
-          "checksum": "sha256:0f4f7e4b",
-          "content": {
-            "model": {"name": "Qwen/Qwen3-8B"},
-            "decode": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 4096},
-            "runtime": {"image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0", "imageMode": "pull-existing"}
-          },
-          "provenance": {"deployment_name": "qwen3-8b-smoke", "description": "Deploy one optimized baseline for evaluation"}
-        }
-      ],
-      "cases": [
-        {
-          "id": "1f31e4de-5452-4b6c-a38f-d404ed5eff10",
-          "run_id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-          "ordinal": 0,
-          "source_configuration_ordinal": 0,
-          "provider_ref": "optimized-baseline",
-          "component": "decode",
-          "depends_on": [],
-          "status": "queued",
-          "attempt": 1,
-          "execution_id": null,
-          "failure": null,
-          "create_request": {
-            "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-            "input_schema_version": "v1",
-            "configuration_artifacts": [
-              {
-                "artifact_id": "524a4178-7e9f-49ea-bccd-8ddb163ae2fd",
-                "schema_version": "deployable-configuration.v1",
-                "kind": "configuration",
-                "provider_ref": "optimized-baseline",
-                "media_type": "application/yaml",
-                "checksum": "sha256:0f4f7e4b",
-                "content": "{\"model\":{\"name\":\"Qwen/Qwen3-8B\"}}"
-              }
-            ],
-            "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen3-8b-smoke"}},
-            "cluster_snapshot_ref": null,
-            "cluster_snapshot": null,
-            "provenance": {}
-          }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.application import deployment_run_manager
-from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest
-from llm_d_lens.deploy.standard_kubernetes_service import build_standard_kubernetes_service_configuration
 from llm_d_lens.deploy.standard_kubernetes_service import StandardKubernetesServiceRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    import asyncio
 
-async def main() -> None:
-    configuration = build_standard_kubernetes_service_configuration(
-        StandardKubernetesServiceRequest(
-            model="Qwen/Qwen3-8B",
-            deployment_name="qwen3-8b-smoke",
-            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-            replicas=1,
-            tensor_parallel_size=1,
+    async def main() -> None:
+        run = await lens.deploy.create_standard_kubernetes_service_run(
+            StandardKubernetesServiceRequest(
+                model="Qwen/Qwen3-8B",
+                deployment_name="qwen3-standard",
+                cluster_session_id="<cluster-session-id>",
+                replicas=1,
+                tensor_parallel_size=1,
+                storage_volume_id="<model-cache-volume-id>",
+            )
         )
-    )
-    run = await deployment_run_manager.start_run(
-        DeploymentRunCreateRequest(
-            configurations=[configuration],
-            provenance={
-                "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-                "deployment_source": {"kind": "manual"},
-            },
-        )
-    )
-    print(run.id, run.status)
+        print(run.id, run.status)
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Start a standard vLLM deployment run
+## Common tasks
 
-Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM contract.
-The generated namespace uses the backend's configured deployment prefix (for example, `llmd-baseline-vllm-...`).
-Standard vLLM deployments use the baseline adapter for rollout readiness and cleanup; they do not require a published Guide manifest's `readinessDeployments` contract.
-Only registered Model Cache storage is accepted. It requires a ready entry for the selected model and serves it offline using the entry's downloaded revision; a conflicting custom vLLM `revision` is rejected. Requests using `local-cache` or direct `pvc` storage fail validation. Shared creation preflight also revalidates model/revision readiness and local-disk node synchronization through `llm_d_lens.deploy.providers.storage_mount.require_cached_model`. Ordinary provider rendering mounts the registered cache read-only for serving; `cacheOffline=false` cannot disable its offline flags. Exact published manifests are not covered by those rendering guarantees. Missing or incomplete models must be downloaded or synchronized through Model Cache.
-The generated run defaults to preferring replicas on one node without making it mandatory. `placement_replicas` also supports required co-location, balanced distribution, or required separation across model-server Pods in the same rendered manifest. For required co-location, `placement_node_label` can restrict the Pods to a selected cluster node by its `kubernetes.io/hostname` label; the label is checked against that cluster before deployment. Tensor-parallel accelerator claims are requested by each model-server Pod, keeping its TP devices in that Pod. Agentic planning inherits the same fields and applies the selected preset on approval.
+### Deploy a saved configuration
+
+Start a run from one or more deployable configurations. A run with several cases uses `failure_policy` to decide whether later cases continue after a failure.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/standard-vllm-runs`**
 
-    Request body: `StandardKubernetesServiceRequest`
-    - `model` (`string`, required)
-    - `deployment_name` (`string`, required)
-    - `description` (`string`, optional)
-    - `cluster_session_id` (`string`, required)
-    - `replicas` (`integer`, required)
-    - `tensor_parallel_size` (`integer`, required)
-    - `placement_replicas` (`"prefer-same-node" | "same-node" | "balanced" | "spread"`, default `"prefer-same-node"`)
-    - `placement_node_label` (`{"key":"kubernetes.io/hostname","value":"node-name"}` or `null`, optional; requires `placement_replicas: "same-node"`)
-    - `storage_type` (`"model-cache"`, default `"model-cache"`)
-    - `storage_volume_id` (`string`, required, nonempty registered Model Cache volume ID)
-    - `model_cache_path`, `pvc_name` (legacy fields, no longer used for deployment storage)
-    - `max_model_len` (`integer`, default `4096`, range `256` to `1048576`; also applies to Agentic requests)
-    - `gpu_memory_utilization`, `max_num_seqs`, `max_num_batched_tokens`
-    - `enable_prefix_caching`, `enforce_eager`, `vllm_arguments`, `use_cluster_proxy`, `http_proxy`, `https_proxy`, `no_proxy`
+**`POST /api/v1/deployments/runs`**
 
-    ```json
+```json
+{
+  "configurations": [
     {
-      "model": "Qwen/Qwen3-8B",
-      "deployment_name": "qwen3-standard",
-      "description": "Standard baseline for smoke tests",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "replicas": 1,
-      "tensor_parallel_size": 1,
-      "storage_type": "model-cache",
-      "storage_volume_id": "storage-model-cache",
-      "max_model_len": 8192,
-      "gpu_memory_utilization": 0.9,
-      "max_num_seqs": 256,
-      "max_num_batched_tokens": 8192,
-      "enable_prefix_caching": true,
-      "enforce_eager": false,
-      "vllm_arguments": [
-        {"name": "max-model-len", "value": "8192"}
-      ],
-      "use_cluster_proxy": true,
-      "http_proxy": "",
-      "https_proxy": "",
-      "no_proxy": ""
-    }
-    ```
-
-    Response: `DeploymentRun`
-
-    ```json
-    {
-      "id": "73606e29-a348-4920-bf8c-3be5e038a8fe",
-      "status": "queued",
-      "failure_policy": "continue",
-      "provenance": {
-        "deployment_source": {"kind": "standard-kubernetes-service"},
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "deployment_name": "qwen3-standard",
-        "description": "Standard baseline for smoke tests",
-        "model_market": {
-          "deployment_name": "qwen3-standard",
-          "description": "Standard baseline for smoke tests"
-        }
+      "schema_version": "deployable-configuration.v1",
+      "type": "baseline",
+      "format": "helm",
+      "provider_ref": "optimized-baseline",
+      "checksum": "sha256:<checksum>",
+      "content": {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 4096}
       },
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "source_configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "baseline-vllm",
-          "checksum": "sha256:9eb2d61d",
-          "content": {
-            "model": {"name": "Qwen/Qwen3-8B"},
-            "decode": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 8192},
-            "runtime": {
-              "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
-              "imageMode": "pull-existing",
-              "modelSource": "auto-cache",
-              "storageVolumeId": "storage-model-cache",
-              "cacheOffline": true
-            },
-            "customParameters": [
-              {"target": "decode", "kind": "argument", "name": "gpu-memory-utilization", "value": "0.9"},
-              {"target": "decode", "kind": "argument", "name": "enable-prefix-caching", "value": "true"}
-            ]
-          },
-          "provenance": {
-            "source": "standard-kubernetes-service.v1",
-            "deployment_name": "qwen3-standard",
-            "description": "Standard baseline for smoke tests",
-            "storage_type": "model-cache"
-          }
-        }
-      ],
-      "cases": []
+      "provenance": {"deployment_name": "qwen3-guide"}
     }
-    ```
+  ],
+  "failure_policy": "continue",
+  "provenance": {"cluster_session_id": "<cluster-session-id>"}
+}
+```
+
+Response fields: `id`, `status`, `cases[].id`, `cases[].status`, `cases[].execution_id`.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-import asyncio
+from llm_d_lens.deploy.contracts import DeployableConfiguration, DeploymentRunCreateRequest
+from llm_d_lens.sdk import LensLocal
 
-from llm_d_lens.deploy.application import deployment_run_manager
-from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest
-from llm_d_lens.deploy.standard_kubernetes_service import (
-    StandardKubernetesServiceRequest,
-    build_standard_kubernetes_service_configuration,
-)
+with LensLocal("<username>") as lens:
+    import asyncio
 
-
-async def main() -> None:
-    request = StandardKubernetesServiceRequest(
-        model="Qwen/Qwen3-8B",
-        deployment_name="qwen3-standard",
-        description="Standard baseline for smoke tests",
-        cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-        storage_volume_id="storage-model-cache",
-        replicas=1,
-        tensor_parallel_size=1,
-    )
-    configuration = build_standard_kubernetes_service_configuration(request)
-    run = await deployment_run_manager.start_run(
-        DeploymentRunCreateRequest(
-            configurations=[configuration],
-            provenance={
-                "deployment_source": {"kind": "standard-kubernetes-service"},
-                "cluster_session_id": request.cluster_session_id,
-                "cluster_server_id": "cluster-123",
-                "deployment_name": request.deployment_name,
-                "description": request.description.strip(),
-            },
+    async def main() -> None:
+        run = await lens.deploy.create_run(
+            DeploymentRunCreateRequest(
+                configurations=[
+                    DeployableConfiguration(
+                        type="baseline",
+                        format="helm",
+                        provider_ref="optimized-baseline",
+                        checksum="sha256:<checksum>",
+                        content={
+                            "model": {"name": "Qwen/Qwen3-8B"},
+                            "decode": {
+                                "replicaCount": 1,
+                                "tensorParallelSize": 1,
+                                "maxModelLen": 4096,
+                            },
+                        },
+                        provenance={"deployment_name": "qwen3-guide"},
+                    )
+                ],
+                provenance={"cluster_session_id": "<cluster-session-id>"},
+            )
         )
-    )
-    print(run.id, run.status)
+        print(run.id, run.status)
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### List deployment runs
+### Find runs and executions
 
-List deployment runs Lens has recorded.
-
-`GET /api/v1/deployments` is the collection-root alias with the same query
-parameter and response. Results are returned newest first.
+List runs newest first. Use `query` to search by run id, provider ref, deployment name, or namespace. Executions can be filtered by status and cluster.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs`**
 
-    Request: no body.
-    - Query parameter: `query` (`string`, optional) searches by run id, provider ref, deployment name, or namespace.
+**`GET /api/v1/deployments/runs?query=qwen3`**
 
-    Response: array of `DeploymentRun` records.
+**`GET /api/v1/deployments/executions?status=ready&cluster_id=<cluster-id>`**
 
-    ```json
-    [
-      {
-        "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-        "status": "running",
-        "failure_policy": "continue",
-        "provenance": {
-          "cluster_server_id": "cluster-1",
-          "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000"
-        },
-        "created_at": "2026-09-23T09:18:24.287000+00:00",
-        "started_at": "2026-09-23T09:18:40.001000+00:00",
-        "finished_at": null,
-        "source_configurations": [],
-        "cases": []
-      }
-    ]
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.router import _store
-
-runs = _store.list_runs()
-for run in runs:
-    print(run.id, run.status)
-```
-  </TabItem>
-</Tabs>
-
-### Get a deployment run
-
-Get the full detail of one deployment run, including all cases and their current status.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs/{run_id}`**
-
-    Request: no body.
-    - Path parameter: `run_id` (`string`, required)
-
-    Response: `DeploymentRun`
-
-    ```json
+```json
+{
+  "items": [
     {
-      "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-      "status": "running",
-      "failure_policy": "continue",
-      "provenance": {
-        "cluster_server_id": "cluster-1",
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000"
-      },
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "started_at": "2026-09-23T09:18:40.001000+00:00",
-      "finished_at": null,
-      "source_configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "baseline-vllm",
-          "checksum": "sha256:9eb2d61d",
-          "content": {"model": {"name": "Qwen/Qwen3-8B"}},
-          "provenance": {"deployment_name": "qwen3-standard"}
-        }
-      ],
-      "cases": [
-        {
-          "id": "1f31e4de-5452-4b6c-a38f-d404ed5eff10",
-          "run_id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-          "ordinal": 0,
-          "source_configuration_ordinal": 0,
-          "provider_ref": "baseline-vllm",
-          "component": "decode",
-          "depends_on": [],
-          "status": "deploying",
-          "attempt": 1,
-          "execution_id": "execution-123",
-          "failure": null,
-          "create_request": {
-            "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-            "input_schema_version": "v1",
-            "configuration_artifacts": [],
-            "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen3-standard"}},
-            "cluster_snapshot_ref": null,
-            "cluster_snapshot": null,
-            "provenance": {}
-          }
-        }
-      ]
+      "execution_id": "<execution-id>",
+      "status": "ready",
+      "cluster_id": "<cluster-id>",
+      "namespace": "llmd-qwen3-standard",
+      "endpoint": "http://qwen3-router.llmd-qwen3-standard.svc:8000"
     }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.router import _store
-
-run = _store.get_run("8c52df8b-5d31-4a36-8c01-3952abf2bf89")
-if run is not None:
-    print(run.id, run.status, len(run.cases))
+  ]
+}
 ```
+
   </TabItem>
-</Tabs>
-
-### Cancel a deployment run
-
-Request cancellation of an active deployment run.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs/{run_id}/cancel`**
-
-    Request: no body.
-    - Path parameter: `run_id` (`string`, required)
-
-    Response:
-
-    ```json
-    {
-      "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-      "status": "cancelling"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.application import deployment_run_manager
-
-run_id = "8c52df8b-5d31-4a36-8c01-3952abf2bf89"
-deployment_run_manager.worker_for_run(run_id).request_cancel(run_id)
-```
-  </TabItem>
-</Tabs>
-
-### Rebind a deployment run's cluster session
-
-Rebind a deployment run to a different active cluster session.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs/{run_id}/cluster-session`**
-
-    Request body: `RebindClusterSessionRequest`
-    - Path parameter: `run_id` (`string`, required)
-    - `cluster_session_id` (`string`, required)
-
-    ```json
-    {
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174111"
-    }
-    ```
-
-    Response: HTTP `204 No Content`. No JSON body is returned.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.application import deployment_run_manager
-
-run_id = "8c52df8b-5d31-4a36-8c01-3952abf2bf89"
-deployment_run_manager.rebind_cluster_session(
-    run_id,
-    "123e4567-e89b-12d3-a456-426614174111",
-)
-```
-  </TabItem>
-</Tabs>
-
-### List deployment executions
-
-List deployment executions without creating new port-forwards.
-
-This route reads stored records; it does not query the cluster itself. A
-background reconciler keeps those records current, re-checking every run that is
-running, succeeded, partially succeeded or **failed** (a failed rollout whose
-Pods later recover is promoted back to `ready`, and one whose namespace is gone
-becomes `cleaned`). Only cleaned and cancelled runs are terminal. Call
-`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh` when you need an
-immediate re-check instead of waiting for that cycle.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions`**
-
-    Request: no body.
-    - Query parameters: `status` (`DeploymentStatus`, optional), `statuses` (`DeploymentStatus[]`, optional), `cluster_id` (`string`, optional), `query` (`string`, optional), `limit` (`integer`, default `200`).
-
-    Response:
-
-    ```json
-    {
-      "items": [
-        {
-          "execution_id": "execution-ready",
-          "status": "ready",
-          "cluster_id": "cluster-1",
-          "cluster_session_id": "session-1",
-          "namespace": "namespace",
-          "name": "qwen",
-          "display_name": "",
-          "description": "",
-          "model": "Qwen",
-          "backend": "vLLM",
-          "guide": "optimized-baseline",
-          "endpoint": "http://execution-ready.namespace.svc:8000",
-          "forwarded_endpoint": null,
-          "replicas": null,
-          "tensor_parallel_size": null,
-          "image": null,
-          "preserve_deployment": true,
-          "created_at": "2026-09-23T09:18:24.287000+00:00",
-          "updated_at": null,
-          "max_model_len": null,
-          "gpu_memory_utilization": null,
-          "enable_prefix_caching": null,
-          "max_num_seqs": null,
-          "max_num_batched_tokens": null,
-          "storage_type": null,
-          "storage_volume_id": null,
-          "mount_path": null,
-          "pvc_name": null,
-          "failure": null,
-          "custom_parameters": [],
-          "baseline_endpoint": null,
-          "service_ref": null
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 from llm_d_lens.deploy.contracts import DeploymentStatus
-from llm_d_lens.deploy.executions import list_execution_contexts
+from llm_d_lens.sdk import LensLocal
 
-contexts = list_execution_contexts(status=DeploymentStatus.READY, cluster_id="cluster-1", limit=20)
-for context in contexts:
-    print(context.execution_id, context.status, context.endpoint)
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        runs = await lens.deploy.list_runs(query="qwen3")
+        for run in runs:
+            print(run.id, run.status)
+
+        executions = await lens.deploy.list_executions(
+            status=DeploymentStatus.READY,
+            cluster_id="<cluster-id>",
+        )
+        for execution in executions.items:
+            print(execution.execution_id, execution.endpoint)
+
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Get a deployment execution
+### Connect to a ready endpoint and read logs
 
-Get one deployment execution by execution id.
+A `ready` execution has an in-cluster URL. Call the endpoint action to create or reuse a reachable forwarded URL before sending model traffic.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions/{execution_id}`**
 
-    Request: no body.
-    - Path parameter: `execution_id` (`string`, required)
+**`POST /api/v1/deployments/executions/<execution-id>/endpoint`**
 
-    Response:
+```json
+{
+  "success": true,
+  "execution_id": "<execution-id>",
+  "endpoint": "http://127.0.0.1:38000/v1",
+  "namespace": "llmd-qwen3-standard",
+  "service": "qwen3-router",
+  "remote_port": 8000
+}
+```
 
-    ```json
-    {
-      "execution_id": "execution-ready",
-      "status": "ready",
-      "cluster_id": "cluster-1",
-      "cluster_session_id": "session-1",
-      "namespace": "namespace",
-      "name": "qwen",
-      "display_name": "",
-      "description": "",
-      "model": "Qwen",
-      "backend": "vLLM",
-      "guide": "optimized-baseline",
-      "endpoint": "http://execution-ready.namespace.svc:8000",
-      "forwarded_endpoint": null,
-      "preserve_deployment": true,
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "custom_parameters": []
-    }
-    ```
+Read pod logs with `GET /api/v1/deployments/executions/<execution-id>/pods/<pod-name>/logs?tail=200`. `tail` accepts 1-2000.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.deploy.executions import find_execution_context
+from llm_d_lens.sdk import LensLocal
 
-context = find_execution_context("execution-ready")
-if context is not None:
-    print(context.execution_id, context.namespace, context.endpoint)
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        execution = await lens.deploy.get_execution("<execution-id>")
+        print(execution.status, execution.endpoint)
+
+        resolved = await lens.deploy.connect_execution_endpoint("<execution-id>")
+        print(resolved.endpoint)
+
+        logs = await lens.deploy.get_execution_pod_logs(
+            "<execution-id>", "<pod-name>", tail=200
+        )
+        print(logs.logs)
+
+    asyncio.run(main())
 ```
+
+  </TabItem>
+</Tabs>
+
+### Stop, clean, or delete a deployment
+
+Stop or clean individual cases without deleting the run history. Delete a run only after it reaches a terminal state; deletion also cleans remaining cases.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/deployments/runs/<run-id>/cases/<case-id>/stop`**
+
+**`POST /api/v1/deployments/runs/<run-id>/cases/<case-id>/clean`**
+
+**`DELETE /api/v1/deployments/runs/<run-id>`** returns `204`.
+
+```json
+{
+  "case": {"id": "<case-id>", "status": "stopped", "execution_id": "<execution-id>"},
+  "execution": {"execution_id": "<execution-id>", "status": "rolled_back"},
+  "deployment": {"run_id": "<run-id>", "case_id": "<case-id>", "status": "stopped"}
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.deploy.models import CleanCaseRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        stopped = await lens.deploy.stop_case("<run-id>", "<case-id>")
+        print(stopped.case.status, stopped.execution.status)
+
+        cleaned = await lens.deploy.clean_case(
+            "<run-id>",
+            "<case-id>",
+            CleanCaseRequest(preserve_rendered_overlay=False),
+        )
+        print(cleaned.case.status)
+
+        await lens.deploy.delete_run("<run-id>")
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Clean orphan namespaces
+
+An orphan namespace matches the deployment prefix but is not referenced by any Lens execution record. Names outside the prefix, or still referenced, are refused.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/deployments/orphans?cluster_id=<cluster-id>`**
+
+**`POST /api/v1/deployments/orphans/clean`**
+
+```json
+{
+  "clusterId": "<cluster-id>",
+  "namespaces": ["llmd-optimized-baseline-1-1-20260918032423139529"]
+}
+```
+
+Response: `cleaned` and `failed` namespace lists.
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.deploy.models import CleanOrphansRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        orphans = await lens.deploy.list_orphan_namespaces("<cluster-id>")
+        print(orphans.prefix, [item.name for item in orphans.items])
+
+        result = await lens.deploy.clean_orphan_namespaces_route(
+            CleanOrphansRequest(
+                cluster_id="<cluster-id>",
+                namespaces=[item.name for item in orphans.items],
+            )
+        )
+        print(result.cleaned, result.failed)
+
+    asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
 ### Scale a deployment execution
 
-Change the live Prefill and/or Decode model-server replica counts for a ready or failed execution. This changes Kubernetes replicas only; the saved configuration is unchanged. Deployment and DisaggregatedSet workloads are supported. DisaggregatedSet scaling changes role replicas and never changes `spec.slices`; new Lens-created sets use `slices: 1`.
+Change the live Prefill and Decode model-server replicas for a ready or failed execution. This changes Kubernetes replicas only; the saved configuration is unchanged. Deployments and DisaggregatedSets are supported. DisaggregatedSet scaling changes role replicas and never changes `spec.slices`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/executions/{execution_id}/scale`**
 
-    Request:
+**`POST /api/v1/deployments/executions/{execution_id}/scale`**
 
-    ```json
-    {
-      "prefill_replicas": 1,
-      "decode_replicas": 2
-    }
-    ```
+```json
+{"prefill_replicas": 1, "decode_replicas": 2}
+```
 
-    - Path parameter: `execution_id` (`string`, required)
-    - Body fields: `prefill_replicas` and `decode_replicas` (`integer`, optional, `1..100`); at least one is required.
-    - Only supplied roles are changed. P/D deployments use both fields; aggregated deployments use `decode_replicas`.
-    - `409` when the execution is not ready or failed; `422` when the workload is unsupported or a role does not exist; `502` when a scale operation only partially succeeds.
+Only supplied roles are changed. Aggregated deployments use `decode_replicas`. Returns the updated execution with `scale`.
 
-    Success: HTTP `200` with the updated execution payload. `scale` contains `prefillReplicas`, `decodeReplicas`, and `manual`.
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
 from llm_d_lens.deploy.contracts import DeploymentScaleRequest
-from llm_d_lens.deploy.executions import scale_deployment_execution
+from llm_d_lens.sdk import LensLocal
 
 
 async def main() -> None:
-    context = await scale_deployment_execution(
-        "execution-ready",
-        DeploymentScaleRequest(decode_replicas=2),
-    )
-    print(context.scale)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Get execution pod status
-
-Get live pod status for all pods in a deployment execution's namespace.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions/{execution_id}/pods`**
-
-    Request: no body.
-    - Path parameter: `execution_id` (`string`, required)
-
-    Response:
-
-    ```json
-    {
-      "execution_id": "exec-123",
-      "namespace": "prism-exec-123",
-      "pods": [
-        {
-          "name": "pod-1",
-          "namespace": "prism-exec-123",
-          "phase": "Running",
-          "ready": true,
-          "pod_ip": "10.244.0.5",
-          "node_name": "worker-1",
-          "restarts": 0,
-          "status_reason": "Running",
-          "containers": [
-            {
-              "name": "vllm",
-              "image": "vllm:latest",
-              "ready": true,
-              "restart_count": 0,
-              "state": "running"
-            }
-          ],
-          "creation_timestamp": "2026-09-06T00:00:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.executions import find_execution_context
-from llm_d_lens.utils.kubernetes import run_kubectl
-
-
-async def main() -> None:
-    context = find_execution_context("exec-123")
-    if context is None or context.namespace is None:
-        return
-    result = await run_kubectl(
-        ["get", "pods", "--namespace", context.namespace, "-o", "json"],
-        cluster_id=context.cluster_id,
-        timeout=15,
-    )
-    print(result.stdout)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Get pod logs for an execution
-
-Get logs for one pod inside a deployment execution's namespace.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions/{execution_id}/pods/{pod_name}/logs`**
-
-    Request: no body.
-    - Path parameters: `execution_id` (`string`, required), `pod_name` (`string`, required)
-    - Query parameters: `container` (`string`, optional), `tail` (`integer`, default `200`), `previous` (`boolean`, default `false`)
-
-    Response:
-
-    ```json
-    {
-      "execution_id": "exec-123",
-      "namespace": "prism-exec-123",
-      "pod_name": "pod-1",
-      "container": "vllm",
-      "logs": "[INFO] Server started\n[INFO] Listening on :8000",
-      "success": true
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.executions import find_execution_context
-from llm_d_lens.utils.kubernetes import run_kubectl
-
-
-async def main() -> None:
-    context = find_execution_context("exec-123")
-    if context is None or context.namespace is None:
-        return
-    result = await run_kubectl(
-        ["logs", "pod-1", "--namespace", context.namespace, "--tail=200", "--container=vllm"],
-        cluster_id=context.cluster_id,
-        timeout=20,
-    )
-    print(result.stdout)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Connect to a deployment execution endpoint
-
-Create or reuse a reachable forwarded endpoint for a deployment execution and return the local URL.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/executions/{execution_id}/endpoint`**
-
-    Request: no body.
-    - Path parameter: `execution_id` (`string`, required)
-
-    Response:
-
-    ```json
-    {
-      "success": true,
-      "execution_id": "execution-ready",
-      "id": "forward-1",
-      "local_port": 38000,
-      "endpoint": "http://127.0.0.1:38000/v1",
-      "forwarded_endpoint": "http://127.0.0.1:38000/v1",
-      "namespace": "namespace",
-      "service": "qwen-router",
-      "remote_port": 8000
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.executions import ensure_execution_endpoint
-
-
-async def main() -> None:
-    resolved = await ensure_execution_endpoint("execution-ready")
-    print(resolved.execution_id, resolved.endpoint)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Get a deployment case
-
-Get one deployment case within a deployment run, including its associated execution and deployment summary payloads.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs/{run_id}/cases/{case_id}`**
-
-    Request: no body.
-    - Path parameters: `run_id` (`string`, required), `case_id` (`string`, required)
-
-    Response:
-
-    ```json
-    {
-      "case": {
-        "id": "case-execution-ready",
-        "run_id": "run-1",
-        "ordinal": 0,
-        "source_configuration_ordinal": 0,
-        "provider_ref": "optimized-baseline",
-        "component": "decode",
-        "depends_on": [],
-        "status": "ready",
-        "attempt": 1,
-        "execution_id": "execution-ready",
-        "failure": null,
-        "create_request": {
-          "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-          "input_schema_version": "v1",
-          "configuration_artifacts": [
-            {
-              "artifact_id": "524a4178-7e9f-49ea-bccd-8ddb163ae2fd",
-              "schema_version": "deployable-configuration.v1",
-              "kind": "configuration",
-              "provider_ref": "optimized-baseline",
-              "media_type": "application/yaml",
-              "checksum": "sha256:0f4f7e4b",
-              "content": "{\"model\":{\"name\":\"Qwen\"}}"
-            }
-          ],
-          "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen"}},
-          "cluster_snapshot_ref": null,
-          "cluster_snapshot": null,
-          "provenance": {}
-        }
-      },
-      "execution": {
-        "execution_id": "execution-ready",
-        "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-        "status": "ready",
-        "artifact": {
-          "artifact_id": "art-1",
-          "artifact_hash": "sha256:ef35",
-          "configuration_artifact_ids": ["524a4178-7e9f-49ea-bccd-8ddb163ae2fd"],
-          "source_ref": null,
-          "manifest_ref": "vllm/manifest.yaml",
-          "manifest_checksum": null,
-          "values_checksum": null,
-          "rendered_payload": {"schema_version": "v1", "value": {}},
-          "created_at": "2026-09-23T09:18:24.287000+00:00"
-        },
-        "endpoint": {
-          "url": "http://execution-ready.namespace.svc:8000",
-          "protocol": "http",
-          "service_ref": null,
-          "model_ref": null,
-          "baseline_url": null
-        },
-        "forwarded_endpoint": null,
-        "monitoring_setup": null,
-        "namespace": "namespace",
-        "configuration_artifacts": [],
-        "resource_snapshot": null,
-        "provenance": {"cluster_server_id": "cluster-1", "cluster_session_id": "session-1"},
-        "metadata": {"display_name": "", "description": ""},
-        "evidence_refs": [],
-        "diagnostics": null,
-        "created_at": "2026-09-23T09:18:24.287000+00:00",
-        "updated_at": "2026-09-23T09:20:00.000000+00:00"
-      },
-      "deployment": {
-        "run_id": "run-1",
-        "case_id": "case-execution-ready",
-        "execution_id": "execution-ready",
-        "name": "qwen",
-        "display_name": "",
-        "description": "",
-        "status": "ready",
-        "namespace": "namespace",
-        "endpoint": "http://execution-ready.namespace.svc:8000",
-        "forwarded_endpoint": null,
-        "guide": "optimized-baseline",
-        "backend": "vLLM",
-        "model_name": "Qwen",
-        "replicas": null,
-        "tensor_parallel_size": null,
-        "image": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.router import _store
-
-case = _store.get_case("run-1", "case-execution-ready")
-print(case.id if case else "missing")
-```
-  </TabItem>
-</Tabs>
-
-### Get deployment case logs
-
-Get orchestration logs for one deployment case.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs/{run_id}/cases/{case_id}/logs`**
-
-    Request: no body.
-    - Path parameters: `run_id` (`string`, required), `case_id` (`string`, required)
-    - Query parameter: `limit` (`integer`, default `200`, max `1000`)
-
-    Response: `DeploymentLogPage`
-
-    ```json
-    {
-      "execution_id": "execution-ready",
-      "entries": [
-        {
-          "timestamp": "2026-09-23T09:19:01.000000+00:00",
-          "source": "provider",
-          "message": "Rendered deployment manifest",
-          "severity": "info"
-        },
-        {
-          "timestamp": "2026-09-23T09:19:12.000000+00:00",
-          "source": "provider",
-          "message": "Deployment reached Ready status",
-          "severity": "info"
-        }
-      ],
-      "next_cursor": null,
-      "complete": true,
-      "evidence_refs": []
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.application import deployment_run_manager
-
-
-async def main() -> None:
-    logs = await deployment_run_manager.worker_for_run("run-1").get_case_logs(
-        "run-1",
-        "case-execution-ready",
-        limit=200,
-    )
-    print(logs.execution_id, len(logs.entries))
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Clean a deployment case
-
-Clean up one deployment case's runtime resources and marks it cleaned.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/clean`**
-
-    Request body: `CleanCaseRequest`
-    - Path parameters: `run_id` (`string`, required), `case_id` (`string`, required)
-    - `preserve_rendered_overlay` (`boolean`, default `false`)
-
-    ```json
-    {
-      "preserve_rendered_overlay": true
-    }
-    ```
-
-    Response:
-
-    ```json
-    {
-      "case": {
-        "id": "case-execution-ready",
-        "run_id": "run-1",
-        "ordinal": 0,
-        "source_configuration_ordinal": 0,
-        "provider_ref": "optimized-baseline",
-        "component": "decode",
-        "depends_on": [],
-        "status": "cleaned",
-        "attempt": 1,
-        "execution_id": "execution-ready",
-        "failure": null,
-        "create_request": {
-          "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-          "input_schema_version": "v1",
-          "configuration_artifacts": [],
-          "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen"}},
-          "cluster_snapshot_ref": null,
-          "cluster_snapshot": null,
-          "provenance": {}
-        }
-      },
-      "execution": {
-        "execution_id": "execution-ready",
-        "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-        "status": "cleaned",
-        "artifact": {
-          "artifact_id": "art-1",
-          "artifact_hash": "sha256:ef35",
-          "configuration_artifact_ids": ["524a4178-7e9f-49ea-bccd-8ddb163ae2fd"],
-          "source_ref": null,
-          "manifest_ref": "vllm/manifest.yaml",
-          "manifest_checksum": null,
-          "values_checksum": null,
-          "rendered_payload": {"schema_version": "v1", "value": {}},
-          "created_at": "2026-09-23T09:18:24.287000+00:00"
-        },
-        "endpoint": {
-          "url": "http://execution-ready.namespace.svc:8000",
-          "protocol": "http",
-          "service_ref": null,
-          "model_ref": null,
-          "baseline_url": null
-        },
-        "forwarded_endpoint": null,
-        "monitoring_setup": null,
-        "namespace": "namespace",
-        "configuration_artifacts": [],
-        "resource_snapshot": null,
-        "provenance": {"cluster_server_id": "cluster-1", "cluster_session_id": "session-1"},
-        "metadata": {"display_name": "", "description": ""},
-        "evidence_refs": [],
-        "diagnostics": null,
-        "created_at": "2026-09-23T09:18:24.287000+00:00",
-        "updated_at": "2026-09-23T09:22:00.000000+00:00"
-      },
-      "deployment": {
-        "run_id": "run-1",
-        "case_id": "case-execution-ready",
-        "execution_id": "execution-ready",
-        "name": "qwen",
-        "display_name": "",
-        "description": "",
-        "status": "cleaned",
-        "namespace": "namespace",
-        "endpoint": "http://execution-ready.namespace.svc:8000",
-        "forwarded_endpoint": null,
-        "guide": "optimized-baseline",
-        "backend": "vLLM",
-        "model_name": "Qwen",
-        "replicas": null,
-        "tensor_parallel_size": null,
-        "image": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.application import deployment_run_manager
-
-
-async def main() -> None:
-    case, execution = await deployment_run_manager.worker_for_run("run-1").clean_case(
-        "run-1",
-        "case-execution-ready",
-        preserve_rendered_overlay=True,
-    )
-    print(case.status, execution.status)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-Access-binding routes also exist for deployment runs and executions at `GET/POST/DELETE /runs/{run_id}/access...`, `GET/POST/DELETE /executions/{execution_id}/access...`, and `GET .../access/options`; see `llm_d_lens/deploy/router.py` for those exact handlers.
-
-Additional endpoints exist for the deploy domain — see the full OpenAPI reference.
-
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
-
-### Delete a deployment run
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`DELETE /api/v1/deployments/runs/{run_id}`**
-
-No request body. Requires `deployment:execution:delete` and access to the run.
-Returns `204` with no body. Missing runs return `404`; active
-(`queued`, `running`, `cancelling`) runs or lifecycle conflicts return `409`.
-Cancel active orchestration and wait for a terminal state before deleting.
-
-This is not a metadata-only delete: remaining cases with stored executions are
-cleaned first, requiring their active cluster session, then stored run/execution
-records and associated shares are removed. Already-cleaned cases are skipped.
-By contrast, case `clean` removes runtime resources but retains the lifecycle
-record; `preserve_rendered_overlay=true` retains rendered files.
-
-Example request: `DELETE /api/v1/deployments/runs/run-1` (no JSON body or response).
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    await deployment_run_manager.worker_for_run("run-1").delete_run("run-1")
-
-asyncio.run(main())
-```
-
-The worker raises `ValueError` for lifecycle conflicts; the route maps it to `409`.
-
-  </TabItem>
-</Tabs>
-
-### Refresh a deployment case
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh`**
-
-No body is required (`{}` is accepted). Requires `deployment:case:execute`.
-Returns `200` with the same `case`, `execution`, and `deployment` envelope as
-Get case, refreshed from provider diagnostics. Stopped or cleaned records are
-preserved rather than made ready again. Missing case/execution or refresh
-`ValueError` returns `404`. Response excerpt:
-
-Progress-deadline errors remain `deploying` while current Pod diagnostics confirm
-normal container startup within probe budgets, counted from container start
-rather than time spent Pending. A recoverable `failed` record returns to
-`deploying`; the case failure is cleared. `diagnostics.value.snapshot.pod_statuses`
-contains Pod status and probe timing fields, not container environment values.
-Running alone does not set `ready`, and current workload failures or expired
-startup budgets are not treated as normal startup.
-
-```json
-{
-  "case": {"id": "case-1", "status": "ready", "execution_id": "execution-1"},
-  "execution": {"execution_id": "execution-1", "status": "ready"},
-  "deployment": {"run_id": "run-1", "case_id": "case-1", "status": "ready"}
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    execution = await deployment_run_manager.worker_for_run("run-1").refresh_case_execution(
-        "run-1", "case-1"
-    )
-    print(execution.status)
-
-asyncio.run(main())
-```
-
-The worker returns the execution; the HTTP route assembles the case envelope.
-
-  </TabItem>
-</Tabs>
-
-### Stop a deployment case
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/stop`**
-
-No body is required (`{}` is accepted). Requires `deployment:case:execute` and
-an active cluster session. Invokes provider stop and retains the records;
-it is not deletion of the run. Returns `200` with the Get case envelope,
-or `409` for worker `ValueError`. Response excerpt:
-
-```json
-{
-  "case": {"id": "case-1", "status": "stopped", "execution_id": "execution-1"},
-  "execution": {"execution_id": "execution-1", "status": "rolled_back"},
-  "deployment": {"run_id": "run-1", "case_id": "case-1", "status": "stopped"}
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    case, execution = await deployment_run_manager.worker_for_run("run-1").stop_case(
-        "run-1", "case-1"
-    )
-    print(case.status, execution.status)
-
-asyncio.run(main())
-```
-
-  </TabItem>
-</Tabs>
-
-### Restart a deployment case
-
-:::warning Current restart limitation
-
-The route exists, but the current worker cleans the old execution and marks its
-case `cleaned` before calling `DeploymentPlanService.retry_case()`, which accepts
-only the latest `stopped` or `failed` case. Consequently, successful cleanup is
-followed by `409`, not a queued replacement. Cleanup has already taken effect;
-an error is not evidence that the old resources remain. Do not repeatedly retry
-this route expecting it to restore the deployment.
-
-:::
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/restart`**
-
-Requires `deployment:case:execute`, an active cluster session, and a stopped or
-failed case. Body: `RestartCaseRequest`; `model_token` is an optional string
-override, with empty/whitespace treated as absent. Send `{}` to omit it.
-The declared success shape is HTTP `200`, `{ "case": ... }`, but the current
-cleanup/retry conflict prevents that path after successful cleanup.
-Lifecycle `ValueError` becomes `409`; invalid bodies return `422`.
-
-```json
-{}
-```
-
-Current conflict response excerpt (the application adds Problem Details fields):
-
-```json
-{
-  "status": 409,
-  "detail": "only the latest stopped or failed deployment case may be retried"
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    try:
-        case = await deployment_run_manager.worker_for_run("run-1").restart_case(
-            "run-1", "case-1", model_token=None
+    with LensLocal("<username>") as lens:
+        context = await lens.deploy.scale_execution(
+            "<execution-id>",
+            DeploymentScaleRequest(decode_replicas=2),
         )
-    except ValueError as error:
-        print(f"Restart failed; inspect the case because cleanup may have occurred: {error}")
-        raise
-    print(case.id, case.status)
+        print(context.scale)
+
 
 asyncio.run(main())
 ```
@@ -1763,798 +381,62 @@ asyncio.run(main())
   </TabItem>
 </Tabs>
 
-## Remote SSH deployment
-
-SSH transport and remote command failures return `502` with
-`{ "error": "Remote deployment failed" }`; internal exception details and failing
-command output are logged server-side rather than exposed in error responses.
-Expected input and policy errors retain their existing status and actionable message.
-
-These legacy endpoints are implemented in the Python module
-`llm_d_lens.deploy.remote_deploy`. They
-execute commands over SSH rather than create v1 deployment runs. Their current
-single-node Intel Data Center GPU/XPU restriction is specific to this legacy
-implementation, not the capability limit of the profile-driven v1 API.
-
-SSH operations require `PRISM_REMOTE_DEPLOY_ENABLED=true` in production (enabled
-by default outside production). Production targets must also match
-`PRISM_REMOTE_HOST_ALLOWLIST`. Defaults remain readable when SSH operations are
-disabled, subject to authentication/permission checks.
-
-| Operation | Lens permission |
-| --- | --- |
-| Defaults | `remote-deploy:target:read` |
-| Fingerprint, test | `remote-deploy:target:connect` |
-| Start, status, logs | `remote-deploy:deploy:execute` |
-| Teardown | `remote-deploy:deploy:teardown` |
-
-Authenticated SSH operations require `target.host`, `username`,
-`hostFingerprint` and a nonempty `cards` array of numeric ID strings.
-`port` defaults to 22; `authMethod` defaults to `agent` and also accepts `key`
-or `password`. Agent authentication requires the BFF's `SSH_AUTH_SOCK`.
-Key authentication requires a server-side `keyPath` beneath `PRISM_SSH_KEY_DIR`
-(default `$HOME/.ssh`). Password authentication supplies
-`credentials.password` on each request; it is not stored or returned.
-Fingerprint discovery does not authenticate and does not require cards.
-Confirm its result through a trusted channel before using it; a returned
-fingerprint is not itself proof of host identity.
-
-Route errors are `{ "error": "..." }`: `400` for invalid input/credentials,
-`403` for a production host outside the allowlist, `503` for disabled SSH
-operations, and normally `502` for SSH/command failures. Gateway authentication
-and permission errors use the gateway's Problem Details format.
-
-### Python HTTP client for remote operations
-
-There is **no Python service-layer equivalent** for these Node endpoints.
-The Python tabs below use this HTTP helper instead. The environment variables
-in this example are client inputs, not new Lens server configuration.
-Set them from an authenticated Lens session; never commit their values.
-
-```python
-import os
-import httpx
-
-def remote_request(method: str, path: str, body: dict | None = None) -> dict:
-    with httpx.Client(
-        base_url=os.environ["LENS_URL"],
-        cookies={
-            "prism_session": os.environ["LENS_SESSION"],
-            "prism_csrf": os.environ["LENS_CSRF"],
-        },
-        headers={"x-prism-csrf": os.environ["LENS_CSRF"]},
-        timeout=300,
-    ) as client:
-        response = client.request(method, path, json=body)
-        response.raise_for_status()
-        return response.json()
-
-target = {
-    "host": "192.0.2.20",
-    "port": 22,
-    "username": "operator",
-    "authMethod": "agent",
-    "hostFingerprint": os.environ["VERIFIED_SSH_FINGERPRINT"],
-    "cards": ["0"],
-}
-```
-
-REST request examples below show operation fields; for authenticated operations,
-add the complete `target` object above and optional per-request `credentials`.
-The Python examples demonstrate the complete request assembly.
-
-### Get remote deployment defaults
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/remote-deploy/defaults`**, no body. Returns `200`:
-
-```json
-{
-  "repository": "", "branch": "", "httpProxy": "", "httpsProxy": "",
-  "noProxy": "", "mountPath": "", "mountModelName": ""
-}
-```
-
-Values come from the BFF environment. Repository uses `LLM_D_ROOT`, then
-`LLM_D_REPOSITORY`, otherwise empty; there is no host-specific default checkout.
-Branch uses `LLM_D_BRANCH`. Proxy fields prefer `HTTP_PROXY`, `HTTPS_PROXY`,
-`NO_PROXY`, then their `LLM_D_` equivalents. Mount fields use
-`LLM_D_MOUNT_PATH` and `LLM_D_MOUNT_MODEL_NAME`.
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-defaults = remote_request("GET", "/api/remote-deploy/defaults")
-print(defaults["repository"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Discover an SSH host fingerprint
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/fingerprint`**. Request:
-
-```json
-{"target": {"host": "192.0.2.20", "port": 22, "username": "operator"}}
-```
-
-Only host is required; port defaults to 22 and username to `probe`.
-Returns `200` with `fingerprint`, `host`, `port`. Illustrative response:
-
-```json
-{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "host": "192.0.2.20", "port": 22}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-discovered = remote_request("POST", "/api/remote-deploy/fingerprint", {
-    "target": {"host": target["host"], "port": target["port"], "username": target["username"]}
-})
-print(discovered["fingerprint"])
-```
-
-Confirm independently; do not automatically overwrite the verified fingerprint.
-
-  </TabItem>
-</Tabs>
-
-### Test a remote deployment target
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/test`**. Body: `target` and optional `credentials`;
-no additional operation fields (`{}`).
-Probes hostname/OS, `llm-d-bench`, kubectl/cluster connectivity and `xpu-smi`.
-Returns `200` with `ok` and `output` (last 12,000 characters):
-
-```json
-{"ok": false, "output": "kubectl could not reach the cluster"}
-```
-
-A completed probe with nonzero exit can return `200` and `ok=false`; HTTP success
-does not prove readiness. Connection failures use the error statuses above.
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-probe = remote_request("POST", "/api/remote-deploy/test", {"target": target})
-if not probe["ok"]:
-    raise RuntimeError(probe["output"])
-print(probe["output"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Start a remote deployment
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/start`**. Add `target` and optional `credentials` to:
-
-```json
-{
-  "plan": {
-    "namespace": "llm-d-optimized", "name": "llm-d-service",
-    "accelerator": "Intel Data Center GPU", "nodes": 1,
-    "guide": "optimized-baseline", "model": "Qwen/Qwen3-0.6B",
-    "decodeReplicas": 1, "decodeTp": 1,
-    "deploymentTarget": {"repository": "https://github.com/llm-d/llm-d.git", "branch": "main"}
-  }
-}
-```
-
-Namespace/name default to the values shown and must be Kubernetes-style names.
-Repository must be an absolute remote path, `~/` path, or GitHub HTTPS URL;
-branch defaults to `main`. URL checkouts use the **remote host's**
-`LENS_CACHE_DIR` (otherwise `$XDG_CACHE_HOME/lens` or `$HOME/.cache/lens`),
-under `deploy-repos/<owner>/<repository>`.
-The plan may set `deploymentTarget.httpProxy`, `httpsProxy`, `noProxy`, and a
-paired absolute `mountPath` / `mountModelName`.
-
-The accelerator must match the legacy Intel label and `nodes` must be one.
-Decode TP/replicas default to 1 (`replicas` is a fallback for `decodeReplicas`);
-prefill TP/replicas default to zero. Dimensions are integers at most 128,
-decode dimensions at least one. Required topology cards cannot exceed selected
-card count. Card IDs are validated/count-checked; this endpoint does not promise
-physical-device pinning. An explicit guide must be a valid identifier;
-without one, source/topology chooses the guide, with `epd` unsupported.
-
-Runs `PRISM_REMOTE_DEPLOY_BIN` (default `llm-d-bench`) with `deploy custom --no-wait`,
-then patches model-container mount/proxy settings. Returns `200`, not `202`,
-after commands complete; this is **not** a ready deployment. Response excerpt:
-
-```json
-{
-  "id": "remote-1700000000000", "name": "llm-d-service",
-  "cluster": "operator@192.0.2.20:22", "remoteHost": "192.0.2.20",
-  "nodes": 1, "gpusPerNode": 1, "selectedCards": ["0"], "replicas": 1,
-  "namespace": "llm-d-optimized", "status": "deploying",
-  "createdAt": "2026-10-13T00:00:00.000Z", "endpoint": null, "pods": [], "logTail": []
-}
-```
-
-The response also includes candidate labels and supplied machine/accelerator
-metadata; `replicas` reflects `plan.replicas` or 1, not necessarily `decodeReplicas`.
-Poll status to determine rollout state.
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-plan = {
-    "namespace": "llm-d-optimized", "name": "llm-d-service",
-    "accelerator": "Intel Data Center GPU", "nodes": 1,
-    "guide": "optimized-baseline", "model": "Qwen/Qwen3-0.6B",
-    "decodeReplicas": 1, "decodeTp": 1,
-    "deploymentTarget": {"repository": "https://github.com/llm-d/llm-d.git", "branch": "main"},
-}
-started = remote_request("POST", "/api/remote-deploy/start", {"target": target, "plan": plan})
-print(started["namespace"], started["status"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Get remote deployment status
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/status`**. Add `target` and optional `credentials` to:
-
-```json
-{"namespace": "llm-d-optimized"}
-```
-
-Returns `200` with `status`, `pods`, `podsReady`, `podsTotal`, `endpoint`,
-`error`, `logTail`. States include `deploying`, `ready`, `ready_no_endpoint`,
-`failed`, `not_found`; inspect `status`, not just the HTTP code.
-Pod entries contain `name`, `status`, `ready`, `restarts`, `node`, `gpuCount`,
-`reason`, `message`. Endpoint discovery uses Gateway/LoadBalancer addresses or
-Gateway Service DNS; it does not establish a local tunnel. Example:
-
-```json
-{"status": "deploying", "pods": [], "podsReady": 0, "podsTotal": 0, "endpoint": null, "error": null, "logTail": []}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-status = remote_request("POST", "/api/remote-deploy/status", {
-    "target": target, "namespace": "llm-d-optimized"
-})
-print(status["status"], status["endpoint"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Get remote deployment logs
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/logs`**. Add `target` and optional `credentials` to:
-
-```json
-{"namespace": "llm-d-optimized", "tail": 100}
-```
-
-Optional `pod` selects a pod. `tail` defaults to 100 and is bounded to `1..1000`.
-Returns `200` with `logs` and `truncated`, retaining at most the final 32,000
-JavaScript string code units, **not a guaranteed 32 KiB byte limit**:
-
-```json
-{"logs": "Model server started\n", "truncated": false}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-logs = remote_request("POST", "/api/remote-deploy/logs", {
-    "target": target, "namespace": "llm-d-optimized", "tail": 100
-})
-print(logs["logs"], logs["truncated"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Tear down a remote deployment
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/teardown`**. Add `target` and optional `credentials` to:
-
-```json
-{"namespace": "llm-d-optimized"}
-```
-
-Runs remote `deploy cleanup -n <namespace> -f`. Returns `200` with `success`,
-`namespace`, and the final 100 output lines in `logTail`:
-
-```json
-{"success": true, "namespace": "llm-d-optimized", "logTail": []}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-removed = remote_request("POST", "/api/remote-deploy/teardown", {
-    "target": target, "namespace": "llm-d-optimized"
-})
-print(removed["success"], removed["namespace"])
-```
-
-  </TabItem>
-</Tabs>
-
-## Additional deployment APIs
-
-### List orphan deployment namespaces
-
-List namespaces on a cluster that match the deployment namespace prefix but are not referenced by any Lens execution record. These are leftovers from records deleted without namespace cleanup, or from a rebuilt database; nothing else in Lens points at them.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/orphans`**
-
-    Query parameters:
-    - `cluster_id` (`string`, required): the cluster to scan.
-
-    Response: the deployment prefix and the orphan namespaces.
-
-    ```json
-    {
-      "clusterId": "cluster-a",
-      "prefix": "llmd-",
-      "items": [
-        { "name": "llmd-optimized-baseline-1-1-20260918032423139529", "createdAt": "2026-09-18T03:24:23Z", "phase": "Active" }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.deploy.orphans import scan_orphan_namespaces
-
-    orphans = asyncio.run(scan_orphan_namespaces("cluster-a"))
-    print([orphan.api_payload() for orphan in orphans])
-    ```
-  </TabItem>
-</Tabs>
-
-### Clean orphan deployment namespaces
-
-Delete the given orphan namespaces (and the InferencePool/EPP/model server inside them). Names outside the deployment prefix, or still referenced by a Lens execution record, are refused rather than deleted.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/orphans/clean`**
-
-    Request body (`CleanOrphansRequest`):
-    - `clusterId` (`string`, required)
-    - `namespaces` (`string[]`, required): the orphan namespaces to delete.
-
-    ```json
-    {
-      "clusterId": "cluster-a",
-      "namespaces": ["llmd-optimized-baseline-1-1-20260918032423139529"]
-    }
-    ```
-
-    Response: deleted names and any per-namespace failures.
-
-    ```json
-    {
-      "clusterId": "cluster-a",
-      "cleaned": ["llmd-optimized-baseline-1-1-20260918032423139529"],
-      "failed": []
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.deploy.orphans import clean_orphan_namespaces
-
-    cleaned, failed = asyncio.run(
-        clean_orphan_namespaces(
-            "cluster-a", ["llmd-optimized-baseline-1-1-20260918032423139529"]
-        )
-    )
-    print({"cleaned": cleaned, "failed": failed})
-    ```
-  </TabItem>
-</Tabs>
-
-## Configuration preparation APIs
-
-These Configuration-domain routes prepare artifacts for Deployments and Evaluation. Request and response models live in `llm_d_lens.configuration.models`. The examples use illustrative cluster/session IDs and guide commits; replace them with an active cluster session and real rendered guide provenance. Saving publishes an artifact; rendering alone does not deploy it.
-
-The workflow is source selection/editing, resolve, render, save, then deployment.
-Resolve normalizes each source configuration before capability checking and
-validation, returning per-configuration feedback. The candidate source identifies
-input origin, not deployment type. Render binds candidate intent to actual Guide
-resources; save publishes immutable artifact content, identity and checksums.
-Configuration owns normalization, validation and artifact publication; Deploy
-owns runtime validation, resource lifecycle, teardown and rollback. Checksums
-alone cannot validate topology or resource semantics. These boundaries apply to
-both the REST endpoints and their Python service functions below.
-
-The HTTP boundary uses `application/problem+json` errors. Shared `DomainError` instances retain their original status and code (for example a conflict remains 409); they are not converted into an operation-specific 500. Python service calls raise their original exceptions; the route adapters in `llm_d_lens.configuration.router` apply the HTTP mappings below.
-
-### Resolve source configurations
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/configurations/resolve`**
-
-Request: `ResolveRequest`. Success: HTTP `200`, `ResolveResponse`. `candidate_source` and a nonempty `configurations` list are required; `target.cluster_id` is optional. Returns `results`, each with `configuration_id`, `candidate_config`, and `validation` (status, errors, warnings). Configuration errors escaping the resolver return 400; unexpected failures return 500 with `Unable to resolve configurations`.
-
-```json
-{
-  "candidate_source": {
-    "name": "manual"
-  },
-  "configurations": [
-    {
-      "configuration_id": "example",
-      "input_mode": "form",
-      "payload": {
-        "type": "baseline",
-        "candidate_source": {
-          "name": "manual"
-        },
-        "target": {
-          "model": "New/Model"
-        },
-        "serving": {
-          "replicas": 2,
-          "tensor_parallel_size": 1
-        },
-        "runtime": {
-          "image": "model:v1"
-        },
-        "guide_settings": {
-          "routerValues": "router:\n  epp:\n    replicas: 2"
-        }
-      }
-    }
-  ],
-  "target": {
-    "cluster_id": "cluster"
-  }
-}
-```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-Save the request JSON above as `resolve-request.json`.
-
-```python
-import asyncio
-from pathlib import Path
-from llm_d_lens.configuration.models import ResolveRequest
-from llm_d_lens.configuration.service import resolve_configurations
-
-request = ResolveRequest.model_validate_json(Path("resolve-request.json").read_text())
-result = asyncio.run(resolve_configurations(request))
-print(result.model_dump(mode="json"))
-```
-  </TabItem>
-</Tabs>
-
-### Render a deployable configuration
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/configurations/render`**
-
-Request: `RenderRequest`. Success: HTTP `200`, `RenderResponse`. Requires `candidate_config` and `render`: format, guide/template references, pinned guide source, rendered manifest, active cluster reference, and deployment readiness/endpoint contract. Optional bundle, reference manifest, model secret and deployment name remain supported. Returns `deployable_configuration` and `metadata`. Configuration or value errors return 400; unexpected failures return 500 with `Unable to render configuration`.
-
-```json
-{
-  "candidate_config": {
-    "type": "baseline",
-    "candidate_source": {
-      "name": "manual"
-    },
-    "target": {
-      "model": "New/Model"
-    },
-    "serving": {
-      "replicas": 2,
-      "tensor_parallel_size": 1
-    },
-    "runtime": {
-      "image": "model:v1"
-    },
-    "guide_settings": {
-      "routerValues": "router:\n  epp:\n    replicas: 2"
-    }
-  },
-  "render": {
-    "format": "manifest",
-    "guide_ref": "optimized-baseline",
-    "template_ref": "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml",
-    "guide_source": {
-      "repository": "llm-d/llm-d",
-      "requestedRef": "main",
-      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "guide": "optimized-baseline",
-      "accelerator": "xpu",
-      "modelServer": "vllm",
-      "variant": ".",
-      "files": [
-        "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml"
-      ]
-    },
-    "rendered_manifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: decode\nspec:\n  replicas: 2\n  template:\n    spec:\n      containers:\n      - args:\n        - New/Model\n        - --tensor-parallel-size=1\n        command:\n        - vllm\n        - serve\n        image: model:v1\n        name: modelserver\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: model\nspec:\n  ports:\n  - port: 8000\n",
-    "deployment_bundle": {
-      "schemaVersion": "guide-deployment-bundle.v1",
-      "guide": "optimized-baseline",
-      "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "helm": {
-        "chart": "oci://ghcr.io/llm-d/charts/llm-d-router-standalone",
-        "version": "v0.9.0",
-        "releaseName": "optimized-baseline",
-        "values": [
-          {
-            "name": "router-base.yaml",
-            "content": "router: {}",
-            "checksum": "sha256:162352753bb2618923b371c7236fc0c69f6604abaceef33d769f7f1686f845f6"
-          },
-          {
-            "name": "router-guide.yaml",
-            "content": "router:\n  epp:\n    replicas: 1",
-            "checksum": "sha256:bc3156ef61b87ae553e01848266fbe4f3dc526e0072f0d93f6dd9ede8c8784fd"
-          },
-          {
-            "name": "router-effective.yaml",
-            "content": "router:\n  epp:\n    replicas: 2",
-            "checksum": "sha256:816e7b274c9e9c55442a5be90c74d252a517a62f49dfdcf6fba60ac8443d189a"
-          }
-        ]
-      },
-      "resources": []
-    },
-    "cluster_ref": {
-      "id": "cluster",
-      "name": "cluster",
-      "session_id": "00000000-0000-0000-0000-000000000001",
-      "connection": "managed-kubeconfig"
-    },
-    "deployment": {
-      "readinessDeployments": [
-        "decode"
-      ],
-      "endpoint": {
-        "protocol": "http",
-        "serviceName": "model",
-        "port": 8000
-      }
-    }
-  }
-}
-```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-Save the request JSON above as `render-request.json`.
-
-```python
-from pathlib import Path
-from llm_d_lens.configuration.models import RenderRequest
-from llm_d_lens.configuration.service import render_configuration
-
-request = RenderRequest.model_validate_json(Path("render-request.json").read_text())
-result = render_configuration(request)
-print(result.model_dump(mode="json"))
-```
-  </TabItem>
-</Tabs>
-
-### Save a configuration artifact
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/configurations/save`**
-
-Request: `SaveRequest`. Success: HTTP `200`, `SaveResponse`. Requires `deployable_configuration`; `file.name` is optional. The configuration file URI is derived from the artifact ID and file name and is preserved when reading the saved artifact. Returns `configuration_file` (URI, type, file name, format, path, size, SHA-256) and `artifact` (ID, revision, status, deployable configuration, file metadata, creation time). Configuration, filesystem or value errors return 400; unexpected failures return 500 with `Unable to save configuration`.
-
-```json
-{
-  "deployable_configuration": {
-    "schema_version": "deployable-configuration.v1",
-    "type": "baseline",
-    "format": "manifest",
-    "content": {
-      "deploymentType": "baseline",
-      "model": {
-        "name": "New/Model"
-      },
-      "serving": {
-        "replicaCount": 2,
-        "tensorParallelSize": 1
-      },
-      "runtime": {
-        "image": "model:v1"
-      },
-      "guideSettings": {
-        "routerValues": "router:\n  epp:\n    replicas: 2"
-      },
-      "officialGuide": {
-        "source": {
-          "repository": "llm-d/llm-d",
-          "requestedRef": "main",
-          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "guide": "optimized-baseline",
-          "accelerator": "xpu",
-          "modelServer": "vllm",
-          "variant": ".",
-          "files": [
-            "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml"
-          ]
-        },
-        "renderedManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: decode\nspec:\n  replicas: 2\n  template:\n    spec:\n      containers:\n      - args:\n        - New/Model\n        - --tensor-parallel-size=1\n        command:\n        - vllm\n        - serve\n        image: model:v1\n        name: modelserver\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: model\nspec:\n  ports:\n  - port: 8000\n",
-        "manifestChecksum": "sha256:f0677cfd3ecd361a1e549b6a17fbf64c884d406152095c777b359d9d95f2b408",
-        "cluster": {
-          "id": "cluster",
-          "name": "cluster",
-          "session_id": "00000000-0000-0000-0000-000000000001",
-          "connection": "managed-kubeconfig"
-        },
-        "deployment": {
-          "readinessDeployments": [
-            "decode"
-          ],
-          "endpoint": {
-            "protocol": "http",
-            "serviceName": "model",
-            "port": 8000
-          }
-        },
-        "modelSecret": {
-          "mode": "none",
-          "sourceNamespace": null,
-          "sourceName": null
-        },
-        "deploymentBundle": {
-          "schemaVersion": "guide-deployment-bundle.v1",
-          "guide": "optimized-baseline",
-          "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "helm": {
-            "chart": "oci://ghcr.io/llm-d/charts/llm-d-router-standalone",
-            "version": "v0.9.0",
-            "releaseName": "optimized-baseline",
-            "values": [
-              {
-                "name": "router-base.yaml",
-                "content": "router: {}",
-                "checksum": "sha256:162352753bb2618923b371c7236fc0c69f6604abaceef33d769f7f1686f845f6"
-              },
-              {
-                "name": "router-guide.yaml",
-                "content": "router:\n  epp:\n    replicas: 1",
-                "checksum": "sha256:bc3156ef61b87ae553e01848266fbe4f3dc526e0072f0d93f6dd9ede8c8784fd"
-              },
-              {
-                "name": "router-effective.yaml",
-                "content": "router:\n  epp:\n    replicas: 2",
-                "checksum": "sha256:816e7b274c9e9c55442a5be90c74d252a517a62f49dfdcf6fba60ac8443d189a"
-              }
-            ]
-          },
-          "resources": []
-        }
-      }
-    },
-    "provider_ref": "optimized-baseline",
-    "checksum": "sha256:da087b6024d1c8c6ef531f06d55e78d2a249594feb96b17580af140ac68c029f",
-    "provenance": {
-      "candidate_source": {
-        "name": "manual",
-        "run_id": null,
-        "result_id": null
-      },
-      "guide_ref": "optimized-baseline",
-      "template_ref": "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml",
-      "guide_source": {
-        "repository": "llm-d/llm-d",
-        "requestedRef": "main",
-        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "guide": "optimized-baseline",
-        "accelerator": "xpu",
-        "modelServer": "vllm",
-        "variant": ".",
-        "files": [
-          "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml"
-        ]
-      },
-      "cluster_ref": {
-        "id": "cluster",
-        "name": "cluster",
-        "session_id": "00000000-0000-0000-0000-000000000001",
-        "connection": "managed-kubeconfig"
-      },
-      "manifest_checksum": "sha256:f0677cfd3ecd361a1e549b6a17fbf64c884d406152095c777b359d9d95f2b408",
-      "renderer_version": "1.0"
-    }
-  },
-  "file": {
-    "name": "example.yaml"
-  }
-}
-```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-Save the request JSON above as `save-request.json`.
-
-```python
-from pathlib import Path
-from llm_d_lens.configuration.models import SaveRequest
-from llm_d_lens.configuration.service import save_configuration
-
-request = SaveRequest.model_validate_json(Path("save-request.json").read_text())
-result = save_configuration(request)
-print(result.model_dump(mode="json"))
-```
-  </TabItem>
-</Tabs>
-
-### Deployment access APIs (removed)
-
-Deployment sharing and `deployment:run:share` have been retired. Use
-[model-service inference grants](/api-reference/modules/model-services#model-inference-grants)
-instead. Migration audits and removes existing deployment shares; it does not
-convert them into broader model grants.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-The former GET/POST/DELETE `/api/v1/deployments/executions/{execution_id}/access`
-and `/api/v1/deployments/runs/{run_id}/access` routes, including
-`/access/options` and `/access/{binding_id}`, are no longer registered.
-They no longer grant, list or revoke access.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-Replace deployment-share calls with the model service's scoped grant methods:
-
-```python
-from llm_d_lens.model_service.service import default_service
-
-def revoke_model_grant(model_id: str, binding_id: str, principal) -> None:
-    default_service().revoke_access(model_id, binding_id, principal=principal)
-```
-
-The method requires `model-service:group:share` in the model's cluster and rejects
-bindings belonging to another model. Generic binding creation rejects retired
-`deployment_run` and `deployment_execution` resource types.
-  </TabItem>
-</Tabs>
+## Endpoints
+
+### Deployment lifecycle
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/deployments` | `deployment:run:read` | List runs (alias of `/runs`) |
+| `GET` | `/api/v1/deployments/runs` | `deployment:run:read` | List or search runs |
+| `POST` | `/api/v1/deployments/runs` | `deployment:run:create` | Start a run from configurations |
+| `POST` | `/api/v1/deployments/standard-vllm-runs` | `deployment:run:create` | Start a Standard vLLM service |
+| `GET` | `/api/v1/deployments/runs/{run_id}` | `deployment:run:read` | Get a run and its cases |
+| `DELETE` | `/api/v1/deployments/runs/{run_id}` | `deployment:execution:delete` | Delete a terminal run and clean resources |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cancel` | `deployment:run:cancel` | Cancel an active run |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cluster-session` | `deployment:session:rebind` | Rebind an active cluster session |
+| `GET` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}` | `deployment:run:read` | Get a case with execution and summary |
+| `GET` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/logs` | `deployment:run:read` | Read case orchestration logs |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh` | `deployment:case:execute` | Re-read live case status |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/stop` | `deployment:case:execute` | Stop a case |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/restart` | `deployment:case:execute` | Restart a stopped or failed case |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/clean` | `deployment:case:execute` | Clean case runtime resources |
+| `GET` | `/api/v1/deployments/executions` | `deployment:run:read` | List executions |
+| `GET` | `/api/v1/deployments/executions/{execution_id}` | `deployment:run:read` | Get an execution |
+| `PATCH` | `/api/v1/deployments/executions/{execution_id}` | `deployment:execution:update` | Edit display name or description |
+| `DELETE` | `/api/v1/deployments/executions/{execution_id}` | `deployment:execution:delete` | Delete an execution record |
+| `GET` | `/api/v1/deployments/executions/{execution_id}/pods` | `deployment:run:read` | List live pod status |
+| `GET` | `/api/v1/deployments/executions/{execution_id}/pods/{pod_name}/logs` | `deployment:run:read` | Read pod logs |
+| `POST` | `/api/v1/deployments/executions/{execution_id}/endpoint` | `deployment:execution:connect` | Create or reuse a forwarded endpoint |
+| `GET` | `/api/v1/deployments/cluster/{cluster_id}` | `deployment:run:read` | List case records for a cluster |
+| `GET` | `/api/v1/deployments/node-labels?cluster_id=<cluster-id>` | `deployment:run:create` | List node label keys and values |
+| `GET` | `/api/v1/deployments/runtime-classes?cluster_id=<cluster-id>` | `deployment:run:read` | Discover RuntimeClasses |
+| `GET` | `/api/v1/deployments/orphans?cluster_id=<cluster-id>` | `deployment:run:read` | List orphan namespaces |
+| `POST` | `/api/v1/deployments/orphans/clean` | `deployment:execution:delete` | Delete orphan namespaces |
+
+## Errors and limits
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| `401` / `403` | Not authenticated or missing permission | Check the token and the permission column above |
+| `404` | Run, case, execution, or artifact not found | Re-list resources and confirm the id |
+| `409` | Lifecycle conflict | Wait for a terminal state or inspect the current status |
+| `422` | Invalid request or no namespace for pod logs | Fix the request fields |
+| `502` | Port-forward or cleanup failed | Retry after checking the cluster |
+| `503` | Cluster placement or RuntimeClass discovery failed | Check cluster access and retry |
+
+- Active runs are `queued`, `running`, or `cancelling`. Cancel an active run before deleting it. The background reconciler treats only `cleaned` and `cancelled` runs as terminal, so a failed rollout can still recover.
+- A stopped case keeps a `rolled_back` execution record. Cleaned cases remain in the run history.
+- An execution must be `ready` and include an endpoint before you connect to it or benchmark it.
+- Standard vLLM runs require a ready Model Cache entry and a registered Model Cache volume. `local-cache` and direct `pvc` storage are rejected.
+- `placement_node_label` requires `placement_replicas: "same-node"` and must exist on the target cluster. LeaderWorkerSet cannot use `balanced` or `spread`.
+- Deleting a run cleans its remaining cases first. Active runs return `409`; cancel them and wait for a terminal state.
+- Case `clean` removes runtime resources but keeps the lifecycle record. `preserve_rendered_overlay=true` keeps rendered files.
+- Case logs accept `limit` 1-1000 (default 200). Pod logs accept `tail` 1-2000.
+
+## Related
+
+- [Deployments user guide](/user-guide/deployments)
+- [Bootstrap and deploy tutorial](/tutorials/bootstrap-and-deploy)
+- [Model cache](/user-guide/model-cache)
+- [OpenAPI schema](/api-reference)

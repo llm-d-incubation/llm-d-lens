@@ -371,7 +371,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
         const cleanupDraft = () => {
             const { cluster: currentCluster, finished: currentFinished } = draftCleanupRef.current;
             if (currentCluster && !currentFinished) {
-                requestJson(`/api/cluster/clusters/${encodeURIComponent(currentCluster.id)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+                requestJson(`/api/v1/cluster/clusters/${encodeURIComponent(currentCluster.id)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
             }
         };
         window.addEventListener('pagehide', cleanupDraft);
@@ -443,7 +443,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
                 // until Finish flips it to a real cluster below. If the
                 // wizard is cancelled first, onClose deletes this draft.
                 body.append('draft', 'true');
-                const payload = await requestJson('/api/cluster/clusters', { method: 'POST', body });
+                const payload = await requestJson('/api/v1/cluster/clusters', { method: 'POST', body });
                 setCluster(payload.cluster);
                 // Verify the uploaded kubeconfig reaches the cluster and its
                 // Kubernetes version meets the stack minimum before continuing.
@@ -469,7 +469,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
             if (!proxyValid || busy) return;
             setBusy(true);
             try {
-                const payload = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
+                const payload = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
                     method: 'PATCH',
                     body: JSON.stringify({
                         proxy:
@@ -491,7 +491,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
             if (busy) return;
             setBusy(true);
             try {
-                const payload = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
+                const payload = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
                     method: 'PATCH',
                     body: JSON.stringify({ gatewayProvider: gatewayProvider || null, gatewayPort: gatewayPort.trim() ? Number(gatewayPort.trim()) : null, gatewayPublicUrl: gatewayPublicUrl.trim() || null, gatewayAuthzHost: gatewayAuthzHost.trim() || null, inotifyMaxUserInstances: inotifyMaxUserInstances.trim() ? Number(inotifyMaxUserInstances.trim()) : null }),
                 });
@@ -574,7 +574,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
                 // Deploy/Evaluate can default to reusing it later -- see
                 // llm_d_lens/cluster/service.py's create_hf_token_secret.
                 if (!secretRef) {
-                    const created = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}/hf-token-secrets`, {
+                    const created = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}/hf-token-secrets`, {
                         method: 'POST',
                         body: JSON.stringify({ namespace: secretNamespace.trim(), name: secretName.trim(), token: hfToken.trim() }),
                     });
@@ -598,7 +598,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
     // Flips the draft cluster created in Step 1 into a real, listed cluster.
     // Only called once every remaining wizard step has succeeded.
     const finalizeDraftCluster = async () => {
-        const payload = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
+        const payload = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
             method: 'PATCH',
             body: JSON.stringify({ draft: false }),
         });
@@ -677,7 +677,7 @@ export function CreateClusterWizard({ onClose, onCreated }) {
     // letting it linger.
     const handleClose = () => {
         if (cluster && !finished) {
-            request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}`, { method: 'DELETE' }).catch(() => {});
+            request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}`, { method: 'DELETE' }).catch(() => {});
         }
         onClose?.();
     };

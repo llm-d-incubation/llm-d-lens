@@ -21,7 +21,7 @@ from llm_d_lens.auth.access import current_principal, require_cluster_access
 from llm_d_lens.cluster.sessions import require_active_session
 from llm_d_lens.infrastructure.process import ShellClient
 
-router = APIRouter(prefix="/api/deploy-poc", include_in_schema=False)
+router = APIRouter(prefix="/api/v1/deploy-poc", include_in_schema=False)
 KNOWN_GOOD = {
     "id": "optimized-baseline-xpu",
     "label": "Optimized Baseline \u00b7 Intel XPU (Qwen3-0.6B)",

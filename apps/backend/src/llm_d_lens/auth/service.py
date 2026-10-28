@@ -7,12 +7,15 @@ Session directly. Design references: sections 5, 7 and 8.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.auth.master_key import resolve_master_key
+from llm_d_lens.auth.models import DirectorySyncResponse
 from llm_d_lens.auth.permissions import (
     ALL_PERMISSIONS,
     BUILTIN_ROLE_ADMIN,
@@ -37,7 +40,11 @@ from llm_d_lens.auth.records import (
     utcnow,
 )
 from llm_d_lens.auth.security import (
+    ACCESS_TOKEN_ISSUER,
+    AccessTokenError,
     SecretCipher,
+    decode_access_token,
+    encode_access_token,
     generate_session_token,
     hash_password,
     hash_session_token,
@@ -66,11 +73,32 @@ _SPECIAL = set("!@#$%^&*()-_=+[]{};:,.<>?/\\|`~\"'")
 SHARE_RESOURCE_TYPES = frozenset({"model_service_group"})
 
 
+_EPHEMERAL_ACCESS_SECRET = generate_session_token()
+_ACCESS_TOKEN_KEY_CACHE: tuple[tuple[object, ...], tuple[str, ...]] | None = None
+logger = logging.getLogger(__name__)
+
+
+def invalidate_access_token_keys_cache() -> None:
+    global _ACCESS_TOKEN_KEY_CACHE
+    _ACCESS_TOKEN_KEY_CACHE = None
+
+
 @dataclass(frozen=True)
 class LoginResult:
     user: UserRecord
     token: str
     principal: Principal
+    session_id: str
+    access_token: str
+    expires_in: int
+
+
+@dataclass(frozen=True)
+class AccessTokenResult:
+    access_token: str
+    expires_in: int
+    principal: Principal
+    session_id: str
 
 
 def _group_name_from_dn(dn: str) -> str:
@@ -464,6 +492,44 @@ class AuthService:
             user.locked_until = utcnow() + timedelta(seconds=self.settings.login_lockout_seconds)
         self.user_dao.save(user)
 
+    def _access_token_keys(self) -> tuple[str, ...]:
+        global _ACCESS_TOKEN_KEY_CACHE
+        signature = (
+            self.settings.access_token_secret,
+            self.settings.old_access_token_secrets,
+            self.settings.secret_key,
+            self.settings.old_secret_keys,
+        )
+        if _ACCESS_TOKEN_KEY_CACHE is not None and _ACCESS_TOKEN_KEY_CACHE[0] == signature:
+            return _ACCESS_TOKEN_KEY_CACHE[1]
+        configured = (self.settings.access_token_secret or "").strip()
+        if configured:
+            keys = (configured, *self.settings.old_access_token_secrets)
+        else:
+            master = resolve_master_key(self.settings)
+            if master.primary:
+                current = hashlib.sha256(f"lens-access-token:{master.primary}".encode()).hexdigest()
+                old = tuple(hashlib.sha256(f"lens-access-token:{key}".encode()).hexdigest() for key in master.old)
+                keys = (current, *old)
+            else:
+                logger.warning(
+                    "Using a process-local ephemeral access-token key. Configure "
+                    "LENS_AUTH_JWT_SECRET or LENS_SECRET_KEY so tokens work across workers."
+                )
+                keys = (_EPHEMERAL_ACCESS_SECRET,)
+        _ACCESS_TOKEN_KEY_CACHE = (signature, keys)
+        return keys
+
+    def _issue_access_token(self, principal: Principal, session_id: str) -> tuple[str, int]:
+        return encode_access_token(
+            self._access_token_keys()[0],
+            user_id=principal.user_id,
+            session_id=session_id,
+            audience=self.settings.access_token_audience,
+            authz_version=principal.authz_version,
+            ttl_seconds=self.settings.access_token_ttl_seconds,
+        )
+
     def _issue_session(
         self, user: UserRecord, *, ip: str | None, user_agent: str | None, remember: bool = False
     ) -> LoginResult:
@@ -471,7 +537,7 @@ class AuthService:
         token = generate_session_token()
         ttl = self.settings.remember_session_ttl_seconds if remember else self.settings.session_ttl_seconds
         idle = self.settings.remember_session_idle_seconds if remember else self.settings.session_idle_seconds
-        self.session_dao.create(
+        session = self.session_dao.create(
             SessionRecord(
                 user_id=user.id,
                 token_hash=hash_session_token(token),
@@ -485,8 +551,18 @@ class AuthService:
             )
         )
         self._enforce_session_limit(user, token=token, ip=ip)
+        user = self.user_dao.get(user.id) or user
         self.audit("login", actor=user, ip=ip)
-        return LoginResult(user=user, token=token, principal=self.principal_for(user))
+        principal = self.principal_for(user)
+        access_token, expires_in = self._issue_access_token(principal, session.id)
+        return LoginResult(
+            user=user,
+            token=token,
+            principal=principal,
+            session_id=session.id,
+            access_token=access_token,
+            expires_in=expires_in,
+        )
 
     def _enforce_session_limit(self, user: UserRecord, *, token: str, ip: str | None) -> None:
         """Keep one (or ``session_max_per_user``) active session(s) per account.
@@ -501,8 +577,8 @@ class AuthService:
         if current is None:
             return
         superseded = self.session_dao.revoke_user_sessions(user.id, keep_session_id=current.id)
-        self.user_dao.bump_principal_version(user.id)
         if superseded:
+            self.user_dao.bump_principal_version(user.id)
             self.audit(
                 "session_revoked",
                 actor=user,
@@ -512,10 +588,7 @@ class AuthService:
                 detail={"reason": "superseded by new login", "count": superseded},
             )
 
-    def validate(self, raw_token: str) -> Principal | None:
-        if not raw_token:
-            return None
-        session = self.session_dao.get_by_token_hash(hash_session_token(raw_token))
+    def _valid_session_user(self, session: SessionRecord | None) -> UserRecord | None:
         if session is None or session.revoked_at is not None:
             return None
         now = utcnow()
@@ -536,7 +609,64 @@ class AuthService:
                 idle_expires_at=now + timedelta(seconds=self.settings.session_idle_seconds),
                 last_seen_at=now,
             )
-        return self.principal_for(user)
+        return user
+
+    def validate_session_token(self, raw_token: str) -> tuple[Principal, str] | None:
+        if not raw_token:
+            return None
+        session = self.session_dao.get_by_token_hash(hash_session_token(raw_token))
+        user = self._valid_session_user(session)
+        if user is None or session is None:
+            return None
+        return self.principal_for(user), session.id
+
+    def validate(self, raw_token: str) -> Principal | None:
+        result = self.validate_session_token(raw_token)
+        return result[0] if result is not None else None
+
+    def validate_access_token(self, token: str) -> tuple[Principal, str] | None:
+        if not token:
+            return None
+        try:
+            claims = decode_access_token(
+                token,
+                self._access_token_keys(),
+                audience=self.settings.access_token_audience,
+                issuer=ACCESS_TOKEN_ISSUER,
+            )
+        except AccessTokenError:
+            return None
+        session = self.session_dao.get(str(claims["sid"]))
+        user = self._valid_session_user(session)
+        if user is None or user.id != claims["sub"]:
+            return None
+        principal = self.principal_for(user)
+        if int(claims.get("authzVersion", -1)) != principal.authz_version:
+            return None
+        return principal, session.id
+
+    def refresh_access_token(self, raw_refresh_token: str) -> AccessTokenResult:
+        if not raw_refresh_token:
+            raise UnauthenticatedError("refresh session is missing")
+        session = self.session_dao.get_by_token_hash(hash_session_token(raw_refresh_token))
+        user = self._valid_session_user(session)
+        if user is None or session is None:
+            raise UnauthenticatedError("refresh session is expired or revoked")
+        principal = self.principal_for(user)
+        access_token, expires_in = self._issue_access_token(principal, session.id)
+        return AccessTokenResult(
+            access_token=access_token,
+            expires_in=expires_in,
+            principal=principal,
+            session_id=session.id,
+        )
+
+    def logout_session(self, session_id: str) -> None:
+        session = self.session_dao.get(session_id)
+        if session is None:
+            return
+        self.session_dao.revoke(session.id)
+        self.audit("logout", target_type="user", target_id=session.user_id)
 
     def principal_from_token(self, raw_token: str) -> Principal:
         principal = self.validate(raw_token)
@@ -597,7 +727,13 @@ class AuthService:
 
     # --- passwords -----------------------------------------------------------
     def change_password(
-        self, user_id: str, old_password: str, new_password: str, *, keep_token: str | None = None
+        self,
+        user_id: str,
+        old_password: str,
+        new_password: str,
+        *,
+        keep_token: str | None = None,
+        keep_session_id: str | None = None,
     ) -> None:
         user = self.user_dao.get(user_id)
         if user is None:
@@ -614,12 +750,16 @@ class AuthService:
         self.user_dao.save(user)
         # Revoke every other session, but keep the caller's session so they can
         # continue after changing an expired/default password (design section 5.2).
-        keep_session_id = None
-        if keep_token:
+        preserved_session_id = None
+        if keep_session_id:
+            session = self.session_dao.get(keep_session_id)
+            if session is not None and session.user_id == user_id:
+                preserved_session_id = session.id
+        elif keep_token:
             session = self.session_dao.get_by_token_hash(hash_session_token(keep_token))
             if session is not None and session.user_id == user_id:
-                keep_session_id = session.id
-        self.session_dao.revoke_user_sessions(user_id, keep_session_id=keep_session_id)
+                preserved_session_id = session.id
+        self.session_dao.revoke_user_sessions(user_id, keep_session_id=preserved_session_id)
         self.audit("password_changed", actor=user)
 
     # --- bootstrap & built-in roles -----------------------------------------
@@ -744,7 +884,7 @@ class AuthService:
         if len(bindings) <= 1 and any(binding.user_id == user_id for binding in bindings):
             raise ConflictError("cannot remove the last global admin")
 
-    async def sync_directory(self, provider_id: str) -> dict[str, object]:
+    async def sync_directory(self, provider_id: str) -> DirectorySyncResponse:
         """Materialize the directory's groups and members into Lens.
 
         Every group under the provider's ``group_base_dn`` becomes a Lens group
@@ -799,7 +939,12 @@ class AuthService:
             target_id=provider_id,
             detail={"groups": group_count, "members": member_count, "failed": failed},
         )
-        return {"ok": not failed, "groups": group_count, "members": member_count, "failed": failed}
+        return DirectorySyncResponse(
+            ok=not failed,
+            groups=group_count,
+            members=member_count,
+            failed=failed,
+        )
 
     def delete_identity_provider(self, provider_id: str) -> None:
         """Delete a provider and every external user/group (and authorization) it produced.

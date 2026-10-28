@@ -1168,13 +1168,13 @@ cmd_start() {
     local scheme="http"
     [[ "$ENABLE_HTTPS" == "1" ]] && scheme="https"
     start_one app env NODE_ENV=production BACKEND_HOST="$APP_HOST" BACKEND_PORT="$APP_PORT" \
-        PRISM_MCP_URL="$scheme://127.0.0.1:$APP_PORT/api/mcp" \
+        PRISM_MCP_URL="$scheme://127.0.0.1:$APP_PORT/api/v1/mcp" \
         PRISM_MCP_CA_FILE="${TLS_CERT_FILE:-}" \
         TLS_CERT_FILE="$TLS_CERT_FILE" TLS_KEY_FILE="$TLS_KEY_FILE" \
         bash scripts/run-backend.sh
     log "waiting for services to become ready..."
     wait_for_http app     "$scheme://127.0.0.1:$APP_PORT/api/health"
-    wait_for_http app     "$scheme://127.0.0.1:$APP_PORT/api/config"
+    wait_for_http app     "$scheme://127.0.0.1:$APP_PORT/api/v1/config"
     local lan_ip
     lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     log "llm-d Lens is running:"

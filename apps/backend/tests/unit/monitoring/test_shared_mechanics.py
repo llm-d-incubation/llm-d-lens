@@ -97,3 +97,57 @@ async def test_install_transport_kills_and_reaps_on_timeout():
         await run_install_command(["installer"], spawn=spawn, env={}, timeout=0.01, on_line=lines.append)
     assert process.killed and process.returncode == -9
     assert lines == ["waiting for pods\n"]
+
+
+def test_observability_routes_declare_concrete_response_models():
+    from fastapi.routing import APIRoute
+
+    from llm_d_lens.monitoring.accelerator.models import (
+        AcceleratorCapabilitiesResponse,
+        AcceleratorLinksResponse,
+        AcceleratorOperationResponse,
+        AcceleratorPreflightResponse,
+        AcceleratorStatusResponse,
+    )
+    from llm_d_lens.monitoring.accelerator.router import router as accelerator_router
+    from llm_d_lens.monitoring.cluster_stack.models import (
+        ClusterStackLinksResponse,
+        ClusterStackOperationResponse,
+        ClusterStackPreflightResponse,
+        ClusterStackStatusResponse,
+    )
+    from llm_d_lens.monitoring.cluster_stack.router import router as cluster_stack_router
+    from llm_d_lens.monitoring.gpu_driver.models import GpuDriverInstallResponse, GpuDriverStatusResponse
+    from llm_d_lens.monitoring.gpu_driver.router import router as gpu_driver_router
+    from llm_d_lens.monitoring.profiling.models import FlowMapResponse
+    from llm_d_lens.monitoring.profiling.router import router as profiling_router
+
+    expected = {
+        ("GET", "/api/v1/monitoring/accelerators"): AcceleratorCapabilitiesResponse,
+        ("GET", "/api/v1/monitoring/accelerators/{accelerator}/status"): AcceleratorStatusResponse,
+        ("POST", "/api/v1/monitoring/accelerators/{accelerator}/installations/preflight"): AcceleratorPreflightResponse,
+        ("POST", "/api/v1/monitoring/accelerators/{accelerator}/installations"): AcceleratorOperationResponse,
+        (
+            "GET",
+            "/api/v1/monitoring/accelerators/{accelerator}/operations/{operation_id}",
+        ): AcceleratorOperationResponse,
+        ("GET", "/api/v1/monitoring/accelerators/{accelerator}/links"): AcceleratorLinksResponse,
+        ("GET", "/api/v1/monitoring/cluster-stack/status"): ClusterStackStatusResponse,
+        ("POST", "/api/v1/monitoring/cluster-stack/installations/preflight"): ClusterStackPreflightResponse,
+        ("POST", "/api/v1/monitoring/cluster-stack/installations"): ClusterStackOperationResponse,
+        ("GET", "/api/v1/monitoring/cluster-stack/operations/{operation_id}"): ClusterStackOperationResponse,
+        ("GET", "/api/v1/monitoring/cluster-stack/links"): ClusterStackLinksResponse,
+        ("GET", "/api/v1/monitoring/gpu-driver/status"): GpuDriverStatusResponse,
+        ("POST", "/api/v1/monitoring/gpu-driver/install"): GpuDriverInstallResponse,
+        ("GET", "/api/v1/monitoring/profiling/flow-map"): FlowMapResponse,
+    }
+    routers = (accelerator_router, cluster_stack_router, gpu_driver_router, profiling_router)
+    declared = {}
+    for router in routers:
+        for route in router.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            for method in route.methods:
+                declared[(method, route.path)] = route.response_model
+
+    assert expected.items() <= declared.items()

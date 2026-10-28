@@ -33,7 +33,7 @@ export default defineConfig({
       ignored: ['**/.venv/**', '**/node_modules/**', '**/dist/**', '**/.git/**'],
     },
     proxy: {
-      '/api/cluster-overview': {
+      '/api/v1/cluster-overview': {
         target: process.env.VITE_AUTH_PROXY_TARGET || `${proxyScheme}://localhost:${backendPort}`,
         changeOrigin: true,
         secure: false,

@@ -20,6 +20,12 @@ from llm_d_lens.storage.contracts import (
     StorageNodeSummary,
     StorageVolume,
     StorageVolumeKind,
+    StorageVolumeListResponse,
+    StorageVolumeResourceClaim,
+    StorageVolumeResourceStatus,
+    StorageVolumeResourceStatusResponse,
+    StorageVolumeResponse,
+    StorageVolumeSource,
     StorageVolumeStatus,
 )
 from llm_d_lens.storage.store import StorageVolumeStore, StorageVolumeStoreError, default_store
@@ -208,7 +214,7 @@ def _pv_source(spec: dict) -> dict | None:
     return None
 
 
-def _resource_status(item: dict) -> dict:
+def _resource_status(item: dict) -> StorageVolumeResourceClaim:
     """Project a PVC/PV Kubernetes object into the fields the Storage table needs.
 
     ``volumeName`` on a PVC is used by ``storage_resource_statuses`` to nest
@@ -219,26 +225,27 @@ def _resource_status(item: dict) -> dict:
     metadata = item.get("metadata") or {}
     spec = item.get("spec") or {}
     capacity = (item.get("status") or {}).get("capacity") or spec.get("capacity") or {}
-    status = {
-        "name": metadata.get("name", ""),
-        "namespace": metadata.get("namespace"),
-        "phase": (item.get("status") or {}).get("phase") or "Unknown",
-        "capacity": capacity.get("storage"),
-        "accessModes": spec.get("accessModes") or [],
-        "storageClassName": spec.get("storageClassName") or None,
-        "volumeMode": spec.get("volumeMode"),
-        "createdAt": metadata.get("creationTimestamp"),
-        "uid": metadata.get("uid"),
-    }
+    status = StorageVolumeResourceClaim(
+        name=metadata.get("name", ""),
+        namespace=metadata.get("namespace"),
+        phase=(item.get("status") or {}).get("phase") or "Unknown",
+        capacity=capacity.get("storage"),
+        accessModes=spec.get("accessModes") or [],
+        storageClassName=spec.get("storageClassName") or None,
+        volumeMode=spec.get("volumeMode"),
+        createdAt=metadata.get("creationTimestamp"),
+        uid=metadata.get("uid"),
+    )
     if item.get("kind") == "PersistentVolumeClaim":
-        status["volumeName"] = spec.get("volumeName")
+        status.volume_name = spec.get("volumeName")
     if item.get("kind") == "PersistentVolume":
-        status["reclaimPolicy"] = spec.get("persistentVolumeReclaimPolicy")
-        status["source"] = _pv_source(spec)
+        status.reclaim_policy = spec.get("persistentVolumeReclaimPolicy")
+        source = _pv_source(spec)
+        status.source = StorageVolumeSource(**source) if source else None
     return status
 
 
-async def storage_resource_statuses(volumes: list[StorageVolume]) -> dict[str, dict]:
+async def storage_resource_statuses(volumes: list[StorageVolume]) -> StorageVolumeResourceStatusResponse:
     """Return live PVC status (with its bound PV nested inline) per Storage volume.
 
     Only the volume's *own* PVC/PV are surfaced here: PVCs are filtered down
@@ -250,7 +257,7 @@ async def storage_resource_statuses(volumes: list[StorageVolume]) -> dict[str, d
     they back the single PVC shown for this volume.
     """
     home_namespace_by_id = {volume.id: _pvc_namespace(volume) for volume in volumes}
-    statuses = {volume.id: {"persistentVolumeClaims": []} for volume in volumes}
+    statuses = {volume.id: StorageVolumeResourceStatus(persistentVolumeClaims=[]) for volume in volumes}
     by_cluster: dict[str, set[str]] = {}
     for volume in volumes:
         by_cluster.setdefault(volume.cluster_id, set()).add(volume.id)
@@ -280,7 +287,7 @@ async def storage_resource_statuses(volumes: list[StorageVolume]) -> dict[str, d
             )
         except Exception:
             return
-        pvs_by_volume: dict[str, list[dict]] = {}
+        pvs_by_volume: dict[str, list[StorageVolumeResourceClaim]] = {}
         for item in pvs:
             volume_id = str(((item.get("metadata") or {}).get("labels") or {}).get("prism.ai/storage-volume-id", ""))
             if volume_id in volume_ids:
@@ -293,15 +300,14 @@ async def storage_resource_statuses(volumes: list[StorageVolume]) -> dict[str, d
             if namespace != home_namespace_by_id.get(volume_id):
                 continue
             pvc_status = _resource_status(item)
-            bound_pv = next(
-                (pv for pv in pvs_by_volume.get(volume_id, []) if pv["name"] == pvc_status.get("volumeName")),
+            pvc_status.persistent_volume = next(
+                (pv for pv in pvs_by_volume.get(volume_id, []) if pv.name == pvc_status.volume_name),
                 None,
             )
-            pvc_status["persistentVolume"] = bound_pv
-            statuses[volume_id]["persistentVolumeClaims"].append(pvc_status)
+            statuses[volume_id].persistent_volume_claims.append(pvc_status)
 
     await asyncio.gather(*(collect(cluster_id, volume_ids) for cluster_id, volume_ids in by_cluster.items()))
-    return statuses
+    return StorageVolumeResourceStatusResponse(items=statuses)
 
 
 def _satellite_pv_name(volume: StorageVolume, *, namespace: str) -> str:
@@ -617,6 +623,20 @@ class StorageVolumeService:
     def register_pending(self, volume: StorageVolume) -> StorageVolume:
         return self._store.create(volume)
 
+    def response(self, volume: StorageVolume, *, nodes_added: list[str] | None = None) -> StorageVolumeResponse:
+        return StorageVolumeResponse.from_volume(
+            volume,
+            in_use_count=len(list_execution_refs(volume.id)),
+            nodes_added=nodes_added,
+            model_cache_count=len(list_model_cache_refs(volume.id)),
+        )
+
+    async def responses(self, volumes: list[StorageVolume]) -> StorageVolumeListResponse:
+        drift = await compute_node_drift(volumes)
+        return StorageVolumeListResponse(
+            items=[self.response(volume, nodes_added=drift.get(volume.id)) for volume in volumes]
+        )
+
     async def provision(self, volume_id: str) -> None:
         volume = self._store.get(volume_id)
         if volume is None:
@@ -624,7 +644,7 @@ class StorageVolumeService:
         volume = await create_volume_objects(volume, cluster_id=volume.cluster_id)
         self._store.save(volume)
 
-    async def delete(self, volume_id: str) -> StorageVolume:
+    async def delete(self, volume_id: str) -> StorageVolumeResponse:
         """Mark a volume ``deleting`` (synchronous, fast) after checking it is unused.
 
         Deployments still block a delete outright -- there's no safe way to
@@ -642,7 +662,7 @@ class StorageVolumeService:
             raise StorageVolumeInUseError(refs)
         volume.status = StorageVolumeStatus.DELETING
         self._store.save(volume)
-        return volume
+        return self.response(volume)
 
     async def finish_delete(self, volume_id: str, *, keep_model_files: bool) -> None:
         """Cascade-delete a volume's Model Cache entries, then the volume itself.
@@ -663,7 +683,7 @@ class StorageVolumeService:
             raise
         self._store.delete(volume_id)
 
-    async def acknowledge_nodes(self, volume_id: str) -> StorageVolume:
+    async def acknowledge_nodes(self, volume_id: str) -> StorageVolumeResponse:
         """Reset a ``local-disk`` volume's node-drift baseline to the current cluster.
 
         Used once an operator has manually confirmed/replicated the hostPath
@@ -676,7 +696,7 @@ class StorageVolumeService:
         if volume.kind == StorageVolumeKind.LOCAL_DISK:
             volume.known_nodes = await _ready_schedulable_node_names(volume.cluster_id)
             self._store.save(volume)
-        return volume
+        return self.response(volume, nodes_added=[])
 
 
 def default_service() -> StorageVolumeService:

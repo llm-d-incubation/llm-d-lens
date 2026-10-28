@@ -15,6 +15,23 @@ from threading import Lock
 from typing import Literal
 from uuid import uuid4
 
+from llm_d_lens.cluster.bootstrap.dto import (  # noqa: F401 - canonical request/response re-exports
+    BootstrapCheckResult,
+    BootstrapCreateRequest,
+    BootstrapCreateResponse,
+    BootstrapHostAddress,
+    BootstrapHostKeyPin,
+    BootstrapHostKeyRequest,
+    BootstrapHostKeyResponse,
+    BootstrapHostKeyResult,
+    BootstrapNodeInput,
+    BootstrapNodeResult,
+    BootstrapPreflightRequest,
+    BootstrapPreflightResponse,
+    BootstrapProxyConfig,
+    BootstrapStatusResponse,
+)
+
 NodeRole = Literal["control-plane", "worker"]
 PreflightState = Literal["pending", "running", "passed", "failed"]
 JobPhase = Literal[

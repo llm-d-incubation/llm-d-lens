@@ -11,8 +11,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from llm_d_lens.api.problems import problem
 from llm_d_lens.auth.access import current_principal, filter_by_cluster, require_cluster_access
 from llm_d_lens.storage.contracts import (
+    StorageClassListResponse,
+    StorageNodeListResponse,
     StorageVolume,
     StorageVolumeCreateRequest,
+    StorageVolumeListResponse,
+    StorageVolumeResourceStatusResponse,
+    StorageVolumeResponse,
+    StorageVolumeScanResponse,
     StorageVolumeStatus,
 )
 from llm_d_lens.storage.service import (
@@ -22,8 +28,6 @@ from llm_d_lens.storage.service import (
     discover_nodes,
     discover_storage_classes,
     import_existing_models_for_volume,
-    list_execution_refs,
-    list_model_cache_refs,
     storage_resource_statuses,
 )
 from llm_d_lens.storage.store import StorageVolumeStoreError
@@ -33,20 +37,9 @@ logger = logging.getLogger(__name__)
 _service = default_service()
 
 
-def _payload(volume: StorageVolume, *, nodes_added: list[str] | None = None) -> dict:
-    payload = volume.api_payload(in_use_count=len(list_execution_refs(volume.id)))
-    payload["nodesAdded"] = nodes_added or []
-    payload["modelCacheCount"] = len(list_model_cache_refs(volume.id))
-    return payload
-
-
-async def _payloads(volumes: list[StorageVolume]) -> list[dict]:
-    drift = await compute_node_drift(volumes)
-    return [_payload(volume, nodes_added=drift.get(volume.id)) for volume in volumes]
-
-
 @router.get(
     "/volumes",
+    response_model=StorageVolumeListResponse,
     summary="List Lens storage volumes with optional filters for cluster, kind, readiness, purpose, or name query.",
     description="List Lens storage volumes with optional filters for cluster, kind, readiness, purpose, or name query.",
     operation_id="list_storage_volumes",
@@ -58,7 +51,7 @@ async def list_volumes(
     status: str = "",
     purpose: str = "",
     query: str = "",
-) -> dict:
+) -> StorageVolumeListResponse:
     needle = query.strip().lower()
     volumes = _service.list()
     volumes = filter_by_cluster(volumes, lambda volume: volume.cluster_id, current_principal(request))
@@ -72,26 +65,29 @@ async def list_volumes(
         volumes = [volume for volume in volumes if purpose in {item.value for item in volume.purposes}]
     if needle:
         volumes = [volume for volume in volumes if needle in volume.name.lower()]
-    return {"items": await _payloads(volumes)}
+    return await _service.responses(volumes)
 
 
 @router.get(
     "/volumes/{volume_id}",
+    response_model=StorageVolumeResponse,
     summary="Get one Lens storage volume by id, including drift and usage metadata.",
     description="Get one Lens storage volume by id, including drift and usage metadata.",
     operation_id="get_storage_volume",
 )
-async def get_volume(volume_id: str, request: Request = None) -> dict:
+async def get_volume(volume_id: str, request: Request = None) -> StorageVolumeResponse:
     volume = _service.get(volume_id)
     if volume is None:
         raise HTTPException(status_code=404, detail=f"storage volume not found: {volume_id}")
     require_cluster_access(current_principal(request), volume.cluster_id)
     drift = await compute_node_drift([volume])
-    return _payload(volume, nodes_added=drift.get(volume.id))
+    return _service.response(volume, nodes_added=drift.get(volume.id))
 
 
 @router.get(
     "/volume-resource-status",
+    response_model=StorageVolumeResourceStatusResponse,
+    response_model_exclude_unset=True,
     summary="Get resource status for selected storage volumes.",
     description=(
         "Return resource status for registered storage volumes selected by repeated volume_id query parameters. "
@@ -101,14 +97,15 @@ async def get_volume(volume_id: str, request: Request = None) -> dict:
 )
 async def get_volume_resource_status(
     volume_ids: Annotated[list[str], Query(alias="volume_id", default_factory=list)],
-) -> dict:
+) -> StorageVolumeResourceStatusResponse:
     volumes = [_service.get(volume_id) for volume_id in dict.fromkeys(volume_ids)]
     found = [volume for volume in volumes if volume is not None]
-    return {"items": await storage_resource_statuses(found)}
+    return await storage_resource_statuses(found)
 
 
 @router.post(
     "/volumes",
+    response_model=StorageVolumeResponse,
     status_code=202,
     summary="Create and provision a new Lens storage volume.",
     description=(
@@ -117,7 +114,7 @@ async def get_volume_resource_status(
     ),
     operation_id="create_storage_volume",
 )
-async def create_volume(request: StorageVolumeCreateRequest) -> dict:
+async def create_volume(request: StorageVolumeCreateRequest) -> StorageVolumeResponse:
     requested_name = request.name.strip()
     name = requested_name or f"storage-{request.kind.value}"
     # Scoped to the cluster: a volume name is a display label, and two clusters
@@ -161,7 +158,7 @@ async def create_volume(request: StorageVolumeCreateRequest) -> dict:
         volume.cluster_id,
     )
     asyncio.create_task(_provision(volume.id))
-    return _payload(volume)
+    return _service.response(volume)
 
 
 async def _provision(volume_id: str) -> None:
@@ -183,6 +180,7 @@ async def _provision(volume_id: str) -> None:
 
 @router.post(
     "/volumes/{volume_id}/acknowledge-nodes",
+    response_model=StorageVolumeResponse,
     summary=("Acknowledge newly added nodes for a local-disk storage volume after you have replicated its contents."),
     description=(
         "Acknowledge newly added nodes for a local-disk storage volume after you have replicated its contents. "
@@ -190,7 +188,7 @@ async def _provision(volume_id: str) -> None:
     ),
     operation_id="acknowledge_storage_volume_nodes",
 )
-async def acknowledge_volume_nodes(volume_id: str) -> dict:
+async def acknowledge_volume_nodes(volume_id: str) -> StorageVolumeResponse:
     """Clear a ``local-disk`` volume's node-drift warning by rebaselining ``known_nodes``.
 
     Call after manually confirming/replicating the hostPath content onto the
@@ -201,11 +199,12 @@ async def acknowledge_volume_nodes(volume_id: str) -> dict:
     except StorageVolumeStoreError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     logger.info("event=storage_volume_nodes_acknowledged volume_id=%s", volume_id)
-    return _payload(volume, nodes_added=[])
+    return volume
 
 
 @router.post(
     "/volumes/{volume_id}/scan-models",
+    response_model=StorageVolumeScanResponse,
     status_code=202,
     summary=(
         "Re-scan a Lens storage volume for model files already present on disk and auto-register Model Cache entries "
@@ -217,7 +216,7 @@ async def acknowledge_volume_nodes(volume_id: str) -> dict:
     ),
     operation_id="scan_storage_volume_models",
 )
-async def scan_volume_models(volume_id: str) -> dict:
+async def scan_volume_models(volume_id: str) -> StorageVolumeScanResponse:
     volume = _service.get(volume_id)
     if volume is None:
         raise HTTPException(status_code=404, detail=f"storage volume not found: {volume_id}")
@@ -230,11 +229,12 @@ async def scan_volume_models(volume_id: str) -> dict:
         )
     logger.info("event=storage_volume_model_scan_requested volume_id=%s", volume_id)
     asyncio.create_task(import_existing_models_for_volume(volume))
-    return {"status": "scanning"}
+    return StorageVolumeScanResponse()
 
 
 @router.delete(
     "/volumes/{volume_id}",
+    response_model=StorageVolumeResponse,
     status_code=202,
     summary="Delete a Lens storage volume registration and, where relevant, its Kubernetes resources.",
     description=(
@@ -245,7 +245,7 @@ async def scan_volume_models(volume_id: str) -> dict:
     ),
     operation_id="delete_storage_volume",
 )
-async def delete_volume(volume_id: str, keep_model_files: bool = False) -> dict:
+async def delete_volume(volume_id: str, keep_model_files: bool = False) -> StorageVolumeResponse:
     try:
         volume = await _service.delete(volume_id)
     except StorageVolumeStoreError as error:
@@ -259,7 +259,7 @@ async def delete_volume(volume_id: str, keep_model_files: bool = False) -> dict:
         )
     logger.info("event=storage_volume_delete_requested volume_id=%s keep_model_files=%s", volume_id, keep_model_files)
     asyncio.create_task(_finish_delete(volume_id, keep_model_files=keep_model_files))
-    return _payload(volume)
+    return volume
 
 
 async def _finish_delete(volume_id: str, *, keep_model_files: bool) -> None:
@@ -272,23 +272,27 @@ async def _finish_delete(volume_id: str, *, keep_model_files: bool) -> None:
 
 @router.get(
     "/storage-classes",
+    response_model=StorageClassListResponse,
     summary="List Kubernetes StorageClasses visible to a cluster.",
     description=(
         "List Kubernetes StorageClasses visible to a cluster. Use this before creating dynamic-pvc storage volumes."
     ),
     operation_id="list_storage_classes",
 )
-async def list_storage_classes(request: Request = None, cluster_id: str = Query(..., min_length=1)) -> dict:
+async def list_storage_classes(
+    request: Request = None, cluster_id: str = Query(..., min_length=1)
+) -> StorageClassListResponse:
     require_cluster_access(current_principal(request), cluster_id)
     try:
         classes = await discover_storage_classes(cluster_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return {"items": [item.model_dump(mode="json", by_alias=True) for item in classes]}
+    return StorageClassListResponse(items=classes)
 
 
 @router.get(
     "/nodes",
+    response_model=StorageNodeListResponse,
     summary="List cluster nodes as seen by the Storage module.",
     description=(
         "List cluster nodes as seen by the Storage module. Use this before creating local-disk storage volumes that "
@@ -296,10 +300,10 @@ async def list_storage_classes(request: Request = None, cluster_id: str = Query(
     ),
     operation_id="list_storage_nodes",
 )
-async def list_nodes(request: Request = None, cluster_id: str = Query(..., min_length=1)) -> dict:
+async def list_nodes(request: Request = None, cluster_id: str = Query(..., min_length=1)) -> StorageNodeListResponse:
     require_cluster_access(current_principal(request), cluster_id)
     try:
         nodes = await discover_nodes(cluster_id)
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return {"items": [item.model_dump(mode="json", by_alias=True) for item in nodes]}
+    return StorageNodeListResponse(items=nodes)

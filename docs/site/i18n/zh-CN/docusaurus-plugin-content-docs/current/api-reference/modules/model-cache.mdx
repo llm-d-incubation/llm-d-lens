@@ -1,672 +1,379 @@
 ---
-title: Model cache
-description: 用于缓存模型下载的后端端点和 Python 直接调用入口。
+title: 模型缓存
+description: 下载模型权重、查看进度并保持缓存跨节点同步。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## 后端 API
+## 概述
 
-下载、删除和增量节点同步共用 `llm_d_lens.model_cache.jobs` 中的 `launch_cache_jobs`。下面的公共服务调用保留了其现有签名：调用方负责选择节点和准备凭据，而启动器负责初始化进度并提交 Jobs。增量同步会保留已有节点；部分提交失败会向外传播，而不会将整个批次标记为“进行中”。
+模型缓存将模型权重存储在已注册的存储卷上，使部署和基准测试无需在启动时下载。使用本模块填充共享缓存、查看下载进度和日志、重试失败、同步新节点并删除缓存模型。目标卷必须为 `ready` 且标记 `model-cache` 用途。下载始终使用集群上保存的 Hugging Face 令牌；API 不接受按请求传入的令牌。
 
+## 快速开始
 
-路由位于 `llm_d_lens/model_cache/router.py`。下面的每个端点都记录了 REST 契约，以及它所使用的对应 `ModelCacheService` 或 Hugging Face 辅助调用。
-
-部署会直接消费缓存。`llm_d_lens.deploy.providers.model_cache_environment.model_cache_environment` 会为每个基于缓存的模型服务器启用 Hugging Face 离线模式（`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`），并为 `auto-cache` 来源添加 `HF_HOME=/model-cache`，使 vLLM 能够从挂载的快照中解析模型，而不是在启动时访问 `huggingface.co`。直接挂载模型目录的提供方（`shared-path`、`mountPath`，包括 P/D 分离、精确前缀缓存路由和分层前缀缓存）会获得离线标志但不设置 `HF_HOME`。这使得基于缓存的启动在受限或不稳定的网络环境下仍能正常工作（例如 `repo_utils.py` 中的 SSL `unexpected_eof_while_reading` 失败）。`huggingface` 来源仍会在启动时下载并保持在线。
-
-Hugging Face 环境变量（`HF_*`、`HUGGING*`、`TRANSFORMERS_*`）由管理员统一管理。部署规划 API 和配置校验会拒绝用户提供的、试图设置这些变量的 `customParameters` 条目（参见 `llm_d_lens/configuration/managed_environment.py`），部署编辑器也会以“由管理员管理”的提示信息阻止这些操作。平台会根据集群已保存的代理、模型缓存和令牌配置自动注入这些值。
-
-### 列出模型缓存条目
-
-列出模型缓存条目，可选按集群或存储卷过滤。用它来发现已缓存的模型 id、下载状态以及节点同步偏差。
+列出已缓存的模型，可选地限定到一个集群或存储卷。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/entries`**
 
-    请求：无请求体。可选查询参数：`cluster_id`（`str`）和 `storage_volume_id`（`str`）。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries?cluster_id=<cluster-id>"
+```
 
-    响应：返回模型缓存条目的 `items` 数组，每个条目都包含由路由计算得出的 `pendingSyncNodes` 字段。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "model-cache-7f3a2c1d",
-          "clusterId": "cluster-123",
-          "storageVolumeId": "storage-abc12345",
-          "source": {
-            "kind": "huggingface",
-            "huggingface": {
-              "repoId": "Qwen/Qwen2.5-7B-Instruct",
-              "revision": "main"
-            }
-          },
-          "tokenSource": {
-            "mode": "none",
-            "namespace": null,
-            "name": null
-          },
-          "status": "ready",
-          "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-          "sizeBytes": 15123042304,
-          "nodeProgress": [
-            {
-              "node": "worker-1",
-              "status": "ready",
-              "failureDetail": null
-            }
-          ],
-          "failureDetail": null,
-          "createdAt": "2026-09-23T08:15:00Z",
-          "updatedAt": "2026-09-23T08:22:11Z",
-          "pendingSyncNodes": ["worker-2"]
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        entries = await service.list(cluster_id="cluster-123", storage_volume_id=None)
-        pending = await service.compute_pending_sync(entries)
-        payload = [
-            {**entry.api_payload(), "pendingSyncNodes": pending.get(entry.id, [])}
-            for entry in entries
-        ]
-        print(payload)
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        result = await lens.model_cache.list_model_cache_entries(
+            cluster_id="<cluster-id>"
+        )
+        for entry in result.items:
+            print(entry.id, entry.source.display_name(), entry.status)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 获取单个模型缓存条目
+`pendingSyncNodes` 列出仍需要本地磁盘缓存条目的节点。
 
-根据 id 获取单个模型缓存条目，包括来源、令牌模式、节点进度和待同步节点。
+## 常见任务
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/entries/{entry_id}`**
+### 从 Hugging Face 下载模型
 
-    请求：无请求体。路径参数：`entry_id`（`str`）。
-
-    响应：返回单个模型缓存条目对象，并附带由路由计算得出的 `pendingSyncNodes` 列表。
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "existing-secret",
-        "namespace": "models",
-        "name": "hf-token"
-      },
-      "status": "downloading",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": null,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "downloading",
-          "failureDetail": null
-        },
-        {
-          "node": "worker-2",
-          "status": "pending",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:16:09Z",
-      "pendingSyncNodes": []
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_cache.service import default_service
-
-
-    async def main() -> None:
-        service = default_service()
-        entry = await service.get("model-cache-7f3a2c1d")
-        pending = await service.compute_pending_sync([entry])
-        payload = {**entry.api_payload(), "pendingSyncNodes": pending.get(entry.id, [])}
-        print(payload)
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 请求下载模型
-
-请求将模型下载到 Lens 模型缓存中。用它可以在部署或基准测试之前预先准备好一份就绪的共享模型缓存。
+请求将模型下载到就绪的模型缓存卷。调用返回 `202` 和一个 `pending` 条目，同时下载 Job 在后台启动。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries`**
 
-    请求：请求体字段包括 `clusterId`（`str`）、`storageVolumeId`（`str`）、`source`（`ModelSource`）以及可选的 `force`（`bool`，默认 `false`）。为了向后兼容仍接受 `tokenSource`，但会被忽略：下载始终使用与集群一起保存的 HuggingFace 令牌（向导中的 `hf_token_secret`），如果该集群没有令牌，则以未认证方式运行。前端的**下载模型**对话框现在已经完全不再发送 `tokenSource`。
-
-    如果该存储卷上已经存在同一模型、同一版本的条目（无论处于什么状态），路由不会开始下载，而是返回 `409`、错误码为 `model_cache_entry_exists` 的问题响应，以便调用方请用户确认。响应体中会带上 `entryId`、`entryStatus`、`model` 和 `storageVolumeId`。用 `force: true` 重新发送同一请求即可继续：处于 `ready` 或 `failed` 的条目会被重置为 `pending` 并就地重新下载，处于 `pending` 或 `downloading` 的条目则原样返回，因此确认操作是加入正在进行的下载，而不是再起一个。任何情况下都不会创建重复条目。
-
-    ```json
-    {
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clusterId": "<cluster-id>",
+    "storageVolumeId": "<volume-id>",
+    "source": {
+      "kind": "huggingface",
+      "huggingface": {
+        "repoId": "<org>/<model>",
+        "revision": "main"
       }
     }
-    ```
+  }' \
+  "$LENS_URL/api/v1/model-cache/entries"
+```
 
-    响应：返回为该下载请求创建的、处于排队状态的 `ModelCacheEntry` 数据。
-
-    ```json
-    {
-      "type": "about:blank",
-      "status": 409,
-      "title": "Model already on this storage volume",
-      "detail": "'Qwen/Qwen2.5-7B-Instruct@main' is already on this storage volume (status: ready)",
-      "code": "model_cache_entry_exists",
-      "entryId": "model-cache-7f3a2c1d",
-      "entryStatus": "ready",
-      "model": "Qwen/Qwen2.5-7B-Instruct@main",
-      "storageVolumeId": "storage-abc12345"
-    }
-    ```
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "existing-secret",
-        "namespace": "models",
-        "name": "hf-token"
-      },
-      "status": "pending",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": null,
-      "nodeProgress": [],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:15:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.contracts import HuggingFaceSource, ModelCacheCreateRequest, ModelSource, ModelSourceKind
-    from llm_d_lens.model_cache.service import ModelCacheEntryExistsError, default_service
+```python
+import asyncio
+
+from llm_d_lens.model_cache.contracts import (
+    HuggingFaceSource,
+    ModelCacheCreateRequest,
+    ModelSource,
+    ModelSourceKind,
+)
+from llm_d_lens.sdk import LensLocal
 
 
-    async def main() -> None:
-        service = default_service()
-        # tokenSource is intentionally omitted: request_download() always resolves the
-        # HuggingFace token from the cluster's saved hf_token_secret instead.
-        request = ModelCacheCreateRequest(
-            clusterId="cluster-123",
-            storageVolumeId="storage-abc12345",
-            source=ModelSource(
-                kind=ModelSourceKind.HUGGINGFACE,
-                huggingface=HuggingFaceSource(repoId="Qwen/Qwen2.5-7B-Instruct", revision="main"),
-            ),
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.create_model_cache_entry(
+            ModelCacheCreateRequest(
+                cluster_id="<cluster-id>",
+                storage_volume_id="<volume-id>",
+                source=ModelSource(
+                    kind=ModelSourceKind.HUGGINGFACE,
+                    huggingface=HuggingFaceSource(
+                        repo_id="<org>/<model>",
+                        revision="main",
+                    ),
+                ),
+            )
         )
-        try:
-            entry = await service.request_download(request)
-        except ModelCacheEntryExistsError as already_there:
-            # Ask the operator whether to download it again, then retry with force.
-            print(already_there.entry.id, already_there.entry.status)
-            entry = await service.request_download(request.model_copy(update={"force": True}))
-        await service.provision(entry.id)
         print(entry.id, entry.status)
 
 
-    asyncio.run(main())
-    ```
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 重试模型下载
+对于私有或门控模型，请让管理员在集群设置中保存一个有权访问该模型的 Hugging Face 令牌。公开模型无需令牌即可下载。`tokenSource` 仅为兼容性而接受，但会被忽略。
 
-重试一个失败或可重试的模型缓存条目下载。
+### 重新下载卷上已有的模型
+
+对相同模型和修订版再次请求会返回 `409 model_cache_entry_exists`，并带有现有 `entryId` 和 `entryStatus`。重新发送并设置 `force: true` 可再次下载。Lens 永远不会创建重复条目。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries/{entry_id}/retry`**
 
-    请求：无请求体。路径参数：`entry_id`（`str`）。
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clusterId": "<cluster-id>",
+    "storageVolumeId": "<volume-id>",
+    "source": {
+      "kind": "huggingface",
+      "huggingface": {"repoId": "<org>/<model>", "revision": "main"}
+    },
+    "force": true
+  }' \
+  "$LENS_URL/api/v1/model-cache/entries"
+```
 
-    响应：返回重新进入可重试下载状态后的更新后条目。
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "none",
-        "namespace": null,
-        "name": null
-      },
-      "status": "pending",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": null,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "pending",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:30:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
+
+from llm_d_lens.model_cache.contracts import (
+    HuggingFaceSource,
+    ModelCacheCreateRequest,
+    ModelSource,
+    ModelSourceKind,
+)
+from llm_d_lens.sdk import LensLocal
 
 
-    async def main() -> None:
-        service = default_service()
-        entry = service.retry("model-cache-7f3a2c1d")
-        await service.provision(entry.id)
-        print(entry.api_payload())
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.create_model_cache_entry(
+            ModelCacheCreateRequest(
+                cluster_id="<cluster-id>",
+                storage_volume_id="<volume-id>",
+                source=ModelSource(
+                    kind=ModelSourceKind.HUGGINGFACE,
+                    huggingface=HuggingFaceSource(
+                        repo_id="<org>/<model>",
+                        revision="main",
+                    ),
+                ),
+                force=True,
+            )
+        )
+        print(entry.id, entry.status)
 
 
-    asyncio.run(main())
-    ```
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 为所有条目同步新节点
+`ready` 或 `failed` 条目会被重置并原地重新下载。`pending` 或 `downloading` 条目会原样返回，因此确认操作会加入正在进行的下载，而不是再启动一个。
 
-为所有在新添加节点上缺失的本地磁盘模型缓存条目触发同步。可以选择将范围限定在某个集群。
+### 查看下载进度和日志
+
+读取条目以查看每节点状态，然后获取失败节点的日志。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries/sync-nodes`**
 
-    请求：无请求体。可选查询参数：`cluster_id`（`str`）。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>"
 
-    响应：返回已被更改并加入新节点预配队列的条目。
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>/logs?node=<node-name>"
+```
 
-    ```json
-    {
-      "items": [
-        {
-          "id": "model-cache-7f3a2c1d",
-          "clusterId": "cluster-123",
-          "storageVolumeId": "storage-abc12345",
-          "source": {
-            "kind": "huggingface",
-            "huggingface": {
-              "repoId": "Qwen/Qwen2.5-7B-Instruct",
-              "revision": "main"
-            }
-          },
-          "tokenSource": {
-            "mode": "none",
-            "namespace": null,
-            "name": null
-          },
-          "status": "downloading",
-          "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-          "sizeBytes": 15123042304,
-          "nodeProgress": [
-            {
-              "node": "worker-1",
-              "status": "ready",
-              "failureDetail": null
-            },
-            {
-              "node": "worker-2",
-              "status": "pending",
-              "failureDetail": null
-            }
-          ],
-          "failureDetail": null,
-          "createdAt": "2026-09-23T08:15:00Z",
-          "updatedAt": "2026-09-23T08:35:00Z",
-          "pendingSyncNodes": []
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        changed = await service.sync_all_nodes(cluster_id="cluster-123")
-        for entry in changed:
-            await service.provision_new_nodes(entry.id)
-        print([entry.id for entry in changed])
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.get_model_cache_entry("<entry-id>")
+        logs = await lens.model_cache.get_model_cache_entry_logs(
+            "<entry-id>",
+            node="<node-name>",
+        )
+        print(entry.status, entry.node_progress)
+        print(logs.logs)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 为单个条目同步新节点
+`nodeProgress[].status` 为 `pending`、`downloading`、`ready` 或 `failed`。节点失败时，`failureDetail` 包含面向用户的错误。
 
-为某一个特定的模型缓存条目触发节点同步。当某个已缓存的模型需要被复制到新添加的节点上时使用此端点。
+### 重试失败的下载
+
+只有处于 `failed` 状态的条目可以重试。调用返回 `202`，并将条目移回 `pending`。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries/{entry_id}/sync-nodes`**
 
-    请求：无请求体。路径参数：`entry_id`（`str`）。
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>/retry"
+```
 
-    响应：返回更新后的条目。当有新节点需要预配时，条目状态会回到 `downloading`。
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "none",
-        "namespace": null,
-        "name": null
-      },
-      "status": "downloading",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": 15123042304,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "ready",
-          "failureDetail": null
-        },
-        {
-          "node": "worker-2",
-          "status": "pending",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:35:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        entry = await service.sync_nodes("model-cache-7f3a2c1d")
-        if entry.status.value == "downloading":
-            await service.provision_new_nodes(entry.id)
-        print(entry.api_payload())
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.retry_model_cache_entry("<entry-id>")
+        print(entry.status)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 删除模型缓存条目
+重试 `ready`、`pending`、`downloading` 或 `deleting` 条目会返回 `409 model_cache_invalid_state`。请先修复根本原因再重试。
 
-删除一个模型缓存条目，并在需要时安排清理其已下载的文件。设置 `keep_files=true` 可以只删除记录本身。
+### 将缓存模型同步到新节点
+
+新节点或替换节点没有本地磁盘缓存内容。同步单个条目或集群上的所有条目；Lens 只为缺少该模型的节点排队下载。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/model-cache/entries/{entry_id}`**
 
-    请求：无请求体。路径参数：`entry_id`（`str`）。可选查询参数：`keep_files`（`bool`，默认 `false`）。
+```bash
+# Sync every local-disk entry missing on new nodes.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/sync-nodes?cluster_id=<cluster-id>"
 
-    响应：通常在后台清理运行期间返回处于 `deleting` 状态的条目。如果该条目从未到达过已持久化的缓存路径，API 可能会改为返回一个最简的 `{"id": ..., "status": "deleted"}` 确认信息。
+# Or sync one entry.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>/sync-nodes"
+```
 
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "none",
-        "namespace": null,
-        "name": null
-      },
-      "status": "deleting",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": 15123042304,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "ready",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T09:00:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        entry = await service.request_delete("model-cache-7f3a2c1d", keep_files=False)
-        if entry is not None:
-            await service.provision_delete(entry.id)
-            print(entry.api_payload())
-        else:
-            print({"id": "model-cache-7f3a2c1d", "status": "deleted"})
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        changed = await lens.model_cache.sync_model_cache_nodes(
+            cluster_id="<cluster-id>"
+        )
+        entry = await lens.model_cache.sync_model_cache_entry_nodes("<entry-id>")
+        print(len(changed.items), entry.status)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 获取模型缓存日志
+两个调用都返回 `202`。当新节点需要供应时，条目会移回 `downloading`。NFS 卷不需要节点同步，因为所有节点共享它。
 
-获取某个模型缓存条目的日志，可选限定在某个节点。用它来调试下载或清理失败的问题。
+### 删除缓存模型
+
+删除会移除条目；除非保留文件，否则会安排清理缓存文件。调用返回 `202`。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/entries/{entry_id}/logs`**
 
-    请求：无请求体。路径参数：`entry_id`（`str`）。可选查询参数：`node`（`str`）。
+```bash
+curl -X DELETE -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>?keep_files=true"
+```
 
-    响应：返回该条目收集到的日志文本，或者仅限于所请求节点的日志文本。
-
-    ```json
-    {
-      "logs": "[worker-1] pulling Qwen/Qwen2.5-7B-Instruct@main\n[worker-1] download completed successfully"
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        logs = await service.get_logs("model-cache-7f3a2c1d", node="worker-1")
-        print(logs)
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 搜索 Hugging Face 模型
-
-从 Lens 模型缓存中搜索 Hugging Face 模型仓库。用它在创建缓存条目之前先发现可用的仓库 id。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/huggingface/search`**
-
-    请求：无请求体。查询参数：`query`（`str`）和可选的 `limit`（`int`，默认 `20`）。
-
-    响应：以 `HuggingFaceModelSummary` 对象的形式返回 Hugging Face 的搜索匹配结果。
-
-    ```json
-    {
-      "items": [
-        {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "likes": 12345,
-          "downloads": 987654,
-          "pipelineTag": "text-generation",
-          "tags": ["transformers", "text-generation", "safetensors"],
-          "lastModified": "2026-09-01T12:00:00.000Z",
-          "gated": false
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_cache import huggingface_hub
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        result = await lens.model_cache.delete_model_cache_entry(
+            "<entry-id>",
+            keep_files=True,
+        )
+        print(result)
 
 
-    async def main() -> None:
-        items = await huggingface_hub.search_models("Qwen2.5", limit=5)
-        summaries = [item["id"] for item in items]
-        print(summaries)
+asyncio.run(main())
+```
 
-
-    asyncio.run(main())
-    ```
   </TabItem>
 </Tabs>
 
-### 获取 Hugging Face 模型详情
+设置 `keep_files=false` 可从共享卷中移除文件。从未达到 `ready` 的条目可能返回最小的 `{"id": "<entry-id>", "status": "deleted"}` 响应，因为没有需要清理的内容。
 
-获取某个模型仓库的详细 Hugging Face 元数据，包括 Lens 抓取到的 README 快照。
+## 端点
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/huggingface/models/{repo_id:path}`**
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/model-cache/entries` | `model-cache:entry:read` | 列出条目，可按集群或卷过滤。 |
+| GET | `/api/v1/model-cache/entries/{entry_id}` | `model-cache:entry:read` | 读取单个条目、节点进度和待同步节点。 |
+| POST | `/api/v1/model-cache/entries` | `model-cache:entry:create` | 请求下载模型。 |
+| POST | `/api/v1/model-cache/entries/{entry_id}/retry` | `model-cache:entry:retry` | 重试失败的下载。 |
+| POST | `/api/v1/model-cache/entries/sync-nodes` | `model-cache:entry:sync` | 将所有缺少模型的条目同步到新节点。 |
+| POST | `/api/v1/model-cache/entries/{entry_id}/sync-nodes` | `model-cache:entry:sync` | 将单个条目同步到新节点。 |
+| DELETE | `/api/v1/model-cache/entries/{entry_id}` | `model-cache:entry:delete` | 删除条目，并可选择删除其文件。 |
+| GET | `/api/v1/model-cache/entries/{entry_id}/logs` | `model-cache:entry:read` | 读取下载或清理日志。 |
+| GET | `/api/v1/model-cache/huggingface/search` | `model-cache:entry:read` | 搜索 Hugging Face 仓库。 |
+| GET | `/api/v1/model-cache/huggingface/models/{repo_id}` | `model-cache:entry:read` | 读取单个仓库的元数据和 README。 |
 
-    请求：无请求体。路径参数：`repo_id`（`str`，例如 `Qwen/Qwen2.5-7B-Instruct`）。
+读取返回 `200`；创建、重试、同步和删除返回 `202`。
 
-    响应：返回一个 `HuggingFaceModelDetail` 对象。
+## 错误与限制
 
-    ```json
-    {
-      "repoId": "Qwen/Qwen2.5-7B-Instruct",
-      "likes": 12345,
-      "downloads": 987654,
-      "pipelineTag": "text-generation",
-      "tags": ["transformers", "text-generation", "safetensors"],
-      "lastModified": "2026-09-01T12:00:00.000Z",
-      "gated": false,
-      "readme": "---\nlibrary_name: transformers\n---\n# Qwen2.5-7B-Instruct"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+- **`401` / `403`** — 未认证或无权访问该集群。
+- **`404`** — 条目不存在，或在 Hugging Face 上找不到该仓库。
+- **`409 model_cache_entry_exists`** — 卷上已有此模型和修订版。确认后重新发送并设置 `force: true`。
+- **`409 storage_volume_not_model_cache`** — 该卷未标记 `model-cache` 用途。
+- **`409 storage_volume_not_ready`** — 等待存储卷变为 `ready`。
+- **`409 model_cache_invalid_state`** — 只有 `failed` 条目可以重试。
+- **`501 model_catalog_not_supported`** — 尚未实现模型目录来源。请改为发送 Hugging Face 的 `repoId` 和 `revision`。
+- **`502 huggingface_hub_unavailable`** — 无法访问 Hugging Face。请检查网络访问以及集群或主机代理。
+- 下载需要就绪的 `local-disk` 或 `nfs` 卷。`dynamic-pvc` 卷不能带有 `model-cache` 用途。
+- Hugging Face 环境变量由管理员管理。请通过集群保存的令牌设置凭据，而不是部署自定义参数。
+- 同步适用于本地磁盘条目。NFS 卷是共享的，不需要逐节点复制。
+- 删除是异步的。清理完成前，条目会保持在 `deleting` 状态。
 
-    from llm_d_lens.model_cache import huggingface_hub
+## 相关
 
-
-    async def main() -> None:
-        detail = await huggingface_hub.get_model_detail("Qwen/Qwen2.5-7B-Instruct")
-        print(detail["info"]["id"], bool(detail.get("readme")))
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-完整的请求/响应 schema 请参见 FastAPI OpenAPI schema（可通过 `npm run docs:api` 重新生成）。
+- [模型缓存指南](/user-guide/model-cache)
+- [存储指南](/user-guide/storage)
+- [部署指南](/user-guide/deployments)
+- [API 约定](/api-reference)
+- [完整 OpenAPI schema](/api-reference)

@@ -533,7 +533,7 @@ def test_install_request_forbids_unknown_fields_and_validates_namespace():
 
 def test_shared_api_registers_accelerator_routes():
     client = TestClient(app)
-    paths = client.get("/api/simulation/openapi.json").json()["paths"]
+    paths = client.get("/api/v1/simulation/openapi.json").json()["paths"]
 
     assert "/api/v1/monitoring/accelerators" in paths
     assert "/api/v1/monitoring/accelerators/{accelerator}/status" in paths

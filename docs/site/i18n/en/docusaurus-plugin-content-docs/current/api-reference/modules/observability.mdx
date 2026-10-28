@@ -1,730 +1,361 @@
 ---
 title: Observability
-description: Monitoring, accelerator, and profiling APIs behind Lens Observability.
+description: Install, inspect, and troubleshoot measurements for clusters, accelerators, deployments, and GPU drivers.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+Use Observability to check or install the cluster Prometheus/Grafana stack, inspect accelerator and GPU driver health, manage monitoring for one deployment, and read profiling metrics. Use it when dashboards are missing, a driver or exporter needs attention, or you need to confirm which deployment executions are already monitored.
 
-Observability is split across five FastAPI routers under `llm_d_lens/monitoring/`: `accelerator/router.py`, `cluster_stack/router.py`, `deployment/router.py`, `gpu_driver/router.py`, and `profiling/router.py`.
+## Quick start
 
-### List accelerator observability capabilities
-
-List accelerator observability capabilities Lens supports, including access modes and default namespaces.
+List the accelerator families and access modes Lens supports.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/accelerators`**
 
-    Request: no request body.
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/monitoring/accelerators
+```
 
-    Response: returns an `AcceleratorCapabilitiesResponse` with supported accelerator families.
-
-    ```json
-    {
-      "accelerators": [
-        {
-          "type": "intel_gpu",
-          "display_name": "Intel GPU",
-          "access_modes": ["dra", "plugin"],
-          "release_name": "xpumd",
-          "default_namespace": "intel-xpumd"
-        },
-        {
-          "type": "nvidia_gpu",
-          "display_name": "NVIDIA GPU",
-          "access_modes": ["plugin", "dra"],
-          "release_name": "dcgm-exporter",
-          "default_namespace": "dcgm-exporter"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.monitoring.accelerator.service import capabilities
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    response = capabilities()
-    print(response.model_dump())
-    ```
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    response = lens.accelerator.list_accelerators()
+    for item in response.accelerators:
+        print(item.type, item.access_modes, item.default_namespace)
+```
+
   </TabItem>
 </Tabs>
 
-### Get accelerator observability status
+## Common tasks
 
-Get observability status for one accelerator family, including release, component, and access-mode health.
+### 1. Check the cluster monitoring stack and dashboard links
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/accelerators/{accelerator}/status`**
 
-    Request: no request body. Path param: `accelerator` (`str`, one of the registered families: `intel_gpu` or `nvidia_gpu`). Query params: `namespace` (`str`, defaults to `intel-xpumd` regardless of the selected accelerator — pass `dcgm-exporter`, or whatever namespace the NVIDIA release was installed into, explicitly when querying `nvidia_gpu`), `access_mode` (`"dra" | "plugin"`, optional), and `cluster_id` (`str`, optional).
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/status?namespace=llm-d-monitoring&cluster_id=<cluster-id>"
 
-    Response: returns an `AcceleratorStatusResponse`.
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/links?namespace=llm-d-monitoring&cluster_id=<cluster-id>"
+```
 
-    ```json
-    {
-      "accelerator": "intel_gpu",
-      "access_mode": "dra",
-      "access_modes": [
-        {
-          "mode": "dra",
-          "available": true,
-          "detected": true,
-          "message": null
-        },
-        {
-          "mode": "plugin",
-          "available": false,
-          "detected": false,
-          "message": "device plugin not installed"
-        }
-      ],
-      "cluster_reachable": true,
-      "context": "kind-test",
-      "namespace": "intel-xpumd",
-      "release": {
-        "name": "xpumd",
-        "status": "deployed",
-        "chart": "xpumd-0.1.0",
-        "revision": 1
-      },
-      "status": "ready",
-      "message": "ready",
-      "components": [
-        {
-          "name": "xpumd-controller",
-          "status": "ready",
-          "kind": "workload",
-          "ready": 1,
-          "desired": 1,
-          "source": "xpumd",
-          "diagnostics": []
-        }
-      ],
-      "active_operation_id": null,
-      "observed_at": "2026-09-23T08:00:00Z",
-      "stale": false
-    }
-    ```
+Read `status`, `message`, `release`, and `components[]`. The links response returns Prometheus and Grafana entries with `available` and `url`.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.accelerator.service import get_status, validate_namespace
+```python
+import asyncio
 
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status(
-            "intel_gpu",
-            validate_namespace("intel-xpumd"),
-            "dra",
-            cluster_id="cluster-123",
+        status = await lens.cluster_stack.status(
+            namespace="llm-d-monitoring", cluster_id="<cluster-id>"
         )
-        print(status.model_dump())
+        print(status.status, status.message)
 
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Install accelerator observability
-
-Install accelerator observability components for a supported accelerator family.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/accelerators/{accelerator}/installations`**
-
-    Request: path param `accelerator` (`str`). Optional header: `Idempotency-Key` (`str`). Optional query param: `cluster_id` (`str`). Body fields are `accelerator`, `access_mode`, and `namespace`.
-
-    ```json
-    {
-      "accelerator": "intel_gpu",
-      "access_mode": "dra",
-      "namespace": "intel-xpumd"
-    }
-    ```
-
-    Response: returns an `AcceleratorOperationResponse` for the queued install operation.
-
-    ```json
-    {
-      "operation_id": "accel-op-123",
-      "kind": "install",
-      "status": "queued",
-      "phase": "queued",
-      "accelerator": "intel_gpu",
-      "access_mode": "dra",
-      "namespace": "intel-xpumd",
-      "started_at": "2026-09-23T08:01:00Z",
-      "finished_at": null,
-      "exit_code": null,
-      "logs": [],
-      "error": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.accelerator.models import AcceleratorInstallRequest
-    from llm_d_lens.monitoring.accelerator.service import install
-
-
-    async def main() -> None:
-        operation = await install(
-            AcceleratorInstallRequest(
-                accelerator="intel_gpu",
-                access_mode="dra",
-                namespace="intel-xpumd",
-            ),
-            idempotency_key="request-123",
-            cluster_id="cluster-123",
+        links = await lens.cluster_stack.links(
+            namespace="llm-d-monitoring", cluster_id="<cluster-id>"
         )
-        print(operation.model_dump())
-
+        for link in links.links:
+            print(link.kind, link.available, link.url)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Get cluster monitoring stack status
-
-Check whether the cluster-level Prometheus/Grafana monitoring stack (kube-prometheus-stack) is installed and ready.
+### 2. Preflight and install or reinstall the cluster stack
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/cluster-stack/status`**
 
-    Request: no request body. Query params: `namespace` (`str`, default `llm-d-monitoring`) and `cluster_id` (`str`, optional).
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/installations/preflight?cluster_id=<cluster-id>" \
+  -d '{"namespace":"llm-d-monitoring","mode":"central","enable_tls":false,"reinstall":false}'
 
-    Response: returns a `ClusterStackStatusResponse`.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: <request-id>" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/installations?cluster_id=<cluster-id>" \
+  -d '{"namespace":"llm-d-monitoring","mode":"central","enable_tls":false,"reinstall":false}'
+```
 
-    ```json
-    {
-      "cluster": {
-        "context": "kind-test",
-        "reachable": true,
-        "platform": "kubernetes"
-      },
-      "namespace": "llm-d-monitoring",
-      "release": {
-        "name": "llmd",
-        "status": "deployed",
-        "chart": "kube-prometheus-stack-65.0.0",
-        "revision": 2
-      },
-      "status": "ready",
-      "message": "ready",
-      "components": [
-        {
-          "name": "grafana",
-          "status": "ready",
-          "kind": "workload",
-          "ready": 1,
-          "desired": 1,
-          "source": "llmd",
-          "diagnostics": []
-        }
-      ],
-      "active_operation_id": null,
-      "observed_at": "2026-09-23T08:00:00Z",
-      "stale": false
-    }
-    ```
+Preflight returns `allowed`, blocking `checks`, and `warnings`. Install returns `202 Accepted` with an `operation_id`; poll the operation until its `status` is `succeeded` or `failed`. Reinstalling deletes stored metrics.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.cluster_stack.service import get_status, validate_namespace
+```python
+import asyncio
 
+from llm_d_lens.monitoring.cluster_stack.models import ClusterStackInstallRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status(validate_namespace("llm-d-monitoring"), cluster_id="cluster-123")
-        print(status.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Run cluster monitoring stack preflight
-
-Run cluster monitoring stack preflight checks without installing anything. Use this before starting a Prometheus/Grafana stack installation.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/cluster-stack/installations/preflight`**
-
-    Request: optional query param `cluster_id` (`str`). Body fields are `namespace`, `mode`, `enable_tls`, and `reinstall`.
-
-    ```json
-    {
-      "namespace": "llm-d-monitoring",
-      "mode": "central",
-      "enable_tls": false,
-      "reinstall": false
-    }
-    ```
-
-    Response: returns a `ClusterStackPreflightResponse` with blocking and non-blocking checks.
-
-    ```json
-    {
-      "allowed": true,
-      "status": "ready",
-      "checks": [
-        {
-          "name": "cluster-reachable",
-          "passed": true,
-          "message": "cluster is reachable",
-          "blocking": true
-        }
-      ],
-      "warnings": [],
-      "command_preview": [
-        "/path/to/llm-d/guides/recipes/observability/install-prometheus-grafana.sh",
-        "--namespace",
-        "llm-d-monitoring"
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.cluster_stack.models import ClusterStackInstallRequest
-    from llm_d_lens.monitoring.cluster_stack.service import preflight
-
-
-    async def main() -> None:
-        result = await preflight(
-            ClusterStackInstallRequest(
-                namespace="llm-d-monitoring",
-                mode="central",
-                enable_tls=False,
-                reinstall=False,
-            ),
-            cluster_id="cluster-123",
+        request = ClusterStackInstallRequest(
+            namespace="llm-d-monitoring",
+            mode="central",
+            enable_tls=False,
+            reinstall=False,
         )
-        print(result.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Install cluster monitoring stack
-
-Install or reinstall the cluster-level monitoring stack. Use this when Prometheus/Grafana cluster monitoring should be provisioned or repaired.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/cluster-stack/installations`**
-
-    Request: optional header `Idempotency-Key` (`str`) and optional query param `cluster_id` (`str`). Body fields are `namespace`, `mode`, `enable_tls`, and `reinstall`.
-
-    ```json
-    {
-      "namespace": "llm-d-monitoring",
-      "mode": "central",
-      "enable_tls": false,
-      "reinstall": true
-    }
-    ```
-
-    Response: returns a `ClusterStackOperationResponse` for the queued install or reinstall operation.
-
-    ```json
-    {
-      "operation_id": "cluster-stack-op-123",
-      "kind": "install",
-      "status": "queued",
-      "phase": "queued",
-      "namespace": "llm-d-monitoring",
-      "started_at": "2026-09-23T08:10:00Z",
-      "finished_at": null,
-      "exit_code": null,
-      "logs": [],
-      "error": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.cluster_stack.models import ClusterStackInstallRequest
-    from llm_d_lens.monitoring.cluster_stack.service import install
-
-
-    async def main() -> None:
-        operation = await install(
-            ClusterStackInstallRequest(
-                namespace="llm-d-monitoring",
-                mode="central",
-                enable_tls=False,
-                reinstall=True,
-            ),
-            idempotency_key="request-123",
-            cluster_id="cluster-123",
+        preflight = await lens.cluster_stack.installation_preflight(
+            request, cluster_id="<cluster-id>"
         )
-        print(operation.model_dump())
+        print(preflight.allowed, preflight.warnings)
 
+        operation = await lens.cluster_stack.create_installation(
+            request, idempotency_key="<request-id>", cluster_id="<cluster-id>"
+        )
+        print(operation.operation_id, operation.status)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### List deployment monitoring status
-
-List deployment monitoring status for every deployment in a cluster. Use this to discover which executions have observability installed, enabled, or unhealthy.
+### 3. Check accelerator capabilities and status
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/deployments`**
 
-    Request: no request body. Required query param: `cluster_id` (`str`).
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/accelerators/nvidia_gpu/status?namespace=dcgm-exporter&access_mode=dra&cluster_id=<cluster-id>"
+```
 
-    Response: returns cluster-level deployment monitoring status with one item per execution namespace.
+Read `status`, `message`, `release`, `access_modes[]`, and `components[]`. Pass `dcgm-exporter` or your NVIDIA release namespace explicitly; the query default is `intel-xpumd`.
 
-    ```json
-    {
-      "cluster_id": "cluster-123",
-      "cluster_reachable": true,
-      "stack_ready": true,
-      "items": [
-        {
-          "execution_id": "deploy-exec-001",
-          "namespace": "llm-d-run-001",
-          "cluster_reachable": true,
-          "stack_ready": true,
-          "status": "enabled",
-          "enabled": true,
-          "epp_service": {
-            "name": "demo-epp",
-            "labels": {
-              "app.kubernetes.io/name": "demo-epp"
-            },
-            "service_account": "demo-epp"
-          },
-          "servicemonitors": ["llm-d-prism-epp-monitor"],
-          "podmonitors": ["llm-d-prism-modelserver-monitor"],
-          "message": "monitoring enabled"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.deployment.service import get_cluster_status
+```python
+import asyncio
 
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_cluster_status("cluster-123")
-        print(status)
-
+        status = await lens.accelerator.status(
+            "nvidia_gpu",
+            namespace="dcgm-exporter",
+            access_mode="dra",
+            cluster_id="<cluster-id>",
+        )
+        print(status.status, status.message)
+        for mode in status.access_modes:
+            print(mode.mode, mode.available, mode.detected)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Get deployment monitoring status
-
-Get monitoring status for one deployment execution, optionally scoped to a cluster id.
+### 4. Install accelerator observability
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/deployments/{execution_id}`**
 
-    Request: no request body. Path param: `execution_id` (`str`). Optional query param: `cluster_id` (`str`).
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://127.0.0.1:3000/api/v1/monitoring/accelerators/nvidia_gpu/installations/preflight?cluster_id=<cluster-id>" \
+  -d '{"accelerator":"nvidia_gpu","access_mode":"dra","namespace":"dcgm-exporter"}'
 
-    Response: returns one deployment monitoring status object.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: <request-id>" \
+  "http://127.0.0.1:3000/api/v1/monitoring/accelerators/nvidia_gpu/installations?cluster_id=<cluster-id>" \
+  -d '{"accelerator":"nvidia_gpu","access_mode":"dra","namespace":"dcgm-exporter"}'
+```
 
-    ```json
-    {
-      "execution_id": "deploy-exec-001",
-      "namespace": "llm-d-run-001",
-      "cluster_reachable": true,
-      "stack_ready": true,
-      "status": "enabled",
-      "enabled": true,
-      "epp_service": {
-        "name": "demo-epp",
-        "labels": {
-          "app.kubernetes.io/name": "demo-epp"
-        },
-        "service_account": "demo-epp"
-      },
-      "servicemonitors": ["llm-d-prism-epp-monitor"],
-      "podmonitors": ["llm-d-prism-modelserver-monitor"],
-      "message": "monitoring enabled"
-    }
-    ```
+The install response is `202 Accepted` with an `operation_id`. The body `accelerator` must match the path parameter.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.deployment.service import get_status
+```python
+import asyncio
 
+from llm_d_lens.monitoring.accelerator.models import AcceleratorInstallRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status("deploy-exec-001", "cluster-123")
-        print(status)
+        request = AcceleratorInstallRequest(
+            accelerator="nvidia_gpu", access_mode="dra", namespace="dcgm-exporter"
+        )
+        preflight = await lens.accelerator.installation_preflight(
+            "nvidia_gpu", request, cluster_id="<cluster-id>"
+        )
+        print(preflight.allowed, preflight.warnings)
 
+        operation = await lens.accelerator.create_installation(
+            "nvidia_gpu", request, idempotency_key="<request-id>", cluster_id="<cluster-id>"
+        )
+        print(operation.operation_id, operation.status)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Manage deployment monitoring resources
-
-Install, enable, disable, or uninstall monitoring resources for one deployment execution.
+### 5. Manage deployment monitoring
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/deployments/{execution_id}/{action}`**
 
-    Request: no request body. Path params: `execution_id` (`str`) and `action` (`str`, one of `install`, `enable`, `disable`, or `uninstall`). Optional query param: `cluster_id` (`str`).
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/deployments?cluster_id=<cluster-id>"
 
-    Response: returns the same deployment monitoring status shape after the requested action completes.
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/deployments/<execution-id>?cluster_id=<cluster-id>"
 
-    ```json
-    {
-      "execution_id": "deploy-exec-001",
-      "namespace": "llm-d-run-001",
-      "cluster_reachable": true,
-      "stack_ready": true,
-      "status": "disabled",
-      "enabled": false,
-      "epp_service": {
-        "name": "demo-epp",
-        "labels": {
-          "app.kubernetes.io/name": "demo-epp"
-        },
-        "service_account": "demo-epp"
-      },
-      "servicemonitors": [],
-      "podmonitors": [],
-      "message": "monitoring disabled"
-    }
-    ```
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/deployments/<execution-id>/enable?cluster_id=<cluster-id>"
+```
+
+Valid actions are `install`, `enable`, `disable`, and `uninstall`. Read `status`, `enabled`, `servicemonitors`, and `podmonitors` from the response.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.deployment.service import disable, enable, install, uninstall
+```python
+import asyncio
 
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        actions = {
-            "install": install,
-            "enable": enable,
-            "disable": disable,
-            "uninstall": uninstall,
-        }
-        result = await actions["disable"]("deploy-exec-001", "cluster-123")
-        print(result)
+        listing = await lens.observability.list_deployment_monitoring("<cluster-id>")
+        print(listing.cluster_id, listing.stack_ready, len(listing.items))
 
+        status = await lens.observability.get_deployment_monitoring(
+            "<execution-id>", "<cluster-id>"
+        )
+        print(status.status, status.enabled)
+
+        result = await lens.observability.manage_deployment_monitoring(
+            "<execution-id>", "enable", "<cluster-id>"
+        )
+        print(result.status, result.message)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Get GPU driver status
-
-Get the current GPU driver installation status for a cluster, including readiness and access mode.
+### 6. Inspect the GPU driver and profiling flow map
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/gpu-driver/status`**
 
-    Request: no request body. Query params: `access_mode` (`"dra" | "plugin"`, default `dra`), `cluster_id` (`str`, optional), and `hardware` (`str`, optional — a registered hardware profile id such as `intel-xpu`; omit it when only one driver provider is registered).
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/gpu-driver/status?access_mode=dra&cluster_id=<cluster-id>&hardware=intel-xpu"
 
-    Response: returns a `GpuDriverStatusResponse`.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://127.0.0.1:3000/api/v1/monitoring/gpu-driver/install?cluster_id=<cluster-id>&hardware=intel-xpu" \
+  -d '{"access_mode":"dra"}'
 
-    ```json
-    {
-      "access_mode": "dra",
-      "installed": true,
-      "ready": true,
-      "cluster_reachable": true,
-      "message": "Intel GPU DRA driver is installed and ready."
-    }
-    ```
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/profiling/flow-map?execution_id=<execution-id>&cluster_id=<cluster-id>"
+```
+
+The driver status returns `installed`, `ready`, and `message`. Driver install is asynchronous (`202`). The flow map returns `prometheus_reachable`, `components`, and `edges`.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.gpu_driver.service import get_status
+```python
+import asyncio
 
+from llm_d_lens.monitoring.gpu_driver.models import GpuDriverInstallRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status("dra", cluster_id="cluster-123", hardware="intel-xpu")
-        print(status.model_dump())
+        status = await lens.gpu_driver.read_status(
+            "dra", cluster_id="<cluster-id>", hardware="intel-xpu"
+        )
+        print(status.installed, status.ready, status.message)
 
+        installed = await lens.gpu_driver.create_install(
+            GpuDriverInstallRequest(access_mode="dra"),
+            cluster_id="<cluster-id>",
+            hardware="intel-xpu",
+        )
+        print(installed.applied, installed.message)
+
+        flow = await lens.profiling.flow_map("<execution-id>", "<cluster-id>")
+        print(flow.prometheus_reachable, len(flow.components), len(flow.edges))
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Install GPU driver stack
+## Endpoints
 
-Install the GPU driver/device-plugin stack Lens expects for the selected access mode.
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/monitoring/accelerators` | `monitoring:accelerator:read` | List accelerator capabilities. |
+| GET | `/api/v1/monitoring/accelerators/{accelerator}/status` | `monitoring:accelerator:read` | Read accelerator health. |
+| POST | `/api/v1/monitoring/accelerators/{accelerator}/installations/preflight` | `monitoring:accelerator:install` | Run install checks. |
+| POST | `/api/v1/monitoring/accelerators/{accelerator}/installations` | `monitoring:accelerator:install` | Install components (`202`). |
+| GET | `/api/v1/monitoring/accelerators/{accelerator}/operations/{operation_id}` | `monitoring:operation:read` | Read install progress. |
+| GET | `/api/v1/monitoring/accelerators/{accelerator}/links` | `monitoring:accelerator:read` | Resolve dashboard links. |
+| GET | `/api/v1/monitoring/cluster-stack/status` | `monitoring:cluster-stack:read` | Read cluster stack health. |
+| POST | `/api/v1/monitoring/cluster-stack/installations/preflight` | `monitoring:cluster-stack:install` | Run install checks. |
+| POST | `/api/v1/monitoring/cluster-stack/installations` | `monitoring:cluster-stack:install` | Install or reinstall (`202`). |
+| GET | `/api/v1/monitoring/cluster-stack/operations/{operation_id}` | `monitoring:operation:read` | Read install progress. |
+| GET | `/api/v1/monitoring/cluster-stack/links` | `monitoring:cluster-stack:read` | Resolve dashboard links. |
+| GET | `/api/v1/monitoring/deployments` | `monitoring:deployment:read` | List deployment monitoring. |
+| GET | `/api/v1/monitoring/deployments/{execution_id}` | `monitoring:deployment:read` | Read one deployment. |
+| POST | `/api/v1/monitoring/deployments/{execution_id}/{action}` | `monitoring:deployment:action` | Install, enable, disable, or uninstall. |
+| GET | `/api/v1/monitoring/gpu-driver/status` | `monitoring:gpu-driver:read` | Read driver readiness. |
+| POST | `/api/v1/monitoring/gpu-driver/install` | `monitoring:gpu-driver:install` | Install the driver stack (`202`). |
+| GET | `/api/v1/monitoring/profiling/flow-map` | `monitoring:profiling:read` | Read profiling flow metrics. |
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/gpu-driver/install`**
+## Errors / limits
 
-    Request: optional query params `cluster_id` (`str`) and `hardware` (`str`, a registered hardware profile id; omit when only one driver provider is registered). Body field: `access_mode` (`"dra" | "plugin"`).
+- **401 / 403**: missing or expired authentication, missing monitoring permission, or no access to the target cluster.
+- **404 `CLUSTER_NOT_FOUND`**: the cluster id is unknown. A deployment action outside `install`, `enable`, `disable`, or `uninstall` also returns `404`.
+- **422**: invalid namespace, access mode, or installer request; the body accelerator must match the path.
+- **502** with `CLUSTER_QUERY_FAILED`, `ACCELERATOR_QUERY_FAILED`, or `FLOW_MAP_FAILED`: the cluster or Prometheus query failed and is retryable.
+- Install operations return `202`; poll the operation endpoint until `status` is `succeeded` or `failed`. Preflight never changes the cluster.
+- **Reinstall deletes stored metrics.** Use it only when you intend to replace the monitoring stack.
+- `POST /api/v1/monitoring/deployments/{execution_id}/install` and `enable` require a ready deployment. `GET /api/v1/monitoring/deployments` requires `cluster_id`; the flow map requires `execution_id`.
+- Namespaces are limited to 63 characters and must be valid DNS labels. Accelerator ids come from registered hardware profiles, such as `intel_gpu` and `nvidia_gpu`.
+- The accelerator status query defaults to `intel-xpumd` for every family; always pass the NVIDIA release namespace, usually `dcgm-exporter`.
 
-    ```json
-    {
-      "access_mode": "dra"
-    }
-    ```
+## Related
 
-    Response: returns a `GpuDriverInstallResponse`.
-
-    ```json
-    {
-      "access_mode": "dra",
-      "applied": true,
-      "message": "Applied the Intel GPU DRA driver manifests. It may take a few minutes for pods to become ready."
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.gpu_driver.service import install
-
-
-    async def main() -> None:
-        result = await install("dra", cluster_id="cluster-123", hardware="intel-xpu")
-        print(result.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Get deployment profiling flow map
-
-Query the Prometheus-backed GPU idle/utilization flow-map for a specific deployment execution.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/profiling/flow-map`**
-
-    Request: no request body. Required query param: `execution_id` (`str`). Optional query param: `cluster_id` (`str`).
-
-    Response: returns a `FlowMapResponse` with component and edge metrics.
-
-    ```json
-    {
-      "execution_id": "deploy-exec-001",
-      "namespace": "llm-d-run-001",
-      "prometheus_reachable": true,
-      "message": null,
-      "components": [
-        {
-          "role": "epp",
-          "label": "EPP",
-          "present": true,
-          "instances": [
-            {
-              "name": "demo-epp-5d7d8c9b6f-abcde",
-              "request_rate": 1.8,
-              "queue_length": 0.2,
-              "prefill_inflight": 0.1,
-              "decode_inflight": 0.1
-            }
-          ],
-          "request_rate": 1.8,
-          "queue_length": 0.2,
-          "process_time_ms": 18.4
-        },
-        {
-          "role": "decode",
-          "label": "Decode",
-          "present": true,
-          "instances": [
-            {
-              "name": "modelserver-decode-0",
-              "request_rate": 1.7,
-              "output_token_rate": 82.0,
-              "kv_cache_usage_perc": 64.5
-            }
-          ],
-          "request_rate": 1.7,
-          "output_token_rate": 82.0,
-          "kv_cache_usage_perc": 64.5
-        }
-      ],
-      "edges": [
-        {
-          "id": "epp->decode",
-          "source": "epp",
-          "target": "decode",
-          "request_rate": 1.7,
-          "success_request_rate": 1.7,
-          "failed_request_rate": 0.0,
-          "input_token_rate": 41.0,
-          "output_token_rate": 82.0
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.profiling.service import build_flow_map
-
-
-    async def main() -> None:
-        response = await build_flow_map("deploy-exec-001", "cluster-123")
-        print(response.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-Additional accelerator endpoints exist for installation preflight, operation status, and resolved links; see the OpenAPI reference.
-
-Additional cluster-stack endpoints exist for operation status and resolved Grafana/Prometheus links; see the OpenAPI reference.
-
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
-
-## Shared monitoring behavior
-
-Monitoring services share command JSON parsing, Service link lookup, Prometheus query transport and operation runtime mechanics. Existing Python entry points and REST request/response contracts below are unchanged; domain errors, installer phases, DAO records and verification callbacks remain with their respective accelerator or cluster-stack service.
+- [Observability user guide](/user-guide/observability)
+- [Deployments API](/api-reference/modules/deployments)
+- [API conventions](/api-reference)
+- OpenAPI: `/api/v1/simulation/docs` (Swagger UI) and `/api/v1/simulation/openapi.json` (schema).

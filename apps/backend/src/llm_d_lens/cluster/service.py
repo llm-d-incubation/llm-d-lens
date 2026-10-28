@@ -18,8 +18,22 @@ from uuid import uuid4
 import httpx
 import yaml
 
-from llm_d_lens.cluster import registry, sessions
+from llm_d_lens.cluster import registry, repo_downloads, sessions
 from llm_d_lens.cluster.errors import ClusterOverviewError
+from llm_d_lens.cluster.models import (
+    ClusterCreateRequest,
+    ClusterSettingsUpdateRequest,
+    HfTokenSecretRef,
+    KubernetesVersionResponse,
+    LwsInstallResponse,
+    LwsStatusResponse,
+    ModelSecretsResponse,
+    ModelSecretSummary,
+    NodeMaintenanceResponse,
+    NodeMaintenanceResult,
+    RepoDownloadStatus,
+    SoftwareDownloadStatusResponse,
+)
 from llm_d_lens.cluster.settings import cluster_settings
 from llm_d_lens.hardware.registry import get_profile
 from llm_d_lens.infrastructure.kubernetes import PortForwardError, ensure_port_forward, run_kubectl, scoped_runner
@@ -60,7 +74,7 @@ async def cluster_is_ready(cluster: registry.Cluster) -> bool:
     return result.returncode == 0 and "ok" in (result.stdout or "").lower()
 
 
-async def lws_status(cluster_id: str) -> dict[str, Any]:
+async def lws_status(cluster_id: str) -> LwsStatusResponse:
     """Report the pinned LeaderWorkerSet CRD and controller readiness."""
     version = lws_version()
     try:
@@ -75,7 +89,7 @@ async def lws_status(cluster_id: str) -> dict[str, Any]:
             timeout=30,
         )
     except Exception as error:  # noqa: BLE001 - status is best effort
-        return {"ready": False, "crd": "unknown", "controller": "unknown", "version": version, "message": str(error)}
+        return LwsStatusResponse(ready=False, crd="unknown", controller="unknown", version=version, message=str(error))
     crd_ready = crd.returncode == 0
     try:
         controller_status = json.loads(controller.stdout) if controller.returncode == 0 else {}
@@ -83,25 +97,25 @@ async def lws_status(cluster_id: str) -> dict[str, Any]:
         controller_status = {}
     controller_ready = int((controller_status.get("status") or {}).get("availableReplicas") or 0) > 0
     message = "" if crd_ready and controller_ready else "LeaderWorkerSet is not installed on this cluster"
-    return {
-        "ready": crd_ready and controller_ready,
-        "crd": "ready" if crd_ready else "missing",
-        "controller": "ready" if controller_ready else "missing",
-        "version": version,
-        "namespace": LWS_NAMESPACE,
-        "message": message,
-    }
+    return LwsStatusResponse(
+        ready=crd_ready and controller_ready,
+        crd="ready" if crd_ready else "missing",
+        controller="ready" if controller_ready else "missing",
+        version=version,
+        namespace=LWS_NAMESPACE,
+        message=message,
+    )
 
 
-async def install_lws(cluster_id: str) -> dict[str, Any]:
+async def install_lws(cluster_id: str) -> LwsInstallResponse:
     """Install/upgrade the pinned LeaderWorkerSet controller with DisaggregatedSet."""
     cluster = registry.require_cluster(cluster_id)
     kubeconfig = registry.kubeconfig_path(cluster.id)
     if not kubeconfig.is_file():
-        return {"ok": False, "ready": False, "message": "cluster kubeconfig is unavailable"}
+        return LwsInstallResponse(ok=False, ready=False, message="cluster kubeconfig is unavailable")
     helm = shutil.which("helm")
     if helm is None:
-        return {"ok": False, "ready": False, "message": "helm is not installed on the Lens host"}
+        return LwsInstallResponse(ok=False, ready=False, message="helm is not installed on the Lens host")
     version = lws_version()
     with tempfile.TemporaryDirectory(prefix="lens-lws-") as directory:
         pull = await asyncio.create_subprocess_exec(
@@ -118,11 +132,11 @@ async def install_lws(cluster_id: str) -> dict[str, Any]:
         )
         stdout, stderr = await pull.communicate()
         if pull.returncode:
-            return {
-                "ok": False,
-                "ready": False,
-                "message": (stderr or stdout).decode(errors="replace").strip() or "could not pull the LWS chart",
-            }
+            return LwsInstallResponse(
+                ok=False,
+                ready=False,
+                message=(stderr or stdout).decode(errors="replace").strip() or "could not pull the LWS chart",
+            )
         crds = Path(directory) / "lws" / "crds"
         for manifest in sorted(crds.glob("*.yaml")) if crds.is_dir() else []:
             result = await run_kubectl(
@@ -131,7 +145,11 @@ async def install_lws(cluster_id: str) -> dict[str, Any]:
                 timeout=300,
             )
             if result.returncode:
-                return {"ok": False, "ready": False, "message": (result.stderr or result.stdout).strip()}
+                return LwsInstallResponse(
+                    ok=False,
+                    ready=False,
+                    message=(result.stderr or result.stdout).strip(),
+                )
         environment = {**os.environ, "KUBECONFIG": str(kubeconfig), **resolve_proxy_env(cluster.id)}
         install = await asyncio.create_subprocess_exec(
             helm,
@@ -156,16 +174,42 @@ async def install_lws(cluster_id: str) -> dict[str, Any]:
         )
         stdout, stderr = await install.communicate()
         if install.returncode:
-            return {
-                "ok": False,
-                "ready": False,
-                "message": (stderr or stdout).decode(errors="replace").strip() or "LWS installation failed",
-            }
+            return LwsInstallResponse(
+                ok=False,
+                ready=False,
+                message=(stderr or stdout).decode(errors="replace").strip() or "LWS installation failed",
+            )
     status = await lws_status(cluster.id)
-    return {"ok": bool(status.get("ready")), **status}
+    return LwsInstallResponse(ok=status.ready, **status.model_dump())
 
 
-async def set_node_maintenance(cluster: registry.Cluster, names: list[str], *, disabled: bool) -> list[dict[str, Any]]:
+async def cluster_kubernetes_version(cluster_id: str) -> KubernetesVersionResponse:
+    """Probe a cluster's Kubernetes version and compare it with the stack minimum."""
+    from llm_d_lens.hardware.version import server_kubernetes_version  # noqa: PLC0415
+    from llm_d_lens.versions import k8s_version_supports, min_k8s_version  # noqa: PLC0415
+
+    minimum = min_k8s_version()
+    try:
+        parsed = await server_kubernetes_version(cluster_id)
+    except Exception:  # noqa: BLE001 - report any probe failure to the wizard
+        logger.exception("Unable to query Kubernetes version for cluster %s", cluster_id)
+        return KubernetesVersionResponse(
+            reachable=False, error="Unable to query Kubernetes version", min_k8s_version=minimum
+        )
+    if parsed is None:
+        return KubernetesVersionResponse(reachable=False, min_k8s_version=minimum)
+    version = f"{parsed[0]}.{parsed[1]}"
+    return KubernetesVersionResponse(
+        reachable=True,
+        version=version,
+        min_k8s_version=minimum,
+        supported=k8s_version_supports(version),
+    )
+
+
+async def set_node_maintenance(
+    cluster: registry.Cluster, names: list[str], *, disabled: bool
+) -> NodeMaintenanceResponse:
     """Cordon (``disabled=True``) or uncordon (``disabled=False``) worker nodes.
 
     Cordoning only flips ``spec.unschedulable``, which stops the scheduler
@@ -179,31 +223,31 @@ async def set_node_maintenance(cluster: registry.Cluster, names: list[str], *, d
     nodes = json_output(nodes_result, "kubectl get nodes").get("items") or []
     roles = {summary["name"]: summary["role"] for summary in (_node_summary(node) for node in nodes)}
 
-    async def _apply(name: str) -> dict[str, Any]:
+    async def _apply(name: str) -> NodeMaintenanceResult:
         if name not in roles:
-            return {"name": name, "ok": False, "error": f"Node '{name}' was not found in this cluster"}
+            return NodeMaintenanceResult(name=name, ok=False, error=f"Node '{name}' was not found in this cluster")
         if roles[name] != "worker":
-            return {
-                "name": name,
-                "ok": False,
-                "error": f"Node '{name}' is a control-plane node and cannot be put into maintenance mode",
-            }
+            return NodeMaintenanceResult(
+                name=name,
+                ok=False,
+                error=f"Node '{name}' is a control-plane node and cannot be put into maintenance mode",
+            )
         verb = "cordon" if disabled else "uncordon"
         try:
             result = await run_kubectl([verb, name], cluster_id=cluster.id, timeout=15)
         except FileNotFoundError as error:
-            return {"name": name, "ok": False, "error": str(error)}
+            return NodeMaintenanceResult(name=name, ok=False, error=str(error))
         except TimeoutError as error:
-            return {"name": name, "ok": False, "error": str(error)}
+            return NodeMaintenanceResult(name=name, ok=False, error=str(error))
         if result.returncode != 0:
-            return {
-                "name": name,
-                "ok": False,
-                "error": (result.stderr or result.stdout or f"kubectl {verb} failed").strip(),
-            }
-        return {"name": name, "ok": True, "schedulingDisabled": disabled}
+            return NodeMaintenanceResult(
+                name=name,
+                ok=False,
+                error=(result.stderr or result.stdout or f"kubectl {verb} failed").strip(),
+            )
+        return NodeMaintenanceResult(name=name, ok=True, schedulingDisabled=disabled)
 
-    return list(await asyncio.gather(*(_apply(name) for name in names)))
+    return NodeMaintenanceResponse(items=list(await asyncio.gather(*(_apply(name) for name in names))))
 
 
 async def hf_token_secret_status(cluster: registry.Cluster) -> str:
@@ -230,7 +274,7 @@ async def hf_token_secret_status(cluster: registry.Cluster) -> str:
     return "present" if (result.stdout or "").strip() else "missing"
 
 
-async def list_model_secrets(cluster: registry.Cluster) -> list[dict[str, str]]:
+async def list_model_secrets(cluster: registry.Cluster) -> ModelSecretsResponse:
     """List external Secret coordinates containing HF_TOKEN without exposing values.
 
     Deliberately does not filter namespaces by name/prefix: a deployment or
@@ -245,20 +289,25 @@ async def list_model_secrets(cluster: registry.Cluster) -> list[dict[str, str]]:
     """
     result = await run_kubectl(["get", "secrets", "-A", "-o", "json"], cluster_id=cluster.id, timeout=30)
     payload = json_output(result, "model credential discovery")
-    secrets = []
+    secrets: list[ModelSecretSummary] = []
     for item in payload.get("items", []):
         metadata = item.get("metadata") or {}
         namespace = str(metadata.get("namespace") or "default")
-        if "HF_TOKEN" not in (item.get("data") or {}):
+        name = str(metadata.get("name") or "")
+        if "HF_TOKEN" not in (item.get("data") or {}) or not name:
             continue
         secrets.append(
-            {
-                "namespace": namespace,
-                "name": str(metadata.get("name") or ""),
-                "createdAt": str(metadata.get("creationTimestamp") or ""),
-            }
+            ModelSecretSummary(
+                namespace=namespace,
+                name=name,
+                createdAt=str(metadata.get("creationTimestamp") or ""),
+            )
         )
-    return sorted((item for item in secrets if item["name"]), key=lambda item: (item["namespace"], item["name"]))
+    secrets.sort(key=lambda item: (item.namespace, item.name))
+    return ModelSecretsResponse(
+        hostManagedAvailable=(Path.home() / ".cache" / "huggingface" / "token").is_file(),
+        items=secrets,
+    )
 
 
 def json_output(result: CommandResult, label: str) -> Any:
@@ -929,37 +978,15 @@ def _has_storage_volumes(cluster_id: str) -> bool:
     return any(volume.cluster_id == cluster_id for volume in default_store().list())
 
 
-def create_cluster(
-    name: str,
-    description: str,
-    kubeconfig_text: str,
-    *,
-    proxy_mode: str = "auto",
-    http_proxy: str | None = None,
-    https_proxy: str | None = None,
-    no_proxy: str | None = None,
-    llm_d_ref: str | None = None,
-    llm_d_lensmark_ref: str | None = None,
-    gateway_provider: str | None = None,
-    gateway_namespace: str | None = None,
-    gateway_name: str | None = None,
-    gateway_public_url: str | None = None,
-    gateway_port: int | None = None,
-    gateway_authz_host: str | None = None,
-    inotify_max_user_instances: int = 8192,
-    router_version: str | None = None,
-    gie_version: str | None = None,
-    ipp_version: str | None = None,
-    draft: bool = False,
-) -> tuple[registry.Cluster, sessions.ClusterSession]:
-    clean_name = name.strip()
-    clean_description = description.strip()
+def create_cluster(request: ClusterCreateRequest) -> tuple[registry.Cluster, sessions.ClusterSession]:
+    clean_name = request.name.strip()
+    clean_description = request.description.strip()
     if not clean_name:
         raise ClusterOverviewError("Cluster name is required", status_code=422, code="invalid_cluster_name")
-    if not kubeconfig_text.strip():
+    if not request.kubeconfig.strip():
         raise ClusterOverviewError("A kubeconfig file is required", status_code=422, code="invalid_kubeconfig")
     try:
-        parsed = yaml.safe_load(kubeconfig_text)
+        parsed = yaml.safe_load(request.kubeconfig)
     except yaml.YAMLError as error:
         raise ClusterOverviewError(
             f"Uploaded kubeconfig is not valid YAML: {error}", status_code=422, code="invalid_kubeconfig"
@@ -968,6 +995,10 @@ def create_cluster(
         raise ClusterOverviewError(
             "Uploaded kubeconfig is not a valid kubeconfig", status_code=422, code="invalid_kubeconfig"
         )
+    proxy_mode = request.proxy.mode
+    http_proxy = request.proxy.http_proxy
+    https_proxy = request.proxy.https_proxy
+    no_proxy = request.proxy.no_proxy
     if proxy_mode == "custom" and not any((http_proxy, https_proxy, no_proxy)):
         raise ClusterOverviewError(
             "Custom proxy requires at least one of HTTP_PROXY/HTTPS_PROXY/NO_PROXY",
@@ -980,55 +1011,33 @@ def create_cluster(
     cluster = registry.create_cluster(
         clean_name,
         clean_description,
-        kubeconfig_text,
+        request.kubeconfig,
         proxy_mode=proxy_mode,
         http_proxy=http_proxy,
         https_proxy=https_proxy,
         no_proxy=no_proxy,
         llm_d_ref=current.llm_d,
         llm_d_lensmark_ref=current.llm_d_lensmark,
-        gateway_provider=gateway_provider,
-        gateway_namespace=gateway_namespace,
-        gateway_name=gateway_name,
-        gateway_public_url=gateway_public_url,
-        gateway_port=gateway_port,
-        gateway_authz_host=gateway_authz_host,
-        inotify_max_user_instances=inotify_max_user_instances,
+        gateway_provider=(request.gateway_provider or "").strip() or None,
+        gateway_namespace=request.gateway_namespace,
+        gateway_name=request.gateway_name,
+        gateway_public_url=(request.gateway_public_url or "").strip() or None,
+        gateway_port=request.gateway_port,
+        gateway_authz_host=(request.gateway_authz_host or "").strip() or None,
+        inotify_max_user_instances=request.inotify_max_user_instances,
         router_version=current.llm_d_router,
         gie_version=current.k8s_gateway_api_inference_extension,
         ipp_version=current.llm_d_inference_payload_processor,
-        draft=draft,
+        draft=request.draft,
     )
     return cluster, _register_cluster_session(cluster)
 
 
-def update_cluster_settings(
-    cluster_id: str,
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    proxy_mode: str | None = None,
-    http_proxy: str | None = None,
-    https_proxy: str | None = None,
-    no_proxy: str | None = None,
-    llm_d_ref: str | None = None,
-    llm_d_lensmark_ref: str | None = None,
-    gateway_provider: str | None = None,
-    gateway_namespace: str | None = None,
-    gateway_name: str | None = None,
-    gateway_public_url: str | None = None,
-    gateway_port: int | None = None,
-    gateway_authz_host: str | None = None,
-    inotify_max_user_instances: int | None = None,
-    router_version: str | None = None,
-    gie_version: str | None = None,
-    ipp_version: str | None = None,
-    draft: bool | None = None,
-) -> registry.Cluster:
+def update_cluster_settings(cluster_id: str, request: ClusterSettingsUpdateRequest) -> registry.Cluster:
     """Patch a cluster's name/description/proxy/version settings (wizard Step 2/3,
     and the Clusters overview page's "Edit cluster" action)."""
     cluster = registry.require_cluster(cluster_id)
-    requested_provider = (gateway_provider or "").strip() or None
+    requested_provider = (request.gateway_provider or "").strip() or None
     # A cluster may be created as a draft before the wizard's Gateway step, so
     # the first provider assignment is allowed. Once set, the provider stays
     # immutable because changing it requires tearing down the installed data
@@ -1044,14 +1053,18 @@ def update_cluster_settings(
             code="gateway_provider_immutable",
         )
     updates: dict[str, Any] = {}
-    if name is not None:
-        clean_name = name.strip()
+    if request.name is not None:
+        clean_name = request.name.strip()
         if not clean_name:
             raise ClusterOverviewError("Cluster name is required", status_code=422, code="invalid_name")
         updates["name"] = clean_name
-    if description is not None:
-        updates["description"] = description.strip()
-    if proxy_mode is not None:
+    if request.description is not None:
+        updates["description"] = request.description.strip()
+    if request.proxy is not None:
+        proxy_mode = request.proxy.mode
+        http_proxy = request.proxy.http_proxy
+        https_proxy = request.proxy.https_proxy
+        no_proxy = request.proxy.no_proxy
         if proxy_mode not in ("auto", "custom"):
             raise ClusterOverviewError(
                 "proxy mode must be 'auto' or 'custom'", status_code=422, code="invalid_proxy_config"
@@ -1076,25 +1089,40 @@ def update_cluster_settings(
     if requested_provider is not None:
         updates["gateway_provider"] = requested_provider
     for key, value in (
-        ("gateway_namespace", gateway_namespace),
-        ("gateway_name", gateway_name),
-        ("gateway_public_url", gateway_public_url),
-        ("gateway_port", gateway_port),
-        ("gateway_authz_host", gateway_authz_host),
+        ("gateway_namespace", request.gateway_namespace),
+        ("gateway_name", request.gateway_name),
+        ("gateway_public_url", request.gateway_public_url),
+        ("gateway_port", request.gateway_port),
+        ("gateway_authz_host", request.gateway_authz_host),
     ):
         if value is not None:
             updates[key] = value or None
-    if inotify_max_user_instances is not None:
-        if inotify_max_user_instances < 1:
+    if request.inotify_max_user_instances is not None:
+        if request.inotify_max_user_instances < 1:
             raise ClusterOverviewError(
                 "inotify max user instances must be at least 1",
                 status_code=422,
                 code="invalid_inotify_limit",
             )
-        updates["inotify_max_user_instances"] = inotify_max_user_instances
-    if draft is not None:
-        updates["draft"] = draft
+        updates["inotify_max_user_instances"] = request.inotify_max_user_instances
+    if request.draft is not None:
+        updates["draft"] = request.draft
     return registry.update_cluster(cluster_id, **updates)
+
+
+def software_download_status(cluster_id: str) -> SoftwareDownloadStatusResponse:
+    """Return the current llm-d and llm-d-benchmark download status for a cluster."""
+    llm_d = repo_downloads.get_status(cluster_id, "llm-d")
+    llm_d_lensmark = repo_downloads.get_status(cluster_id, "llm-d-benchmark")
+    return SoftwareDownloadStatusResponse(
+        llmD=RepoDownloadStatus(ref=llm_d.ref, state=llm_d.state, path=llm_d.path, error=llm_d.error),
+        llmDBenchmark=RepoDownloadStatus(
+            ref=llm_d_lensmark.ref,
+            state=llm_d_lensmark.state,
+            path=llm_d_lensmark.path,
+            error=llm_d_lensmark.error,
+        ),
+    )
 
 
 def record_repo_download(
@@ -1209,7 +1237,7 @@ async def _write_hf_token_secret(
     registry.update_cluster(cluster.id, hf_token_secret_namespace=namespace, hf_token_secret_name=name)
 
 
-async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name: str, token: str) -> dict[str, str]:
+async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name: str, token: str) -> HfTokenSecretRef:
     """Create a standalone ``HF_TOKEN`` Secret for the wizard's Model Cache step.
 
     Decoupled from any Model Cache entry (see
@@ -1232,7 +1260,7 @@ async def create_hf_token_secret(cluster: registry.Cluster, namespace: str, name
             code="secret_already_exists",
         )
     await _write_hf_token_secret(cluster, namespace, name, token, verb="create", failure_code="secret_create_failed")
-    return {"namespace": namespace, "name": name}
+    return HfTokenSecretRef(namespace=namespace, name=name)
 
 
 async def update_hf_token_secret(
@@ -1241,7 +1269,7 @@ async def update_hf_token_secret(
     *,
     namespace: str | None = None,
     name: str | None = None,
-) -> dict[str, str]:
+) -> HfTokenSecretRef:
     """Rotate the cluster's ``HF_TOKEN`` Secret from the Edit cluster drawer.
 
     Unlike :func:`create_hf_token_secret` this uses ``kubectl apply``, because
@@ -1267,7 +1295,7 @@ async def update_hf_token_secret(
     await _write_hf_token_secret(
         cluster, namespace, name, token.strip(), verb="apply", failure_code="secret_update_failed"
     )
-    return {"namespace": namespace, "name": name}
+    return HfTokenSecretRef(namespace=namespace, name=name)
 
 
 def _register_cluster_session(cluster: registry.Cluster) -> sessions.ClusterSession:

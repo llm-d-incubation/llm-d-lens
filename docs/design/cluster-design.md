@@ -157,7 +157,7 @@ skipped directly), the normal five-step wizard is shown:
 
 #### 2.2 Backend: from "one-shot synchronous creation" to "creation + background orchestration"
 
-Currently `POST /api/cluster/clusters` is synchronous: write metadata + kubeconfig
+Currently `POST /api/v1/cluster/clusters` is synchronous: write metadata + kubeconfig
 file, then immediately return 201. That step (§3 Step 1) remains synchronously
 unchanged—it is inherently fast and is a prerequisite dependency for later steps
 (without `cluster_id`, proxy configuration, Storage volume, and Model Cache
@@ -176,7 +176,7 @@ Steps 2-4 **cannot** be stuffed into the same synchronous request:
 
 Therefore the create-cluster backend flow changes as follows:
 
-1. `POST /api/cluster/clusters` (existing required fields remain: `name`,
+1. `POST /api/v1/cluster/clusters` (existing required fields remain: `name`,
    `description`, `file`; new optional fields are listed in §3) completes
    synchronously:
    - Write Cluster metadata + kubeconfig (unchanged from today).
@@ -211,7 +211,7 @@ Therefore the create-cluster backend flow changes as follows:
    - Each substep updates the Cluster's provisioning status record (see §5), which
      the frontend polls.
 3. The frontend polls the new endpoint
-   `GET /api/cluster/clusters/{id}/provisioning` until all substeps are
+   `GET /api/v1/cluster/clusters/{id}/provisioning` until all substeps are
    `ready`/`failed`.
 
 ---
@@ -266,7 +266,7 @@ class DatabaseSetupRequest(StrictModel):
 
 This section is independent from the rest of §3.1-3.2: `DatabaseBootstrapConfig`
 is not attached to `Cluster` / `ClusterRecord`, and does not appear in the
-`POST /api/cluster/clusters` payload (see Non-goal #4 in §1).
+`POST /api/v1/cluster/clusters` payload (see Non-goal #4 in §1).
 
 #### 3.1 `llm_d_lens/cluster/registry.py::Cluster`
 
@@ -448,7 +448,7 @@ class ClusterProvisioningStatus(StrictModel):
         return all(step.status in ("skipped", "ready", "failed") for step in self.steps)
 ```
 
-`POST /api/cluster/clusters` adds the following form fields (still
+`POST /api/v1/cluster/clusters` adds the following form fields (still
 `multipart/form-data`, because kubeconfig is a file upload):
 
 | Field | Type | Description |
@@ -472,7 +472,7 @@ The response body expands to:
 When `provisioning` is `null`, it means there are no background substeps
 (equivalent to today's behavior).
 
-New endpoints for Step 0 (fully independent from `POST /api/cluster/clusters`, with
+New endpoints for Step 0 (fully independent from `POST /api/v1/cluster/clusters`, with
 no `clusterId`; see §4.0):
 
 | Endpoint | Description |
@@ -600,7 +600,7 @@ existing `registry.create_cluster()` to obtain `cluster_id` for later steps.
 because Steps 2-4 all require an existing `cluster_id` (especially because
 kubeconfig must be persisted first before Step 4's Storage / Model Cache can issue
 kubectl commands to the target cluster). If the user cancels midway through Steps
-2-4, the wizard must call `DELETE /api/cluster/clusters/{id}` to roll back
+2-4, the wizard must call `DELETE /api/v1/cluster/clusters/{id}` to roll back
 (reusing the current "delete cluster" logic; since there is not yet any Storage
 volume at this point, the new "cannot delete a cluster with Storage underneath it"
 check added in §8.4 will not block this rollback).
@@ -677,7 +677,7 @@ node/system configuration". Proposal:
      rate is low.
 
 **How it takes effect at runtime:** after saving `ProxyConfig` via
-`PATCH /api/cluster/clusters/{id}` (when `mode="auto"`, the background
+`PATCH /api/v1/cluster/clusters/{id}` (when `mode="auto"`, the background
 Provisioning task triggers one detection and writes back `detected_*`; when
 `mode="custom"`, the manual values take effect directly),
 `llm_d_lens/utils/kubernetes.py::kubeconfig_environment()` and
@@ -829,7 +829,7 @@ out everything manually:
   is not attached to any specific Model Cache entry:
 
   ```
-  POST /api/cluster/clusters/{cluster_id}/hf-token-secrets
+  POST /api/v1/cluster/clusters/{cluster_id}/hf-token-secrets
   Body: HfTokenSecretCreateRequest { namespace, name?, token }
   Resp: HfTokenSecretRef { namespace, name }
   ```
@@ -876,7 +876,7 @@ out everything manually:
 Read-only summary of the choices in Steps 1-4 (skipped steps show as "not
 enabled"), with a "Create cluster" button. If the cluster was already created
 mid-wizard in Step 1 (see §4.1), clicking this step actually sends
-`PATCH /api/cluster/clusters/{id}` (persist Step 2/3 config and start Step 4
+`PATCH /api/v1/cluster/clusters/{id}` (persist Step 2/3 config and start Step 4
 background work), rather than another `POST`.
 
 ---
@@ -911,12 +911,12 @@ background work), rather than another `POST`.
   should not delay/block completion of the wizard). `data-plane` is non-`skipped`
   only when a data-plane version set is selected in Step 3; on failure it keeps the
   already-installed parts and reports the missing items.
-- `GET /api/cluster/clusters/{id}/provisioning` is used by the frontend for
+- `GET /api/v1/cluster/clusters/{id}/provisioning` is used by the frontend for
   polling (reusing the polling interval conventions from the Model Cache page).
   Once all substeps enter terminal states (`skipped` / `ready` / `failed`), the
   frontend stops polling.
 - An individual `failed` substep can be retried independently
-  (`POST /api/cluster/clusters/{id}/provisioning/{step_id}/retry`) without
+  (`POST /api/v1/cluster/clusters/{id}/provisioning/{step_id}/retry`) without
   rerunning the entire wizard—for example, if Model Cache download fails due to a
   transient network issue, the user retries only that part; "detect again" for
   `proxy-detection` reuses the same retry endpoint.
@@ -1330,10 +1330,10 @@ Add a set of endpoints independent from the existing cluster CRUD routes in
 
 | Method & path | Description |
 |---|---|
-| `POST /api/cluster/bootstrap/preflight` | Takes the node list, synchronously runs the quick checks in §3.2, and returns per-node pass/fail details. |
-| `POST /api/cluster/bootstrap` | Called after all preflight checks pass: renders the inventory, starts a background task running `ansible-playbook cluster.yml`, and returns `{ bootstrapId }`. |
-| `GET /api/cluster/bootstrap/{id}` | Polls status + log tail; when `phase == "succeeded"`, the response body also includes `kubeconfig` (returned only once; after it is read, the field is cleared from the in-memory Job and `inventory_dir` is cleaned up). |
-| `POST /api/cluster/bootstrap/{id}/cancel` | If the user closes the sub-wizard mid-run: terminate the running `ansible-playbook` subprocess (`asyncio.subprocess` `.terminate()`, following the existing Helm subprocess management pattern in `precise_prefix_cache_routing.py`). |
+| `POST /api/v1/cluster/bootstrap/preflight` | Takes the node list, synchronously runs the quick checks in §3.2, and returns per-node pass/fail details. |
+| `POST /api/v1/cluster/bootstrap` | Called after all preflight checks pass: renders the inventory, starts a background task running `ansible-playbook cluster.yml`, and returns `{ bootstrapId }`. |
+| `GET /api/v1/cluster/bootstrap/{id}` | Polls status + log tail; when `phase == "succeeded"`, the response body also includes `kubeconfig` (returned only once; after it is read, the field is cleared from the in-memory Job and `inventory_dir` is cleaned up). |
+| `POST /api/v1/cluster/bootstrap/{id}/cancel` | If the user closes the sub-wizard mid-run: terminate the running `ansible-playbook` subprocess (`asyncio.subprocess` `.terminate()`, following the existing Helm subprocess management pattern in `precise_prefix_cache_routing.py`). |
 
 Existing Cluster DTOs such as `ClusterSettingsUpdateRequest` remain **unchanged**.
 
@@ -1361,13 +1361,13 @@ Existing Cluster DTOs such as `ClusterSettingsUpdateRequest` remain **unchanged*
   (verbose Ansible output may echo variables such as `ansible_ssh_pass`; filter out lines
   containing those field names while reading subprocess output, or rely on `no_log: true` where
   Kubespray already does so in its built-in tasks).
-- **One-time kubeconfig delivery:** once `GET /api/cluster/bootstrap/{id}` returns kubeconfig, the
+- **One-time kubeconfig delivery:** once `GET /api/v1/cluster/bootstrap/{id}` returns kubeconfig, the
   field is immediately cleared from the in-memory Job and `artifacts/admin.conf` is deleted from
   disk, preventing the same sensitive file from lingering on the Lens backend host.
 - **sudo boundary:** `ansible-playbook -b` (`become`) delegates privilege elevation
   to Kubespray's task definitions.
 - **Host-key verification:** Before the first authenticated connection, the UI calls
-  `POST /api/cluster/bootstrap/host-keys` to retrieve each expanded host's SSH public-key SHA-256
+  `POST /api/v1/cluster/bootstrap/host-keys` to retrieve each expanded host's SSH public-key SHA-256
   fingerprint without credentials. It displays the `host:port`, algorithm and fingerprint, and
   requires the operator to confirm an independent check against a trusted source. Both preflight
   and job creation require `hostKeys` pins covering every expanded node; the backend rejects

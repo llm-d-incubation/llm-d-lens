@@ -176,17 +176,17 @@ def test_catalog_and_fastapi_contract(simulation_root):
     assert trace_registry.get("bailian-coder")["scenario"] == "coding"
     with TestClient(app) as client:
         assert client.get("/api/health").status_code == 200
-        assert client.get("/api/simulation/health").status_code == 200
-        assert client.get("/api/simulation/docs").status_code == 200
-        assert client.get("/api/simulation/openapi.json").status_code == 200
-        assert client.get("/api/simulation/backends").status_code == 200
-        scenarios = client.get("/api/simulation/scenarios").json()["scenarios"]
+        assert client.get("/api/v1/simulation/health").status_code == 200
+        assert client.get("/api/v1/simulation/docs").status_code == 200
+        assert client.get("/api/v1/simulation/openapi.json").status_code == 200
+        assert client.get("/api/v1/simulation/backends").status_code == 200
+        scenarios = client.get("/api/v1/simulation/scenarios").json()["scenarios"]
         assert [scenario["name"] for scenario in scenarios] == [
             "chat",
             "api-calling",
             "coding",
         ]
-        datasets = client.get("/api/simulation/trace-datasets").json()["datasets"]
+        datasets = client.get("/api/v1/simulation/trace-datasets").json()["datasets"]
         coder = next(item for item in datasets if item["name"] == "bailian-coder")
         assert coder["supported_backends"] == ["aiperf", "trace-replayer"]
         baseten = next(item for item in datasets if item["name"] == "baseten-synthetic")
@@ -201,15 +201,15 @@ def test_catalog_and_fastapi_contract(simulation_root):
         assert not any(item["name"].startswith("azure-") for item in datasets)
         assert (
             client.post(
-                "/api/simulation/trace-datasets/download",
+                "/api/v1/simulation/trace-datasets/download",
                 json={"dataset": "unknown", "url": "https://example.com/trace"},
             ).status_code
             == 422
         )
-        assert client.get("/api/simulation/tasks?created_after=not-a-date").status_code == 422
+        assert client.get("/api/v1/simulation/tasks?created_after=not-a-date").status_code == 422
         assert (
             client.post(
-                "/api/simulation/models/discover",
+                "/api/v1/simulation/models/discover",
                 json={"endpoint_url": "not-a-url"},
             ).status_code
             == 400
@@ -306,7 +306,7 @@ def test_task_details_backfills_backend_version(simulation_root):
     asyncio.run(save_task(task))
 
     with TestClient(app) as client:
-        response = client.get("/api/simulation/tasks/1234abcd")
+        response = client.get("/api/v1/simulation/tasks/1234abcd")
 
     assert response.status_code == 200
     assert response.json()["result"]["backend_version"].startswith("0.2.0+")
@@ -467,7 +467,7 @@ def test_create_api_keeps_json_shape_and_passes_typed_request(simulation_root, m
     monkeypatch.setattr(importlib.import_module("llm_d_lens.simulation.router"), "create_task", fake_create)
     with TestClient(app) as client:
         response = client.post(
-            "/api/simulation/tasks",
+            "/api/v1/simulation/tasks",
             json={
                 "name": "API replay",
                 "description": "",
@@ -915,7 +915,7 @@ def test_timeline_index(simulation_root):
     assert sum(item["request_count"] for item in timeline["bins"]) == 5
 
     with TestClient(app) as client:
-        response = client.get("/api/simulation/trace-datasets/mooncake-arxiv/timeline?bins=50")
+        response = client.get("/api/v1/simulation/trace-datasets/mooncake-arxiv/timeline?bins=50")
     assert response.status_code == 200
     assert response.json()["duration_seconds"] == 2
 
@@ -1739,7 +1739,7 @@ def test_status_code_breakdown_supports_arbitrary_codes(simulation_root):
 
     asyncio.run(save_task(task))
     with TestClient(app) as client:
-        response = client.get(f"/api/simulation/tasks/{task.id}/response-code-issues?status_code=418")
+        response = client.get(f"/api/v1/simulation/tasks/{task.id}/response-code-issues?status_code=418")
     assert response.status_code == 200
     assert response.json() == {
         "task_id": task.id,
@@ -2463,7 +2463,7 @@ def test_discovery_api_forwards_token_without_serializing_it(simulation_root, mo
     monkeypatch.setattr(importlib.import_module("llm_d_lens.simulation.router"), "discover_models", probe)
     with TestClient(app) as client:
         response = client.post(
-            "/api/simulation/models/discover",
+            "/api/v1/simulation/models/discover",
             json={
                 "endpoint_url": "http://endpoint.local",
                 "api_key": "test-token",
@@ -2485,7 +2485,7 @@ def test_create_api_rejects_unreachable_endpoint(simulation_root, monkeypatch):
     monkeypatch.setattr(simulation_service, "_schedule_task", schedule)
     with TestClient(app) as client:
         response = client.post(
-            "/api/simulation/tasks",
+            "/api/v1/simulation/tasks",
             json={
                 "scenario": "chat",
                 "backend": "aiperf",

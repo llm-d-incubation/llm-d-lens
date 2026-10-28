@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from llm_d_lens.infrastructure.process import CommandResult, CommandRunner, ScopedCommandRunner, spawn, which
 
-router = APIRouter(prefix="/api/cluster", tags=["cluster"])
+router = APIRouter(prefix="/api/v1/cluster", tags=["cluster"])
 
 logger = logging.getLogger(__name__)
 

@@ -107,7 +107,7 @@ def mcp_request(client, method, params=None):
     from httpx_sse import EventSource
 
     response = client.post(
-        "/api/mcp",
+        "/api/v1/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
         headers={"accept": "application/json, text/event-stream"},
     )
@@ -137,8 +137,8 @@ def test_mcp_http_initialization_list_and_read_tool():
         called = mcp_request(client, "tools/call", {"name": "list_deploy_poc_configs", "arguments": {}})
         assert not called["result"].get("isError")
         assert json.loads(called["result"]["content"][0]["text"])
-        assert client.get("/api/mcp").status_code == 405
-        assert client.delete("/api/mcp").status_code == 405
+        assert client.get("/api/v1/mcp").status_code == 405
+        assert client.delete("/api/v1/mcp").status_code == 405
 
 
 @pytest.mark.asyncio
@@ -170,7 +170,7 @@ async def test_agentic_client_connects_to_python_mcp_and_calls_the_canonical_api
     monkeypatch.setattr(
         generator, "httpx", SimpleNamespace(AsyncClient=partial(httpx.AsyncClient, transport=transport))
     )
-    client = generator.AgenticMcpClient("http://testserver/api/mcp")
+    client = generator.AgenticMcpClient("http://testserver/api/v1/mcp")
     available = await client.available_tools()
     assert {"get_cluster_overview", "search_candidates"} <= {tool["name"] for tool in available}
     result = await client.call("get_configuration_capabilities", {})

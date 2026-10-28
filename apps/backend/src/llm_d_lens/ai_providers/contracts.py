@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
@@ -33,8 +33,8 @@ class AIProvider(StrictModel):
     """A saved, OpenAI-compatible external LLM connection.
 
     ``api_key`` is persisted (see ``store.py``) but is never returned verbatim
-    over the API -- ``api_payload`` projects it as ``hasApiKey``/``apiKeyPreview``
-    instead (see ``_api_key_preview``).
+    over the API -- ``AIProviderResponse.from_provider`` masks it as
+    ``hasApiKey``/``apiKeyPreview`` instead (see ``_api_key_preview``).
     """
 
     id: str = Field(default_factory=lambda: f"ai-provider-{uuid4().hex[:8]}")
@@ -48,12 +48,51 @@ class AIProvider(StrictModel):
     created_at: datetime = Field(default_factory=utcnow, alias="createdAt")
     updated_at: datetime = Field(default_factory=utcnow, alias="updatedAt")
 
-    def api_payload(self) -> dict[str, Any]:
-        """Project the provider for HTTP clients, masking the API key."""
-        payload = self.model_dump(mode="json", by_alias=True, exclude={"api_key"})
-        payload["hasApiKey"] = bool(self.api_key)
-        payload["apiKeyPreview"] = _api_key_preview(self.api_key)
-        return payload
+
+class AIProviderResponse(StrictModel):
+    """The masked, safe-to-return form of a saved provider."""
+
+    id: str
+    name: str
+    base_url: HttpUrl = Field(alias="baseUrl")
+    model: str
+    context_window: int | None = Field(default=None, alias="contextWindow")
+    provider_type: AIProviderType = Field(alias="providerType")
+    timeout_seconds: float = Field(alias="timeoutSeconds")
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")
+    has_api_key: bool = Field(alias="hasApiKey")
+    api_key_preview: str = Field(alias="apiKeyPreview")
+
+    @classmethod
+    def from_provider(cls, provider: AIProvider) -> AIProviderResponse:
+        return cls(
+            id=provider.id,
+            name=provider.name,
+            baseUrl=provider.base_url,
+            model=provider.model,
+            contextWindow=provider.context_window,
+            providerType=provider.provider_type,
+            timeoutSeconds=provider.timeout_seconds,
+            createdAt=provider.created_at,
+            updatedAt=provider.updated_at,
+            hasApiKey=bool(provider.api_key),
+            apiKeyPreview=_api_key_preview(provider.api_key),
+        )
+
+
+class AIProviderListResponse(StrictModel):
+    items: list[AIProviderResponse] = Field(default_factory=list)
+
+
+class AIProviderChatCompletionResponse(BaseModel):
+    """OpenAI-compatible chat completion returned by an upstream provider.
+
+    The upstream provider defines the full JSON shape, so unknown fields are
+    preserved instead of being projected through a local response schema.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
 
 class AIProviderCreateRequest(StrictModel):

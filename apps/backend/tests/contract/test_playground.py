@@ -119,7 +119,7 @@ def test_chat_sse_finishes_with_message_and_done(monkeypatch):
     completion = AsyncMock(return_value={"choices": [{"message": {"role": "assistant", "content": "answer"}}]})
     monkeypatch.setattr(chat, "call_provider", completion)
     response = TestClient(app).post(
-        "/api/playground/chat",
+        "/api/v1/playground/chat",
         json={
             "deployment": {"providerId": "provider", "model": "model"},
             "messages": [{"role": "user", "content": "question"}],

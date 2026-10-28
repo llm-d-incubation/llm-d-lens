@@ -21,6 +21,7 @@ from llm_d_lens.infrastructure.artifacts.store import artifact_uri, register_art
 from llm_d_lens.infrastructure.storage.paths import storage_path
 
 from .errors import SimulationConfigurationError
+from .models import TraceDatasetTimelineResponse
 
 if TYPE_CHECKING:
     from .models import SimulationTrace
@@ -902,7 +903,7 @@ class WekaClaudeCodeSubagentsTrace(WekaPublicDatasetTrace):
     )
 
 
-async def get_trace_timeline(name: str, bins: int) -> dict:
+async def get_trace_timeline(name: str, bins: int) -> TraceDatasetTimelineResponse:
     try:
         dataset = trace_registry.get(name)
     except SimulationConfigurationError as error:
@@ -911,8 +912,8 @@ async def get_trace_timeline(name: str, bins: int) -> dict:
     lock = _timeline_locks.setdefault(str(trace.path), asyncio.Lock())
     async with lock:
         timeline = await asyncio.to_thread(trace.timeline, bins)
-    return {
-        "dataset": name,
-        "trace_format": dataset["trace_format"],
+    return TraceDatasetTimelineResponse(
+        dataset=name,
+        trace_format=dataset["trace_format"],
         **timeline,
-    }
+    )

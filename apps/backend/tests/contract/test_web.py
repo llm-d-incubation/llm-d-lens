@@ -50,7 +50,7 @@ def test_json_limit_does_not_buffer_or_limit_multipart(tmp_path):
 def test_legacy_proxy_alias_reaches_canonical_backend(tmp_path):
     app = application(tmp_path)
 
-    @app.get("/api/cluster/example")
+    @app.get("/api/v1/cluster/example")
     async def example():
         return {"canonical": True}
 
@@ -63,7 +63,7 @@ def test_config_preserves_browser_defaults(monkeypatch):
 
     monkeypatch.setenv("LLM_D_ROOT", "/opt/llm-d")
     monkeypatch.delenv("LLM_D_BRANCH", raising=False)
-    response = TestClient(app).get("/api/config")
+    response = TestClient(app).get("/api/v1/config")
     assert response.status_code == 200
     assert response.json()["deploymentDefaults"]["repository"] == "/opt/llm-d"
     assert response.json()["deploymentDefaults"]["branch"] == "tpc-llmdbench"

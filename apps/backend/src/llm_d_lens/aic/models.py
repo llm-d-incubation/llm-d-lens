@@ -10,7 +10,7 @@
 
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_INPUT_TOKENS = 4000
 DEFAULT_OUTPUT_TOKENS = 1000
@@ -74,10 +74,34 @@ class AICSupportResponse(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
 
 
+class AICConfiguration(BaseModel):
+    """One aggregated or disaggregated serving configuration."""
+
+    model_config = ConfigDict(extra="allow")
+
+    mode: Literal["agg", "disagg"]
+    tp: int | None = None
+    replicas: int | None = None
+    prefill_tp: int | None = None
+    prefill_replicas: int | None = None
+    decode_tp: int | None = None
+    decode_replicas: int | None = None
+    num_total_gpus: int | None = None
+    ttft_ms: float | None = None
+    tpot_ms: float | None = None
+    throughput_tokens_per_sec: float | None = None
+    name: str | None = None
+    is_chosen: bool | None = None
+
+
+class AICEstimateResponse(AICConfiguration):
+    """TTFT/TPOT estimate for one exact serving topology."""
+
+
 class AICSearchResponse(BaseModel):
-    configs: list[dict[str, Any]] = Field(default_factory=list)
+    configs: list[AICConfiguration] = Field(default_factory=list)
     chosen_mode: str | None = None
 
 
 class AICExperimentResponse(BaseModel):
-    experiments: list[dict[str, Any]] = Field(default_factory=list)
+    experiments: list[AICConfiguration] = Field(default_factory=list)

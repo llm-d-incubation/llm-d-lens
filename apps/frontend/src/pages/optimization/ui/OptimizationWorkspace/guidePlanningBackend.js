@@ -13,14 +13,14 @@ const selectedClusterId = () => globalThis.sessionStorage?.getItem('prism_cluste
 export function loadGuideCatalog({ clusterId = selectedClusterId(), refresh = false } = {}) {
     if (!catalogs.has(clusterId)) {
         catalogs.set(clusterId, createResourceLoader(() => guidePlanningRequest(
-            `/api/guide-planning/catalog?${new URLSearchParams({ clusterId })}`,
+            `/api/v1/guide-planning/catalog?${new URLSearchParams({ clusterId })}`,
         )));
     }
     return catalogs.get(clusterId)({ refresh });
 }
 
 export function planGuideDeployment(selection) {
-    return guidePlanningRequest('/api/guide-planning/plan', {
+    return guidePlanningRequest('/api/v1/guide-planning/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...selection, clusterId: selection.clusterId || (selection.clusterSessionId ? undefined : selectedClusterId()) }),
@@ -30,7 +30,7 @@ export function planGuideDeployment(selection) {
 // Start the source-only work while the user edits. It performs no deployment or
 // cluster changes; plan() consumes the same in-flight/cached source when needed.
 export function prepareGuideSource(selection) {
-    return guidePlanningRequest('/api/guide-planning/prepare', {
+    return guidePlanningRequest('/api/v1/guide-planning/prepare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...selection, clusterId: selection.clusterId || (selection.clusterSessionId ? undefined : selectedClusterId()) }),

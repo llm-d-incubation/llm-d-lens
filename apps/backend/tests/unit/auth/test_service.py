@@ -42,6 +42,72 @@ def test_bootstrap_admin_and_duplicate_conflict():
     assert principal.is_global_admin()
 
 
+def test_login_issues_short_lived_access_token_and_refresh_roundtrip():
+    service = _service()
+    service.bootstrap_admin("root", STRONG)
+
+    login = service.authenticate("root", STRONG)
+
+    assert login.session_id
+    assert login.access_token
+    assert login.expires_in == service.settings.access_token_ttl_seconds
+    resolved = service.validate_access_token(login.access_token)
+    assert resolved is not None
+    principal, session_id = resolved
+    assert principal.username == "root"
+    assert session_id == login.session_id
+
+    refreshed = service.refresh_access_token(login.token)
+    assert refreshed.session_id == login.session_id
+    assert refreshed.access_token
+    assert service.validate_access_token(refreshed.access_token) is not None
+
+
+def test_access_token_keys_are_cached_across_services(monkeypatch):
+    from llm_d_lens.auth import service as auth_service
+    from llm_d_lens.auth.master_key import MasterKey
+
+    auth_service.invalidate_access_token_keys_cache()
+    calls = 0
+
+    def fake_resolve(_settings):
+        nonlocal calls
+        calls += 1
+        return MasterKey(primary="cached-master", old=(), source="test")
+
+    monkeypatch.setattr(auth_service, "resolve_master_key", fake_resolve)
+    settings = AuthSettings(auth_mode="local", session_ttl_seconds=3600, session_idle_seconds=3600)
+    first = AuthService(settings)._access_token_keys()
+    second = AuthService(settings)._access_token_keys()
+    auth_service.invalidate_access_token_keys_cache()
+
+    assert first == second
+    assert calls == 1
+
+
+def test_access_token_is_rejected_after_session_revocation():
+    service = _service()
+    service.bootstrap_admin("root", STRONG)
+    login = service.authenticate("root", STRONG)
+
+    service.logout_session(login.session_id)
+
+    assert service.validate_access_token(login.access_token) is None
+    with pytest.raises(UnauthenticatedError):
+        service.refresh_access_token(login.token)
+
+
+def test_legacy_session_token_still_validates_for_cookie_fallback():
+    service = _service()
+    service.bootstrap_admin("root", STRONG)
+    login = service.authenticate("root", STRONG)
+
+    assert service.validate(login.token) is not None
+    validated = service.validate_session_token(login.token)
+    assert validated is not None
+    assert validated[1] == login.session_id
+
+
 def test_authenticate_success_and_failure_paths():
     service = _service()
     service.bootstrap_admin("root", STRONG)
@@ -229,7 +295,7 @@ async def test_directory_sync_imports_groups_and_reconciles_members(monkeypatch)
     monkeypatch.setattr("llm_d_lens.auth.service.get_provider", lambda *args, **kwargs: _FakeProvider())
     result = await service.sync_directory(provider.id)
 
-    assert result == {"ok": True, "groups": 1, "members": 2, "failed": []}
+    assert result.model_dump() == {"ok": True, "groups": 1, "members": 2, "failed": []}
     group = service.group_dao.get_by_external(provider.id, "cn=team,dc=x")
     assert group is not None
     assert (group.source, group.name) == ("ldap", "team")
@@ -498,3 +564,22 @@ def test_revoke_session_records_audit_actor():
     assert events[0].actor_username == "frank"
     assert events[0].target_type == "session"
     assert events[0].target_id == session.id
+
+
+@pytest.mark.asyncio
+async def test_directory_sync_returns_the_concrete_response_model(monkeypatch):
+    from llm_d_lens.auth.models import DirectorySyncResponse
+    from llm_d_lens.auth.records import IdentityProviderRecord
+
+    service = _service()
+    provider = service.identity_provider_dao.create(
+        IdentityProviderRecord(type="ldap", name="corp", enabled=True, config={})
+    )
+
+    class _FakeProvider:
+        async def list_groups(self):
+            return []
+
+    monkeypatch.setattr("llm_d_lens.auth.service.get_provider", lambda *args, **kwargs: _FakeProvider())
+    result = await service.sync_directory(provider.id)
+    assert isinstance(result, DirectorySyncResponse)

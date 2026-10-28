@@ -10,7 +10,15 @@
 
 from fastapi import APIRouter, HTTPException
 
-from .models import AICEstimateRequest, AICExperimentRequest, AICRequest
+from .models import (
+    AICEstimateRequest,
+    AICEstimateResponse,
+    AICExperimentRequest,
+    AICExperimentResponse,
+    AICRequest,
+    AICSearchResponse,
+    AICSupportResponse,
+)
 from .service import AICError, check_support, estimate, experiments, search
 
 router = APIRouter(prefix="/api/v1/aic", tags=["aic"])
@@ -28,8 +36,9 @@ def _bad_request(error: AICError) -> HTTPException:
         "supported serving modes, constraints, and a reason when unsupported. Use this before candidate search."
     ),
     operation_id="check_aic_support",
+    response_model=AICSupportResponse,
 )
-async def support_endpoint(request: AICRequest):
+async def support_endpoint(request: AICRequest) -> AICSupportResponse:
     try:
         return await check_support(request)
     except AICError as error:
@@ -44,8 +53,10 @@ async def support_endpoint(request: AICRequest):
         "latency targets. Returns candidate configurations and the chosen serving mode, subject to max_candidates."
     ),
     operation_id="search_aic_configurations",
+    response_model=AICSearchResponse,
+    response_model_exclude_unset=True,
 )
-async def search_endpoint(request: AICRequest):
+async def search_endpoint(request: AICRequest) -> AICSearchResponse:
     try:
         return await search(request)
     except AICError as error:
@@ -57,8 +68,10 @@ async def search_endpoint(request: AICRequest):
     summary=("Parse an AIConfigurator experiment YAML file and return the top experiments Lens can extract from it."),
     description="Parse an AIConfigurator experiment YAML file and return the top experiments Lens can extract from it.",
     operation_id="list_aic_experiments",
+    response_model=AICExperimentResponse,
+    response_model_exclude_unset=True,
 )
-async def experiments_endpoint(request: AICExperimentRequest):
+async def experiments_endpoint(request: AICExperimentRequest) -> AICExperimentResponse:
     try:
         return await experiments(request)
     except AICError as error:
@@ -73,8 +86,10 @@ async def experiments_endpoint(request: AICExperimentRequest):
         "total GPU count. Reject results that do not match the requested topology."
     ),
     operation_id="estimate_aic_configuration",
+    response_model=AICEstimateResponse,
+    response_model_exclude_unset=True,
 )
-async def estimate_endpoint(payload: AICEstimateRequest):
+async def estimate_endpoint(payload: AICEstimateRequest) -> AICEstimateResponse:
     try:
         return await estimate(payload)
     except AICError as error:

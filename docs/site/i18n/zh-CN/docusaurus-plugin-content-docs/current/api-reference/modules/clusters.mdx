@@ -1,1299 +1,427 @@
 ---
 title: 集群
-description: 用于集群注册、引导和 Kubernetes 读取的后端端点与直接 Python 入口点。
+description: 注册集群、准备集群依赖并读取实时集群状态。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+## 概述
 
-集群管理路由来自 `llm_d_lens/cluster/router.py`、`llm_d_lens/cluster/bootstrap/router.py` 和 `llm_d_lens/cluster/sdk_discovery.py`。
+集群模块把 Lens 连接到用于部署和基准测试的 Kubernetes 集群。在缓存模型、启动部署或读取集群健康状态之前，先注册集群。使用本模块上传 kubeconfig、完成草稿注册、准备 Gateway、LeaderWorkerSet、CRD 和镜像依赖、引导新机器、轮换 Hugging Face 访问凭据，并查看容量、节点和版本。
 
-### 列出集群
+## 快速开始
 
-列出由 Lens 管理的集群，并可选择包含尚未完成的草稿记录。该路由还会通过探测每个集群的 Kubernetes API 可达性来计算 `ready` 标志。
+列出你可见的集群，并确认哪些集群可达。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters`**
 
-    请求：无请求体。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters"
+```
 
-    - `includeDrafts`（`boolean`，查询参数，默认 `false`）：是否包含草稿集群记录。
-
-    响应：`ClustersResponse`，每个可见集群对应一个 `ClusterRecord`。
-
-`hfTokenSecret` 返回该集群 HF_TOKEN Secret 的命名空间和名称；集群没有该 Secret 时为 `null`。接口只返回位置信息，令牌值保存在目标集群上，不会由 API 返回。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "cluster-a",
-          "name": "Primary cluster",
-          "description": "Shared production GPU cluster",
-          "createdAt": "2026-09-20T10:15:00Z",
-          "ready": true,
-          "proxy": {
-            "mode": "custom",
-            "httpProxy": "http://proxy.example:3128",
-            "httpsProxy": "http://proxy.example:3128",
-            "noProxy": "127.0.0.1,localhost,.svc"
-          },
-          "llmDRef": "v0.3.0",
-          "llmDBenchmarkRef": "main",
-          "llmDRepoPath": "/cache/llm-d/v0.3.0",
-          "llmDBenchmarkRepoPath": "/cache/llm-d-benchmark/main",
-          "hfTokenSecret": {
-            "namespace": "llm-d-bench-storage-44395349",
-            "name": "hf-token-c758ced0"
-          },
-          "draft": false
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.cluster import service
+```python
+import asyncio
 
-    async def main() -> None:
-        clusters = service.list_clusters(include_drafts=True)
-        ready_flags = await asyncio.gather(*(service.cluster_is_ready(cluster) for cluster in clusters))
-        for cluster, ready in zip(clusters, ready_flags):
-            print(cluster.id, cluster.name, ready)
+from llm_d_lens.sdk import LensLocal
 
-    asyncio.run(main())
-    ```
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        clusters = await lens.clusters.list_clusters()
+        for cluster in clusters.items:
+            print(cluster.id, cluster.name, cluster.ready)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 获取支持的 llm-d 版本
+默认不显示草稿集群。在 REST 中传入 `includeDrafts=true`，在 SDK 中传入 `include_drafts=True` 可包含草稿。
 
-返回当前 Lens 版本所支持的 llm-d 组件版本（llm-d、llm-d-router、llm-d-benchmark、Inference Payload Processor、Gateway API / Gateway API Inference Extension CRD、LeaderWorkerSet 以及网关供应商）。只读；集群向导和每条安装路径都使用这些值。
+## 常见任务
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/versions`**
+### 从 kubeconfig 注册集群
 
-    响应：
-
-    ```json
-    {
-      "llm_d": "v1.0.0",
-      "min_k8s_version": "v1.32.0",
-      "llm_d_router": "v1.0.0",
-      "llm_d_lensmark": "v1.0.0",
-      "llm_d_inference_payload_processor": "v1.0.0",
-      "k8s_gateway_api": "v1.6.2",
-      "k8s_gateway_api_inference_extension": "v1.6.2",
-      "k8s_lws": "v1.0.0",
-      "gateway_providers": {
-        "istio": "1.29.4",
-        "envoy_gateway": "v1.8.1",
-        "envoy_ai_gateway": "v0.7.0",
-        "agentgateway": "v1.5.0"
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens import versions
-
-    stack = versions.describe()
-
-    print(stack["llm_d"], stack["llm_d_router"], stack["llm_d_lensmark"])
-    print(stack["gateway_providers"]["istio"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 列出 Lens 主机地址
-
-为集群创建/编辑表单中的"Lens 地址"下拉框及自动填充功能，返回本 Lens 主机的候选 IP 地址/主机名。端口是 Lens 自身的实时服务端口，会自动添加。
+`POST /api/v1/cluster/clusters` 使用 multipart 表单数据，而不是 JSON。成功时返回 `201`，包含新集群；如果创建了会话，还包含其 `sessionId`。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/lens-hosts`**
 
-    请求：无参数。
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -F "name=<cluster-name>" \
+  -F "file=@<kubeconfig-path>" \
+  "$LENS_URL/api/v1/cluster/clusters"
+```
 
-    响应：
-
-    ```json
-    { "items": ["10.112.228.229"] }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.utils.hostinfo import local_host_addresses
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    print(local_host_addresses())
-    ```
-  </TabItem>
-</Tabs>
+```python
+import asyncio
+from io import BytesIO
+from pathlib import Path
 
-### 注册集群
+from starlette.datastructures import UploadFile
 
-通过上传的 kubeconfig 文件注册集群。该路由接受 multipart 表单数据，存储集群记录，并返回新集群以及（如有）创建的 Lens 会话 id。
+from llm_d_lens.sdk import LensLocal
 
-llm-d 组件版本由 Lens 技术栈配置文件固定（参见[获取支持的 llm-d 版本](#获取支持的-llm-d-版本)）；`llmDRef`、`llmDBenchmarkRef`、`routerVersion`、`gieVersion` 和 `ippVersion` 为兼容性保留字段，但会被忽略。
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters`**
-
-    请求：multipart 表单数据，不是 JSON。
-
-    - `name`（`string`，表单字段）：集群显示名称。
-    - `description`（`string`，表单字段，可选）：自由格式描述。
-    - `file`（`file`，表单字段）：UTF-8 编码的 kubeconfig 上传文件。
-    - `proxy`（`string`，表单字段，可选）：与 `ProxyConfigDTO` 匹配的 JSON 字符串。
-    - `llmDRef`（`string`，表单字段，可选）：已忽略 —— `llm-d` 版本来自技术栈配置文件。
-    - `llmDBenchmarkRef`（`string`，表单字段，可选）：已忽略 —— `llm-d-benchmark` 版本来自技术栈配置文件。
-    - `gatewayProvider`（`string`，表单字段，可选）：共享网关供应商（`envoy-ai-gateway` | `istio` | `agentgateway` | `gke`）。
-    - `gatewayPublicUrl`（`string`，表单字段，可选）：客户端用来访问网关的外部可达主机/IP —— Lens 会自动添加 `http://` 加暴露端口加 `/v1`。为空时将根据暴露端口和集群节点推导。
-    - `gatewayPort`（`integer`，表单字段，可选）：共享网关暴露所使用的 NodePort（30000–32767）。
-    - `gatewayAuthzHost`（`string`，表单字段）：该集群用来访问 Lens 的主机/IP（对于带有 Lens 地址钩子的供应商为必填：`envoy-ai-gateway`/`istio`/`agentgateway`）。可从 `GET /api/cluster/lens-hosts` 中选取；Lens 会自动添加自身的服务端口，为空时 Lens 会自动填入该主机地址。
-    - `inotifyMaxUserInstances`（`integer`，表单字段，默认 `8192`）：Lens 应用于每个节点的每用户 inotify 实例数上限（`fs.inotify.max_user_instances`）。在运行大量 Pod 的节点上，应将其调高到 kind 默认值 128 之上。
-    - `draft`（`boolean`，表单字段，默认 `false`）：是否以草稿形式创建。
-
-    示例字段取值：
-
-    ```json
-    {
-      "name": "Primary cluster",
-      "description": "Shared production GPU cluster",
-      "file": "<uploaded kubeconfig.yaml UTF-8 file>",
-      "proxy": "{"mode":"custom","httpProxy":"http://proxy.example:3128","httpsProxy":"http://proxy.example:3128","noProxy":"127.0.0.1,localhost,.svc"}",
-      "llmDRef": "v0.3.0",
-      "llmDBenchmarkRef": "main",
-      "draft": true
-    }
-    ```
-
-    响应：`CreateClusterResponse`。
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": false,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "llmDRef": "v0.3.0",
-        "llmDBenchmarkRef": "main",
-        "draft": true
-      },
-      "sessionId": "f4c15c0a-8c1f-4eb7-b4d7-ef83f22c2e9b"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    kubeconfig_text = """
-    apiVersion: v1
-    kind: Config
-    clusters: []
-    contexts: []
-    current-context: ""
-    users: []
-    """.strip()
-
-    cluster, session = service.create_cluster(
-        "Primary cluster",
-        "Shared production GPU cluster",
-        kubeconfig_text,
-        proxy_mode="custom",
-        http_proxy="http://proxy.example:3128",
-        https_proxy="http://proxy.example:3128",
-        no_proxy="127.0.0.1,localhost,.svc",
-        llm_d_ref="v0.3.0",
-        llm_d_lensmark_ref="main",
-        draft=True,
-    )
-
-    print(cluster.id, session.id)
-    ```
-  </TabItem>
-</Tabs>
-
-### 更新集群
-
-修改集群的可编辑设置，包括名称、描述、代理设置和草稿状态。kubeconfig 本身不在此补丁契约范围内。版本字段（`llmDRef`、`llmDBenchmarkRef`、`routerVersion`、`gieVersion`、`ippVersion`）由服务端根据技术栈配置文件管理，输入时会被忽略。
-
-Gateway 命名空间前缀会附加该 Lens 集群注册的稳定短 ID。注册 ID 为 `1234abcd` 时，
-默认命名空间为 `lens-gateway-1234abcd`；`gatewayNamespace: "custom"` 会解析为
-`custom-1234abcd`。再次传入带后缀的值不会重复添加。集群响应返回实际命名空间，
-以前使用共享 `lens-gateway` 默认值的记录也遵循此规则。
-`service.update_cluster_settings(..., gateway_namespace="custom")` 的行为相同。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PATCH /api/cluster/clusters/{cluster_id}`**
-
-    请求体（`ClusterSettingsUpdateRequest`）：
-
-    - `name`（`string`，可选）
-    - `description`（`string`，可选）
-    - `proxy`（`ProxyConfigDTO`，可选）
-    - `llmDRef`（`string`，可选）
-    - `llmDBenchmarkRef`（`string`，可选）
-    - `gatewayProvider`（`string`，可选）：当集群尚未设置供应商时可赋值一次；设置后不可更改，传入不同值会返回 `422 gateway_provider_immutable`。
-    - `gatewayNamespace`（`string`，可选）：最多 63 个字符的命名空间前缀，会附加注册的稳定短 ID。
-    - `gatewayPort`（`integer`，可选）
-    - `gatewayPublicUrl`（`string`，可选）：外部可达的网关主机/IP —— Lens 会自动添加暴露端口；为空时将自动推导。
-    - `gatewayAuthzHost`（`string`）：该集群用来访问 Lens 的主机/IP（对于带有 Lens 地址钩子的供应商为必填；Lens 会自动添加自身服务端口；为空时会自动填入该主机地址）。
-    - `inotifyMaxUserInstances`（`integer`，可选）：应用于每个节点的每用户 inotify 实例数上限（默认 `8192`）。
-    - `draft`（`boolean`，可选）
-
-    ```json
-    {
-      "name": "Primary cluster",
-      "description": "Shared production GPU cluster",
-      "proxy": {
-        "mode": "custom",
-        "httpProxy": "http://proxy.example:3128",
-        "httpsProxy": "http://proxy.example:3128",
-        "noProxy": "127.0.0.1,localhost,.svc"
-      },
-      "llmDRef": "v0.3.0",
-      "llmDBenchmarkRef": "main",
-      "draft": false
-    }
-    ```
-
-    响应：`CreateClusterResponse`，包含更新后的记录。
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": true,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "llmDRef": "v0.3.0",
-        "llmDBenchmarkRef": "main",
-        "draft": false
-      },
-      "sessionId": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    cluster = service.update_cluster_settings(
-        "cluster-a",
-        name="Primary cluster",
-        description="Shared production GPU cluster",
-        proxy_mode="custom",
-        http_proxy="http://proxy.example:3128",
-        https_proxy="http://proxy.example:3128",
-        no_proxy="127.0.0.1,localhost,.svc",
-        llm_d_ref="v0.3.0",
-        llm_d_lensmark_ref="main",
-        gateway_authz_host="10.0.0.5",
-        draft=False,
-    )
-    print(cluster.id, cluster.name)
-    ```
-  </TabItem>
-</Tabs>
-
-### 创建集群 HF_TOKEN secret
-
-在目标集群上创建保存 Hugging Face 令牌的独立 Kubernetes Secret，并把它的坐标记录到 Lens 集群记录上，供部署和模型缓存下载默认使用。这是创建集群向导的模型缓存步骤。令牌值只写入集群；Lens 只保存命名空间和名称。Secret 已存在时返回 `409 secret_already_exists`，此时请使用下面的轮换接口替换令牌。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/hf-token-secrets`**
-
-    请求体（`HfTokenSecretCreateRequest`）：
-
-    - `namespace`（`string`，必填）：创建 Secret 的命名空间；不存在时自动创建。
-    - `name`（`string`，必填）：Secret 名称。
-    - `token`（`string`，必填）：保存在 `HF_TOKEN` 键下的 Hugging Face 令牌。
-
-    ```json
-    {
-      "namespace": "llm-d-bench-storage-44395349",
-      "name": "hf-token-c758ced0",
-      "token": "hf_exampleTokenValue"
-    }
-    ```
-
-    响应：`HfTokenSecretRef`。
-
-    ```json
-    {
-      "namespace": "llm-d-bench-storage-44395349",
-      "name": "hf-token-c758ced0"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import registry, service
-
-    cluster = registry.get_cluster("cluster-a")
-    ref = asyncio.run(
-        service.create_hf_token_secret(
-            cluster,
-            "llm-d-bench-storage-44395349",
-            "hf-token-c758ced0",
-            "hf_exampleTokenValue",
-        )
-    )
-    print(ref["namespace"], ref["name"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 轮换集群 HF_TOKEN secret
-
-在编辑集群面板中替换集群 `HF_TOKEN` Secret 中保存的 Hugging Face 令牌。与创建接口不同，这里使用 apply，因此已存在的 Secret 会被覆盖而不是报错。`namespace` 和 `name` 默认使用集群上已记录的坐标（`hfTokenSecret`），所以轮换令牌只需提供令牌；提供不同坐标会把集群指向该 Secret，并在其不存在时创建它。
-
-轮换只重写这个集群级 Secret。部署和模型缓存下载在运行时派生的命名空间内 `llm-d-hf-token` 副本会在下一次部署或下载时重新派生，因此已在运行的工作负载在重建之前仍使用旧令牌。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PUT /api/cluster/clusters/{cluster_id}/hf-token-secret`**
-
-    请求体（`HfTokenSecretUpdateRequest`）：
-
-    - `namespace`（`string`，可选）：默认使用集群已记录的 Secret 命名空间。
-    - `name`（`string`，可选）：默认使用集群已记录的 Secret 名称。
-    - `token`（`string`，必填）：新的 Hugging Face 令牌；空值返回 `422 invalid_secret_token`。
-
-    ```json
-    {
-      "token": "hf_rotatedTokenValue"
-    }
-    ```
-
-    响应：`HfTokenSecretRef`，返回实际写入的坐标。
-
-    ```json
-    {
-      "namespace": "llm-d-bench-storage-44395349",
-      "name": "hf-token-c758ced0"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import registry, service
-
-    cluster = registry.get_cluster("cluster-a")
-    # 使用集群上已记录的坐标原地轮换。
-    ref = asyncio.run(service.update_hf_token_secret(cluster, "hf_rotatedTokenValue"))
-    print(ref["namespace"], ref["name"])
-
-    # 也可以把集群指向另一个 Secret。
-    ref = asyncio.run(
-        service.update_hf_token_secret(
-            cluster,
-            "hf_rotatedTokenValue",
-            namespace="llm-d-bench-storage-44395349",
-            name="hf-token-rotated",
-        )
-    )
-    ```
-  </TabItem>
-</Tabs>
-
-### 启动集群软件下载
-
-为集群下载由 Lens 技术栈配置文件固定的 `llm-d` 和 `llm-d-benchmark` 版本。处理函数会调度后台下载任务并立即返回当前状态快照；请求体会被忽略。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/software-downloads`**
-
-    请求体（`SoftwareDownloadRequest`）：可选且会被忽略 —— 系统会下载配置文件中固定的版本。
-
-    ```json
-    {}
-    ```
-
-    响应：`SoftwareDownloadStatusResponse`。
-
-    ```json
-    {
-      "llmD": {
-        "ref": "v0.2.0",
-        "state": "downloading",
-        "path": null,
-        "error": null
-      },
-      "llmDBenchmark": {
-        "ref": "main",
-        "state": "downloading",
-        "path": null,
-        "error": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster.router import _download_and_record
-    from llm_d_lens.cluster import repo_downloads
-
-    async def main() -> None:
-        await _download_and_record("cluster-a", "llm-d", "v0.2.0")
-        await _download_and_record("cluster-a", "llm-d-benchmark", "main")
-        print(repo_downloads.get_status("cluster-a", "llm-d"))
-        print(repo_downloads.get_status("cluster-a", "llm-d-benchmark"))
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取集群软件下载状态
-
-返回集群固定的 `llm-d` 和 `llm-d-benchmark` 引用的当前内存态下载状态。使用此端点来轮询下载进度。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/software-downloads`**
-
-    请求：无请求体。
-
-    - `cluster_id`（`string`，路径参数）：目标集群 id。
-
-    响应：`SoftwareDownloadStatusResponse`。
-
-    ```json
-    {
-      "llmD": {
-        "ref": "v0.2.0",
-        "state": "ready",
-        "path": "/cache/llm-d/v0.2.0",
-        "error": null
-      },
-      "llmDBenchmark": {
-        "ref": "main",
-        "state": "ready",
-        "path": "/cache/llm-d-benchmark/main",
-        "error": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import repo_downloads
-
-    llm_d = repo_downloads.get_status("cluster-a", "llm-d")
-    llm_d_lensmark = repo_downloads.get_status("cluster-a", "llm-d-benchmark")
-    print(llm_d)
-    print(llm_d_lensmark)
-    ```
-  </TabItem>
-</Tabs>
-
-### 启动集群镜像预拉取
-
-为所选加速器在每个集群节点上预拉取 Lens 固定版本的 llm-d 镜像。这些镜像包括 llm-d-router EPP 和 P/D sidecar，以及各加速器对应的模型服务镜像；版本来自 Lens 技术栈配置文件，而非请求内容。一个特权 DaemonSet 会在每个节点上运行主机的 `crictl`；可通过下方的 GET 端点轮询每个节点的就绪状态。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/images/prepull`**
-
-    请求体：
-
-    - `accelerators`（`string[]`）：需要拉取模型服务镜像的加速器 id（例如 `["nvidia","intel"]`）。
-
-    ```json
-    {
-      "accelerators": ["nvidia", "intel"]
-    }
-    ```
-
-    响应：总体状态、`ready`/`desired` 节点数、镜像列表以及每个节点的就绪状态。
-
-    ```json
-    {
-      "state": "pulling",
-      "desired": 2,
-      "ready": 1,
-      "images": [
-        { "name": "ghcr.io/llm-d/llm-d-router-endpoint-picker:v1.0.0", "ready": 2, "desired": 2, "state": "ready" },
-        { "name": "ghcr.io/llm-d/llm-d-router-disagg-sidecar:v1.0.0", "ready": 2, "desired": 2, "state": "ready" },
-        { "name": "ghcr.io/llm-d/llm-d-cuda:v0.9.0", "ready": 1, "desired": 2, "state": "pulling" }
-      ],
-      "nodes": [{ "node": "worker-1", "phase": "Running", "ready": true, "restarts": 0 }]
-    }
-    ```
-
-    当所有节点都已拉取该镜像时 `images[].state` 为 `ready`；拉取进行中为 `pulling`；若某节点拉取不断崩溃重试则为 `failed`。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import images
-
-    status = await images.start_image_prepull("cluster-a", ["nvidia", "intel"])
-    print(status["state"], status["ready"], status["desired"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取集群镜像预拉取状态
-
-获取集群当前的镜像预拉取状态：总体状态、ready/desired 节点数以及每个拉取 Pod 所在节点的就绪状态。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/images/prepull`**
-
-    响应：与启动响应结构相同。
-
-    ```json
-    {
-      "state": "ready",
-      "desired": 2,
-      "ready": 2,
-      "images": [
-        { "name": "ghcr.io/llm-d/llm-d-cuda:v0.9.0", "ready": 2, "desired": 2, "state": "ready" }
-      ],
-      "nodes": [
-        { "node": "worker-1", "phase": "Running", "ready": true, "restarts": 0 },
-        { "node": "worker-2", "phase": "Running", "ready": true, "restarts": 0 }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import images
-
-    status = await images.image_prepull_status("cluster-a")
-    print(status["state"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 应用固定版本的 Gateway API / Gateway API Inference Extension CRD
-
-应用由 Lens 技术栈配置文件固定版本的 Gateway API（`gateway.networking.k8s.io`）和 Gateway API Inference Extension（`inference.networking.k8s.io`）CRD 包。该操作是幂等的；集群创建过程中也会执行此操作。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/crds`**
-
-    响应：每个 CRD 包的执行结果。
-
-    ```json
-    {
-      "gateway_api": { "ok": true, "message": "" },
-      "gateway_api_inference_extension": { "ok": true, "message": "" }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import gateway_crds
-
-    result = await gateway_crds.apply_gateway_crds("cluster-a")
-    print(result["gateway_api"]["ok"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取 Gateway API / GIE CRD 状态
-
-报告集群上是否存在固定版本的 Gateway API 和 Gateway API Inference Extension CRD（每个包的状态为 `ready`/`missing`）。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/crds`**
-
-    ```json
-    {
-      "gateway_api": "ready",
-      "gateway_api_inference_extension": "ready"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import gateway_crds
-
-    status = await gateway_crds.gateway_crds_status("cluster-a")
-    print(status["gateway_api"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 安装 LeaderWorkerSet 控制器
-
-安装或升级 Lens 技术栈配置文件固定的 LeaderWorkerSet 控制器，启用 llm-d v1.0 P/D Guide 使用的 `DisaggregatedSet` API。Lens 先以服务端应用方式安装 CRD，再升级 Helm release。操作幂等；创建向导在安装 Gateway CRD 后也会调用此端点。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/clusters/{cluster_id}/lws`**
-
-    ```json
-    {
-      "ok": true,
-      "ready": true,
-      "crd": "ready",
-      "controller": "ready",
-      "version": "v1.0.0",
-      "namespace": "lws-system",
-      "message": ""
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    result = await service.install_lws("cluster-a")
-    print(result["ready"], result["version"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取 LeaderWorkerSet 状态
-
-报告集群上是否存在固定版本的 LeaderWorkerSet CRD 和控制器。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/lws`**
-
-    ```json
-    {
-      "ready": true,
-      "crd": "ready",
-      "controller": "ready",
-      "version": "v1.0.0",
-      "namespace": "lws-system",
-      "message": ""
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    status = await service.lws_status("cluster-a")
-    print(status["crd"], status["controller"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 检查集群 Kubernetes 版本
-
-探测集群 Kubernetes API 的可达性及其服务端版本，并与 Lens 技术栈配置文件固定的最低 Kubernetes 版本（`min_k8s_version`）进行比较。创建向导会在 kubeconfig 上传后调用此端点，当集群不可达或版本过低时阻止继续操作。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/clusters/{cluster_id}/kubernetes-version`**
-
-    ```json
-    {
-      "reachable": true,
-      "version": "1.34",
-      "min_k8s_version": "v1.32.0",
-      "supported": true
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.hardware.version import server_kubernetes_version
-    from llm_d_lens.versions import k8s_version_supports
-
-    parsed = await server_kubernetes_version("cluster-a")
-    version = f"{parsed[0]}.{parsed[1]}" if parsed else None
-    print(version, bool(version) and k8s_version_supports(version))
-    ```
-  </TabItem>
-</Tabs>
-
-### 删除集群
-
-删除由 Lens 管理的集群记录，并清理相关状态。仅当需要将集群从 Lens 中彻底移除时才应使用此操作。
-
-该接口会执行以下远端清理：
-
-- 删除注册独立的 Gateway 命名空间（通常为 `lens-gateway-<cluster-id>`），以及其中的 Gateway、IPP、鉴权资源和路由。命名空间不存在视为成功，不删除旧共享命名空间、其他注册的命名空间或共享 Gateway 控制器。
-- 删除 `hfTokenSecret` 中记录的集群 `HF_TOKEN` Secret；当其所在命名空间没有理由在集群之后继续存在时，该命名空间也会一并删除。以下情况属于此类：Lens 自有的 `llm-d-bench-storage-{cluster_id}` 命名空间、Lens 为该 Secret 创建的任何命名空间（带有 `app.kubernetes.io/managed-by: llm-d-lens` 标签），以及删除该 Secret 后仅剩 Kubernetes 和集群插件注入到每个命名空间中的对象（`default` 服务账号及其令牌 Secret、`kube-root-ca.crt` 等 CA 证书包 ConfigMap）的命名空间。仍包含任何其他对象（包括自定义资源）的命名空间会被保留；`default`、`kube-system`、`kube-public` 和 `kube-node-lease` 永远不会被删除。如果无法列出命名空间内容，则保留该命名空间。
-- 对于草稿集群，仍挂在其上的每个存储卷都会连同其 `PersistentVolumeClaim` 和 `PersistentVolume` 对象一起删除。底层 NFS 或主机路径存储上的模型文件会保留，因为 `PersistentVolume` 使用 `Retain` 回收策略。
-
-Gateway 命名空间必须清理成功：失败或超时返回 `502 cluster_gateway_cleanup_failed`，
-并保留集群记录和 kubeconfig 以便重试。HF-token 和草稿存储清理仍为尽力而为。
-非草稿集群仍有可用部署或存储卷时返回 `409`，请先清理这些资源。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/cluster/clusters/{cluster_id}`**
-
-    请求：无请求体。
-
-    - `cluster_id`（`string`，路径参数）：目标集群 id。
-
-    响应：`204 No Content`。此端点不返回 JSON 响应体。
-
-    失败：`502 cluster_gateway_cleanup_failed` 表示独立 Gateway 命名空间无法删除；
-    `409 cluster_has_available_deployments` 或 `cluster_has_storage_volumes`
-    表示已完成注册的集群仍有对应资源。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    必要清理失败时，`service.delete_cluster()` 抛出包含相同状态和错误码的 `ClusterOverviewError`。
-
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import service
-
-    async def main() -> None:
-        await service.delete_cluster("cluster-a")
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取集群会话
-
-获取或创建某个集群 id 对应的活动 Lens 会话元数据。当其他 API 接口需要会话 id 而非集群 id 时使用此端点。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/session`**
-
-    请求：无请求体。
-
-    - `clusterId`（`string`，查询参数）：目标集群 id。
-
-    响应：`ClusterSessionResponse`。
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": true,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "draft": false
-      },
-      "sessionId": "f4c15c0a-8c1f-4eb7-b4d7-ef83f22c2e9b"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster import service
-
-    cluster, session = service.get_cluster_session("cluster-a")
-    print(cluster.id, session.id)
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取集群概览
-
-返回一个集群的实时 Kubernetes 概览信息，包括节点、GPU、命名空间、缓存镜像以及组件健康状况摘要。该路由还会在返回实时快照的同时报告当前的集群记录。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/overview`**
-
-    请求：无请求体。
-
-    - `clusterId`（`string`，查询参数）：目标集群 id。
-
-    响应：`OverviewResponse`。
-
-    ```json
-    {
-      "cluster": {
-        "id": "cluster-a",
-        "name": "Primary cluster",
-        "description": "Shared production GPU cluster",
-        "createdAt": "2026-09-23T09:00:00Z",
-        "ready": true,
-        "proxy": {
-          "mode": "custom",
-          "httpProxy": "http://proxy.example:3128",
-          "httpsProxy": "http://proxy.example:3128",
-          "noProxy": "127.0.0.1,localhost,.svc"
-        },
-        "draft": false
-      },
-      "fetchedAt": "2026-09-23T09:18:00Z",
-      "kubernetes": {
-        "components": {
-          "intelDevicePlugin": {
-            "installed": true,
-            "ready": 1,
-            "desired": 1,
-            "status": "ready"
-          },
-          "monitoring": {
-            "installed": true,
-            "ready": 3,
-            "desired": 3,
-            "status": "ready"
-          }
-        },
-        "nodes": [
-          {
-            "name": "worker-1",
-            "version": "v1.31.0",
-            "osImage": "Ubuntu 22.04 LTS",
-            "ready": true,
-            "schedulingDisabled": false,
-            "cpu": 64.0,
-            "gpu": true,
-            "gpuCount": 4,
-            "gpuByProfile": {
-              "intel-xpu": 4
-            },
-            "vramBytes": 274877906944,
-            "role": "worker",
-            "cachedImages": [
-              "ghcr.io/llm-d/serving:latest"
-            ]
-          }
-        ],
-        "namespaces": [
-          {
-            "name": "default",
-            "deployments": [
-              {
-                "name": "example-deploy",
-                "desired": 1,
-                "ready": 1,
-                "available": 1
-              }
-            ],
-            "ready": 1
-          }
-        ],
-        "hardware": {
-          "nodes": 3,
-          "cpuCores": 192.0,
-          "memoryBytes": 824633720832,
-          "memoryUsagePercent": 25.0,
-          "memoryAvailableBytes": 618475290624,
-          "diskBytes": 7619773423616,
-          "diskUsedBytes": 4178392940544,
-          "diskAvailableBytes": 3441380483072,
-          "diskUsagePercent": 54.8,
-          "gpuNodes": 2,
-          "gpuCount": 8,
-          "totalGpuCount": 8,
-          "accelerators": [
-            {
-              "id": "intel-xpu",
-              "gpuCount": 8
-            }
-          ],
-          "vramBytes": 549755813888,
-          "allocatedGpuCount": 4,
-          "availableGpuCount": 4,
-          "usableGpuCount": 8
-        }
-      }
-    }
-    ```
-
-    `hardware` 在给出使用率的同时也给出剩余容量，调用方无需自己换算。
-    `diskUsedBytes`/`diskAvailableBytes` 直接来自各节点 kubelet 的 Summary API，
-    因此数值是精确的，并且在本集群自身的 Prometheus 不可用时依然可以上报。
-    `memoryAvailableBytes` 则由 `memoryUsagePercent`（Prometheus 上报的各节点
-    使用率的平均值）换算而来，因为内存没有字节级的数据源。这三个字段在其所依赖的
-    读数不可用时均为 `null`——`null` 表示未知，而不是剩余为零。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster import registry, service
-
-    async def main() -> None:
-        cluster = registry.require_cluster("cluster-a")
-        overview = await service.build_overview(cluster)
-        print(overview)
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 读取规划发现资源
-
-为一个活动的集群会话读取某个受许可列表限制的规划发现资源。此端点有意限制为固定的 `kubectl` 读取操作，当读取失败或返回不可用的 JSON 时会返回 `{"result": null}`。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/sessions/{session_id}/planning-discovery/{resource}`**
-
-    请求：无请求体。
-
-    - `session_id`（`string`，路径参数）：活动集群会话 id。
-    - `resource`（`string`，路径参数）：`version`、`nodes`、`deviceclasses`、`resourceslices` 或 `runtimeclasses` 之一。
-
-    响应：包含 `result` 键的包装对象。
-
-    ```json
-    {
-      "result": {
-        "items": []
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-    import json
-
-    from llm_d_lens.cluster import sessions
-    from llm_d_lens.utils.kubernetes import run_kubectl
-
-    async def main() -> None:
-        session = sessions.require_active_session("f4c15c0a-8c1f-4eb7-b4d7-ef83f22c2e9b")
-        result = await run_kubectl(["get", "nodes", "-o", "json"], timeout=10, cluster_id=session.id)
-        payload = json.loads(result.stdout) if result.ok else None
-        print({"result": payload if isinstance(payload, dict) else None})
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 发现引导阶段的 SSH 主机密钥
-
-在不进行身份验证或发送凭据的情况下，从每个目标读取其 SSH 主机密钥。主机规格和 IP 范围会在服务端展开，因此每个响应项都标识了一个确切的 `host:port`。在 UI 中确认之前，请将这些 SHA-256 指纹与可信来源进行比对。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap/host-keys`**
-
-    ```json
-    {
-      "nodes": [{ "host": "10.0.0.10-12", "port": 22 }]
-    }
-    ```
-
-    每个响应项都包含 `host`、`port`、`algorithm` 和 `fingerprint`；无法访问的主机则会包含 `error` 字段。
-
-    ```json
-    {
-      "items": [
-        { "host": "10.0.0.10", "port": 22, "algorithm": "ssh-ed25519", "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-        { "host": "10.0.0.11", "port": 22, "algorithm": "ssh-ed25519", "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
-        { "host": "10.0.0.12", "port": 22, "error": "Connection timed out" }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### 运行引导阶段预检
-
-针对一台或多台目标机器运行 Kubespray 引导阶段预检。响应会报告每个节点的状态，以及各项检查是通过、失败还是被跳过。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap/preflight`**
-
-    请求体（`BootstrapPreflightRequest`）：
-
-    - `nodes`（`BootstrapNodeInput[]`）：包含主机、SSH 及角色信息的多行数据。
-    - `hostKeys`（`BootstrapHostKeyPin[]`）：每个展开后的 `host:port` 对应的确切已确认指纹。
-
-    ```json
-    {
-      "nodes": [
-        {
-          "host": "10.0.0.1",
-          "port": 22,
-          "roles": [
-            "control-plane"
-          ],
-          "username": "root"
-        },
-        {
-          "host": "10.0.0.2",
-          "port": 22,
-          "roles": [
-            "worker"
-          ],
-          "username": "root"
-        }
-      ],
-      "hostKeys": [
-        { "host": "10.0.0.1", "port": 22, "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-        { "host": "10.0.0.2", "port": 22, "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" }
-      ]
-    }
-    ```
-
-    响应：`BootstrapPreflightResponse`。
-
-    ```json
-    {
-      "items": [
-        {
-          "host": "10.0.0.1",
-          "roles": [
-            "control-plane"
-          ],
-          "state": "passed",
-          "checks": [
-            {
-              "id": "ssh",
-              "label": "SSH connectivity",
-              "status": "passed",
-              "detail": "reachable"
-            },
-            {
-              "id": "sudo",
-              "label": "Passwordless sudo",
-              "status": "passed"
-            }
-          ]
-        },
-        {
-          "host": "10.0.0.2",
-          "roles": [
-            "worker"
-          ],
-          "state": "passed",
-          "checks": [
-            {
-              "id": "ssh",
-              "label": "SSH connectivity",
-              "status": "passed",
-              "detail": "reachable"
-            }
-          ]
-        }
-      ],
-      "allPassed": true
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster.bootstrap.dto import BootstrapHostKeyPin, BootstrapNodeInput
-    from llm_d_lens.cluster.bootstrap.service import run_preflight_check
-
-    async def main() -> None:
-      pins = [
-        BootstrapHostKeyPin(host="10.0.0.1", port=22, fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-        BootstrapHostKeyPin(host="10.0.0.2", port=22, fingerprint="SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
-      ]
-        nodes = await run_preflight_check([
-            BootstrapNodeInput(host="10.0.0.1", roles=["control-plane"]),
-            BootstrapNodeInput(host="10.0.0.2", roles=["worker"]),
-      ], pins)
-        for node in nodes:
-            print(node.host, node.preflight_state)
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 启动引导作业
-
-在预检成功后启动一个基于 Kubespray 的长时间运行集群引导作业。响应会立即返回引导作业 id，而实际的配置过程会在后台继续进行。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap`**
-
-    请求体（`BootstrapCreateRequest`）：
-
-    - `nodes`（`BootstrapNodeInput[]`）：要配置的节点。
-    - `hostKeys`（`BootstrapHostKeyPin[]`）：每个展开后的 `host:port` 对应的确切已确认指纹。
-    - `proxy`（`BootstrapProxyConfig`，可选）：目标节点的代理配置。
-
-    ```json
-    {
-      "nodes": [
-        {
-          "host": "10.0.0.1",
-          "port": 22,
-          "roles": [
-            "control-plane"
-          ],
-          "username": "root"
-        },
-        {
-          "host": "10.0.0.2",
-          "port": 22,
-          "roles": [
-            "worker"
-          ],
-          "username": "root"
-        }
-      ],
-      "hostKeys": [
-        { "host": "10.0.0.1", "port": 22, "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
-        { "host": "10.0.0.2", "port": 22, "fingerprint": "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" }
-      ],
-      "proxy": {
-        "mode": "custom",
-        "httpProxy": "http://proxy.example:3128",
-        "httpsProxy": "http://proxy.example:3128",
-        "noProxy": "127.0.0.1,localhost,.svc"
-      }
-    }
-    ```
-
-    响应：`BootstrapCreateResponse`。
-
-    ```json
-    {
-      "bootstrapId": "bootstrap-5b7fd3a81290"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.cluster.bootstrap.dto import BootstrapHostKeyPin, BootstrapNodeInput, BootstrapProxyConfig
-    from llm_d_lens.cluster.bootstrap import service
-
-    async def main() -> None:
-      pins = [
-        BootstrapHostKeyPin(host="10.0.0.1", port=22, fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-        BootstrapHostKeyPin(host="10.0.0.2", port=22, fingerprint="SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
-      ]
-        job = service.create_job(
-            [
-                BootstrapNodeInput(host="10.0.0.1", roles=["control-plane"]),
-                BootstrapNodeInput(host="10.0.0.2", roles=["worker"]),
-            ],
-            pins,
-            proxy=BootstrapProxyConfig(
-                mode="custom",
-                httpProxy="http://proxy.example:3128",
-                httpsProxy="http://proxy.example:3128",
-                noProxy="127.0.0.1,localhost,.svc",
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        response = await lens.clusters.create_cluster(
+            file=UploadFile(
+                filename="kubeconfig.yaml",
+                file=BytesIO(Path("<kubeconfig-path>").read_bytes()),
             ),
+            name="<cluster-name>",
         )
-        await service.run_bootstrap_job(job.id)
-        print(job.id)
+        print(response.cluster.id, response.session_id)
 
-    asyncio.run(main())
-    ```
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 获取引导状态
+kubeconfig 必须是 UTF-8 文件。llm-d 组件版本来自 Lens 发行版，而不是请求，因此 `llmDRef` 和 `llmDBenchmarkRef` 会被忽略。添加 `draft=true` 可在集群可用前先注册。
 
-获取引导作业的当前状态。当作业首次达到 `succeeded` 状态时，该响应还可以携带一次性的 kubeconfig 交接数据。
+### 完成或编辑注册
+
+使用 `PATCH` 重命名集群、修改描述或代理，或将草稿转为正式集群。只有传入的字段会改变。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/cluster/bootstrap/{bootstrap_id}`**
 
-    请求：无请求体。
+```bash
+curl -X PATCH -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"<cluster-name>","draft":false}' \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>"
+```
 
-    - `bootstrap_id`（`string`，路径参数）：引导作业 id。
-
-    响应：`BootstrapStatusResponse`。
-
-    ```json
-    {
-      "id": "bootstrap-5b7fd3a81290",
-      "phase": "succeeded",
-      "logTail": "PLAY [all]
-ok: [10-0-0-1]",
-      "error": null,
-      "kubeconfig": "apiVersion: v1
-kind: Config
-clusters: []
-contexts: []
-users: []
-"
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster.bootstrap import service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    job = service.get_job("bootstrap-5b7fd3a81290")
-    kubeconfig = service.consume_kubeconfig(job.id) if job.phase == "succeeded" else None
-    print(job.phase, kubeconfig)
-    ```
+```python
+import asyncio
+
+from llm_d_lens.cluster.models import ClusterSettingsUpdateRequest
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        response = await lens.clusters.update_cluster(
+            "<cluster-id>",
+            ClusterSettingsUpdateRequest(name="<cluster-name>", draft=False),
+        )
+        print(response.cluster.id, response.cluster.ready)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 取消引导作业
+Gateway 提供程序只能分配一次。之后修改会返回 `422 gateway_provider_immutable`。Gateway 端口必须在 `30000`-`32767` 之间。
 
-取消一个正在运行的引导作业，使其停止配置并不再继续。一旦收到取消请求，此端点会立即返回。
+### 准备 Gateway 和镜像依赖
+
+应用固定版本的 Gateway API CRD 和 LeaderWorkerSet 控制器，然后预拉取路由器和加速器镜像。这些操作是幂等的。使用对应的 `GET` 端点轮询进度。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/cluster/bootstrap/{bootstrap_id}/cancel`**
 
-    请求：无请求体。
+```bash
+# Apply the pinned Gateway API / GIE CRDs.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/crds"
 
-    - `bootstrap_id`（`string`，路径参数）：引导作业 id。
+# Install or upgrade LeaderWorkerSet.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/lws"
 
-    响应：`204 No Content`。此端点不返回 JSON 响应体。
+# Pre-pull router and model-server images for the selected accelerators.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"accelerators":["nvidia"]}' \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/images/prepull"
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster.bootstrap import service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    service.cancel_job("bootstrap-5b7fd3a81290")
-    ```
+```python
+import asyncio
+
+from llm_d_lens.cluster.models import ImagePrepullRequest
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        await lens.clusters.create_cluster_crds("<cluster-id>")
+        await lens.clusters.install_cluster_lws("<cluster-id>")
+
+        status = await lens.clusters.create_cluster_image_prepull(
+            "<cluster-id>",
+            ImagePrepullRequest(accelerators=["nvidia"]),
+        )
+        print(status.state, status.ready, status.desired)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-还有一些其他端点可用于网关端口可用性检查、HF token 密钥创建、模型密钥列表、节点 cordon/uncordon 以及旧版集群概览会话断开路由 —— 详见完整的 OpenAPI 参考文档。
+镜像预拉取使用特权 DaemonSet，每个节点可能需要数分钟。镜像状态为失败表示至少有一个节点的拉取 Pod 在崩溃循环。
 
-完整的请求/响应模式请参见 FastAPI OpenAPI 模式（使用 `npm run docs:api` 重新生成）。
+### 设置或轮换 Hugging Face 令牌
+
+在集群上保存 Hugging Face 令牌，以便模型缓存下载和私有模型部署使用。`PUT` 会原地轮换令牌；省略 `namespace` 和 `name` 可复用集群上已记录的 Secret。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -X PUT -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<hf-token>"}' \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/hf-token-secret"
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.cluster.models import HfTokenSecretUpdateRequest
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        ref = await lens.clusters.update_hf_token_secret(
+            "<cluster-id>",
+            HfTokenSecretUpdateRequest(token="<hf-token>"),
+        )
+        print(ref.namespace, ref.name)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+如果集群还没有 Secret，请使用 `POST /api/v1/cluster/clusters/{cluster_id}/hf-token-secrets` 创建一个。创建已存在的 Secret 会返回 `409 secret_already_exists`；此时应使用 `PUT` 轮换。令牌为空会返回 `422 invalid_secret_token`。正在运行的工作负载会继续使用旧令牌，直到重新创建。
+
+### 引导裸金属机器
+
+发现并固定 SSH 主机密钥，运行预检，然后启动 Kubespray 任务。预检必须通过后才能开始引导。任务会立即返回 `bootstrapId`，实际配置在后台继续。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+# 1. Discover host keys without authenticating.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nodes":[{"host":"<ip>","port":22}]}' \
+  "$LENS_URL/api/v1/cluster/bootstrap/host-keys"
+
+# 2. Pin the returned fingerprints and run preflight.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nodes":[{"host":"<ip>","port":22,"roles":["worker"],"username":"root","password":"<ssh-password>"}],"hostKeys":[{"host":"<ip>","port":22,"fingerprint":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}' \
+  "$LENS_URL/api/v1/cluster/bootstrap/preflight"
+
+# 3. After allPassed is true, start the job.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nodes":[{"host":"<ip>","port":22,"roles":["worker"],"username":"root","password":"<ssh-password>"}],"hostKeys":[{"host":"<ip>","port":22,"fingerprint":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}' \
+  "$LENS_URL/api/v1/cluster/bootstrap"
+
+# 4. Poll until phase is succeeded; the response then carries the kubeconfig.
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/bootstrap/<bootstrap-id>"
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.cluster.bootstrap.dto import (
+    BootstrapCreateRequest,
+    BootstrapHostKeyPin,
+    BootstrapHostKeyRequest,
+    BootstrapHostAddress,
+    BootstrapNodeInput,
+    BootstrapPreflightRequest,
+)
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        keys = await lens.cluster_bootstrap.discover_host_keys(
+            BootstrapHostKeyRequest(nodes=[BootstrapHostAddress(host="<ip>", port=22)])
+        )
+        print([(item.host, item.fingerprint) for item in keys.items])
+
+        node = BootstrapNodeInput(
+            host="<ip>",
+            roles=["worker"],
+            username="root",
+            password="<ssh-password>",
+        )
+        pin = BootstrapHostKeyPin(
+            host="<ip>",
+            port=22,
+            fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        preflight = await lens.cluster_bootstrap.preflight(
+            BootstrapPreflightRequest(nodes=[node], host_keys=[pin])
+        )
+        if preflight.all_passed:
+            job = await lens.cluster_bootstrap.start_bootstrap(
+                BootstrapCreateRequest(nodes=[node], host_keys=[pin])
+            )
+            print(job.bootstrap_id)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+SSH 凭据只用于预检和引导。固定主机密钥前，请将指纹与可信来源进行比较。使用 `POST /api/v1/cluster/bootstrap/{bootstrap_id}/cancel` 取消任务。
+
+### 检查集群健康状态
+
+读取实时节点、加速器、容量和组件摘要，并检查 Kubernetes 版本是否达到 Lens 的最低要求。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/overview?clusterId=<cluster-id>"
+
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/cluster/clusters/<cluster-id>/kubernetes-version"
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        overview = await lens.clusters.overview(cluster_id="<cluster-id>")
+        version = await lens.clusters.read_cluster_kubernetes_version("<cluster-id>")
+
+        print(overview.kubernetes.hardware.accelerators)
+        print(version.version, version.supported)
+
+
+asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+当某项读数不可用时，容量字段可能为 `null`；`null` 表示未知，而不是零。`ready` 只是可达性探测，并不保证有空闲 GPU。
+
+## 端点
+
+### 注册与检查
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/cluster/lens-hosts` | `cluster:cluster:read` | 列出集群可用于 Gateway 认证的 Lens 主机地址。 |
+| GET | `/api/v1/cluster/clusters` | `cluster:cluster:read` | 列出可见集群。 |
+| POST | `/api/v1/cluster/clusters` | `cluster:cluster:create` | 从 kubeconfig 注册集群。 |
+| PATCH | `/api/v1/cluster/clusters/{cluster_id}` | `cluster:cluster:update` | 编辑集群设置。 |
+| DELETE | `/api/v1/cluster/clusters/{cluster_id}` | `cluster:cluster:delete` | 删除注册及其 Lens 管理的资源。 |
+| GET | `/api/v1/cluster/session` | `cluster:session:connect` | 获取或创建集群的会话 id。 |
+| GET | `/api/v1/cluster/overview` | `cluster:cluster:read` | 读取实时集群健康和容量。 |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/kubernetes-version` | `cluster:cluster:read` | 检查可达性和 Kubernetes 版本。 |
+| GET | `/api/v1/cluster/sessions/{session_id}/planning-discovery/{resource}` | `cluster:planning:read` | 读取一个规划发现资源。 |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/gateway-port-check` | `cluster:cluster:update` | 检查 Gateway NodePort 是否空闲。 |
+| GET | `/api/v1/cluster/model-secrets` | `cluster:cluster:read` | 列出集群的模型相关 Secret。 |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/nodes/cordon` | `cluster:node:operate` | 停止新的 Pod 调度到工作节点。 |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/nodes/uncordon` | `cluster:node:operate` | 让工作节点重新可调度。 |
+
+### 集群准备
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/hf-token-secrets` | `cluster:hf-token:create` | 创建 Hugging Face 令牌 Secret。 |
+| PUT | `/api/v1/cluster/clusters/{cluster_id}/hf-token-secret` | `cluster:hf-token:update` | 轮换 Hugging Face 令牌 Secret 或将其指向其他 Secret。 |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/software-downloads` | `cluster:cluster:update` | 下载固定版本的 llm-d 源码。 |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/software-downloads` | `cluster:cluster:read` | 读取软件下载进度。 |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/images/prepull` | `cluster:cluster:update` | 在每个节点预拉取镜像。 |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/images/prepull` | `cluster:cluster:read` | 读取每节点镜像预拉取状态。 |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/crds` | `cluster:cluster:update` | 应用固定版本的 Gateway API 和 GIE CRD。 |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/crds` | `cluster:cluster:read` | 检查 CRD 就绪状态。 |
+| POST | `/api/v1/cluster/clusters/{cluster_id}/lws` | `cluster:cluster:update` | 安装或升级 LeaderWorkerSet。 |
+| GET | `/api/v1/cluster/clusters/{cluster_id}/lws` | `cluster:cluster:read` | 检查 LeaderWorkerSet 就绪状态。 |
+
+### 引导
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/cluster/bootstrap/host-keys` | `cluster:bootstrap:execute` | 发现目标机器的 SSH 主机密钥。 |
+| POST | `/api/v1/cluster/bootstrap/preflight` | `cluster:bootstrap:execute` | 校验 SSH、sudo 和节点前提条件。 |
+| POST | `/api/v1/cluster/bootstrap` | `cluster:bootstrap:execute` | 启动 Kubespray 引导任务。 |
+| GET | `/api/v1/cluster/bootstrap/{bootstrap_id}` | `cluster:bootstrap:read` | 读取任务状态和 kubeconfig 交付内容。 |
+| POST | `/api/v1/cluster/bootstrap/{bootstrap_id}/cancel` | `cluster:bootstrap:execute` | 取消正在运行的引导任务。 |
+
+大多数读取返回 `200`。注册和创建 HF Secret 返回 `201`；创建软件下载和引导任务返回 `202`；删除集群和取消引导返回 `204`。
+
+## 错误与限制
+
+- **`401` / `403`** — 未认证或无权访问该集群。管理员可以管理所有集群；维护者只能管理分配给自己的集群。
+- **`404`** — 集群不存在、引导任务不存在或会话已失效。
+- **`409 cluster_has_available_deployments`** 或 **`cluster_has_storage_volumes`** — 集群仍有资源，请先删除这些资源。
+- **`422 invalid_kubeconfig`** — 上传的文件不是 UTF-8 文本。
+- **`422 invalid_proxy_config`** — `proxy` 不是有效的 JSON。
+- **`422 invalid_gateway_port`** 或 **`gateway_port_in_use`** — 请选择 `30000`-`32767` 之间空闲的 NodePort。
+- **`422 gateway_provider_immutable`** — Gateway 提供程序只能分配一次。
+- **`422 invalid_secret_token`** — Hugging Face 令牌为空。
+- **`409 secret_already_exists`** — Secret 已存在；请使用 `PUT` 轮换。
+- **`502 cluster_gateway_cleanup_failed`** — Gateway 清理失败，注册已保留。请重试删除。
+- **`503 kubectl_unavailable`** 或 **`504 kubectl_timeout`** — Lens 无法访问集群 API。请检查 kubeconfig、网络和代理。
+- 组件版本由 Lens 发行版固定。请求中的版本字段不会覆盖它们。
+- Cordon 只会阻止新 Pod 调度，不会驱逐或停止正在运行的 Pod。
+
+## 相关
+
+- [集群指南](/user-guide/clusters)
+- [存储指南](/user-guide/storage)
+- [模型缓存指南](/user-guide/model-cache)
+- [API 约定](/api-reference)
+- [完整 OpenAPI schema](/api-reference)

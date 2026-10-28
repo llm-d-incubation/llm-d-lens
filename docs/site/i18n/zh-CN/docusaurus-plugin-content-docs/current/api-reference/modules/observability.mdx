@@ -1,730 +1,361 @@
 ---
 title: 可观测性
-description: Lens 可观测性背后的监控、加速器和性能分析 API。
+description: 安装、检查并排查集群、加速器、部署和 GPU 驱动的监控数据。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## 后端 API
+使用可观测性（Observability）检查或安装集群 Prometheus/Grafana 技术栈、查看加速器和 GPU 驱动健康状态、管理单个部署的监控，并读取性能剖析指标。仪表盘缺失、驱动或 exporter 需要处理，或需要确认哪些部署执行已启用监控时使用本模块。
 
-可观测性功能拆分在 `llm_d_lens/monitoring/` 下的五个 FastAPI 路由器中：`accelerator/router.py`、`cluster_stack/router.py`、`deployment/router.py`、`gpu_driver/router.py` 和 `profiling/router.py`。
+## 快速开始
 
-### 列出加速器可观测性能力
-
-列出 Lens 支持的加速器可观测性能力，包括访问模式和默认命名空间。
+列出 Lens 支持的加速器系列和访问模式。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/accelerators`**
 
-    请求：无请求体。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/monitoring/accelerators
+```
 
-    响应：返回一个 `AcceleratorCapabilitiesResponse`，其中包含支持的加速器系列。
-
-    ```json
-    {
-      "accelerators": [
-        {
-          "type": "intel_gpu",
-          "display_name": "Intel GPU",
-          "access_modes": ["dra", "plugin"],
-          "release_name": "xpumd",
-          "default_namespace": "intel-xpumd"
-        },
-        {
-          "type": "nvidia_gpu",
-          "display_name": "NVIDIA GPU",
-          "access_modes": ["plugin", "dra"],
-          "release_name": "dcgm-exporter",
-          "default_namespace": "dcgm-exporter"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.monitoring.accelerator.service import capabilities
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    response = capabilities()
-    print(response.model_dump())
-    ```
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    response = lens.accelerator.list_accelerators()
+    for item in response.accelerators:
+        print(item.type, item.access_modes, item.default_namespace)
+```
+
   </TabItem>
 </Tabs>
 
-### 获取加速器可观测性状态
+## 常见任务
 
-获取某个加速器系列的可观测性状态，包括 release、组件以及访问模式的健康状况。
+### 1. 检查集群监控技术栈和仪表盘链接
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/accelerators/{accelerator}/status`**
 
-    请求：无请求体。路径参数：`accelerator`（`str`，取值为已注册系列之一：`intel_gpu` 或 `nvidia_gpu`）。查询参数：`namespace`（`str`，默认值为 `intel-xpumd`，无论所选加速器是哪个——查询 `nvidia_gpu` 时，请显式传入 `dcgm-exporter` 或 NVIDIA release 实际安装到的命名空间）、`access_mode`（`"dra" | "plugin"`，可选）以及 `cluster_id`（`str`，可选）。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/status?namespace=llm-d-monitoring&cluster_id=<cluster-id>"
 
-    响应：返回一个 `AcceleratorStatusResponse`。
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/links?namespace=llm-d-monitoring&cluster_id=<cluster-id>"
+```
 
-    ```json
-    {
-      "accelerator": "intel_gpu",
-      "access_mode": "dra",
-      "access_modes": [
-        {
-          "mode": "dra",
-          "available": true,
-          "detected": true,
-          "message": null
-        },
-        {
-          "mode": "plugin",
-          "available": false,
-          "detected": false,
-          "message": "device plugin not installed"
-        }
-      ],
-      "cluster_reachable": true,
-      "context": "kind-test",
-      "namespace": "intel-xpumd",
-      "release": {
-        "name": "xpumd",
-        "status": "deployed",
-        "chart": "xpumd-0.1.0",
-        "revision": 1
-      },
-      "status": "ready",
-      "message": "ready",
-      "components": [
-        {
-          "name": "xpumd-controller",
-          "status": "ready",
-          "kind": "workload",
-          "ready": 1,
-          "desired": 1,
-          "source": "xpumd",
-          "diagnostics": []
-        }
-      ],
-      "active_operation_id": null,
-      "observed_at": "2026-09-23T08:00:00Z",
-      "stale": false
-    }
-    ```
+读取 `status`、`message`、`release` 和 `components[]`。链接响应返回 Prometheus 和 Grafana 条目，包含 `available` 和 `url`。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.accelerator.service import get_status, validate_namespace
+```python
+import asyncio
 
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status(
-            "intel_gpu",
-            validate_namespace("intel-xpumd"),
-            "dra",
-            cluster_id="cluster-123",
+        status = await lens.cluster_stack.status(
+            namespace="llm-d-monitoring", cluster_id="<cluster-id>"
         )
-        print(status.model_dump())
+        print(status.status, status.message)
 
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 安装加速器可观测性
-
-为受支持的加速器系列安装可观测性组件。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/accelerators/{accelerator}/installations`**
-
-    请求：路径参数 `accelerator`（`str`）。可选请求头：`Idempotency-Key`（`str`）。可选查询参数：`cluster_id`（`str`）。请求体字段为 `accelerator`、`access_mode` 和 `namespace`。
-
-    ```json
-    {
-      "accelerator": "intel_gpu",
-      "access_mode": "dra",
-      "namespace": "intel-xpumd"
-    }
-    ```
-
-    响应：返回已排队安装操作对应的 `AcceleratorOperationResponse`。
-
-    ```json
-    {
-      "operation_id": "accel-op-123",
-      "kind": "install",
-      "status": "queued",
-      "phase": "queued",
-      "accelerator": "intel_gpu",
-      "access_mode": "dra",
-      "namespace": "intel-xpumd",
-      "started_at": "2026-09-23T08:01:00Z",
-      "finished_at": null,
-      "exit_code": null,
-      "logs": [],
-      "error": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.accelerator.models import AcceleratorInstallRequest
-    from llm_d_lens.monitoring.accelerator.service import install
-
-
-    async def main() -> None:
-        operation = await install(
-            AcceleratorInstallRequest(
-                accelerator="intel_gpu",
-                access_mode="dra",
-                namespace="intel-xpumd",
-            ),
-            idempotency_key="request-123",
-            cluster_id="cluster-123",
+        links = await lens.cluster_stack.links(
+            namespace="llm-d-monitoring", cluster_id="<cluster-id>"
         )
-        print(operation.model_dump())
-
+        for link in links.links:
+            print(link.kind, link.available, link.url)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 获取集群监控技术栈状态
-
-检查集群级别的 Prometheus/Grafana 监控技术栈（kube-prometheus-stack）是否已安装并就绪。
+### 2. 预检并安装或重新安装集群技术栈
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/cluster-stack/status`**
 
-    请求：无请求体。查询参数：`namespace`（`str`，默认值为 `llm-d-monitoring`）和 `cluster_id`（`str`，可选）。
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/installations/preflight?cluster_id=<cluster-id>" \
+  -d '{"namespace":"llm-d-monitoring","mode":"central","enable_tls":false,"reinstall":false}'
 
-    响应：返回一个 `ClusterStackStatusResponse`。
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: <request-id>" \
+  "http://127.0.0.1:3000/api/v1/monitoring/cluster-stack/installations?cluster_id=<cluster-id>" \
+  -d '{"namespace":"llm-d-monitoring","mode":"central","enable_tls":false,"reinstall":false}'
+```
 
-    ```json
-    {
-      "cluster": {
-        "context": "kind-test",
-        "reachable": true,
-        "platform": "kubernetes"
-      },
-      "namespace": "llm-d-monitoring",
-      "release": {
-        "name": "llmd",
-        "status": "deployed",
-        "chart": "kube-prometheus-stack-65.0.0",
-        "revision": 2
-      },
-      "status": "ready",
-      "message": "ready",
-      "components": [
-        {
-          "name": "grafana",
-          "status": "ready",
-          "kind": "workload",
-          "ready": 1,
-          "desired": 1,
-          "source": "llmd",
-          "diagnostics": []
-        }
-      ],
-      "active_operation_id": null,
-      "observed_at": "2026-09-23T08:00:00Z",
-      "stale": false
-    }
-    ```
+预检返回 `allowed`、阻断性 `checks` 和 `warnings`。安装返回 `202 Accepted` 和 `operation_id`；请轮询操作直到 `status` 为 `succeeded` 或 `failed`。重新安装会删除已存储的指标。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.cluster_stack.service import get_status, validate_namespace
+```python
+import asyncio
 
+from llm_d_lens.monitoring.cluster_stack.models import ClusterStackInstallRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status(validate_namespace("llm-d-monitoring"), cluster_id="cluster-123")
-        print(status.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 运行集群监控技术栈预检
-
-在不安装任何内容的情况下运行集群监控技术栈的预检检查。在开始安装 Prometheus/Grafana 技术栈之前使用它。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/cluster-stack/installations/preflight`**
-
-    请求：可选查询参数 `cluster_id`（`str`）。请求体字段为 `namespace`、`mode`、`enable_tls` 和 `reinstall`。
-
-    ```json
-    {
-      "namespace": "llm-d-monitoring",
-      "mode": "central",
-      "enable_tls": false,
-      "reinstall": false
-    }
-    ```
-
-    响应：返回一个 `ClusterStackPreflightResponse`，包含阻断性和非阻断性检查项。
-
-    ```json
-    {
-      "allowed": true,
-      "status": "ready",
-      "checks": [
-        {
-          "name": "cluster-reachable",
-          "passed": true,
-          "message": "cluster is reachable",
-          "blocking": true
-        }
-      ],
-      "warnings": [],
-      "command_preview": [
-        "/path/to/llm-d/guides/recipes/observability/install-prometheus-grafana.sh",
-        "--namespace",
-        "llm-d-monitoring"
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.cluster_stack.models import ClusterStackInstallRequest
-    from llm_d_lens.monitoring.cluster_stack.service import preflight
-
-
-    async def main() -> None:
-        result = await preflight(
-            ClusterStackInstallRequest(
-                namespace="llm-d-monitoring",
-                mode="central",
-                enable_tls=False,
-                reinstall=False,
-            ),
-            cluster_id="cluster-123",
+        request = ClusterStackInstallRequest(
+            namespace="llm-d-monitoring",
+            mode="central",
+            enable_tls=False,
+            reinstall=False,
         )
-        print(result.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 安装集群监控技术栈
-
-安装或重新安装集群级别的监控技术栈。当需要部署或修复 Prometheus/Grafana 集群监控时使用。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/cluster-stack/installations`**
-
-    请求：可选请求头 `Idempotency-Key`（`str`）和可选查询参数 `cluster_id`（`str`）。请求体字段为 `namespace`、`mode`、`enable_tls` 和 `reinstall`。
-
-    ```json
-    {
-      "namespace": "llm-d-monitoring",
-      "mode": "central",
-      "enable_tls": false,
-      "reinstall": true
-    }
-    ```
-
-    响应：返回已排队安装或重新安装操作对应的 `ClusterStackOperationResponse`。
-
-    ```json
-    {
-      "operation_id": "cluster-stack-op-123",
-      "kind": "install",
-      "status": "queued",
-      "phase": "queued",
-      "namespace": "llm-d-monitoring",
-      "started_at": "2026-09-23T08:10:00Z",
-      "finished_at": null,
-      "exit_code": null,
-      "logs": [],
-      "error": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.cluster_stack.models import ClusterStackInstallRequest
-    from llm_d_lens.monitoring.cluster_stack.service import install
-
-
-    async def main() -> None:
-        operation = await install(
-            ClusterStackInstallRequest(
-                namespace="llm-d-monitoring",
-                mode="central",
-                enable_tls=False,
-                reinstall=True,
-            ),
-            idempotency_key="request-123",
-            cluster_id="cluster-123",
+        preflight = await lens.cluster_stack.installation_preflight(
+            request, cluster_id="<cluster-id>"
         )
-        print(operation.model_dump())
+        print(preflight.allowed, preflight.warnings)
 
+        operation = await lens.cluster_stack.create_installation(
+            request, idempotency_key="<request-id>", cluster_id="<cluster-id>"
+        )
+        print(operation.operation_id, operation.status)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 列出部署监控状态
-
-列出集群中每个部署的监控状态。使用此接口可以发现哪些执行已安装、启用或处于不健康的可观测性状态。
+### 3. 检查加速器能力和状态
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/deployments`**
 
-    请求：无请求体。必需查询参数：`cluster_id`（`str`）。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/accelerators/nvidia_gpu/status?namespace=dcgm-exporter&access_mode=dra&cluster_id=<cluster-id>"
+```
 
-    响应：返回集群级别的部署监控状态，每个执行命名空间对应一个条目。
+读取 `status`、`message`、`release`、`access_modes[]` 和 `components[]`。请显式传入 `dcgm-exporter` 或你的 NVIDIA release 命名空间；查询默认使用 `intel-xpumd`。
 
-    ```json
-    {
-      "cluster_id": "cluster-123",
-      "cluster_reachable": true,
-      "stack_ready": true,
-      "items": [
-        {
-          "execution_id": "deploy-exec-001",
-          "namespace": "llm-d-run-001",
-          "cluster_reachable": true,
-          "stack_ready": true,
-          "status": "enabled",
-          "enabled": true,
-          "epp_service": {
-            "name": "demo-epp",
-            "labels": {
-              "app.kubernetes.io/name": "demo-epp"
-            },
-            "service_account": "demo-epp"
-          },
-          "servicemonitors": ["llm-d-prism-epp-monitor"],
-          "podmonitors": ["llm-d-prism-modelserver-monitor"],
-          "message": "monitoring enabled"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.deployment.service import get_cluster_status
+```python
+import asyncio
 
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_cluster_status("cluster-123")
-        print(status)
-
+        status = await lens.accelerator.status(
+            "nvidia_gpu",
+            namespace="dcgm-exporter",
+            access_mode="dra",
+            cluster_id="<cluster-id>",
+        )
+        print(status.status, status.message)
+        for mode in status.access_modes:
+            print(mode.mode, mode.available, mode.detected)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 获取部署监控状态
-
-获取某个部署执行的监控状态，可选择按集群 id 限定范围。
+### 4. 安装加速器可观测性
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/deployments/{execution_id}`**
 
-    请求：无请求体。路径参数：`execution_id`（`str`）。可选查询参数：`cluster_id`（`str`）。
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://127.0.0.1:3000/api/v1/monitoring/accelerators/nvidia_gpu/installations/preflight?cluster_id=<cluster-id>" \
+  -d '{"accelerator":"nvidia_gpu","access_mode":"dra","namespace":"dcgm-exporter"}'
 
-    响应：返回单个部署监控状态对象。
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: <request-id>" \
+  "http://127.0.0.1:3000/api/v1/monitoring/accelerators/nvidia_gpu/installations?cluster_id=<cluster-id>" \
+  -d '{"accelerator":"nvidia_gpu","access_mode":"dra","namespace":"dcgm-exporter"}'
+```
 
-    ```json
-    {
-      "execution_id": "deploy-exec-001",
-      "namespace": "llm-d-run-001",
-      "cluster_reachable": true,
-      "stack_ready": true,
-      "status": "enabled",
-      "enabled": true,
-      "epp_service": {
-        "name": "demo-epp",
-        "labels": {
-          "app.kubernetes.io/name": "demo-epp"
-        },
-        "service_account": "demo-epp"
-      },
-      "servicemonitors": ["llm-d-prism-epp-monitor"],
-      "podmonitors": ["llm-d-prism-modelserver-monitor"],
-      "message": "monitoring enabled"
-    }
-    ```
+安装响应为 `202 Accepted`，包含 `operation_id`。请求体中的 `accelerator` 必须与路径参数一致。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.deployment.service import get_status
+```python
+import asyncio
 
+from llm_d_lens.monitoring.accelerator.models import AcceleratorInstallRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status("deploy-exec-001", "cluster-123")
-        print(status)
+        request = AcceleratorInstallRequest(
+            accelerator="nvidia_gpu", access_mode="dra", namespace="dcgm-exporter"
+        )
+        preflight = await lens.accelerator.installation_preflight(
+            "nvidia_gpu", request, cluster_id="<cluster-id>"
+        )
+        print(preflight.allowed, preflight.warnings)
 
+        operation = await lens.accelerator.create_installation(
+            "nvidia_gpu", request, idempotency_key="<request-id>", cluster_id="<cluster-id>"
+        )
+        print(operation.operation_id, operation.status)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 管理部署监控资源
-
-安装、启用、禁用或卸载某个部署执行的监控资源。
+### 5. 管理部署监控
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/deployments/{execution_id}/{action}`**
 
-    请求：无请求体。路径参数：`execution_id`（`str`）和 `action`（`str`，取值为 `install`、`enable`、`disable` 或 `uninstall` 之一）。可选查询参数：`cluster_id`（`str`）。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/deployments?cluster_id=<cluster-id>"
 
-    响应：在所请求的操作完成后，返回与前述相同形状的部署监控状态。
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/deployments/<execution-id>?cluster_id=<cluster-id>"
 
-    ```json
-    {
-      "execution_id": "deploy-exec-001",
-      "namespace": "llm-d-run-001",
-      "cluster_reachable": true,
-      "stack_ready": true,
-      "status": "disabled",
-      "enabled": false,
-      "epp_service": {
-        "name": "demo-epp",
-        "labels": {
-          "app.kubernetes.io/name": "demo-epp"
-        },
-        "service_account": "demo-epp"
-      },
-      "servicemonitors": [],
-      "podmonitors": [],
-      "message": "monitoring disabled"
-    }
-    ```
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/deployments/<execution-id>/enable?cluster_id=<cluster-id>"
+```
+
+有效操作包括 `install`、`enable`、`disable` 和 `uninstall`。从响应中读取 `status`、`enabled`、`servicemonitors` 和 `podmonitors`。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.deployment.service import disable, enable, install, uninstall
+```python
+import asyncio
 
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        actions = {
-            "install": install,
-            "enable": enable,
-            "disable": disable,
-            "uninstall": uninstall,
-        }
-        result = await actions["disable"]("deploy-exec-001", "cluster-123")
-        print(result)
+        listing = await lens.observability.list_deployment_monitoring("<cluster-id>")
+        print(listing.cluster_id, listing.stack_ready, len(listing.items))
 
+        status = await lens.observability.get_deployment_monitoring(
+            "<execution-id>", "<cluster-id>"
+        )
+        print(status.status, status.enabled)
+
+        result = await lens.observability.manage_deployment_monitoring(
+            "<execution-id>", "enable", "<cluster-id>"
+        )
+        print(result.status, result.message)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 获取 GPU 驱动状态
-
-获取集群中当前 GPU 驱动的安装状态，包括就绪情况和访问模式。
+### 6. 检查 GPU 驱动和性能剖析流量图
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/gpu-driver/status`**
 
-    请求：无请求体。查询参数：`access_mode`（`"dra" | "plugin"`，默认值为 `dra`）、`cluster_id`（`str`，可选）以及 `hardware`（`str`，可选——已注册的硬件配置文件 id，例如 `intel-xpu`；当只注册了一个驱动提供方时可省略）。
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/gpu-driver/status?access_mode=dra&cluster_id=<cluster-id>&hardware=intel-xpu"
 
-    响应：返回一个 `GpuDriverStatusResponse`。
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://127.0.0.1:3000/api/v1/monitoring/gpu-driver/install?cluster_id=<cluster-id>&hardware=intel-xpu" \
+  -d '{"access_mode":"dra"}'
 
-    ```json
-    {
-      "access_mode": "dra",
-      "installed": true,
-      "ready": true,
-      "cluster_reachable": true,
-      "message": "Intel GPU DRA driver is installed and ready."
-    }
-    ```
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/monitoring/profiling/flow-map?execution_id=<execution-id>&cluster_id=<cluster-id>"
+```
+
+驱动状态返回 `installed`、`ready` 和 `message`。驱动安装为异步操作（`202`）。流量图返回 `prometheus_reachable`、`components` 和 `edges`。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.monitoring.gpu_driver.service import get_status
+```python
+import asyncio
 
+from llm_d_lens.monitoring.gpu_driver.models import GpuDriverInstallRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
     async def main() -> None:
-        status = await get_status("dra", cluster_id="cluster-123", hardware="intel-xpu")
-        print(status.model_dump())
+        status = await lens.gpu_driver.read_status(
+            "dra", cluster_id="<cluster-id>", hardware="intel-xpu"
+        )
+        print(status.installed, status.ready, status.message)
 
+        installed = await lens.gpu_driver.create_install(
+            GpuDriverInstallRequest(access_mode="dra"),
+            cluster_id="<cluster-id>",
+            hardware="intel-xpu",
+        )
+        print(installed.applied, installed.message)
+
+        flow = await lens.profiling.flow_map("<execution-id>", "<cluster-id>")
+        print(flow.prometheus_reachable, len(flow.components), len(flow.edges))
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 安装 GPU 驱动技术栈
+## 端点
 
-为所选访问模式安装 Lens 所期望的 GPU 驱动/设备插件技术栈。
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/monitoring/accelerators` | `monitoring:accelerator:read` | 列出加速器能力。 |
+| GET | `/api/v1/monitoring/accelerators/{accelerator}/status` | `monitoring:accelerator:read` | 读取加速器健康状态。 |
+| POST | `/api/v1/monitoring/accelerators/{accelerator}/installations/preflight` | `monitoring:accelerator:install` | 运行安装预检。 |
+| POST | `/api/v1/monitoring/accelerators/{accelerator}/installations` | `monitoring:accelerator:install` | 安装组件（`202`）。 |
+| GET | `/api/v1/monitoring/accelerators/{accelerator}/operations/{operation_id}` | `monitoring:operation:read` | 读取安装进度。 |
+| GET | `/api/v1/monitoring/accelerators/{accelerator}/links` | `monitoring:accelerator:read` | 解析仪表盘链接。 |
+| GET | `/api/v1/monitoring/cluster-stack/status` | `monitoring:cluster-stack:read` | 读取集群技术栈健康状态。 |
+| POST | `/api/v1/monitoring/cluster-stack/installations/preflight` | `monitoring:cluster-stack:install` | 运行安装预检。 |
+| POST | `/api/v1/monitoring/cluster-stack/installations` | `monitoring:cluster-stack:install` | 安装或重新安装（`202`）。 |
+| GET | `/api/v1/monitoring/cluster-stack/operations/{operation_id}` | `monitoring:operation:read` | 读取安装进度。 |
+| GET | `/api/v1/monitoring/cluster-stack/links` | `monitoring:cluster-stack:read` | 解析仪表盘链接。 |
+| GET | `/api/v1/monitoring/deployments` | `monitoring:deployment:read` | 列出部署监控状态。 |
+| GET | `/api/v1/monitoring/deployments/{execution_id}` | `monitoring:deployment:read` | 读取单个部署的监控状态。 |
+| POST | `/api/v1/monitoring/deployments/{execution_id}/{action}` | `monitoring:deployment:action` | 安装、启用、停用或卸载。 |
+| GET | `/api/v1/monitoring/gpu-driver/status` | `monitoring:gpu-driver:read` | 读取驱动就绪状态。 |
+| POST | `/api/v1/monitoring/gpu-driver/install` | `monitoring:gpu-driver:install` | 安装驱动技术栈（`202`）。 |
+| GET | `/api/v1/monitoring/profiling/flow-map` | `monitoring:profiling:read` | 读取性能剖析流量指标。 |
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/monitoring/gpu-driver/install`**
+## 错误与限制
 
-    请求：可选查询参数 `cluster_id`（`str`）和 `hardware`（`str`，已注册的硬件配置文件 id；当只注册了一个驱动提供方时可省略）。请求体字段：`access_mode`（`"dra" | "plugin"`）。
+- **401 / 403**：认证缺失或过期、缺少监控权限，或无权访问目标集群。
+- **404 `CLUSTER_NOT_FOUND`**：集群 ID 未知。部署操作不在 `install`、`enable`、`disable` 或 `uninstall` 中时也会返回 `404`。
+- **422**：命名空间、访问模式或安装请求无效；请求体中的加速器必须与路径一致。
+- **502** 且带有 `CLUSTER_QUERY_FAILED`、`ACCELERATOR_QUERY_FAILED` 或 `FLOW_MAP_FAILED`：集群或 Prometheus 查询失败，可重试。
+- 安装操作返回 `202`；请轮询操作端点直到 `status` 为 `succeeded` 或 `failed`。预检不会更改集群。
+- **重新安装会删除已存储的指标。** 仅在确定要替换监控技术栈时使用。
+- `POST /api/v1/monitoring/deployments/{execution_id}/install` 和 `enable` 要求部署已就绪。`GET /api/v1/monitoring/deployments` 需要 `cluster_id`；流量图需要 `execution_id`。
+- 命名空间最长 63 个字符，且必须是有效的 DNS 标签。加速器 ID 来自已登记的硬件配置，例如 `intel_gpu` 和 `nvidia_gpu`。
+- 加速器状态查询对所有系列默认使用 `intel-xpumd`；查询 NVIDIA 时始终传入其 release 命名空间，通常是 `dcgm-exporter`。
 
-    ```json
-    {
-      "access_mode": "dra"
-    }
-    ```
+## 相关
 
-    响应：返回一个 `GpuDriverInstallResponse`。
-
-    ```json
-    {
-      "access_mode": "dra",
-      "applied": true,
-      "message": "Applied the Intel GPU DRA driver manifests. It may take a few minutes for pods to become ready."
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.gpu_driver.service import install
-
-
-    async def main() -> None:
-        result = await install("dra", cluster_id="cluster-123", hardware="intel-xpu")
-        print(result.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取部署性能分析流程图
-
-查询由 Prometheus 支撑的 GPU 空闲/利用率流程图（flow-map），用于特定的部署执行。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/monitoring/profiling/flow-map`**
-
-    请求：无请求体。必需查询参数：`execution_id`（`str`）。可选查询参数：`cluster_id`（`str`）。
-
-    响应：返回一个包含组件和边（edge）指标的 `FlowMapResponse`。
-
-    ```json
-    {
-      "execution_id": "deploy-exec-001",
-      "namespace": "llm-d-run-001",
-      "prometheus_reachable": true,
-      "message": null,
-      "components": [
-        {
-          "role": "epp",
-          "label": "EPP",
-          "present": true,
-          "instances": [
-            {
-              "name": "demo-epp-5d7d8c9b6f-abcde",
-              "request_rate": 1.8,
-              "queue_length": 0.2,
-              "prefill_inflight": 0.1,
-              "decode_inflight": 0.1
-            }
-          ],
-          "request_rate": 1.8,
-          "queue_length": 0.2,
-          "process_time_ms": 18.4
-        },
-        {
-          "role": "decode",
-          "label": "Decode",
-          "present": true,
-          "instances": [
-            {
-              "name": "modelserver-decode-0",
-              "request_rate": 1.7,
-              "output_token_rate": 82.0,
-              "kv_cache_usage_perc": 64.5
-            }
-          ],
-          "request_rate": 1.7,
-          "output_token_rate": 82.0,
-          "kv_cache_usage_perc": 64.5
-        }
-      ],
-      "edges": [
-        {
-          "id": "epp->decode",
-          "source": "epp",
-          "target": "decode",
-          "request_rate": 1.7,
-          "success_request_rate": 1.7,
-          "failed_request_rate": 0.0,
-          "input_token_rate": 41.0,
-          "output_token_rate": 82.0
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.monitoring.profiling.service import build_flow_map
-
-
-    async def main() -> None:
-        response = await build_flow_map("deploy-exec-001", "cluster-123")
-        print(response.model_dump())
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-还存在用于安装预检、操作状态和已解析链接的其他加速器端点；详见 OpenAPI 参考文档。
-
-还存在用于操作状态以及已解析 Grafana/Prometheus 链接的其他 cluster-stack 端点；详见 OpenAPI 参考文档。
-
-完整的请求/响应模式请参见 FastAPI OpenAPI schema（使用 `npm run docs:api` 重新生成）。
-
-## 共享的监控行为
-
-监控服务共享命令 JSON 解析、Service 链接查找、Prometheus 查询传输以及操作运行时机制。下方的现有 Python 入口点和 REST 请求/响应契约保持不变；领域错误、安装阶段、DAO 记录和验证回调仍归属于各自的加速器或 cluster-stack 服务。
+- [可观测性用户指南](/user-guide/observability)
+- [部署 API](/api-reference/modules/deployments)
+- [API 约定](/api-reference)
+- OpenAPI：`/api/v1/simulation/docs`（Swagger UI）和 `/api/v1/simulation/openapi.json`（Schema）。

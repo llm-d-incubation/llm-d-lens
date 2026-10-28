@@ -7,10 +7,16 @@ from fastapi import HTTPException
 
 from llm_d_lens.model_cache import router as model_cache_router
 from llm_d_lens.model_cache.contracts import (
+    HuggingFaceModelDetail,
+    HuggingFaceModelSearchResponse,
     HuggingFaceSource,
     ModelCacheCreateRequest,
+    ModelCacheDeletedResponse,
     ModelCacheEntry,
+    ModelCacheEntryListResponse,
+    ModelCacheEntryResponse,
     ModelCacheEntryStatus,
+    ModelCacheLogsResponse,
     ModelSource,
     ModelSourceKind,
     NodeDownloadStatus,
@@ -45,10 +51,11 @@ async def test_list_entries_filters_by_cluster_and_volume(service):
     service._store.create(e2)
 
     result = await model_cache_router.list_entries(cluster_id="cluster-1")
-    assert [item["id"] for item in result["items"]] == [e1.id]
+    assert isinstance(result, ModelCacheEntryListResponse)
+    assert [item.id for item in result.items] == [e1.id]
 
     result = await model_cache_router.list_entries(storage_volume_id="vol-2")
-    assert [item["id"] for item in result["items"]] == [e2.id]
+    assert [item.id for item in result.items] == [e2.id]
 
 
 @pytest.mark.asyncio
@@ -63,7 +70,8 @@ async def test_get_entry_returns_payload(service):
     entry = _entry()
     service._store.create(entry)
     payload = await model_cache_router.get_entry(entry.id)
-    assert payload["id"] == entry.id
+    assert isinstance(payload, ModelCacheEntryResponse)
+    assert payload.id == entry.id
 
 
 @pytest.mark.asyncio
@@ -86,7 +94,8 @@ async def test_create_entry_schedules_background_provisioning(service, monkeypat
         source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId="org/model")),
     )
     payload = await model_cache_router.create_entry(request)
-    assert payload["status"] == "pending"
+    assert isinstance(payload, ModelCacheEntryResponse)
+    assert payload.status == "pending"
     await asyncio.wait_for(provisioned.wait(), timeout=1)
 
 
@@ -206,7 +215,8 @@ async def test_retry_entry_schedules_background_provisioning(service, monkeypatc
 
     monkeypatch.setattr(service, "provision", fake_provision)
     payload = await model_cache_router.retry_entry(entry.id)
-    assert payload["status"] == "pending"
+    assert isinstance(payload, ModelCacheEntryResponse)
+    assert payload.status == "pending"
     await asyncio.wait_for(provisioned.wait(), timeout=1)
 
 
@@ -236,7 +246,8 @@ async def test_sync_entry_nodes_schedules_background_provisioning_when_missing_n
 
     monkeypatch.setattr(service, "provision_new_nodes", fake_provision_new_nodes)
     payload = await model_cache_router.sync_entry_nodes(entry.id)
-    assert payload["status"] == "downloading"
+    assert isinstance(payload, ModelCacheEntryResponse)
+    assert payload.status == "downloading"
     await asyncio.wait_for(provisioned.wait(), timeout=1)
 
 
@@ -255,7 +266,8 @@ async def test_sync_entry_nodes_does_not_schedule_provisioning_when_nothing_to_s
 
     monkeypatch.setattr(service, "provision_new_nodes", fail_provision_new_nodes)
     payload = await model_cache_router.sync_entry_nodes(entry.id)
-    assert payload["status"] == "ready"
+    assert isinstance(payload, ModelCacheEntryResponse)
+    assert payload.status == "ready"
 
 
 @pytest.mark.asyncio
@@ -275,7 +287,8 @@ async def test_sync_all_entry_nodes_schedules_provisioning_for_each_changed_entr
 
     monkeypatch.setattr(service, "provision_new_nodes", fake_provision_new_nodes)
     payload = await model_cache_router.sync_all_entry_nodes()
-    assert [item["id"] for item in payload["items"]] == [changed_entry.id]
+    assert isinstance(payload, ModelCacheEntryListResponse)
+    assert [item.id for item in payload.items] == [changed_entry.id]
     await asyncio.sleep(0)  # let the scheduled background tasks run
     assert provisioned_ids == [changed_entry.id]
 
@@ -299,7 +312,8 @@ async def test_delete_entry_schedules_background_deletion(service, monkeypatch):
 
     monkeypatch.setattr(service, "provision_delete", fake_provision_delete)
     payload = await model_cache_router.delete_entry(entry.id)
-    assert payload["status"] == "deleting"
+    assert isinstance(payload, ModelCacheEntryResponse)
+    assert payload.status == "deleting"
     await asyncio.wait_for(deleted.wait(), timeout=1)
 
 
@@ -320,7 +334,8 @@ async def test_delete_entry_removes_never_ready_entry_without_scheduling_provisi
 
     monkeypatch.setattr(service, "provision_delete", fail_if_called)
     payload = await model_cache_router.delete_entry(entry.id)
-    assert payload["status"] == "deleted"
+    assert isinstance(payload, ModelCacheDeletedResponse)
+    assert payload.status == "deleted"
     assert service._store.get(entry.id) is None
 
 
@@ -342,13 +357,15 @@ async def test_get_entry_logs_returns_logs(service, monkeypatch):
 
     monkeypatch.setattr(service, "get_logs", fake_get_logs)
     payload = await model_cache_router.get_entry_logs(entry.id)
-    assert payload == {"logs": "some logs"}
+    assert isinstance(payload, ModelCacheLogsResponse)
+    assert payload.logs == "some logs"
 
 
 @pytest.mark.asyncio
 async def test_search_huggingface_models_returns_empty_for_blank_query():
     result = await model_cache_router.search_huggingface_models(query="  ")
-    assert result == {"items": []}
+    assert isinstance(result, HuggingFaceModelSearchResponse)
+    assert result.items == []
 
 
 @pytest.mark.asyncio
@@ -359,7 +376,8 @@ async def test_search_huggingface_models_maps_hub_payload(monkeypatch):
 
     monkeypatch.setattr(model_cache_router.huggingface_hub, "search_models", fake_search)
     result = await model_cache_router.search_huggingface_models(query="llama")
-    assert result["items"] == [
+    assert isinstance(result, HuggingFaceModelSearchResponse)
+    assert [item.model_dump(mode="json", by_alias=True) for item in result.items] == [
         {
             "repoId": "org/llama",
             "likes": 5,
@@ -390,9 +408,10 @@ async def test_get_huggingface_model_returns_detail(monkeypatch):
 
     monkeypatch.setattr(model_cache_router.huggingface_hub, "get_model_detail", fake_detail)
     payload = await model_cache_router.get_huggingface_model("org/llama")
-    assert payload["repoId"] == "org/llama"
-    assert payload["readme"] == "# Llama"
-    assert payload["tags"] == ["text-generation"]
+    assert isinstance(payload, HuggingFaceModelDetail)
+    assert payload.repo_id == "org/llama"
+    assert payload.readme == "# Llama"
+    assert payload.tags == ["text-generation"]
 
 
 @pytest.mark.asyncio

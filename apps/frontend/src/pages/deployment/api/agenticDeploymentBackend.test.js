@@ -9,7 +9,7 @@ test('agentic recommendation stream preserves events across response chunks', as
     globalThis.document = { cookie: 'prism_csrf=csrf-value-123' };
     t.after(() => { globalThis.document = previousDocument; });
     t.mock.method(globalThis, 'fetch', async (url, options) => {
-        assert.equal(url, '/api/agentic-deployments/stream');
+        assert.equal(url, '/api/v1/agentic-deployments/stream');
         assert.equal(options.signal, signal);
         assert.equal(options.headers['X-Prism-CSRF'], 'csrf-value-123');
         assert.deepEqual(JSON.parse(options.body), { model: 'Qwen/test' });
@@ -36,7 +36,7 @@ test('agentic recommendation stream preserves events across response chunks', as
 test('agentic recalculation streams through the run-specific refine endpoint', async (t) => {
     const encoder = new TextEncoder();
     t.mock.method(globalThis, 'fetch', async (url, options) => {
-        assert.equal(url, '/api/agentic-deployments/run%2F1/refine/stream');
+        assert.equal(url, '/api/v1/agentic-deployments/run%2F1/refine/stream');
         assert.deepEqual(JSON.parse(options.body), { planner_prompt: 'prefer latency' });
         return new Response(new ReadableStream({
             start(controller) {

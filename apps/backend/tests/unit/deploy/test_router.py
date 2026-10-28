@@ -11,6 +11,13 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from llm_d_lens.deploy.contracts import DeploymentCaseStatus, DeploymentStatus
+from llm_d_lens.deploy.models import (
+    DeploymentExecutionListResponse,
+    DeploymentExecutionResponse,
+    DeploymentPodLogsResponse,
+    DeploymentPodsResponse,
+    DeploymentRuntimeClassesResponse,
+)
 from llm_d_lens.deploy.providers.hardware_profile import runtime_image
 from llm_d_lens.deploy.runtime.composition import build_namespace_factory
 from llm_d_lens.deploy.standard_kubernetes_service import (
@@ -49,10 +56,11 @@ async def test_runtime_classes_api_exposes_capabilities_without_claiming_runtime
         ),
     )
     result = await router.list_deployment_runtime_classes("cluster-a", accelerator="nvidia", access_mode="plugin")
+    assert isinstance(result, DeploymentRuntimeClassesResponse)
     assert accesses == ["cluster-a"]
-    assert result["available_suggestion"] == "nvidia"
-    assert result["items"][0]["matching_nodes"] == ["gpu-node"]
-    assert result["requirement"] == result["node_runtime_readiness"] == "unknown"
+    assert result.available_suggestion == "nvidia"
+    assert result.items[0].matching_nodes == ["gpu-node"]
+    assert result.requirement == result.node_runtime_readiness == "unknown"
 
 
 @pytest.mark.asyncio
@@ -69,6 +77,25 @@ def test_deployment_run_route_requires_request_body_not_cluster_query():
     route = next(route for route in router.router.routes if route.path.endswith("/runs") and "POST" in route.methods)
     assert route.endpoint is router.create_run
     assert not [parameter for parameter in route.dependant.query_params if parameter.required]
+
+
+def test_every_data_route_declares_a_concrete_response_model():
+    no_content_routes = {
+        ("DELETE", "/api/v1/deployments/executions/{execution_id}"),
+        ("DELETE", "/api/v1/deployments/runs/{run_id}"),
+        ("POST", "/api/v1/deployments/runs/{run_id}/cluster-session"),
+    }
+    missing = []
+    for route in router.router.routes:
+        methods = getattr(route, "methods", None)
+        if not methods or not route.path.startswith("/api/v1/deployments"):
+            continue
+        for method in methods:
+            if (method, route.path) in no_content_routes:
+                continue
+            if getattr(route, "response_model", None) is None:
+                missing.append((method, route.path))
+    assert missing == []
 
 
 def test_standard_kubernetes_service_configuration_is_an_immutable_baseline_artifact():
@@ -507,13 +534,14 @@ def test_get_execution_pods_returns_pods(monkeypatch):
     monkeypatch.setattr(k8s, "run_kubectl", mock_run_kubectl)
 
     res = asyncio.run(router.get_execution_pods("exec-123"))
-    assert res["execution_id"] == "exec-123"
-    assert res["namespace"] == "prism-exec-123"
-    assert len(res["pods"]) == 1
-    assert res["pods"][0]["name"] == "pod-1"
-    assert res["pods"][0]["phase"] == "Running"
-    assert res["pods"][0]["ready"] is True
-    assert res["pods"][0]["pod_ip"] == "10.244.0.5"
+    assert isinstance(res, DeploymentPodsResponse)
+    assert res.execution_id == "exec-123"
+    assert res.namespace == "prism-exec-123"
+    assert len(res.pods) == 1
+    assert res.pods[0].name == "pod-1"
+    assert res.pods[0].phase == "Running"
+    assert res.pods[0].ready is True
+    assert res.pods[0].pod_ip == "10.244.0.5"
 
 
 def test_get_execution_pod_logs_returns_logs(monkeypatch):
@@ -535,10 +563,11 @@ def test_get_execution_pod_logs_returns_logs(monkeypatch):
     monkeypatch.setattr(k8s, "run_kubectl", mock_run_kubectl)
 
     res = asyncio.run(router.get_execution_pod_logs("exec-123", "pod-1", tail=100))
-    assert res["execution_id"] == "exec-123"
-    assert res["pod_name"] == "pod-1"
-    assert res["logs"] == "[INFO] Server started"
-    assert res["success"] is True
+    assert isinstance(res, DeploymentPodLogsResponse)
+    assert res.execution_id == "exec-123"
+    assert res.pod_name == "pod-1"
+    assert res.logs == "[INFO] Server started"
+    assert res.success is True
 
 
 def test_standard_kubernetes_service_requires_model_cache_volume():
@@ -745,8 +774,9 @@ async def test_list_ready_executions_is_side_effect_free_and_filtered(monkeypatc
         cluster_id="cluster-1",
     )
 
-    assert len(response["items"]) == 1
-    assert response["items"][0] == {
+    assert isinstance(response, DeploymentExecutionListResponse)
+    assert len(response.items) == 1
+    assert response.items[0].model_dump() == {
         "execution_id": "execution-ready",
         "status": "ready",
         "cluster_id": "cluster-1",
@@ -801,9 +831,10 @@ async def test_execution_payload_omits_run_and_case_identifiers(monkeypatch):
 
     payload = await router.get_execution("execution-ready")
 
-    assert payload["execution_id"] == "execution-ready"
-    assert "run_id" not in payload
-    assert "case_id" not in payload
+    assert isinstance(payload, DeploymentExecutionResponse)
+    assert payload.execution_id == "execution-ready"
+    assert "run_id" not in payload.model_dump()
+    assert "case_id" not in payload.model_dump()
 
 
 @pytest.mark.asyncio
@@ -837,7 +868,8 @@ async def test_list_executions_rejects_other_cluster(monkeypatch):
 
     response = await router.list_executions(cluster_id="cluster-2")
 
-    assert response == {"items": []}
+    assert isinstance(response, DeploymentExecutionListResponse)
+    assert response.items == []
 
 
 def test_execution_readable_rejects_a_retired_execution_share():

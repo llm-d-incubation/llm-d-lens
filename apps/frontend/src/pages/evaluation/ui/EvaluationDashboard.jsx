@@ -1,4 +1,5 @@
 import { PaginationControls } from '../../../shared/ui/PaginationControls';
+import { fetchWithAuthRetry } from '../../../shared/api/httpClient';
 import { resolveEvaluationTarget } from '../model/client';
 import { editedEvaluationConfiguration } from '../model/configuration';
 import { evaluationApi as api } from '../model/client';
@@ -480,7 +481,7 @@ export default function EvaluationDashboard({ onNavigate }) {
         setConfigurationTab("yaml");
         setYamlLoading(true);
         try {
-            const response = await fetch(`/api/v1/configurations/artifacts/${artifactId}/manifest`);
+            const response = await fetchWithAuthRetry(`/api/v1/configurations/artifacts/${artifactId}/manifest`);
             if (!response.ok) throw new Error(`Unable to load YAML (${response.status})`);
             setYamlText(await response.text());
         } catch (nextError) {

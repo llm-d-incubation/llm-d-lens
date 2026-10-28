@@ -1,951 +1,379 @@
 ---
 title: Administration
-description: Auth, RBAC, session, and system-settings APIs behind Lens Administration.
+description: Manage sign-in, users, roles, cluster access, sessions, and Lens system settings.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+Use Administration to sign in, provision users, grant roles and cluster access, review or revoke sessions, and maintain Lens system settings such as the database connection and stored-secret master key. Use it when you need to give someone access, remove access, or confirm the security state of the Lens installation.
 
-Administration spans the auth router in `llm_d_lens/auth/router.py` and the system-settings router in `llm_d_lens/db/system_router.py`.
+## Quick start
 
-Auth and administration routes live under the `/api/v1` prefix from `llm_d_lens/auth/router.py`.
-
-### Resource binding restrictions
-
-Model inference grants replace deployment sharing. Resource-scope bindings only
-accept `scopeResourceType: "model_service_group"` and the built-in end-user
-`roleId`. The model ID and cluster must match stored records, and the recipient
-must independently hold inference permission in that cluster. Global/cluster
-role assignments are unchanged.
+Sign in to obtain an access token and confirm the resulting principal.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-These restrictions apply to POST `/api/v1/users/{user_id}/role-bindings` and
-POST `/api/v1/groups/{group_id}/role-bindings` (both require role binding
-management). Successful creation returns HTTP 201 with the binding.
+```bash
+curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"username":"<username>","password":"<password>"}'
 
-```json
-{
-  "roleId": "existing-built-in-end-user-role-id",
-  "scopeType": "resource",
-  "scopeClusterId": "cluster-id",
-  "scopeResourceType": "model_service_group",
-  "scopeResourceId": "msg-existing-model-id"
-}
+curl -H "Authorization: Bearer $LENS_ACCESS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/auth/session
 ```
 
-Retired deployment resource types, privileged grant roles and cluster
-mismatches are rejected. Use the
-[scoped model access API](/api-reference/modules/model-services#model-inference-grants)
-for routine model grants; it derives role and cluster rather than accepting them.
+The login response returns `accessToken`, `tokenType`, `expiresIn`, and the current `principal`. Send the token as a Bearer token on later requests. The refresh cookie is stored in `cookies.txt`.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-def add_inference_binding(user_id: str, model_id: str, cluster_id: str):
-    service = default_service()
-    role = service.require_role("end-user")
-    return service.add_user_binding(
-        user_id, role.id, scope_type="resource",
-        scope_cluster_id=cluster_id,
-        scope_resource_type="model_service_group",
-        scope_resource_id=model_id,
-    )
-```
+from llm_d_lens.sdk import LensLocal
 
-This low-level service is for already-authorized administrator code.
-`add_group_binding` enforces the same constraints for groups. Prefer
-`ModelService.grant_access(..., principal=principal)` to enforce the caller's
-model-specific grant-management scope as well.
-  </TabItem>
-</Tabs>
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        principal = await lens.administration.current_session()
+        print(principal.user_id, principal.username, principal.permissions)
 
-### List users
-
-List users, including direct roles, group memberships, and inherited roles.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/v1/users`**
-
-Request:
-
-- Query params:
-  - `query` (`string`, optional): filter by username or other user-search text.
-  - `status` (`string`, optional): filter by user status such as `active` or `disabled`.
-
-This endpoint has no request body.
-
-Response:
-
-Returns an array of user records enriched with direct `roles`, `groups`, and `inheritedRoles`.
-
-```json
-[
-  {
-    "username": "alice",
-    "display_name": "Alice Admin",
-    "id": "user-1",
-    "email": "alice@example.com",
-    "provider_id": null,
-    "auth_source": "local",
-    "external_id": null,
-    "status": "active",
-    "failed_login_count": 0,
-    "locked_until": null,
-    "must_change_password": false,
-    "password_changed_at": "2026-09-21T08:00:00+00:00",
-    "last_login_at": "2026-09-23T08:45:00+00:00",
-    "principal_version": 3,
-    "created_at": "2026-09-20T10:00:00+00:00",
-    "updated_at": "2026-09-23T08:45:00+00:00",
-    "has_password": true,
-    "protected": false,
-    "roles": [
-      {
-        "name": "maintainer",
-        "scopeType": "cluster",
-        "scopeClusterId": "cluster-123"
-      }
-    ],
-    "groups": [
-      {
-        "id": "group-ops",
-        "name": "ops",
-        "source": "manual"
-      }
-    ],
-    "inheritedRoles": [
-      {
-        "name": "end-user",
-        "scopeType": "global",
-        "scopeClusterId": null,
-        "scopeResourceType": null,
-        "scopeResourceId": null,
-        "groupId": "group-ops",
-        "groupName": "ops"
-      }
-    ]
-  }
-]
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.service import default_service
-
-service = default_service()
-role_names = {role.id: role.name for role in service.role_dao.list()}
-group_names = {group.id: group.name for group in service.group_dao.list()}
-user_bindings = service.user_binding_dao.list_all()
-group_bindings = service.group_binding_dao.list_all()
-memberships = service.user_group_dao.list_all()
-users = service.user_dao.list(query="alice", status="active")
-
-print(len(users), len(user_bindings), len(group_bindings), len(memberships))
-print(role_names)
-print(group_names)
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### Create a user
+## Common tasks
 
-Create a user account.
+### 1. Create and list users
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`POST /api/v1/users`**
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/users \
+  -d '{"username":"<username>","password":"<password>","displayName":"<display-name>","email":"<email>"}'
 
-Request:
-
-- JSON body fields:
-  - `username` (`string`, required)
-  - `password` (`string`, optional)
-  - `displayName` (`string`, optional)
-  - `email` (`string`, optional)
-
-```json
-{
-  "username": "alice",
-  "password": "<strong-password>",
-  "displayName": "Alice Admin",
-  "email": "alice@example.com"
-}
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/users?query=<search>&status=active"
 ```
 
-Response:
-
-Returns the created user record from `_user_public(...)`.
-
-```json
-{
-  "username": "alice",
-  "display_name": "Alice Admin",
-  "id": "user-1",
-  "email": "alice@example.com",
-  "provider_id": null,
-  "auth_source": "local",
-  "external_id": null,
-  "status": "active",
-  "failed_login_count": 0,
-  "locked_until": null,
-  "must_change_password": false,
-  "password_changed_at": null,
-  "last_login_at": null,
-  "principal_version": 1,
-  "created_at": "2026-09-23T09:00:00+00:00",
-  "updated_at": "2026-09-23T09:00:00+00:00",
-  "has_password": true,
-  "protected": false
-}
-```
+Create returns `201 Created` with the user record. List returns direct `roles`, `groups`, and `inheritedRoles` for each user.
 
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-user = default_service().create_user(
-    username="alice",
-    password="<strong-password>",
-    display_name="Alice Admin",
-    email="alice@example.com",
-)
-print(user.id, user.username, user.status)
+from llm_d_lens.auth.models import UserCreateRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        user = await lens.administration.create_user(
+            UserCreateRequest(
+                username="<username>",
+                password="<password>",
+                displayName="<display-name>",
+                email="<email>",
+            )
+        )
+        print(user.id, user.username)
+
+        users = await lens.administration.list_users(query="<search>", status="active")
+        for item in users:
+            print(item.id, item.username, item.status)
+
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### Update a user
-
-Update a user's display name, email, or status.
+### 2. Update, disable, or reset a user
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`PATCH /api/v1/users/{user_id}`**
+```bash
+curl -X PATCH -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/users/<user-id> \
+  -d '{"displayName":"<display-name>","email":"<email>","status":"disabled"}'
 
-Request:
-
-- Path params:
-  - `user_id` (`string`, required): the user record to update.
-- JSON body fields:
-  - `displayName` (`string`, optional)
-  - `email` (`string`, optional)
-  - `status` (`string`, optional)
-
-```json
-{
-  "displayName": "Alice Operations",
-  "email": "alice.ops@example.com",
-  "status": "active"
-}
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/users/<user-id>/password \
+  -d '{"newPassword":"<new-password>"}'
 ```
 
-Response:
-
-Returns the updated user record.
-
-```json
-{
-  "username": "alice",
-  "display_name": "Alice Operations",
-  "id": "user-1",
-  "email": "alice.ops@example.com",
-  "provider_id": null,
-  "auth_source": "local",
-  "external_id": null,
-  "status": "active",
-  "failed_login_count": 0,
-  "locked_until": null,
-  "must_change_password": false,
-  "password_changed_at": null,
-  "last_login_at": "2026-09-23T08:45:00+00:00",
-  "principal_version": 2,
-  "created_at": "2026-09-20T10:00:00+00:00",
-  "updated_at": "2026-09-23T09:05:00+00:00",
-  "has_password": true,
-  "protected": false
-}
-```
+Password reset returns `204 No Content`. Disabling a user keeps the record but blocks future sign-in.
 
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.router import UserUpdateRequest
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-body = UserUpdateRequest(displayName="Alice Operations", email="alice.ops@example.com", status="active")
-updates = body.model_dump(exclude_none=True)
-user = default_service().update_user("user-1", **updates)
-print(user.display_name, user.email, user.status)
+from llm_d_lens.auth.models import ResetPasswordRequest, UserUpdateRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        user = await lens.administration.update_user(
+            "<user-id>",
+            UserUpdateRequest(
+                displayName="<display-name>",
+                email="<email>",
+                status="disabled",
+            ),
+        )
+        print(user.id, user.status)
+
+        await lens.administration.reset_password(
+            "<user-id>", ResetPasswordRequest(newPassword="<new-password>")
+        )
+
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### List roles
-
-List roles.
+### 3. Grant or revoke cluster access
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`GET /api/v1/roles`**
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/clusters/<cluster-id>/access \
+  -d '{"subjectType":"user","subjectId":"<user-id>","roleId":"<role-id>"}'
 
-Request:
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/clusters/<cluster-id>/access
 
-This endpoint has no request body.
-
-Response:
-
-Returns an array of role records with their resolved permission codes.
-
-```json
-[
-  {
-    "name": "maintainer",
-    "description": "Manage clusters and workloads",
-    "id": "role-maintainer",
-    "is_builtin": true,
-    "created_at": "2026-09-20T09:00:00+00:00",
-    "updated_at": "2026-09-20T09:00:00+00:00",
-    "permissions": [
-      "cluster:cluster:read",
-      "deployment:run:read",
-      "session:session:revoke"
-    ]
-  }
-]
+curl -X DELETE -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/clusters/<cluster-id>/access/<binding-id>
 ```
 
+Grant returns `201 Created` with the binding. Delete returns `204 No Content`. Use `subjectType: "group"` with a group id to grant a group.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-roles = default_service().role_dao.list()
-print([(role.id, role.name) for role in roles])
+from llm_d_lens.auth.models import AccessRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        binding = await lens.administration.grant_cluster_access(
+            "<cluster-id>",
+            AccessRequest(subjectType="user", subjectId="<user-id>", roleId="<role-id>"),
+        )
+        print(binding.id, binding.scope_cluster_id)
+
+        items = await lens.administration.list_cluster_access("<cluster-id>")
+        print(len(items))
+
+        await lens.administration.revoke_cluster_access("<cluster-id>", binding.id)
+
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### Create a role
-
-Create a role.
+### 4. Create a role and set its permissions
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`POST /api/v1/roles`**
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/roles \
+  -d '{"name":"<role-name>","description":"<description>","permissions":["cluster:cluster:read"]}'
 
-Request:
-
-- JSON body fields:
-  - `name` (`string`, required)
-  - `description` (`string`, optional)
-  - `permissions` (`array<string>`, optional)
-
-```json
-{
-  "name": "auditor",
-  "description": "Read-only compliance role",
-  "permissions": [
-    "deployment:run:read",
-    "cluster:cluster:read"
-  ]
-}
+curl -X PUT -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/roles/<role-id>/permissions \
+  -d '{"permissions":["cluster:cluster:read","deployment:run:read"]}'
 ```
 
-Response:
-
-Returns the newly created role and its permission set.
-
-```json
-{
-  "name": "auditor",
-  "description": "Read-only compliance role",
-  "id": "role-auditor",
-  "is_builtin": false,
-  "created_at": "2026-09-23T09:10:00+00:00",
-  "updated_at": "2026-09-23T09:10:00+00:00",
-  "permissions": [
-    "cluster:cluster:read",
-    "deployment:run:read"
-  ]
-}
-```
+Create returns `201 Created`. Setting permissions returns `204 No Content` and only works for custom roles.
 
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-role = default_service().create_role(
-    name="auditor",
-    description="Read-only compliance role",
-    permissions={"deployment:run:read", "cluster:cluster:read"},
-)
-print(role.id, role.name)
+from llm_d_lens.auth.models import RoleCreateRequest, RolePermissionsRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        role = await lens.administration.create_role(
+            RoleCreateRequest(
+                name="<role-name>",
+                description="<description>",
+                permissions=["cluster:cluster:read"],
+            )
+        )
+        print(role.id, role.name)
+
+        await lens.administration.set_role_permissions(
+            role.id,
+            RolePermissionsRequest(
+                permissions=["cluster:cluster:read", "deployment:run:read"]
+            ),
+        )
+
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### Set role permissions
-
-Set a custom role's permissions.
+### 5. List and revoke sessions
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`PUT /api/v1/roles/{role_id}/permissions`**
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/sessions?include_revoked=true"
 
-Request:
-
-- Path params:
-  - `role_id` (`string`, required): the custom role to update.
-- JSON body fields:
-  - `permissions` (`array<string>`, required)
-
-```json
-{
-  "permissions": [
-    "cluster:cluster:read",
-    "deployment:run:read",
-    "session:session:revoke"
-  ]
-}
+curl -X DELETE -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/sessions/<session-id>
 ```
 
-Response:
-
-Returns `204 No Content` when the permission set is stored successfully. This endpoint does not return a JSON body.
+Administrators with `session:session:revoke` see all sessions; other callers see only their own. Delete returns `204 No Content`.
 
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-default_service().set_role_permissions(
-    "role-auditor",
-    {"cluster:cluster:read", "deployment:run:read", "session:session:revoke"},
-)
-print("permissions updated")
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        sessions = await lens.administration.list_sessions(include_revoked=True)
+        for session in sessions:
+            print(session.id, session.user_id, session.revoked_at)
+
+        await lens.administration.revoke_session("<session-id>")
+
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### List sessions
-
-List sessions; admins can include revoked sessions, while other callers see their own sessions.
+### 6. Rotate the stored-secret master key
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`GET /api/v1/sessions`**
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/system/secret-key
 
-Request:
-
-- Query params:
-  - `include_revoked` (`boolean`, optional): admins can include revoked sessions in the result set.
-
-This endpoint has no request body.
-
-Response:
-
-Returns a list of session records. Admin callers receive every session plus a `username` field; non-admin callers receive only their own sessions.
-
-```json
-[
-  {
-    "user_id": "user-1",
-    "token_hash": "$argon2id$v=19$m=65536,t=3,p=4$sessionhash",
-    "id": "session-1",
-    "created_at": "2026-09-23T08:45:00+00:00",
-    "expires_at": "2026-09-23T16:45:00+00:00",
-    "idle_expires_at": "2026-09-23T10:45:00+00:00",
-    "last_seen_at": "2026-09-23T09:15:00+00:00",
-    "revoked_at": null,
-    "auth_source": "local",
-    "ip": "127.0.0.1",
-    "user_agent": "Mozilla/5.0",
-    "username": "alice"
-  }
-]
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/system/secret-key/rotate \
+  -d '{"newKey":"<new-key>"}'
 ```
 
+The status response returns `source`, `envLocked`, `fingerprint`, `oldKeyCount`, and `providerSecretCount`; it never returns the key. Rotate re-encrypts provider secrets and reports `rotatedSecrets`. Leave `newKey` empty to generate a key.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.auth.service import default_service
+import asyncio
 
-service = default_service()
-admin_view = service.session_dao.list_all(include_revoked=True)
-self_view = service.list_sessions("user-1")
+from llm_d_lens.auth.models import RotateSecretKeyRequest
+from llm_d_lens.sdk import LensLocal
 
-print(len(admin_view), len(self_view))
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        status = await lens.administration.get_secret_key_status()
+        print(status.source, status.env_locked, status.fingerprint)
+
+        rotated = await lens.administration.rotate_secret_key(
+            RotateSecretKeyRequest(newKey="<new-key>")
+        )
+        print(rotated.fingerprint, rotated.rotated_secrets)
+
+    asyncio.run(main())
 ```
 
   </TabItem>
 </Tabs>
 
-### Revoke a session
-
-Revoke a session.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`DELETE /api/v1/sessions/{session_id}`**
-
-Request:
-
-- Path params:
-  - `session_id` (`string`, required): the session record to revoke.
-
-This endpoint has no request body.
-
-Response:
-
-Returns `204 No Content` after the target session is revoked. This endpoint does not return a JSON body.
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.service import default_service
-
-service = default_service()
-service.revoke_session("session-1", allow_any=True)
-print("session revoked")
-```
-
-  </TabItem>
-</Tabs>
-
-### List cluster access bindings
-
-List cluster-scoped access bindings for a cluster.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/v1/clusters/{cluster_id}/access`**
-
-Request:
-
-- Path params:
-  - `cluster_id` (`string`, required): the cluster whose user and group bindings should be listed.
-
-This endpoint has no request body.
-
-Response:
-
-Returns a list of user and group bindings, each tagged with `subjectType`.
-
-```json
-[
-  {
-    "subjectType": "user",
-    "user_id": "user-1",
-    "role_id": "role-maintainer",
-    "id": "binding-user-1",
-    "scope_type": "cluster",
-    "scope_cluster_id": "cluster-123",
-    "scope_resource_type": null,
-    "scope_resource_id": null,
-    "granted_by_user_id": "admin-1",
-    "expires_at": null,
-    "created_at": "2026-09-23T09:20:00+00:00"
-  },
-  {
-    "subjectType": "group",
-    "group_id": "group-ops",
-    "role_id": "role-end-user",
-    "id": "binding-group-1",
-    "scope_type": "cluster",
-    "scope_cluster_id": "cluster-123",
-    "scope_resource_type": null,
-    "scope_resource_id": null,
-    "granted_by_user_id": "admin-1",
-    "expires_at": null,
-    "created_at": "2026-09-23T09:21:00+00:00"
-  }
-]
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.router import _list_access
-from llm_d_lens.auth.service import default_service
-
-items = _list_access("cluster-123", None, default_service())
-print(items)
-```
-
-  </TabItem>
-</Tabs>
-
-### Grant cluster access
-
-Grant cluster-scoped access to a user or group.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/clusters/{cluster_id}/access`**
-
-Request:
-
-- Path params:
-  - `cluster_id` (`string`, required): the authoritative cluster scope for the binding.
-- JSON body fields:
-  - `subjectType` (`"user" | "group"`, required)
-  - `subjectId` (`string`, required)
-  - `roleId` (`string`, required)
-  - `clusterId` (`string`, optional): present in the request model, but the route uses the `{cluster_id}` path parameter as the scope.
-
-```json
-{
-  "subjectType": "user",
-  "subjectId": "user-1",
-  "roleId": "role-maintainer"
-}
-```
-
-Response:
-
-Returns the created binding record.
-
-```json
-{
-  "user_id": "user-1",
-  "role_id": "role-maintainer",
-  "id": "binding-user-1",
-  "scope_type": "cluster",
-  "scope_cluster_id": "cluster-123",
-  "scope_resource_type": null,
-  "scope_resource_id": null,
-  "granted_by_user_id": "admin-1",
-  "expires_at": null,
-  "created_at": "2026-09-23T09:20:00+00:00"
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.service import default_service
-
-binding = default_service().add_user_binding(
-    "user-1",
-    "role-maintainer",
-    scope_type="cluster",
-    scope_cluster_id="cluster-123",
-    granted_by="admin-1",
-)
-print(binding.id, binding.scope_cluster_id)
-```
-
-  </TabItem>
-</Tabs>
-
-### Revoke cluster access
-
-Revoke a cluster-scoped access binding.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`DELETE /api/v1/clusters/{cluster_id}/access/{binding_id}`**
-
-Request:
-
-- Path params:
-  - `cluster_id` (`string`, required): the cluster whose binding is being removed.
-  - `binding_id` (`string`, required): the user or group binding id to revoke.
-
-This endpoint has no request body.
-
-Response:
-
-Returns `204 No Content` after the binding is removed. This endpoint does not return a JSON body.
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.service import default_service
-
-service = default_service()
-for binding in service.user_binding_dao.list_all():
-    if binding.id == "binding-user-1":
-        service.remove_user_binding(binding.user_id, binding.id)
-        break
-else:
-    for binding in service.group_binding_dao.list_all():
-        if binding.id == "binding-group-1":
-            service.remove_group_binding(binding.group_id, binding.id)
-            break
-
-print("binding revoked")
-```
-
-  </TabItem>
-</Tabs>
-
-The database setup routes below live under the `/api/v1/system` path from `llm_d_lens/db/system_router.py`.
-
-### Read database setup status
-
-Read whether Lens' own database has already been configured.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/v1/system/database`**
-
-Request:
-
-This endpoint has no request body.
-
-Response:
-
-Returns a `DatabaseStatus` object. `displayTarget` is masked host/port/database information only; it never echoes credentials.
-
-```json
-{
-  "configured": true,
-  "mode": "external",
-  "engine": "postgresql",
-  "displayTarget": "db.example.com:5432/prism"
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.db.system_router import get_database_status
-
-status = get_database_status()
-print(status.configured, status.mode, status.display_target)
-```
-
-  </TabItem>
-</Tabs>
-
-### Configure the backend database
-
-Configure Lens' own database connection (external or embedded) and create the initial tables.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/system/database`**
-
-Request:
-
-- JSON body fields:
-  - `mode` (`"external" | "embedded"`, required)
-  - `engine` (`"postgresql" | "mysql" | "oracle" | "mssql"`, optional)
-  - `databaseUrl` (`string`, required for `external` mode)
-  - `embeddedPassword` (`string`, optional; only meaningful for `embedded` mode)
-
-External-database example:
-
-```json
-{
-  "mode": "external",
-  "engine": "mysql",
-  "databaseUrl": "mysql://prism:secret@db.example.com:3306/prism"
-}
-```
-
-Response:
-
-Returns the resulting `DatabaseStatus` after connection probing, engine configuration, and initial table creation succeed.
-
-```json
-{
-  "configured": true,
-  "mode": "external",
-  "engine": "mysql",
-  "displayTarget": "db.example.com:3306/prism"
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.db.system_router import DatabaseSetupRequest, apply_database_setup
-
-status = apply_database_setup(
-    DatabaseSetupRequest(
-        mode="external",
-        engine="mysql",
-        databaseUrl="mysql://prism:secret@db.example.com:3306/prism",
-    )
-)
-print(status.configured, status.mode, status.engine)
-```
-
-  </TabItem>
-</Tabs>
-
-The master-key routes below also live at an `/api/v1/system/...` path, but they are registered by `llm_d_lens/auth/router.py` (not `system_router.py`), alongside the other auth and administration endpoints.
-
-### Read the stored-secret master key status
-
-Read the effective master key (`LENS_SECRET_KEY`) source, a non-reversible fingerprint, and how many provider secrets and old fallback keys exist. The key value itself is never returned.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/v1/system/secret-key`**
-
-Request:
-
-This endpoint has no request body.
-
-Response:
-
-```json
-{
-  "source": "file",
-  "envLocked": false,
-  "configured": true,
-  "fingerprint": "3f9a1c7b52e0d4a6",
-  "keyLength": 64,
-  "oldKeyCount": 1,
-  "path": "/home/user/.local/share/lens/credentials/master_key.json",
-  "providerSecretCount": 2
-}
-```
-
-`source` is `environment`, `file`, or `unconfigured`; `envLocked` is `true` when `LENS_SECRET_KEY` is supplied through the environment (the stored key is then ignored and rotation through the API is rejected).
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.master_key import status
-from llm_d_lens.auth.settings import get_settings
-
-print(status(get_settings())["source"], status(get_settings())["fingerprint"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Rotate the stored-secret master key
-
-Generate a new master key (or use a supplied one), re-encrypt every stored provider secret with it, and retain the previous key(s) as decryption fallback. Rejected when `LENS_SECRET_KEY` is environment-locked.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/system/secret-key/rotate`**
-
-Request:
-
-- JSON body fields:
-  - `newKey` (`string`, optional; leave empty to auto-generate a strong key)
-
-```json
-{
-  "newKey": "a-manually-chosen-strong-key"
-}
-```
-
-Response:
-
-Returns the new status plus `rotatedSecrets`, the number of provider secrets re-encrypted.
-
-```json
-{
-  "source": "file",
-  "envLocked": false,
-  "configured": true,
-  "fingerprint": "b71e0c9d3a4f8215",
-  "keyLength": 28,
-  "oldKeyCount": 1,
-  "path": "/home/user/.local/share/lens/credentials/master_key.json",
-  "providerSecretCount": 2,
-  "rotatedSecrets": 2
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.master_key import rotate_master_key
-from llm_d_lens.auth.settings import get_settings
-from llm_d_lens.db.dao.identity_provider import IdentityProviderDao
-
-result = rotate_master_key(get_settings(), None, provider_dao=IdentityProviderDao())
-print(result["fingerprint"], result["rotatedSecrets"])
-```
-
-  </TabItem>
-</Tabs>
-
-### Clear previous master keys
-
-Drop the retained fallback keys once every provider secret has been re-encrypted. Secrets still encrypted with an old key become unreadable, so re-save those providers first.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`DELETE /api/v1/system/secret-key/old`**
-
-Request:
-
-This endpoint has no request body.
-
-Response:
-
-Returns the status with `oldKeyCount` set to `0`.
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.auth.master_key import clear_old_keys
-from llm_d_lens.auth.settings import get_settings
-
-print(clear_old_keys(get_settings())["oldKeyCount"])
-```
-
-  </TabItem>
-</Tabs>
-
-Additional auth endpoints also exist for login/session state, groups, identity providers, audit logs, password changes, and bootstrap; see the OpenAPI reference.
-
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
+## Endpoints
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| POST | `/api/v1/auth/login` | Public | Sign in; returns an access token and sets the refresh cookie. |
+| POST | `/api/v1/auth/refresh` | Public + refresh cookie + CSRF | Get a new access token using the refresh cookie and CSRF header. |
+| POST | `/api/v1/auth/logout` | Authenticated | Revoke the current session (`204`). |
+| GET | `/api/v1/auth/session` | Authenticated | Read the current principal and permissions. |
+| POST | `/api/v1/auth/password` | Authenticated | Change your own password (`204`). |
+| GET | `/api/v1/auth/sessions` | Authenticated | List your own sessions. |
+| GET | `/api/v1/sessions` | Authenticated | List sessions; admins see all sessions. |
+| DELETE | `/api/v1/sessions/{session_id}` | Authenticated | Revoke a session (`204`). |
+| GET | `/api/v1/users` | `user:user:read` | List users and inherited access. |
+| POST | `/api/v1/users` | `user:user:create` | Create a user (`201`). |
+| GET | `/api/v1/users/{user_id}` | `user:user:read` | Read one user. |
+| PATCH | `/api/v1/users/{user_id}` | `user:user:update` | Update profile fields or status. |
+| DELETE | `/api/v1/users/{user_id}` | `user:user:delete` | Delete a user (`204`). |
+| POST | `/api/v1/users/{user_id}/password` | `user:user:reset-password` | Reset a password (`204`). |
+| GET, POST | `/api/v1/users/{user_id}/role-bindings` | `role:binding:manage` | List or add user role bindings. |
+| DELETE | `/api/v1/users/{user_id}/role-bindings/{binding_id}` | `role:binding:manage` | Remove a user role binding (`204`). |
+| GET, POST | `/api/v1/groups/{group_id}/role-bindings` | `role:binding:manage` | List or add group role bindings. |
+| DELETE | `/api/v1/groups/{group_id}/role-bindings/{binding_id}` | `role:binding:manage` | Remove a group role binding (`204`). |
+| GET | `/api/v1/roles` | `role:role:read` | List roles and permissions. |
+| POST | `/api/v1/roles` | `role:role:create` | Create a custom role (`201`). |
+| GET | `/api/v1/roles/{role_id}` | `role:role:read` | Read one role. |
+| PATCH | `/api/v1/roles/{role_id}` | `role:role:update` | Update a custom role. |
+| DELETE | `/api/v1/roles/{role_id}` | `role:role:delete` | Delete a custom role (`204`). |
+| PUT | `/api/v1/roles/{role_id}/permissions` | `role:role:update` | Replace a custom role's permissions (`204`). |
+| GET, POST | `/api/v1/clusters/{cluster_id}/access` | `cluster:cluster:grant-access` | List or grant cluster access. |
+| DELETE | `/api/v1/clusters/{cluster_id}/access/{binding_id}` | `cluster:cluster:grant-access` | Revoke cluster access (`204`). |
+| GET | `/api/v1/system/database` | `system:database:read` | Read database setup status. |
+| POST | `/api/v1/system/database` | `system:database:configure` | Configure the Lens database. |
+| GET | `/api/v1/system/secret-key` | `system:secret:read` | Read master-key status. |
+| POST | `/api/v1/system/secret-key/rotate` | `system:secret:manage` | Rotate the master key. |
+| DELETE | `/api/v1/system/secret-key/old` | `system:secret:manage` | Drop retained fallback keys. |
+
+## Errors / limits
+
+- **401**: invalid credentials, an expired or revoked session, or a locked account. **403**: missing permission, another user's session, or no cluster access.
+- **404**: unknown user, role, group, session, or binding. **409**: duplicate username, group, or role; protected built-in accounts; removing the last global admin; or disabling the built-in admin.
+- **422**: invalid permission code, malformed request, or a password that is shorter than 12 characters, equals the username, or does not mix at least three character classes.
+- Refresh uses the HttpOnly refresh cookie plus the `X-Prism-CSRF` header; Bearer requests do not need CSRF. Logout revokes the current session.
+- Resource-scope role bindings only accept `scopeResourceType: "model_service_group"` with the built-in end-user role. The model and cluster must match, and the recipient needs inference permission in that cluster. Use the [scoped model access API](/api-reference/modules/model-services) for routine model grants.
+- Master-key rotation is rejected when `LENS_SECRET_KEY` is environment-locked. Clearing old keys makes secrets still encrypted with them unreadable.
+- Database setup: external mode requires `databaseUrl` with a scheme matching `engine`; embedded mode is always PostgreSQL. Connection errors return `422`; setup failures return `409`.
+
+## Related
+
+- [Administration user guide](/user-guide/administration)
+- [Model services API](/api-reference/modules/model-services)
+- [API conventions](/api-reference)
+- OpenAPI: `/api/v1/simulation/docs` (Swagger UI) and `/api/v1/simulation/openapi.json` (schema).

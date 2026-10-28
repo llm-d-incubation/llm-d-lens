@@ -118,7 +118,7 @@ When `DeterministicPlanner.candidates()` generates candidates:
 
 ### 5.2 Pre-deployment guardrail
 
-Before approving via `POST /api/agentic-deployments/{id}/approve` or deploying via `llm_d_lens/deploy/`:
+Before approving via `POST /api/v1/agentic-deployments/{id}/approve` or deploying via `llm_d_lens/deploy/`:
 1. Extract the selected topology's actual vLLM parameters (`tp`, `max_model_len`, `gpu_memory_utilization`, `gpu_memory`).
 2. Run `validate_vllm_params()` as a pre-flight check.
 3. If fatal errors are found and `ignore_failures` is not enabled, stop deployment and return structured rejection reasons and remediation suggestions, such as increasing TP, reducing `maxModelLen`, or lowering concurrency.

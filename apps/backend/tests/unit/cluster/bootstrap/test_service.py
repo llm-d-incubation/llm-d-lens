@@ -4,6 +4,7 @@ not exercise this against real machines."""
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from pathlib import Path
 
@@ -13,8 +14,13 @@ from fastapi.testclient import TestClient
 from llm_d_lens.api.main import app
 from llm_d_lens.cluster.bootstrap import kubespray, preflight, service
 from llm_d_lens.cluster.bootstrap.dto import (
+    BootstrapCreateResponse,
+    BootstrapHostAddress,
     BootstrapHostKeyPin,
+    BootstrapHostKeyResponse,
     BootstrapNodeInput,
+    BootstrapPreflightResponse,
+    BootstrapStatusResponse,
 )
 from llm_d_lens.cluster.bootstrap.host_expr import expand_host_spec
 from llm_d_lens.cluster.bootstrap.models import BootstrapNode, job_store
@@ -72,7 +78,7 @@ async def _fake_fail_one(nodes: list[BootstrapNode]) -> list[BootstrapNode]:
 def test_preflight_endpoint_reports_all_passed(monkeypatch):
     monkeypatch.setattr(preflight, "run_preflight", _fake_pass_all)
     response = client.post(
-        "/api/cluster/bootstrap/preflight",
+        "/api/v1/cluster/bootstrap/preflight",
         json={
             "nodes": [{"host": "10.0.0.1", "roles": ["control-plane"]}],
             "hostKeys": [{"host": "10.0.0.1", "port": 22, "fingerprint": _TEST_FINGERPRINT}],
@@ -93,7 +99,7 @@ def test_host_key_discovery_expands_ranges_without_authentication(monkeypatch):
 
     monkeypatch.setattr(service, "inspect_host_key", _inspect)
     response = client.post(
-        "/api/cluster/bootstrap/host-keys",
+        "/api/v1/cluster/bootstrap/host-keys",
         json={"nodes": [{"host": "10.0.0.10-12", "port": 2222}]},
     )
 
@@ -105,9 +111,9 @@ def test_host_key_discovery_expands_ranges_without_authentication(monkeypatch):
 
 def test_preflight_rejects_missing_or_unexpected_host_key_pins():
     payload = {"nodes": [{"host": "10.0.0.1", "roles": ["control-plane"]}]}
-    missing = client.post("/api/cluster/bootstrap/preflight", json={**payload, "hostKeys": []})
+    missing = client.post("/api/v1/cluster/bootstrap/preflight", json={**payload, "hostKeys": []})
     unexpected = client.post(
-        "/api/cluster/bootstrap/preflight",
+        "/api/v1/cluster/bootstrap/preflight",
         json={
             **payload,
             "hostKeys": [{"host": "10.0.0.2", "port": 22, "fingerprint": _TEST_FINGERPRINT}],
@@ -171,7 +177,7 @@ def test_preflight_endpoint_reports_per_check_breakdown(monkeypatch):
     monkeypatch.setattr(preflight, "remote_exec", lambda *a, **k: responses.pop(0))
 
     response = client.post(
-        "/api/cluster/bootstrap/preflight",
+        "/api/v1/cluster/bootstrap/preflight",
         json={
             "nodes": [{"host": "10.0.0.1", "roles": ["control-plane"]}],
             "hostKeys": [{"host": "10.0.0.1", "port": 22, "fingerprint": _TEST_FINGERPRINT}],
@@ -258,7 +264,7 @@ async def test_run_bootstrap_job_auto_mode_has_no_proxy_when_nodes_have_none(mon
 def test_preflight_endpoint_reports_failures(monkeypatch):
     monkeypatch.setattr(preflight, "run_preflight", _fake_fail_one)
     response = client.post(
-        "/api/cluster/bootstrap/preflight",
+        "/api/v1/cluster/bootstrap/preflight",
         json={
             "nodes": [
                 {"host": "10.0.0.1", "roles": ["control-plane"]},
@@ -279,7 +285,7 @@ def test_preflight_endpoint_reports_failures(monkeypatch):
 def test_preflight_endpoint_expands_host_range_into_individual_hosts(monkeypatch):
     monkeypatch.setattr(preflight, "run_preflight", _fake_pass_all)
     response = client.post(
-        "/api/cluster/bootstrap/preflight",
+        "/api/v1/cluster/bootstrap/preflight",
         json={
             "nodes": [{"host": "10.0.0.10-12", "roles": ["worker"]}],
             "hostKeys": [
@@ -296,7 +302,7 @@ def test_preflight_endpoint_expands_host_range_into_individual_hosts(monkeypatch
 def test_preflight_endpoint_rejects_malformed_host_spec(monkeypatch):
     monkeypatch.setattr(preflight, "run_preflight", _fake_pass_all)
     response = client.post(
-        "/api/cluster/bootstrap/preflight",
+        "/api/v1/cluster/bootstrap/preflight",
         json={
             "nodes": [{"host": "10.0.0.5-999", "roles": ["worker"]}],
             "hostKeys": [{"host": "10.0.0.5", "port": 22, "fingerprint": _TEST_FINGERPRINT}],
@@ -457,3 +463,32 @@ def test_consume_kubeconfig_is_one_shot(tmp_path):
     with pytest.raises(KeyError):
         service.get_job(job.id)  # job (and its work_dir) are torn down after consumption
     assert not job.work_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_service_operations_return_response_models(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "inspect_host_key",
+        lambda _host, _port: HostKeyInfo("ssh-ed25519", _TEST_FINGERPRINT, "cHVibGljLWtleQ=="),
+    )
+    host_keys = await service.discover_host_keys([BootstrapHostAddress(host="10.0.0.1")])
+    assert isinstance(host_keys, BootstrapHostKeyResponse)
+
+    payload = [BootstrapNodeInput(host="10.0.0.1", roles=["control-plane"])]
+    monkeypatch.setattr(preflight, "run_preflight", _fake_pass_all)
+    preflight_response = await service.run_preflight_check(payload, _pins_for(payload))
+    assert isinstance(preflight_response, BootstrapPreflightResponse)
+    assert preflight_response.all_passed is True
+
+    async def _noop(_job_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(service, "run_bootstrap_job", _noop)
+    created = await service.start_bootstrap(payload, _pins_for(payload))
+    assert isinstance(created, BootstrapCreateResponse)
+    await asyncio.sleep(0)
+
+    status = service.get_status(created.bootstrap_id)
+    assert isinstance(status, BootstrapStatusResponse)
+    assert status.id == created.bootstrap_id

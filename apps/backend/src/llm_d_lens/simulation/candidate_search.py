@@ -12,11 +12,13 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from llm_d_lens.aic import service as aic_service
 from llm_d_lens.aic.models import AICEstimateRequest, AICExperimentRequest, AICRequest
 from llm_d_lens.auth.context import require_route_permission
+
+from .models import CandidateRelaxedResponse, CandidateSearchResponse, CandidateSupportResponse
 
 router = APIRouter(include_in_schema=False)
 logger = logging.getLogger(__name__)
@@ -43,6 +45,11 @@ class CandidateError(Exception):
 
 def record(value) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def response_dict(value: Any) -> dict:
+    """Normalize a typed AIC response (or a test double) to a mapping."""
+    return value.model_dump(mode="python") if isinstance(value, BaseModel) else value
 
 
 def finite_number(value, *, missing=False) -> float | None:
@@ -80,7 +87,7 @@ def predict_payload(workload: dict, config: dict) -> dict:
     }
 
 
-async def aic_call(request: Request, operation: str, payload: dict) -> dict:
+async def aic_call(request: Request, operation: str, payload: dict) -> Any:
     scope = dict(request.scope, path=f"/api/v1/aic/{operation}", method="POST")
     await require_route_permission(Request(scope))
     model, service = {
@@ -234,13 +241,13 @@ async def search_candidates(request: Request, body: dict) -> dict:
     if "aic" in sources:
         if not payload["aic_system_name"]:
             raise CandidateError("AIC system is required for Predictive search")
-        support = await aic_call(request, "support", payload)
+        support = response_dict(await aic_call(request, "support", payload))
         if support.get("supported") is False:
             raise CandidateError(
                 f"{workload.get('model') or 'Model'} is not supported on "
                 f"{payload['aic_system_name']} with {payload['aic_backend_name']}"
             )
-        prediction = await aic_call(request, "search", payload)
+        prediction = response_dict(await aic_call(request, "search", payload))
         candidates.extend(
             normalize_candidate(raw, index) for index, raw in enumerate(prediction.get("configs", [])[:limit])
         )
@@ -249,7 +256,7 @@ async def search_candidates(request: Request, body: dict) -> dict:
             text = str(manual.get("yamlText") or "").strip()
             if not text:
                 raise CandidateError("Upload an AIConfigurator experiment YAML file first")
-            result = await aic_call(request, "experiments", {"yaml_text": text, "top_n": limit})
+            result = response_dict(await aic_call(request, "experiments", {"yaml_text": text, "top_n": limit}))
             candidates.extend(
                 normalize_candidate(raw, index, "YAML Experiment")
                 for index, raw in enumerate(result.get("experiments", []))
@@ -275,11 +282,11 @@ async def search_candidates(request: Request, body: dict) -> dict:
                 else manual_payload["prefill_tp"] * manual_payload["prefill_replicas"]
                 + manual_payload["decode_tp"] * manual_payload["decode_replicas"]
             )
-            support = await aic_call(request, "support", manual_payload)
+            support = response_dict(await aic_call(request, "support", manual_payload))
             if support.get("agg_supported" if mode == "agg" else "disagg_supported") is False:
                 label = "Aggregated" if mode == "agg" else "P/D disaggregated"
                 raise CandidateError(f"{label} serving is not supported for this model and hardware")
-            estimate = await aic_call(request, "estimate", manual_payload)
+            estimate = response_dict(await aic_call(request, "estimate", manual_payload))
             candidates.append(
                 normalize_candidate(
                     dict(estimate, name=str(manual.get("name") or "manual-estimate")),
@@ -330,7 +337,7 @@ async def relaxed_candidates(request: Request, body: dict) -> dict:
     ):
         raise CandidateError("Latency targets must be positive finite numbers")
     payload = predict_payload(workload, config)
-    support = await aic_call(request, "support", payload)
+    support = response_dict(await aic_call(request, "support", payload))
     if support.get("supported") is False:
         return {"candidates": [], "attempts": [], "anchor": None, "sloSatisfied": False, "reason": "unsupported"}
     attempts, candidates = [], []
@@ -340,7 +347,7 @@ async def relaxed_candidates(request: Request, body: dict) -> dict:
             if search_payload[key] is not None:
                 search_payload[key] *= factor
         try:
-            result = await aic_call(request, "search", search_payload)
+            result = response_dict(await aic_call(request, "search", search_payload))
         except CandidateError as error:
             if error.status != 400 or str(error) != NO_FEASIBLE:
                 raise
@@ -406,9 +413,9 @@ async def support_candidate(request: Request, body: dict) -> dict:
 
 async def candidate_endpoint(request: Request, body: Annotated[Any, Body()] = None):
     operation = {
-        "/api/candidate-search": search_candidates,
-        "/api/candidate-search/relaxed": relaxed_candidates,
-        "/api/candidate-support": support_candidate,
+        "/api/v1/candidate-search": search_candidates,
+        "/api/v1/candidate-search/relaxed": relaxed_candidates,
+        "/api/v1/candidate-support": support_candidate,
     }[request.url.path]
     try:
         return await operation(request, record(body))
@@ -416,5 +423,17 @@ async def candidate_endpoint(request: Request, body: Annotated[Any, Body()] = No
         return JSONResponse({"error": error.public_message}, status_code=error.status)
 
 
-for route_path in ("/api/candidate-search", "/api/candidate-search/relaxed", "/api/candidate-support"):
-    router.add_api_route(route_path, candidate_endpoint, methods=["POST"])
+_RESPONSE_MODELS = {
+    "/api/v1/candidate-search": CandidateSearchResponse,
+    "/api/v1/candidate-search/relaxed": CandidateRelaxedResponse,
+    "/api/v1/candidate-support": CandidateSupportResponse,
+}
+
+for route_path, response_model in _RESPONSE_MODELS.items():
+    router.add_api_route(
+        route_path,
+        candidate_endpoint,
+        methods=["POST"],
+        response_model=response_model,
+        response_model_exclude_unset=True,
+    )

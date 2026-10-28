@@ -59,24 +59,28 @@ def test_hidden_migrated_routes_participate_in_startup_validation(monkeypatch):
     from llm_d_lens.auth import routes
 
     prefixes = (
-        "/api/config",
-        "/api/mcp",
-        "/api/playground",
-        "/api/candidate-",
-        "/api/deploy-poc",
-        "/api/remote-deploy",
-        "/api/guide-planning",
+        "/api/v1/config",
+        "/api/v1/mcp",
+        "/api/v1/playground",
+        "/api/v1/candidate-",
+        "/api/v1/deploy-poc",
+        "/api/v1/remote-deploy",
+        "/api/v1/guide-planning",
     )
-    expected = {(entry.method, entry.path) for entry in routes.ROUTE_PERMISSIONS if entry.path.startswith(prefixes)}
-    assert len(expected) == 26
+    expected = {
+        (entry.method, entry.path)
+        for entry in routes.ROUTE_PERMISSIONS
+        if any(entry.path == prefix or entry.path.startswith(prefix + "/") for prefix in prefixes)
+    }
+    assert len(expected) == 20
     assert expected <= routes.app_route_table(app)
     assert routes.validate_route_registry(app) == []
     monkeypatch.setattr(
         routes,
         "ROUTE_PERMISSIONS",
-        tuple(entry for entry in routes.ROUTE_PERMISSIONS if (entry.method, entry.path) != ("POST", "/api/mcp")),
+        tuple(entry for entry in routes.ROUTE_PERMISSIONS if (entry.method, entry.path) != ("POST", "/api/v1/mcp")),
     )
-    assert routes.validate_route_registry(app) == ["route not registered: POST /api/mcp"]
+    assert routes.validate_route_registry(app) == ["route not registered: POST /api/v1/mcp"]
 
 
 def test_session_cookie_max_age_uses_absolute_ttl_not_idle_window():
@@ -116,16 +120,16 @@ def _migrated_routes():
     from llm_d_lens.auth.routes import ROUTE_PERMISSIONS
 
     prefixes = (
-        "/api/configurations/",
-        "/api/candidate-search",
-        "/api/candidate-support",
-        "/api/deploy-poc/",
-        "/api/remote-deploy/",
-        "/api/guide-planning/",
+        "/api/v1/configurations/",
+        "/api/v1/candidate-search",
+        "/api/v1/candidate-support",
+        "/api/v1/deploy-poc/",
+        "/api/v1/remote-deploy/",
+        "/api/v1/guide-planning/",
     )
     routes = [(entry.method, entry.path) for entry in ROUTE_PERMISSIONS if entry.path.startswith(prefixes)]
     assert len(routes) >= 20
-    return [*routes, ("POST", "/api/playground/chat"), ("POST", "/api/mcp")]
+    return [*routes, ("POST", "/api/v1/playground/chat"), ("POST", "/api/v1/mcp")]
 
 
 def test_migrated_business_routes_require_authentication():
@@ -157,7 +161,7 @@ def test_mcp_entry_permission_does_not_grant_target_tool_permission(monkeypatch,
 
     def rpc(client, method, params):
         response = client.post(
-            "/api/mcp",
+            "/api/v1/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
             headers={"accept": "application/json, text/event-stream", "authorization": "Bearer fixture"},
         )
@@ -165,7 +169,7 @@ def test_mcp_entry_permission_does_not_grant_target_tool_permission(monkeypatch,
         return json.loads(next(EventSource(response).iter_sse()).data)
 
     with _client() as client:
-        assert client.post("/api/mcp", json={}).status_code == 401
+        assert client.post("/api/v1/mcp", json={}).status_code == 401
         assert rpc(client, "tools/list", {})["result"]["tools"]
         result = rpc(client, "tools/call", {"name": "list_deploy_poc_configs", "arguments": {}})
         body = json.loads(result["result"]["content"][0]["text"])
@@ -245,12 +249,12 @@ def test_authenticated_playground_forwards_session_and_csrf_to_provider_and_tool
             "readOnly": True,
         }
         for headers in ({}, {"x-prism-csrf": "mismatched-token"}):
-            rejected = client.post("/api/playground/chat", json=body, headers=headers)
+            rejected = client.post("/api/v1/playground/chat", json=body, headers=headers)
             assert rejected.status_code == 403
             assert rejected.json()["code"] == "csrf_failed"
         upstream.post.assert_not_awaited()
 
-        response = client.post("/api/playground/chat", json=body, headers=_csrf_headers(client))
+        response = client.post("/api/v1/playground/chat", json=body, headers=_csrf_headers(client))
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream")
         assert "content-encoding" not in response.headers
@@ -262,7 +266,7 @@ def test_authenticated_playground_forwards_session_and_csrf_to_provider_and_tool
         assert not {"error", "permission_denied", "blocked"} & {event for event, _ in events}, events
         result = next(data for event, data in events if event == "tool_result")
         assert result["isError"] is False
-        assert json.loads(result["result"]["content"][0]["text"]) == client.get("/api/deploy-poc/config").json()
+        assert json.loads(result["result"]["content"][0]["text"]) == client.get("/api/v1/deploy-poc/config").json()
         assert events[-2:] == [("message", {"content": "answer"}), ("done", {})]
         assert upstream.post.await_count == 2
         assert any(
@@ -280,7 +284,7 @@ def test_authenticated_mcp_browser_session_initializes_and_calls_read_tool():
 
         def rpc(method, params):
             response = client.post(
-                "/api/mcp",
+                "/api/v1/mcp",
                 json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
                 headers={**_csrf_headers(client), "accept": "application/json, text/event-stream"},
             )
@@ -300,7 +304,7 @@ def test_authenticated_mcp_browser_session_initializes_and_calls_read_tool():
         assert "list_deploy_poc_configs" in {tool["name"] for tool in listed["tools"]}
         called = rpc("tools/call", {"name": "list_deploy_poc_configs", "arguments": {}})
         assert not called.get("isError"), called
-        assert json.loads(called["content"][0]["text"]) == client.get("/api/deploy-poc/config").json()
+        assert json.loads(called["content"][0]["text"]) == client.get("/api/v1/deploy-poc/config").json()
 
 
 def test_migrated_business_routes_deny_unprivileged_users():
@@ -454,17 +458,17 @@ def test_cluster_and_storage_visibility_is_scope_filtered(monkeypatch):
             headers=_csrf_headers(client),
         )
         # Admin (global) sees both clusters.
-        admin_response = client.get("/api/cluster/clusters")
+        admin_response = client.get("/api/v1/cluster/clusters")
         assert admin_response.status_code == 200, admin_response.text
         admin_ids = {cluster["id"] for cluster in admin_response.json()["items"]}
         assert {cluster_a.id, cluster_b.id} <= admin_ids
 
     with _client() as client:
         assert client.post("/api/v1/auth/login", json={"username": "scopebob", "password": STRONG}).status_code == 200
-        clusters_response = client.get("/api/cluster/clusters")
+        clusters_response = client.get("/api/v1/cluster/clusters")
         assert clusters_response.status_code == 200, clusters_response.text
         bob_ids = {cluster["id"] for cluster in clusters_response.json()["items"]}
-        guide_response = client.get("/api/guide-planning/catalog", params={"clusterId": cluster_b.id})
+        guide_response = client.get("/api/v1/guide-planning/catalog", params={"clusterId": cluster_b.id})
         assert guide_response.status_code == 403, guide_response.text
         assert bob_ids == {cluster_a.id}
 
@@ -804,3 +808,143 @@ def test_audit_update_events_are_suppressed_for_high_frequency_workloads():
         assert audit_tracks_write(table, "delete")
 
     assert audit_tracks_write("clusters", "update")
+
+
+def _login_with_access_token(client: TestClient, username: str = "root") -> str:
+    bootstrap = client.post("/api/v1/auth/bootstrap", json={"username": username, "password": STRONG})
+    assert bootstrap.status_code == 200, bootstrap.text
+    login = client.post("/api/v1/auth/login", json={"username": username, "password": STRONG})
+    assert login.status_code == 200, login.text
+    payload = login.json()
+    assert payload["tokenType"] == "Bearer"
+    assert payload["accessToken"]
+    assert payload["expiresIn"] > 0
+    return payload["accessToken"]
+
+
+def test_bearer_token_authenticates_direct_python_api_without_cookies():
+    with _client() as client:
+        token = _login_with_access_token(client)
+
+    with _client() as direct:
+        headers = {"Authorization": f"Bearer {token}"}
+        session = direct.get("/api/v1/auth/session", headers=headers)
+        assert session.status_code == 200, session.text
+        assert session.json()["username"] == "root"
+        assert direct.get("/api/v1/users", headers=headers).status_code == 200
+
+
+def test_refresh_exchanges_http_only_cookie_for_new_access_token():
+    with _client() as client:
+        token = _login_with_access_token(client)
+        refresh = client.post("/api/v1/auth/refresh", headers=_csrf_headers(client))
+        assert refresh.status_code == 200, refresh.text
+        refreshed = refresh.json()
+        assert refreshed["accessToken"]
+        assert refreshed["tokenType"] == "Bearer"
+
+    with _client() as direct:
+        response = direct.get(
+            "/api/v1/auth/session",
+            headers={"Authorization": f"Bearer {refreshed['accessToken']}"},
+        )
+        assert response.status_code == 200
+        # The old token remains a valid short-lived credential until expiry.
+        old = direct.get("/api/v1/auth/session", headers={"Authorization": f"Bearer {token}"})
+        assert old.status_code == 200
+
+
+def test_refresh_uses_cookie_when_cookie_fallback_is_disabled():
+    set_settings_for_testing(
+        AuthSettings(
+            auth_mode="local",
+            session_ttl_seconds=3600,
+            session_idle_seconds=3600,
+            auto_seed_admin=False,
+            cookie_fallback=False,
+        )
+    )
+    with _client() as client:
+        _bootstrap_and_login(client)
+        assert client.get("/api/v1/auth/session").status_code == 401
+        refresh = client.post("/api/v1/auth/refresh", headers=_csrf_headers(client))
+        assert refresh.status_code == 200, refresh.text
+        token = refresh.json()["accessToken"]
+        session = client.get("/api/v1/auth/session", headers={"Authorization": f"Bearer {token}"})
+        assert session.status_code == 200
+
+
+def test_refresh_requires_csrf_for_cookie_based_exchange():
+    with _client() as client:
+        _login_with_access_token(client)
+        response = client.post("/api/v1/auth/refresh")
+        assert response.status_code == 403
+        assert response.json()["code"] == "csrf_failed"
+
+
+def test_bearer_requests_are_csrf_exempt_and_revoke_the_session():
+    with _client() as client:
+        token = _login_with_access_token(client)
+        response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 204
+        assert client.get("/api/v1/auth/session").status_code == 401
+
+
+def test_invalid_bearer_does_not_fall_back_to_a_valid_cookie():
+    with _client() as client:
+        _login_with_access_token(client)
+        response = client.get(
+            "/api/v1/auth/session",
+            headers={"Authorization": "Bearer not-a-valid-access-token"},
+        )
+        assert response.status_code == 401
+
+
+def test_legacy_opaque_session_bearer_is_accepted_only_when_enabled():
+    set_settings_for_testing(
+        AuthSettings(
+            auth_mode="local",
+            session_ttl_seconds=3600,
+            session_idle_seconds=3600,
+            auto_seed_admin=False,
+            accept_legacy_opaque_bearer=True,
+        )
+    )
+    with _client() as client:
+        _bootstrap_and_login(client)
+        login = client.post("/api/v1/auth/login", json={"username": "root", "password": STRONG})
+        refresh_token = login.cookies.get("prism_session")
+
+    with _client() as direct:
+        response = direct.get(
+            "/api/v1/auth/session",
+            headers={"Authorization": f"Bearer {refresh_token}"},
+        )
+        assert response.status_code == 200
+
+
+def test_openapi_declares_http_bearer_security_scheme():
+    with _client() as client:
+        schema = client.get("/api/v1/simulation/openapi.json").json()
+    assert schema["components"]["securitySchemes"]["BearerAuth"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+    }
+    assert {"BearerAuth": []} in schema["security"]
+
+
+def test_data_returning_auth_routes_declare_concrete_response_models():
+    from llm_d_lens.auth import router as auth_router_module
+
+    missing = []
+    for route in auth_router_module.router.routes:
+        methods = set(getattr(route, "methods", ()) or ())
+        if not methods or methods == {"DELETE"}:
+            continue
+        if getattr(route, "status_code", 200) in {204, 304}:
+            continue
+        response_model = getattr(route, "response_model", None)
+        if response_model is None or response_model is dict:
+            missing.append((methods, route.path))
+    assert missing == []

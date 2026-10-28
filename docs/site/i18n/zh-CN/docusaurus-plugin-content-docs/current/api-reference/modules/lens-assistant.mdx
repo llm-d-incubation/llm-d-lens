@@ -1,211 +1,112 @@
 ---
 title: Lens Assistant
-description: Lens Assistant 背后的 Python MCP 端点与工具目录。
+description: 连接 MCP 客户端，以工具形式调用 Lens 平台操作。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## 后端 API
+## 模块用途
 
-Lens Assistant 使用统一 Python 服务中的 `llm_d_lens.mcp.router`。其 FastAPI 路由通过官方 MCP Python SDK 在 `/api/mcp` 提供无状态 Streamable HTTP 端点。
+Lens Assistant 是使用 Lens MCP 工具目录的内置聊天界面。当你希望自己的 MCP
+客户端、IDE 智能体或脚本查看和操作 Lens 时，也使用同一个端点。它是基于
+Streamable HTTP 的无状态 JSON-RPC 2.0 端点：每个请求相互独立，工具调用读取
+Lens REST 的当前状态。
 
-候选工具声明并转发 `workload.concurrency` 或 `workload.request_rate`
-（正数且互斥的负载目标）。兼容 API 的输入／输出 token 长度缺省为
-4000／1000，与 Agentic 规划一致。预期的校验提示和无可行候选时的重试行为
-保持不变。其他 AIC 服务错误返回状态码 `400` 及通用响应
-`{ "error": "AIC candidate search failed" }`，内部异常详情仅记录在服务端日志中。
+## 快速开始
 
-### 发送一次无状态的 MCP 请求
+`POST /api/v1/mcp` 需要已登录会话，并拥有 `mcp:tool:invoke` 或
+`playground:chat:use` 权限。凭据可通过 Bearer token 或 `prism_session` cookie 发送。
 
-使用新的 SDK 服务器和传输管理器处理一次无状态 Streamable HTTP MCP 请求。
+MCP 传输没有 Python SDK 封装。SDK 标签页展示同一 Lens 操作的类型化进程内调用。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
-**`POST /api/mcp`**
-
-请求：
-
-- Content type：`application/json`
-- Body：一个 MCP JSON-RPC 请求对象。在无状态模式下，Lens 会为每个请求创建一个全新的服务器，因此不需要会话 ID。
-- 常见的请求形态包括 `initialize`、`tools/list` 和 `tools/call`。
-
-`tools/call` 请求示例：
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "req-2",
-  "method": "tools/call",
-  "params": {
-    "name": "list_simulation_backends",
-    "arguments": {}
-  }
-}
+```bash
+curl -s "http://127.0.0.1:3000/api/v1/mcp" \
+  -H "Authorization: Bearer $LENS_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "list_clusters", "arguments": {}}
+  }'
 ```
 
-响应：
+成功的工具调用返回 JSON-RPC `result`，其中包含 `content` 块。`text` 字段包含
+经过 JSON 字符串化的 REST 结果。
 
-成功的响应使用 MCP JSON-RPC 结果信封格式。对于工具调用，Lens 的 MCP 服务器会返回 `content` 块，其 `text` 字段包含经过 JSON 字符串化的 Lens REST 结果。
+  </TabItem>
+</Tabs>
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "req-2",
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "{\n  \"items\": []\n}"
+## 常见任务
+
+### 查看可用工具
+
+工具名称会随 Lens 模块演进。向服务端查询当前工具目录：
+
+```bash
+curl -s "http://127.0.0.1:3000/api/v1/mcp" \
+  -H "Authorization: Bearer $LENS_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}'
+```
+
+每个工具会报告输入字段和风险等级（`read`、`write` 或 `approve`）。
+
+### 启动一次部署
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -s "http://127.0.0.1:3000/api/v1/mcp" \
+  -H "Authorization: Bearer $LENS_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "create_standard_vllm_deployment_run",
+      "arguments": {
+        "model": "Qwen/Qwen3-8B",
+        "deployment_name": "assistant-backed-deploy",
+        "cluster_session_id": "<cluster-session-id>",
+        "replicas": 1,
+        "tensor_parallel_size": 1
       }
-    ]
-  }
-}
-```
-
-如果在 SDK 发送响应之前发生了未处理的服务器错误，Lens 会返回：
-
-```json
-{
-  "jsonrpc": "2.0",
-  "error": {
-    "code": -32603,
-    "message": "Internal server error"
-  },
-  "id": null
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-使用官方 MCP Python 客户端进行传输调用。查询元数据时，`llm_d_lens.mcp.catalog.catalog(app)` 返回与端点相同的工具定义。进程内领域集成可复用[部署](/api-reference/modules/deployments)页面上的辅助函数：
-
-```python
-from llm_d_lens.deploy.standard_kubernetes_service import (
-    StandardKubernetesServiceRequest,
-    build_standard_kubernetes_service_configuration,
-)
-
-request = StandardKubernetesServiceRequest(
-    model="meta-llama/Llama-3.1-8B-Instruct",
-    deployment_name="assistant-backed-deploy",
-    cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-    replicas=1,
-    tensor_parallel_size=1,
-)
-configuration = build_standard_kubernetes_service_configuration(request)
-print(configuration.checksum)
+    }
+  }'
 ```
 
   </TabItem>
 </Tabs>
 
-### 无状态模式下不支持 GET
+## 端点
 
-返回 `405 Method not allowed.`，因为无状态模式不支持 Streamable HTTP 的 GET 流。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/mcp`**
-
-请求：
-
-该端点没有请求体。在 Lens 的无状态 MCP 模式下，Streamable HTTP 的 GET 流被特意禁用。
-
-响应：
-
-返回一个 HTTP 状态码为 `405` 的 JSON-RPC 错误负载。
-
-```json
-{
-  "jsonrpc": "2.0",
-  "error": {
-    "code": -32000,
-    "message": "Method not allowed."
-  },
-  "id": null
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-Python 路由在无状态模式下拒绝 GET 流。请使用 MCP 客户端的 POST 传输，或直接调用底层 Python 领域逻辑，参见[MCP 工具调用的内容](#what-the-mcp-tools-call)。
-
-  </TabItem>
-</Tabs>
-
-### 无状态模式下不支持 DELETE
-
-返回 `405 Method not allowed.`，因为无状态模式不支持终止会话。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`DELETE /api/mcp`**
-
-请求：
-
-该端点没有请求体。Lens 不会在请求之间保留 MCP 会话，因此也就没有服务器端会话可以终止。
-
-响应：
-
-返回一个 HTTP 状态码为 `405` 的 JSON-RPC 错误负载。
-
-```json
-{
-  "jsonrpc": "2.0",
-  "error": {
-    "code": -32000,
-    "message": "Method not allowed."
-  },
-  "id": null
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-Python 路由不保留传输会话，因此拒绝终止会话的请求。使用 Python MCP 客户端时请设置 `terminate_on_close=False`。
-
-  </TabItem>
-</Tabs>
-
-`llm_d_lens.mcp.catalog` 根据 FastAPI OpenAPI schema 生成工具，并与 `llm_d_lens/mcp/definitions.json` 中的 25 个特殊工具定义合并。`node scripts/generate-mcp-tools.mjs --check` 校验该目录，不再生成 Node 文件。`llm_d_lens.mcp.tools` 通过进程内 ASGI 客户端调用规范 REST 路由，保留认证、CSRF 和资源范围检查。
-
-## MCP 工具调用的内容 {/* #what-the-mcp-tools-call */}
-
-具有代表性的自动生成 MCP 工具会直接转发到已有的 Python 支撑的 REST 模块：
-
-| MCP 工具 | 转发的 HTTP 端点 | 底层模块 |
+| 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `create_standard_vllm_deployment_run` | `POST /api/v1/deployments/standard-vllm-runs` | [部署](/api-reference/modules/deployments)，经由 `llm_d_lens/deploy/router.py` |
-| `list_deployment_executions` | `GET /api/v1/deployments/executions` | [部署](/api-reference/modules/deployments)，经由 `llm_d_lens/deploy/router.py` |
-| `create_evaluate_run` | `POST /api/v1/evaluate/runs` | [评估](/api-reference/modules/evaluation)，经由 `llm_d_lens/evaluation/router.py` |
-| `get_cluster_stack_status` | `GET /api/v1/monitoring/cluster-stack/status` | [可观测性](/api-reference/modules/observability)，经由 `llm_d_lens/monitoring/cluster_stack/router.py` |
-| `list_simulation_tasks` | `GET /api/simulation/tasks` | [模拟](/api-reference/modules/simulation)，经由 `llm_d_lens/simulation/router.py` |
+| `POST` | `/api/v1/mcp` | 一次无状态 MCP JSON-RPC 请求（`initialize`、`tools/list` 或 `tools/call`）。 |
+| `GET` | `/api/v1/mcp` | 返回 `405`；无状态模式没有服务端到客户端的流。 |
+| `DELETE` | `/api/v1/mcp` | 返回 `405`；没有可终止的服务端会话。 |
 
-如果你需要的是 Python 而不是 MCP 传输，请直接调用其背后的 Python 领域逻辑，而不是通过 `/api/mcp`。例如，MCP 工具 `create_standard_vllm_deployment_run` 最终调用的是与 `POST /api/v1/deployments/standard-vllm-runs` 相同的部署辅助函数：
+## 错误与限制
 
-```python
-from llm_d_lens.deploy.standard_kubernetes_service import (
-    StandardKubernetesServiceRequest,
-    build_standard_kubernetes_service_configuration,
-)
+- 缺少或无效的认证返回 `401`。会话缺少 `mcp:tool:invoke` 或
+  `playground:chat:use` 时返回 `403`。
+- 未知工具名或无效参数会返回工具错误结果。使用 `tools/list` 确认当前名称和字段。
+- `GET` 和 `DELETE` 返回 `405` 及 JSON-RPC 错误负载。
+- 请求之间不共享会话。每个请求都必须携带凭据。
+- 在 Lens Assistant 中，破坏性的 `approve` 工具需要明确的人工确认；智能体不应自动批准。
 
-request = StandardKubernetesServiceRequest(
-    model="meta-llama/Llama-3.1-8B-Instruct",
-    deployment_name="assistant-backed-deploy",
-    cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-    replicas=1,
-    tensor_parallel_size=1,
-)
-configuration = build_standard_kubernetes_service_configuration(request)
+## 相关内容
 
-print(configuration.checksum)
-```
-
-完整的请求/响应 schema 请参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。
+- [Lens Assistant 指南](/user-guide/lens-assistant)
+- [MCP 集成](/mcp)
+- [OpenAPI schema](/api-reference)

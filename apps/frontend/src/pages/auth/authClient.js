@@ -11,11 +11,15 @@ export function fetchSession() {
 }
 
 export function login(username, password, remember = false) {
-    return postJson('/api/v1/auth/login', { username, password, remember });
+    return postJson('/api/v1/auth/login', { username, password, remember }, {}, { auth: 'none' });
+}
+
+export function refreshSession() {
+    return postJson('/api/v1/auth/refresh', {}, {}, { auth: 'none', retryOnUnauthorized: false });
 }
 
 export function logout() {
-    return postJson('/api/v1/auth/logout', {});
+    return postJson('/api/v1/auth/logout', {}, { credentials: 'include' });
 }
 
 export function changePassword(oldPassword, newPassword) {

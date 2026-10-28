@@ -20,7 +20,7 @@ test('chat remains streaming and preserves event delivery and request signal', a
     const signal = new AbortController().signal;
     const encoder = new TextEncoder();
     t.mock.method(globalThis, 'fetch', async (url, options) => {
-        assert.equal(url, '/api/playground/chat');
+        assert.equal(url, '/api/v1/playground/chat');
         assert.equal(options.signal, signal);
         assert.deepEqual(JSON.parse(options.body), { deployment: 'one', messages: [], readOnly: true });
         return new Response(new ReadableStream({
@@ -52,7 +52,7 @@ test('chat and confirmed tool resumption send the current CSRF cookie as a heade
     ];
     let call = 0;
     t.mock.method(globalThis, 'fetch', async (url, options) => {
-        assert.equal(url, '/api/playground/chat');
+        assert.equal(url, '/api/v1/playground/chat');
         assert.equal(options.method, 'POST');
         const headers = new Headers(options.headers);
         assert.equal(headers.get('X-Prism-CSRF'), call === 0 ? 'first/token' : 'rotated-token');

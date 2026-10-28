@@ -61,7 +61,6 @@ const sidebars: SidebarsConfig = {
           label: 'Modules',
           items: [
             'api-reference/modules/welcome',
-            'api-reference/modules/model-market',
             'api-reference/modules/deployments',
             'api-reference/modules/evaluation',
             'api-reference/modules/simulation',

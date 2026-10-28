@@ -15,7 +15,7 @@ from llm_d_lens.infrastructure.process import CommandResult
 @pytest.fixture
 def app():
     app = FastAPI()
-    app.include_router(sdk_discovery.router, prefix="/api/cluster")
+    app.include_router(sdk_discovery.router, prefix="/api/v1/cluster")
     return app
 
 
@@ -34,7 +34,7 @@ async def test_only_allowlisted_session_reads(app, monkeypatch, resource, args):
     read = AsyncMock(return_value=CommandResult((), 0, json.dumps({"items": []}), ""))
     monkeypatch.setattr(sdk_discovery, "run_kubectl", read)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/cluster/sessions/session-id/planning-discovery/{resource}")
+        response = await client.get(f"/api/v1/cluster/sessions/session-id/planning-discovery/{resource}")
     assert response.status_code == 200
     assert response.json() == {"result": {"items": []}}
     read.assert_awaited_once_with(args, timeout=10, cluster_id="session-id")
@@ -49,7 +49,7 @@ async def test_inactive_session_cannot_read(app, monkeypatch):
     read = AsyncMock()
     monkeypatch.setattr(sdk_discovery, "run_kubectl", read)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/cluster/sessions/not-a-session/planning-discovery/nodes")
+        response = await client.get("/api/v1/cluster/sessions/not-a-session/planning-discovery/nodes")
     assert response.status_code == 404
     read.assert_not_awaited()
 
@@ -69,7 +69,7 @@ async def test_read_failures_remain_null(app, monkeypatch, result):
     read = AsyncMock(side_effect=result) if isinstance(result, Exception) else AsyncMock(return_value=result)
     monkeypatch.setattr(sdk_discovery, "run_kubectl", read)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/cluster/sessions/session-id/planning-discovery/nodes")
+        response = await client.get("/api/v1/cluster/sessions/session-id/planning-discovery/nodes")
     assert response.json() == {"result": None}
 
 
@@ -78,7 +78,7 @@ async def test_arbitrary_resources_are_rejected(app, monkeypatch):
     read = AsyncMock()
     monkeypatch.setattr(sdk_discovery, "run_kubectl", read)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/cluster/sessions/session-id/planning-discovery/secrets")
+        response = await client.get("/api/v1/cluster/sessions/session-id/planning-discovery/secrets")
     assert response.status_code == 422
     read.assert_not_awaited()
 
@@ -99,7 +99,7 @@ async def test_real_session_validation_rejects_missing_or_unsafe_config(app, mon
     monkeypatch.setattr(sdk_discovery.sessions, "_SESSION_DIRECTORY", tmp_path)
     read = AsyncMock()
     monkeypatch.setattr(sdk_discovery, "run_kubectl", read)
-    route = f"/api/cluster/sessions/{session_id}/planning-discovery/nodes"
+    route = f"/api/v1/cluster/sessions/{session_id}/planning-discovery/nodes"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.get(route)).status_code == 404
         kubeconfig = tmp_path / f"{session_id}.yaml"

@@ -1819,7 +1819,7 @@
         "type": "object",
         "properties": {
           "clusterId": {
-            "description": "Restrict results to deployments on this cluster id (as returned by /api/cluster/clusters).",
+            "description": "Restrict results to deployments on this cluster id (as returned by /api/v1/cluster/clusters).",
             "type": "string",
             "minLength": 1,
             "maxLength": 64
@@ -1836,7 +1836,7 @@
         "type": "object",
         "properties": {
           "clusterId": {
-            "description": "Cluster id (as returned by /api/cluster/clusters) whose downloaded Software Versions define the catalog.",
+            "description": "Cluster id (as returned by /api/v1/cluster/clusters) whose downloaded Software Versions define the catalog.",
             "type": "string",
             "minLength": 1,
             "maxLength": 64
@@ -1891,8 +1891,8 @@
     }
   ],
   "intentionalSkips": [
-    "DELETE /api/cluster/port-forwards/{forward_id}",
-    "DELETE /api/cluster/sessions/{session_id}/port-forwards",
+    "DELETE /api/v1/cluster/port-forwards/{forward_id}",
+    "DELETE /api/v1/cluster/sessions/{session_id}/port-forwards",
     "DELETE /api/v1/clusters/{cluster_id}/access/{binding_id}",
     "DELETE /api/v1/groups/{group_id}",
     "DELETE /api/v1/groups/{group_id}/role-bindings/{binding_id}",
@@ -1902,10 +1902,11 @@
     "DELETE /api/v1/system/secret-key/old",
     "DELETE /api/v1/users/{user_id}",
     "DELETE /api/v1/users/{user_id}/role-bindings/{binding_id}",
-    "GET /api/cluster/endpoints",
-    "GET /api/cluster-overview/sessions/{session_id}",
-    "GET /api/cluster/sessions/{session_id}",
+    "GET /api/v1/cluster/endpoints",
+    "GET /api/v1/cluster-overview/sessions/{session_id}",
+    "GET /api/v1/cluster/sessions/{session_id}",
     "GET /api/health",
+    "GET /api/v1/health",
     "GET /api/v1/audit-logs",
     "GET /api/v1/auth/permissions",
     "GET /api/v1/auth/providers",
@@ -1936,13 +1937,14 @@
     "PATCH /api/v1/identity-providers/{provider_id}",
     "PATCH /api/v1/roles/{role_id}",
     "PATCH /api/v1/users/{user_id}",
-    "POST /api/agentic-deployments/{run_id}/refine/stream",
-    "POST /api/agentic-deployments/stream",
-    "POST /api/cluster-overview/sessions/{session_id}/disconnect",
-    "POST /api/cluster/port-forward",
+    "POST /api/v1/agentic-deployments/{run_id}/refine/stream",
+    "POST /api/v1/agentic-deployments/stream",
+    "POST /api/v1/cluster-overview/sessions/{session_id}/disconnect",
+    "POST /api/v1/cluster/port-forward",
     "POST /api/v1/auth/bootstrap",
     "POST /api/v1/auth/login",
     "POST /api/v1/auth/logout",
+    "POST /api/v1/auth/refresh",
     "POST /api/v1/auth/password",
     "POST /api/v1/capacity/estimate",
     "POST /api/v1/clusters/{cluster_id}/access",

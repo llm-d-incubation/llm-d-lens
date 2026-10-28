@@ -793,7 +793,7 @@ start_services() {
     start_one backend env \
         PRISM_MODEL_API_PUBLIC_HOST="$PRISM_MODEL_API_PUBLIC_HOST" \
         PRISM_GPU_PCI_ALLOWLIST="$PRISM_GPU_PCI_ALLOWLIST" \
-        PRISM_MCP_URL="$scheme://127.0.0.1:$BACKEND_PORT/api/mcp" \
+        PRISM_MCP_URL="$scheme://127.0.0.1:$BACKEND_PORT/api/v1/mcp" \
         PRISM_MCP_CA_FILE="${TLS_CERT_FILE:-}" \
         LENS_INTERNAL_AUTH_SECRET="$LENS_INTERNAL_AUTH_SECRET" \
         LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE="$authz_tls_insecure" \

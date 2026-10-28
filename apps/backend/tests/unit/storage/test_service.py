@@ -11,6 +11,9 @@ from llm_d_lens.storage.contracts import (
     NfsSpec,
     StorageVolume,
     StorageVolumeKind,
+    StorageVolumeListResponse,
+    StorageVolumeResourceStatusResponse,
+    StorageVolumeResponse,
     StorageVolumeStatus,
 )
 from llm_d_lens.storage.service import (
@@ -232,37 +235,20 @@ async def test_storage_resource_statuses_nests_bound_pv_under_pvc(monkeypatch):
 
     statuses = await storage_service.storage_resource_statuses([volume])
 
-    assert statuses == {
-        volume.id: {
-            "persistentVolumeClaims": [
-                {
-                    "name": "prism-storage-storage-abc",
-                    "namespace": "llm-d-bench-storage",
-                    "phase": "Bound",
-                    "capacity": "100Gi",
-                    "accessModes": ["ReadWriteMany"],
-                    "storageClassName": None,
-                    "volumeMode": "Filesystem",
-                    "createdAt": "2026-09-01T00:00:00Z",
-                    "uid": "pvc-uid",
-                    "volumeName": "prism-storage-storage-abc",
-                    "persistentVolume": {
-                        "name": "prism-storage-storage-abc",
-                        "namespace": None,
-                        "phase": "Bound",
-                        "capacity": "100Gi",
-                        "accessModes": ["ReadWriteMany"],
-                        "storageClassName": None,
-                        "volumeMode": "Filesystem",
-                        "createdAt": "2026-09-01T00:00:00Z",
-                        "uid": "pv-uid",
-                        "reclaimPolicy": "Retain",
-                        "source": {"type": "hostPath", "detail": "/mnt/models"},
-                    },
-                }
-            ],
-        }
-    }
+    assert isinstance(statuses, StorageVolumeResourceStatusResponse)
+    claim = statuses.items[volume.id].persistent_volume_claims[0]
+    assert claim.name == "prism-storage-storage-abc"
+    assert claim.namespace == "llm-d-bench-storage"
+    assert claim.phase == "Bound"
+    assert claim.capacity == "100Gi"
+    assert claim.access_modes == ["ReadWriteMany"]
+    assert claim.volume_name == "prism-storage-storage-abc"
+    assert claim.persistent_volume is not None
+    assert claim.persistent_volume.name == "prism-storage-storage-abc"
+    assert claim.persistent_volume.reclaim_policy == "Retain"
+    assert claim.persistent_volume.source is not None
+    assert claim.persistent_volume.source.type == "hostPath"
+    assert claim.persistent_volume.source.detail == "/mnt/models"
 
 
 @pytest.mark.asyncio
@@ -312,11 +298,13 @@ async def test_storage_resource_statuses_excludes_satellite_pvcs_and_pvs(monkeyp
     monkeypatch.setattr(storage_service, "list_resources", fake_list_resources)
 
     statuses = await storage_service.storage_resource_statuses([volume])
-    claims = statuses[volume.id]["persistentVolumeClaims"]
+    assert isinstance(statuses, StorageVolumeResourceStatusResponse)
+    claims = statuses.items[volume.id].persistent_volume_claims
 
     assert len(claims) == 1
-    assert claims[0]["namespace"] == "llm-d-bench-storage"
-    assert claims[0]["persistentVolume"]["name"] == "prism-storage-storage-abc"
+    assert claims[0].namespace == "llm-d-bench-storage"
+    assert claims[0].persistent_volume is not None
+    assert claims[0].persistent_volume.name == "prism-storage-storage-abc"
 
 
 @pytest.mark.asyncio
@@ -361,12 +349,13 @@ async def test_storage_resource_statuses_isolates_cluster_failures(monkeypatch):
     monkeypatch.setattr(storage_service, "list_resources", fake_list_resources)
 
     statuses = await storage_service.storage_resource_statuses([healthy, stale])
+    assert isinstance(statuses, StorageVolumeResourceStatusResponse)
 
-    assert len(statuses[healthy.id]["persistentVolumeClaims"]) == 1
-    assert (
-        statuses[healthy.id]["persistentVolumeClaims"][0]["persistentVolume"]["name"] == "prism-storage-storage-healthy"
-    )
-    assert statuses[stale.id]["persistentVolumeClaims"] == []
+    healthy_claims = statuses.items[healthy.id].persistent_volume_claims
+    assert len(healthy_claims) == 1
+    assert healthy_claims[0].persistent_volume is not None
+    assert healthy_claims[0].persistent_volume.name == "prism-storage-storage-healthy"
+    assert statuses.items[stale.id].persistent_volume_claims == []
 
 
 @pytest.mark.asyncio
@@ -664,6 +653,22 @@ async def test_get_ready_volume_returns_ready_volume(monkeypatch, tmp_path):
     monkeypatch.setattr(storage_service, "default_store", lambda: store)
     resolved = await get_ready_volume(volume.id, cluster_id="cluster-1")
     assert resolved.pvc_name == "prism-storage-abc"
+
+
+@pytest.mark.asyncio
+async def test_service_responses_return_concrete_response_models(monkeypatch, tmp_path):
+    store = StorageVolumeStore(tmp_path)
+    volume = _local_disk_volume()
+    store.create(volume)
+    service = StorageVolumeService(store)
+    monkeypatch.setattr(storage_service, "list_execution_refs", lambda volume_id: ["exec-1"])
+    monkeypatch.setattr(storage_service, "list_model_cache_refs", lambda volume_id: ["cache-1"])
+
+    responses = await service.responses([volume])
+    assert isinstance(responses, StorageVolumeListResponse)
+    assert isinstance(responses.items[0], StorageVolumeResponse)
+    assert responses.items[0].in_use_count == 1
+    assert responses.items[0].model_cache_count == 1
 
 
 @pytest.mark.asyncio

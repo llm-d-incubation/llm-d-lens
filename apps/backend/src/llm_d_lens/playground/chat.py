@@ -479,7 +479,7 @@ async def run_turn(request, body, emit):
     await emit("done", {})
 
 
-@router.post("/api/playground/chat")
+@router.post("/api/v1/playground/chat")
 async def chat(request: Request):
     try:
         body = await request.json()

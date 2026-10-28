@@ -44,7 +44,7 @@ async def require_internal_permission(request, path: str):
 
 
 async def validate_planning_session(request, session_id: str):
-    await require_internal_permission(request, f"/api/cluster-overview/sessions/{session_id}")
+    await require_internal_permission(request, f"/api/v1/cluster-overview/sessions/{session_id}")
     try:
         session = require_active_session(session_id)
     except ValueError as error:
@@ -57,7 +57,7 @@ async def load_guide_paths(request, selection: dict) -> dict:
     cluster_id = str(selection.get("clusterId") or "").strip()
     if selection.get("clusterSessionId"):
         session_id = selection["clusterSessionId"]
-        await require_internal_permission(request, f"/api/cluster-overview/sessions/{session_id}")
+        await require_internal_permission(request, f"/api/v1/cluster-overview/sessions/{session_id}")
         try:
             session = require_active_session(session_id)
         except ValueError as error:
@@ -67,7 +67,7 @@ async def load_guide_paths(request, selection: dict) -> dict:
         cluster_id = session.server_id
     if not cluster_id:
         raise GuideError("Select a cluster and download its Software Versions first")
-    await require_internal_permission(request, "/api/cluster/clusters")
+    await require_internal_permission(request, "/api/v1/cluster/clusters")
     require_cluster_access(current_principal(request), cluster_id)
     cluster = registry.get_cluster(cluster_id)
     if cluster is None:
@@ -383,7 +383,7 @@ async def discover_local_cluster(request, session_id=None):
     if session_id:
         session = require_active_session(session_id)
         require_cluster_access(current_principal(request), session.server_id)
-        await require_internal_permission(request, f"/api/cluster/sessions/{session_id}/planning-discovery/nodes")
+        await require_internal_permission(request, f"/api/v1/cluster/sessions/{session_id}/planning-discovery/nodes")
 
     async def query(argv):
         try:

@@ -17,7 +17,7 @@ from .service import service
 from .streaming import planning_stream_response
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/agentic-deployments", tags=["agentic-deployments"])
+router = APIRouter(prefix="/api/v1/agentic-deployments", tags=["agentic-deployments"])
 
 
 @router.post(

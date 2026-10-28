@@ -5,6 +5,10 @@
 Start with the requested file or a targeted `rg` search. Read its implementation,
 relevant callers and tests, then make the smallest compatible change. Reuse
 existing code before adding abstractions or dependencies. Honor the user's stack.
+Focused means avoiding unrelated changes, not stopping partway through a
+multi-part request. When the user names a set (all modules, all pages, every
+endpoint), that whole set is the task; do not treat each element as a finished
+task or stop after the first passing module.
 Do not read the whole capability catalog, design library or all skills by default.
 If the owner is unclear, search `.reuse/map.md` for the relevant entries only.
 
@@ -57,9 +61,12 @@ those inputs/dependencies remain unchanged; expand testing for shared contracts,
 failures or uncertain impact. Report actual checks and limitations concisely.
 `npm run verify:full` is a manual checkpoint, not the default for every task;
 usage and limits are in [CONTRIBUTING.md](CONTRIBUTING.md#periodic-full-local-validation).
-Read failed logs, not successful full logs. Stop when the requested behavior and
-affected checks pass; do not expand a finished task into a repository review. Do not claim full validation from a
-partial check or carry an old passing result across source/environment changes.
+Read failed logs, not successful full logs. Complete the full requested scope
+before stopping. Do not treat one passing module, page or test as completion when
+the request covers multiple items. Do not expand a finished task into an unrelated
+repository review, but do not narrow a multi-part request either. Intermediate
+checks may guide work but must not end the task. Do not claim full validation from
+a partial check or carry an old passing result across source/environment changes.
 
 Continue clear authorized work. Ask only when business meaning, compatibility,
 ownership or an exception remains unresolved after inspecting the relevant code.
@@ -80,6 +87,50 @@ internal, streaming, secret-bearing or otherwise unsuitable routes to
 `intentionalSkips` in `apps/backend/src/llm_d_lens/mcp/definitions.json`.
 The catalog implementation is `llm_d_lens.mcp.catalog`; special handlers are in
 `llm_d_lens.mcp.tools`. No generated Node server artifact is required.
+
+## REST and in-process Python SDK parity
+
+Any change to a REST route, request/response contract, permission, default, status
+code or behavior must update the matching in-process Python SDK surface in the same
+change:
+
+- `apps/backend/src/llm_d_lens/sdk/local.py`: typed namespace, `LocalModule`
+  binding or `lens.services` path;
+- permission resolution and tests under `apps/backend/tests/unit/sdk/`;
+- both `REST API` and `In-process Python SDK` tabs on the module page, in every
+  supported docs locale.
+
+Do not ship a REST-only change that leaves the SDK or its examples stale. An
+`In-process Python SDK` example must call `lens.*`; direct `llm_d_lens.*` service
+calls are an internal Python API, not the SDK. If an operation intentionally
+cannot be exposed in-process, record the reason in the SDK and docs instead of
+leaving a silent gap.
+
+Response-class coverage is part of the same contract. A route with
+`response_model=dict` or no `response_model` is not complete for SDK parity:
+replace it with a concrete Lens response class, or record why no class is
+appropriate. Adding `TypeAdapter(response_model)` normalization in the SDK without
+filling those route schemas is only a partial fix, not completion.
+
+Each domain module defines its public request and response classes in
+`models.py` (or the existing canonical models module). The REST handler, the
+Python service operation and the in-process Python SDK operation must share the
+same request class and the same response class:
+
+```text
+REST transport -> Request model -> service operation -> Response model -> HTTP JSON
+SDK context     -> Request model -> service operation -> Response model -> Python caller
+```
+
+The service operation is the single implementation. A router is only an HTTP
+adapter (path/query/form/header mapping, status codes, streaming); it must not
+rebuild a second response dict. The SDK is only an identity/permission adapter;
+it must not wrap dicts in a generic response class. Do not add
+`response_model=dict`, `_payload()` response projections, `LensResponse` /
+`LensListResponse` fallbacks, or `lens.services.*` examples for public
+operations. HTTP-only concerns (pagination transport, file downloads, event
+streams) may remain adapter-specific, but their domain request/response contract
+is still shared.
 
 ## Keep the docs site in sync
 

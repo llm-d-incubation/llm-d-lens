@@ -20,11 +20,19 @@ from typing import Any
 
 import yaml
 
+from llm_d_lens.auth.access import require_cluster_access, resource_readable, visible_cluster_ids
+from llm_d_lens.auth.context import context_principal
+from llm_d_lens.auth.contracts import Principal
+from llm_d_lens.auth.policy import authorize
 from llm_d_lens.configuration.manifest_facts import workload_roles
+from llm_d_lens.core.exceptions import ForbiddenError, NotFoundError
+from llm_d_lens.db.dao.deployment_batch import DeploymentBatchDao
 from llm_d_lens.deploy.application import deployment_run_manager
 from llm_d_lens.deploy.contracts import (
     DeploymentMetadata,
     DeploymentMetadataUpdateRequest,
+    DeploymentRunCreateRequest,
+    DeploymentRunStatus,
     DeploymentScaleRequest,
     DeploymentStatus,
     utcnow,
@@ -133,44 +141,11 @@ class DeploymentExecutionContext:
                 return total
         return max(int(self.replicas or 1), 1)
 
-    def api_payload(self) -> dict[str, Any]:
+    def api_payload(self) -> Any:
         """Project the execution for HTTP clients without leaking run/case ids."""
-        created_at = self.created_at
-        return {
-            "execution_id": self.execution_id,
-            "status": self.status,
-            "cluster_id": self.cluster_id,
-            "cluster_session_id": self.cluster_session_id,
-            "namespace": self.namespace,
-            "name": self.name,
-            "display_name": self.display_name,
-            "description": self.description,
-            "model": self.model,
-            "backend": self.backend,
-            "guide": self.guide,
-            "endpoint": self.endpoint,
-            "forwarded_endpoint": self.forwarded_endpoint,
-            "replicas": self.replicas,
-            "tensor_parallel_size": self.tensor_parallel_size,
-            "image": self.image,
-            "preserve_deployment": self.preserve_deployment,
-            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
-            "updated_at": _isoformat(self.updated_at),
-            "max_model_len": self.max_model_len,
-            "gpu_memory_utilization": self.gpu_memory_utilization,
-            "enable_prefix_caching": self.enable_prefix_caching,
-            "max_num_seqs": self.max_num_seqs,
-            "max_num_batched_tokens": self.max_num_batched_tokens,
-            "storage_type": self.storage_type,
-            "storage_volume_id": self.storage_volume_id,
-            "mount_path": self.mount_path,
-            "pvc_name": self.pvc_name,
-            "failure": self.failure,
-            "custom_parameters": self.custom_parameters or [],
-            "baseline_endpoint": self.baseline_endpoint,
-            "service_ref": self.service_ref,
-            "scale": self.scale,
-        }
+        from llm_d_lens.deploy.models import DeploymentExecutionResponse
+
+        return DeploymentExecutionResponse.from_context(self)
 
     def search_haystack(self) -> str:
         """Lower-cased text a deployment can be searched by."""
@@ -189,10 +164,6 @@ class DeploymentExecutionContext:
             )
             if value
         )
-
-
-def _isoformat(value: Any) -> Any:
-    return value.isoformat() if hasattr(value, "isoformat") else value
 
 
 def serving_metadata(case, execution) -> dict[str, Any]:
@@ -1075,3 +1046,147 @@ async def ensure_execution_endpoint(execution_id: str):
 
     context = get_execution_context(execution_id)
     return await resolve_deployment_endpoint(context.run_id, context.case_id)
+
+
+def _service_principal() -> Principal | None:
+    """Ambient principal for HTTP/local calls, or None for direct handler calls."""
+    return context_principal()
+
+
+_OWNER_UNSET = object()
+
+
+def _local_execution_owner(context: DeploymentExecutionContext):
+    return DeploymentBatchDao().owner_map([context.run_id]).get(context.run_id)
+
+
+def _local_execution_readable(
+    principal: Principal | None,
+    context: DeploymentExecutionContext,
+    permission: str,
+    owner: object = _OWNER_UNSET,
+) -> bool:
+    if principal is None:
+        return True
+    if owner is _OWNER_UNSET:
+        owner = _local_execution_owner(context)
+    owner_user_id, owner_group_id = owner or (None, None)
+    if context.run_id and resource_readable(
+        principal,
+        permission=permission,
+        resource_type="deployment_run",
+        resource_id=context.run_id,
+        cluster_id=context.cluster_id,
+        owner_user_id=owner_user_id,
+        owner_group_id=owner_group_id,
+    ):
+        return True
+    return resource_readable(
+        principal,
+        permission=permission,
+        resource_type="deployment_execution",
+        resource_id=context.execution_id,
+        cluster_id=context.cluster_id,
+        owner_user_id=owner_user_id,
+        owner_group_id=owner_group_id,
+    )
+
+
+def list_local_executions(
+    *,
+    status: DeploymentStatus | None = None,
+    statuses: list[DeploymentStatus] | None = None,
+    cluster_id: str = "",
+    query: str = "",
+    limit: int | None = None,
+) -> list[DeploymentExecutionContext]:
+    principal = _service_principal()
+    if principal is not None and not authorize(principal, "deployment:run:read").allowed:
+        raise ForbiddenError("deployment:run:read is required")
+    contexts = list_execution_contexts(
+        status=status,
+        statuses=statuses,
+        cluster_id=cluster_id,
+        query=query,
+        limit=limit,
+        allowed_cluster_ids=visible_cluster_ids(principal) if principal is not None else None,
+    )
+    if principal is None:
+        return contexts
+    owners = DeploymentBatchDao().owner_map([context.run_id for context in contexts])
+    return [
+        context
+        for context in contexts
+        if _local_execution_readable(principal, context, "deployment:run:read", owners.get(context.run_id))
+    ]
+
+
+def get_local_execution(execution_id: str) -> DeploymentExecutionContext:
+    principal = _service_principal()
+    context = find_execution_context(execution_id)
+    if context is None:
+        raise NotFoundError("deployment execution not found")
+    if not _local_execution_readable(principal, context, "deployment:run:read"):
+        raise ForbiddenError("deployment execution is not accessible")
+    return context
+
+
+async def create_local_run(
+    request: DeploymentRunCreateRequest | dict[str, Any],
+) -> Any:
+    principal = _service_principal()
+    if principal is not None and not authorize(principal, "deployment:run:create").allowed:
+        raise ForbiddenError("deployment:run:create is required")
+    request = DeploymentRunCreateRequest.model_validate(request) if isinstance(request, dict) else request
+    require_cluster_access(principal, request.provenance.get("cluster_server_id"))
+    return await deployment_run_manager.start_run(
+        request, owner_user_id=principal.user_id if principal is not None else None
+    )
+
+
+async def get_local_run(run_id: str):
+    principal = _service_principal()
+    run = _store.get_run(run_id)
+    if run is None:
+        raise NotFoundError("deployment run not found")
+    if principal is None:
+        return run
+    owner_user_id, owner_group_id = DeploymentBatchDao().owner_map([run.id]).get(run.id) or (None, None)
+    if not resource_readable(
+        principal,
+        permission="deployment:run:read",
+        resource_type="deployment_run",
+        resource_id=run.id,
+        cluster_id=run.provenance.get("cluster_server_id"),
+        owner_user_id=owner_user_id,
+        owner_group_id=owner_group_id,
+    ):
+        raise ForbiddenError("deployment run is not accessible")
+    return run
+
+
+async def wait_local_run(run_id: str, *, timeout: float = 1800, poll_interval: float = 5):
+    deadline = asyncio.get_running_loop().time() + max(timeout, 0)
+    while True:
+        run = await get_local_run(run_id)
+        if run.status in {
+            DeploymentRunStatus.SUCCEEDED,
+            DeploymentRunStatus.PARTIALLY_SUCCEEDED,
+            DeploymentRunStatus.FAILED,
+            DeploymentRunStatus.CLEANED,
+            DeploymentRunStatus.CANCELLED,
+        }:
+            return run
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"deployment run {run_id} did not finish within {timeout}s")
+        await asyncio.sleep(max(poll_interval, 0.1))
+
+
+async def delete_local_execution(execution_id: str, *, delete_namespace: bool = True) -> None:
+    principal = _service_principal()
+    context = find_execution_context(execution_id)
+    if context is None:
+        raise NotFoundError("deployment execution not found")
+    if not _local_execution_readable(principal, context, "deployment:execution:delete"):
+        raise ForbiddenError("deployment execution is not accessible")
+    await delete_execution(execution_id, delete_namespace=delete_namespace)

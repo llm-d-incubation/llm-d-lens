@@ -109,7 +109,7 @@ A new shareable/owned resource needs, in the same task:
 - Browser requests carry cookie + `x-prism-csrf` directly to the Python API.
 - MCP dispatch in `apps/backend/src/llm_d_lens/mcp/tools.py` signs internal ASGI
   requests for the current principal. Keep target route and resource permissions
-  enforced even when the outer `/api/mcp` route accepts either `mcp:tool:invoke`
+  enforced even when the outer `/api/v1/mcp` route accepts either `mcp:tool:invoke`
   or `playground:chat:use`. Playground uses the same tool dispatcher.
 - Never add a browser-reachable path to the public whitelist to make an internal
   call work; fix the call's auth instead.

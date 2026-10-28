@@ -9,9 +9,9 @@ export async function verifyModelMarketCacheReturn(page) {
             let body = { items: [] };
             if (url.pathname === '/api/v1/auth/session') {
                 body = { username: 'navigation-test', permissions: ['*:*:*'] };
-            } else if (url.pathname === '/api/cluster/clusters') {
+            } else if (url.pathname === '/api/v1/cluster/clusters') {
                 body = { items: [{ id: 'test-cluster', name: 'Navigation test cluster', ready: true }] };
-            } else if (url.pathname === '/api/cluster/overview') {
+            } else if (url.pathname === '/api/v1/cluster/overview') {
                 body = { kubernetes: { hardware: { gpuCount: 8, availableGpuCount: 8, vramBytes: 687194767360 } } };
             } else if (url.pathname === '/api/v1/storage/volumes') {
                 body = { items: window.__navigationTestVolumes };

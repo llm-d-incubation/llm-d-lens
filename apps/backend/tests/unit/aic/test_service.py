@@ -39,9 +39,10 @@ def test_search_routes_load_target_to_recommend_and_scales_replicas(monkeypatch,
     assert captured["isl"] == 4000
     assert captured["osl"] == 1000
     assert "total_gpus" not in captured
-    assert result.configs[0]["replicas"] == 3
-    assert result.configs[0]["num_total_gpus"] == 6
-    assert result.configs[0]["throughput_tokens_per_sec"] == 300
+    assert isinstance(result.configs[0], service.AICConfiguration)
+    assert result.configs[0].replicas == 3
+    assert result.configs[0].num_total_gpus == 6
+    assert result.configs[0].throughput_tokens_per_sec == 300
 
 
 def test_search_rejects_joint_load_targets():
@@ -92,10 +93,10 @@ def test_search_scales_both_pd_worker_pools():
             "tokens/s": 100,
         },
     )
-    assert result["prefill_replicas"] == 3
-    assert result["decode_replicas"] == 6
-    assert result["num_total_gpus"] == 12
-    assert result["throughput_tokens_per_sec"] == 300
+    assert result.prefill_replicas == 3
+    assert result.decode_replicas == 6
+    assert result.num_total_gpus == 12
+    assert result.throughput_tokens_per_sec == 300
 
 
 def test_search_rejects_closest_recommendation_that_exceeds_slo(monkeypatch):
@@ -207,7 +208,8 @@ def test_estimate_passes_exact_aggregated_topology_and_workload(monkeypatch):
         )
     )
 
-    assert result["ttft_ms"] == 120
+    assert isinstance(result, service.AICEstimateResponse)
+    assert result.ttft_ms == 120
     assert captured["total_gpus"] == 4
     assert captured["agg_tp_candidates"] == [2]
     assert captured["agg_num_gpu_candidates"] == [2]
@@ -311,7 +313,7 @@ def test_estimate_accepts_matching_disaggregated_topology(monkeypatch):
         )
     )
 
-    assert result["tpot_ms"] == 25
+    assert result.tpot_ms == 25
     assert captured["prefill_tp_candidates"] == [2]
     assert captured["decode_tp_candidates"] == [1]
     assert captured["total_gpus"] == 4
@@ -348,8 +350,8 @@ def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch)
         )
     )
 
-    assert result["ttft_ms"] == 45
-    assert result["throughput_tokens_per_sec"] == 150
+    assert result.ttft_ms == 45
+    assert result.throughput_tokens_per_sec == 150
     assert captured["isl"] == 1024
     assert captured["osl"] == 256
     assert captured["batch_size"] == 1
@@ -417,9 +419,9 @@ def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeyp
         )
     )
 
-    assert result["throughput_tokens_per_sec"] == 300
-    assert result["prefill_replicas"] == 2
-    assert result["decode_replicas"] == 3
+    assert result.throughput_tokens_per_sec == 300
+    assert result.prefill_replicas == 2
+    assert result.decode_replicas == 3
     assert captured["prefill_num_workers"] == 2
     assert captured["decode_num_workers"] == 3
     assert captured["isl"] == 1024 and captured["osl"] == 256
@@ -448,5 +450,30 @@ def test_estimate_without_targets_does_not_infer_multi_replica_throughput(monkey
         )
     )
 
-    assert result["replicas"] == 2
-    assert result["throughput_tokens_per_sec"] is None
+    assert result.replicas == 2
+    assert result.throughput_tokens_per_sec is None
+
+
+def test_router_declares_concrete_request_and_response_models():
+    from fastapi.routing import APIRoute
+
+    from llm_d_lens.aic import router as aic_router
+    from llm_d_lens.aic.models import (
+        AICEstimateResponse,
+        AICExperimentResponse,
+        AICSearchResponse,
+        AICSupportResponse,
+    )
+
+    models = {
+        ("POST", "/api/v1/aic/support"): AICSupportResponse,
+        ("POST", "/api/v1/aic/search"): AICSearchResponse,
+        ("POST", "/api/v1/aic/experiments"): AICExperimentResponse,
+        ("POST", "/api/v1/aic/estimate"): AICEstimateResponse,
+    }
+    for route in aic_router.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods:
+            if (method, route.path) in models:
+                assert route.response_model is models[(method, route.path)]

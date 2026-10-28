@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Iterator
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -71,6 +72,58 @@ class ClusterRecord(StrictModel):
     hf_token_secret: HfTokenSecretRef | None = Field(default=None, alias="hfTokenSecret")
     draft: bool = False
 
+    @classmethod
+    def from_cluster(cls, cluster: Any, *, ready: bool = False) -> ClusterRecord:
+        """Build the API representation of a registry cluster record."""
+        from llm_d_lens.cluster.deployment_source import (  # noqa: PLC0415
+            resolve_cluster_benchmark_source,
+            resolve_cluster_deployment_source,
+        )
+
+        try:
+            source = resolve_cluster_deployment_source(cluster)
+        except ValueError as error:
+            source = {"resolved_from": "unavailable", "error": str(error)}
+        try:
+            benchmark_source = resolve_cluster_benchmark_source(cluster)
+        except ValueError as error:
+            benchmark_source = {"resolved_from": "unavailable", "error": str(error)}
+        return cls(
+            id=cluster.id,
+            name=cluster.name,
+            description=cluster.description,
+            created_at=cluster.created_at,
+            ready=ready,
+            proxy=ProxyConfigDTO(
+                mode=cluster.proxy_mode,
+                httpProxy=cluster.http_proxy,
+                httpsProxy=cluster.https_proxy,
+                noProxy=cluster.no_proxy,
+            ),
+            llmDRef=cluster.llm_d_ref,
+            llmDBenchmarkRef=cluster.llm_d_lensmark_ref,
+            llmDRepoPath=cluster.llm_d_repo_path,
+            llmDBenchmarkRepoPath=cluster.llm_d_lensmark_repo_path,
+            gatewayProvider=cluster.gateway_provider,
+            gatewayNamespace=cluster.gateway_namespace,
+            gatewayName=cluster.gateway_name,
+            gatewayPublicUrl=cluster.gateway_public_url,
+            gatewayPort=cluster.gateway_port,
+            gatewayAuthzHost=cluster.gateway_authz_host,
+            inotifyMaxUserInstances=cluster.inotify_max_user_instances,
+            routerVersion=cluster.router_version,
+            gieVersion=cluster.gie_version,
+            ippVersion=cluster.ipp_version,
+            hfTokenSecret=(
+                HfTokenSecretRef(namespace=cluster.hf_token_secret_namespace, name=cluster.hf_token_secret_name)
+                if cluster.hf_token_secret_namespace and cluster.hf_token_secret_name
+                else None
+            ),
+            draft=cluster.draft,
+            deploymentSource=source,
+            benchmarkSource=benchmark_source,
+        )
+
 
 class ImagePrepullRequest(StrictModel):
     """Accelerators whose llm-d images should be pre-pulled onto every node."""
@@ -79,7 +132,7 @@ class ImagePrepullRequest(StrictModel):
 
 
 class ClusterSettingsUpdateRequest(StrictModel):
-    """``PATCH /api/cluster/clusters/{id}`` payload; every field is optional,
+    """``PATCH /api/v1/cluster/clusters/{id}`` payload; every field is optional,
     only supplied keys are changed. Covers both the wizard's Step 2/3 settings
     (plus the wizard's final "Finish" step flipping ``draft`` to ``False``)
     and the Clusters overview page's "Edit cluster" action (name/description/
@@ -109,6 +162,25 @@ class ClusterSettingsUpdateRequest(StrictModel):
     draft: bool | None = None
 
 
+class ClusterCreateRequest(StrictModel):
+    """``POST /api/v1/cluster/clusters`` multipart form mapped into one request model."""
+
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=4096)
+    kubeconfig: str = Field(repr=False)
+    proxy: ProxyConfigDTO = Field(default_factory=ProxyConfigDTO)
+    llm_d_ref: str | None = Field(default=None, alias="llmDRef")
+    llm_d_lensmark_ref: str | None = Field(default=None, alias="llmDBenchmarkRef")
+    gateway_provider: str | None = Field(default=None, alias="gatewayProvider")
+    gateway_namespace: str | None = Field(default=None, alias="gatewayNamespace")
+    gateway_name: str | None = Field(default=None, alias="gatewayName")
+    gateway_public_url: str | None = Field(default=None, alias="gatewayPublicUrl")
+    gateway_port: int | None = Field(default=None, alias="gatewayPort")
+    gateway_authz_host: str | None = Field(default=None, alias="gatewayAuthzHost")
+    inotify_max_user_instances: int = Field(default=8192, alias="inotifyMaxUserInstances")
+    draft: bool = False
+
+
 class HfTokenSecretCreateRequest(StrictModel):
     """Standalone "create an HF_TOKEN secret" request, decoupled from any
     Model Cache entry -- see docs/design/cluster-design.md#cluster-creation-wizard
@@ -122,7 +194,7 @@ class HfTokenSecretCreateRequest(StrictModel):
 
 
 class HfTokenSecretUpdateRequest(StrictModel):
-    """``PUT /api/cluster/clusters/{id}/hf-token-secret`` payload (Edit cluster).
+    """``PUT /api/v1/cluster/clusters/{id}/hf-token-secret`` payload (Edit cluster).
 
     Rotates the token stored in the cluster's existing HF_TOKEN Secret. Omit
     ``namespace``/``name`` to rewrite the Secret the cluster already points at
@@ -135,7 +207,7 @@ class HfTokenSecretUpdateRequest(StrictModel):
 
 
 class SoftwareDownloadRequest(StrictModel):
-    """``POST /api/cluster/clusters/{id}/software-downloads`` payload.
+    """``POST /api/v1/cluster/clusters/{id}/software-downloads`` payload.
 
     Kicks off (or reuses a cached) download for whichever refs are supplied;
     a ``None``/blank ref leaves that repo's download untouched."""
@@ -186,6 +258,111 @@ class NodeMaintenanceResponse(StrictModel):
 class CreateClusterResponse(StrictModel):
     cluster: ClusterRecord
     session_id: str | None = Field(default=None, alias="sessionId")
+
+
+# --- Cluster discovery and auxiliary status DTOs ---
+
+
+class LensHostsResponse(StrictModel):
+    items: list[str] = Field(default_factory=list)
+
+
+class GatewayPortCheckResponse(StrictModel):
+    available: bool
+    owner: str | None = None
+    reason: str | None = None
+
+
+class ImagePrepullNodeStatus(StrictModel):
+    node: str | None = None
+    phase: str | None = None
+    ready: bool = False
+    restarts: int = 0
+
+
+class ImagePrepullImageStatus(StrictModel):
+    name: str
+    ready: int = 0
+    desired: int = 0
+    state: Literal["pulling", "ready", "failed"] = "pulling"
+    message: str | None = None
+
+
+class ImagePrepullStatusResponse(StrictModel):
+    state: Literal["idle", "pulling", "ready", "failed"]
+    desired: int = 0
+    ready: int = 0
+    nodes: list[ImagePrepullNodeStatus] = Field(default_factory=list)
+    images: list[ImagePrepullImageStatus] = Field(default_factory=list)
+
+
+class GatewayCrdApplyResult(StrictModel):
+    ok: bool
+    message: str = ""
+
+
+class GatewayCrdsApplyResponse(StrictModel):
+    gateway_api: GatewayCrdApplyResult
+    gateway_api_inference_extension: GatewayCrdApplyResult
+
+    def items(self) -> Iterator[tuple[str, dict[str, Any]]]:
+        """Mapping-compatible view for existing Gateway operation logging."""
+        for name in ("gateway_api", "gateway_api_inference_extension"):
+            yield name, getattr(self, name).model_dump()
+
+
+class GatewayCrdsStatusResponse(StrictModel):
+    gateway_api: Literal["ready", "missing"]
+    gateway_api_inference_extension: Literal["ready", "missing"]
+
+
+class LwsStatusResponse(StrictModel):
+    ready: bool
+    crd: Literal["ready", "missing", "unknown"] = "unknown"
+    controller: Literal["ready", "missing", "unknown"] = "unknown"
+    version: str
+    namespace: str | None = None
+    message: str = ""
+
+
+class LwsInstallResponse(StrictModel):
+    ok: bool
+    ready: bool
+    crd: Literal["ready", "missing", "unknown"] | None = None
+    controller: Literal["ready", "missing", "unknown"] | None = None
+    version: str | None = None
+    namespace: str | None = None
+    message: str = ""
+
+
+class KubernetesVersionResponse(StrictModel):
+    reachable: bool
+    error: str | None = None
+    version: str | None = None
+    min_k8s_version: str
+    supported: bool | None = None
+
+
+class ModelSecretSummary(StrictModel):
+    namespace: str
+    name: str
+    created_at: str = Field(alias="createdAt")
+
+
+class ModelSecretsResponse(StrictModel):
+    host_managed_available: bool = Field(alias="hostManagedAvailable")
+    items: list[ModelSecretSummary] = Field(default_factory=list)
+
+
+class OverviewSessionResponse(StrictModel):
+    id: str
+    server_id: str = Field(alias="serverId")
+    created_at: str = Field(alias="createdAt")
+    status: str
+
+
+class PlanningDiscoveryResponse(StrictModel):
+    result: dict[str, Any] | None = None
 
 
 # --- Kubernetes overview DTOs ---

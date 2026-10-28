@@ -35,6 +35,12 @@ from llm_d_lens.deploy.contracts import (
     DeploymentStatus,
     VersionedPayload,
 )
+from llm_d_lens.deploy.models import (
+    DeploymentCaseResponse,
+    DeploymentCaseSummary,
+    DeploymentExecutionListResponse,
+    DeploymentExecutionResponse,
+)
 from llm_d_lens.deploy.run_store import JsonDeploymentRunStore
 
 router = importlib.import_module("llm_d_lens.deploy.router")
@@ -277,13 +283,15 @@ def _payload(response):
 async def test_list_returns_all_deployments_with_metadata_fields(deployment_store):
     response = await router.list_executions()
 
-    identifiers = [item["execution_id"] for item in response["items"]]
+    assert isinstance(response, DeploymentExecutionListResponse)
+    identifiers = [item.execution_id for item in response.items]
     assert sorted(identifiers) == ["execution-cleaned", "execution-ready"]
-    for item in response["items"]:
-        assert item["display_name"] == ""
-        assert item["description"] == ""
-        assert "run_id" not in item
-        assert "case_id" not in item
+    for item in response.items:
+        assert isinstance(item, DeploymentExecutionResponse)
+        assert item.display_name == ""
+        assert item.description == ""
+        assert "run_id" not in item.model_dump()
+        assert "case_id" not in item.model_dump()
 
 
 @pytest.mark.asyncio
@@ -296,9 +304,23 @@ async def test_list_filters_by_query_across_metadata_and_serving_facts(deploymen
     by_namespace = await router.list_executions(query="qwen-cleaned")
     by_model = await router.list_executions(query="qwen3-0.6b")
 
-    assert [item["execution_id"] for item in by_display_name["items"]] == ["execution-ready"]
-    assert [item["execution_id"] for item in by_namespace["items"]] == ["execution-cleaned"]
-    assert len(by_model["items"]) == 2
+    assert [item.execution_id for item in by_display_name.items] == ["execution-ready"]
+    assert [item.execution_id for item in by_namespace.items] == ["execution-cleaned"]
+    assert len(by_model.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_case_and_cluster_routes_return_shared_models(deployment_store):
+    case = await router.get_case("run-1", "case-0")
+    assert isinstance(case, DeploymentCaseResponse)
+    assert case.case.id == "case-0"
+    assert case.execution.execution_id == "execution-ready"
+    assert case.deployment.name == "qwen-0"
+
+    cluster_cases = await router.list_cluster_deployments("cluster-1")
+    assert cluster_cases
+    assert all(isinstance(item, DeploymentCaseSummary) for item in cluster_cases)
+    assert {item.case_id for item in cluster_cases} == {"case-0", "case-1"}
 
 
 @pytest.mark.asyncio
@@ -307,9 +329,9 @@ async def test_list_filters_by_multiple_statuses_and_limit(deployment_store):
     ready_only = await router.list_executions(statuses=[DeploymentStatus.READY])
     limited = await router.list_executions(limit=1)
 
-    assert len(both["items"]) == 2
-    assert [item["execution_id"] for item in ready_only["items"]] == ["execution-ready"]
-    assert len(limited["items"]) == 1
+    assert len(both.items) == 2
+    assert [item.execution_id for item in ready_only.items] == ["execution-ready"]
+    assert len(limited.items) == 1
 
 
 @pytest.mark.asyncio
@@ -320,8 +342,9 @@ async def test_patch_updates_only_supplied_fields(deployment_store):
     )
     response = await router.patch_execution("execution-ready", DeploymentMetadataUpdateRequest(description="Second"))
 
-    assert response["display_name"] == "Qwen production"
-    assert response["description"] == "Second"
+    assert isinstance(response, DeploymentExecutionResponse)
+    assert response.display_name == "Qwen production"
+    assert response.description == "Second"
     assert deployment_store.get_execution("execution-ready").metadata.display_name == "Qwen production"
 
 
@@ -330,7 +353,7 @@ async def test_patch_can_clear_a_field(deployment_store):
     await router.patch_execution("execution-ready", DeploymentMetadataUpdateRequest(description="temporary"))
     response = await router.patch_execution("execution-ready", DeploymentMetadataUpdateRequest(description=""))
 
-    assert response["description"] == ""
+    assert response.description == ""
 
 
 @pytest.mark.asyncio
@@ -340,9 +363,9 @@ async def test_patch_never_changes_runtime_facts(deployment_store):
     response = await router.patch_execution("execution-ready", DeploymentMetadataUpdateRequest(display_name="renamed"))
     after = deployment_store.get_execution("execution-ready")
 
-    assert response["name"] == "qwen-0"
-    assert response["namespace"] == "qwen-ready"
-    assert response["status"] == "ready"
+    assert response.name == "qwen-0"
+    assert response.namespace == "qwen-ready"
+    assert response.status == "ready"
     assert after.namespace == before.namespace
     assert after.status == before.status
     assert after.endpoint == before.endpoint
@@ -877,8 +900,8 @@ async def test_scale_route_returns_updated_execution(deployment_store, monkeypat
 
     response = await router.scale_execution("execution-ready", DeploymentScaleRequest(decode_replicas=2))
 
-    assert response["scale"]["decodeReplicas"] == 2
-    assert response["replicas"] == 2
+    assert response.scale["decodeReplicas"] == 2
+    assert response.replicas == 2
 
 
 def _disaggregated_set_document(*, slices=2, prefill=4, decode=1, external_prefill=False, external_decode=False):

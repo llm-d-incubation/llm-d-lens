@@ -61,6 +61,17 @@ class AuthSettings:
     #: ``secret_key`` when decrypting stored provider secrets (design §12).
     old_secret_keys: tuple[str, ...] = ()
     internal_auth_secret: str = ""
+    #: Dedicated access-token signing key. When empty, a stable key is derived
+    #: from ``secret_key`` (or the persisted master key) so existing installs
+    #: keep working; production should set this explicitly.
+    access_token_secret: str = ""
+    old_access_token_secrets: tuple[str, ...] = ()
+    access_token_ttl_seconds: int = 1800
+    access_token_audience: str = "lens-api"  # noqa: S105 - audience name, not a credential
+    #: Keep cookie + CSRF authentication available during migration.
+    cookie_fallback: bool = True
+    #: Accept an opaque session token in the Bearer header during migration.
+    accept_legacy_opaque_bearer: bool = True
     # Absolute cap on a session's lifetime, independent of activity (prevents
     # infinite sliding renewal). Deliberately much larger than the idle
     # timeout below: the practical "log me out" signal for an active user is
@@ -102,6 +113,12 @@ class AuthSettings:
             secret_key=os.environ.get("LENS_SECRET_KEY", ""),
             old_secret_keys=_env_key_list("LENS_SECRET_KEYS_OLD"),
             internal_auth_secret=os.environ.get("LENS_INTERNAL_AUTH_SECRET", ""),
+            access_token_secret=os.environ.get("LENS_AUTH_JWT_SECRET", ""),
+            old_access_token_secrets=_env_key_list("LENS_AUTH_JWT_SECRETS_OLD"),
+            access_token_ttl_seconds=_env_int("PRISM_ACCESS_TOKEN_TTL_SECONDS", 1800),
+            access_token_audience=os.environ.get("PRISM_ACCESS_TOKEN_AUDIENCE", "lens-api"),
+            cookie_fallback=_env_bool("PRISM_AUTH_COOKIE_FALLBACK", True),
+            accept_legacy_opaque_bearer=_env_bool("PRISM_AUTH_LEGACY_OPAQUE_BEARER", True),
             session_ttl_seconds=_env_int("PRISM_SESSION_TTL_SECONDS", 43200),
             session_idle_seconds=_env_int("PRISM_SESSION_IDLE_SECONDS", 1800),
             remember_session_ttl_seconds=_env_int("PRISM_REMEMBER_SESSION_TTL_SECONDS", 2592000),
@@ -127,7 +144,13 @@ class AuthSettings:
 
     def as_public_dict(self) -> dict[str, Any]:
         """Non-sensitive subset safe to log or return."""
-        hidden = {"secret_key", "old_secret_keys", "internal_auth_secret"}
+        hidden = {
+            "secret_key",
+            "old_secret_keys",
+            "internal_auth_secret",
+            "access_token_secret",
+            "old_access_token_secrets",
+        }
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in hidden}
 
 

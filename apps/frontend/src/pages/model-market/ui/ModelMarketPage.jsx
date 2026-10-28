@@ -127,7 +127,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
 
     const loadClusters = useCallback(async () => {
         try {
-            const payload = await requestJson('/api/cluster/clusters');
+            const payload = await requestJson('/api/v1/cluster/clusters');
             const items = payload.items || [];
             setClusters(items);
             const preferredClusterId = pendingCluster && items.some((item) => item.id === pendingCluster)
@@ -185,7 +185,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
             return undefined;
         }
         let cancelled = false;
-        requestJson(`/api/cluster/overview?clusterId=${encodeURIComponent(cluster)}`)
+        requestJson(`/api/v1/cluster/overview?clusterId=${encodeURIComponent(cluster)}`)
             .then((payload) => {
                 if (!cancelled) {
                     setHardware(payload.kubernetes?.hardware || null);

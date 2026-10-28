@@ -1,1623 +1,379 @@
 ---
 title: 部署
-description: Lens 部署功能背后的主要部署运行、执行和用例 API。
+description: 使用 REST API 或进程内 Python SDK 启动、查看和清理模型部署。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-在为部署规划指定操作者偏好时，请使用英文，例如
-`prefer prefix cache`（偏好前缀缓存）、`more GPU for performance`（更多 GPU 以提升性能）
-或 `use fewer GPU resources`（使用更少的 GPU 资源）。确定性规划器只匹配英文偏好关键词；
-不再支持中文关键词别名。
+Lens Deploy 会将已经渲染好的部署配置运行到 Kubernetes 集群，并跟踪每个运行、用例和执行。使用本模块可以部署已保存的配置产物、启动 Standard vLLM 服务、查看发布状态、连接就绪端点并清理资源。这里也包含配置准备端点，因为它们用于生成部署所消费的产物。
 
-## Python 领域契约
+## 快速开始
 
-`llm_d_lens.deploy.contracts` 中的模型与
-`llm_d_lens.deploy.service.DeploymentService` 协议定义 Configuration 到 Deploy
-的内部边界，不是额外的 HTTP 端点。Configuration 负责不可变配置产物的校验和生成，
-Deploy 负责提供方执行与生命周期证据；Evaluation 负责工作负载校验和基准执行，
-Simulation 不负责部署生命周期。
+启动一个 Standard vLLM 服务。模型必须已存在于已注册的 Model Cache 存储卷中并处于就绪状态。
 
-### 命令与不可变产物
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
 
-| 契约 | 字段与约束 |
-| --- | --- |
-| `VersionedPayload` | 非空 `schema_version`；对象 `value` 默认为 `{}`；封装本身不规定生产方管理的字段。 |
-| `ConfigurationArtifact` | `artifact_id` 默认为 UUID；`schema_version`、`kind`、`provider_ref`、`checksum` 非空；`media_type` 默认为 `application/yaml`；必须至少提供 `content` 或 `content_ref`。 |
-| `DeploymentCreateRequest` | UUID `request_id`；`input_schema_version="v1"`；非空 `configuration_artifacts`；`deployment_policy` 默认为非 null 的 `VersionedPayload(schema_version="v1", value={})`；可选 `cluster_snapshot_ref`/`cluster_snapshot`；对象 `provenance`。 |
-| `DeploymentKillRequest` | UUID `request_id`；`input_schema_version="v1"`；必填非空 `execution_id`；可选 `expected_namespace`/`reason`；对象 `provenance`。 |
-| `DeploymentArtifact` | UUID `artifact_id`；非空 `artifact_hash` 和 `configuration_artifact_ids`；可选 `source_ref`、`manifest_ref`、`manifest_checksum`、`values_checksum`；必填 `rendered_payload`；`created_at`。 |
-
-`provider_ref` 选择部署提供方，不转移配置所有权。当前
-`GuideAdapterDeploymentService` 比通用 DTO 的限制更严格：每次 create 必须提供
-**恰好一个包含内联 JSON 对象的产物**，且 `media_type="application/json"`。
-运行规划器会将公开的运行请求拆分为 Case；不能直接向该适配器传入通用 YAML
-或只有内容引用的产物并假定它支持。
-
-`create(request, *, model_token=None, on_initial_execution=None)` 返回
-`DeploymentExecution`；运行时绑定不改变配置所有权。
-`kill(request, execution)` 在清理前验证执行 ID、可选的预期命名空间，以及该服务
-所管理的提供方状态，不接受任意资源选择器。
-
-### RuntimeClass 发现与策略
-
-`GET /api/v1/deployments/runtime-classes?cluster_id=CLUSTER_ID` 要求部署读取权限和目标
-集群访问权限。可选的 `accelerator`、`access_mode` 用于查询已注册 profile 的建议值。
-返回 `items`（`name`、`handler`、`scheduling`、`overhead`、`matching_nodes`）、
-`profile_suggestion`、`available_suggestion`、`requirement="unknown"`、
-`node_runtime_readiness="unknown"` 和 `warnings`。Kubernetes 连接或读取权限失败返回
-HTTP 503，不会伪装成空列表；未知硬件或访问模式返回 422，Lens 授权失败返回 403。
-
-在 `POST /api/v1/deployments/runs` 中指定 `runtime_binding.runtime_class`：
+```bash
+curl -sX POST http://127.0.0.1:3000/api/v1/deployments/standard-vllm-runs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-8B",
+    "deployment_name": "qwen3-standard",
+    "cluster_session_id": "<cluster-session-id>",
+    "replicas": 1,
+    "tensor_parallel_size": 1,
+    "storage_volume_id": "<model-cache-volume-id>"
+  }'
+```
 
 ```json
-{"runtime_binding": {"runtime_class": {"mode": "named", "name": "custom-runtime"}}}
+{
+  "id": "<run-id>",
+  "status": "queued",
+  "cases": []
+}
 ```
 
-Python 对应 `llm_d_lens.deploy.contracts` 中的
-`RuntimeBinding(runtime_class=RuntimeClassPolicy(...))`。Standard 和 Agentic 创建请求
-通过顶层 `runtime_class` 接受同一策略。
-
-- `auto`：保留并校验清单已有的显式类；否则仅在目标集群提供 profile 访问模式建议的类时
-  使用它，没有可用建议时省略 `runtimeClassName`。
-- `node-default`：明确移除 `runtimeClassName`，使用节点默认运行时；此模式不依赖
-  RuntimeClass 发现权限，也不验证设备注入是否可用。
-- `named`：必须提供合法 DNS 子域格式的 `name`，并校验目标集群是否提供该类。
-  类缺失或与 Pod 节点选择器、节点名称冲突时，在修改集群前失败。
-
-省略运行时覆盖时沿用配置的 `provenance.runtime_class`，未保存偏好时默认 `auto`。
-显式 `auto` 会覆盖已保存偏好。选择保存在部署 Case policy 中，供重试和恢复沿用。
-五种模型 provider 共用部署适配器，生成新的部署产物，不改写原始 Configuration 或已有
-执行；仅路由的 Pod 不受影响。离线渲染不再注入未经集群验证的 profile 默认类。
-报告位于 `artifact.rendered_payload.value.deployment_contract.runtimeClass`。
-
-类存在、节点选择器匹配，不代表必须使用该类，也不能证明各节点的 handler、CDI、驱动
-或完整调度约束已就绪。不能仅凭 device-plugin 或 DRA 判断是否需要 RuntimeClass。
-只有确认集群默认运行时已经提供设备访问时，才应选择节点默认模式。自动和指定名称模式
-在部署时依赖可解析的显式目标集群；离线 provider 渲染不构成集群验证。
-
-### 执行、观察与证据
-
-普通 provider 渲染会把各角色的 `maxModelLen`、`maxNumSeqs`、
-`gpuMemoryUtilization`、`blockSize` 和 `maxNumBatchedTokens` 映射为对应的 vLLM 参数。
-P/D 分别使用 `prefill` 和 `decode`；其他 provider 使用 `decode`
-（`precise-prefix-cache-routing` 也接受 `serving`）。角色未指定长度时，
-使用 `model.maxModelLen`。显式整数控制项必须为正整数；
-`gpuMemoryUtilization` 必须为有限数，且大于零、不超过一。
-非法值会使验证或渲染失败，不会静默回退。匹配目标角色的 `customParameters`
-覆盖结构化控制项。普通渲染会替换 `--name=value` 和 `--name value` 两种形式；
-省略的字段保留 Guide 默认值。精确发布的 `officialGuide` 清单继续走现有清单验证路径，
-不会由普通 provider 参数映射重写。
-
-`DeploymentExecution` 包含 `execution_id`、`request_id`、`status`、`artifact`、
-`configuration_artifacts`、可选 `endpoint`/`namespace`/`resource_snapshot`、
-`provenance`、`evidence_refs`、可选版本化 `diagnostics` 和时间戳。
-当前还包含 `forwarded_endpoint`、`monitoring_setup`（安装审计，不是实时监控状态）、
-`data_plane`，以及与来源证据分离的可编辑描述性
-`metadata`（`display_name`、`description`）。
-
-完整的 Run、Case、Execution 状态枚举见下文。`ready` 执行必须具有
-`DeploymentEndpoint`，包含 `url`、`protocol="http"` 和可选
-`service_ref`、`model_ref`、`baseline_url`。端点元数据不得包含凭据、
-kubeconfig 或授权值。
-
-共享内存检查结果保存在
-`artifact.rendered_payload.value.deployment_contract.sharedMemory`，并复制到
-`diagnostics.value.snapshot.shared_memory`。报告包含 `defaultSizeLimit`（`4Gi`）、
-`addedMounts`、各容器的 `mounts`、`warnings`，以及共享内存处理阶段的
-`manifestChecksum`（在后续放置和追踪处理之前）。普通渲染会补充模型容器缺少的
-`/dev/shm` 挂载；已有挂载和主机 IPC 设置保持不变。发布的 `officialGuide` 清单
-只检查，不修改共享内存配置。警告也会写入日志；无效或重复挂载绑定会使渲染失败。
-这不会修改传入的 Configuration 产物。
-
-`get(execution_id)` 返回 `DeploymentExecution`，而非另一套状态 DTO。
-具体服务查询内存中的执行状态，未知 ID 会抛出 `KeyError`，它本身不是数据库查询。
-Worker/DAO 边界负责持久化记录并在需要时恢复执行上下文。协议还提供
-`restore_execution`、`refresh_diagnostics`、`stop` 和 `clean`；
-外部客户端应使用下方经过认证的 REST 操作。
-
-`get_logs(DeploymentLogRequest(...))` 返回独立于执行元数据的 `DeploymentLogPage`：
-
-- 请求字段：`execution_id`、可选非负整数字符串 `cursor`、范围 1 到 1000 的
-  `limit`（默认 100）、`follow=False`、`sources=[]`。
-- 当前来源为 `workload` 和 `events`，不是任意 Kubernetes 选择器。
-  日志条目包含 `timestamp`、`source`、`message` 和可选 `severity`。
-- 响应字段：`execution_id`、`entries`、`next_cursor`、`complete`、`evidence_refs`。
-  `follow=True` 会设置 `complete=False`，但方法仍只返回一页，不是流式迭代器，
-  也不保证等待新日志。
-- 归档诊断由 `ExecutionLogArchive` 管理，引用格式为
-  `deployment-log://<execution_id>/archive`。证据文件与数据库记录分开保留；
-  参见[存储设置](/environment-variables)。保留的快照是局部诊断，不是完整集群日志历史。
-
-### 消费方投影
-
-这些是纯 DTO 辅助方法，不执行生命周期操作或 REST 权限检查。
-`benchmark_input()` 要求执行处于 `ready` 且具有端点，否则抛出 `ValueError`；
-输出执行 ID、产物、端点、命名空间和来源证据。
-`simulation_input()` 接受任意执行状态，并额外输出部署状态和可选资源快照/端点；
-它保留执行时的证据，不用当前可变集群状态替换。当前 Evaluation/Simulation
-路由并不直接调用这两个辅助方法，不能将投影描述为它们实际的请求 API。
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.deploy.contracts import (
-    BenchmarkDeploymentInput,
-    DeploymentExecution,
-    SimulationDeploymentInput,
-)
-
-
-def benchmark_projection(execution: DeploymentExecution) -> BenchmarkDeploymentInput:
-    return execution.benchmark_input()
-
-
-def simulation_projection(execution: DeploymentExecution) -> SimulationDeploymentInput:
-    return execution.simulation_input()
-```
-
-## 后端 API
-
-Guide 兼容端点保留 `{ "error": "..." }` 响应结构。
-预期的校验失败保留可操作的错误提示及状态码。
-目录加载和准备阶段的非预期错误返回通用 `502` 响应；
-规划阶段的非预期错误返回通用 `500` 响应，并保留 `Server-Timing`。
-异常详情仅记录在服务端日志中，不返回浏览器。
-
-### 准备 Guide 源码
-
-`POST /api/guide-planning/prepare` 接受 `guide`、`accelerator`、`modelServer`、
-`guideVariant` 和选定的 `clusterId`。它准备官方源码但不部署，返回提交标识及从清单解析的能力：
-
-```json
-{"ready": true, "commit": "selected-source-commit", "capabilities": {"cacheCpuGiB": false, "rdmaNicCount": true}}
-```
-
-布尔值表示是否支持 CPU 缓存修改以及是否存在匹配硬件 profile 的 NIC 声明，
-不依赖变体名称。处理函数为 `llm_d_lens.deploy.guide_planning.prepare`，
-源码加载位于 `llm_d_lens.deploy.guide_sources`。部署提供方复用 `guide_overlays`
-和 `llm_d_lens.hardware.resolver.deployment_mode(profile, access_mode)`。
-
-当前单仓库启动和 Lens 存储根目录参见[安装](/installation)及
-[存储环境设置](/environment-variables)。旧 `.llm-d-bench/deploy` 和主机专属的
-`/root/.llm_d_lens/run_store` 不再是当前存储契约。
-执行发现使用 `execution_id` 作为跨模块引用，列表查询不会建立端口转发。
-需要主机可达地址时应调用执行端点连接操作，不能假定持久化的集群内地址或旧隧道仍然可达。
-
-| 记录 | 生命周期状态 |
-| --- | --- |
-| Run | `queued`、`running`、`succeeded`、`partially_succeeded`、`failed`、`cleaned`、`cancelling`、`cancelled` |
-| Case | `queued`、`rendering`、`deploying`、`ready`、`failed`、`stopped`、`cancelling`、`cancelled`、`cleaned`、`cleaned_up` |
-| Execution | `draft`、`validated`、`rendered`、`deploying`、`ready`、`failed`、`rolling_back`、`rolled_back`、`cleaned`、`cleaned_up` |
-
-停止的 Case 对应 `rolled_back` Execution，两者不是同一个状态枚举。
-评测要求执行处于 ready、有端点且集群会话有效。下方 worker 示例在已配置的 Lens 后端内运行；
-外部客户端应使用已认证的 HTTP，以执行路由权限和资源范围校验。
-
-智能体创建和细化流使用 `llm_d_lens.agentic.streaming.planning_stream_response`。
-这些路由保留了主体解析、预期错误分类以及它们现有的通用错误信息。
-流会先发出 `progress`，然后是 `complete` 或 `error`；断开连接时的清理
-操作会取消并等待尚未完成的规划。网关操作/日志流是单独处理的。
-
-Agentic 的生成器和规划器用户消息均以完整用户偏好开头，随后才是 JSON 上下文。
-提示词的优先级为：平台和硬件有效性、明确用户要求、软偏好、证据与候选多样性。
-多样性不得引入用户禁止的拓扑，最终可以返回少于三个方案。
-这是提示词约束，并不等同于服务端具备通用的自然语言硬约束解析能力。
-
-规划快照（schema version 2）完整保留 `request.planner_prompt`，不做内容脱敏。
-`planner_prompt_present` 仅作为兼容性标志保留，不再替代原文。
-运行记录的 `generator_requests` 和 `planner_requests` 保存每一次实际 HTTP 尝试
-最终发送的提供方原生请求体、原始响应、时间戳、HTTP 状态与错误类型，包括重试。
-快照中对应字段为 `generator.requests` 和 `planner.requests`。
-阶段审计文件位于 `session-artifacts/agentic-planning/<run_id>/requests/`，
-在发送前和完成后落盘，因此取消、失败或未生成最终运行记录时仍可排查。
-不记录认证头和 API Key；完整提示词和工具上下文属于私有应用数据。
-审计只适用于修改后的新请求，无法补回过去没有记录的交互。
-
-部署相关功能位于 `llm_d_lens/deploy/router.py` 中的 FastAPI 路由下，
-前缀为 `/api/v1/deployments`。
-
-优化路由和精确路由的能力元数据复用了 `llm_d_lens.deploy.capabilities`
-中的 `shared_prefix_routing_workload()`。每个场景和推荐的工作负载都会
-获得各自独立的嵌套值；提供方专属的基线和目标保持不变。精确提供方的
-校准和模型发现共享惰性的 modelserver 调用遍历逻辑，同时各自保留了
-自己的"取最后一个值"和"取第一个模型"选择规则。
-
-Agentic 候选提交接受 `optimized-baseline`、`pd-disaggregation`、`tiered-prefix-cache`
-和 `precise-prefix-cache-routing`；生成器 schema 拒绝 `baseline-vllm`，规划器排序也会
-排除它。AIC 聚合推荐映射到 `optimized-baseline`，包括负载目标和宽松锚点路径。
-
-智能体规划会针对每个经过校验的 optimized-baseline 和
-pd-disaggregation 候选方案，根据其工作负载和 GPU 拓扑结构，分别估算
-缺失的精确 AIC 预测值。候选方案的估算值会以 `aic_estimate` 的形式
-提供给 AI 评分；如果估算值不可用，则保持为未知状态，而不是一种
-性能或 SLO 保证。智能体估算不会沿用原始搜索的 TTFT/TPOT 目标；
-它们只是在没有 SLO 过滤的情况下，对固定的拓扑结构和工作负载进行校验。
-当失败的生成器没有留下任何工具调用轨迹时，生成器回退逻辑也会使用
-已解析的工作负载，对内置的前三个候选方案进行估算。不受支持或不可用的
-拓扑结构保持为未知状态。宽松 AIC 搜索会接受任何不超过可用 GPU
-预算的完整配置。它的预测结果并不能确立对原始 SLO 的符合性。
-即使生成器只建议了一个更小的拓扑结构，智能体仍会将宽松的锚点方案
-保留为一个经过校验的候选方案，然后估算其精确的拓扑结构和工作负载。
-已知估算值未能达到原始延迟目标的候选方案会被标记为 `not_satisfied`；
-在同样未达标的候选方案中，相对目标偏差更小的方案排名会优先于
-GPU 节省量更大的方案。未知的估算值不会被视为失败。
-当外部规划器对多个候选方案进行评分时，其选择理由会根据提供的
-规划事实，解释为什么每一个评分较低的返回候选方案排在最高选择之后。
-只有返回的前三个候选方案会被评分；对于该集合之外的候选方案，
-不会推断出任何理由。
-
-### 搜索或估算 AIC 负载容量
-
-上文的 MCP 生成和普通 estimate 回退行为适用于未提供负载目标的请求。
-Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包括普通候选网格之外的副本数。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/aic/search`**
-
-    `mean_input_tokens` 默认 `4000`，`mean_output_tokens` 默认 `1000`，与 AIC 原生
-    search/recommend 一致。可以提供正数 `target_concurrency` 或 `target_request_rate`
-    （每秒请求数），二选一；两项均不提供时保留固定 GPU 数搜索。
-    同时提供会被拒绝，错误中会明确说明 AIC 不支持联合负载目标。
-    Agentic 将 `planning_facts.workload_profile.concurrency` 和 `.request_rate`
-    映射到这些字段；QPS 和 request rate 是同一项。
-
-    存在负载目标时，`gpu_count` 是 Lens 的验收预算，不传给原生 recommend。
-    Lens 会扩展推荐的各 worker 池，只接受所需 GPU 不超预算且满足 TTFT/TPOT 目标
-    （原生默认 `2000`/`30` 毫秒）的配置。预测不可用、容量不足或 SLO 无法满足时，
-    会明确报错，不会悄悄选择没有负载目标的预测。Agentic 会将原因传到前端错误提示区。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.aic.models import AICRequest
-    from llm_d_lens.aic.service import search
-
-    result = await search(AICRequest(
-        model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
-        gpu_count=8, target_request_rate=10,
-    ))
-    ```
-
-    要指定目标并发请求数，使用 `target_concurrency` 替代 `target_request_rate`。
-    两项都不设置则保持原来的固定 GPU 数搜索。
-  </TabItem>
-</Tabs>
-
-### 估算 AIC 拓扑结构
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/aic/estimate`**
-
-    发送 `model_name`、`scenario`（`inference_scheduling` 或 `pd_disaggregation`）、
-    `gpu_count`、`mean_input_tokens`、`mean_output_tokens`、AIC 系统/后端/数据库，
-    以及拓扑结构字段（`tp` 和 `replicas`，或者 prefill/decode 的 TP 和副本数）。
-    可选的 `ttft_target_ms` 和 `tpot_target_ms` 会保留受约束的实验路径；
-    两者都省略时，则在没有 SLO 过滤的情况下估算固定的拓扑结构。
-
-    ```json
-    {
-      "model_name": "Qwen/Qwen3-0.6B",
-      "scenario": "inference_scheduling",
-      "gpu_count": 1,
-      "mean_input_tokens": 1024,
-      "mean_output_tokens": 256,
-      "aic_system_name": "b60",
-      "aic_backend_name": "vllm",
-      "aic_database_mode": "SILICON",
-      "tp": 1,
-      "replicas": 1
-    }
-    ```
-
-    响应中包含 `mode`、拓扑结构字段，以及在可测量时的 `ttft_ms`、
-    `tpot_ms` 和 `throughput_tokens_per_sec`。估算值并不能证明符合 SLO。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.aic.models import AICEstimateRequest
-    from llm_d_lens.aic.service import estimate
-
-    result = await estimate(AICEstimateRequest(
-        model_name="Qwen/Qwen3-0.6B", scenario="inference_scheduling",
-        gpu_count=1, mean_input_tokens=1024, mean_output_tokens=256,
-        aic_system_name="b60", aic_backend_name="vllm", tp=1, replicas=1,
-    ))
-    ```
-  </TabItem>
-</Tabs>
-
-### 启动一次部署运行
-
-从一个或多个已经渲染好的可部署配置启动一次部署运行。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs`**
-
-    请求体：`DeploymentRunCreateRequest`
-    - `configurations`（`DeployableConfiguration[]`，必需）：要执行的已渲染部署载荷。
-    - `failure_policy`（`"stop" | "continue"`，默认 `"continue"`）：失败后，后续用例是否应继续执行。
-    - `provenance`（`object`，可选）：调用方自有的来源元数据。
-    - `runtime_binding`（`RuntimeBinding`，可选）：环境变量覆盖和集群会话绑定。
-
-    ```json
-    {
-      "configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "optimized-baseline",
-          "checksum": "sha256:0f4f7e4b",
-          "content": {
-            "model": {"name": "Qwen/Qwen3-8B"},
-            "decode": {
-              "replicaCount": 1,
-              "tensorParallelSize": 1,
-              "maxModelLen": 4096
-            },
-            "runtime": {
-              "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
-              "imageMode": "pull-existing"
-            }
-          },
-          "provenance": {
-            "deployment_name": "qwen3-8b-smoke",
-            "description": "Deploy one optimized baseline for evaluation"
-          }
-        }
-      ],
-      "failure_policy": "continue",
-      "provenance": {
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "deployment_source": {"kind": "manual"}
-      },
-      "runtime_binding": {
-        "schema_version": "runtime-binding.v1",
-        "environment": {
-          "HTTP_PROXY": "http://proxy.example:911"
-        },
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000"
-      }
-    }
-    ```
-
-    响应：`DeploymentRun`
-
-    ```json
-    {
-      "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-      "status": "queued",
-      "failure_policy": "continue",
-      "provenance": {
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "deployment_source": {"kind": "manual"}
-      },
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "started_at": null,
-      "finished_at": null,
-      "source_configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "optimized-baseline",
-          "checksum": "sha256:0f4f7e4b",
-          "content": {
-            "model": {"name": "Qwen/Qwen3-8B"},
-            "decode": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 4096},
-            "runtime": {"image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0", "imageMode": "pull-existing"}
-          },
-          "provenance": {"deployment_name": "qwen3-8b-smoke", "description": "Deploy one optimized baseline for evaluation"}
-        }
-      ],
-      "cases": [
-        {
-          "id": "1f31e4de-5452-4b6c-a38f-d404ed5eff10",
-          "run_id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-          "ordinal": 0,
-          "source_configuration_ordinal": 0,
-          "provider_ref": "optimized-baseline",
-          "component": "decode",
-          "depends_on": [],
-          "status": "queued",
-          "attempt": 1,
-          "execution_id": null,
-          "failure": null,
-          "create_request": {
-            "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-            "input_schema_version": "v1",
-            "configuration_artifacts": [
-              {
-                "artifact_id": "524a4178-7e9f-49ea-bccd-8ddb163ae2fd",
-                "schema_version": "deployable-configuration.v1",
-                "kind": "configuration",
-                "provider_ref": "optimized-baseline",
-                "media_type": "application/yaml",
-                "checksum": "sha256:0f4f7e4b",
-                "content": "{\"model\":{\"name\":\"Qwen/Qwen3-8B\"}}"
-              }
-            ],
-            "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen3-8b-smoke"}},
-            "cluster_snapshot_ref": null,
-            "cluster_snapshot": null,
-            "provenance": {}
-          }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.application import deployment_run_manager
-from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest
-from llm_d_lens.deploy.standard_kubernetes_service import build_standard_kubernetes_service_configuration
 from llm_d_lens.deploy.standard_kubernetes_service import StandardKubernetesServiceRequest
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    import asyncio
 
-async def main() -> None:
-    configuration = build_standard_kubernetes_service_configuration(
-        StandardKubernetesServiceRequest(
-            model="Qwen/Qwen3-8B",
-            deployment_name="qwen3-8b-smoke",
-            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-            replicas=1,
-            tensor_parallel_size=1,
+    async def main() -> None:
+        run = await lens.deploy.create_standard_kubernetes_service_run(
+            StandardKubernetesServiceRequest(
+                model="Qwen/Qwen3-8B",
+                deployment_name="qwen3-standard",
+                cluster_session_id="<cluster-session-id>",
+                replicas=1,
+                tensor_parallel_size=1,
+                storage_volume_id="<model-cache-volume-id>",
+            )
         )
-    )
-    run = await deployment_run_manager.start_run(
-        DeploymentRunCreateRequest(
-            configurations=[configuration],
-            provenance={
-                "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-                "deployment_source": {"kind": "manual"},
-            },
-        )
-    )
-    print(run.id, run.status)
+        print(run.id, run.status)
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### 启动一次标准 vLLM 部署运行
+## 常见任务
 
-使用 Lens 的白名单 vLLM 契约，启动一次标准 Kubernetes 服务部署运行。
+### 部署已保存的配置
+
+使用一个或多个可部署配置启动运行。包含多个用例的运行通过 `failure_policy` 决定某个用例失败后是否继续执行后续用例。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/standard-vllm-runs`**
 
-    请求体：`StandardKubernetesServiceRequest`
-    - `model`（`string`，必需）
-    - `deployment_name`（`string`，必需）
-    - `description`（`string`，可选）
-    - `cluster_session_id`（`string`，必需）
-    - `replicas`（`integer`，必需）
-    - `tensor_parallel_size`（`integer`，必需）
-    - `storage_type`（`"local-cache" | "pvc" | "model-cache"`，默认 `"local-cache"`）
-    - `storage_volume_id`、`model_cache_path`、`pvc_name`（特定存储设置）
-    - `max_model_len`（`integer`，默认 `4096`，范围为 `256` 到 `1048576`；同样适用于 Agentic 请求）
-    - `gpu_memory_utilization`、`max_num_seqs`、`max_num_batched_tokens`
-    - `enable_prefix_caching`、`enforce_eager`、`vllm_arguments`、`use_cluster_proxy`、`http_proxy`、`https_proxy`、`no_proxy`
+**`POST /api/v1/deployments/runs`**
 
-    ```json
+```json
+{
+  "configurations": [
     {
-      "model": "Qwen/Qwen3-8B",
-      "deployment_name": "qwen3-standard",
-      "description": "Standard baseline for smoke tests",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "replicas": 1,
-      "tensor_parallel_size": 1,
-      "storage_type": "local-cache",
-      "storage_volume_id": "",
-      "model_cache_path": "/home/prism/.cache",
-      "pvc_name": "",
-      "max_model_len": 8192,
-      "gpu_memory_utilization": 0.9,
-      "max_num_seqs": 256,
-      "max_num_batched_tokens": 8192,
-      "enable_prefix_caching": true,
-      "enforce_eager": false,
-      "vllm_arguments": [
-        {"name": "max-model-len", "value": "8192"}
-      ],
-      "use_cluster_proxy": true,
-      "http_proxy": "",
-      "https_proxy": "",
-      "no_proxy": ""
-    }
-    ```
-
-    响应：`DeploymentRun`
-
-    ```json
-    {
-      "id": "73606e29-a348-4920-bf8c-3be5e038a8fe",
-      "status": "queued",
-      "failure_policy": "continue",
-      "provenance": {
-        "deployment_source": {"kind": "standard-kubernetes-service"},
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "deployment_name": "qwen3-standard",
-        "description": "Standard baseline for smoke tests",
-        "model_market": {
-          "deployment_name": "qwen3-standard",
-          "description": "Standard baseline for smoke tests"
-        }
+      "schema_version": "deployable-configuration.v1",
+      "type": "baseline",
+      "format": "helm",
+      "provider_ref": "optimized-baseline",
+      "checksum": "sha256:<checksum>",
+      "content": {
+        "model": {"name": "Qwen/Qwen3-8B"},
+        "decode": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 4096}
       },
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "source_configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "baseline-vllm",
-          "checksum": "sha256:9eb2d61d",
-          "content": {
-            "model": {"name": "Qwen/Qwen3-8B"},
-            "decode": {"replicaCount": 1, "tensorParallelSize": 1, "maxModelLen": 8192},
-            "runtime": {
-              "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
-              "imageMode": "pull-existing",
-              "modelSource": "auto-cache",
-              "mountPath": "/home/prism/.cache"
-            },
-            "customParameters": [
-              {"target": "decode", "kind": "argument", "name": "gpu-memory-utilization", "value": "0.9"},
-              {"target": "decode", "kind": "argument", "name": "enable-prefix-caching", "value": "true"}
-            ]
-          },
-          "provenance": {
-            "source": "standard-kubernetes-service.v1",
-            "deployment_name": "qwen3-standard",
-            "description": "Standard baseline for smoke tests",
-            "storage_type": "local-cache",
-            "namespace_policy": {"prefix": "standard-"}
-          }
-        }
-      ],
-      "cases": []
+      "provenance": {"deployment_name": "qwen3-guide"}
     }
-    ```
+  ],
+  "failure_policy": "continue",
+  "provenance": {"cluster_session_id": "<cluster-session-id>"}
+}
+```
+
+响应字段：`id`、`status`、`cases[].id`、`cases[].status`、`cases[].execution_id`。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-import asyncio
+from llm_d_lens.deploy.contracts import DeployableConfiguration, DeploymentRunCreateRequest
+from llm_d_lens.sdk import LensLocal
 
-from llm_d_lens.deploy.application import deployment_run_manager
-from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest
-from llm_d_lens.deploy.standard_kubernetes_service import (
-    StandardKubernetesServiceRequest,
-    build_standard_kubernetes_service_configuration,
-)
+with LensLocal("<username>") as lens:
+    import asyncio
 
-
-async def main() -> None:
-    request = StandardKubernetesServiceRequest(
-        model="Qwen/Qwen3-8B",
-        deployment_name="qwen3-standard",
-        description="Standard baseline for smoke tests",
-        cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-        replicas=1,
-        tensor_parallel_size=1,
-    )
-    configuration = build_standard_kubernetes_service_configuration(request)
-    run = await deployment_run_manager.start_run(
-        DeploymentRunCreateRequest(
-            configurations=[configuration],
-            provenance={
-                "deployment_source": {"kind": "standard-kubernetes-service"},
-                "cluster_session_id": request.cluster_session_id,
-                "deployment_name": request.deployment_name,
-                "description": request.description.strip(),
-            },
+    async def main() -> None:
+        run = await lens.deploy.create_run(
+            DeploymentRunCreateRequest(
+                configurations=[
+                    DeployableConfiguration(
+                        type="baseline",
+                        format="helm",
+                        provider_ref="optimized-baseline",
+                        checksum="sha256:<checksum>",
+                        content={
+                            "model": {"name": "Qwen/Qwen3-8B"},
+                            "decode": {
+                                "replicaCount": 1,
+                                "tensorParallelSize": 1,
+                                "maxModelLen": 4096,
+                            },
+                        },
+                        provenance={"deployment_name": "qwen3-guide"},
+                    )
+                ],
+                provenance={"cluster_session_id": "<cluster-session-id>"},
+            )
         )
-    )
-    print(run.id, run.status)
+        print(run.id, run.status)
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### 列出部署运行
+### 查找运行和执行
 
-列出 Lens 已记录的部署运行。
-
-`GET /api/v1/deployments` 是集合根路径别名，查询参数和响应相同，结果按最新优先返回。
+运行按最新优先返回。可用 `query` 按运行 id、provider ref、部署名称或命名空间搜索。执行可按状态和集群筛选。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs`**
 
-    请求：无请求体。
-    - 查询参数：`query`（`string`，可选），按运行 ID、提供方引用、部署名称或命名空间进行搜索。
+**`GET /api/v1/deployments/runs?query=qwen3`**
 
-    响应：`DeploymentRun` 记录数组。
+**`GET /api/v1/deployments/executions?status=ready&cluster_id=<cluster-id>`**
 
-    ```json
-    [
-      {
-        "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-        "status": "running",
-        "failure_policy": "continue",
-        "provenance": {
-          "cluster_server_id": "cluster-1",
-          "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000"
-        },
-        "created_at": "2026-09-23T09:18:24.287000+00:00",
-        "started_at": "2026-09-23T09:18:40.001000+00:00",
-        "finished_at": null,
-        "source_configurations": [],
-        "cases": []
-      }
-    ]
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.router import _store
-
-runs = _store.list_runs()
-for run in runs:
-    print(run.id, run.status)
-```
-  </TabItem>
-</Tabs>
-
-### 获取一次部署运行
-
-获取某一次部署运行的全部详情，包括所有用例及其当前状态。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs/{run_id}`**
-
-    请求：无请求体。
-    - 路径参数：`run_id`（`string`，必需）
-
-    响应：`DeploymentRun`
-
-    ```json
+```json
+{
+  "items": [
     {
-      "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-      "status": "running",
-      "failure_policy": "continue",
-      "provenance": {
-        "cluster_server_id": "cluster-1",
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000"
-      },
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "started_at": "2026-09-23T09:18:40.001000+00:00",
-      "finished_at": null,
-      "source_configurations": [
-        {
-          "schema_version": "deployable-configuration.v1",
-          "type": "baseline",
-          "format": "helm",
-          "provider_ref": "baseline-vllm",
-          "checksum": "sha256:9eb2d61d",
-          "content": {"model": {"name": "Qwen/Qwen3-8B"}},
-          "provenance": {"deployment_name": "qwen3-standard"}
-        }
-      ],
-      "cases": [
-        {
-          "id": "1f31e4de-5452-4b6c-a38f-d404ed5eff10",
-          "run_id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-          "ordinal": 0,
-          "source_configuration_ordinal": 0,
-          "provider_ref": "baseline-vllm",
-          "component": "decode",
-          "depends_on": [],
-          "status": "deploying",
-          "attempt": 1,
-          "execution_id": "execution-123",
-          "failure": null,
-          "create_request": {
-            "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-            "input_schema_version": "v1",
-            "configuration_artifacts": [],
-            "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen3-standard"}},
-            "cluster_snapshot_ref": null,
-            "cluster_snapshot": null,
-            "provenance": {}
-          }
-        }
-      ]
+      "execution_id": "<execution-id>",
+      "status": "ready",
+      "cluster_id": "<cluster-id>",
+      "namespace": "llmd-qwen3-standard",
+      "endpoint": "http://qwen3-router.llmd-qwen3-standard.svc:8000"
     }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.router import _store
-
-run = _store.get_run("8c52df8b-5d31-4a36-8c01-3952abf2bf89")
-if run is not None:
-    print(run.id, run.status, len(run.cases))
+  ]
+}
 ```
+
   </TabItem>
-</Tabs>
-
-### 取消一次部署运行
-
-请求取消一次正在进行的部署运行。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs/{run_id}/cancel`**
-
-    请求：无请求体。
-    - 路径参数：`run_id`（`string`，必需）
-
-    响应：
-
-    ```json
-    {
-      "id": "8c52df8b-5d31-4a36-8c01-3952abf2bf89",
-      "status": "cancelling"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.application import deployment_run_manager
-
-run_id = "8c52df8b-5d31-4a36-8c01-3952abf2bf89"
-deployment_run_manager.worker_for_run(run_id).request_cancel(run_id)
-```
-  </TabItem>
-</Tabs>
-
-### 为部署运行重新绑定集群会话
-
-将一次部署运行重新绑定到另一个处于活动状态的集群会话。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs/{run_id}/cluster-session`**
-
-    请求体：`RebindClusterSessionRequest`
-    - 路径参数：`run_id`（`string`，必需）
-    - `cluster_session_id`（`string`，必需）
-
-    ```json
-    {
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174111"
-    }
-    ```
-
-    响应：HTTP `204 No Content`。不返回任何 JSON 响应体。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.application import deployment_run_manager
-
-run_id = "8c52df8b-5d31-4a36-8c01-3952abf2bf89"
-deployment_run_manager.rebind_cluster_session(
-    run_id,
-    "123e4567-e89b-12d3-a456-426614174111",
-)
-```
-  </TabItem>
-</Tabs>
-
-### 列出部署执行
-
-列出部署执行，不会创建新的端口转发。
-
-该接口读取的是已存储的记录，不会直接查询集群。后台对账任务会持续更新这些记录，重新核对
-所有处于运行中、成功、部分成功或**失败**状态的 run（失败的发布若其 Pod 之后恢复，会被改回
-`ready`；若命名空间已不存在，则改为 `cleaned`）。只有已清理和已取消的 run 才是终态。
-如需立即重新核对而不等待该周期，请调用
-`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh`。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions`**
-
-    请求：无请求体。
-    - 查询参数：`status`（`DeploymentStatus`，可选）、`statuses`（`DeploymentStatus[]`，可选）、`cluster_id`（`string`，可选）、`query`（`string`，可选）、`limit`（`integer`，默认 `200`）。
-
-    响应：
-
-    ```json
-    {
-      "items": [
-        {
-          "execution_id": "execution-ready",
-          "status": "ready",
-          "cluster_id": "cluster-1",
-          "cluster_session_id": "session-1",
-          "namespace": "namespace",
-          "name": "qwen",
-          "display_name": "",
-          "description": "",
-          "model": "Qwen",
-          "backend": "vLLM",
-          "guide": "optimized-baseline",
-          "endpoint": "http://execution-ready.namespace.svc:8000",
-          "forwarded_endpoint": null,
-          "replicas": null,
-          "tensor_parallel_size": null,
-          "image": null,
-          "preserve_deployment": true,
-          "created_at": "2026-09-23T09:18:24.287000+00:00",
-          "updated_at": null,
-          "max_model_len": null,
-          "gpu_memory_utilization": null,
-          "enable_prefix_caching": null,
-          "max_num_seqs": null,
-          "max_num_batched_tokens": null,
-          "storage_type": null,
-          "storage_volume_id": null,
-          "mount_path": null,
-          "pvc_name": null,
-          "failure": null,
-          "custom_parameters": [],
-          "baseline_endpoint": null,
-          "service_ref": null
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 from llm_d_lens.deploy.contracts import DeploymentStatus
-from llm_d_lens.deploy.executions import list_execution_contexts
+from llm_d_lens.sdk import LensLocal
 
-contexts = list_execution_contexts(status=DeploymentStatus.READY, cluster_id="cluster-1", limit=20)
-for context in contexts:
-    print(context.execution_id, context.status, context.endpoint)
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        runs = await lens.deploy.list_runs(query="qwen3")
+        for run in runs:
+            print(run.id, run.status)
+
+        executions = await lens.deploy.list_executions(
+            status=DeploymentStatus.READY,
+            cluster_id="<cluster-id>",
+        )
+        for execution in executions.items:
+            print(execution.execution_id, execution.endpoint)
+
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### 获取一次部署执行
+### 连接就绪端点并读取日志
 
-通过执行 ID 获取一次部署执行。
+`ready` 执行具有集群内 URL。在发送模型流量前，调用端点操作创建或复用可访问的转发 URL。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions/{execution_id}`**
 
-    请求：无请求体。
-    - 路径参数：`execution_id`（`string`，必需）
+**`POST /api/v1/deployments/executions/<execution-id>/endpoint`**
 
-    响应：
+```json
+{
+  "success": true,
+  "execution_id": "<execution-id>",
+  "endpoint": "http://127.0.0.1:38000/v1",
+  "namespace": "llmd-qwen3-standard",
+  "service": "qwen3-router",
+  "remote_port": 8000
+}
+```
 
-    ```json
-    {
-      "execution_id": "execution-ready",
-      "status": "ready",
-      "cluster_id": "cluster-1",
-      "cluster_session_id": "session-1",
-      "namespace": "namespace",
-      "name": "qwen",
-      "display_name": "",
-      "description": "",
-      "model": "Qwen",
-      "backend": "vLLM",
-      "guide": "optimized-baseline",
-      "endpoint": "http://execution-ready.namespace.svc:8000",
-      "forwarded_endpoint": null,
-      "preserve_deployment": true,
-      "created_at": "2026-09-23T09:18:24.287000+00:00",
-      "custom_parameters": []
-    }
-    ```
+使用 `GET /api/v1/deployments/executions/<execution-id>/pods/<pod-name>/logs?tail=200` 读取 Pod 日志。`tail` 取值为 1-2000。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.deploy.executions import find_execution_context
+from llm_d_lens.sdk import LensLocal
 
-context = find_execution_context("execution-ready")
-if context is not None:
-    print(context.execution_id, context.namespace, context.endpoint)
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        execution = await lens.deploy.get_execution("<execution-id>")
+        print(execution.status, execution.endpoint)
+
+        resolved = await lens.deploy.connect_execution_endpoint("<execution-id>")
+        print(resolved.endpoint)
+
+        logs = await lens.deploy.get_execution_pod_logs(
+            "<execution-id>", "<pod-name>", tail=200
+        )
+        print(logs.logs)
+
+    asyncio.run(main())
 ```
+
+  </TabItem>
+</Tabs>
+
+### 停止、清理或删除部署
+
+可以只停止或清理单个用例而不删除运行历史。仅在运行进入终态后删除运行；删除时也会清理剩余用例。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/deployments/runs/<run-id>/cases/<case-id>/stop`**
+
+**`POST /api/v1/deployments/runs/<run-id>/cases/<case-id>/clean`**
+
+**`DELETE /api/v1/deployments/runs/<run-id>`** 返回 `204`。
+
+```json
+{
+  "case": {"id": "<case-id>", "status": "stopped", "execution_id": "<execution-id>"},
+  "execution": {"execution_id": "<execution-id>", "status": "rolled_back"},
+  "deployment": {"run_id": "<run-id>", "case_id": "<case-id>", "status": "stopped"}
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.deploy.models import CleanCaseRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        stopped = await lens.deploy.stop_case("<run-id>", "<case-id>")
+        print(stopped.case.status, stopped.execution.status)
+
+        cleaned = await lens.deploy.clean_case(
+            "<run-id>",
+            "<case-id>",
+            CleanCaseRequest(preserve_rendered_overlay=False),
+        )
+        print(cleaned.case.status)
+
+        await lens.deploy.delete_run("<run-id>")
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 清理孤儿命名空间
+
+孤儿命名空间匹配部署前缀，但没有被任何 Lens 执行记录引用。前缀之外的名称或仍被引用的名称会被拒绝。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/deployments/orphans?cluster_id=<cluster-id>`**
+
+**`POST /api/v1/deployments/orphans/clean`**
+
+```json
+{
+  "clusterId": "<cluster-id>",
+  "namespaces": ["llmd-optimized-baseline-1-1-20260918032423139529"]
+}
+```
+
+响应：`cleaned` 和 `failed` 命名空间列表。
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.deploy.models import CleanOrphansRequest
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        orphans = await lens.deploy.list_orphan_namespaces("<cluster-id>")
+        print(orphans.prefix, [item.name for item in orphans.items])
+
+        result = await lens.deploy.clean_orphan_namespaces_route(
+            CleanOrphansRequest(
+                cluster_id="<cluster-id>",
+                namespaces=[item.name for item in orphans.items],
+            )
+        )
+        print(result.cleaned, result.failed)
+
+    asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
 ### 扩缩容部署执行
 
-修改处于就绪或失败状态的执行的 Prefill 和/或 Decode 模型服务器实时副本数。此操作只修改 Kubernetes 副本数，不改变已保存的配置。支持 Deployment 和 DisaggregatedSet 工作负载。DisaggregatedSet 扩缩容只修改角色副本数，不修改 `spec.slices`；Lens 新建的 DisaggregatedSet 固定使用 `slices: 1`。
+为 ready 或 failed 状态的执行调整 Prefill 和 Decode model-server 副本数。只修改 Kubernetes 副本，不改变已保存的配置。支持 Deployment 和 DisaggregatedSet；DisaggregatedSet 只改 role 副本，不修改 `spec.slices`。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/executions/{execution_id}/scale`**
 
-    请求：
+**`POST /api/v1/deployments/executions/{execution_id}/scale`**
 
-    ```json
-    {
-      "prefill_replicas": 1,
-      "decode_replicas": 2
-    }
-    ```
+```json
+{"prefill_replicas": 1, "decode_replicas": 2}
+```
 
-    - 路径参数：`execution_id`（`string`，必需）
-    - 请求体字段：`prefill_replicas` 和 `decode_replicas`（`integer`，可选，`1..100`）；至少提供一个。
-    - 只修改提供的角色。P/D 部署同时使用两个字段；聚合部署使用 `decode_replicas`。
-    - 执行不是就绪或失败状态时返回 `409`；工作负载不受支持或角色不存在时返回 `422`；扩缩容部分成功时返回 `502`。
+只修改传入的 role；聚合部署使用 `decode_replicas`。返回带 `scale` 的更新后执行。
 
-    成功：HTTP `200`，返回更新后的执行 payload。`scale` 包含 `prefillReplicas`、`decodeReplicas` 和 `manual`。
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
 from llm_d_lens.deploy.contracts import DeploymentScaleRequest
-from llm_d_lens.deploy.executions import scale_deployment_execution
+from llm_d_lens.sdk import LensLocal
 
 
 async def main() -> None:
-    context = await scale_deployment_execution(
-        "execution-ready",
-        DeploymentScaleRequest(decode_replicas=2),
-    )
-    print(context.scale)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### 获取执行的 Pod 状态
-
-获取一次部署执行所在命名空间中所有 Pod 的实时状态。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions/{execution_id}/pods`**
-
-    请求：无请求体。
-    - 路径参数：`execution_id`（`string`，必需）
-
-    响应：
-
-    ```json
-    {
-      "execution_id": "exec-123",
-      "namespace": "prism-exec-123",
-      "pods": [
-        {
-          "name": "pod-1",
-          "namespace": "prism-exec-123",
-          "phase": "Running",
-          "ready": true,
-          "pod_ip": "10.244.0.5",
-          "node_name": "worker-1",
-          "restarts": 0,
-          "status_reason": "Running",
-          "containers": [
-            {
-              "name": "vllm",
-              "image": "vllm:latest",
-              "ready": true,
-              "restart_count": 0,
-              "state": "running"
-            }
-          ],
-          "creation_timestamp": "2026-09-06T00:00:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.executions import find_execution_context
-from llm_d_lens.utils.kubernetes import run_kubectl
-
-
-async def main() -> None:
-    context = find_execution_context("exec-123")
-    if context is None or context.namespace is None:
-        return
-    result = await run_kubectl(
-        ["get", "pods", "--namespace", context.namespace, "-o", "json"],
-        cluster_id=context.cluster_id,
-        timeout=15,
-    )
-    print(result.stdout)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### 获取一次执行的 Pod 日志
-
-获取一次部署执行所在命名空间中某个 Pod 的日志。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/executions/{execution_id}/pods/{pod_name}/logs`**
-
-    请求：无请求体。
-    - 路径参数：`execution_id`（`string`，必需）、`pod_name`（`string`，必需）
-    - 查询参数：`container`（`string`，可选）、`tail`（`integer`，默认 `200`）、`previous`（`boolean`，默认 `false`）
-
-    响应：
-
-    ```json
-    {
-      "execution_id": "exec-123",
-      "namespace": "prism-exec-123",
-      "pod_name": "pod-1",
-      "container": "vllm",
-      "logs": "[INFO] Server started\n[INFO] Listening on :8000",
-      "success": true
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.executions import find_execution_context
-from llm_d_lens.utils.kubernetes import run_kubectl
-
-
-async def main() -> None:
-    context = find_execution_context("exec-123")
-    if context is None or context.namespace is None:
-        return
-    result = await run_kubectl(
-        ["logs", "pod-1", "--namespace", context.namespace, "--tail=200", "--container=vllm"],
-        cluster_id=context.cluster_id,
-        timeout=20,
-    )
-    print(result.stdout)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### 连接到一次部署执行的端点
-
-为一次部署执行创建或复用一个可访问的转发端点，并返回其本地 URL。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/executions/{execution_id}/endpoint`**
-
-    请求：无请求体。
-    - 路径参数：`execution_id`（`string`，必需）
-
-    响应：
-
-    ```json
-    {
-      "success": true,
-      "execution_id": "execution-ready",
-      "id": "forward-1",
-      "local_port": 38000,
-      "endpoint": "http://127.0.0.1:38000/v1",
-      "forwarded_endpoint": "http://127.0.0.1:38000/v1",
-      "namespace": "namespace",
-      "service": "qwen-router",
-      "remote_port": 8000
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.executions import ensure_execution_endpoint
-
-
-async def main() -> None:
-    resolved = await ensure_execution_endpoint("execution-ready")
-    print(resolved.execution_id, resolved.endpoint)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### 获取一个部署用例
-
-获取一次部署运行中的某个部署用例，包括其关联的执行和部署摘要载荷。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs/{run_id}/cases/{case_id}`**
-
-    请求：无请求体。
-    - 路径参数：`run_id`（`string`，必需）、`case_id`（`string`，必需）
-
-    响应：
-
-    ```json
-    {
-      "case": {
-        "id": "case-execution-ready",
-        "run_id": "run-1",
-        "ordinal": 0,
-        "source_configuration_ordinal": 0,
-        "provider_ref": "optimized-baseline",
-        "component": "decode",
-        "depends_on": [],
-        "status": "ready",
-        "attempt": 1,
-        "execution_id": "execution-ready",
-        "failure": null,
-        "create_request": {
-          "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-          "input_schema_version": "v1",
-          "configuration_artifacts": [
-            {
-              "artifact_id": "524a4178-7e9f-49ea-bccd-8ddb163ae2fd",
-              "schema_version": "deployable-configuration.v1",
-              "kind": "configuration",
-              "provider_ref": "optimized-baseline",
-              "media_type": "application/yaml",
-              "checksum": "sha256:0f4f7e4b",
-              "content": "{\"model\":{\"name\":\"Qwen\"}}"
-            }
-          ],
-          "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen"}},
-          "cluster_snapshot_ref": null,
-          "cluster_snapshot": null,
-          "provenance": {}
-        }
-      },
-      "execution": {
-        "execution_id": "execution-ready",
-        "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-        "status": "ready",
-        "artifact": {
-          "artifact_id": "art-1",
-          "artifact_hash": "sha256:ef35",
-          "configuration_artifact_ids": ["524a4178-7e9f-49ea-bccd-8ddb163ae2fd"],
-          "source_ref": null,
-          "manifest_ref": "vllm/manifest.yaml",
-          "manifest_checksum": null,
-          "values_checksum": null,
-          "rendered_payload": {"schema_version": "v1", "value": {}},
-          "created_at": "2026-09-23T09:18:24.287000+00:00"
-        },
-        "endpoint": {
-          "url": "http://execution-ready.namespace.svc:8000",
-          "protocol": "http",
-          "service_ref": null,
-          "model_ref": null,
-          "baseline_url": null
-        },
-        "forwarded_endpoint": null,
-        "monitoring_setup": null,
-        "namespace": "namespace",
-        "configuration_artifacts": [],
-        "resource_snapshot": null,
-        "provenance": {"cluster_server_id": "cluster-1", "cluster_session_id": "session-1"},
-        "metadata": {"display_name": "", "description": ""},
-        "evidence_refs": [],
-        "diagnostics": null,
-        "created_at": "2026-09-23T09:18:24.287000+00:00",
-        "updated_at": "2026-09-23T09:20:00.000000+00:00"
-      },
-      "deployment": {
-        "run_id": "run-1",
-        "case_id": "case-execution-ready",
-        "execution_id": "execution-ready",
-        "name": "qwen",
-        "display_name": "",
-        "description": "",
-        "status": "ready",
-        "namespace": "namespace",
-        "endpoint": "http://execution-ready.namespace.svc:8000",
-        "forwarded_endpoint": null,
-        "guide": "optimized-baseline",
-        "backend": "vLLM",
-        "model_name": "Qwen",
-        "replicas": null,
-        "tensor_parallel_size": null,
-        "image": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.deploy.router import _store
-
-case = _store.get_case("run-1", "case-execution-ready")
-print(case.id if case else "missing")
-```
-  </TabItem>
-</Tabs>
-
-### 获取部署用例日志
-
-获取一个部署用例的编排日志。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/runs/{run_id}/cases/{case_id}/logs`**
-
-    请求：无请求体。
-    - 路径参数：`run_id`（`string`，必需）、`case_id`（`string`，必需）
-    - 查询参数：`limit`（`integer`，默认 `200`，最大 `1000`）
-
-    响应：`DeploymentLogPage`
-
-    ```json
-    {
-      "execution_id": "execution-ready",
-      "entries": [
-        {
-          "timestamp": "2026-09-23T09:19:01.000000+00:00",
-          "source": "provider",
-          "message": "Rendered deployment manifest",
-          "severity": "info"
-        },
-        {
-          "timestamp": "2026-09-23T09:19:12.000000+00:00",
-          "source": "provider",
-          "message": "Deployment reached Ready status",
-          "severity": "info"
-        }
-      ],
-      "next_cursor": null,
-      "complete": true,
-      "evidence_refs": []
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.application import deployment_run_manager
-
-
-async def main() -> None:
-    logs = await deployment_run_manager.worker_for_run("run-1").get_case_logs(
-        "run-1",
-        "case-execution-ready",
-        limit=200,
-    )
-    print(logs.execution_id, len(logs.entries))
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### 清理一个部署用例
-
-清理一个部署用例的运行时资源，并将其标记为已清理。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/clean`**
-
-    请求体：`CleanCaseRequest`
-    - 路径参数：`run_id`（`string`，必需）、`case_id`（`string`，必需）
-    - `preserve_rendered_overlay`（`boolean`，默认 `false`）
-
-    ```json
-    {
-      "preserve_rendered_overlay": true
-    }
-    ```
-
-    响应：
-
-    ```json
-    {
-      "case": {
-        "id": "case-execution-ready",
-        "run_id": "run-1",
-        "ordinal": 0,
-        "source_configuration_ordinal": 0,
-        "provider_ref": "optimized-baseline",
-        "component": "decode",
-        "depends_on": [],
-        "status": "cleaned",
-        "attempt": 1,
-        "execution_id": "execution-ready",
-        "failure": null,
-        "create_request": {
-          "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-          "input_schema_version": "v1",
-          "configuration_artifacts": [],
-          "deployment_policy": {"schema_version": "v1", "value": {"deployment_name": "qwen"}},
-          "cluster_snapshot_ref": null,
-          "cluster_snapshot": null,
-          "provenance": {}
-        }
-      },
-      "execution": {
-        "execution_id": "execution-ready",
-        "request_id": "58b85f84-c8ef-47e1-8cb9-61831eb9d310",
-        "status": "cleaned",
-        "artifact": {
-          "artifact_id": "art-1",
-          "artifact_hash": "sha256:ef35",
-          "configuration_artifact_ids": ["524a4178-7e9f-49ea-bccd-8ddb163ae2fd"],
-          "source_ref": null,
-          "manifest_ref": "vllm/manifest.yaml",
-          "manifest_checksum": null,
-          "values_checksum": null,
-          "rendered_payload": {"schema_version": "v1", "value": {}},
-          "created_at": "2026-09-23T09:18:24.287000+00:00"
-        },
-        "endpoint": {
-          "url": "http://execution-ready.namespace.svc:8000",
-          "protocol": "http",
-          "service_ref": null,
-          "model_ref": null,
-          "baseline_url": null
-        },
-        "forwarded_endpoint": null,
-        "monitoring_setup": null,
-        "namespace": "namespace",
-        "configuration_artifacts": [],
-        "resource_snapshot": null,
-        "provenance": {"cluster_server_id": "cluster-1", "cluster_session_id": "session-1"},
-        "metadata": {"display_name": "", "description": ""},
-        "evidence_refs": [],
-        "diagnostics": null,
-        "created_at": "2026-09-23T09:18:24.287000+00:00",
-        "updated_at": "2026-09-23T09:22:00.000000+00:00"
-      },
-      "deployment": {
-        "run_id": "run-1",
-        "case_id": "case-execution-ready",
-        "execution_id": "execution-ready",
-        "name": "qwen",
-        "display_name": "",
-        "description": "",
-        "status": "cleaned",
-        "namespace": "namespace",
-        "endpoint": "http://execution-ready.namespace.svc:8000",
-        "forwarded_endpoint": null,
-        "guide": "optimized-baseline",
-        "backend": "vLLM",
-        "model_name": "Qwen",
-        "replicas": null,
-        "tensor_parallel_size": null,
-        "image": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.deploy.application import deployment_run_manager
-
-
-async def main() -> None:
-    case, execution = await deployment_run_manager.worker_for_run("run-1").clean_case(
-        "run-1",
-        "case-execution-ready",
-        preserve_rendered_overlay=True,
-    )
-    print(case.status, execution.status)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-访问绑定相关的路由对于部署运行和执行同样存在，位于
-`GET/POST/DELETE /runs/{run_id}/access...`、
-`GET/POST/DELETE /executions/{execution_id}/access...`
-以及 `GET .../access/options`；这些具体的处理函数参见 `llm_d_lens/deploy/router.py`。
-
-部署领域还存在其他端点——参见完整的 OpenAPI 参考文档。
-
-### 删除部署运行
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`DELETE /api/v1/deployments/runs/{run_id}`**
-
-无请求体，需要 `deployment:execution:delete` 及对应运行的访问权限。
-成功返回 `204`，无响应体；不存在返回 `404`；活动运行
-（`queued`、`running`、`cancelling`）或生命周期冲突返回 `409`。
-活动编排需要先取消并等待终态。
-
-此操作不是只删除元数据：先清理尚未清理且存在执行记录的用例（需要其有效集群会话），
-再删除运行、执行记录及相关共享权限。已清理用例会跳过。
-相比之下，Case `clean` 删除运行时资源但保留生命周期记录；
-`preserve_rendered_overlay=true` 会保留渲染文件。
-
-请求示例：`DELETE /api/v1/deployments/runs/run-1`，不发送或返回 JSON。
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    await deployment_run_manager.worker_for_run("run-1").delete_run("run-1")
-
-asyncio.run(main())
-```
-
-worker 对生命周期冲突抛出 `ValueError`，路由映射为 `409`。
-
-  </TabItem>
-</Tabs>
-
-### 刷新部署用例
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh`**
-
-不要求请求体，可发送 `{}`；需要 `deployment:case:execute`。
-根据 provider 诊断刷新，返回 `200`，结构与获取用例相同，包含 `case`、`execution`、`deployment`。
-已停止或已清理记录不会被重新标记为 ready。缺失用例／执行或刷新 `ValueError` 返回 `404`。
-
-如果当前 Pod 诊断确认容器仍在探针预算内正常启动，即使报告进度期限超时也保持 `deploying`。
-预算从容器实际启动时刻计算，不包含 Pending 等待时间。可恢复的 `failed` 记录会返回
-`deploying` 并清除用例失败信息。`diagnostics.value.snapshot.pod_statuses` 包含 Pod 状态
-和探针时间字段，不包含容器环境变量值。仅有 Running 状态不会设为 `ready`；
-当前工作负载失败或启动预算耗尽不会被视为正常启动。
-响应节选：
-
-```json
-{
-  "case": {"id": "case-1", "status": "ready", "execution_id": "execution-1"},
-  "execution": {"execution_id": "execution-1", "status": "ready"},
-  "deployment": {"run_id": "run-1", "case_id": "case-1", "status": "ready"}
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    execution = await deployment_run_manager.worker_for_run("run-1").refresh_case_execution(
-        "run-1", "case-1"
-    )
-    print(execution.status)
-
-asyncio.run(main())
-```
-
-worker 返回 Execution，由 HTTP 路由组装用例响应。
-
-  </TabItem>
-</Tabs>
-
-### 停止部署用例
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/stop`**
-
-不要求请求体，可发送 `{}`；需要 `deployment:case:execute` 和有效集群会话。
-调用 provider stop，保留记录，不删除运行。成功返回 `200` 及获取用例的响应结构，
-worker 的 `ValueError` 返回 `409`。响应节选：
-
-```json
-{
-  "case": {"id": "case-1", "status": "stopped", "execution_id": "execution-1"},
-  "execution": {"execution_id": "execution-1", "status": "rolled_back"},
-  "deployment": {"run_id": "run-1", "case_id": "case-1", "status": "stopped"}
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    case, execution = await deployment_run_manager.worker_for_run("run-1").stop_case(
-        "run-1", "case-1"
-    )
-    print(case.status, execution.status)
-
-asyncio.run(main())
-```
-
-  </TabItem>
-</Tabs>
-
-### 重启部署用例
-
-:::warning 当前重启限制
-
-路由存在，但当前 worker 清理旧执行并把用例标记为 `cleaned` 后，再调用
-`DeploymentPlanService.retry_case()`；后者只接受最新的 `stopped` 或 `failed` 用例。
-因此清理成功后仍会返回 `409`，而不是产生排队中的替代用例。
-清理已经发生，错误并不代表旧资源仍然存在；不要反复调用此路由并期待恢复部署。
-
-:::
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/deployments/runs/{run_id}/cases/{case_id}/restart`**
-
-需要 `deployment:case:execute`、有效集群会话和 stopped／failed 用例。
-请求体为 `RestartCaseRequest`，可选字符串 `model_token` 用于覆盖模型令牌，
-空字符串／纯空白视为未提供；不覆盖时发送 `{}`。
-声明的成功结构是 HTTP `200`、`{ "case": ... }`，但当前清理与重试状态冲突
-使成功清理后的路径无法到达该响应。生命周期 `ValueError` 映射为 `409`，无效请求体返回 `422`。
-
-```json
-{}
-```
-
-当前冲突响应节选（应用另附 Problem Details 字段）：
-
-```json
-{
-  "status": 409,
-  "detail": "only the latest stopped or failed deployment case may be retried"
-}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-from llm_d_lens.deploy.application import deployment_run_manager
-
-async def main() -> None:
-    try:
-        case = await deployment_run_manager.worker_for_run("run-1").restart_case(
-            "run-1", "case-1", model_token=None
+    with LensLocal("<username>") as lens:
+        context = await lens.deploy.scale_execution(
+            "<execution-id>",
+            DeploymentScaleRequest(decode_replicas=2),
         )
-    except ValueError as error:
-        print(f"Restart failed; inspect the case because cleanup may have occurred: {error}")
-        raise
-    print(case.id, case.status)
+        print(context.scale)
+
 
 asyncio.run(main())
 ```
@@ -1625,805 +381,62 @@ asyncio.run(main())
   </TabItem>
 </Tabs>
 
-完整的请求/响应 schema 参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。
-
-## Remote SSH 部署
-
-SSH 传输和远程命令失败返回 `502` 及
-`{ "error": "Remote deployment failed" }`；内部异常详情及失败命令的输出
-记录在服务端日志中，不暴露在错误响应中。
-预期的输入和策略错误保留原有状态码及可操作的提示。
-
-这些旧版端点由 Python 模块 `llm_d_lens.deploy.remote_deploy` 实现。
-它们通过 SSH 执行命令，不创建 v1 部署运行。当前仅支持单节点 Intel Data Center GPU/XPU，
-这是旧实现的限制，不代表由硬件 profile 驱动的 v1 API 的能力范围。
-
-生产环境必须设置 `PRISM_REMOTE_DEPLOY_ENABLED=true`，非生产环境默认启用；
-生产目标还必须匹配 `PRISM_REMOTE_HOST_ALLOWLIST`。
-即使 SSH 操作被禁用，默认值接口仍可读取，但需要认证及相应权限。
-
-| 操作 | Lens 权限 |
-| --- | --- |
-| Defaults | `remote-deploy:target:read` |
-| Fingerprint、test | `remote-deploy:target:connect` |
-| Start、status、logs | `remote-deploy:deploy:execute` |
-| Teardown | `remote-deploy:deploy:teardown` |
-
-需认证的 SSH 操作要求 `target.host`、`username`、`hostFingerprint`
-以及非空、由数字 ID 字符串构成的 `cards` 数组。`port` 默认 22；
-`authMethod` 默认 `agent`，还支持 `key`、`password`。
-Agent 模式要求 BFF 有 `SSH_AUTH_SOCK`；key 模式要求服务端 `keyPath`
-位于 `PRISM_SSH_KEY_DIR` 下，默认 `$HOME/.ssh`。
-Password 模式在每次请求的 `credentials.password` 中提供密码，不保存也不返回。
-指纹发现不执行认证，也不要求 cards。使用前应通过可信渠道确认指纹；
-接口返回一个指纹本身并不能证明主机身份。
-
-路由错误结构为 `{ "error": "..." }`：输入／凭据无效为 `400`，
-生产目标不在允许列表为 `403`，SSH 操作被禁用为 `503`，
-SSH／命令失败通常为 `502`。网关认证和权限错误使用网关的 Problem Details 格式。
-
-### Remote 操作的 Python HTTP 客户端
-
-这些 Node 端点**没有 Python 服务层等价方法**，下方 Python 页签使用此 HTTP helper。
-示例环境变量只是客户端输入，不是新增的 Lens 服务端配置。
-从已登录的 Lens 会话取得值，切勿提交其内容。
-
-```python
-import os
-import httpx
-
-def remote_request(method: str, path: str, body: dict | None = None) -> dict:
-    with httpx.Client(
-        base_url=os.environ["LENS_URL"],
-        cookies={
-            "prism_session": os.environ["LENS_SESSION"],
-            "prism_csrf": os.environ["LENS_CSRF"],
-        },
-        headers={"x-prism-csrf": os.environ["LENS_CSRF"]},
-        timeout=300,
-    ) as client:
-        response = client.request(method, path, json=body)
-        response.raise_for_status()
-        return response.json()
-
-target = {
-    "host": "192.0.2.20",
-    "port": 22,
-    "username": "operator",
-    "authMethod": "agent",
-    "hostFingerprint": os.environ["VERIFIED_SSH_FINGERPRINT"],
-    "cards": ["0"],
-}
-```
-
-下方 REST 请求示例展示操作字段；需认证的操作还要加入上述完整 `target`
-以及可选的每次请求 `credentials`。Python 示例展示完整请求组装。
-
-### 获取远程部署默认值
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`GET /api/remote-deploy/defaults`**，无请求体，返回 `200`：
-
-```json
-{
-  "repository": "", "branch": "", "httpProxy": "", "httpsProxy": "",
-  "noProxy": "", "mountPath": "", "mountModelName": ""
-}
-```
-
-值来自 BFF 环境：repository 优先 `LLM_D_ROOT`，然后 `LLM_D_REPOSITORY`，
-否则为空，没有主机专属的默认 checkout；branch 来自 `LLM_D_BRANCH`。
-代理优先 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`，其次是对应的 `LLM_D_` 变量。
-挂载字段来自 `LLM_D_MOUNT_PATH`、`LLM_D_MOUNT_MODEL_NAME`。
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-defaults = remote_request("GET", "/api/remote-deploy/defaults")
-print(defaults["repository"])
-```
-
-  </TabItem>
-</Tabs>
-
-### 发现 SSH 主机指纹
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/fingerprint`**，请求：
-
-```json
-{"target": {"host": "192.0.2.20", "port": 22, "username": "operator"}}
-```
-
-仅 host 必填；port 默认 22，username 默认 `probe`。
-返回 `200`，包含 `fingerprint`、`host`、`port`。示意响应：
-
-```json
-{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "host": "192.0.2.20", "port": 22}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-discovered = remote_request("POST", "/api/remote-deploy/fingerprint", {
-    "target": {"host": target["host"], "port": target["port"], "username": target["username"]}
-})
-print(discovered["fingerprint"])
-```
-
-需要独立确认，不要自动覆盖已验证的指纹。
-
-  </TabItem>
-</Tabs>
-
-### 测试远程部署目标
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/test`**。请求包含 `target` 和可选 `credentials`，
-没有额外操作字段（`{}`）。探测主机名／OS、`llm-d-bench`、kubectl／集群连接和 `xpu-smi`。
-返回 `200`，包含 `ok`、`output`（最后 12,000 个字符）：
-
-```json
-{"ok": false, "output": "kubectl could not reach the cluster"}
-```
-
-探测命令完成但退出码非零时，可能返回 `200` 和 `ok=false`；HTTP 成功不代表目标就绪。
-连接失败使用前述错误状态。
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-probe = remote_request("POST", "/api/remote-deploy/test", {"target": target})
-if not probe["ok"]:
-    raise RuntimeError(probe["output"])
-print(probe["output"])
-```
-
-  </TabItem>
-</Tabs>
-
-### 启动远程部署
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/start`**。以下操作字段还需加入 `target` 和可选 `credentials`：
-
-```json
-{
-  "plan": {
-    "namespace": "llm-d-optimized", "name": "llm-d-service",
-    "accelerator": "Intel Data Center GPU", "nodes": 1,
-    "guide": "optimized-baseline", "model": "Qwen/Qwen3-0.6B",
-    "decodeReplicas": 1, "decodeTp": 1,
-    "deploymentTarget": {"repository": "https://github.com/llm-d/llm-d.git", "branch": "main"}
-  }
-}
-```
-
-namespace／name 默认如示例，必须符合 Kubernetes 风格名称。
-repository 支持远程绝对路径、`~/` 路径或 GitHub HTTPS URL；branch 默认 `main`。
-URL checkout 使用**远程主机**的 `LENS_CACHE_DIR`，否则为 `$XDG_CACHE_HOME/lens`
-或 `$HOME/.cache/lens`，其下路径为 `deploy-repos/<owner>/<repository>`。
-可设置 `deploymentTarget.httpProxy`、`httpsProxy`、`noProxy`，
-以及成对的绝对 `mountPath`／`mountModelName`。
-
-accelerator 必须匹配旧 Intel 标签，nodes 必须为一。
-Decode TP／副本默认一，`replicas` 是 `decodeReplicas` 的回退值；
-Prefill TP／副本默认零。各维度必须为不超过 128 的整数，Decode 维度至少为一。
-拓扑所需卡数不能超过所选卡数。卡 ID 会做格式和数量校验，
-但此端点不保证物理设备绑定。显式 guide 必须是合法标识符；
-未提供时根据 source／拓扑选择，不支持 `epd`。
-
-执行 `PRISM_REMOTE_DEPLOY_BIN`（默认 `llm-d-bench`）的 `deploy custom --no-wait`，
-随后修补模型容器的挂载／代理设置。命令完成后返回 `200`，不是 `202`，
-也**不代表部署已就绪**。响应节选：
-
-```json
-{
-  "id": "remote-1700000000000", "name": "llm-d-service",
-  "cluster": "operator@192.0.2.20:22", "remoteHost": "192.0.2.20",
-  "nodes": 1, "gpusPerNode": 1, "selectedCards": ["0"], "replicas": 1,
-  "namespace": "llm-d-optimized", "status": "deploying",
-  "createdAt": "2026-10-13T00:00:00.000Z", "endpoint": null, "pods": [], "logTail": []
-}
-```
-
-响应还包含候选标签及传入的机器／加速器元数据；
-`replicas` 反映 `plan.replicas` 或一，不一定等于 `decodeReplicas`。应查询 status 判断部署进度。
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-plan = {
-    "namespace": "llm-d-optimized", "name": "llm-d-service",
-    "accelerator": "Intel Data Center GPU", "nodes": 1,
-    "guide": "optimized-baseline", "model": "Qwen/Qwen3-0.6B",
-    "decodeReplicas": 1, "decodeTp": 1,
-    "deploymentTarget": {"repository": "https://github.com/llm-d/llm-d.git", "branch": "main"},
-}
-started = remote_request("POST", "/api/remote-deploy/start", {"target": target, "plan": plan})
-print(started["namespace"], started["status"])
-```
-
-  </TabItem>
-</Tabs>
-
-### 获取远程部署状态
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/status`**。以下字段还需加入 `target` 和可选 `credentials`：
-
-```json
-{"namespace": "llm-d-optimized"}
-```
-
-返回 `200`，包含 `status`、`pods`、`podsReady`、`podsTotal`、`endpoint`、`error`、`logTail`。
-状态包含 `deploying`、`ready`、`ready_no_endpoint`、`failed`、`not_found`；
-应检查 status，不能只看 HTTP 状态。
-Pod 条目包含 `name`、`status`、`ready`、`restarts`、`node`、`gpuCount`、`reason`、`message`。
-端点来自 Gateway／LoadBalancer 地址或 Gateway Service DNS，不会建立本地隧道。示例：
-
-```json
-{"status": "deploying", "pods": [], "podsReady": 0, "podsTotal": 0, "endpoint": null, "error": null, "logTail": []}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-status = remote_request("POST", "/api/remote-deploy/status", {
-    "target": target, "namespace": "llm-d-optimized"
-})
-print(status["status"], status["endpoint"])
-```
-
-  </TabItem>
-</Tabs>
-
-### 获取远程部署日志
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/logs`**。以下字段还需加入 `target` 和可选 `credentials`：
-
-```json
-{"namespace": "llm-d-optimized", "tail": 100}
-```
-
-可选 `pod` 指定 Pod；tail 默认 100，限制为 `1..1000`。
-返回 `200`，包含 `logs`、`truncated`，最多保留最后 32,000 个 JavaScript 字符串代码单元，
-**并非保证 32 KiB 的字节上限**：
-
-```json
-{"logs": "Model server started\n", "truncated": false}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-logs = remote_request("POST", "/api/remote-deploy/logs", {
-    "target": target, "namespace": "llm-d-optimized", "tail": 100
-})
-print(logs["logs"], logs["truncated"])
-```
-
-  </TabItem>
-</Tabs>
-
-### 清理远程部署
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/remote-deploy/teardown`**。以下字段还需加入 `target` 和可选 `credentials`：
-
-```json
-{"namespace": "llm-d-optimized"}
-```
-
-执行远程 `deploy cleanup -n <namespace> -f`。
-返回 `200`，包含 `success`、`namespace` 及最后 100 行输出组成的 `logTail`：
-
-```json
-{"success": true, "namespace": "llm-d-optimized", "logTail": []}
-```
-
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-removed = remote_request("POST", "/api/remote-deploy/teardown", {
-    "target": target, "namespace": "llm-d-optimized"
-})
-print(removed["success"], removed["namespace"])
-```
-
-  </TabItem>
-</Tabs>
-
-## 其他部署 API
-
-### 列出孤儿部署命名空间
-
-列出集群上匹配部署命名空间前缀、但没有被任何 Lens 执行记录引用的
-命名空间。这些是因记录被删除而未清理命名空间，或因数据库重建
-而遗留下来的；Lens 中没有任何其他内容指向它们。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/deployments/orphans`**
-
-    查询参数：
-    - `cluster_id`（`string`，必需）：要扫描的集群。
-
-    响应：部署前缀以及孤儿命名空间。
-
-    ```json
-    {
-      "clusterId": "cluster-a",
-      "prefix": "llmd-",
-      "items": [
-        { "name": "llmd-optimized-baseline-1-1-20260918032423139529", "createdAt": "2026-09-18T03:24:23Z", "phase": "Active" }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.deploy.orphans import scan_orphan_namespaces
-
-    orphans = asyncio.run(scan_orphan_namespaces("cluster-a"))
-    print([orphan.api_payload() for orphan in orphans])
-    ```
-  </TabItem>
-</Tabs>
-
-### 清理孤儿部署命名空间
-
-删除给定的孤儿命名空间（以及其中的 InferencePool/EPP/模型服务器）。
-超出部署前缀范围的名称，或仍被某个 Lens 执行记录引用的名称，
-会被拒绝而不会被删除。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/deployments/orphans/clean`**
-
-    请求体（`CleanOrphansRequest`）：
-    - `clusterId`（`string`，必需）
-    - `namespaces`（`string[]`，必需）：要删除的孤儿命名空间。
-
-    ```json
-    {
-      "clusterId": "cluster-a",
-      "namespaces": ["llmd-optimized-baseline-1-1-20260918032423139529"]
-    }
-    ```
-
-    响应：已删除的名称以及任何按命名空间划分的失败信息。
-
-    ```json
-    {
-      "clusterId": "cluster-a",
-      "cleaned": ["llmd-optimized-baseline-1-1-20260918032423139529"],
-      "failed": []
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.deploy.orphans import clean_orphan_namespaces
-
-    cleaned, failed = asyncio.run(
-        clean_orphan_namespaces(
-            "cluster-a", ["llmd-optimized-baseline-1-1-20260918032423139529"]
-        )
-    )
-    print({"cleaned": cleaned, "failed": failed})
-    ```
-  </TabItem>
-</Tabs>
-
-## 配置准备 API
-
-这些配置领域的路由会为部署和评估准备制品。请求和响应模型位于
-`llm_d_lens.configuration.models`。示例中使用了用于说明的集群/会话
-ID 和指南提交记录；请将它们替换为一个活动的集群会话和真实渲染过的
-指南溯源信息。保存操作会发布一个制品；单独的渲染操作不会部署它。
-
-流程为来源选择/编辑、resolve、render、save，最后才是部署。Resolve 先归一化各输入，
-再进行能力检查与校验，并逐配置返回反馈。Candidate source 标识输入来源，不是部署类型。
-Render 将候选意图与实际 Guide 资源绑定；save 发布不可变制品、身份信息与校验和。
-Configuration 负责归一化、校验与制品发布，Deploy 负责运行时校验、资源生命周期、拆除与回滚。
-校验和不能单独证明拓扑或资源语义正确。以下 REST 端点及 Python 服务函数遵循同样的边界。
-
-HTTP 边界使用 `application/problem+json` 格式的错误。共享的
-`DomainError` 实例会保留其原始的状态码和错误码（例如冲突仍然是
-409）；它们不会被转换成一个操作专属的 500 错误。Python 服务调用
-会抛出其原始异常；`llm_d_lens.configuration.router` 中的路由适配器
-应用下面的 HTTP 映射关系。
-
-### 解析源配置
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/configurations/resolve`**
-
-请求：`ResolveRequest`。成功：HTTP `200`，`ResolveResponse`。
-`candidate_source` 和一个非空的 `configurations` 列表是必需的；
-`target.cluster_id` 是可选的。返回 `results`，其中每一项都包含
-`configuration_id`、`candidate_config` 和 `validation`（状态、错误、警告）。
-从解析器中逃逸出来的配置错误会返回 400；意外的失败会返回 500，
-并附带 `Unable to resolve configurations`。
-
-```json
-{
-  "candidate_source": {
-    "name": "manual"
-  },
-  "configurations": [
-    {
-      "configuration_id": "example",
-      "input_mode": "form",
-      "payload": {
-        "type": "baseline",
-        "candidate_source": {
-          "name": "manual"
-        },
-        "target": {
-          "model": "New/Model"
-        },
-        "serving": {
-          "replicas": 2,
-          "tensor_parallel_size": 1
-        },
-        "runtime": {
-          "image": "model:v1"
-        },
-        "guide_settings": {
-          "routerValues": "router:\n  epp:\n    replicas: 2"
-        }
-      }
-    }
-  ],
-  "target": {
-    "cluster_id": "cluster"
-  }
-}
-```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-将上面的请求 JSON 保存为 `resolve-request.json`。
-
-```python
-import asyncio
-from pathlib import Path
-from llm_d_lens.configuration.models import ResolveRequest
-from llm_d_lens.configuration.service import resolve_configurations
-
-request = ResolveRequest.model_validate_json(Path("resolve-request.json").read_text())
-result = asyncio.run(resolve_configurations(request))
-print(result.model_dump(mode="json"))
-```
-  </TabItem>
-</Tabs>
-
-### 渲染一个可部署配置
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/configurations/render`**
-
-请求：`RenderRequest`。成功：HTTP `200`，`RenderResponse`。
-需要 `candidate_config` 和 `render`：格式、指南/模板引用、固定的
-指南来源、渲染后的清单、活动的集群引用，以及部署就绪状态/端点契约。
-仍然支持可选的 bundle、参考清单、模型密钥和部署名称。返回
-`deployable_configuration` 和 `metadata`。配置或值错误会返回 400；
-意外的失败会返回 500，并附带 `Unable to render configuration`。
-
-```json
-{
-  "candidate_config": {
-    "type": "baseline",
-    "candidate_source": {
-      "name": "manual"
-    },
-    "target": {
-      "model": "New/Model"
-    },
-    "serving": {
-      "replicas": 2,
-      "tensor_parallel_size": 1
-    },
-    "runtime": {
-      "image": "model:v1"
-    },
-    "guide_settings": {
-      "routerValues": "router:\n  epp:\n    replicas: 2"
-    }
-  },
-  "render": {
-    "format": "manifest",
-    "guide_ref": "optimized-baseline",
-    "template_ref": "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml",
-    "guide_source": {
-      "repository": "llm-d/llm-d",
-      "requestedRef": "main",
-      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "guide": "optimized-baseline",
-      "accelerator": "xpu",
-      "modelServer": "vllm",
-      "variant": ".",
-      "files": [
-        "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml"
-      ]
-    },
-    "rendered_manifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: decode\nspec:\n  replicas: 2\n  template:\n    spec:\n      containers:\n      - args:\n        - New/Model\n        - --tensor-parallel-size=1\n        command:\n        - vllm\n        - serve\n        image: model:v1\n        name: modelserver\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: model\nspec:\n  ports:\n  - port: 8000\n",
-    "deployment_bundle": {
-      "schemaVersion": "guide-deployment-bundle.v1",
-      "guide": "optimized-baseline",
-      "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "helm": {
-        "chart": "oci://ghcr.io/llm-d/charts/llm-d-router-standalone",
-        "version": "v0.9.0",
-        "releaseName": "optimized-baseline",
-        "values": [
-          {
-            "name": "router-base.yaml",
-            "content": "router: {}",
-            "checksum": "sha256:162352753bb2618923b371c7236fc0c69f6604abaceef33d769f7f1686f845f6"
-          },
-          {
-            "name": "router-guide.yaml",
-            "content": "router:\n  epp:\n    replicas: 1",
-            "checksum": "sha256:bc3156ef61b87ae553e01848266fbe4f3dc526e0072f0d93f6dd9ede8c8784fd"
-          },
-          {
-            "name": "router-effective.yaml",
-            "content": "router:\n  epp:\n    replicas: 2",
-            "checksum": "sha256:816e7b274c9e9c55442a5be90c74d252a517a62f49dfdcf6fba60ac8443d189a"
-          }
-        ]
-      },
-      "resources": []
-    },
-    "cluster_ref": {
-      "id": "cluster",
-      "name": "cluster",
-      "session_id": "00000000-0000-0000-0000-000000000001",
-      "connection": "managed-kubeconfig"
-    },
-    "deployment": {
-      "readinessDeployments": [
-        "decode"
-      ],
-      "endpoint": {
-        "protocol": "http",
-        "serviceName": "model",
-        "port": 8000
-      }
-    }
-  }
-}
-```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-将上面的请求 JSON 保存为 `render-request.json`。
-
-```python
-from pathlib import Path
-from llm_d_lens.configuration.models import RenderRequest
-from llm_d_lens.configuration.service import render_configuration
-
-request = RenderRequest.model_validate_json(Path("render-request.json").read_text())
-result = render_configuration(request)
-print(result.model_dump(mode="json"))
-```
-  </TabItem>
-</Tabs>
-
-### 保存一个配置制品
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-**`POST /api/v1/configurations/save`**
-
-请求：`SaveRequest`。成功：HTTP `200`，`SaveResponse`。
-需要 `deployable_configuration`；`file.name` 是可选的。返回
-`configuration_file`（URI、类型、文件名、格式、路径、大小、SHA-256）
-和 `artifact`（ID、修订版本、状态、可部署配置、文件元数据、创建时间）。
-配置、文件系统或值错误会返回 400；意外的失败会返回 500，
-并附带 `Unable to save configuration`。
-
-```json
-{
-  "deployable_configuration": {
-    "schema_version": "deployable-configuration.v1",
-    "type": "baseline",
-    "format": "manifest",
-    "content": {
-      "deploymentType": "baseline",
-      "model": {
-        "name": "New/Model"
-      },
-      "serving": {
-        "replicaCount": 2,
-        "tensorParallelSize": 1
-      },
-      "runtime": {
-        "image": "model:v1"
-      },
-      "guideSettings": {
-        "routerValues": "router:\n  epp:\n    replicas: 2"
-      },
-      "officialGuide": {
-        "source": {
-          "repository": "llm-d/llm-d",
-          "requestedRef": "main",
-          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "guide": "optimized-baseline",
-          "accelerator": "xpu",
-          "modelServer": "vllm",
-          "variant": ".",
-          "files": [
-            "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml"
-          ]
-        },
-        "renderedManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: decode\nspec:\n  replicas: 2\n  template:\n    spec:\n      containers:\n      - args:\n        - New/Model\n        - --tensor-parallel-size=1\n        command:\n        - vllm\n        - serve\n        image: model:v1\n        name: modelserver\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: model\nspec:\n  ports:\n  - port: 8000\n",
-        "manifestChecksum": "sha256:f0677cfd3ecd361a1e549b6a17fbf64c884d406152095c777b359d9d95f2b408",
-        "cluster": {
-          "id": "cluster",
-          "name": "cluster",
-          "session_id": "00000000-0000-0000-0000-000000000001",
-          "connection": "managed-kubeconfig"
-        },
-        "deployment": {
-          "readinessDeployments": [
-            "decode"
-          ],
-          "endpoint": {
-            "protocol": "http",
-            "serviceName": "model",
-            "port": 8000
-          }
-        },
-        "modelSecret": {
-          "mode": "none",
-          "sourceNamespace": null,
-          "sourceName": null
-        },
-        "deploymentBundle": {
-          "schemaVersion": "guide-deployment-bundle.v1",
-          "guide": "optimized-baseline",
-          "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "helm": {
-            "chart": "oci://ghcr.io/llm-d/charts/llm-d-router-standalone",
-            "version": "v0.9.0",
-            "releaseName": "optimized-baseline",
-            "values": [
-              {
-                "name": "router-base.yaml",
-                "content": "router: {}",
-                "checksum": "sha256:162352753bb2618923b371c7236fc0c69f6604abaceef33d769f7f1686f845f6"
-              },
-              {
-                "name": "router-guide.yaml",
-                "content": "router:\n  epp:\n    replicas: 1",
-                "checksum": "sha256:bc3156ef61b87ae553e01848266fbe4f3dc526e0072f0d93f6dd9ede8c8784fd"
-              },
-              {
-                "name": "router-effective.yaml",
-                "content": "router:\n  epp:\n    replicas: 2",
-                "checksum": "sha256:816e7b274c9e9c55442a5be90c74d252a517a62f49dfdcf6fba60ac8443d189a"
-              }
-            ]
-          },
-          "resources": []
-        }
-      }
-    },
-    "provider_ref": "optimized-baseline",
-    "checksum": "sha256:da087b6024d1c8c6ef531f06d55e78d2a249594feb96b17580af140ac68c029f",
-    "provenance": {
-      "candidate_source": {
-        "name": "manual",
-        "run_id": null,
-        "result_id": null
-      },
-      "guide_ref": "optimized-baseline",
-      "template_ref": "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml",
-      "guide_source": {
-        "repository": "llm-d/llm-d",
-        "requestedRef": "main",
-        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "guide": "optimized-baseline",
-        "accelerator": "xpu",
-        "modelServer": "vllm",
-        "variant": ".",
-        "files": [
-          "guides/optimized-baseline/modelserver/xpu/vllm/kustomization.yaml"
-        ]
-      },
-      "cluster_ref": {
-        "id": "cluster",
-        "name": "cluster",
-        "session_id": "00000000-0000-0000-0000-000000000001",
-        "connection": "managed-kubeconfig"
-      },
-      "manifest_checksum": "sha256:f0677cfd3ecd361a1e549b6a17fbf64c884d406152095c777b359d9d95f2b408",
-      "renderer_version": "1.0"
-    }
-  },
-  "file": {
-    "name": "example.yaml"
-  }
-}
-```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-将上面的请求 JSON 保存为 `save-request.json`。
-
-```python
-from pathlib import Path
-from llm_d_lens.configuration.models import SaveRequest
-from llm_d_lens.configuration.service import save_configuration
-
-request = SaveRequest.model_validate_json(Path("save-request.json").read_text())
-result = save_configuration(request)
-print(result.model_dump(mode="json"))
-```
-  </TabItem>
-</Tabs>
-
-### 部署访问 API（已移除）
-
-部署分享和 `deployment:run:share` 已退役。请改用
-[模型服务推理授权](/api-reference/modules/model-services#模型推理授权)。
-迁移会审计并清理旧部署授权，不会自动扩大为模型授权。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-原 GET/POST/DELETE `/api/v1/deployments/executions/{execution_id}/access`
-和 `/api/v1/deployments/runs/{run_id}/access` 路由，包括 `/access/options`
-及 `/access/{binding_id}`，均已取消注册，不再提供授权、列表或撤权功能。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-将部署分享调用替换成模型服务的、带 scope 校验的授权方法：
-
-```python
-from llm_d_lens.model_service.service import default_service
-
-def revoke_model_grant(model_id: str, binding_id: str, principal) -> None:
-    default_service().revoke_access(model_id, binding_id, principal=principal)
-```
-
-该方法要求调用方在模型所属集群拥有 `model-service:group:share`，并拒绝撤销其他模型的绑定。
-通用绑定创建方法也会拒绝已退役的 `deployment_run` 和 `deployment_execution` 资源类型。
-  </TabItem>
-</Tabs>
+## 端点
+
+### 部署生命周期
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/deployments` | `deployment:run:read` | 列出运行（`/runs` 的别名） |
+| `GET` | `/api/v1/deployments/runs` | `deployment:run:read` | 列出或搜索运行 |
+| `POST` | `/api/v1/deployments/runs` | `deployment:run:create` | 从配置启动运行 |
+| `POST` | `/api/v1/deployments/standard-vllm-runs` | `deployment:run:create` | 启动 Standard vLLM 服务 |
+| `GET` | `/api/v1/deployments/runs/{run_id}` | `deployment:run:read` | 获取运行及其用例 |
+| `DELETE` | `/api/v1/deployments/runs/{run_id}` | `deployment:execution:delete` | 删除终态运行并清理资源 |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cancel` | `deployment:run:cancel` | 取消活动运行 |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cluster-session` | `deployment:session:rebind` | 重新绑定活动集群会话 |
+| `GET` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}` | `deployment:run:read` | 获取用例、执行和摘要 |
+| `GET` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/logs` | `deployment:run:read` | 读取用例编排日志 |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/refresh` | `deployment:case:execute` | 重新读取用例实时状态 |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/stop` | `deployment:case:execute` | 停止用例 |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/restart` | `deployment:case:execute` | 重启已停止或失败的用例 |
+| `POST` | `/api/v1/deployments/runs/{run_id}/cases/{case_id}/clean` | `deployment:case:execute` | 清理用例运行时资源 |
+| `GET` | `/api/v1/deployments/executions` | `deployment:run:read` | 列出执行 |
+| `GET` | `/api/v1/deployments/executions/{execution_id}` | `deployment:run:read` | 获取执行 |
+| `PATCH` | `/api/v1/deployments/executions/{execution_id}` | `deployment:execution:update` | 编辑显示名称或描述 |
+| `DELETE` | `/api/v1/deployments/executions/{execution_id}` | `deployment:execution:delete` | 删除执行记录 |
+| `GET` | `/api/v1/deployments/executions/{execution_id}/pods` | `deployment:run:read` | 列出实时 Pod 状态 |
+| `GET` | `/api/v1/deployments/executions/{execution_id}/pods/{pod_name}/logs` | `deployment:run:read` | 读取 Pod 日志 |
+| `POST` | `/api/v1/deployments/executions/{execution_id}/endpoint` | `deployment:execution:connect` | 创建或复用转发端点 |
+| `GET` | `/api/v1/deployments/cluster/{cluster_id}` | `deployment:run:read` | 列出集群的用例记录 |
+| `GET` | `/api/v1/deployments/node-labels?cluster_id=<cluster-id>` | `deployment:run:create` | 列出节点标签键值 |
+| `GET` | `/api/v1/deployments/runtime-classes?cluster_id=<cluster-id>` | `deployment:run:read` | 发现 RuntimeClass |
+| `GET` | `/api/v1/deployments/orphans?cluster_id=<cluster-id>` | `deployment:run:read` | 列出孤儿命名空间 |
+| `POST` | `/api/v1/deployments/orphans/clean` | `deployment:execution:delete` | 删除孤儿命名空间 |
+
+## 错误与限制
+
+| 状态码 | 含义 | 处理方式 |
+| --- | --- | --- |
+| `401` / `403` | 未认证或缺少权限 | 检查令牌和上表的权限列 |
+| `404` | 运行、用例、执行或产物不存在 | 重新列出资源并确认 id |
+| `409` | 生命周期冲突 | 等待终态或检查当前状态 |
+| `422` | 请求无效或 Pod 日志缺少命名空间 | 修正请求字段 |
+| `502` | 端口转发或清理失败 | 检查集群后重试 |
+| `503` | 集群放置或 RuntimeClass 发现失败 | 检查集群访问权限后重试 |
+
+- 活动运行的状态为 `queued`、`running` 或 `cancelling`。删除前先取消活动运行。后台协调器只将 `cleaned` 和 `cancelled` 运行视为终态，因此失败的回滚仍可能恢复。
+- 已停止的用例会保留 `rolled_back` 执行记录。已清理的用例仍保留在运行历史中。
+- 执行必须为 `ready` 且包含端点，才能连接或用于基准测试。
+- Standard vLLM 运行要求 Model Cache 中存在就绪模型，并提供已注册的 Model Cache 存储卷。`local-cache` 和直接 `pvc` 存储会被拒绝。
+- `placement_node_label` 需要 `placement_replicas: "same-node"`，且标签必须存在于目标集群。LeaderWorkerSet 不能使用 `balanced` 或 `spread`。
+- 删除运行会先清理剩余用例。活动运行返回 `409`；请先取消并等待终态。
+- 用例 `clean` 会删除运行时资源但保留生命周期记录。`preserve_rendered_overlay=true` 会保留渲染文件。
+- 用例日志的 `limit` 为 1-1000（默认 200）。Pod 日志的 `tail` 为 1-2000。
+
+## 相关
+
+- [部署用户指南](/user-guide/deployments)
+- [引导与部署教程](/tutorials/bootstrap-and-deploy)
+- [模型缓存](/user-guide/model-cache)
+- [OpenAPI 架构](/api-reference)

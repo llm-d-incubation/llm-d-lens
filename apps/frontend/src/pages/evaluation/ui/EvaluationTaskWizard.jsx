@@ -1,4 +1,5 @@
 import { usePolling } from '../../../shared/lib/usePolling.js';
+import { fetchWithAuthRetry } from '../../../shared/api/httpClient';
 import { createLatestResourceRequest } from '../../../shared/lib/resourceLoader.js';
 import { useHardwareProfiles } from '../../../shared/lib/useHardwareProfiles.js';
 import { getHardwareProfiles } from '../../clusters';
@@ -716,7 +717,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         setYamlText("");
         setYamlLoading(true);
         try {
-            const response = await fetch(`/api/v1/configurations/artifacts/${encodeURIComponent(artifact.artifact_id)}/manifest`);
+            const response = await fetchWithAuthRetry(`/api/v1/configurations/artifacts/${encodeURIComponent(artifact.artifact_id)}/manifest`);
             if (!response.ok) throw new Error(`Unable to load YAML (${response.status})`);
             setYamlText(await response.text());
         } catch (nextError) {

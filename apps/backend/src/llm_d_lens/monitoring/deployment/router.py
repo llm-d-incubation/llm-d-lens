@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from . import service as deployment_monitoring
+from .models import DeploymentMonitoringListResponse, DeploymentMonitoringStatusResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/monitoring/deployments", tags=["deployment-monitoring"])
@@ -40,8 +41,11 @@ def _http_error(error: deployment_monitoring.DeploymentMonitoringError) -> HTTPE
         "have observability installed, enabled, or unhealthy."
     ),
     operation_id="list_deployment_monitoring",
+    response_model=DeploymentMonitoringListResponse,
 )
-async def list_deployment_monitoring(cluster_id: str = Query(max_length=64)):
+async def list_deployment_monitoring(
+    cluster_id: str = Query(max_length=64),
+) -> DeploymentMonitoringListResponse:
     """Report monitoring state for every deployment in a cluster."""
     try:
         return await deployment_monitoring.get_cluster_status(cluster_id)
@@ -56,11 +60,12 @@ async def list_deployment_monitoring(cluster_id: str = Query(max_length=64)):
     summary="Get monitoring status for one deployment execution, optionally scoped to a cluster id.",
     description="Get monitoring status for one deployment execution, optionally scoped to a cluster id.",
     operation_id="get_deployment_monitoring",
+    response_model=DeploymentMonitoringStatusResponse,
 )
 async def get_deployment_monitoring(
     execution_id: str,
     cluster_id: str | None = Query(default=None, max_length=64),
-):
+) -> DeploymentMonitoringStatusResponse:
     """Report monitoring state for one deployment execution."""
     try:
         return await deployment_monitoring.get_status(execution_id, cluster_id)
@@ -75,12 +80,13 @@ async def get_deployment_monitoring(
     summary="Install, enable, disable, or uninstall monitoring resources for one deployment execution.",
     description="Install, enable, disable, or uninstall monitoring resources for one deployment execution.",
     operation_id="manage_deployment_monitoring",
+    response_model=DeploymentMonitoringStatusResponse,
 )
 async def manage_deployment_monitoring(
     execution_id: str,
     action: str,
     cluster_id: str | None = Query(default=None, max_length=64),
-):
+) -> DeploymentMonitoringStatusResponse:
     """Install, enable, disable, or uninstall a deployment's monitoring resources."""
     handler = _ACTIONS.get(action)
     if handler is None:

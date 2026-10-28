@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 
 from llm_d_lens.cluster import sessions
+from llm_d_lens.cluster.models import PlanningDiscoveryResponse
 from llm_d_lens.infrastructure.kubernetes import run_kubectl
 
 router = APIRouter()
@@ -22,6 +23,7 @@ _READS = {
 
 @router.get(
     "/sessions/{session_id}/planning-discovery/{resource}",
+    response_model=PlanningDiscoveryResponse,
     summary="Read one planning discovery resource for an active cluster session.",
     description="Read Kubernetes version, nodes, device classes, resource slices or runtime classes for an "
     "active cluster session without exposing kubeconfig material.",
@@ -30,7 +32,7 @@ _READS = {
 async def planning_discovery(
     session_id: str,
     resource: Literal["version", "nodes", "deviceclasses", "resourceslices", "runtimeclasses"],
-) -> dict[str, object]:
+) -> PlanningDiscoveryResponse:
     try:
         session = sessions.require_active_session(session_id)
     except ValueError as error:
@@ -40,8 +42,8 @@ async def planning_discovery(
         # accept kubeconfig paths, API paths, or command arguments from callers.
         result = await run_kubectl(_READS[resource], timeout=10, cluster_id=session.id)
         payload = json.loads(result.stdout) if result.ok else None
-        return {"result": payload if isinstance(payload, dict) else None}
+        return PlanningDiscoveryResponse(result=payload if isinstance(payload, dict) else None)
     except Exception:
         # Planning treats unavailable optional APIs and failed required reads as
         # null; the Node caller decides whether preflight can succeed.
-        return {"result": None}
+        return PlanningDiscoveryResponse(result=None)

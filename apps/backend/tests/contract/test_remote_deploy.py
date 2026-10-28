@@ -9,6 +9,12 @@ from llm_d_lens.deploy import remote_deploy as remote
 from llm_d_lens.infrastructure.ssh import SshTarget
 
 
+def test_remote_routes_declare_concrete_response_models():
+    routes = [route for route in remote.router.routes if getattr(route, "methods", None)]
+    assert routes
+    assert all(getattr(route, "response_model", None) is not None for route in routes)
+
+
 def target(**overrides):
     return {
         "host": "host.example",
@@ -81,7 +87,7 @@ def test_fingerprint_probe_does_not_authenticate(monkeypatch):
     monkeypatch.setattr(remote, "execute", execute)
     app = FastAPI()
     app.include_router(remote.router)
-    response = TestClient(app).post("/api/remote-deploy/fingerprint", json={"target": {"host": "host.example"}})
+    response = TestClient(app).post("/api/v1/remote-deploy/fingerprint", json={"target": {"host": "host.example"}})
     assert response.status_code == 200
     assert response.json()["host"] == "host.example"
     inspect.assert_called_once_with("host.example", 22, 10)
@@ -96,7 +102,7 @@ def test_remote_start_preserves_response(monkeypatch):
     app = FastAPI()
     app.include_router(remote.router)
     response = TestClient(app).post(
-        "/api/remote-deploy/start",
+        "/api/v1/remote-deploy/start",
         json={
             "target": target(),
             "credentials": {"password": "test-only"},
@@ -110,6 +116,8 @@ def test_remote_start_preserves_response(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "deploying"
     assert response.json()["cluster"] == "operator@host.example:22"
+    assert "machineType" not in response.json()
+    assert response.json()["accelerator"] == "Intel Data Center GPU Max"
     command = execute.call_args.args[2]
     assert '--llm-d-root "$LLM_D_ROOT"' in command
     assert "--no-wait --prefill-replicas 0" in command
@@ -128,7 +136,7 @@ def test_remote_internal_errors_are_logged_not_exposed(monkeypatch, caplog, erro
     monkeypatch.setattr(remote, "inspect_host_key", Mock(side_effect=error_type(detail)))
     app = FastAPI()
     app.include_router(remote.router)
-    response = TestClient(app).post("/api/remote-deploy/fingerprint", json={"target": {"host": "host.example"}})
+    response = TestClient(app).post("/api/v1/remote-deploy/fingerprint", json={"target": {"host": "host.example"}})
     assert response.status_code == 502
     assert response.json() == {"error": "Remote deployment failed"}
     assert detail not in response.text
@@ -141,7 +149,7 @@ def test_remote_command_errors_do_not_expose_stderr(monkeypatch, caplog):
     monkeypatch.setattr(remote, "execute", AsyncMock(return_value={"code": 1, "stdout": "", "stderr": detail}))
     app = FastAPI()
     app.include_router(remote.router)
-    response = TestClient(app).post("/api/remote-deploy/teardown", json={"target": target(), "namespace": "test"})
+    response = TestClient(app).post("/api/v1/remote-deploy/teardown", json={"target": target(), "namespace": "test"})
     assert response.status_code == 502
     assert response.json() == {"error": "Remote deployment failed"}
     assert detail not in response.text
@@ -152,6 +160,6 @@ def test_remote_validation_keeps_actionable_message(monkeypatch):
     monkeypatch.setenv("NODE_ENV", "development")
     app = FastAPI()
     app.include_router(remote.router)
-    response = TestClient(app).post("/api/remote-deploy/fingerprint", json={"target": {"host": "invalid;host"}})
+    response = TestClient(app).post("/api/v1/remote-deploy/fingerprint", json={"target": {"host": "invalid;host"}})
     assert response.status_code == 400
     assert response.json() == {"error": "Invalid SSH host"}

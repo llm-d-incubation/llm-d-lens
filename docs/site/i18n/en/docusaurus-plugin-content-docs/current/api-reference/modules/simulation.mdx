@@ -1,1124 +1,343 @@
 ---
 title: Simulation
-description: Backend endpoints and direct Python entry points for simulation task discovery and replay.
+description: Replay trace workloads against a model and inspect the results.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+Use Simulation to replay a registered trace dataset against a deployment, a published Model Service, or an endpoint URL. Reach for it when you need measured throughput, latency, and per-request errors for a realistic workload; use Evaluation for benchmark suites.
 
-Local and Pod execution share request progress reporting through `llm_d_lens.simulation.progress.report_request_progress`. Pod reporting still waits for readiness; local reporting retains its original start time. Backend adapters share artifact error formatting through `backends.analytics.artifact_error_message`, while retaining their own error/timeout field precedence, status mapping, and metric units. Task APIs and backend environment preparation are unchanged.
+## Quick start
 
-Simulation routes live in `llm_d_lens/simulation/router.py` under the `/api/simulation` prefix.
-
-### Test-time evidence and historical ingestion
-
-Task create/get/list/rerun responses include optional `benchmark_evidence`:
-the saved task/deployment configuration, API-enriched `benchmark_context`,
-optional Model Service `routing`, `benchmark_context_error` when collection or
-verification fails, and terminal `ingestion` diagnostics. No new request metadata
-is required. These facts are captured before traffic and verified after completion.
-Reruns collect their own snapshot.
-
-`benchmark_context.model_identity` identifies the authoritative model and its
-source (`deployment-configuration` or `model-service-routing`), including the
-deployment execution and, for Model Services, group/member IDs. Simulation reuses
-this validated identity without parsing container startup commands. Hardware and
-runtime facts are still probed independently, and container/route stability checks
-remain required. Unobserved `serving_configuration` fields and auxiliary metadata
-stay null with `warnings`; they are not replaced with configured values. Missing
-hard compatibility fields exclude a record from predictive matching, not archival.
-
-The ingestion report has `schema_version`, `status`, `record_ids`, `existing_ids`,
-`inserted_ids` and `issues`. Status is `stored`, `partial`, `skipped` or `error`;
-read-only preview uses `eligible` and `eligible_ids` for pending valid evidence.
-Each record uses `simulation:<task-id>` and the original measurement time.
-Source results are saved before evidence insertion, and existing evidence is
-never overwritten. Missing required context or incomplete artifacts produce
-explicit issues instead of current-environment substitutions.
-
-Normalization checks AIPerf's reported duration against the successful-request
-window and Trace Replayer's against the all-request window, with a one-second
-tolerance. The full request window is separately bounded by the task's measured
-execution duration. Mean concurrency divides all request lifetimes by the full
-request window; original summary durations and throughput metrics are unchanged.
-Benchmark record provenance includes `measurement_windows` with
-`reported_duration_seconds`, `reported_duration_scope` (`successful-requests` or
-`all-requests`), `all_requests_duration_seconds` and
-`successful_requests_duration_seconds`.
+List the backends Lens can use in the current environment, then choose one whose `available` value is `true`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    Read `benchmark_evidence` from **`GET /api/simulation/tasks/{task_id}`**.
-    Multi-deployment Model Service traffic and unverifiable external environments
-    are not attributed to a guessed deployment.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
 
-```python
-from llm_d_lens.simulation.benchmark_evidence import normalize_simulation_task, ingest_simulation_task
-
-records, issues = normalize_simulation_task(saved_task)  # saved facts/artifacts only
-preview = ingest_simulation_task(saved_task, apply=False)  # no writes
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/simulation/backends
 ```
 
   </TabItem>
-</Tabs>
-
-From the configured backend environment, run
-`python -m llm_d_lens.simulation.benchmark_evidence` for preview. Repeat
-`--task-id <id>` to select tasks; add `--apply` to insert eligible records and
-persist source reports. Backfill never recollects today's cluster state.
-Unknown shared-prefix ratios remain null and receive no matching credit.
-
-### List simulation backends
-
-List Simulation backends Lens knows about and whether each backend is available in the current environment.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/backends`**
-
-    Request: no body.
-
-    Response:
-
-    ```json
-    {
-      "backends": [
-        {
-          "name": "aiperf",
-          "display_name": "AIPerf",
-          "api_version": 1,
-          "available": true,
-          "version": "0.12.0",
-          "unavailable_reason": null,
-          "scenarios": [
-            {
-              "name": "chat",
-              "display_name": "Chat",
-              "description": "Conversational and general assistant traffic.",
-              "supported_backends": []
-            },
-            {
-              "name": "api-calling",
-              "display_name": "Tool & API Use",
-              "description": "Tool-use, agent, and business API traffic.",
-              "supported_backends": []
-            }
-          ],
-          "capabilities": {
-            "prompt_kinds": ["trace"],
-            "arrival_patterns": [],
-            "supports_duration": true,
-            "supports_request_count": false,
-            "supports_request_rate": false,
-            "supports_streaming": true,
-            "supports_per_request_results": true,
-            "supports_cancellation": true,
-            "supports_trace_range": true,
-            "scale_factor_trace_formats": ["baseten_trace"],
-            "trace_format_capabilities": {
-              "mooncake_trace": {"supports_trace_range": true, "supports_scale_factor": false}
-            },
-            "advanced_options": [],
-            "trace_formats": [
-              "mooncake_trace",
-              "bailian_trace",
-              "baseten_trace",
-              "burst_gpt_trace",
-              "weka_public_dataset"
-            ]
-          },
-          "managed_installation": false
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.simulation.backends import list_backends
-
-for backend in list_backends():
-    print(backend.name, backend.available, backend.version)
-```
-  </TabItem>
-</Tabs>
-
-### Discover endpoint models
-
-Probe a model endpoint and discover which models it reports. The optional `api_key` is sent as a Bearer token and is not included in the response. Failed connectivity, authentication, or invalid model lists return HTTP 400.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/simulation/models/discover`**
-
-    Request body: `ModelDiscoveryRequest`
-    - `endpoint_url` (`string`, required)
-    - `api_key` (`string`, optional, maximum 4096 characters; used only for this request)
-
-    ```json
-    {
-      "endpoint_url": "http://127.0.0.1:38000/v1"
-    }
-    ```
-
-    Response:
-
-    ```json
-    {
-      "endpoint": "http://127.0.0.1:38000/v1",
-      "models": [
-        "Qwen/Qwen3-8B",
-        "Qwen/Qwen3-8B-Instruct"
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
-from llm_d_lens.simulation.endpoints import discover_models
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        response = await lens.simulation.backends_catalog()
+        for backend in response.backends:
+            print(backend.name, backend.available, backend.scenarios)
 
-async def main() -> None:
-    models = await discover_models("http://127.0.0.1:38000/v1", api_key="your-model-access-token")
-    print(models["endpoint"], models["models"])
-
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### List simulation scenarios
+## Common tasks
 
-List the simulation scenario catalog Lens exposes, such as chat, API-calling, and coding.
+### 1. Find a trace dataset and its replay shape
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/scenarios`**
 
-    Request: no body.
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/simulation/trace-datasets
 
-    Response:
-
-    ```json
-    {
-      "scenarios": [
-        {
-          "name": "chat",
-          "display_name": "Chat",
-          "description": "Conversational and general assistant traffic.",
-          "supported_backends": ["aiperf", "trace-replayer"]
-        },
-        {
-          "name": "coding",
-          "display_name": "Code Generation",
-          "description": "Code generation and software engineering traffic.",
-          "supported_backends": ["aiperf"]
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.simulation.backends import list_scenarios
-
-for scenario in list_scenarios():
-    print(scenario.name, scenario.supported_backends)
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/simulation/trace-datasets/mooncake-arxiv/timeline?bins=200"
 ```
+
+Use `data_dir`, `datasets[].downloaded`, and `datasets[].supported_backends` to pick a dataset. The timeline returns `request_count`, `duration_seconds`, and `bins`.
+
   </TabItem>
-</Tabs>
-
-### List trace datasets
-
-List registered trace datasets and the backends that can replay each one.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/trace-datasets`**
-
-    Request: no body.
-
-    Response:
-
-    ```json
-    {
-      "data_dir": "/home/prism/.local/share/prism/data/datasets",
-      "datasets": [
-        {
-          "name": "mooncake-arxiv",
-          "filename": "mooncake_trace.jsonl",
-          "scenario": "chat",
-          "trace_format": "mooncake_trace",
-          "description": "Mooncake chat trace derived from Arxiv summarization prompts.",
-          "downloaded": false,
-          "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-          "artifact_uri": "artifact://dataset/mooncake-arxiv/mooncake_trace.jsonl",
-          "size_bytes": null,
-          "license": "Apache-2.0",
-          "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
-          "source_repository": "https://github.com/kvcache-ai/Mooncake.git",
-          "supported_backends": ["aiperf", "trace-replayer"]
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.simulation.backends import list_backends
-from llm_d_lens.simulation.traces import trace_registry
-
-backends = list_backends()
-for dataset in trace_registry.list():
-    supported = [
-        backend.name
-        for backend in backends
-        if any(scenario.name == dataset["scenario"] for scenario in backend.scenarios)
-        and dataset["trace_format"] in backend.capabilities.get("trace_formats", [])
-    ]
-    print(dataset["name"], supported)
-```
-  </TabItem>
-</Tabs>
-
-### Download a trace dataset
-
-Download a registered trace dataset into Lens's local trace store.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/simulation/trace-datasets/download`**
-
-    Request body: `TraceDatasetDownloadRequest`
-    - `dataset` (`string`, required)
-    - `force` (`boolean`, default `false`)
-
-    ```json
-    {
-      "dataset": "mooncake-arxiv",
-      "force": false
-    }
-    ```
-
-    Response:
-
-    ```json
-    {
-      "artifact_uri": "artifact://dataset/mooncake-arxiv/mooncake_trace.jsonl",
-      "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-      "trace_format": "mooncake_trace",
-      "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
-      "metadata_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl.metadata.json",
-      "size_bytes": 1048576
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
-from llm_d_lens.simulation.traces import BaseTrace
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        datasets = await lens.simulation.trace_datasets_catalog()
+        for dataset in datasets.datasets:
+            print(dataset.name, dataset.downloaded, dataset.supported_backends)
 
-async def main() -> None:
-    result = await BaseTrace.download("mooncake-arxiv", force=False)
-    print(result["path"], result["sha256"])
+        timeline = await lens.simulation.trace_dataset_timeline("mooncake-arxiv", bins=200)
+        print(timeline.request_count, timeline.duration_seconds)
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Get a trace dataset timeline
-
-Get a pre-aggregated timeline view for one trace dataset.
+### 2. Download a trace dataset
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/trace-datasets/{dataset_name}/timeline`**
 
-    Request: no body.
-    - Path parameter: `dataset_name` (`string`, required)
-    - Query parameter: `bins` (`integer`, default `800`, range `50`-`2000`)
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/simulation/trace-datasets/download \
+  -d '{"dataset":"mooncake-arxiv","force":false}'
+```
 
-    Response:
+The response returns `path`, `artifact_uri`, `trace_format`, `size_bytes`, and `sha256`. Set `force` to `true` only when you want to replace an existing download.
 
-    ```json
-    {
-      "dataset": "mooncake-arxiv",
-      "trace_format": "mooncake_trace",
-      "request_count": 12000,
-      "duration_seconds": 3600.0,
-      "source_size_bytes": 1048576,
-      "bin_width_seconds": 4.5,
-      "bins": [
-        {"start_seconds": 0.0, "end_seconds": 4.5, "request_count": 12},
-        {"start_seconds": 4.5, "end_seconds": 9.0, "request_count": 18}
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
-from llm_d_lens.simulation.traces import get_trace_timeline
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.simulation.models import TraceDatasetDownloadRequest
 
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        result = await lens.simulation.download_trace_dataset(
+            TraceDatasetDownloadRequest(dataset="mooncake-arxiv", force=False)
+        )
+        print(result.path, result.sha256, result.size_bytes)
 
-async def main() -> None:
-    timeline = await get_trace_timeline("mooncake-arxiv", 800)
-    print(timeline["dataset"], timeline["request_count"])
-
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### List simulation tasks
-
-List Simulation tasks with optional filters for status, scenario, backend, model, dataset, endpoint, and creation window.
+### 3. Discover models at an endpoint
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/tasks`**
 
-    Request: no body.
-    - Query parameters: `status`, `scenario`, `search`, `backend`, `model`, `dataset`, `trace_format`, `endpoint`, `created_after`, `created_before`, `offset`, `limit`.
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/simulation/models/discover \
+  -d '{"endpoint_url":"http://<host>:<port>/v1","api_key":"<token>"}'
+```
 
-    Response:
+The response contains `endpoint` and `models`. The optional `api_key` is sent as a Bearer token and is not returned.
 
-    ```json
-    {
-      "tasks": [
-        {
-          "id": "1a2b3c4d",
-          "name": "Trace simulation",
-          "description": "Replay a chat trace against a ready deployment",
-          "scenario": "chat",
-          "status": "running",
-          "endpoint_mode": "deployment",
-          "endpoint_namespace": "prism-sim",
-          "endpoint_service": "qwen-router",
-          "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-          "endpoint_deployment_run_id": null,
-          "endpoint_deployment_case_id": null,
-          "endpoint_cluster_id": "cluster-1",
-          "endpoint_cluster_name": "dev-cluster",
-          "endpoint_deployment_name": "qwen3-guide",
-          "endpoint_url": "http://127.0.0.1:38000/v1",
-          "model_name": "Qwen/Qwen3-8B",
-          "simulation": {
-            "backend": "trace-replayer",
-            "backend_options": {},
-            "duration_seconds": 60.0,
-            "num_requests": null,
-            "stream": true,
-            "warmup_enabled": false,
-            "grace_period_seconds": 30.0
-          },
-          "prompt": {
-            "type": "trace",
-            "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
-            "trace": {
-              "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-              "format": "mooncake_trace",
-              "fixed_schedule": true,
-              "timeout_seconds": 3600.0,
-              "synthesis_speedup_ratio": 1.0,
-              "start_seconds": 0.0,
-              "end_seconds": null
-            }
-          },
-          "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
-          "artifact_uri": null,
-          "artifact_error": null,
-          "logs_truncated": false,
-          "artifacts_incomplete": false,
-          "backend_version_inferred": false,
-          "backend_version": null,
-          "configuration_ids": ["config-1"],
-          "progress_percent": 42.5,
-          "progress_message": "Simulation running",
-          "logs": [],
-          "result": null,
-          "error_message": null,
-          "created_at": "2026-09-23T09:18:24.287000Z",
-          "started_at": "2026-09-23T09:18:25.000000Z",
-          "execution_started_at": "2026-09-23T09:18:27.000000Z",
-          "completed_at": null,
-          "owner_pid": null,
-          "owner_instance_id": null,
-          "live_summary": {
-            "completed_requests": 420,
-            "successful_requests": 418
-          }
-        }
-      ],
-      "total": 1,
-      "offset": 0,
-      "limit": 10,
-      "counts": {
-        "queued": 0,
-        "running": 1,
-        "completed": 0,
-        "failed": 0,
-        "cancelled": 0
-      },
-      "facets": {
-        "backends": ["trace-replayer"],
-        "models": ["Qwen/Qwen3-8B"],
-        "datasets": ["mooncake-arxiv"],
-        "trace_formats": ["mooncake_trace"],
-        "endpoints": ["http://127.0.0.1:38000/v1"]
-      }
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
-from llm_d_lens.simulation.service import list_tasks
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.simulation.models import ModelDiscoveryRequest
 
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        models = await lens.simulation.endpoint_models(
+            ModelDiscoveryRequest(endpoint_url="http://<host>:<port>/v1", api_key="<token>")
+        )
+        print(models.endpoint, models.models)
 
-async def main() -> None:
-    page = await list_tasks(status="running", limit=20)
-    print(page.total, [task.id for task in page.tasks])
-
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Create a simulation task
+### 4. Create a replay task
 
-For Endpoint URL targets (`endpoint_mode != "deployment"`), the service checks
-`/v1/models` with the supplied `api_key` before persisting or scheduling the task.
-A failed check returns HTTP 400; direct Python calls raise
-`SimulationConfigurationError`. Manual model names do not bypass this check.
-Deployment-bound Model Service tasks retain their cluster execution path.
-
-Create a Simulation task that replays a trace dataset against a target model endpoint.
+Create a task against a ready deployment execution:
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/simulation/tasks`**
 
-    Request body: `SimulationTaskCreateRequest`
-    - `name`, `description`, `scenario`, `backend`, `endpoint_mode`
-    - `cluster_session_id`, `endpoint_namespace`, `endpoint_service`, `endpoint_deployment_execution_id`, `endpoint_cluster_id`, `endpoint_cluster_name`, `endpoint_deployment_name`
-    - `model_service_group_id` (`string`, optional) — target a published, continuously health-probed
-      Model Service instead of a raw deployment execution. When set, the backend resolves it to the
-      group's active member and published name and forces `endpoint_mode` to `"deployment"`,
-      overriding any supplied `endpoint_deployment_execution_id`/`model_name`. Requires `api_key`.
-    - `api_key` (`string`, optional) — model access token; required when `model_service_group_id` is set.
-    - `endpoint_url`, `model_name`, `trace_dataset`, `trace_path`
-    - `duration_seconds`, `scale_factor`, `trace_start_seconds`, `trace_end_seconds`, `trace_timeout_seconds`, `fixed_schedule`, `stream`, `backend_options`
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/simulation/tasks \
+  -d '{
+    "name": "Chat replay",
+    "scenario": "chat",
+    "backend": "trace-replayer",
+    "endpoint_mode": "deployment",
+    "endpoint_deployment_execution_id": "<execution-id>",
+    "endpoint_cluster_id": "<cluster-id>",
+    "endpoint_url": "http://<host>:<port>/v1",
+    "model_name": "Qwen/Qwen3-8B",
+    "trace_dataset": "mooncake-arxiv",
+    "trace_path": "<dataset-path>",
+    "duration_seconds": 60
+  }'
+```
 
-    ```json
-    {
-      "name": "Trace simulation",
-      "description": "Replay a chat trace against a ready deployment",
-      "scenario": "chat",
-      "backend": "trace-replayer",
-      "endpoint_mode": "deployment",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "endpoint_namespace": "prism-sim",
-      "endpoint_service": "qwen-router",
-      "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-      "endpoint_cluster_id": "cluster-1",
-      "endpoint_cluster_name": "dev-cluster",
-      "endpoint_deployment_name": "qwen3-guide",
-      "endpoint_url": "http://127.0.0.1:38000/v1",
-      "model_name": "Qwen/Qwen3-8B",
-      "trace_dataset": "mooncake-arxiv",
-      "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-      "duration_seconds": 60,
-      "scale_factor": 1,
-      "trace_start_seconds": 0,
-      "trace_end_seconds": null,
-      "trace_timeout_seconds": 3600,
-      "fixed_schedule": true,
-      "stream": true,
-      "backend_options": {}
-    }
-    ```
+This returns `202 Accepted` with `task_id`, `status`, and `task`. To target a published Model Service instead, send `model_service_group_id` and `api_key`; the backend resolves the active member and published model name. Endpoint URL tasks are validated through `/v1/models` before the task is queued.
 
-    To target a published Model Service instead, set `model_service_group_id` and `api_key`; the
-    backend discards the supplied `endpoint_deployment_execution_id`/`endpoint_url`/`model_name` and
-    re-resolves them from the group's active member (a syntactically valid placeholder URL still
-    satisfies request validation):
-
-    ```json
-    {
-      "name": "Trace simulation",
-      "scenario": "chat",
-      "backend": "trace-replayer",
-      "endpoint_mode": "deployment",
-      "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
-      "api_key": "lens-mk-…",
-      "endpoint_url": "http://model-service.internal",
-      "model_name": "qwen3-8b",
-      "trace_dataset": "mooncake-arxiv",
-      "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl"
-    }
-    ```
-
-    Response:
-
-    ```json
-    {
-      "task_id": "1a2b3c4d",
-      "status": "queued",
-      "task": {
-        "id": "1a2b3c4d",
-        "name": "Trace simulation",
-        "description": "Replay a chat trace against a ready deployment",
-        "scenario": "chat",
-        "status": "queued",
-        "endpoint_mode": "deployment",
-        "endpoint_namespace": "prism-sim",
-        "endpoint_service": "qwen-router",
-        "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-        "endpoint_deployment_run_id": null,
-        "endpoint_deployment_case_id": null,
-        "endpoint_cluster_id": "cluster-1",
-        "endpoint_cluster_name": "dev-cluster",
-        "endpoint_deployment_name": "qwen3-guide",
-        "endpoint_url": "http://127.0.0.1:38000/v1",
-        "model_name": "Qwen/Qwen3-8B",
-        "simulation": {
-          "backend": "trace-replayer",
-          "backend_options": {},
-          "duration_seconds": 60.0,
-          "num_requests": null,
-          "stream": true,
-          "warmup_enabled": false,
-          "grace_period_seconds": 30.0
-        },
-        "prompt": {
-          "type": "trace",
-          "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
-          "trace": {
-            "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-            "format": "mooncake_trace",
-            "fixed_schedule": true,
-            "timeout_seconds": 3600.0,
-            "synthesis_speedup_ratio": 1.0,
-            "start_seconds": 0.0,
-            "end_seconds": null
-          }
-        },
-        "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
-        "artifact_uri": null,
-        "artifact_error": null,
-        "logs_truncated": false,
-        "artifacts_incomplete": false,
-        "backend_version_inferred": false,
-        "backend_version": null,
-        "configuration_ids": ["config-1"],
-        "progress_percent": 0.0,
-        "progress_message": "Queued",
-        "logs": [],
-        "result": null,
-        "error_message": null,
-        "created_at": "2026-09-23T09:18:24.287000Z",
-        "started_at": null,
-        "execution_started_at": null,
-        "completed_at": null,
-        "owner_pid": null,
-        "owner_instance_id": null
-      }
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
+from llm_d_lens.sdk import LensLocal
 from llm_d_lens.simulation.models import SimulationTaskCreateRequest
-from llm_d_lens.simulation.service import create_task
 
-
-async def main() -> None:
-    task = await create_task(
-        SimulationTaskCreateRequest(
-            scenario="chat",
-            backend="trace-replayer",
-            endpoint_mode="deployment",
-            endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000001",
-            endpoint_url="http://127.0.0.1:38000/v1",
-            model_name="Qwen/Qwen3-8B",
-            trace_dataset="mooncake-arxiv",
-            trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        response = await lens.simulation.create_simulation_task(
+            SimulationTaskCreateRequest(
+                name="Chat replay",
+                scenario="chat",
+                backend="trace-replayer",
+                endpoint_mode="deployment",
+                endpoint_deployment_execution_id="<execution-id>",
+                endpoint_cluster_id="<cluster-id>",
+                endpoint_url="http://<host>:<port>/v1",
+                model_name="Qwen/Qwen3-8B",
+                trace_dataset="mooncake-arxiv",
+                trace_path="<dataset-path>",
+                duration_seconds=60,
+            )
         )
-    )
-    print(task.id, task.status)
+        print(response.task_id, response.status, response.task.id)
 
-    # Or target a published Model Service (resolves to its active member and
-    # published name; requires api_key, and endpoint_url/model_name are discarded):
-    task = await create_task(
-        SimulationTaskCreateRequest(
-            scenario="chat",
-            backend="trace-replayer",
-            endpoint_mode="deployment",
-            model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
-            api_key="lens-mk-…",
-            endpoint_url="http://model-service.internal",
-            model_name="qwen3-8b",
-            trace_dataset="mooncake-arxiv",
-            trace_path="/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 5. Watch progress and read results
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/simulation/tasks/<task-id>
+
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/simulation/tasks/<task-id>/response-code-issues?status_code=500&limit=20"
+
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  -OJ http://127.0.0.1:3000/api/v1/simulation/tasks/<task-id>/artifacts/summary-json
+```
+
+Read `status`, `progress_percent`, `result.summary`, and `result.artifacts`. Use `status_code=unknown` for requests with no HTTP status. The response-code endpoint returns `issues`; the SDK exposes the same list as `.items`.
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+import asyncio
+
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        task = await lens.simulation.simulation_task("<task-id>")
+        print(task.status, task.progress_percent, task.result.summary)
+
+        issues = await lens.simulation.simulation_response_code_issues(
+            "<task-id>", status_code="500", limit=20
         )
-    )
-    print(task.id, task.status)
+        print(issues.total, len(issues.items))
 
+        artifact = await lens.simulation.download_simulation_artifact("<task-id>", "summary-json")
+        print(artifact.media_type)
 
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Get a simulation task
-
-Get one Simulation task by id, including progress, logs, and result artifacts when they exist.
-
-Artifact publication status and errors, log truncation, artifact completeness, backend version
-provenance, and configuration IDs persist with the task in the database. An artifact URI is
-returned only after publication has been recorded; an older on-disk manifest alone does not
-make an unpublished result available.
+### 6. Stop, rerun, or delete a task
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/tasks/{task_id}`**
 
-    Request: no body.
-    - Path parameter: `task_id` (`string`, required)
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/simulation/tasks/<task-id>/stop
 
-    Response:
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:3000/api/v1/simulation/tasks/<task-id>/rerun \
+  -d '{"endpoint_deployment_execution_id":"<new-execution-id>"}'
 
-    ```json
-    {
-      "id": "1a2b3c4d",
-      "name": "Trace simulation",
-      "description": "Replay a chat trace against a ready deployment",
-      "scenario": "chat",
-      "status": "completed",
-      "endpoint_mode": "deployment",
-      "endpoint_namespace": "prism-sim",
-      "endpoint_service": "qwen-router",
-      "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-      "endpoint_deployment_run_id": null,
-      "endpoint_deployment_case_id": null,
-      "endpoint_cluster_id": "cluster-1",
-      "endpoint_cluster_name": "dev-cluster",
-      "endpoint_deployment_name": "qwen3-guide",
-      "endpoint_url": "http://127.0.0.1:38000/v1",
-      "model_name": "Qwen/Qwen3-8B",
-      "simulation": {
-        "backend": "trace-replayer",
-        "backend_options": {},
-        "duration_seconds": 60.0,
-        "num_requests": null,
-        "stream": true,
-        "warmup_enabled": false,
-        "grace_period_seconds": 30.0
-      },
-      "prompt": {
-        "type": "trace",
-        "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
-        "trace": {
-          "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-          "format": "mooncake_trace",
-          "fixed_schedule": true,
-          "timeout_seconds": 3600.0,
-          "synthesis_speedup_ratio": 1.0,
-          "start_seconds": 0.0,
-          "end_seconds": null
-        }
-      },
-      "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d",
-      "artifact_uri": "artifact://simulation/1a2b3c4d",
-      "artifact_error": null,
-      "logs_truncated": false,
-      "artifacts_incomplete": false,
-      "backend_version_inferred": false,
-      "backend_version": "0.2.0",
-      "configuration_ids": ["config-1"],
-      "progress_percent": 100.0,
-      "progress_message": "Simulation completed",
-      "logs": ["Starting trace-replayer", "Simulation completed"],
-      "result": {
-        "run_id": "trace-replayer-1",
-        "backend": "trace-replayer",
-        "backend_version": "0.2.0",
-        "summary": {
-          "throughput_tps": 1180.4,
-          "success_rate": 99.8,
-          "completion_timeline": []
-        },
-        "artifacts": [
-          {
-            "uri": "artifact://simulation/1a2b3c4d/summary.json",
-            "kind": "summary-json",
-            "path": "/home/prism/.local/share/prism/data/artifacts/simulations/1a2b3c4d/summary.json",
-            "media_type": "application/json"
-          }
-        ],
-        "per_request": [
-          {
-            "request_id": 1,
-            "status_code": 200,
-            "successful": true,
-            "error": null,
-            "started_at_seconds": 0.0,
-            "completed_at_seconds": 0.42,
-            "latency_ms": 420.0,
-            "ttft_ms": 110.0,
-            "tpot_ms": 8.3,
-            "input_tokens": 512.0,
-            "output_tokens": 128.0,
-            "metadata": {}
-          }
-        ],
-        "backend_metrics": {},
-        "warnings": []
-      },
-      "error_message": null,
-      "created_at": "2026-09-23T09:18:24.287000Z",
-      "started_at": "2026-09-23T09:18:25.000000Z",
-      "execution_started_at": "2026-09-23T09:18:27.000000Z",
-      "completed_at": "2026-09-23T09:19:32.000000Z",
-      "owner_pid": null,
-      "owner_instance_id": null
-    }
-    ```
+curl -X DELETE -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/simulation/tasks/<task-id>
+```
+
+Stop returns `status: "cancelling"`. Rerun returns `202 Accepted` with a new task id. Delete returns `status: "deleted"` and only succeeds after the task has stopped.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
 import asyncio
 
-from llm_d_lens.simulation.service import get_task
-
-
-async def main() -> None:
-    task = await get_task("1a2b3c4d")
-    if task is not None:
-        print(task.id, task.status, task.progress_percent)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Download a simulation artifact
-
-Download a saved simulation artifact by task id and artifact kind as a file attachment.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/tasks/{task_id}/artifacts/{kind}`**
-
-    Request: no body.
-    - Path parameters: `task_id` (`string`, required), `kind` (`string`, required)
-
-    Response: file attachment streamed from the saved artifact path. No JSON body is returned. The task's `result.artifacts` list tells you which `kind` values are available.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.simulation.router import download_simulation_artifact
-
-
-async def main() -> None:
-    response = await download_simulation_artifact("1a2b3c4d", "summary-json")
-    print(response.media_type)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Get response-code issues for a simulation task
-
-Get requests from a Simulation task that returned a specific HTTP status code.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/simulation/tasks/{task_id}/response-code-issues`**
-
-    Request: no body.
-    - Path parameter: `task_id` (`string`, required)
-    - Query parameters: `status_code` (`string`, required; use `unknown` for missing status), `offset` (`integer`, default `0`), `limit` (`integer`, default `100`, max `500`)
-
-    Response:
-
-    ```json
-    {
-      "task_id": "1a2b3c4d",
-      "status_code": 500,
-      "issues": [
-        {
-          "request_number": 12,
-          "request_id": 12,
-          "status_code": 500,
-          "error": "Transport error: upstream reset the connection",
-          "started_at_seconds": 14.2,
-          "latency_ms": 982.5,
-          "input_tokens": 512.0,
-          "output_tokens": 0.0
-        }
-      ],
-      "total": 1,
-      "offset": 0,
-      "limit": 100
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.simulation.service import get_response_code_issues
-
-
-async def main() -> None:
-    issues = await get_response_code_issues("1a2b3c4d", 500, offset=0, limit=20)
-    print(issues.task_id, issues.total)
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Stop a simulation task
-
-Stop an active Simulation task.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/simulation/tasks/{task_id}/stop`**
-
-    Request: no body.
-    - Path parameter: `task_id` (`string`, required)
-
-    Response:
-
-    ```json
-    {
-      "task_id": "1a2b3c4d",
-      "status": "cancelling"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.simulation.service import stop_task
-
-
-async def main() -> None:
-    await stop_task("1a2b3c4d")
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Rerun a simulation task
-
-For Endpoint URL targets (`endpoint_mode != "deployment"`), the service checks
-`/v1/models` with the supplied `api_key` before persisting or scheduling the task.
-A failed check returns HTTP 400; direct Python calls raise
-`SimulationConfigurationError`. Manual model names do not bypass this check.
-Deployment-bound Model Service tasks retain their cluster execution path.
-
-Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh endpoint or deployment execution.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/simulation/tasks/{task_id}/rerun`**
-
-    Request body: `SimulationTaskRerunRequest` (optional)
-    - Path parameter: `task_id` (`string`, required)
-    - Optional body fields: `endpoint_url`, `endpoint_deployment_execution_id`, `endpoint_cluster_id`, `endpoint_cluster_name`, `endpoint_deployment_name`
-    - `model_service_group_id` (`string`, optional) — re-bind to a published, health-probed Model Service
-      instead of a raw deployment execution; resolved the same way as on task creation and preferred
-      over `endpoint_deployment_execution_id` when both are supplied.
-
-    ```json
-    {
-      "endpoint_url": "http://127.0.0.1:39000/v1",
-      "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000002",
-      "endpoint_cluster_id": "cluster-1",
-      "endpoint_cluster_name": "dev-cluster",
-      "endpoint_deployment_name": "qwen3-guide-rerun"
-    }
-    ```
-
-    Response:
-
-    ```json
-    {
-      "task_id": "5e6f7a8b",
-      "status": "queued",
-      "task": {
-        "id": "5e6f7a8b",
-        "name": "Trace simulation · rerun 5e6f7a8b",
-        "description": "Replay a chat trace against a ready deployment",
-        "scenario": "chat",
-        "status": "queued",
-        "endpoint_mode": "deployment",
-        "endpoint_namespace": "prism-sim",
-        "endpoint_service": "qwen-router",
-        "endpoint_deployment_execution_id": "00000000-0000-4000-8000-000000000002",
-        "endpoint_deployment_run_id": null,
-        "endpoint_deployment_case_id": null,
-        "endpoint_cluster_id": "cluster-1",
-        "endpoint_cluster_name": "dev-cluster",
-        "endpoint_deployment_name": "qwen3-guide-rerun",
-        "endpoint_url": "http://127.0.0.1:39000/v1",
-        "model_name": "Qwen/Qwen3-8B",
-        "simulation": {
-          "backend": "trace-replayer",
-          "backend_options": {},
-          "duration_seconds": 60.0,
-          "num_requests": null,
-          "stream": true,
-          "warmup_enabled": false,
-          "grace_period_seconds": 30.0
-        },
-        "prompt": {
-          "type": "trace",
-          "dataset": {"name": "mooncake-arxiv", "scenario": "chat", "tokenizer": null},
-          "trace": {
-            "path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
-            "format": "mooncake_trace",
-            "fixed_schedule": true,
-            "timeout_seconds": 3600.0,
-            "synthesis_speedup_ratio": 1.0,
-            "start_seconds": 0.0,
-            "end_seconds": null
-          }
-        },
-        "task_dir": "/home/prism/.local/share/prism/data/artifacts/simulations/5e6f7a8b",
-        "artifact_uri": null,
-        "artifact_error": null,
-        "logs_truncated": false,
-        "artifacts_incomplete": false,
-        "backend_version_inferred": false,
-        "backend_version": null,
-        "configuration_ids": ["config-2"],
-        "progress_percent": 0.0,
-        "progress_message": "Queued",
-        "logs": [],
-        "result": null,
-        "error_message": null,
-        "created_at": "2026-09-23T09:25:24.287000Z",
-        "started_at": null,
-        "execution_started_at": null,
-        "completed_at": null,
-        "owner_pid": null,
-        "owner_instance_id": null
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
+from llm_d_lens.sdk import LensLocal
 from llm_d_lens.simulation.models import SimulationTaskRerunRequest
-from llm_d_lens.simulation.service import rerun_task
 
+with LensLocal("<username>") as lens:
+    async def main() -> None:
+        await lens.simulation.stop_simulation_task("<task-id>")
 
-async def main() -> None:
-    task = await rerun_task(
-        "1a2b3c4d",
-        override=SimulationTaskRerunRequest(
-            endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000002",
-            endpoint_url="http://127.0.0.1:39000/v1",
-        ),
-    )
-    print(task.id, task.name)
+        rerun = await lens.simulation.rerun_simulation_task(
+            "<task-id>",
+            SimulationTaskRerunRequest(endpoint_deployment_execution_id="<new-execution-id>"),
+        )
+        print(rerun.task_id, rerun.status)
 
-    # Or re-bind to a published Model Service (preferred over
-    # endpoint_deployment_execution_id when both are supplied):
-    task = await rerun_task(
-        "1a2b3c4d",
-        override=SimulationTaskRerunRequest(model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11"),
-    )
-    print(task.id, task.name)
+        await lens.simulation.delete_simulation_task("<task-id>")
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Delete a simulation task
+## Endpoints
 
-Delete a Simulation task record.
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/simulation/backends` | `simulation:task:read` | List usable backends and scenarios. |
+| POST | `/api/v1/simulation/models/discover` | `simulation:task:create` | Probe `/v1/models` at an endpoint. |
+| GET | `/api/v1/simulation/scenarios` | `simulation:task:read` | List replay scenarios. |
+| GET | `/api/v1/simulation/trace-datasets` | `simulation:task:read` | List trace datasets. |
+| POST | `/api/v1/simulation/trace-datasets/download` | `simulation:dataset:download` | Download a dataset. |
+| GET | `/api/v1/simulation/trace-datasets/{dataset_name}/timeline` | `simulation:task:read` | Read a dataset timeline. |
+| GET | `/api/v1/simulation/tasks` | `simulation:task:read` | List tasks. REST uses `status`; SDK uses `task_status`. |
+| POST | `/api/v1/simulation/tasks` | `simulation:task:create` | Create a task (`202`). |
+| GET | `/api/v1/simulation/tasks/{task_id}` | `simulation:task:read` | Get one task and its result. |
+| GET | `/api/v1/simulation/tasks/{task_id}/artifacts/{kind}` | `simulation:artifact:download` | Download an artifact. |
+| GET | `/api/v1/simulation/tasks/{task_id}/response-code-issues` | `simulation:task:read` | List requests by status code. |
+| POST | `/api/v1/simulation/tasks/{task_id}/stop` | `simulation:task:stop` | Stop a running task. |
+| POST | `/api/v1/simulation/tasks/{task_id}/rerun` | `simulation:task:rerun` | Queue a rerun (`202`). |
+| DELETE | `/api/v1/simulation/tasks/{task_id}` | `simulation:task:delete` | Delete a stopped task. |
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/simulation/tasks/{task_id}`**
+## Errors / limits
 
-    Request: no body.
-    - Path parameter: `task_id` (`string`, required)
+- **400**: invalid endpoint URL, failed endpoint discovery or authentication, unknown backend, missing trace file, or invalid trace range.
+- **401 / 403**: missing or expired authentication, missing permission, or no access to the task's cluster.
+- **404**: unknown task, dataset, or artifact; **409**: the dataset timeline is not ready, or you tried to delete an active task.
+- **429**: the concurrent trace download limit is reached (default 1; set `SIMULATION_MAX_CONCURRENT_DOWNLOADS` on the backend).
+- **422**: invalid query values. Task list `limit` is 1-100, timeline `bins` is 50-2000, and response-code `limit` is at most 500.
+- Endpoint URL tasks must pass `/v1/models`; entering a model name manually does not bypass that check. A Model Service target also requires `api_key`.
+- Create and rerun return `202`; poll the task until it is `completed`, `failed`, or `cancelled` before downloading artifacts.
 
-    Response:
+## Related
 
-    ```json
-    {
-      "task_id": "1a2b3c4d",
-      "status": "deleted"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.simulation.service import delete_task
-
-
-async def main() -> None:
-    await delete_task("1a2b3c4d")
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
+- [Trace Replayer user guide](/user-guide/simulation)
+- [Publish a model service](/tutorials/publish-a-model-service)
+- [API conventions](/api-reference)
+- OpenAPI: `/api/v1/simulation/docs` (Swagger UI) and `/api/v1/simulation/openapi.json` (schema).

@@ -1,684 +1,410 @@
 ---
 title: Model cache
-description: Backend endpoints and direct Python entry points for cached model downloads.
+description: Download model weights, inspect progress, and keep caches in sync across nodes.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+## Overview
 
-Download, deletion and incremental node synchronization share `launch_cache_jobs` in `llm_d_lens.model_cache.jobs`. Public service calls below retain their existing signatures: callers select nodes and prepare credentials, while the launcher initializes progress and submits Jobs. Incremental synchronization preserves existing nodes; partial submission failures propagate without marking the whole batch in progress.
+Model Cache stores model weights on a registered storage volume so deployments
+and benchmarks can load them without downloading at startup. Use this module to
+seed a shared cache, inspect download progress and logs, retry failures, sync new
+nodes, and remove cached models. The target volume must be `ready` and tagged with
+the `model-cache` purpose. Downloads always use the Hugging Face token saved on
+the cluster; the API does not accept a per-request token.
 
+## Quick start
 
-Routes live in `llm_d_lens/model_cache/router.py`. Each endpoint below documents the REST contract and the matching `ModelCacheService` or Hugging Face helper call it uses.
-
-Model Cache owns deployment-model downloads. Shared creation preflight requires a ready model/revision in a registered cache on the selected cluster; local-disk entries must also be synchronized to the eligible nodes. `llm_d_lens.deploy.providers.storage_mount.require_cached_model` enforces this before rendering. During ordinary provider rendering, `llm_d_lens.deploy.providers.model_cache_environment.model_cache_environment` sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, including for legacy online inputs, and adds `HF_HOME=/model-cache` for the `auto-cache` source. Those serving mounts are read-only, and missing files fail offline resolution instead of being downloaded at startup. Exact published manifests bypass ordinary provider rendering and are not covered by the same final-manifest guarantees; see [deployment limitations](/user-guide/deployments#model-cache-enforcement-limitations).
-
-Hugging Face environment variables (`HF_*`, `HUGGING*`, `TRANSFORMERS_*`) are administrator-managed. The deployment planning API and configuration validation reject user-supplied `customParameters` entries that set them (see `llm_d_lens/configuration/managed_environment.py`), and the deployment editor blocks them with an "administrator-managed" message. The platform injects these values from the cluster's saved proxy, model cache and token configuration.
-
-Deployment callers use `require_cached_model(overrides, cluster_id=..., provider_id=...)`
-before rendering. `provider_id` defaults to `baseline-vllm`; the shared deployment
-service supplies the actual provider. The check resolves `revision`, `tokenizer`,
-and `tokenizer-revision` separately for each active role, matches repository IDs
-and revisions exactly, and checks node synchronization for both model and tokenizer.
-Inactive-role arguments are ignored and conflicting dependency values are rejected.
-The manifest adapter then uses `validate_cached_model_arguments` to compare the
-rendered loading arguments against the checked dependencies, including published
-manifests. This argument check does not enforce published-manifest offline settings
-or storage binding. Unsupported dependency overrides are described in the
-[deployment guide](/user-guide/deployments#open-the-deployment-creation-flow).
-
-### List Model Cache entries
-
-List Model Cache entries, optionally filtered by cluster or storage volume. Use this to discover cached model ids, download state, and node sync drift.
+List cached models, optionally scoped to one cluster or volume.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/entries`**
 
-    Request: no request body. Optional query params: `cluster_id` (`str`) and `storage_volume_id` (`str`).
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries?cluster_id=<cluster-id>"
+```
 
-    Response: returns an `items` array of Model Cache entries, with each item including the router-computed `pendingSyncNodes` field.
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "model-cache-7f3a2c1d",
-          "clusterId": "cluster-123",
-          "storageVolumeId": "storage-abc12345",
-          "source": {
-            "kind": "huggingface",
-            "huggingface": {
-              "repoId": "Qwen/Qwen2.5-7B-Instruct",
-              "revision": "main"
-            }
-          },
-          "tokenSource": {
-            "mode": "none",
-            "namespace": null,
-            "name": null
-          },
-          "status": "ready",
-          "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-          "sizeBytes": 15123042304,
-          "nodeProgress": [
-            {
-              "node": "worker-1",
-              "status": "ready",
-              "failureDetail": null
-            }
-          ],
-          "failureDetail": null,
-          "createdAt": "2026-09-23T08:15:00Z",
-          "updatedAt": "2026-09-23T08:22:11Z",
-          "pendingSyncNodes": ["worker-2"]
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        entries = await service.list(cluster_id="cluster-123", storage_volume_id=None)
-        pending = await service.compute_pending_sync(entries)
-        payload = [
-            {**entry.api_payload(), "pendingSyncNodes": pending.get(entry.id, [])}
-            for entry in entries
-        ]
-        print(payload)
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        result = await lens.model_cache.list_model_cache_entries(
+            cluster_id="<cluster-id>"
+        )
+        for entry in result.items:
+            print(entry.id, entry.source.display_name(), entry.status)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Get a Model Cache entry
+`pendingSyncNodes` lists nodes that still need a local-disk cache entry.
 
-Get one Model Cache entry by id, including source, token mode, node progress, and pending sync nodes.
+## Common tasks
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/entries/{entry_id}`**
+### Download a model from Hugging Face
 
-    Request: no request body. Path param: `entry_id` (`str`).
-
-    Response: returns one Model Cache entry object plus the router-computed `pendingSyncNodes` list.
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "existing-secret",
-        "namespace": "models",
-        "name": "hf-token"
-      },
-      "status": "downloading",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": null,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "downloading",
-          "failureDetail": null
-        },
-        {
-          "node": "worker-2",
-          "status": "pending",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:16:09Z",
-      "pendingSyncNodes": []
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_cache.service import default_service
-
-
-    async def main() -> None:
-        service = default_service()
-        entry = await service.get("model-cache-7f3a2c1d")
-        pending = await service.compute_pending_sync([entry])
-        payload = {**entry.api_payload(), "pendingSyncNodes": pending.get(entry.id, [])}
-        print(payload)
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Request a model download
-
-Request a model download into Lens Model Cache. Use this to seed a ready shared model cache before deployments or benchmarks.
+Request a download into a ready model-cache volume. The call returns `202` with a
+`pending` entry while the download Job starts in the background.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries`**
 
-    Request: body fields are `clusterId` (`str`), `storageVolumeId` (`str`), `source` (`ModelSource`), and the optional `force` (`bool`, default `false`). `tokenSource` is accepted for backward compatibility but ignored: downloads always use the HuggingFace token saved with the cluster (the wizard's `hf_token_secret`), or run unauthenticated when the cluster has none. The frontend's **Download model** dialog no longer sends `tokenSource` at all.
-
-    If the storage volume already holds an entry for the same model and revision -- in any status -- the route answers `409` with code `model_cache_entry_exists` instead of downloading, so the caller can ask the user to confirm. The problem body carries `entryId`, `entryStatus`, `model` and `storageVolumeId`. Resend the same request with `force: true` to go ahead: a `ready` or `failed` entry is reset to `pending` and downloaded again in place, and a `pending` or `downloading` entry is returned unchanged so the confirmation joins the running download rather than starting a second one. No duplicate entry is ever created.
-
-    ```json
-    {
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clusterId": "<cluster-id>",
+    "storageVolumeId": "<volume-id>",
+    "source": {
+      "kind": "huggingface",
+      "huggingface": {
+        "repoId": "<org>/<model>",
+        "revision": "main"
       }
     }
-    ```
+  }' \
+  "$LENS_URL/api/v1/model-cache/entries"
+```
 
-    Response: returns the queued `ModelCacheEntry` payload that was created for the download request.
-
-    ```json
-    {
-      "type": "about:blank",
-      "status": 409,
-      "title": "Model already on this storage volume",
-      "detail": "'Qwen/Qwen2.5-7B-Instruct@main' is already on this storage volume (status: ready)",
-      "code": "model_cache_entry_exists",
-      "entryId": "model-cache-7f3a2c1d",
-      "entryStatus": "ready",
-      "model": "Qwen/Qwen2.5-7B-Instruct@main",
-      "storageVolumeId": "storage-abc12345"
-    }
-    ```
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "existing-secret",
-        "namespace": "models",
-        "name": "hf-token"
-      },
-      "status": "pending",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": null,
-      "nodeProgress": [],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:15:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.contracts import HuggingFaceSource, ModelCacheCreateRequest, ModelSource, ModelSourceKind
-    from llm_d_lens.model_cache.service import ModelCacheEntryExistsError, default_service
+```python
+import asyncio
+
+from llm_d_lens.model_cache.contracts import (
+    HuggingFaceSource,
+    ModelCacheCreateRequest,
+    ModelSource,
+    ModelSourceKind,
+)
+from llm_d_lens.sdk import LensLocal
 
 
-    async def main() -> None:
-        service = default_service()
-        # tokenSource is intentionally omitted: request_download() always resolves the
-        # HuggingFace token from the cluster's saved hf_token_secret instead.
-        request = ModelCacheCreateRequest(
-            clusterId="cluster-123",
-            storageVolumeId="storage-abc12345",
-            source=ModelSource(
-                kind=ModelSourceKind.HUGGINGFACE,
-                huggingface=HuggingFaceSource(repoId="Qwen/Qwen2.5-7B-Instruct", revision="main"),
-            ),
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.create_model_cache_entry(
+            ModelCacheCreateRequest(
+                cluster_id="<cluster-id>",
+                storage_volume_id="<volume-id>",
+                source=ModelSource(
+                    kind=ModelSourceKind.HUGGINGFACE,
+                    huggingface=HuggingFaceSource(
+                        repo_id="<org>/<model>",
+                        revision="main",
+                    ),
+                ),
+            )
         )
-        try:
-            entry = await service.request_download(request)
-        except ModelCacheEntryExistsError as already_there:
-            # Ask the operator whether to download it again, then retry with force.
-            print(already_there.entry.id, already_there.entry.status)
-            entry = await service.request_download(request.model_copy(update={"force": True}))
-        await service.provision(entry.id)
         print(entry.id, entry.status)
 
 
-    asyncio.run(main())
-    ```
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Retry a model download
+For a private or gated model, ask an administrator to save a Hugging Face token
+with access to that model in the cluster settings. Public models download without
+one. `tokenSource` is accepted for compatibility but ignored.
 
-Retry a failed or retryable Model Cache entry download.
+### Re-download a model already on the volume
+
+A second request for the same model and revision returns
+`409 model_cache_entry_exists` with the existing `entryId` and `entryStatus`.
+Resend with `force: true` to download it again. Lens never creates a duplicate
+entry.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries/{entry_id}/retry`**
 
-    Request: no request body. Path param: `entry_id` (`str`).
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clusterId": "<cluster-id>",
+    "storageVolumeId": "<volume-id>",
+    "source": {
+      "kind": "huggingface",
+      "huggingface": {"repoId": "<org>/<model>", "revision": "main"}
+    },
+    "force": true
+  }' \
+  "$LENS_URL/api/v1/model-cache/entries"
+```
 
-    Response: returns the updated entry after it has been moved back into a retryable download state.
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "none",
-        "namespace": null,
-        "name": null
-      },
-      "status": "pending",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": null,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "pending",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:30:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
+
+from llm_d_lens.model_cache.contracts import (
+    HuggingFaceSource,
+    ModelCacheCreateRequest,
+    ModelSource,
+    ModelSourceKind,
+)
+from llm_d_lens.sdk import LensLocal
 
 
-    async def main() -> None:
-        service = default_service()
-        entry = service.retry("model-cache-7f3a2c1d")
-        await service.provision(entry.id)
-        print(entry.api_payload())
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.create_model_cache_entry(
+            ModelCacheCreateRequest(
+                cluster_id="<cluster-id>",
+                storage_volume_id="<volume-id>",
+                source=ModelSource(
+                    kind=ModelSourceKind.HUGGINGFACE,
+                    huggingface=HuggingFaceSource(
+                        repo_id="<org>/<model>",
+                        revision="main",
+                    ),
+                ),
+                force=True,
+            )
+        )
+        print(entry.id, entry.status)
 
 
-    asyncio.run(main())
-    ```
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Sync new nodes for all entries
+A `ready` or `failed` entry is reset and downloaded again in place. A `pending` or
+`downloading` entry is returned unchanged, so the confirmation joins the running
+download instead of starting another one.
 
-Trigger sync for all local-disk Model Cache entries that are missing on newly added nodes. Optionally scope the work to one cluster.
+### Check download progress and read logs
+
+Read the entry for per-node status, then fetch logs for a failed node.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries/sync-nodes`**
 
-    Request: no request body. Optional query param: `cluster_id` (`str`).
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>"
 
-    Response: returns the entries that were changed and queued for new-node provisioning.
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>/logs?node=<node-name>"
+```
 
-    ```json
-    {
-      "items": [
-        {
-          "id": "model-cache-7f3a2c1d",
-          "clusterId": "cluster-123",
-          "storageVolumeId": "storage-abc12345",
-          "source": {
-            "kind": "huggingface",
-            "huggingface": {
-              "repoId": "Qwen/Qwen2.5-7B-Instruct",
-              "revision": "main"
-            }
-          },
-          "tokenSource": {
-            "mode": "none",
-            "namespace": null,
-            "name": null
-          },
-          "status": "downloading",
-          "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-          "sizeBytes": 15123042304,
-          "nodeProgress": [
-            {
-              "node": "worker-1",
-              "status": "ready",
-              "failureDetail": null
-            },
-            {
-              "node": "worker-2",
-              "status": "pending",
-              "failureDetail": null
-            }
-          ],
-          "failureDetail": null,
-          "createdAt": "2026-09-23T08:15:00Z",
-          "updatedAt": "2026-09-23T08:35:00Z",
-          "pendingSyncNodes": []
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        changed = await service.sync_all_nodes(cluster_id="cluster-123")
-        for entry in changed:
-            await service.provision_new_nodes(entry.id)
-        print([entry.id for entry in changed])
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.get_model_cache_entry("<entry-id>")
+        logs = await lens.model_cache.get_model_cache_entry_logs(
+            "<entry-id>",
+            node="<node-name>",
+        )
+        print(entry.status, entry.node_progress)
+        print(logs.logs)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Sync new nodes for one entry
+`nodeProgress[].status` is `pending`, `downloading`, `ready`, or `failed`.
+`failureDetail` contains the user-facing error when a node fails.
 
-Trigger node sync for one specific Model Cache entry. Use this when a single cached model needs to be replicated onto newly added nodes.
+### Retry a failed download
+
+Only entries in `failed` state can be retried. The call returns `202` and moves
+the entry back to `pending`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-cache/entries/{entry_id}/sync-nodes`**
 
-    Request: no request body. Path param: `entry_id` (`str`).
+```bash
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>/retry"
+```
 
-    Response: returns the updated entry. When new nodes need provisioning, the entry status moves back to `downloading`.
-
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "none",
-        "namespace": null,
-        "name": null
-      },
-      "status": "downloading",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": 15123042304,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "ready",
-          "failureDetail": null
-        },
-        {
-          "node": "worker-2",
-          "status": "pending",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T08:35:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        entry = await service.sync_nodes("model-cache-7f3a2c1d")
-        if entry.status.value == "downloading":
-            await service.provision_new_nodes(entry.id)
-        print(entry.api_payload())
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        entry = await lens.model_cache.retry_model_cache_entry("<entry-id>")
+        print(entry.status)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Delete a Model Cache entry
+Retrying a `ready`, `pending`, `downloading`, or `deleting` entry returns
+`409 model_cache_invalid_state`. Fix the underlying cause before retrying.
 
-Delete a Model Cache entry and, when required, schedule cleanup of its downloaded files. Set `keep_files=true` to remove the record only.
+### Sync cached models to new nodes
+
+New or replaced nodes do not have local-disk cache contents. Sync one entry or
+all entries on a cluster; Lens queues downloads only for nodes that are missing
+the model.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/model-cache/entries/{entry_id}`**
 
-    Request: no request body. Path param: `entry_id` (`str`). Optional query param: `keep_files` (`bool`, default `false`).
+```bash
+# Sync every local-disk entry missing on new nodes.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/sync-nodes?cluster_id=<cluster-id>"
 
-    Response: usually returns the entry in `deleting` state while background cleanup runs. If the entry never reached a persisted cache path, the API may instead return a minimal `{"id": ..., "status": "deleted"}` acknowledgement.
+# Or sync one entry.
+curl -X POST -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>/sync-nodes"
+```
 
-    ```json
-    {
-      "id": "model-cache-7f3a2c1d",
-      "clusterId": "cluster-123",
-      "storageVolumeId": "storage-abc12345",
-      "source": {
-        "kind": "huggingface",
-        "huggingface": {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "revision": "main"
-        }
-      },
-      "tokenSource": {
-        "mode": "none",
-        "namespace": null,
-        "name": null
-      },
-      "status": "deleting",
-      "cachePath": "hub/models--Qwen--Qwen2.5-7B-Instruct",
-      "sizeBytes": 15123042304,
-      "nodeProgress": [
-        {
-          "node": "worker-1",
-          "status": "ready",
-          "failureDetail": null
-        }
-      ],
-      "failureDetail": null,
-      "createdAt": "2026-09-23T08:15:00Z",
-      "updatedAt": "2026-09-23T09:00:00Z",
-      "pendingSyncNodes": []
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        entry = await service.request_delete("model-cache-7f3a2c1d", keep_files=False)
-        if entry is not None:
-            await service.provision_delete(entry.id)
-            print(entry.api_payload())
-        else:
-            print({"id": "model-cache-7f3a2c1d", "status": "deleted"})
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        changed = await lens.model_cache.sync_model_cache_nodes(
+            cluster_id="<cluster-id>"
+        )
+        entry = await lens.model_cache.sync_model_cache_entry_nodes("<entry-id>")
+        print(len(changed.items), entry.status)
+
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### Get Model Cache logs
+Both calls return `202`. When new nodes need provisioning, the entry moves back to
+`downloading`. NFS volumes do not need node sync because every node shares them.
 
-Get logs for one Model Cache entry, optionally scoped to a specific node. Use this to debug download or cleanup failures.
+### Delete a cached model
+
+Delete removes the entry and, unless you keep files, schedules cleanup of the
+cached files. The call returns `202`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/entries/{entry_id}/logs`**
 
-    Request: no request body. Path param: `entry_id` (`str`). Optional query param: `node` (`str`).
+```bash
+curl -X DELETE -H "Authorization: Bearer $LENS_TOKEN" \
+  "$LENS_URL/api/v1/model-cache/entries/<entry-id>?keep_files=true"
+```
 
-    Response: returns the collected log text for the entry, or for the requested node only.
-
-    ```json
-    {
-      "logs": "[worker-1] pulling Qwen/Qwen2.5-7B-Instruct@main\n[worker-1] download completed successfully"
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.model_cache.service import default_service
+```python
+import asyncio
 
-
-    async def main() -> None:
-        service = default_service()
-        logs = await service.get_logs("model-cache-7f3a2c1d", node="worker-1")
-        print(logs)
+from llm_d_lens.sdk import LensLocal
 
 
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### Search Hugging Face models
-
-Search Hugging Face model repositories from Lens Model Cache. Use this to discover repo ids before creating a cache entry.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/huggingface/search`**
-
-    Request: no request body. Query params: `query` (`str`) and optional `limit` (`int`, default `20`).
-
-    Response: returns Hugging Face search matches as `HuggingFaceModelSummary` objects.
-
-    ```json
-    {
-      "items": [
-        {
-          "repoId": "Qwen/Qwen2.5-7B-Instruct",
-          "likes": 12345,
-          "downloads": 987654,
-          "pipelineTag": "text-generation",
-          "tags": ["transformers", "text-generation", "safetensors"],
-          "lastModified": "2026-09-01T12:00:00.000Z",
-          "gated": false
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_cache import huggingface_hub
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        result = await lens.model_cache.delete_model_cache_entry(
+            "<entry-id>",
+            keep_files=True,
+        )
+        print(result)
 
 
-    async def main() -> None:
-        items = await huggingface_hub.search_models("Qwen2.5", limit=5)
-        summaries = [item["id"] for item in items]
-        print(summaries)
+asyncio.run(main())
+```
 
-
-    asyncio.run(main())
-    ```
   </TabItem>
 </Tabs>
 
-### Get Hugging Face model details
+Set `keep_files=false` to remove the files from the shared volume. An entry that
+never reached `ready` can return a minimal `{"id": "<entry-id>", "status":
+"deleted"}` response because there is nothing to clean up.
 
-Get detailed Hugging Face metadata for one model repository, including the README snapshot Lens fetched.
+## Endpoints
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-cache/huggingface/models/{repo_id:path}`**
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/model-cache/entries` | `model-cache:entry:read` | List entries, optionally by cluster or volume. |
+| GET | `/api/v1/model-cache/entries/{entry_id}` | `model-cache:entry:read` | Read one entry, node progress, and pending nodes. |
+| POST | `/api/v1/model-cache/entries` | `model-cache:entry:create` | Request a model download. |
+| POST | `/api/v1/model-cache/entries/{entry_id}/retry` | `model-cache:entry:retry` | Retry a failed download. |
+| POST | `/api/v1/model-cache/entries/sync-nodes` | `model-cache:entry:sync` | Sync every entry missing on new nodes. |
+| POST | `/api/v1/model-cache/entries/{entry_id}/sync-nodes` | `model-cache:entry:sync` | Sync one entry to new nodes. |
+| DELETE | `/api/v1/model-cache/entries/{entry_id}` | `model-cache:entry:delete` | Delete an entry and optionally its files. |
+| GET | `/api/v1/model-cache/entries/{entry_id}/logs` | `model-cache:entry:read` | Read download or cleanup logs. |
+| GET | `/api/v1/model-cache/huggingface/search` | `model-cache:entry:read` | Search Hugging Face repositories. |
+| GET | `/api/v1/model-cache/huggingface/models/{repo_id}` | `model-cache:entry:read` | Read metadata and README for one repository. |
 
-    Request: no request body. Path param: `repo_id` (`str`, for example `Qwen/Qwen2.5-7B-Instruct`).
+Reads return `200`; create, retry, sync, and delete return `202`.
 
-    Response: returns a `HuggingFaceModelDetail` object.
+## Errors and limits
 
-    ```json
-    {
-      "repoId": "Qwen/Qwen2.5-7B-Instruct",
-      "likes": 12345,
-      "downloads": 987654,
-      "pipelineTag": "text-generation",
-      "tags": ["transformers", "text-generation", "safetensors"],
-      "lastModified": "2026-09-01T12:00:00.000Z",
-      "gated": false,
-      "readme": "---\nlibrary_name: transformers\n---\n# Qwen2.5-7B-Instruct"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+- **`401` / `403`** — missing authentication or no access to the cluster.
+- **`404`** — the entry does not exist, or the repository is not found on
+  Hugging Face.
+- **`409 model_cache_entry_exists`** — the volume already holds this model and
+  revision. Resend with `force: true` after confirming.
+- **`409 storage_volume_not_model_cache`** — the volume is not tagged with the
+  `model-cache` purpose.
+- **`409 storage_volume_not_ready`** — wait for the storage volume to become
+  `ready`.
+- **`409 model_cache_invalid_state`** — only `failed` entries can be retried.
+- **`501 model_catalog_not_supported`** — model-catalog sources are not
+  implemented. Send a Hugging Face `repoId` and `revision` instead.
+- **`502 huggingface_hub_unavailable`** — Hugging Face is unreachable. Check
+  network access and the cluster or host proxy.
+- A download requires a ready `local-disk` or `nfs` volume. `dynamic-pvc` volumes
+  cannot carry the `model-cache` purpose.
+- Hugging Face environment variables are administrator-managed. Set credentials
+  through the cluster's saved token, not deployment custom parameters.
+- Sync applies to local-disk entries. NFS volumes are shared and need no per-node
+  copy.
+- Deletion is asynchronous. The entry moves to `deleting` until cleanup finishes.
 
-    from llm_d_lens.model_cache import huggingface_hub
+## Related
 
-
-    async def main() -> None:
-        detail = await huggingface_hub.get_model_detail("Qwen/Qwen2.5-7B-Instruct")
-        print(detail["info"]["id"], bool(detail.get("readme")))
-
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
+- [Model Cache guide](/user-guide/model-cache)
+- [Storage guide](/user-guide/storage)
+- [Deployments guide](/user-guide/deployments)
+- [API conventions](/api-reference)
+- [Full OpenAPI schema](/api-reference)

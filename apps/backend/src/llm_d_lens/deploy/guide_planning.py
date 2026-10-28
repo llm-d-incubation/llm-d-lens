@@ -23,7 +23,7 @@ from llm_d_lens.versions import router_pd_sidecar_image
 from .guide_runtime import apply_runtime_overrides, configure_cpu_cache, configure_model_server, runtime_overrides
 from .remote_deploy import RemoteError
 
-router = APIRouter(prefix="/api/guide-planning", include_in_schema=False)
+router = APIRouter(prefix="/api/v1/guide-planning", include_in_schema=False)
 logger = logging.getLogger(__name__)
 
 

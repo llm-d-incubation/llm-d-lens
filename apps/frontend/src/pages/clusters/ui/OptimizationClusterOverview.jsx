@@ -40,7 +40,7 @@ function formatUsagePercent(value) {
 // Derives whether a cluster's *own* latest overview payload shows an
 // abnormality (a NotReady node, an under-provisioned capacity, a near-full
 // disk reported directly by kubelet, or a broken core component) -- pure
-// function of that cluster's own cached `/api/cluster/overview` response, so
+// function of that cluster's own cached `/api/v1/cluster/overview` response, so
 // it can be applied independently to every cluster in the sidebar list, not
 // only the one currently selected/displayed in the detail panel.
 // Returns `null` when the overview hasn't loaded yet (unknown health, not
@@ -245,7 +245,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
     const handledInitialAction = useRef(false);
     const handledEditAction = useRef(false);
     const fetchClusters = useCallback(async ({ signal }) => {
-        const payload = await request('/api/cluster/clusters', { signal });
+        const payload = await request('/api/v1/cluster/clusters', { signal });
         return payload.items || [];
     }, []);
     const selectAvailableCluster = useCallback((items) => {
@@ -295,7 +295,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
         let cancelled = false;
         const poll = async () => {
             try {
-                const payload = await request(`/api/cluster/overview?clusterId=${encodeURIComponent(selectedId)}`);
+                const payload = await request(`/api/v1/cluster/overview?clusterId=${encodeURIComponent(selectedId)}`);
                 if (!cancelled) {
                     setOverview(payload);
                     setError('');
@@ -322,7 +322,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
         let cancelled = false;
         const poll = async () => {
             const results = await Promise.allSettled(
-                ids.map((id) => request(`/api/cluster/overview?clusterId=${encodeURIComponent(id)}`))
+                ids.map((id) => request(`/api/v1/cluster/overview?clusterId=${encodeURIComponent(id)}`))
             );
             if (cancelled) return;
             setOverviewByCluster((current) => {
@@ -349,7 +349,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
         let cancelled = false;
         (async () => {
             try {
-                const payload = await request(`/api/cluster/session?clusterId=${encodeURIComponent(selectedId)}`);
+                const payload = await request(`/api/v1/cluster/session?clusterId=${encodeURIComponent(selectedId)}`);
                 if (!cancelled) syncSession(payload);
             } catch {
                 if (!cancelled) syncSession(null);
@@ -368,7 +368,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
         setDeleting(true);
         setDeleteError('');
         try {
-            await request(`/api/cluster/clusters/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' });
+            await request(`/api/v1/cluster/clusters/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' });
             setDeleteTarget(null);
             await loadClusters();
         } catch (nextError) {
@@ -418,7 +418,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
         setMaintenanceError('');
         try {
             const payload = await request(
-                `/api/cluster/clusters/${encodeURIComponent(selectedId)}/nodes/${disabled ? 'cordon' : 'uncordon'}`,
+                `/api/v1/cluster/clusters/${encodeURIComponent(selectedId)}/nodes/${disabled ? 'cordon' : 'uncordon'}`,
                 { method: 'POST', body: JSON.stringify({ names }) },
             );
             const failures = (payload.items || []).filter((item) => !item.ok);
@@ -426,7 +426,7 @@ export default function OptimizationClusterOverview({ onNavigate, onToggleMobile
                 setMaintenanceError(failures.map((item) => `${item.name}: ${item.error || 'failed'}`).join('; '));
             }
             setSelectedNodeNames(new Set());
-            const refreshed = await request(`/api/cluster/overview?clusterId=${encodeURIComponent(selectedId)}`);
+            const refreshed = await request(`/api/v1/cluster/overview?clusterId=${encodeURIComponent(selectedId)}`);
             setOverview(refreshed);
         } catch (nextError) {
             setMaintenanceError(nextError.message);

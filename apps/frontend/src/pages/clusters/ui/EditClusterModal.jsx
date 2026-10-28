@@ -5,7 +5,7 @@ import { requestJson } from '../../../shared/api/httpClient';
 // Lets an operator update a cluster's name/description, network proxy, and
 // pinned llm-d / llm-d-benchmark versions after creation (the wizard only
 // captures these once, at creation time). Mirrors the same PATCH
-// `/api/cluster/clusters/{id}` + `POST .../software-downloads` flow used by
+// `/api/v1/cluster/clusters/{id}` + `POST .../software-downloads` flow used by
 // CreateClusterWizard's Proxy/Versions steps, so a ref change here actually
 // triggers a real (re-)download instead of just updating the pinned ref.
 import { useEffect, useState } from 'react';
@@ -88,7 +88,7 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
         if (!value || (cluster.gatewayPort && Number(value) === cluster.gatewayPort)) { setPortError(''); return; }
         try {
             const query = new URLSearchParams({ port: String(Number(value)) });
-            const payload = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}/gateway-port-check?${query.toString()}`);
+            const payload = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}/gateway-port-check?${query.toString()}`);
             setPortError(payload.available ? '' : (payload.owner ? `Port ${value} is already used by ${payload.owner}` : (payload.reason || 'Port is not available')));
         } catch (err) {
             setPortError(err?.message || 'Could not check the port');
@@ -108,7 +108,7 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
         setBusy(true);
         setError('');
         try {
-            const payload = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
+            const payload = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}`, {
                 method: 'PATCH',
                 body: JSON.stringify({
                     name: trimmedName,
@@ -132,7 +132,7 @@ export function EditClusterModal({ cluster, onClose, onSaved }) {
             // current value is write-only and is never read back, so an empty
             // field must leave the existing secret untouched.
             if (hfToken.trim()) {
-                const ref = await request(`/api/cluster/clusters/${encodeURIComponent(cluster.id)}/hf-token-secret`, {
+                const ref = await request(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.id)}/hf-token-secret`, {
                     method: 'PUT',
                     body: JSON.stringify({
                         namespace: hfTokenNamespace.trim(),

@@ -1,391 +1,372 @@
 ---
 title: External providers
-description: Backend endpoints and direct Python entry points for saved AI provider connections.
+description: Connect Lens to an OpenAI- or Anthropic-compatible AI provider.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+## What this module is
 
-Routes live in `llm_d_lens/ai_providers/router.py`. Each endpoint below documents the REST contract and the matching `AIProviderService`, connectivity probe, or proxy call it uses.
+External providers are saved outbound AI connections that Lens uses as a client — for example OpenAI, Anthropic, or a self-hosted OpenAI-compatible server. Use this module to test a connection, save and update provider settings, send a chat completion through a saved provider, and remove connections you no longer need. Stored API keys are never returned; responses expose only `hasApiKey` and `apiKeyPreview`.
 
-Outbound requests validate HTTPS provider URLs and public DNS answers. When no proxy is active, the backend connects to a validated IP while preserving the original Host header and TLS SNI. When the host environment provides an HTTPS proxy, the backend uses that proxy by default and sends the original hostname, so TLS keeps the correct SNI. Set `LENS_TRUSTED_AI_PROVIDER_PROXY` only to pin a specific verified proxy URL; a mismatched value or a proxy bypass retains application-side IP pinning. Redirects are not followed. Only configure an egress proxy you trust to resolve public provider hosts.
+## Quick start
 
-### List saved AI providers
-
-List the saved external AI provider connections Lens knows about. Returned records mask stored API keys and expose only a safe preview.
+Test a draft configuration first, then save it. Provider calls go from the Lens backend to the provider, so the URL must be reachable and public.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/ai-providers`**
 
-    Request: no request body.
+```bash
+curl -X POST "$LENS_URL/api/v1/ai-providers/test" \
+  -H "Content-Type: application/json" \
+  -d '{"baseUrl":"https://api.openai.com/","model":"gpt-4o-mini","apiKey":"<token>","providerType":"openai"}'
 
-    Response: returns an `items` array of saved `AIProvider` records with `hasApiKey` and `apiKeyPreview` instead of the raw `apiKey`.
+curl -X POST "$LENS_URL/api/v1/ai-providers" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"OpenAI","baseUrl":"https://api.openai.com/","model":"gpt-4o-mini","apiKey":"<token>","providerType":"openai","timeoutSeconds":30}'
+```
 
-    ```json
-    {
-      "items": [
-        {
-          "id": "ai-provider-7f3a2c1d",
-          "name": "OpenAI-compatible gateway",
-          "baseUrl": "https://llm.example.com/",
-          "model": "gpt-4o-mini",
-          "providerType": "openai",
-          "timeoutSeconds": 15,
-          "createdAt": "2026-09-23T08:00:00Z",
-          "updatedAt": "2026-09-23T08:00:00Z",
-          "hasApiKey": true,
-          "apiKeyPreview": "...cdef"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.service import default_service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    service = default_service()
-    providers = [provider.api_payload() for provider in service.list()]
-    print(providers)
-    ```
-  </TabItem>
-</Tabs>
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest, AIProviderTestRequest
 
-### Get a saved AI provider
-
-Get one saved external AI provider connection by id. The response masks the stored API key and includes only safe metadata.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/ai-providers/{provider_id}`**
-
-    Request: no request body. Path param: `provider_id` (`str`).
-
-    Response: returns one masked `AIProvider` payload.
-
-    ```json
-    {
-      "id": "ai-provider-7f3a2c1d",
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4o-mini",
-      "providerType": "openai",
-      "timeoutSeconds": 15,
-      "createdAt": "2026-09-23T08:00:00Z",
-      "updatedAt": "2026-09-23T08:00:00Z",
-      "hasApiKey": true,
-      "apiKeyPreview": "...cdef"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    provider = service.get("ai-provider-7f3a2c1d")
-    if provider is None:
-        raise RuntimeError("provider not found")
-    print(provider.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### Create an AI provider
-
-Create and persist a new external AI provider configuration. Use this for durable provider definitions Lens may later reuse for agentic planning or other integrations.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers`**
-
-    Request: body fields are `name` (`str`), `baseUrl` (`HttpUrl`), `model` (`str`), `apiKey` (`str`, optional), `providerType` (`"openai" | "anthropic"`), and `timeoutSeconds` (`float`).
-
-    ```json
-    {
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4o-mini",
-      "apiKey": "sk-example-secret",
-      "providerType": "openai",
-      "timeoutSeconds": 15
-    }
-    ```
-
-    Response: returns the newly created provider with its secret masked.
-
-    ```json
-    {
-      "id": "ai-provider-7f3a2c1d",
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4o-mini",
-      "providerType": "openai",
-      "timeoutSeconds": 15,
-      "createdAt": "2026-09-23T08:00:00Z",
-      "updatedAt": "2026-09-23T08:00:00Z",
-      "hasApiKey": true,
-      "apiKeyPreview": "...cret"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    provider = service.create(
-        AIProviderCreateRequest(
-            name="OpenAI-compatible gateway",
-            baseUrl="https://llm.example.com/",
-            model="gpt-4o-mini",
-            apiKey="sk-example-secret",
-            providerType="openai",
-            timeoutSeconds=15,
-        )
-    )
-    print(provider.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### Update an AI provider
-
-Update an existing external AI provider configuration by id. Omit `apiKey` to keep the stored key unchanged, or pass an empty string to clear it.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PUT /api/v1/ai-providers/{provider_id}`**
-
-    Request: path param `provider_id` (`str`). The body is `AIProviderUpdateRequest`, where every field is optional.
-
-    ```json
-    {
-      "name": "OpenAI-compatible gateway",
-      "model": "gpt-4.1-mini",
-      "timeoutSeconds": 30
-    }
-    ```
-
-    Response: returns the updated provider with the stored secret still masked.
-
-    ```json
-    {
-      "id": "ai-provider-7f3a2c1d",
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4.1-mini",
-      "providerType": "openai",
-      "timeoutSeconds": 30,
-      "createdAt": "2026-09-23T08:00:00Z",
-      "updatedAt": "2026-09-23T08:05:00Z",
-      "hasApiKey": true,
-      "apiKeyPreview": "...cret"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.contracts import AIProviderUpdateRequest
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    provider = service.update(
-        "ai-provider-7f3a2c1d",
-        AIProviderUpdateRequest(model="gpt-4.1-mini", timeoutSeconds=30),
-    )
-    print(provider.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### Delete an AI provider
-
-Delete a saved external AI provider configuration. Use this when a provider should no longer be available to Lens.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/ai-providers/{provider_id}`**
-
-    Request: no request body. Path param: `provider_id` (`str`).
-
-    Response: no response body. The endpoint returns **204 No Content** when deletion succeeds.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    service.delete("ai-provider-7f3a2c1d")
-    print("deleted")
-    ```
-  </TabItem>
-</Tabs>
-
-### Test a draft AI provider
-
-Test connectivity for a not-yet-saved external AI provider configuration. Use this before creating or updating a durable provider entry.
-
-The URL must use a public HTTPS destination without embedded credentials, query parameters, or a fragment. Base paths with version segments (for example `/openai/v1.0`) are supported. The same destination rules apply to saved-provider chat and agentic requests.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers/test`**
-
-    Request: body fields are `baseUrl` (`HttpUrl`), `model` (`str`), `apiKey` (`str`, optional), `providerType` (`"openai" | "anthropic"`), and `timeoutSeconds` (`float`).
-
-    ```json
-    {
-      "baseUrl": "https://api.openai.com/",
-      "model": "gpt-4o-mini",
-      "apiKey": "sk-abc",
-      "providerType": "openai",
-      "timeoutSeconds": 15
-    }
-    ```
-
-    Response: returns an `AIProviderTestResult` with success, model lookup status, and latency.
-
-    ```json
-    {
-      "success": true,
-      "message": "Connected successfully.",
-      "modelFound": true,
-      "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
-      "latencyMs": 182.4
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.ai_providers.service import check_connection
-
-
     async def main() -> None:
-        result = await check_connection(
-            "https://api.openai.com/",
-            "gpt-4o-mini",
-            "sk-abc",
-            15,
-            "openai",
+        result = await lens.external_providers.test_draft_provider(
+            AIProviderTestRequest(
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+            )
         )
-        print(result.model_dump(mode="json", by_alias=True))
+        print(result.success, result.message)
 
+        provider = await lens.external_providers.create_provider(
+            AIProviderCreateRequest(
+                name="OpenAI",
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+                timeoutSeconds=30,
+            )
+        )
+        print(provider.id, provider.has_api_key)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Test a saved AI provider
+## Common tasks
 
-Test connectivity for an already-saved external AI provider by id, reusing its stored API key. Use this to validate an existing provider definition.
+### Test a configuration before saving
+
+The test probes the provider's model list and reports whether the configured model was found. An unreachable provider returns `200` with `success: false`; check the result rather than relying only on the HTTP status.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers/{provider_id}/test`**
 
-    Request: no request body. Path param: `provider_id` (`str`).
+**`POST /api/v1/ai-providers/test`**
 
-    Response: returns an `AIProviderTestResult` using the provider's persisted `baseUrl`, `model`, `apiKey`, `timeoutSeconds`, and `providerType`.
+```json
+{
+  "baseUrl": "https://api.openai.com/",
+  "model": "gpt-4o-mini",
+  "apiKey": "<token>",
+  "providerType": "openai",
+  "timeoutSeconds": 15
+}
+```
 
-    ```json
-    {
-      "success": true,
-      "message": "Connected successfully.",
-      "modelFound": true,
-      "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
-      "latencyMs": 176.9
-    }
-    ```
+```json
+{
+  "success": true,
+  "message": "Connected successfully.",
+  "modelFound": true,
+  "availableModels": ["gpt-4o-mini"],
+  "latencyMs": 182.4
+}
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderTestRequest
+
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.ai_providers.service import check_connection, default_service
-
-
     async def main() -> None:
-        service = default_service()
-        provider = service.get("ai-provider-7f3a2c1d")
-        if provider is None:
-            raise RuntimeError("provider not found")
-        result = await check_connection(
-            str(provider.base_url),
-            provider.model,
-            provider.api_key,
-            provider.timeout_seconds,
-            provider.provider_type,
+        result = await lens.external_providers.test_draft_provider(
+            AIProviderTestRequest(
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+            )
         )
-        print(result.model_dump(mode="json", by_alias=True))
-
+        print(result.success, result.model_found, result.latency_ms)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### Proxy a chat completion through a saved provider
+### Save a provider connection
 
-Send a chat completion request through a saved AI provider. The route only supports saved `openai`-type providers and forwards an OpenAI-compatible JSON body with the server-held API key attached.
+Save a durable connection for Lens Assistant and other agentic features. Provider names are unique, ignoring case; a duplicate returns `409 ai_provider_name_conflict`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers/{provider_id}/chat/completions`**
 
-    Request: path param `provider_id` (`str`). The body is forwarded as an OpenAI-style `chat/completions` payload. If `model` is omitted, the router fills in the saved provider model before proxying.
+**`POST /api/v1/ai-providers`**
 
-    ```json
-    {
-      "messages": [
-        {
-          "role": "user",
-          "content": "Give me a one-line health summary for cluster-123."
-        }
-      ]
-    }
-    ```
+```json
+{
+  "name": "OpenAI",
+  "baseUrl": "https://api.openai.com/",
+  "model": "gpt-4o-mini",
+  "apiKey": "<token>",
+  "providerType": "openai",
+  "timeoutSeconds": 30
+}
+```
 
-    Response: returns the upstream provider JSON response.
+Response (`201`):
 
-    ```json
-    {
-      "choices": [
-        {
-          "message": {
-            "role": "assistant",
-            "content": "Cluster cluster-123 is reachable and reports healthy control-plane status."
-          }
-        }
-      ]
-    }
-    ```
+```json
+{
+  "id": "ai-provider-7f3a2c1d",
+  "name": "OpenAI",
+  "baseUrl": "https://api.openai.com/",
+  "model": "gpt-4o-mini",
+  "providerType": "openai",
+  "timeoutSeconds": 30,
+  "hasApiKey": true,
+  "apiKeyPreview": "...cdef"
+}
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest
+
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.ai_providers.router import proxy_chat_completions
+    async def main() -> None:
+        provider = await lens.external_providers.create_provider(
+            AIProviderCreateRequest(
+                name="OpenAI",
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+                timeoutSeconds=30,
+            )
+        )
+        print(provider.id, provider.model, provider.has_api_key)
 
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Update a provider or rotate its key
+
+All fields are optional. Omit `apiKey` to keep the stored key, or send an empty string to clear it.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`PUT /api/v1/ai-providers/{provider_id}`**
+
+```json
+{
+  "model": "gpt-4.1-mini",
+  "timeoutSeconds": 45,
+  "apiKey": "<token>"
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderUpdateRequest
+
+with LensLocal("<username>") as lens:
+    import asyncio
 
     async def main() -> None:
-        response = await proxy_chat_completions(
-            "ai-provider-7f3a2c1d",
+        provider = await lens.external_providers.update_provider(
+            "<provider-id>",
+            AIProviderUpdateRequest(
+                model="gpt-4.1-mini",
+                timeoutSeconds=45,
+                apiKey="<token>",
+            ),
+        )
+        print(provider.id, provider.model)
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Send a chat completion through a saved provider
+
+The server forwards an OpenAI-style body with the saved key attached and fills in the saved model when `model` is omitted. Only `openai`-type providers support this route.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/ai-providers/{provider_id}/chat/completions`**
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Give me a one-line health summary."
+    }
+  ]
+}
+```
+
+The response is the upstream provider's JSON.
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        response = await lens.external_providers.proxy_chat_completions(
+            "<provider-id>",
             {"messages": [{"role": "user", "content": "Say hello in one sentence."}]},
         )
         print(response)
 
-
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
+### Test a saved provider
+
+This reuses the stored URL, model, key and timeout. Use it after editing a provider or when diagnosing a connection problem.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -X POST "$LENS_URL/api/v1/ai-providers/<provider-id>/test"
+```
+
+The response has the same shape as a draft test.
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        result = await lens.external_providers.test_saved_provider("<provider-id>")
+        print(result.success, result.message)
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Delete a provider
+
+Deleting removes the saved configuration and its stored key. It does not affect the external provider itself.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -X DELETE "$LENS_URL/api/v1/ai-providers/<provider-id>"
+```
+
+Response: `204 No Content`.
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        await lens.external_providers.delete_provider("<provider-id>")
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+## Endpoints
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/v1/ai-providers` | `ai-provider:provider:read` | List saved providers with masked keys. |
+| GET | `/api/v1/ai-providers/{provider_id}` | `ai-provider:provider:read` | Get one saved provider. |
+| POST | `/api/v1/ai-providers` | `ai-provider:provider:create` | Save a new provider connection. |
+| PUT | `/api/v1/ai-providers/{provider_id}` | `ai-provider:provider:update` | Update a provider; rotate or clear its key. |
+| DELETE | `/api/v1/ai-providers/{provider_id}` | `ai-provider:provider:delete` | Delete a saved provider. |
+| POST | `/api/v1/ai-providers/test` | `ai-provider:provider:test` | Test an unsaved configuration. |
+| POST | `/api/v1/ai-providers/{provider_id}/test` | `ai-provider:provider:test` | Test a saved provider. |
+| POST | `/api/v1/ai-providers/{provider_id}/chat/completions` | `ai-provider:provider:chat` | Proxy an OpenAI chat completion. |
+
+## Errors / limits
+
+- **API keys are never returned.** List, get, create and update responses expose `hasApiKey` and `apiKeyPreview` only.
+- **Updating without `apiKey` keeps the old key.** Send `"apiKey": ""` to clear it, or a new value to rotate it.
+- **Provider names are unique, ignoring case.** A duplicate returns `409 ai_provider_name_conflict`.
+- **Outbound URLs must use public HTTPS.** Do not embed credentials, query parameters or fragments. Versioned base paths such as `/openai/v1.0` are supported. Redirects are not followed. Only configure an egress proxy you trust; set `LENS_TRUSTED_AI_PROVIDER_PROXY` to pin a specific verified proxy.
+- **A failed connectivity test is not an HTTP error.** The test endpoint returns `200` with `success: false` and a message for an unreachable or rejected probe. Invalid request fields return `422`.
+- **Chat proxying is OpenAI-only.** Other provider types return `400`. A missing provider returns `404`; upstream error statuses are passed through; network or timeout failures return `502`.
+- **Field limits.** `name` and `model` allow up to 200 characters; `timeoutSeconds` must be greater than `0` and at most `120`; `providerType` is `openai` or `anthropic`. Chat proxy calls use a separate, longer fixed timeout.
+- **Supported provider types.** Use `openai` for OpenAI-compatible APIs and `anthropic` for Anthropic-compatible APIs. Chat proxying currently supports `openai` only.
+
+## Related
+
+- [External providers user guide](/user-guide/external-providers)
+- [Lens Assistant](/user-guide/lens-assistant) — the main consumer of saved providers.
+- [Integrations](/integrations) — connect OpenAI-compatible clients to Lens model services.
+- [API reference conventions](/api-reference) — authentication, errors and field naming.
+- OpenAPI schema: `/api/v1/simulation/openapi.json` (Swagger UI at `/api/v1/simulation/docs`).

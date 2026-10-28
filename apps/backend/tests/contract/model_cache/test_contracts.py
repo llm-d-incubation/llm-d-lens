@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from llm_d_lens.model_cache.contracts import (
     HuggingFaceSource,
     ModelCacheEntry,
+    ModelCacheEntryResponse,
     ModelSource,
     ModelSourceKind,
     TokenSource,
@@ -43,15 +44,17 @@ def test_hf_cache_path_matches_hf_layout():
     assert hf_cache_path("meta-llama/Llama-3-8B") == "hub/models--meta-llama--Llama-3-8B"
 
 
-def test_model_cache_entry_api_payload_uses_camel_case():
+def test_model_cache_entry_response_uses_camel_case():
     entry = ModelCacheEntry(
         clusterId="cluster-1",
         storageVolumeId="vol-1",
         source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId="org/model")),
         cachePath="models--org--model",
     )
-    payload = entry.api_payload()
+    response = ModelCacheEntryResponse.from_entry(entry, pending_sync_nodes=["node-2"])
+    payload = response.model_dump(mode="json", by_alias=True)
     assert payload["clusterId"] == "cluster-1"
     assert payload["storageVolumeId"] == "vol-1"
     assert payload["cachePath"] == "models--org--model"
     assert payload["status"] == "pending"
+    assert payload["pendingSyncNodes"] == ["node-2"]

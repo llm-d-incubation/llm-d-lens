@@ -1,73 +1,96 @@
 ---
 title: API Reference
-description: Backend API surfaces, contracts and integration points.
+description: Use the Lens REST API or the in-process Python SDK.
 slug: /api-reference
 ---
 
-Lens exposes a same-origin HTTP API through the Python FastAPI backend
-(`llm_d_lens`). Vite proxies browser `/api/...` calls directly to it in development.
-In production, the same backend serves the built frontend, API and MCP endpoint,
-and owns validation, persistence and task execution.
+Lens exposes two ways to automate the same operations:
 
-```mermaid
-flowchart LR
-    UI["Lens UI"] --> PY["Python API (llm_d_lens) :3000"]
-    PY -->|/api/remote-deploy| SSH["Remote host over SSH"]
-    PY --> DB["Database"]
-    PY --> K8s["Kubernetes"]
+- **REST API** for remote clients, scripts and the browser.
+- **In-process Python SDK** for trusted automation on the Lens host.
+
+Both use the same request and response models, permissions and audit rules.
+
+## Quick start
+
+### REST API
+
+Use a Bearer access token or an authenticated browser session:
+
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/deployments/executions
 ```
 
-Deploy is part of the Lens Python backend, not a separate llm-d-bench API.
-Deployment routes run in the same process; no separate BFF upstream is required.
-Use `scripts/lens-local.sh start` for local development; see
-[Installation](/installation) and [Environment variables](/environment-variables)
-for current startup and storage settings rather than host-specific `/root/...`
-paths. Requests require an authenticated Lens session and the relevant permission;
-unsafe methods also require the matching `prism_csrf` cookie and `x-prism-csrf`
-header. Unauthenticated smoke requests may return `401`, not a resource list.
+Unsafe cookie-authenticated requests also need the `prism_csrf` cookie in the
+`x-prism-csrf` header. See [Authentication](/user-guide/administration).
 
-## Surfaces
+### In-process Python SDK
 
-| Surface | Description |
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    executions = lens.deployments.list_executions()
+    for execution in executions:
+        print(execution.execution_id, execution.status)
+```
+
+The SDK is for code running on the Lens host. Use REST when the caller is remote
+or the local user is not trusted.
+
+## Choose an API
+
+| Caller | Use |
 | --- | --- |
-| Python API | Same-origin FastAPI routes for deploy, simulation, evaluation, storage, monitoring, auth and Playground; also serves the production frontend. |
-| MCP tools | Assistant-callable operations generated from backend routes into the MCP catalog. |
-| Kubernetes backend | Server-side Kubernetes access over the official Python client, with CLI rollback. |
+| Remote service, CI runner or another machine | REST API with a Bearer token |
+| Browser UI | REST API with a session cookie |
+| Trusted script or CI job on the Lens host | In-process Python SDK |
+| Lens Assistant | MCP tools |
 
 ## Modules
 
-Every Lens module has a dedicated page covering its backend HTTP endpoints and,
-where one exists, how to call its Python service layer directly (for internal
-scripts, tests or automation) instead of over HTTP:
+Start with the module that matches your task:
 
 <CardGroup cols={3}>
-  <Card title="Welcome" href="/api-reference/modules/welcome">Scoped current issues and diagnostic links.</Card>
-  <Card title="Model market" href="/api-reference/modules/model-market">Catalog hand-off (frontend-only catalog).</Card>
-  <Card title="Deployments" href="/api-reference/modules/deployments">Runs, executions, cases, access.</Card>
-  <Card title="Evaluation" href="/api-reference/modules/evaluation">Guided benchmark tasks.</Card>
-  <Card title="Simulation" href="/api-reference/modules/simulation">Trace-based simulation runs.</Card>
-  <Card title="Model services" href="/api-reference/modules/model-services">Gateway, providers, selection policies.</Card>
-  <Card title="Clusters" href="/api-reference/modules/clusters">Registration, bootstrap, overview.</Card>
-  <Card title="Storage" href="/api-reference/modules/storage">Volumes and storage backends.</Card>
-  <Card title="Model cache" href="/api-reference/modules/model-cache">Cached model artifacts.</Card>
-  <Card title="External providers" href="/api-reference/modules/external-providers">Third-party AI providers.</Card>
-  <Card title="Observability" href="/api-reference/modules/observability">Accelerator, cluster stack, GPU driver, profiling.</Card>
-  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Python MCP tool catalog.</Card>
-  <Card title="Administration" href="/api-reference/modules/administration">Auth, RBAC and system settings.</Card>
+  <Card title="Deployments" href="/api-reference/modules/deployments">Start, inspect and clean model deployments.</Card>
+  <Card title="Evaluation" href="/api-reference/modules/evaluation">Run and inspect benchmarks.</Card>
+  <Card title="Simulation" href="/api-reference/modules/simulation">Replay trace datasets against a model.</Card>
+  <Card title="Model services" href="/api-reference/modules/model-services">Publish models and manage gateway access.</Card>
+  <Card title="Clusters" href="/api-reference/modules/clusters">Register clusters and bootstrap Kubernetes.</Card>
+  <Card title="Storage" href="/api-reference/modules/storage">Create and manage model storage volumes.</Card>
+  <Card title="Model cache" href="/api-reference/modules/model-cache">Download and sync cached models.</Card>
+  <Card title="External providers" href="/api-reference/modules/external-providers">Connect OpenAI-compatible providers.</Card>
+  <Card title="Observability" href="/api-reference/modules/observability">Inspect accelerator, gateway and driver health.</Card>
+  <Card title="Administration" href="/api-reference/modules/administration">Manage users, roles, sessions and system settings.</Card>
+  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">MCP transport and available tools.</Card>
+  <Card title="Welcome" href="/api-reference/modules/welcome">Current issues and diagnostic links.</Card>
 </CardGroup>
-
-Every Python backend endpoint is also documented in the generated FastAPI
-OpenAPI schema. Regenerate it after backend route changes:
-
-```bash
-source .venv/bin/activate
-npm run docs:api
-```
 
 ## Conventions
 
-Every new or modified externally callable API (FastAPI routes, HTTP handlers,
-RPC/MCP tools and their request/response contracts) must keep its description
-consistent with the implemented behavior, validation, authorization, defaults,
-status codes and schemas. See the repository API description requirements in
-`.github/instructions/api-documentation.instructions.md`.
+- Responses are JSON unless the operation downloads a file or streams events.
+- Errors use `application/problem+json` with a stable `code`, `message` and
+  optional `details`.
+- Requests are authenticated. Unsafe cookie-authenticated requests require CSRF.
+- Resource-level permissions and cluster scope are enforced by the service layer,
+  not only by the route.
+- Field names in HTTP payloads are camelCase. Python models expose snake_case
+  attributes and accept both names where aliases are defined.
+
+## Deprecated paths
+
+Old `/api/...` paths such as `/api/cluster`, `/api/simulation` and `/api/mcp`
+remain temporary aliases to `/api/v1/...` while clients migrate. `/healthz`
+remains available for process probes.
+
+## Full schema
+
+The generated OpenAPI schema is the source of truth for every request and
+response field:
+
+- Swagger UI: `/api/v1/simulation/docs`
+- OpenAPI JSON: `/api/v1/simulation/openapi.json`
+
+Use the module pages for common tasks and the OpenAPI schema for exhaustive field
+definitions.

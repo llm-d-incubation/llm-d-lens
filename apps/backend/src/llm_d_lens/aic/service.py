@@ -17,7 +17,9 @@ from typing import Any
 import yaml
 
 from .models import (
+    AICConfiguration,
     AICEstimateRequest,
+    AICEstimateResponse,
     AICExperimentRequest,
     AICExperimentResponse,
     AICRequest,
@@ -91,7 +93,7 @@ async def check_support(request: AICRequest) -> AICSupportResponse:
     return await asyncio.to_thread(check_support_sync, request)
 
 
-def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
+def _candidate(mode: str, row: dict[str, Any]) -> AICConfiguration:
     scale = max(1, int(row.get("replicas_needed") or 1))
     row = dict(row)
     row["num_total_gpus"] = int(row.get("num_total_gpus") or row.get("tp") or 1) * scale
@@ -100,7 +102,7 @@ def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
     if mode == "agg":
         tp = int(row.get("tp") or 1)
         replicas = max(1, int(row.get("num_total_gpus") or tp) // max(tp, 1))
-        return {
+        candidate = {
             "mode": "agg",
             "tp": tp,
             "replicas": replicas,
@@ -109,27 +111,29 @@ def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
             "tpot_ms": row.get("tpot"),
             "throughput_tokens_per_sec": row.get("tokens/s"),
         }
-    prefill_tp = int(row.get("(p)tp") or 1)
-    decode_tp = int(row.get("(d)tp") or 1)
-    return {
-        "mode": "disagg",
-        "prefill_tp": prefill_tp,
-        "prefill_replicas": int(row.get("(p)workers") or 1) * scale,
-        "decode_tp": decode_tp,
-        "decode_replicas": int(row.get("(d)workers") or 1) * scale,
-        "num_total_gpus": int(row.get("num_total_gpus") or 1),
-        "ttft_ms": row.get("ttft"),
-        "tpot_ms": row.get("tpot"),
-        "throughput_tokens_per_sec": row.get("tokens/s"),
-    }
+    else:
+        prefill_tp = int(row.get("(p)tp") or 1)
+        decode_tp = int(row.get("(d)tp") or 1)
+        candidate = {
+            "mode": "disagg",
+            "prefill_tp": prefill_tp,
+            "prefill_replicas": int(row.get("(p)workers") or 1) * scale,
+            "decode_tp": decode_tp,
+            "decode_replicas": int(row.get("(d)workers") or 1) * scale,
+            "num_total_gpus": int(row.get("num_total_gpus") or 1),
+            "ttft_ms": row.get("ttft"),
+            "tpot_ms": row.get("tpot"),
+            "throughput_tokens_per_sec": row.get("tokens/s"),
+        }
+    return AICConfiguration.model_validate(_plain(candidate))
 
 
-def _result_candidates(result: Any, limit: int) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
+def _result_candidates(result: Any, limit: int) -> list[AICConfiguration]:
+    candidates: list[AICConfiguration] = []
     for mode, frame in result.best_configs.items():
         normalized_mode = "agg" if mode == "agg" else "disagg"
         records = frame.head(limit).to_dict(orient="records")
-        candidates.extend(_plain(_candidate(normalized_mode, row)) for row in records)
+        candidates.extend(_candidate(normalized_mode, row) for row in records)
     return candidates
 
 
@@ -158,9 +162,9 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
             kwargs["target_request_rate"] = request.target_request_rate
             result = cli_recommend(**kwargs)
             configs = _result_candidates(result, request.max_candidates)
-            fitting = [item for item in configs if item["num_total_gpus"] <= request.gpu_count]
+            fitting = [item for item in configs if (item.num_total_gpus or 0) <= request.gpu_count]
             if not fitting:
-                required = min((item["num_total_gpus"] for item in configs), default=None)
+                required = min((item.num_total_gpus for item in configs if item.num_total_gpus), default=None)
                 raise AICError(
                     f"AIC cannot serve the requested load within the selected {request.gpu_count}-GPU budget. "
                     f"Minimum recommended GPUs: {required if required is not None else 'unavailable'}. "
@@ -169,10 +173,10 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
             compliant = [
                 item
                 for item in fitting
-                if item.get("ttft_ms") is not None
-                and item.get("tpot_ms") is not None
-                and 0 < item["ttft_ms"] <= (request.ttft_target_ms or 2000)
-                and 0 < item["tpot_ms"] <= (request.tpot_target_ms or 30)
+                if item.ttft_ms is not None
+                and item.tpot_ms is not None
+                and 0 < item.ttft_ms <= (request.ttft_target_ms or 2000)
+                and 0 < item.tpot_ms <= (request.tpot_target_ms or 30)
             ]
             if not compliant:
                 raise AICError(
@@ -204,12 +208,12 @@ def experiments_sync(request: AICExperimentRequest) -> AICExperimentResponse:
         raise
     except Exception as error:
         raise AICError(str(error)) from error
-    experiments: list[dict[str, Any]] = []
+    experiments: list[AICConfiguration] = []
     for mode, frame in result.best_configs.items():
         for index, row in enumerate(frame.to_dict(orient="records")):
             item = _candidate("agg" if mode == "agg" else "disagg", row)
-            item.update({"name": f"{mode}-{index + 1}", "is_chosen": mode == result.chosen_exp})
-            experiments.append(_plain(item))
+            item = item.model_copy(update={"name": f"{mode}-{index + 1}", "is_chosen": mode == result.chosen_exp})
+            experiments.append(item)
     return AICExperimentResponse(experiments=experiments)
 
 
@@ -217,7 +221,7 @@ async def experiments(request: AICExperimentRequest) -> AICExperimentResponse:
     return await asyncio.to_thread(experiments_sync, request)
 
 
-def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
+def estimate_sync(payload: AICEstimateRequest) -> AICEstimateResponse:
     """Return an estimate only when AIC's experiment matches the requested topology."""
     is_agg = payload.scenario == "inference_scheduling"
     if is_agg and payload.pp != 1:
@@ -287,7 +291,7 @@ def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
                     decode_tp=payload.decode_tp,
                     decode_replicas=payload.decode_replicas,
                 )
-            return prediction
+            return AICEstimateResponse.model_validate(_plain(prediction))
         except AICError:
             raise
         except Exception as error:
@@ -322,28 +326,29 @@ def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
             experiment[f"{role}_num_gpu_candidates"] = [getattr(payload, f"{role}_tp")]
     response = experiments_sync(AICExperimentRequest(yaml_text=yaml.safe_dump({"manual": experiment}), top_n=1))
     for result in response.experiments:
-        if not result.get("ttft_ms") or not result.get("tpot_ms"):
+        item = result if isinstance(result, dict) else result.model_dump(exclude_unset=True)
+        if not item.get("ttft_ms") or not item.get("tpot_ms"):
             continue
-        if result.get("num_total_gpus") not in (None, required_gpus):
+        if item.get("num_total_gpus") not in (None, required_gpus):
             continue
         if (
             is_agg
-            and result.get("mode") == "agg"
-            and result.get("tp") == payload.tp
-            and result.get("replicas") == payload.replicas
+            and item.get("mode") == "agg"
+            and item.get("tp") == payload.tp
+            and item.get("replicas") == payload.replicas
         ):
-            return result
+            return AICEstimateResponse.model_validate(_plain(item))
         if (
             not is_agg
-            and result.get("mode") == "disagg"
+            and item.get("mode") == "disagg"
             and all(
-                result.get(field) == getattr(payload, field)
+                item.get(field) == getattr(payload, field)
                 for field in ("prefill_tp", "prefill_replicas", "decode_tp", "decode_replicas")
             )
         ):
-            return result
+            return AICEstimateResponse.model_validate(_plain(item))
     raise AICError("AIConfigurator returned no estimate matching the requested topology")
 
 
-async def estimate(payload: AICEstimateRequest) -> dict[str, Any]:
+async def estimate(payload: AICEstimateRequest) -> AICEstimateResponse:
     return await asyncio.to_thread(estimate_sync, payload)

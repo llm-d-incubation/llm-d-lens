@@ -65,6 +65,33 @@ def service(tmp_path) -> ModelCacheService:
 
 
 @pytest.mark.asyncio
+async def test_responses_return_concrete_response_models(service, monkeypatch):
+    from llm_d_lens.model_cache.contracts import (
+        ModelCacheEntry,
+        ModelCacheEntryListResponse,
+        ModelCacheEntryResponse,
+    )
+
+    entry = ModelCacheEntry(
+        clusterId="cluster-1",
+        storageVolumeId="vol-1",
+        source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId="org/model")),
+        cachePath="models--org--model",
+    )
+    service._store.create(entry)
+
+    async def no_pending_sync(_entries):
+        return {}
+
+    monkeypatch.setattr(service, "compute_pending_sync", no_pending_sync)
+    responses = await service.responses([entry])
+    assert isinstance(responses, ModelCacheEntryListResponse)
+    assert isinstance(responses.items[0], ModelCacheEntryResponse)
+    assert responses.items[0].id == entry.id
+    assert responses.items[0].pending_sync_nodes == []
+
+
+@pytest.mark.asyncio
 async def test_request_download_rejects_model_catalog(service):
     request = _request(source=ModelSource(kind=ModelSourceKind.MODEL_CATALOG, modelCatalog={"catalogEntryId": "abc"}))
     with pytest.raises(ModelCatalogNotSupportedError):

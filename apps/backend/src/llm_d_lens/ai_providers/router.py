@@ -10,9 +10,12 @@ from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import Response
 
 from llm_d_lens.ai_providers.contracts import (
-    AIProvider,
+    AIProviderChatCompletionResponse,
     AIProviderCreateRequest,
+    AIProviderListResponse,
+    AIProviderResponse,
     AIProviderTestRequest,
+    AIProviderTestResult,
     AIProviderUpdateRequest,
 )
 from llm_d_lens.ai_providers.endpoints import normalize_provider_base_url
@@ -32,12 +35,9 @@ logger = logging.getLogger(__name__)
 _service = default_service()
 
 
-def _payload(provider: AIProvider) -> dict:
-    return provider.api_payload()
-
-
 @router.get(
     "",
+    response_model=AIProviderListResponse,
     summary="List the saved external AI provider connections Lens knows about.",
     description=(
         "List the saved external AI provider connections Lens knows about. Returned records mask stored API keys "
@@ -45,12 +45,13 @@ def _payload(provider: AIProvider) -> dict:
     ),
     operation_id="list_ai_providers",
 )
-async def list_providers() -> dict:
-    return {"items": [_payload(provider) for provider in _service.list()]}
+async def list_providers() -> AIProviderListResponse:
+    return _service.responses(_service.list())
 
 
 @router.get(
     "/{provider_id}",
+    response_model=AIProviderResponse,
     summary="Get one saved external AI provider connection by id.",
     description=(
         "Get one saved external AI provider connection by id. The response masks the stored API key and includes "
@@ -58,15 +59,16 @@ async def list_providers() -> dict:
     ),
     operation_id="get_ai_provider",
 )
-async def get_provider(provider_id: str) -> dict:
+async def get_provider(provider_id: str) -> AIProviderResponse:
     provider = _service.get(provider_id)
     if provider is None:
         raise HTTPException(status_code=404, detail=f"AI provider not found: {provider_id}")
-    return _payload(provider)
+    return _service.response(provider)
 
 
 @router.post(
     "",
+    response_model=AIProviderResponse,
     status_code=201,
     summary="Create and persist a new external AI provider configuration.",
     description=(
@@ -75,17 +77,18 @@ async def get_provider(provider_id: str) -> dict:
     ),
     operation_id="create_ai_provider",
 )
-async def create_provider(request: AIProviderCreateRequest) -> dict:
+async def create_provider(request: AIProviderCreateRequest) -> AIProviderResponse:
     try:
         provider = _service.create(request)
     except AIProviderNameConflictError as error:
         return problem(409, "AI provider name already in use", str(error), "ai_provider_name_conflict")
     logger.info("event=ai_provider_created provider_id=%s name=%s", provider.id, provider.name)
-    return _payload(provider)
+    return _service.response(provider)
 
 
 @router.put(
     "/{provider_id}",
+    response_model=AIProviderResponse,
     summary="Update an existing external AI provider configuration by id.",
     description=(
         "Update an existing external AI provider configuration by id. Omit apiKey to keep the stored key unchanged, "
@@ -93,7 +96,7 @@ async def create_provider(request: AIProviderCreateRequest) -> dict:
     ),
     operation_id="update_ai_provider",
 )
-async def update_provider(provider_id: str, request: AIProviderUpdateRequest) -> dict:
+async def update_provider(provider_id: str, request: AIProviderUpdateRequest) -> AIProviderResponse:
     try:
         provider = _service.update(provider_id, request)
     except AIProviderStoreError as error:
@@ -101,7 +104,7 @@ async def update_provider(provider_id: str, request: AIProviderUpdateRequest) ->
     except AIProviderNameConflictError as error:
         return problem(409, "AI provider name already in use", str(error), "ai_provider_name_conflict")
     logger.info("event=ai_provider_updated provider_id=%s", provider.id)
-    return _payload(provider)
+    return _service.response(provider)
 
 
 @router.delete(
@@ -125,6 +128,7 @@ async def delete_provider(provider_id: str):
 
 @router.post(
     "/test",
+    response_model=AIProviderTestResult,
     summary="Test connectivity for a not-yet-saved external AI provider configuration.",
     description=(
         "Test connectivity for a not-yet-saved external AI provider configuration. "
@@ -132,20 +136,20 @@ async def delete_provider(provider_id: str):
     ),
     operation_id="test_ai_provider_draft_connection",
 )
-async def test_draft_provider(request: AIProviderTestRequest) -> dict:
+async def test_draft_provider(request: AIProviderTestRequest) -> AIProviderTestResult:
     """Test connectivity for a not-yet-saved configuration (the create/edit form)."""
-    result = await check_connection(
+    return await check_connection(
         str(request.base_url),
         request.model,
         request.api_key,
         request.timeout_seconds,
         request.provider_type,
     )
-    return result.model_dump(mode="json", by_alias=True)
 
 
 @router.post(
     "/{provider_id}/test",
+    response_model=AIProviderTestResult,
     summary=("Test connectivity for an already-saved external AI provider by id, reusing its stored API key."),
     description=(
         "Test connectivity for an already-saved external AI provider by id, reusing its stored API key. "
@@ -153,19 +157,18 @@ async def test_draft_provider(request: AIProviderTestRequest) -> dict:
     ),
     operation_id="test_ai_provider_connection",
 )
-async def test_saved_provider(provider_id: str) -> dict:
+async def test_saved_provider(provider_id: str) -> AIProviderTestResult:
     """Test connectivity for an already-saved provider, reusing its stored API key."""
     provider = _service.get(provider_id)
     if provider is None:
         raise HTTPException(status_code=404, detail=f"AI provider not found: {provider_id}")
-    result = await check_connection(
+    return await check_connection(
         str(provider.base_url),
         provider.model,
         provider.api_key,
         provider.timeout_seconds,
         provider.provider_type,
     )
-    return result.model_dump(mode="json", by_alias=True)
 
 
 # A real chat/completions call (Talk with Lens sending the full tool
@@ -183,6 +186,7 @@ CHAT_COMPLETIONS_TIMEOUT_SECONDS = 600.0
 
 @router.post(
     "/{provider_id}/chat/completions",
+    response_model=AIProviderChatCompletionResponse,
     summary="Send a chat completion request through a saved AI provider.",
     description=(
         "Forward an OpenAI-compatible chat completion body to a saved openai-type provider using its server-held "

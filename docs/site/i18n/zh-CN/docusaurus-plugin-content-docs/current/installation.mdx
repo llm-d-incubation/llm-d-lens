@@ -106,7 +106,7 @@ scripts/lens-local.sh status
 ```
 
 启动器准备 Node.js、npm 依赖和 Python 环境，然后在端口 `5173` 运行源码前端、
-在 `3000` 运行统一 Python API。这种方式通过 Vite 运行源码，并不替代下方的生产构建命令。
+在 `3000` 运行统一后端。这种方式通过 Vite 运行源码，并不替代下方的生产构建命令。
 `npm run dev` 和 `npm run dev:web` 都会启动这两个开发进程。
 执行 `npm run build` 后，`npm start` 通过一个 Python 进程、一个端口提供构建后的前端、
 API 和 MCP。Node 用于前端构建，不参与生产请求处理。

@@ -15,7 +15,7 @@ import { streamSseRequest } from '../../../../shared/api/sse.js';
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Reads Server-Sent Events emitted by POST /api/playground/chat
+// Reads Server-Sent Events emitted by POST /api/v1/playground/chat
 // (llm_d_lens/playground/chat.py). fetch() is used instead of EventSource
 // because EventSource cannot send a POST body.
 // `pendingResume` (instead of `messages`) resumes a turn paused on a
@@ -26,7 +26,7 @@ import { streamSseRequest } from '../../../../shared/api/sse.js';
 // (used for voice-transcribed messages, see PlaygroundPage.jsx).
 export async function streamPlaygroundChat({ deployment, messages, pendingResume, readOnly }, onEvent, signal) {
     return streamSseRequest(
-        '/api/playground/chat',
+        '/api/v1/playground/chat',
         pendingResume ? { deployment, pendingResume } : { deployment, messages, readOnly },
         onEvent,
         signal,

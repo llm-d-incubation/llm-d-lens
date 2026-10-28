@@ -122,7 +122,7 @@ def test_software_downloads_endpoints_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(repo_downloads, "ensure_downloaded", _fake_ensure_downloaded)
 
     response = client.post(
-        f"/api/cluster/clusters/{cluster.id}/software-downloads",
+        f"/api/v1/cluster/clusters/{cluster.id}/software-downloads",
         json={"llmDRef": "v0.2.0", "llmDBenchmarkRef": "main"},
     )
     assert response.status_code == 202
@@ -130,7 +130,7 @@ def test_software_downloads_endpoints_roundtrip(tmp_path, monkeypatch):
     # Downloads run as fire-and-forget background tasks; give them a tick.
     asyncio.run(asyncio.sleep(0.05))
 
-    status_response = client.get(f"/api/cluster/clusters/{cluster.id}/software-downloads")
+    status_response = client.get(f"/api/v1/cluster/clusters/{cluster.id}/software-downloads")
     assert status_response.status_code == 200
     body = status_response.json()
     assert body["llmD"]["state"] == "ready"

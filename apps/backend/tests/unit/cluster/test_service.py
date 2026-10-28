@@ -9,6 +9,15 @@ import pytest
 
 from llm_d_lens.cluster import registry, service
 from llm_d_lens.cluster.errors import ClusterOverviewError
+from llm_d_lens.cluster.models import (
+    ClusterCreateRequest,
+    ClusterSettingsUpdateRequest,
+    HfTokenSecretRef,
+    LwsStatusResponse,
+    ModelSecretsResponse,
+    NodeMaintenanceResponse,
+    ProxyConfigDTO,
+)
 from llm_d_lens.cluster.service import _active_gpu_allocations
 from llm_d_lens.cluster.settings import ClusterSettings
 from llm_d_lens.infrastructure.process import CommandResult
@@ -44,10 +53,11 @@ async def test_lws_status_reports_crd_and_controller(monkeypatch):
     monkeypatch.setattr(service, "run_kubectl", fake_run_kubectl)
     status = await service.lws_status("cluster-a")
 
-    assert status["ready"] is True
-    assert status["crd"] == "ready"
-    assert status["controller"] == "ready"
-    assert status["version"] == service.lws_version()
+    assert isinstance(status, LwsStatusResponse)
+    assert status.ready is True
+    assert status.crd == "ready"
+    assert status.controller == "ready"
+    assert status.version == service.lws_version()
     assert commands[0][:3] == ["get", "crd", "disaggregatedsets.disaggregatedset.x-k8s.io"]
 
 
@@ -59,9 +69,9 @@ async def test_lws_status_reports_missing_crd(monkeypatch):
     monkeypatch.setattr(service, "run_kubectl", fake_run_kubectl)
     status = await service.lws_status("cluster-a")
 
-    assert status["ready"] is False
-    assert status["crd"] == "missing"
-    assert status["controller"] == "missing"
+    assert status.ready is False
+    assert status.crd == "missing"
+    assert status.controller == "missing"
 
 
 @pytest.mark.asyncio
@@ -509,16 +519,17 @@ async def test_set_node_maintenance_cordons_worker_but_rejects_control_plane(mon
 
     monkeypatch.setattr(service, "run_kubectl", fake_kubectl)
 
-    results = await service.set_node_maintenance(
+    response = await service.set_node_maintenance(
         SimpleNamespace(id="cluster"), ["worker-1", "cp-1", "missing-node"], disabled=True
     )
 
-    by_name = {item["name"]: item for item in results}
-    assert by_name["worker-1"]["ok"] is True
-    assert by_name["worker-1"]["schedulingDisabled"] is True
-    assert by_name["cp-1"]["ok"] is False
-    assert "control-plane" in by_name["cp-1"]["error"]
-    assert by_name["missing-node"]["ok"] is False
+    assert isinstance(response, NodeMaintenanceResponse)
+    by_name = {item.name: item for item in response.items}
+    assert by_name["worker-1"].ok is True
+    assert by_name["worker-1"].scheduling_disabled is True
+    assert by_name["cp-1"].ok is False
+    assert "control-plane" in by_name["cp-1"].error
+    assert by_name["missing-node"].ok is False
     assert calls == [["cordon", "worker-1"]]
 
 
@@ -1011,10 +1022,11 @@ async def test_model_secret_discovery_returns_external_coordinates_without_value
     monkeypatch.setattr(service, "run_kubectl", fake_kubectl)
     result = await service.list_model_secrets(SimpleNamespace(id="cluster"))
 
-    assert result == [
-        {"namespace": "llm-d-bench-failed-deployment", "name": "llm-d-hf-token", "createdAt": ""},
-        {"namespace": "llm-d-bench-storage-e97867eb", "name": "hf-token-544aeb47", "createdAt": "now"},
-        {"namespace": "models", "name": "huggingface", "createdAt": "now"},
+    assert isinstance(result, ModelSecretsResponse)
+    assert [(item.namespace, item.name, item.created_at) for item in result.items] == [
+        ("llm-d-bench-failed-deployment", "llm-d-hf-token", ""),
+        ("llm-d-bench-storage-e97867eb", "hf-token-544aeb47", "now"),
+        ("models", "huggingface", "now"),
     ]
 
 
@@ -1057,7 +1069,13 @@ def test_registry_update_cluster_patches_only_given_fields(tmp_path, monkeypatch
 
 def test_create_cluster_rejects_empty_custom_proxy():
     with pytest.raises(ClusterOverviewError) as excinfo:
-        service.create_cluster("c1", "", "kubeconfig: {}", proxy_mode="custom")
+        service.create_cluster(
+            ClusterCreateRequest(
+                name="c1",
+                kubeconfig="kubeconfig: {}",
+                proxy=ProxyConfigDTO(mode="custom"),
+            )
+        )
     assert excinfo.value.code == "invalid_proxy_config"
 
 
@@ -1065,7 +1083,7 @@ def test_update_cluster_settings_rejects_empty_custom_proxy(monkeypatch):
     cluster = registry.Cluster(id="cluster-1", name="c1", description="", created_at="2026-01-01T00:00:00Z")
     monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
     with pytest.raises(ClusterOverviewError) as excinfo:
-        service.update_cluster_settings("cluster-1", proxy_mode="custom")
+        service.update_cluster_settings("cluster-1", ClusterSettingsUpdateRequest(proxy=ProxyConfigDTO(mode="custom")))
     assert excinfo.value.code == "invalid_proxy_config"
 
 
@@ -1080,9 +1098,9 @@ def test_update_cluster_settings_rejects_model_gateway_provider_change(monkeypat
     monkeypatch.setattr(registry, "require_cluster", lambda cluster_id: cluster)
     monkeypatch.setattr(registry, "update_cluster", lambda *args, **kwargs: cluster)
     with pytest.raises(ClusterOverviewError) as excinfo:
-        service.update_cluster_settings("cluster-1", gateway_provider="envoy-ai-gateway")
+        service.update_cluster_settings("cluster-1", ClusterSettingsUpdateRequest(gatewayProvider="envoy-ai-gateway"))
     assert excinfo.value.code == "gateway_provider_immutable"
-    service.update_cluster_settings("cluster-1", gateway_provider="istio")
+    service.update_cluster_settings("cluster-1", ClusterSettingsUpdateRequest(gatewayProvider="istio"))
 
 
 def test_update_cluster_settings_allows_first_model_gateway_provider_assignment(monkeypatch):
@@ -1095,7 +1113,7 @@ def test_update_cluster_settings_allows_first_model_gateway_provider_assignment(
         return cluster
 
     monkeypatch.setattr(registry, "update_cluster", fake_update)
-    service.update_cluster_settings("cluster-1", gateway_provider="istio")
+    service.update_cluster_settings("cluster-1", ClusterSettingsUpdateRequest(gatewayProvider="istio"))
     assert captured["gateway_provider"] == "istio"
 
 
@@ -1228,7 +1246,7 @@ async def test_create_hf_token_secret_creates_when_absent(monkeypatch):
 
     ref = await service.create_hf_token_secret(cluster, "default", "hf-token-new", "hf_secret_value")
 
-    assert ref == {"namespace": "default", "name": "hf-token-new"}
+    assert ref == HfTokenSecretRef(namespace="default", name="hf-token-new")
     assert created["manifest"]["metadata"] == {"name": "hf-token-new", "namespace": "default"}
     assert created["manifest"]["stringData"] == {"HF_TOKEN": "hf_secret_value"}
     # A namespace Lens creates is labelled, so deleting the cluster can remove it.
@@ -1273,7 +1291,7 @@ async def test_update_hf_token_secret_rewrites_recorded_secret_in_place(monkeypa
 
     ref = await service.update_hf_token_secret(cluster, "hf_rotated")
 
-    assert ref == {"namespace": "llm-d-bench-storage-x", "name": "hf-token-old"}
+    assert ref == HfTokenSecretRef(namespace="llm-d-bench-storage-x", name="hf-token-old")
     secret = [item for item in captured["applied"] if item and item.get("kind") == "Secret"][0]
     assert secret["metadata"] == {"name": "hf-token-old", "namespace": "llm-d-bench-storage-x"}
     assert secret["stringData"] == {"HF_TOKEN": "hf_rotated"}
@@ -1295,7 +1313,7 @@ async def test_update_hf_token_secret_repoints_cluster_to_new_coordinates(monkey
 
     ref = await service.update_hf_token_secret(cluster, "hf_new", namespace="new-ns", name="hf-token-new")
 
-    assert ref == {"namespace": "new-ns", "name": "hf-token-new"}
+    assert ref == HfTokenSecretRef(namespace="new-ns", name="hf-token-new")
     reloaded = registry.get_cluster(cluster.id)
     assert reloaded.hf_token_secret_namespace == "new-ns"  # noqa: S105
     assert reloaded.hf_token_secret_name == "hf-token-new"  # noqa: S105 -- k8s Secret name, not a credential
@@ -1326,17 +1344,17 @@ async def test_update_hf_token_secret_rejects_blank_token():
 def test_cluster_record_exposes_hf_token_secret_coordinates():
     """The Edit cluster drawer needs the recorded coordinates to prefill its
     rotation fields, so the API record must expose them (never the token)."""
-    from llm_d_lens.cluster.router import _record
+    from llm_d_lens.cluster.models import ClusterRecord
 
     cluster = registry.create_cluster("cluster-record-secret", "", "kubeconfig: {}")
-    assert _record(cluster).hf_token_secret is None
+    assert ClusterRecord.from_cluster(cluster).hf_token_secret is None
 
     registry.update_cluster(
         cluster.id,
         hf_token_secret_namespace="ns-a",  # noqa: S106 -- Kubernetes resource name, not a credential.
         hf_token_secret_name="hf-token-a",  # noqa: S106 -- Kubernetes resource name, not a credential.
     )
-    record = _record(registry.get_cluster(cluster.id))
+    record = ClusterRecord.from_cluster(registry.get_cluster(cluster.id))
 
     assert record.hf_token_secret is not None
     payload = record.model_dump(by_alias=True)

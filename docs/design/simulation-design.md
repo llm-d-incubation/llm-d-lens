@@ -14,7 +14,7 @@ original part-local context; use the links below for unambiguous navigation.
 
 ## Lens Simulation Design and API Contract
 
-> Implementation contract for the current `/api/simulation` service. This document
+> Implementation contract for the current `/api/v1/simulation` service. This document
 > describes deployed behavior, not the future unified Run/TCO target architecture.
 
 ### 1. Scope and design principles
@@ -44,7 +44,7 @@ The implementation follows these rules:
 
 ```mermaid
 flowchart LR
-    UI[Lens Simulation UI] -->|Catalog and task APIs| API[FastAPI /api/simulation]
+    UI[Lens Simulation UI] -->|Catalog and task APIs| API[FastAPI /api/v1/simulation]
     API --> C[Capability catalog]
     API --> S[Simulation service and queue]
     API --> D[Trace download and timeline service]
@@ -159,7 +159,7 @@ presentation and do not become AIPerf CLI flags.
 
 ### 6. API conventions
 
-- Base path: `/api/simulation`
+- Base path: `/api/v1/simulation`
 - Media type: `application/json`
 - Timestamps: ISO 8601 strings, normally UTC with `Z`
 - Percent values: `0..100`, not fractions
@@ -866,7 +866,7 @@ Discovery endpoints are read-only and do not mutate simulation state.
 ##### Endpoint
 
 ```
-GET /api/simulation/backends
+GET /api/v1/simulation/backends
 ```
 
 ##### Python
@@ -902,7 +902,7 @@ before creating a task.
 ##### Endpoint
 
 ```
-GET /api/simulation/scenarios
+GET /api/v1/simulation/scenarios
 ```
 
 ##### Python
@@ -930,7 +930,7 @@ ScenarioDescriptor(
 ##### Endpoint
 
 ```
-GET /api/simulation/trace-datasets
+GET /api/v1/simulation/trace-datasets
 ```
 
 ##### Python
@@ -964,7 +964,7 @@ TraceDatasetDescriptor(
 ##### Endpoint
 
 ```
-POST /api/simulation/trace-datasets/download
+POST /api/v1/simulation/trace-datasets/download
 ```
 
 ##### Python
@@ -990,7 +990,7 @@ TraceDatasetDownloadRequest(
 ##### Endpoint
 
 ```
-GET /api/simulation/trace-datasets/{dataset_name}/timeline
+GET /api/v1/simulation/trace-datasets/{dataset_name}/timeline
 ```
 
 ##### Python
@@ -1009,7 +1009,7 @@ visualization. Accepts an optional `bins` parameter (50–2000, default 800).
 ##### Endpoint
 
 ```
-POST /api/simulation/models/discover
+POST /api/v1/simulation/models/discover
 ```
 
 ##### Python
@@ -1037,7 +1037,7 @@ simulation task:
 #### Endpoint
 
 ```
-POST /api/simulation/tasks
+POST /api/v1/simulation/tasks
 ```
 
 #### Python
@@ -1108,7 +1108,7 @@ Stops a running or queued task:
 #### Endpoint
 
 ```
-POST /api/simulation/tasks/{task_id}/stop
+POST /api/v1/simulation/tasks/{task_id}/stop
 ```
 
 #### Python
@@ -1130,7 +1130,7 @@ Creates a new task from an existing completed, failed, or cancelled task:
 #### Endpoint
 
 ```
-POST /api/simulation/tasks/{task_id}/rerun
+POST /api/v1/simulation/tasks/{task_id}/rerun
 ```
 
 #### Python
@@ -1152,7 +1152,7 @@ Deletes a completed, failed, or cancelled task and its on-disk artifacts:
 #### Endpoint
 
 ```
-DELETE /api/simulation/tasks/{task_id}
+DELETE /api/v1/simulation/tasks/{task_id}
 ```
 
 #### Python
@@ -1173,7 +1173,7 @@ rejected with HTTP 409. On success the task directory is removed from disk.
 ##### Endpoint
 
 ```
-GET /api/simulation/tasks/{task_id}
+GET /api/v1/simulation/tasks/{task_id}
 ```
 
 ##### Python
@@ -1200,7 +1200,7 @@ Returns HTTP 404 if the task does not exist.
 ##### Endpoint
 
 ```
-GET /api/simulation/tasks
+GET /api/v1/simulation/tasks
 ```
 
 ##### Python
@@ -1416,7 +1416,7 @@ Each artifact references an on-disk file within the task's artifact directory.
 #### Endpoint
 
 ```
-GET /api/simulation/tasks/{task_id}/response-code-issues
+GET /api/v1/simulation/tasks/{task_id}/response-code-issues
 ```
 
 #### Python

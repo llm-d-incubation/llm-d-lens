@@ -9,7 +9,10 @@ from fastapi import HTTPException
 from llm_d_lens.ai_providers import router as ai_providers_router
 from llm_d_lens.ai_providers.contracts import (
     AIProviderCreateRequest,
+    AIProviderListResponse,
+    AIProviderResponse,
     AIProviderTestRequest,
+    AIProviderTestResult,
     AIProviderUpdateRequest,
 )
 from llm_d_lens.ai_providers.service import AIProviderService, UnsafeProviderEndpointError
@@ -38,12 +41,14 @@ async def test_create_then_list_returns_masked_payloads(service):
             name="OpenAI", baseUrl="https://api.openai.com", model="gpt-4o-mini", apiKey="sk-secret"
         )
     )
-    assert created["name"] == "OpenAI"
-    assert created["hasApiKey"] is True
-    assert "apiKey" not in created
+    assert isinstance(created, AIProviderResponse)
+    assert created.name == "OpenAI"
+    assert created.has_api_key is True
+    assert "apiKey" not in created.model_dump(mode="json", by_alias=True)
 
     listing = await ai_providers_router.list_providers()
-    assert [item["id"] for item in listing["items"]] == [created["id"]]
+    assert isinstance(listing, AIProviderListResponse)
+    assert [item.id for item in listing.items] == [created.id]
 
 
 @pytest.mark.asyncio
@@ -72,9 +77,10 @@ async def test_update_provider_changes_fields(service):
         AIProviderCreateRequest(name="Original", baseUrl="https://api.openai.com", model="gpt-4o-mini")
     )
 
-    updated = await ai_providers_router.update_provider(created["id"], AIProviderUpdateRequest(model="gpt-4.1-mini"))
+    updated = await ai_providers_router.update_provider(created.id, AIProviderUpdateRequest(model="gpt-4.1-mini"))
 
-    assert updated["model"] == "gpt-4.1-mini"
+    assert isinstance(updated, AIProviderResponse)
+    assert updated.model == "gpt-4.1-mini"
 
 
 @pytest.mark.asyncio
@@ -90,11 +96,11 @@ async def test_delete_provider_then_get_is_404(service):
         AIProviderCreateRequest(name="Removable", baseUrl="https://api.openai.com", model="gpt-4o-mini")
     )
 
-    response = await ai_providers_router.delete_provider(created["id"])
+    response = await ai_providers_router.delete_provider(created.id)
     assert response.status_code == 204
 
     with pytest.raises(HTTPException):
-        await ai_providers_router.get_provider(created["id"])
+        await ai_providers_router.get_provider(created.id)
 
 
 @pytest.mark.asyncio
@@ -138,8 +144,9 @@ async def test_test_draft_provider_reports_success(service, monkeypatch):
         AIProviderTestRequest(baseUrl="https://api.openai.com/", model="gpt-4o-mini", apiKey="sk-abc")
     )
 
-    assert result["success"] is True
-    assert result["modelFound"] is True
+    assert isinstance(result, AIProviderTestResult)
+    assert result.success is True
+    assert result.model_found is True
 
 
 @pytest.mark.asyncio
@@ -149,9 +156,10 @@ async def test_test_saved_provider_reports_success(service, monkeypatch):
         AIProviderCreateRequest(name="OpenAI", baseUrl="https://api.openai.com", model="gpt-4o-mini", apiKey="sk-abc")
     )
 
-    result = await ai_providers_router.test_saved_provider(created["id"])
+    result = await ai_providers_router.test_saved_provider(created.id)
 
-    assert result["success"] is True
+    assert isinstance(result, AIProviderTestResult)
+    assert result.success is True
 
 
 @pytest.mark.asyncio
@@ -175,7 +183,8 @@ async def test_test_draft_provider_uses_anthropic_headers_when_requested(service
         )
     )
 
-    assert result["success"] is True
+    assert isinstance(result, AIProviderTestResult)
+    assert result.success is True
     assert client.last_headers.get("x-api-key") == "sk-ant-abc"
     assert "Authorization" not in client.last_headers
 
@@ -194,9 +203,10 @@ async def test_test_saved_provider_uses_its_stored_provider_type(service, monkey
         )
     )
 
-    result = await ai_providers_router.test_saved_provider(created["id"])
+    result = await ai_providers_router.test_saved_provider(created.id)
 
-    assert result["success"] is True
+    assert isinstance(result, AIProviderTestResult)
+    assert result.success is True
     assert client.last_headers.get("x-api-key") == "sk-ant-abc"
 
 
@@ -241,7 +251,7 @@ async def test_proxy_chat_completions_forwards_with_stored_key_and_default_model
     )
 
     result = await ai_providers_router.proxy_chat_completions(
-        created["id"], {"messages": [{"role": "user", "content": "hi"}]}
+        created.id, {"messages": [{"role": "user", "content": "hi"}]}
     )
 
     assert result["choices"][0]["message"]["content"] == "hi"
@@ -262,7 +272,7 @@ async def test_proxy_chat_completions_accepts_base_url_with_v1_suffix(service, m
         )
     )
 
-    await ai_providers_router.proxy_chat_completions(created["id"], {"messages": [{"role": "user", "content": "hi"}]})
+    await ai_providers_router.proxy_chat_completions(created.id, {"messages": [{"role": "user", "content": "hi"}]})
 
     assert client.last_url == "https://api.openai.com/v1/chat/completions"
 
@@ -279,7 +289,7 @@ async def test_proxy_chat_completions_rejects_dns_rebinding_during_request(servi
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        await ai_providers_router.proxy_chat_completions(created["id"], {"messages": []})
+        await ai_providers_router.proxy_chat_completions(created.id, {"messages": []})
     assert excinfo.value.status_code == 422
 
 
@@ -305,7 +315,7 @@ async def test_proxy_chat_completions_uses_a_generous_fixed_timeout_not_the_prov
         )
     )
 
-    await ai_providers_router.proxy_chat_completions(created["id"], {"messages": [{"role": "user", "content": "hi"}]})
+    await ai_providers_router.proxy_chat_completions(created.id, {"messages": [{"role": "user", "content": "hi"}]})
 
     assert captured_kwargs["timeout"] == ai_providers_router.CHAT_COMPLETIONS_TIMEOUT_SECONDS
     assert captured_kwargs["timeout"] != 15
@@ -331,7 +341,7 @@ async def test_proxy_chat_completions_rejects_anthropic_providers(service):
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        await ai_providers_router.proxy_chat_completions(created["id"], {"messages": []})
+        await ai_providers_router.proxy_chat_completions(created.id, {"messages": []})
     assert excinfo.value.status_code == 400
 
 
@@ -368,7 +378,7 @@ async def test_proxy_chat_completions_reports_a_useful_message_even_when_the_und
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        await ai_providers_router.proxy_chat_completions(created["id"], {"messages": []})
+        await ai_providers_router.proxy_chat_completions(created.id, {"messages": []})
 
     assert excinfo.value.status_code == 502
     assert "ConnectTimeout" in excinfo.value.detail
@@ -386,5 +396,5 @@ async def test_proxy_chat_completions_propagates_provider_error_status(service, 
     )
 
     with pytest.raises(HTTPException) as excinfo:
-        await ai_providers_router.proxy_chat_completions(created["id"], {"messages": []})
+        await ai_providers_router.proxy_chat_completions(created.id, {"messages": []})
     assert excinfo.value.status_code == 400

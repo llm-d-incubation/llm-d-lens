@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import contextvars
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -31,6 +33,83 @@ from llm_d_lens.core.exceptions import (
 SESSION_COOKIE = "prism_session"
 CSRF_COOKIE = "prism_csrf"
 CSRF_HEADER = "x-prism-csrf"
+
+_current_principal: contextvars.ContextVar[Principal | None] = contextvars.ContextVar(
+    "lens_current_principal", default=None
+)
+
+
+def context_principal() -> Principal | None:
+    """Principal for the current in-process API call, if one was set."""
+    return _current_principal.get()
+
+
+async def with_principal_context(request: Request) -> AsyncIterator[None]:
+    """Expose the HTTP principal to service-layer authorization.
+
+    The router remains the HTTP adapter; application/services read the same
+    ambient principal as the local SDK.
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        yield
+        return
+    token = _current_principal.set(principal)
+    try:
+        yield
+    finally:
+        _current_principal.reset(token)
+
+
+@contextmanager
+def principal_context(principal: Principal):
+    token = _current_principal.set(principal)
+    try:
+        yield principal
+    finally:
+        _current_principal.reset(token)
+
+
+class LensContext:
+    """Ambient principal context for the local Python API.
+
+    Mirrors Odoo's ``env.user`` / Frappe's ``session.user``: the caller supplies
+    a user id, the context loads the real Principal, and the service/domain layer
+    enforces permissions. This is a trusted in-process context, not authentication.
+    """
+
+    def __init__(self, principal: Principal) -> None:
+        self.principal = principal
+        self._token = None
+
+    @classmethod
+    def from_username(cls, username: str) -> LensContext:
+        if not username:
+            raise UnauthenticatedError("username is required")
+        service = default_service()
+        user = service.user_dao.get_by_username(username.strip())
+        if user is None or user.status != "active":
+            raise UnauthenticatedError("unknown or inactive user")
+        return cls(service.principal_for(user))
+
+    @classmethod
+    def from_user_id(cls, user_id: str) -> LensContext:
+        if not user_id:
+            raise UnauthenticatedError("user id is required")
+        service = default_service()
+        user = service.user_dao.get(user_id)
+        if user is None or user.status != "active":
+            raise UnauthenticatedError("unknown or inactive user")
+        return cls(service.principal_for(user))
+
+    def __enter__(self) -> LensContext:
+        self._token = _current_principal.set(self.principal)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._token is not None:
+            _current_principal.reset(self._token)
+            self._token = None
 
 
 @dataclass
@@ -100,7 +179,7 @@ def _source(request: Request) -> str:
     if declared in {"assistant", "background"} and request.headers.get("x-prism-principal-id"):
         return declared
     if request.headers.get("x-prism-principal-id"):
-        return "assistant" if request.url.path == "/api/mcp" else "api"
+        return "assistant" if request.url.path == "/api/v1/mcp" else "api"
     return "api"
 
 
@@ -117,8 +196,10 @@ class CsrfFailedError(DomainError):
 
 
 def _verify_csrf(request: Request) -> None:
-    """Double-submit cookie check (design section 12). Cookie-less clients
-    (e.g. Bearer API callers) are exempt; browser sessions always carry it."""
+    """Double-submit cookie check (design section 12). Bearer callers are
+    exempt because the browser does not attach that credential automatically."""
+    if bearer_token_from_request(request):
+        return
     cookie = request.cookies.get(CSRF_COOKIE)
     if not cookie:
         return
@@ -130,18 +211,24 @@ _PASSWORD_CHANGE_ALLOWED = {
     "/api/v1/auth/password",
     "/api/v1/auth/session",
     "/api/v1/auth/logout",
+    "/api/v1/auth/refresh",
 }
 
 
-def token_from_request(request: Request) -> str | None:
-    """Extract the opaque session token from the cookie or Bearer header."""
-    cookie = request.cookies.get(SESSION_COOKIE)
-    if cookie:
-        return cookie
+def bearer_token_from_request(request: Request) -> str | None:
     header = request.headers.get("authorization", "")
     if header.lower().startswith("bearer "):
         return header[7:].strip() or None
     return None
+
+
+def cookie_token_from_request(request: Request) -> str | None:
+    return request.cookies.get(SESSION_COOKIE)
+
+
+def token_from_request(request: Request) -> str | None:
+    """Extract a bearer access token first, then the opaque session cookie."""
+    return bearer_token_from_request(request) or cookie_token_from_request(request)
 
 
 def _disabled_principal() -> Principal:
@@ -187,17 +274,33 @@ class AuthContextMiddleware(BaseHTTPMiddleware):
     """Attach the resolved principal (or ``None``) to ``request.state``."""
 
     async def dispatch(self, request: Request, call_next):
+        settings = get_settings()
         principal: Principal | None = None
-        if get_settings().disabled:
+        session_id: str | None = None
+        legacy_bearer = False
+        bearer = bearer_token_from_request(request)
+        cookie = cookie_token_from_request(request)
+        if settings.disabled:
             principal = _disabled_principal()
         else:
             principal = _internal_principal(request)
-            if principal is None:
-                token = token_from_request(request)
-                if token:
-                    principal = default_service().validate(token)
+            if principal is None and bearer:
+                service = default_service()
+                resolved = service.validate_access_token(bearer)
+                if resolved is not None:
+                    principal, session_id = resolved
+                elif settings.accept_legacy_opaque_bearer:
+                    legacy_principal = service.validate(bearer)
+                    if legacy_principal is not None:
+                        principal = legacy_principal
+                        legacy_bearer = True
+            elif principal is None and cookie and settings.cookie_fallback:
+                resolved = default_service().validate_session_token(cookie)
+                if resolved is not None:
+                    principal, session_id = resolved
         request.state.principal = principal
-        request.state.principal_token = token_from_request(request)
+        request.state.principal_token = cookie if cookie else (bearer if legacy_bearer else None)
+        request.state.principal_session_id = session_id
         found, permission = resolve_route_permission(request.method, request.url.path)
         context = AuditContext(
             request_id=_request_id(request),

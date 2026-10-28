@@ -2,7 +2,7 @@ import { requestJson } from '../../../../shared/api/httpClient';
 // Kubespray-based "bootstrap a K8s cluster" sub-flow for Step 1 of the
 // Create Cluster wizard. See docs/design/cluster-design.md#kubernetes-bootstrap at the repo root
 // for the full design; this component only talks to
-// `/api/cluster/bootstrap/*` and, once a bootstrap job succeeds, hands the
+// `/api/v1/cluster/bootstrap/*` and, once a bootstrap job succeeds, hands the
 // resulting kubeconfig text back to the caller via `onKubeconfigReady` --
 // the wizard's existing Step 1 kubeconfig-file state is otherwise
 // untouched (the design's "self-contained pre-step" principle).
@@ -120,7 +120,7 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
         setHostKeyResults(null);
         setHostKeysConfirmed(false);
         try {
-            const payload = await requestJson('/api/cluster/bootstrap/host-keys', {
+            const payload = await requestJson('/api/v1/cluster/bootstrap/host-keys', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ nodes: nodes.map((node) => ({ host: node.host.trim(), port: Number(node.port) || 22 })) }),
@@ -139,7 +139,7 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
         setPreflightBusy(true);
         setPreflightResults(null);
         try {
-            const payload = await requestJson('/api/cluster/bootstrap/preflight', {
+            const payload = await requestJson('/api/v1/cluster/bootstrap/preflight', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ nodes: nodes.map(toApiNode), hostKeys: hostKeyPins() }),
@@ -157,7 +157,7 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
         window.clearInterval(pollRef.current);
         pollRef.current = window.setInterval(async () => {
             try {
-                const payload = await requestJson(`/api/cluster/bootstrap/${id}`, {}, {
+                const payload = await requestJson(`/api/v1/cluster/bootstrap/${id}`, {}, {
                     strictJson: true,
                     errorFactory: (_payload, response) => new Error(`Bootstrap status request failed (${response.status})`),
                 });
@@ -181,7 +181,7 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
         if (!allPassed) return;
         setError('');
         try {
-            const payload = await requestJson('/api/cluster/bootstrap', {
+            const payload = await requestJson('/api/v1/cluster/bootstrap', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -210,7 +210,7 @@ export function BootstrapNodesPanel({ onKubeconfigReady, onCancel }) {
         window.clearInterval(pollRef.current);
         if (bootstrapId) {
             try {
-                await requestJson(`/api/cluster/bootstrap/${bootstrapId}/cancel`, { method: 'POST' });
+                await requestJson(`/api/v1/cluster/bootstrap/${bootstrapId}/cancel`, { method: 'POST' });
             } catch {
                 /* best-effort */
             }

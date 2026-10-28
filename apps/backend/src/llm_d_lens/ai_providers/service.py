@@ -16,6 +16,8 @@ from llm_d_lens.ai_providers.contracts import (
     DEFAULT_ANTHROPIC_VERSION,
     AIProvider,
     AIProviderCreateRequest,
+    AIProviderListResponse,
+    AIProviderResponse,
     AIProviderTestResult,
     AIProviderType,
     AIProviderUpdateRequest,
@@ -116,6 +118,12 @@ def public_provider_client(base_url: str, timeout: float) -> httpx.AsyncClient:
 class AIProviderService:
     def __init__(self, store: AIProviderStore | None = None) -> None:
         self._store = store or default_store()
+
+    def response(self, provider: AIProvider) -> AIProviderResponse:
+        return AIProviderResponse.from_provider(provider)
+
+    def responses(self, providers: list[AIProvider]) -> AIProviderListResponse:
+        return AIProviderListResponse(items=[self.response(provider) for provider in providers])
 
     def list(self) -> list[AIProvider]:
         return self._store.list()

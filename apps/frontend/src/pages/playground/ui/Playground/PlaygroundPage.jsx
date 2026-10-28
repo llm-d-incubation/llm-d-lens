@@ -639,7 +639,7 @@ export default function PlaygroundPage({ onToggleMobileNav }) {
     // Unifies the two AI provider modes into one shape the chat/rendering
     // code below can use without branching everywhere: a label to show in
     // the "Talking to ..." banner, the model name, and the deployment
-    // payload to send to POST /api/playground/chat.
+    // payload to send to POST /api/v1/playground/chat.
     const activeService = useMemo(() => (
         providerMode === 'internal'
             ? (selectedDeployment && {

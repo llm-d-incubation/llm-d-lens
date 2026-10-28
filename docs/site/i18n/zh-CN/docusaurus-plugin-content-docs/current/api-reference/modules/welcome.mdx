@@ -1,146 +1,118 @@
 ---
 title: 欢迎页
-description: 欢迎页使用的当前问题只读聚合接口。
+description: 读取欢迎页展示的当前集群问题。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## 后端 API
+## 模块用途
 
-欢迎页路由来自 `llm_d_lens/dashboard/router.py`。接口只返回最新问题快照。
-后端后台任务每 60 秒刷新该快照，请求处理时再按调用者过滤。
-集群容量、服务列表、部署活动和 Token 使用量仍由各自模块的接口负责。
+欢迎页提供落地页使用的只读问题数据。你可以用它构建跨集群的告警视图或仪表盘。
+该接口只返回问题快照；集群容量、模型服务列表、部署历史和用量仍由各自模块的接口负责。
 
-两个路由都需要已登录会话和 `cluster:cluster:read`。每条问题还会按调用者可访问的集群
-和问题所属领域的权限过滤。显式传入无权访问的 `clusterId` 会返回 `403`，
-且不包含资源详情。
+两个端点都需要已登录会话和 `cluster:cluster:read`。返回结果会按调用者可访问的
+集群和领域权限过滤。
 
-### 获取欢迎页概览
+## 快速开始
 
-返回欢迎页当前范围内的问题数据。已有快照时，`refresh=true` 会安排一次后台刷新，
-并立即返回当前快照，不会等待远程数据源。
+### 获取概览
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/welcome/overview`**
 
-    查询参数：
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/welcome/overview?clusterId=cluster-a"
+```
 
-    - `clusterId`（`string`，可选）：一个有权访问的集群。
-    - `refresh`（`boolean`，默认 `false`）：安排一次后台快照刷新。
+响应包含 `generatedAt`、`scope`，以及带有当前问题数组的 `issues` 信封。
 
-    响应：`WelcomeOverview`。
-
-    ```json
-    {
-      "generatedAt": "2026-10-18T12:41:03Z",
-      "scope": {
-        "mode": "all",
-        "clusters": [{ "id": "cluster-a", "name": "prod-a" }]
-      },
-      "issues": {
-        "state": "complete",
-        "generatedAt": "2026-10-18T12:41:03Z",
-        "observedAt": "2026-10-18T12:40:30Z",
-        "stale": false,
-        "coverage": { "observed": 1, "expected": 1, "unit": "clusters" },
-        "data": [
-          {
-            "id": "model.provider_unhealthy|cluster-a|model_service|msg-123",
-            "code": "model.provider_unhealthy",
-            "severity": "warning",
-            "category": "model-service",
-            "title": "model-alpha: 1 provider(s) not ready",
-            "message": "At least one configured provider is unhealthy.",
-            "clusterId": "cluster-a",
-            "resource": { "type": "model_service", "id": "msg-123", "name": "model-alpha" },
-            "evidence": { "providers": { "ready": 1, "active": 2 } },
-            "primaryAction": {
-              "intent": "inspect_providers",
-              "view": "admin/model-service",
-              "params": { "clusterId": "cluster-a", "groupId": "msg-123" },
-              "permission": "model-service:group:read"
-            }
-          }
-        ]
-      }
-    }
-    ```
-
-    响应不包含硬件汇总、集群容量、服务列表、部署活动、Token 总量或 AI provider 配置。
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.dashboard.service import default_service
+```python
+import asyncio
 
-    async def main(principal) -> None:
-        # `principal` 通常从已认证的请求会话中解析。
-        overview = await default_service().welcome_overview(principal, cluster_id="cluster-a")
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        overview = await lens.dashboard.overview(cluster_id="cluster-a")
         for issue in overview.issues.data or []:
             print(issue.severity, issue.code, issue.title)
 
-    asyncio.run(main(principal))
-    ```
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### 列出当前问题
+## 常见任务
 
-返回相同的规范化当前问题，支持筛选和游标分页。该接口对应 **View all issues** 页面。
+### 筛选和分页获取当前问题
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/welcome/issues`**
 
-    查询参数：
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/welcome/issues?severity=critical&category=model-service&limit=10"
+```
 
-    - `clusterId`（`string`，可选）：一个有权访问的集群。
-    - `severity`（`critical`、`warning`、`info`，可选）。
-    - `category`（`cluster`、`model-service`、`deployment`、`storage`、`model-cache`、`monitoring`、`ai-provider`、`access`，可选）。
-    - `search`（`string`，可选）：匹配问题/资源标识或文本。
-    - `cursor`（`string`，可选）：由 `nextCursor` 返回的不透明游标。
-    - `limit`（`integer`，默认 `25`，范围 `1..100`）。
-
-    响应：`WelcomeIssuesResponse`，包含 `snapshotId`、`total`、`items`、
-    `nextCursor` 和 `restarted`。
-
-    ```json
-    {
-      "generatedAt": "2026-10-18T12:41:03Z",
-      "snapshotId": "8e4f...",
-      "total": 3,
-      "items": [],
-      "nextCursor": null,
-      "restarted": false
-    }
-    ```
-
-    游标包含快照标识。如果快照过期或问题发生变化，服务端会设置
-    `restarted: true` 并返回第一页。
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.dashboard.service import default_service
+```python
+import asyncio
 
-    async def main(principal) -> None:
-        page = await default_service().alerts(principal, severity="critical", limit=25)
-        print(page.total)
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        page = await lens.dashboard.alerts(
+            severity="critical", category="model-service", limit=10
+        )
+        print(page.total, page.next_cursor)
         for issue in page.items:
             print(issue.cluster_name, issue.title)
 
-    asyncio.run(main(principal))
-    ```
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-## 相关接口
+- 可选筛选项：`clusterId`、`severity`、`category` 和 `search`。
+- 将 `nextCursor` 作为 `cursor` 传回。如果快照发生变化或已过期，响应会设置
+  `restarted: true`，并从第一页重新开始。
+- `category` 的取值为 `cluster`、`model-service`、`deployment`、`storage`、
+  `model-cache`、`monitoring`、`ai-provider` 和 `access`。
 
-- `GET /api/v1/ai-providers`：欢迎页输入框使用的 provider 列表。
-- `GET /api/cluster/overview`：完整集群硬件和组件数据。
-- `GET /api/v1/model-service/admin/gateway/status`：Gateway 和 IPP 状态。
-- `GET /api/v1/monitoring/cluster-stack/status`：监控栈详细信息。
+### 刷新快照
+
+在概览请求中设置 `refresh=true` 可安排一次后台刷新。调用会立即返回当前快照，
+不会等待远程数据源。将值作为最新数据使用前，请检查 `issues.stale` 标志。
+
+## 端点
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/v1/welcome/overview` | 落地页当前范围内的问题信封。 |
+| `GET` | `/api/v1/welcome/issues` | 支持筛选和游标分页的扁平问题列表。 |
+
+## 错误与限制
+
+- 缺少或无效的认证返回 `401`；缺少 `cluster:cluster:read` 返回 `403`。
+- 显式传入无权访问的 `clusterId` 返回 `403`，且不包含资源详情。
+- `limit` 必须在 `1` 到 `100` 之间。
+- 快照大约每 60 秒在后台刷新一次。`refresh=true` 只会排队一次刷新。
+
+## 相关内容
+
+- [欢迎页指南](/user-guide/welcome)
+- [OpenAPI schema](/api-reference)

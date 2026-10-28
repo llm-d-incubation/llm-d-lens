@@ -1029,7 +1029,7 @@ function GatewayConfigModal({ cluster, onClose, onSaved }) {
         }
         try {
             const payload = await requestJson(
-                `/api/cluster/clusters/${encodeURIComponent(cluster.clusterId)}/gateway-port-check?port=${Number(value)}`,
+                `/api/v1/cluster/clusters/${encodeURIComponent(cluster.clusterId)}/gateway-port-check?port=${Number(value)}`,
             );
             setPortError(payload.available ? '' : (payload.owner ? `Port ${value} is already used by ${payload.owner}` : (payload.reason || 'Port is not available')));
         } catch (failure) {
@@ -1044,7 +1044,7 @@ function GatewayConfigModal({ cluster, onClose, onSaved }) {
         setBusy(true);
         setError('');
         try {
-            const payload = await requestJson(`/api/cluster/clusters/${encodeURIComponent(cluster.clusterId)}`, {
+            const payload = await requestJson(`/api/v1/cluster/clusters/${encodeURIComponent(cluster.clusterId)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

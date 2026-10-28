@@ -307,6 +307,155 @@ class ScenarioDescriptor(FrozenDomainModel):
     supported_backends: list[str] = Field(default_factory=list)
 
 
+class SimulationBackendsResponse(FrozenDomainModel):
+    backends: list[BackendDescriptor]
+
+
+class SimulationScenariosResponse(FrozenDomainModel):
+    scenarios: list[ScenarioDescriptor]
+
+
+class SimulationModelDiscoveryResponse(FrozenDomainModel):
+    endpoint: str
+    models: list[str]
+
+
+class TraceDataset(BaseModel):
+    """One registered trace dataset, including format-specific catalog metadata."""
+
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+
+    name: str
+    filename: str
+    scenario: SimulationScenario
+    trace_format: TraceFormat
+    description: str
+    downloaded: bool = False
+    path: str | None = None
+    artifact_uri: str | None = None
+    size_bytes: int | None = None
+    license: str | None = None
+    sha256: str | None = None
+    source_repository: str | None = None
+    url: str | None = None
+    public_dataset: str | None = None
+    source_type: str | None = None
+    log_type: str | None = None
+    supported_backends: list[str] = Field(default_factory=list)
+
+
+class TraceDatasetCatalogResponse(FrozenDomainModel):
+    data_dir: str
+    datasets: list[TraceDataset]
+
+
+class TraceTimelineBin(FrozenDomainModel):
+    start_seconds: float
+    end_seconds: float
+    request_count: int
+
+
+class TraceDatasetTimelineResponse(FrozenDomainModel):
+    dataset: str
+    trace_format: TraceFormat
+    request_count: int
+    duration_seconds: float
+    source_size_bytes: int
+    bin_width_seconds: float
+    bins: list[TraceTimelineBin]
+
+
+class TraceDatasetDownloadResponse(FrozenDomainModel):
+    artifact_uri: str
+    path: str
+    trace_format: TraceFormat
+    sha256: str
+    metadata_path: str
+    size_bytes: int
+
+
+class SimulationTaskQueuedResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    task_id: str
+    status: Literal["queued"] = "queued"
+    task: SimulationTask
+
+
+class SimulationTaskActionResponse(FrozenDomainModel):
+    task_id: str
+    status: str
+
+
+class CandidatePrediction(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    ttft_ms: float | None = Field(default=None, alias="ttftMs")
+    tpot_ms: float | None = Field(default=None, alias="tpotMs")
+    throughput_tps: float | None = Field(default=None, alias="throughputTps")
+
+
+class CandidateRecord(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    id: str
+    source: str
+    source_label: str = Field(alias="sourceLabel")
+    family: str
+    confidence: float | None = None
+    backend: str
+    name: str
+    topology_mode: str = Field(alias="topologyMode")
+    prefill_tp: int = Field(alias="prefillTp")
+    prefill_replicas: int = Field(alias="prefillReplicas")
+    decode_tp: int = Field(alias="decodeTp")
+    decode_replicas: int = Field(alias="decodeReplicas")
+    encode_tp: int | None = Field(default=None, alias="encodeTp")
+    encode_replicas: int | None = Field(default=None, alias="encodeReplicas")
+    total_gpus: int = Field(alias="totalGpus")
+    predicted: CandidatePrediction | None = None
+    deployable: bool
+    deployment_note: str | None = Field(default=None, alias="deploymentNote")
+    pipeline_parallel: int | None = Field(default=None, alias="pipelineParallel")
+    is_chosen_experiment: bool | None = Field(default=None, alias="isChosenExperiment")
+    aic_rank: int | None = Field(default=None, alias="aicRank")
+
+
+class CandidateRelaxationAttempt(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    factor: float
+    ttft_ms: float | None = Field(default=None, alias="ttftMs")
+    tpot_ms: float | None = Field(default=None, alias="tpotMs")
+    result_count: int = Field(alias="resultCount")
+    complete_count: int = Field(alias="completeCount")
+
+
+class CandidateSupportResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    supported: bool
+    agg_supported: bool = False
+    disagg_supported: bool = False
+    epd_supported: bool = False
+    reason: str | None = None
+    constraints: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    candidates: list[CandidateRecord] = Field(default_factory=list)
+    backend: str | None = None
+
+
+class CandidateRelaxedResponse(CandidateSearchResponse):
+    attempts: list[CandidateRelaxationAttempt] = Field(default_factory=list)
+    anchor: CandidateRecord | None = None
+    slo_satisfied: bool = Field(alias="sloSatisfied")
+    reason: str | None = None
+
+
 class BackendAvailability(FrozenDomainModel):
     available: bool
     version: str | None

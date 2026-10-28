@@ -15,6 +15,8 @@ from typing import Any
 
 import yaml
 
+from llm_d_lens.versions.models import SupportedVersionsResponse
+
 _PROFILE_NAME = "llm_d_stack.yaml"
 
 ROUTER_STANDALONE_CHART = "oci://ghcr.io/llm-d/charts/llm-d-router-standalone"
@@ -156,3 +158,8 @@ def describe() -> dict[str, Any]:
             "agentgateway": current.gateway_providers.agentgateway,
         },
     }
+
+
+def describe_response() -> SupportedVersionsResponse:
+    """The pinned stack inputs as the concrete API response model."""
+    return SupportedVersionsResponse.model_validate(describe())

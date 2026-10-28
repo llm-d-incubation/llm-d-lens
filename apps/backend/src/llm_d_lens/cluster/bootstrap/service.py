@@ -31,7 +31,15 @@ from llm_d_lens.cluster.bootstrap.dto import (
 )
 from llm_d_lens.cluster.bootstrap.host_expr import MAX_EXPANDED_HOSTS, expand_host_spec
 from llm_d_lens.cluster.bootstrap.inventory import artifacts_kubeconfig_path, write_inventory
-from llm_d_lens.cluster.bootstrap.models import BootstrapJob, BootstrapNode, job_store
+from llm_d_lens.cluster.bootstrap.models import (
+    BootstrapCreateResponse,
+    BootstrapHostKeyResponse,
+    BootstrapJob,
+    BootstrapNode,
+    BootstrapPreflightResponse,
+    BootstrapStatusResponse,
+    job_store,
+)
 from llm_d_lens.infrastructure.process import CommandNotFoundError, shell, which
 from llm_d_lens.infrastructure.ssh import SshTarget, inspect_host_key, remote_exec
 from llm_d_lens.infrastructure.storage.paths import storage_path
@@ -78,7 +86,7 @@ def _expand_addresses(payloads: list[BootstrapHostAddress]) -> list[tuple[str, i
     return addresses
 
 
-async def discover_host_keys(payloads: list[BootstrapHostAddress]) -> list[BootstrapHostKeyResult]:
+async def discover_host_keys(payloads: list[BootstrapHostAddress]) -> BootstrapHostKeyResponse:
     semaphore = asyncio.Semaphore(16)
 
     async def _inspect(host: str, port: int) -> BootstrapHostKeyResult:
@@ -91,7 +99,8 @@ async def discover_host_keys(payloads: list[BootstrapHostAddress]) -> list[Boots
         except Exception as error:  # surfaced per host so a partial discovery is useful in the UI
             return BootstrapHostKeyResult(host=host, port=port, error=str(error))
 
-    return await asyncio.gather(*(_inspect(host, port) for host, port in _expand_addresses(payloads)))
+    items = await asyncio.gather(*(_inspect(host, port) for host, port in _expand_addresses(payloads)))
+    return BootstrapHostKeyResponse(items=list(items))
 
 
 def _apply_host_key_pins(nodes: list[BootstrapNode], pins: list[BootstrapHostKeyPin]) -> None:
@@ -157,7 +166,7 @@ def _cleanup_keys(nodes: list[BootstrapNode]) -> None:
 
 async def run_preflight_check(
     payloads: list[BootstrapNodeInput], pins: list[BootstrapHostKeyPin]
-) -> list[BootstrapNode]:
+) -> BootstrapPreflightResponse:
     """One-shot preflight for the "review nodes" screen, decoupled from any
     job: writes any supplied private keys to a throwaway temp dir, runs the
     checks, then removes the temp dir immediately regardless of outcome."""
@@ -173,7 +182,7 @@ async def run_preflight_check(
             await preflight.run_preflight(nodes)
         finally:
             _cleanup_keys(nodes)
-    return nodes
+    return BootstrapPreflightResponse.from_nodes(nodes)
 
 
 def _work_root() -> Path:
@@ -281,6 +290,17 @@ def create_job(
     # ``_resolve_auto_proxy_from_nodes``).
     resolved = _resolve_custom_proxy(proxy) if (proxy is not None and mode == "custom") else None
     return job_store.create(nodes, proxy=resolved, proxy_mode=mode)
+
+
+async def start_bootstrap(
+    payloads: list[BootstrapNodeInput],
+    pins: list[BootstrapHostKeyPin],
+    proxy: BootstrapProxyConfig | None = None,
+) -> BootstrapCreateResponse:
+    """Create a job and schedule its background execution."""
+    job = create_job(payloads, pins, proxy=proxy)
+    asyncio.create_task(run_bootstrap_job(job.id))
+    return BootstrapCreateResponse.from_job(job)
 
 
 async def _stream_output(process: asyncio.subprocess.Process, job: BootstrapJob) -> None:
@@ -421,6 +441,17 @@ async def run_bootstrap_job(job_id: str) -> None:
 
 def get_job(job_id: str) -> BootstrapJob:
     return job_store.require(job_id)
+
+
+def get_status(job_id: str) -> BootstrapStatusResponse:
+    """Return a job's status, consuming the one-time kubeconfig handoff if ready."""
+    job = get_job(job_id)
+    kubeconfig = None
+    if job.phase == "succeeded":
+        # One-shot consumption (design §6): the caller that first observes
+        # "succeeded" gets the kubeconfig; the job is then torn down.
+        kubeconfig = consume_kubeconfig(job_id)
+    return BootstrapStatusResponse.from_job(job, kubeconfig=kubeconfig)
 
 
 def consume_kubeconfig(job_id: str) -> str:

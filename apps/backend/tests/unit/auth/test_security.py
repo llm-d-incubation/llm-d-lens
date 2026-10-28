@@ -1,7 +1,10 @@
 import pytest
 
 from llm_d_lens.auth.security import (
+    AccessTokenError,
     SecretCipher,
+    decode_access_token,
+    encode_access_token,
     generate_session_token,
     hash_password,
     hash_session_token,
@@ -80,3 +83,57 @@ def test_secret_cipher_rejects_unknown_key():
 def test_secret_cipher_requires_primary_key():
     with pytest.raises(ValueError, match="primary secret key"):
         SecretCipher("")
+
+
+def test_access_token_roundtrip_and_claims():
+    token, expires_in = encode_access_token(
+        "signing-secret",
+        user_id="user-1",
+        session_id="session-1",
+        audience="lens-api",
+        authz_version=7,
+        ttl_seconds=1800,
+        now=1000,
+    )
+
+    claims = decode_access_token(token, ["signing-secret"], audience="lens-api", now=1000)
+    assert expires_in == 1800
+    assert claims["sub"] == "user-1"
+    assert claims["sid"] == "session-1"
+    assert claims["authzVersion"] == 7
+    assert claims["exp"] == 2800
+
+
+def test_access_token_rejects_tampering_expiry_audience_and_wrong_key():
+    token, _ = encode_access_token(
+        "signing-secret",
+        user_id="user-1",
+        session_id="session-1",
+        audience="lens-api",
+        authz_version=1,
+        ttl_seconds=60,
+        now=1000,
+    )
+    with pytest.raises(AccessTokenError):
+        decode_access_token(token + "tampered", ["signing-secret"], audience="lens-api", now=1000)
+    with pytest.raises(AccessTokenError):
+        decode_access_token(token, ["signing-secret"], audience="other-api", now=1000)
+    with pytest.raises(AccessTokenError):
+        decode_access_token(token, ["other-secret"], audience="lens-api", now=1000)
+    with pytest.raises(AccessTokenError):
+        decode_access_token(token, ["signing-secret"], audience="lens-api", now=2000)
+
+
+def test_access_token_accepts_rotation_fallback_key():
+    token, _ = encode_access_token(
+        "old-key",
+        user_id="user-1",
+        session_id="session-1",
+        audience="lens-api",
+        authz_version=1,
+        ttl_seconds=60,
+        now=1000,
+    )
+
+    claims = decode_access_token(token, ["new-key", "old-key"], audience="lens-api", now=1000)
+    assert claims["sid"] == "session-1"

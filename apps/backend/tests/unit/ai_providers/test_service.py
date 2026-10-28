@@ -5,7 +5,11 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest, AIProviderUpdateRequest
+from llm_d_lens.ai_providers.contracts import (
+    AIProviderCreateRequest,
+    AIProviderResponse,
+    AIProviderUpdateRequest,
+)
 from llm_d_lens.ai_providers.service import (
     AIProviderNameConflictError,
     AIProviderService,
@@ -36,7 +40,7 @@ def test_create_lists_and_masks_the_api_key(service):
         )
     )
 
-    payload = provider.api_payload()
+    payload = AIProviderResponse.from_provider(provider).model_dump(mode="json", by_alias=True)
     assert payload["hasApiKey"] is True
     assert payload["apiKeyPreview"] == "...alue"
     assert "apiKey" not in payload
@@ -44,6 +48,20 @@ def test_create_lists_and_masks_the_api_key(service):
 
     listed = service.list()
     assert [item.id for item in listed] == [provider.id]
+
+
+def test_response_masks_the_api_key(service):
+    provider = service.create(
+        AIProviderCreateRequest(
+            name="My OpenAI", baseUrl="https://api.openai.com", model="gpt-4o-mini", apiKey="sk-secret-value"
+        )
+    )
+
+    response = service.response(provider)
+    assert isinstance(response, AIProviderResponse)
+    assert response.id == provider.id
+    assert response.has_api_key is True
+    assert response.api_key_preview == "...alue"
 
 
 def test_create_rejects_duplicate_name(service):
@@ -500,7 +518,7 @@ def test_create_persists_provider_type(service):
     )
 
     assert provider.provider_type == "anthropic"
-    assert provider.api_payload()["providerType"] == "anthropic"
+    assert AIProviderResponse.from_provider(provider).provider_type == "anthropic"
 
 
 def test_create_defaults_provider_type_to_openai(service):

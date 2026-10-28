@@ -198,7 +198,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
         setError('');
         setGenerationEvents([{ phase: 'initialization', status: 'running', message: 'Connecting to the recommendation service.' }]);
         try {
-            const session = await api(`/api/cluster/session?clusterId=${encodeURIComponent(draft.clusterId)}`);
+            const session = await api(`/api/v1/cluster/session?clusterId=${encodeURIComponent(draft.clusterId)}`);
             const clusterSessionId = session.sessionId || session.session_id;
             if (!clusterSessionId) throw new Error('The selected cluster did not return an active session');
             const payload = {
@@ -280,12 +280,12 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
         setError('');
         try {
             if (run.selected_candidate?.id !== candidateId) {
-                const updated = await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/select`, {
+                const updated = await api(`/api/v1/agentic-deployments/${encodeURIComponent(run.id)}/select`, {
                     method: 'POST', body: JSON.stringify({ candidate_id: candidateId }),
                 });
                 setRun(updated);
             }
-            await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/approve`, { method: 'POST' });
+            await api(`/api/v1/agentic-deployments/${encodeURIComponent(run.id)}/approve`, { method: 'POST' });
             onDeploymentStarted();
         } catch (failure) {
             setError(failure.message || 'Unable to start deployment');

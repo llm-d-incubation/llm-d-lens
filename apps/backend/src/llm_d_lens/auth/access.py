@@ -54,10 +54,17 @@ def resource_readable(
 
 
 def current_principal(request: Request | None) -> Principal | None:
-    """Principal for a request, or ``None`` (direct handler calls/tests)."""
-    if request is None:
-        return None
-    return getattr(request.state, "principal", None)
+    """Principal for a request, or the ambient in-process principal.
+
+    HTTP handlers pass the request; local SDK/service calls have no request and
+    use the ambient ``LensContext``. ``None`` remains unrestricted for direct
+    handler calls and tests.
+    """
+    if request is not None:
+        return getattr(request.state, "principal", None)
+    from llm_d_lens.auth.context import context_principal  # noqa: PLC0415
+
+    return context_principal()
 
 
 def visible_cluster_ids(principal: Principal | None) -> set[str] | None:

@@ -9,7 +9,7 @@ from llm_d_lens.simulation import candidate_search as candidates
 
 def test_grid_candidates_preserve_order_budget_and_names():
     response = TestClient(app).post(
-        "/api/candidate-search",
+        "/api/v1/candidate-search",
         json={
             "sourceIds": ["baseline", "baseline", "tiered-cache", "pd", "epd", "unknown"],
             "searchConfig": {"totalGpus": 4, "maxCandidatesPerMode": 2},
@@ -28,7 +28,7 @@ def test_grid_candidates_preserve_order_budget_and_names():
 @pytest.mark.parametrize("budget", [0, 65, "4", True, 1.5])
 def test_relaxed_requires_explicit_valid_budget(budget):
     response = TestClient(app).post(
-        "/api/candidate-search/relaxed",
+        "/api/v1/candidate-search/relaxed",
         json={
             "workload": {"model": "example/model"},
             "searchConfig": {"totalGpus": budget},
@@ -53,7 +53,7 @@ def test_relaxed_retries_no_feasible_and_rejects_over_budget(monkeypatch):
     monkeypatch.setattr(candidates.aic_service, "check_support", AsyncMock(return_value={"supported": True}))
     monkeypatch.setattr(candidates.aic_service, "search", search)
     response = TestClient(app).post(
-        "/api/candidate-search/relaxed",
+        "/api/v1/candidate-search/relaxed",
         json={
             "workload": {"model": "example/model", "ttftMs": 100},
             "searchConfig": {"totalGpus": 4, "aicSystemName": "test-system"},
@@ -81,7 +81,7 @@ def test_manual_yaml_preserves_chosen_and_replica_inference(monkeypatch):
         ),
     )
     response = TestClient(app).post(
-        "/api/candidate-search",
+        "/api/v1/candidate-search",
         json={
             "sourceIds": ["manual"],
             "manualConfig": {"inputMode": "yaml", "yamlText": "experiments: []"},
@@ -96,7 +96,9 @@ def test_manual_yaml_preserves_chosen_and_replica_inference(monkeypatch):
 
 
 def test_unknown_sources_are_ignored():
-    assert TestClient(app).post("/api/candidate-search", json={"sourceIds": ["unknown"]}).json() == {"candidates": []}
+    assert TestClient(app).post("/api/v1/candidate-search", json={"sourceIds": ["unknown"]}).json() == {
+        "candidates": []
+    }
 
 
 @pytest.mark.parametrize("field", ["concurrency", "request_rate"])
@@ -104,7 +106,7 @@ def test_support_preserves_load_target_and_upstream_token_defaults(monkeypatch, 
     support = AsyncMock(return_value={"supported": True})
     monkeypatch.setattr(candidates.aic_service, "check_support", support)
     response = TestClient(app).post(
-        "/api/candidate-support",
+        "/api/v1/candidate-support",
         json={
             "workload": {"model": "example/model", field: 10},
             "searchConfig": {"aicSystemName": "test-system"},
@@ -123,7 +125,7 @@ def test_aic_error_details_are_logged_not_exposed(monkeypatch, caplog):
         candidates.aic_service, "check_support", AsyncMock(side_effect=candidates.aic_service.AICError(detail))
     )
     response = TestClient(app).post(
-        "/api/candidate-support",
+        "/api/v1/candidate-support",
         json={"workload": {"model": "example/model"}, "searchConfig": {"aicSystemName": "test-system"}},
     )
     assert response.status_code == 400
@@ -136,7 +138,7 @@ def test_support_rejects_joint_load_targets_before_calling_aic(monkeypatch):
     support = AsyncMock()
     monkeypatch.setattr(candidates.aic_service, "check_support", support)
     response = TestClient(app).post(
-        "/api/candidate-support",
+        "/api/v1/candidate-support",
         json={
             "workload": {"model": "example/model", "concurrency": 10, "request_rate": 2},
             "searchConfig": {"aicSystemName": "test-system"},

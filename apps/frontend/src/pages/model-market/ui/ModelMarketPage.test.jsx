@@ -81,10 +81,10 @@ test('Agentic deployment submits empty SLO and workload fields as null, not plac
     }
     const payloads = [];
     t.mock.method(globalThis, 'fetch', async (url, options) => {
-        if (url === '/api/cluster/session?clusterId=cluster-1') {
+        if (url === '/api/v1/cluster/session?clusterId=cluster-1') {
             return Response.json({ sessionId: 'session-1' });
         }
-        assert.equal(url, '/api/agentic-deployments/stream');
+        assert.equal(url, '/api/v1/agentic-deployments/stream');
         payloads.push(JSON.parse(options.body));
         return new Response('event: complete\ndata: {"id":"run-1"}\n\n', {
             headers: { 'Content-Type': 'text/event-stream' },

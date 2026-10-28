@@ -8,6 +8,7 @@ from urllib.parse import urlparse, urlunparse
 import aiohttp
 
 from .errors import SimulationConfigurationError
+from .models import SimulationModelDiscoveryResponse
 
 MAX_MODELS_RESPONSE_BYTES = 1024 * 1024
 
@@ -24,7 +25,7 @@ def models_url(endpoint_url: str) -> str:
     return urlunparse(parsed._replace(path=f"{path}/models", params="", query="", fragment=""))
 
 
-async def discover_models(endpoint_url: str, *, api_key: str | None = None) -> dict:
+async def discover_models(endpoint_url: str, *, api_key: str | None = None) -> SimulationModelDiscoveryResponse:
     url = models_url(endpoint_url)
     headers = {"Accept": "application/json"}
     if api_key:
@@ -65,4 +66,4 @@ async def discover_models(endpoint_url: str, *, api_key: str | None = None) -> d
     )
     if not models:
         raise SimulationConfigurationError("The endpoint reported no models")
-    return {"endpoint": endpoint_url, "models": models}
+    return SimulationModelDiscoveryResponse(endpoint=endpoint_url, models=models)

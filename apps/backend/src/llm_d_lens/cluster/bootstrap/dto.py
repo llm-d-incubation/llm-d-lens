@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -109,10 +109,28 @@ class BootstrapNodeResult(StrictModel):
     error: str | None = None
     checks: list[BootstrapCheckResult] = Field(default_factory=list)
 
+    @classmethod
+    def from_node(cls, node: Any) -> BootstrapNodeResult:
+        return cls(
+            host=node.host,
+            roles=node.roles,
+            state=node.preflight_state,
+            error=node.preflight_error,
+            checks=[
+                BootstrapCheckResult(id=item.id, label=item.label, status=item.status, detail=item.detail)
+                for item in node.preflight_checks
+            ],
+        )
+
 
 class BootstrapPreflightResponse(StrictModel):
     items: list[BootstrapNodeResult] = Field(default_factory=list)
     all_passed: bool = Field(alias="allPassed")
+
+    @classmethod
+    def from_nodes(cls, nodes: list[Any]) -> BootstrapPreflightResponse:
+        items = [BootstrapNodeResult.from_node(node) for node in nodes]
+        return cls(items=items, allPassed=all(item.state == "passed" for item in items))
 
 
 class BootstrapCreateRequest(StrictModel):
@@ -127,6 +145,10 @@ class BootstrapCreateRequest(StrictModel):
 class BootstrapCreateResponse(StrictModel):
     bootstrap_id: str = Field(alias="bootstrapId")
 
+    @classmethod
+    def from_job(cls, job: Any) -> BootstrapCreateResponse:
+        return cls(bootstrapId=job.id)
+
 
 class BootstrapStatusResponse(StrictModel):
     id: str
@@ -139,3 +161,13 @@ class BootstrapStatusResponse(StrictModel):
     # "succeeded"; the server clears it from memory immediately afterwards
     # (see design §6, "one-time kubeconfig handoff").
     kubeconfig: str | None = None
+
+    @classmethod
+    def from_job(cls, job: Any, *, kubeconfig: str | None = None) -> BootstrapStatusResponse:
+        return cls(
+            id=job.id,
+            phase=job.phase,
+            logTail=job.log_tail,
+            error=job.error,
+            kubeconfig=kubeconfig,
+        )

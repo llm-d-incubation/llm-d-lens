@@ -199,3 +199,8 @@ class ConfigurationArtifactRecord(BaseModel):
 class SaveResponse(BaseModel):
     configuration_file: ConfigurationFile
     artifact: ConfigurationArtifactRecord
+
+
+class ConfigurationCapabilitiesResponse(BaseModel):
+    schema_version: str = "deployment-capabilities.v1"
+    providers: list[dict[str, Any]] = Field(default_factory=list)

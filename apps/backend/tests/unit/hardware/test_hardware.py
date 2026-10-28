@@ -185,3 +185,13 @@ def test_capabilities_version_is_stable_across_calls():
     first = TestClient(app).get("/api/v1/hardware/capabilities").json()["version"]
     second = TestClient(app).get("/api/v1/hardware/capabilities").json()["version"]
     assert first == second
+
+
+def test_capabilities_route_and_service_use_the_concrete_response_model():
+    from llm_d_lens.hardware.models import HardwareCapabilitiesResponse
+    from llm_d_lens.hardware.router import router
+    from llm_d_lens.hardware.service import capabilities
+
+    route = next(route for route in router.routes if route.path == "/api/v1/hardware/capabilities")
+    assert route.response_model is HardwareCapabilitiesResponse
+    assert isinstance(capabilities(), HardwareCapabilitiesResponse)

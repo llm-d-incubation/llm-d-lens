@@ -37,7 +37,7 @@ async def test_monitoring_recognizes_untyped_items_in_multi_resource_sdk_lists(c
 
 @pytest.mark.asyncio
 async def test_storage_links_bound_volume_from_untyped_sdk_list_items(cluster_api):
-    from llm_d_lens.storage.contracts import StorageVolume
+    from llm_d_lens.storage.contracts import StorageVolume, StorageVolumeResourceStatusResponse
     from llm_d_lens.storage.service import storage_resource_statuses
 
     volume = StorageVolume(
@@ -78,10 +78,13 @@ async def test_storage_links_bound_volume_from_untyped_sdk_list_items(cluster_ap
 
     cluster_api.response = response
     result = await storage_resource_statuses([volume])
-    pvc = result[volume.id]["persistentVolumeClaims"][0]
-    assert pvc["persistentVolume"] is not None
-    assert pvc["persistentVolume"]["phase"] == "Bound"
-    assert pvc["persistentVolume"]["source"] == {"type": "hostPath", "detail": "/data/models"}
+    assert isinstance(result, StorageVolumeResourceStatusResponse)
+    pvc = result.items[volume.id].persistent_volume_claims[0]
+    assert pvc.persistent_volume is not None
+    assert pvc.persistent_volume.phase == "Bound"
+    assert pvc.persistent_volume.source is not None
+    assert pvc.persistent_volume.source.type == "hostPath"
+    assert pvc.persistent_volume.source.detail == "/data/models"
 
 
 @pytest.mark.asyncio

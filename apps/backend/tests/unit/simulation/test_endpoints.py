@@ -35,7 +35,8 @@ async def test_authenticated_discovery_succeeds_and_missing_token_fails():
         with pytest.raises(SimulationConfigurationError, match="HTTP 401"):
             await discover_models(url)
         result = await discover_models(url, api_key="test-token")
-        assert result == {"endpoint": url, "models": ["model"]}
+        assert result.endpoint == url
+        assert result.models == ["model"]
 
 
 @pytest.mark.asyncio

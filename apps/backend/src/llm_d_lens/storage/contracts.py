@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -153,11 +153,76 @@ class StorageVolume(StrictModel):
     created_at: datetime = Field(default_factory=utcnow, alias="createdAt")
     updated_at: datetime = Field(default_factory=utcnow, alias="updatedAt")
 
-    def api_payload(self, *, in_use_count: int = 0) -> dict[str, Any]:
-        """Project the volume for HTTP clients, appending the non-persisted usage count."""
-        payload = self.model_dump(mode="json", by_alias=True)
-        payload["inUseCount"] = in_use_count
-        return payload
+
+class StorageVolumeResponse(StorageVolume):
+    """A storage volume plus the live usage/drift metadata shown by the API."""
+
+    in_use_count: int = Field(default=0, alias="inUseCount")
+    nodes_added: list[str] = Field(default_factory=list, alias="nodesAdded")
+    model_cache_count: int = Field(default=0, alias="modelCacheCount")
+
+    @classmethod
+    def from_volume(
+        cls,
+        volume: StorageVolume,
+        *,
+        in_use_count: int = 0,
+        nodes_added: list[str] | None = None,
+        model_cache_count: int = 0,
+    ) -> StorageVolumeResponse:
+        return cls.model_validate(
+            {
+                **volume.model_dump(mode="json", by_alias=True),
+                "inUseCount": in_use_count,
+                "nodesAdded": nodes_added or [],
+                "modelCacheCount": model_cache_count,
+            }
+        )
+
+
+class StorageVolumeListResponse(StrictModel):
+    items: list[StorageVolumeResponse] = Field(default_factory=list)
+
+
+class StorageVolumeScanResponse(StrictModel):
+    status: Literal["scanning"] = "scanning"
+
+
+class StorageVolumeSource(StrictModel):
+    type: str
+    detail: str = ""
+
+
+class StorageVolumeResourceClaim(StrictModel):
+    """A PVC/PV projection used by the Storage table.
+
+    ``persistentVolume`` is only populated on a PVC when its bound PV was
+    found in the same cluster response.
+    """
+
+    name: str = ""
+    namespace: str | None = None
+    phase: str = "Unknown"
+    capacity: str | None = None
+    access_modes: list[str] = Field(default_factory=list, alias="accessModes")
+    storage_class_name: str | None = Field(default=None, alias="storageClassName")
+    volume_mode: str | None = Field(default=None, alias="volumeMode")
+    created_at: str | None = Field(default=None, alias="createdAt")
+    uid: str | None = None
+    volume_name: str | None = Field(default=None, alias="volumeName")
+    reclaim_policy: str | None = Field(default=None, alias="reclaimPolicy")
+    source: StorageVolumeSource | None = None
+    persistent_volume: StorageVolumeResourceClaim | None = Field(default=None, alias="persistentVolume")
+
+
+class StorageVolumeResourceStatus(StrictModel):
+    persistent_volume_claims: list[StorageVolumeResourceClaim] = Field(
+        default_factory=list, alias="persistentVolumeClaims"
+    )
+
+
+class StorageVolumeResourceStatusResponse(StrictModel):
+    items: dict[str, StorageVolumeResourceStatus] = Field(default_factory=dict)
 
 
 class StorageClassSummary(StrictModel):
@@ -166,6 +231,10 @@ class StorageClassSummary(StrictModel):
     name: str
     provisioner: str
     is_default: bool = Field(default=False, alias="isDefault")
+
+
+class StorageClassListResponse(StrictModel):
+    items: list[StorageClassSummary] = Field(default_factory=list)
 
 
 class StorageNodeSummary(StrictModel):
@@ -181,3 +250,7 @@ class StorageNodeSummary(StrictModel):
     # storage/service.py::discover_nodes for how this is derived from the
     # node's ``spec.taints``.
     schedulable: bool = True
+
+
+class StorageNodeListResponse(StrictModel):
+    items: list[StorageNodeSummary] = Field(default_factory=list)

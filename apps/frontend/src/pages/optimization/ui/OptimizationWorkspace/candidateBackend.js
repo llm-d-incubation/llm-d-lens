@@ -15,10 +15,10 @@
 import { postJson as postCandidateApi } from '../../../../shared/api/httpClient';
 
 export async function checkAicSupport(workload, searchConfig) {
-    return postCandidateApi('/api/candidate-support', { workload, searchConfig });
+    return postCandidateApi('/api/v1/candidate-support', { workload, searchConfig });
 }
 
 export async function searchAicCandidates(workload, sourceIds, searchConfig, manualConfig) {
-    const payload = await postCandidateApi('/api/candidate-search', { workload, sourceIds, searchConfig, manualConfig });
+    const payload = await postCandidateApi('/api/v1/candidate-search', { workload, sourceIds, searchConfig, manualConfig });
     return payload.candidates || [];
 }

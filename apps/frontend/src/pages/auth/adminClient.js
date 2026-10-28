@@ -87,7 +87,7 @@ export function removeGroupRoleBinding(groupId, bindingId) {
     return del(`/api/v1/groups/${groupId}/role-bindings/${bindingId}`);
 }
 export function listClusters() {
-    return requestJson('/api/cluster/clusters');
+    return requestJson('/api/v1/cluster/clusters');
 }
 
 // identity providers

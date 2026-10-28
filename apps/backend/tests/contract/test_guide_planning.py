@@ -395,7 +395,7 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
         ),
     )
     response = TestClient(app).post(
-        "/api/guide-planning/plan",
+        "/api/v1/guide-planning/plan",
         json={
             "guide": "optimized-baseline",
             "accelerator": "gpu",
@@ -429,7 +429,7 @@ def test_plan_rejects_expired_explicit_session_with_discovery_disabled(monkeypat
 
     monkeypatch.setattr(sources, "require_active_session", expired)
     response = TestClient(app).post(
-        "/api/guide-planning/plan",
+        "/api/v1/guide-planning/plan",
         json={
             "guide": "optimized-baseline",
             "accelerator": "gpu",
@@ -483,10 +483,10 @@ def test_guide_internal_errors_are_logged_not_exposed(monkeypatch, caplog, opera
     monkeypatch.setattr(sources, loader, AsyncMock(side_effect=OSError(detail)))
     client = TestClient(app)
     response = (
-        client.get("/api/guide-planning/catalog")
+        client.get("/api/v1/guide-planning/catalog")
         if operation == "catalog"
         else client.post(
-            f"/api/guide-planning/{operation}",
+            f"/api/v1/guide-planning/{operation}",
             json={
                 "guide": "optimized-baseline",
                 "accelerator": "gpu",
@@ -517,7 +517,7 @@ def test_guide_validation_keeps_actionable_message_and_status(monkeypatch):
         AsyncMock(side_effect=guide.GuideError("Remote branch/ref could not be resolved to a commit", 404)),
     )
     response = TestClient(app).post(
-        "/api/guide-planning/plan",
+        "/api/v1/guide-planning/plan",
         json={
             "guide": "optimized-baseline",
             "accelerator": "gpu",

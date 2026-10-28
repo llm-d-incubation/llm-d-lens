@@ -21,7 +21,7 @@ router = APIRouter(include_in_schema=False)
 MAX_JSON_BYTES = 50 * 1024 * 1024
 
 
-@router.get("/api/config")
+@router.get("/api/v1/config")
 async def config():
     return {
         "deploymentDefaults": {
@@ -53,7 +53,23 @@ class WebEntryMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope["path"]
-        for alias, canonical in (("/api/v1/cluster", "/api/cluster"), ("/api/v1/simulation", "/api/simulation")):
+        aliases = (
+            ("/api/cluster-overview", "/api/v1/cluster-overview"),
+            ("/api/cluster", "/api/v1/cluster"),
+            ("/api/simulation", "/api/v1/simulation"),
+            ("/api/candidate-search", "/api/v1/candidate-search"),
+            ("/api/candidate-support", "/api/v1/candidate-support"),
+            ("/api/agentic-deployments", "/api/v1/agentic-deployments"),
+            ("/api/remote-deploy", "/api/v1/remote-deploy"),
+            ("/api/deploy-poc", "/api/v1/deploy-poc"),
+            ("/api/guide-planning", "/api/v1/guide-planning"),
+            ("/api/configurations", "/api/v1/configurations"),
+            ("/api/config", "/api/v1/config"),
+            ("/api/mcp", "/api/v1/mcp"),
+            ("/api/playground", "/api/v1/playground"),
+            ("/api/health", "/api/v1/health"),
+        )
+        for alias, canonical in aliases:
             if path == alias or path.startswith(alias + "/"):
                 scope = dict(scope, path=canonical + path[len(alias) :])
                 scope["raw_path"] = scope["path"].encode()

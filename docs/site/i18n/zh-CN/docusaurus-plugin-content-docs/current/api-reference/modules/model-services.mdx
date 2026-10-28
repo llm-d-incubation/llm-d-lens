@@ -1,1795 +1,374 @@
 ---
 title: 模型服务
-description: 用于模型网关路由和运维的后端端点与直接 Python 入口。
+description: 发布模型并使用 API 密钥调用。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## 后端 API
+## 这个模块是什么
 
-模型服务路由分布在 `llm_d_lens/model_service/router.py` 的用户、管理员、公共和内部路由器中。
+模型服务会把一个就绪的部署转换为可通过共享网关调用的、兼容 OpenAI 的模型名称。你可以用它创建和轮换 API 密钥、查找可调用的模型和网关地址、发送聊天请求、查看 token 用量，并在具备相应权限时发布部署和授予推理访问权限。
 
-### 列出模型访问令牌
+## 快速开始
 
-列出调用方当前有效的模型访问令牌。响应永远不包含明文令牌值，只包含用于识别和日后吊销所需的元数据。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/tokens`**
-
-    请求：无请求体。调用方必须已通过 Lens 用户会话进行身份验证。
-
-    响应：返回一个 `items` 数组，其中每个元素都是经过 `ModelAccessToken.api_payload()` 投影后的 `ModelAccessToken` 记录，因此 `tokenHash` 字段被省略。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "mat-7f2c4a19b6d1",
-          "userId": "user-123",
-          "name": "laptop",
-          "tokenHint": "9mQx",
-          "status": "active",
-          "lastUsedAt": "2026-09-23T08:15:00Z",
-          "lastUsedIp": "10.0.0.25",
-          "createdAt": "2026-09-21T12:00:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    tokens = service.tokens.list_for_user("user-123", include_revoked=False)
-    for token in tokens:
-        print(token.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 创建模型访问令牌
-
-为调用方创建一个新的模型访问令牌。明文令牌仅返回一次，与持久化保存的令牌元数据一起返回。
+先创建 API 密钥，再找到所属集群的网关，然后用任意兼容 OpenAI 的客户端调用已发布的模型。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/tokens`**
 
-    请求体（`TokenCreateRequest`）：
-
-    - `name`（`string`）：令牌的显示名称。
-
-    ```json
-    {
-      "name": "automation"
-    }
-    ```
-
-    响应：一个 `ModelAccessToken` 载荷，外加一次性的 `token` 字符串。
-
-    ```json
-    {
-      "id": "mat-2c47de48a35b",
-      "userId": "user-123",
-      "name": "automation",
-      "tokenHint": "K8xP",
-      "status": "active",
-      "createdAt": "2026-09-23T09:00:00Z",
-      "token": "lens-mk-bTj9X7mW4zP1qN8sR6uC2yF5hL0aV3dK1mQ"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    token, raw_token = service.tokens.create("user-123", name="automation")
-
-    print(token.api_payload())
-    print(raw_token)
-    ```
-  </TabItem>
-</Tabs>
-
-### 重新生成模型访问令牌
-
-吊销调用方当前有效的一个或多个令牌，然后签发一个新令牌。你可以选择性地为替换后的新令牌指定一个名称。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/tokens/regenerate`**
-
-    请求体：可选的 `TokenCreateRequest`。若省略，该路由使用 `"default"`。
-
-    ```json
-    {
-      "name": "default"
-    }
-    ```
-
-    响应：新签发的令牌元数据，外加新的明文令牌。
-
-    ```json
-    {
-      "id": "mat-54b2a51d9d93",
-      "userId": "user-123",
-      "name": "default",
-      "tokenHint": "F6rN",
-      "status": "active",
-      "createdAt": "2026-09-23T09:05:00Z",
-      "token": "lens-mk-Gq4nP1sT8uV2xY5zA7bC9dE3fH6jK8mN0pR"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    token, raw_token = service.tokens.regenerate("user-123", name="default")
-
-    print(token.id, raw_token)
-    ```
-  </TabItem>
-</Tabs>
-
-### 吊销模型访问令牌
-
-吊销调用方此前签发的一个模型访问令牌。吊销后，该令牌将无法再用于网关访问。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/model-service/tokens/{token_id}`**
-
-    请求：无请求体。
-
-    - `token_id`（`string`，路径参数）：令牌 ID，例如 `mat-7f2c4a19b6d1`。
-
-    响应：`204 No Content`。该端点不返回 JSON 响应体。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    revoked = service.tokens.revoke("user-123", "mat-7f2c4a19b6d1")
-    print(revoked)
-    ```
-  </TabItem>
-</Tabs>
-
-### 列出可访问的模型
-
-列出有在线且权重为正的提供方、并且调用方可访问的活动模型。
-消费者必须在模型所属集群拥有推理权限，并获得直接或经用户组授予的模型授权；
-非 self-scoped 操作者保留其绑定 scope 内的推理权限。部署分享或所有权不授予消费者推理权限。
-`/v1/models` 和 Gateway 鉴权使用同一规则。条目包含从 `clusterId` 解析出的 `clusterName`，
-用于区分不同集群中相同的公开名称。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/models`**
-
-    请求：无请求体。调用方必须已通过 Lens 用户会话进行身份验证。
-
-    响应：返回一个 `items` 数组，其中每个元素都是附加了 `clusterName` 的 `ModelServiceGroup` 载荷。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "msg-4a8b41f3dd6c",
-          "name": "qwen3-8b",
-          "modelRef": "Qwen/Qwen3-8B",
-          "displayName": "Qwen3 8B",
-          "description": "Shared Qwen 3 8B service",
-          "selectionPolicy": "random",
-          "status": "active",
-          "clusterId": "cluster-a",
-          "clusterName": "Cluster A",
-          "servedName": "Qwen/Qwen3-8B",
-          "baseModel": "Qwen/Qwen3-8B",
-          "createdByUserId": "user-123",
-          "createdAt": "2026-09-20T15:00:00Z",
-          "updatedAt": "2026-09-22T11:30:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    entries = service.list_model_entries_for_user("user-123")
-    for entry in entries:
-        print(entry["name"], entry["clusterName"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取网关连接信息
-
-返回客户端用于配置其 OpenAI 客户端的 Gateway 连接信息。每个集群都运行自己的 Gateway，因此响应会为调用方可访问的每个集群分别列出一条连接；当设置了 `LENS_MODEL_GATEWAY_PUBLIC_URL` 时，它会作为单一覆盖值应用到每个集群。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/connection`**
-
-    请求：无请求体。
-
-    响应：全局覆盖值（未设置时为空字符串），外加一个按集群分组的列表。
-
-    ```json
-    {
-      "baseUrl": "",
-      "clusters": [
-        {
-          "clusterId": "cluster-a",
-          "clusterName": "Cluster A",
-          "provider": "istio",
-          "gatewayName": "lens-inference-gateway",
-          "address": "10.0.0.10",
-          "publicUrl": null,
-          "port": null,
-          "baseUrl": "http://10.0.0.10/v1",
-          "ready": true
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import os
-
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService, gateway_base_url
-
-    global_url = os.environ.get("LENS_MODEL_GATEWAY_PUBLIC_URL", "").strip()
-    public_host = os.environ.get("LENS_PUBLIC_HOST", "").strip()
-    status = asyncio.run(GatewayOpsService().status())
-    clusters = [
-        {
-            "clusterId": cluster.cluster_id,
-            "clusterName": cluster.cluster_name,
-            "provider": cluster.gateway_provider,
-            "gatewayName": cluster.gateway_name,
-            "address": cluster.gateway_address,
-            "publicUrl": cluster.gateway_public_url,
-            "port": cluster.gateway_port,
-            "baseUrl": gateway_base_url(cluster, public_host, global_url),
-            "ready": bool(cluster.gateway_ready),
-        }
-        for cluster in status.clusters
-    ]
-
-    print({"baseUrl": global_url, "clusters": clusters})
-    ```
-  </TabItem>
-</Tabs>
-
-### 列出兼容 OpenAI 的模型
-
-针对一个有效的模型令牌返回 OpenAI 风格的 `GET /v1/models` 响应。模型列表会被过滤为该令牌所属用户可见的那些组。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /v1/models`**
-
-    请求：无请求体。使用 `Authorization: ******` 或 `x-api-key: <token>` 传递模型令牌。
-
-    响应：标准的兼容 OpenAI 的模型列表载荷。
-
-    ```json
-    {
-      "object": "list",
-      "data": [
-        {
-          "id": "qwen3-8b",
-          "object": "model",
-          "created": 1727107200,
-          "owned_by": "lens"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    record = service.tokens.validate("lens-mk-bTj9X7mW4zP1qN8sR6uC2yF5hL0aV3dK1mQ", ip="10.0.0.25")
-    if record is None:
-        raise RuntimeError("token is missing, expired, or revoked")
-
-    payload = {
-        "object": "list",
-        "data": [
-            {
-                "id": group.name,
-                "object": "model",
-                "created": int(group.created_at.timestamp()),
-                "owned_by": "lens",
-            }
-            for group in service.list_models_for_user(record.user_id)
-        ],
-    }
-    print(payload)
-    ```
-  </TabItem>
-</Tabs>
-
-### 列出使用记录
-
-列出调用方最近的使用记录，通过 `limit` 和 `offset` 进行简单的分页。每个条目都是存储的 `UsageRecord`，并经过驼峰命名的 API 别名投影。llm-d EPP 仅上报输入/输出 token，因此 `cachedInputTokens` 目前始终为 `0`（保留该字段是为了兼容会暴露该数据的引擎）。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/usage/records`**
-
-    请求：无请求体。
-
-    - `limit`（`integer`，查询参数，默认值 `100`，最大值 `500`）：要返回的记录数量。
-    - `offset`（`integer`，查询参数，默认值 `0`）：调用方流水账中从 0 开始计数的偏移量。
-
-    响应：一个 `items` 数组，包含若干条使用记录。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "usg-8c2d9e1fa410",
-          "requestId": "req-20260923-0001",
-          "userId": "user-123",
-          "tokenId": "mat-2c47de48a35b",
-          "groupId": "msg-4a8b41f3dd6c",
-          "groupName": "qwen3-8b",
-          "clusterId": "cluster-a",
-          "executionId": "exec-qwen3-8b",
-          "modelRef": "Qwen/Qwen3-8B",
-          "provider": "vllm",
-          "inputTokens": 512,
-          "cachedInputTokens": 128,
-          "cacheWriteTokens": 0,
-          "outputTokens": 196,
-          "usageSource": "engine",
-          "status": "success",
-          "streaming": false,
-          "ttftMs": 240,
-          "durationMs": 1310,
-          "createdAt": "2026-09-23T08:40:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    records = service.usage.list_for_user("user-123", limit=100, offset=0)
-    for record in records:
-        print(record.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取每日使用总量
-
-将调用方最近的使用记录按天聚合为 token 总量。该处理函数复用同一份使用流水账，并通过 `_daily_totals` 对其进行分桶统计。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/usage/timeseries`**
-
-    请求：无请求体。
-
-    - `days`（`integer`，查询参数，默认值 `30`，取值范围 `1..365`）：要包含的最近天数。
-
-    响应：每日使用量分桶，其中包含每个 token 类别的总量。
-
-    ```json
-    {
-      "items": [
-        {
-          "date": "2026-09-22",
-          "requests": 4,
-          "inputTokens": 1200,
-          "cachedInputTokens": 300,
-          "cacheWriteTokens": 0,
-          "outputTokens": 640
-        },
-        {
-          "date": "2026-09-23",
-          "requests": 2,
-          "inputTokens": 530,
-          "cachedInputTokens": 64,
-          "cacheWriteTokens": 0,
-          "outputTokens": 211
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from datetime import datetime, timedelta
-
-    from llm_d_lens.model_service.router import _daily_totals
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    since = datetime.now() - timedelta(days=30)
-    records = service.usage.list_for_user("user-123", since=since, limit=10000)
-    print(_daily_totals(records))
-    ```
-  </TabItem>
-</Tabs>
-
-### 列出模型路由组
-
-列出调用方具备集群级读取权限的模型组。每个组是路由到部署 InferencePool 的公开模型名称。
-`GET /api/v1/model-service/admin/groups/{group_id}` 也要求相应 scope 内的
-`model-service:group:read`。模型响应还包含可空的 `ownerUserId`、`ownerGroupId`；
-所有权本身不授予消费者推理权限。
-
-### 模型推理授权
-
-所有访问管理端点都要求调用方在模型所属集群拥有 `model-service:group:share`。
-admin 和 maintainer 具备该权限，但它不包含模型本身或 Gateway 的管理权限。
-授权覆盖该模型的所有提供方，不包含管理 API。重命名保留授权，删除模型清理授权；
-即使模型为空，只要还有授权，也不能迁移到其他集群。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-
-| 方法 | `/api/v1/model-service/admin/groups/{group_id}` 下的路径 | 响应 |
-| --- | --- | --- |
-| GET | `/access` | `{"items":[...]}`，包含授权 ID、`subjectType`、`subjectId`、`subjectName`、`permission`、`createdAt` |
-| GET | `/access/options` | `{"users":[{"id":"user-123","username":"alice"}],"groups":[{"id":"group-123","name":"team"}]}` |
-| POST | `/access` | HTTP 201，包含授权 ID、对象和推理权限 |
-| DELETE | `/access/{binding_id}` | HTTP 204，空响应体 |
-
-POST 请求体：
-
-```json
-{"subjectType":"user","subjectId":"user-123"}
+```bash
+# 1. 创建 API 密钥。立即复制 `token`：它只会返回一次。
+curl -X POST "$LENS_URL/api/v1/model-service/tokens" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-app"}'
+
+# 2. 获取所属集群的网关基础 URL。
+curl "$LENS_URL/api/v1/model-service/connection"
+
+# 3. 通过该网关调用模型。
+curl "$GATEWAY_URL/v1/chat/completions" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-响应示例：
-
-```json
-{"id":"binding-123","subjectType":"user","subjectId":"user-123","permission":"model-service:inference:use"}
-```
-
-向用户组授权时使用 `subjectType: "group"`。不接受角色、集群或所有者字段；
-服务器固定授权角色，并从模型记录确定集群。对象必须已在该集群拥有推理权限。
-options 只返回符合条件对象的 ID 和显示名称，不暴露完整身份记录；禁用或受保护用户不能选择。
-
-scope 不足返回 403；资源不存在或撤权绑定不匹配返回 404；重复授权返回 409；
-无效或多余字段返回 422。撤权影响使用已有 API key 的后续请求，不中断已开始的流，
-也不修改 HTTPRoute 权重。
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.model_service.contracts import ModelGrantRequest
-from llm_d_lens.model_service.service import default_service
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.model_service.contracts import TokenCreateRequest
 
-def grant_model(model_id: str, user_id: str, principal):
-    service = default_service()
-    return service.grant_access(
-        model_id,
-        ModelGrantRequest(subject_type="user", subject_id=user_id),
-        principal=principal,
-    )
+with LensLocal("<username>") as lens:
+    import asyncio
 
-def read_model_access(model_id: str, principal):
-    service = default_service()
-    return (
-        service.list_access(model_id, principal=principal),
-        service.access_options(model_id, principal=principal),
-    )
+    async def main() -> None:
+        issued = await lens.model_services.create_token(TokenCreateRequest(name="my-app"))
+        print(issued.token)
 
-def revoke_model(model_id: str, binding_id: str, principal):
-    default_service().revoke_access(model_id, binding_id, principal=principal)
+        connection = await lens.model_services.model_service_connection()
+        for cluster in connection.clusters:
+            print(cluster.cluster_name, cluster.base_url)
+
+    asyncio.run(main())
 ```
 
-传入已认证调用方解析后的 principal。这些方法对内部调用同样校验授权管理权限及模型集群 scope。
   </TabItem>
 </Tabs>
 
-### 模型路由组列表示例
+## 常见任务
+
+### 创建 API 密钥
+
+明文 token 只会在创建或重新生成时返回。之后的列表只显示提示片段和元数据。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/groups`**
 
-    请求：无请求体。
-
-    响应：返回一个 `items` 数组，其中每个元素都是 `ModelServiceGroup` 载荷。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "msg-4a8b41f3dd6c",
-          "name": "qwen3-8b",
-          "modelRef": "Qwen/Qwen3-8B",
-          "clusterId": "cluster-a",
-          "servedName": "Qwen/Qwen3-8B",
-          "baseModel": "Qwen/Qwen3-8B",
-          "displayName": "Qwen3 8B",
-          "description": "Shared Qwen 3 8B service",
-          "selectionPolicy": "random",
-          "status": "active",
-          "createdByUserId": "user-123",
-          "createdAt": "2026-09-20T15:00:00Z",
-          "updatedAt": "2026-09-22T11:30:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    for group in service.list_groups():
-        print(group.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 创建模型路由组
-
-创建集群内公开模型名称对应的路由组。`name`、`clusterId` 必填，名称在集群内唯一，
-所有提供方必须位于该集群。提供 `executionId` 时，组与初始成员在同一事务中创建，
-供 **Add model** 使用。部署必须就绪且有模型名称；服务端从部署推导 `modelRef`、
-`servedName`，将 `baseModel` 设为公开名称，忽略调用方对这三个字段的覆盖。
-不传 `executionId` 时仍支持单独创建组。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/groups`**
-
-    请求体（`GroupCreateRequest`）：
-
-    - `name`（`string`）：客户端在 Chat Completions API 中使用的公开模型名称。
-    - `clusterId`（`string`）：该服务所属的集群（必填）；其提供方必须都位于该集群内，且名称在该集群内唯一。
-    - `displayName`（`string`，可选）：便于在 UI 中展示的标签；默认为 `name`。
-    - `description`（`string`，可选）：自由格式的描述。
-    - `executionId`（`string`，可选）：作为初始成员发布的就绪部署；需要该集群中的 `model-service:group:manage` 和 `model-service:member:manage` 权限。
-    - `modelRef` / `servedName` / `baseModel`（`string`，可选，高级选项）：传入 `executionId` 时由服务端推导；否则 `modelRef` 默认为 `name`，`baseModel` 默认为 `modelRef`，`servedName` 为 null。
-    - `selectionPolicy`（`string`，遗留字段）：为兼容性而接受此参数；llm-d 数据面会忽略它。
-
-    ```json
-    {
-      "name": "qwen3-8b",
-      "clusterId": "cluster-a",
-      "executionId": "exec-123",
-      "displayName": "Qwen3 8B",
-      "description": "Shared Qwen 3 8B service"
-    }
-    ```
-
-    响应：`201` 和创建后的 `ModelServiceGroup`。传入 `executionId` 时成员同时提交，
-    并在后台安排 Gateway 调谐。权限或范围不足返回 `403`，目标不存在返回 `404`，
-    名称重复、集群不匹配、部署未就绪或无模型名称返回 `409`，输入无效返回 `422`。
-    事务失败不会留下任一记录。
-
-    ```json
-    {
-      "id": "msg-4a8b41f3dd6c",
-      "name": "qwen3-8b",
-      "modelRef": "Qwen/Qwen3-8B",
-      "clusterId": "cluster-a",
-      "servedName": "Qwen/Qwen3-8B",
-      "baseModel": "qwen3-8b",
-      "displayName": "Qwen3 8B",
-      "description": "Shared Qwen 3 8B service",
-      "selectionPolicy": "random",
-      "status": "active",
-      "createdByUserId": "user-123",
-      "createdAt": "2026-09-23T09:10:00Z",
-      "updatedAt": "2026-09-23T09:10:00Z"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import GroupCreateRequest
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    group = service.create_group(
-        GroupCreateRequest(
-            name="qwen3-8b",
-            clusterId="cluster-a",
-            executionId="exec-123",
-            displayName="Qwen3 8B",
-            description="Shared Qwen 3 8B service",
-        ),
-        created_by="user-123",
-    )
-    print(group.api_payload())
-    print([member.api_payload() for member in service.list_members(group.id)])
-    ```
-
-    `exec-123` 必须是 `cluster-a` 中已有的就绪部署。可信内部 Python 调用可省略
-    `principal`，请求适配器必须传入已认证主体以校验权限和集群范围。
-    `create_group` 只提交记录，HTTP 处理函数还会安排 Gateway 调谐。
-  </TabItem>
-</Tabs>
-
-### 将就绪部署发布为公开模型服务
-
-把单个就绪部署发布为新的集群级公开模型名称，无需授予完整的模型组管理权限。公开名称尚不存在时，**Add model** 会使用此接口。调用者需要部署所在集群的 `model-service:member:manage` 权限。服务使用默认的 `random` 选择策略；编辑模型服务元数据或选择策略仍需要 `model-service:group:manage`。
-
-**`POST /api/v1/model-service/admin/groups/publish`**
-
-请求体（`GroupPublishRequest`）：
-
-- `name`（`string`）：公开模型名称。
-- `clusterId`（`string`）：部署所在集群。
-- `executionId`（`string`）：要发布的就绪部署。
-- `displayName` / `description`（`string`，可选）。
-
-响应：`201` 和创建后的 `ModelServiceGroup`；部署会作为首个成员提交，并安排 Gateway 调谐。错误码与创建模型组一致（`403`、`404`、`409`、`422`）。
+**`POST /api/v1/model-service/tokens`**
 
 ```json
 {
-  "name": "qwen3-8b",
-  "clusterId": "cluster-a",
-  "executionId": "exec-123"
+  "name": "automation"
 }
 ```
 
-### 列出已发布的模型服务成员
+响应（`201`）：
 
-列出为路由组提供后端支持的已发布成员。该路由可以选择按某个组 ID 进行过滤，并添加一个根据 `execution_name()` 推导出来的、便于阅读的部署 `name` 字段。
+```json
+{
+  "id": "mat-2c47de48a35b",
+  "name": "automation",
+  "tokenHint": "K8xP",
+  "status": "active",
+  "token": "lens-mk-..."
+}
+```
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/members`**
-
-    请求：无请求体。
-
-    - `group_id`（`string`，查询参数，可选）：仅返回某个路由组的成员。
-
-    响应：`items` 成员载荷数组，包含整数 `weight`，范围为 0 到 1000000。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "msm-32d55cb7f9a1",
-          "groupId": "msg-4a8b41f3dd6c",
-          "executionId": "exec-qwen3-8b",
-          "clusterId": "cluster-a",
-          "targetNamespace": "ns",
-          "targetService": "vllm",
-          "targetPort": 8000,
-          "endpointKind": "vllm",
-          "weight": 1,
-          "status": "active",
-          "publishedByUserId": "user-123",
-          "createdAt": "2026-09-23T09:12:00Z",
-          "updatedAt": "2026-09-23T09:12:00Z",
-          "name": "qwen-qwen3-8b-202609210558"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-    from llm_d_lens.model_service.targets import execution_name
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    service = default_service()
-    items = []
-    for member in service.list_members("msg-4a8b41f3dd6c"):
-        payload = member.api_payload()
-        payload["name"] = execution_name(member.execution_id) or member.execution_id
-        items.append(payload)
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.model_service.contracts import TokenCreateRequest
 
-    print(items)
-    ```
-  </TabItem>
-</Tabs>
-
-### 将一个部署发布为成员
-
-将一个就绪的部署执行发布到某个路由组中。该路由会根据执行 ID 推导出实际的命名空间、服务、端口和端点类型。该执行所在的集群必须与该组所在的集群一致，否则调用会被以 `409`（`model_member_conflict`）拒绝。
-
-每个新提供方默认权重为 1，已有权重保持不变。通过流量分配接口修改权重。
-HTTP 处理函数会安排调谐，直接 Python 调用只持久化记录。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/members`**
-
-    请求体（`MemberCreateRequest`）：
-
-    - `groupId`（`string`）：目标路由组 ID。
-    - `executionId`（`string`）：就绪的部署执行 ID。
-    - `poolName`（`string`，可选，高级选项）：由部署所拥有的 InferencePool 名称；默认为部署保存的池名称，形式为 `namespace/pool`（跨命名空间唯一）。
-
-    ```json
-    {
-      "groupId": "msg-4a8b41f3dd6c",
-      "executionId": "exec-qwen3-8b",
-      "poolName": "ns/qwen"
-    }
-    ```
-
-    响应：创建成功后的 `ModelServiceMember`。
-
-    ```json
-    {
-      "id": "msm-32d55cb7f9a1",
-      "groupId": "msg-4a8b41f3dd6c",
-      "executionId": "exec-qwen3-8b",
-      "clusterId": "cluster-a",
-      "targetNamespace": "ns",
-      "targetService": "qwen-epp",
-      "targetPort": 8000,
-      "endpointKind": "llm-d-epp",
-      "weight": 1,
-      "poolName": "qwen",
-      "eppRef": "qwen-epp",
-      "status": "active",
-      "ownerUserId": "user-123",
-      "publishedByUserId": "user-123",
-      "createdAt": "2026-09-23T09:12:00Z",
-      "updatedAt": "2026-09-23T09:12:00Z"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import MemberCreateRequest
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    member = service.create_member(
-        MemberCreateRequest(
-            groupId="msg-4a8b41f3dd6c",
-            executionId="exec-qwen3-8b",
-            poolName="ns/qwen",
-        ),
-        published_by="user-123",
-    )
-    print(member.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 保存并应用流量分配
-
-原子更新全部权重，并可添加部署提供方，然后调谐集群的共享 Gateway 和加权 HTTPRoute。
-需要模型组所在集群中的 `model-service:member:manage` 权限。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PUT /api/v1/model-service/admin/groups/{group_id}/traffic`**
-
-    请求体（`TrafficUpdateRequest`）：
-
-    - `members`：完整的 1 到 16 个成员，每项包含 `executionId` 和 **0..1000000** 范围内的整数 `weight`。不能遗漏已有成员；移除成员请使用删除接口。
-    - `expectedWeights`：之前读取的执行 ID 到权重的映射，包含所有已有提供方，不含新提供方。
-
-    ```json
-    {
-      "members": [
-        {"executionId": "stable", "weight": 90},
-        {"executionId": "canary", "weight": 10}
-      ],
-      "expectedWeights": {"stable": 1}
-    }
-    ```
-
-    新部署及从零权重激活的提供方必须就绪、位于同一集群、使用不同的
-    InferencePool/EPP，且提供方模型名称与组一致。至少一个未禁用提供方的权重为正。
-    零权重成员保留但不写入 backendRefs，离线成员也不接收流量。
-
-    响应：`200`，包含完整更新后的 `items`（包括 `weight`）和 `operation`
-    （含 `status`、`message`、`detailJson` 的 `GatewayOperation`）。
-    **操作失败不会回滚已保存权重。** `succeeded` 只表示已提交配置，不代表已测得流量比例。
-
-    格式或范围错误返回 `422`，快照过期或分配无效返回 `409 model_traffic_conflict`，
-    目标不存在返回 `404`，权限不足返回 `403`。保存后的传输或领域异常返回
-    `502 model_traffic_apply_failed`，明确说明配置已保存；重新读取分配，修复后重试 Reconcile。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    `ModelService.update_traffic()` 校验并持久化；调用
-    `GatewayOpsService.reconcile_cluster_gateway()` 提交配置。
-    主体必须来自已认证请求，不能来自用户自行提交的身份。
-
-    ```python
-    from llm_d_lens.auth.access import current_principal
-    from llm_d_lens.model_service.contracts import TrafficUpdateRequest
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-    from llm_d_lens.model_service.service import default_service
-
-    async def configure_traffic(request, group_id, canary_execution_id):
-        service = default_service()
-        principal = current_principal(request)
-        existing = service.list_members(group_id)
-        weights = {member.execution_id: member.weight for member in existing}
-        members = [{"executionId": member.execution_id, "weight": member.weight}
-                   for member in existing]
-        members[0]["weight"] = 90
-        members.append({"executionId": canary_execution_id, "weight": 10})
-        saved = service.update_traffic(
-            group_id,
-            TrafficUpdateRequest(members=members, expectedWeights=weights),
-            principal=principal,
-        )
-        operation = await GatewayOpsService().reconcile_cluster_gateway(
-            saved[0].cluster_id, actor=principal.user_id,
-        )
-        return {"items": [member.api_payload() for member in saved],
-                "operation": operation.api_payload()}
-    ```
-  </TabItem>
-</Tabs>
-
-`render_model_route(..., pools=[PoolBinding(...)])` 生成精确的相对权重、一个 IPP
-模型映射及跨命名空间 ReferenceGrant。保留原有 `pool=PoolBinding(...)` 单后端调用，
-但不能同时传入两种形式。`PoolBinding.weight` 默认为 1。
-
-### 获取使用量分析数据
-
-为管理员仪表盘返回聚合后的模型服务使用量分析数据。该载荷包括总体合计、时间序列、分组明细以及可用的筛选维度选项。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/usage/analytics`**
-
-    请求：无请求体。
-
-    - `since`（`string`，查询参数，可选）：ISO 时间戳，作为下限。
-    - `until`（`string`，查询参数，可选）：ISO 时间戳，作为上限。
-    - `interval`（`string`，查询参数，默认值 `day`）：`day` 或 `hour`。
-    - `group_by`（`string`，查询参数，默认值 `model`）：`model`、`user` 或 `cluster`。
-    - `user_id`（`string[]`，查询参数，可选）：可重复传入的用户 ID。
-    - `group_id`（`string[]`，查询参数，可选）：可重复传入的组 ID。
-    - `cluster_id`（`string[]`，查询参数，可选）：可重复传入的集群 ID。
-
-    响应：由 `build_usage_analytics()` 构建的分析数据。
-
-    ```json
-    {
-      "interval": "day",
-      "groupBy": "model",
-      "totals": {
-        "requests": 3,
-        "inputTokens": 17,
-        "cachedInputTokens": 2,
-        "outputTokens": 6,
-        "tokens": 25
-      },
-      "series": [
-        {
-          "bucket": "2026-09-21",
-          "requests": 2,
-          "inputTokens": 13,
-          "cachedInputTokens": 2,
-          "outputTokens": 6,
-          "tokens": 21
-        },
-        {
-          "bucket": "2026-09-22",
-          "requests": 1,
-          "inputTokens": 4,
-          "cachedInputTokens": 0,
-          "outputTokens": 0,
-          "tokens": 4
-        }
-      ],
-      "groups": [
-        {
-          "key": "m1",
-          "label": "m1",
-          "totals": {
-            "requests": 2,
-            "inputTokens": 13,
-            "cachedInputTokens": 2,
-            "outputTokens": 6,
-            "tokens": 21
-          },
-          "series": [
-            {
-              "bucket": "2026-09-21",
-              "requests": 2,
-              "inputTokens": 13,
-              "cachedInputTokens": 2,
-              "outputTokens": 6,
-              "tokens": 21
-            }
-          ]
-        }
-      ],
-      "facets": {
-        "models": [
-          {
-            "key": "g-m1",
-            "label": "m1"
-          }
-        ],
-        "users": [
-          {
-            "key": "u1",
-            "label": "u1"
-          }
-        ],
-        "clusters": [
-          {
-            "key": "c1",
-            "label": "c1"
-          }
-        ]
-      }
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    analytics = service.usage_analytics(
-        since=None,
-        until=None,
-        interval="day",
-        group_by="model",
-        user_ids=None,
-        group_ids=None,
-        cluster_ids=["cluster-a"],
-        principal=None,
-    )
-    print(analytics)
-    ```
-  </TabItem>
-</Tabs>
-
-### 跨集群列出使用记录
-
-为管理员仪表盘列出跨用户/模型/集群的最近使用记录，可以选择按路由组或集群进行过滤，并以 `limit` 作为上限。集群可见性仍会被限制为调用方可访问的集群范围。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/usage`**
-
-    请求：无请求体。
-
-    - `group_id`（`string[]`，查询参数，可选）：可重复传入的路由组 ID。
-    - `cluster_id`（`string[]`，查询参数，可选）：可重复传入的集群 ID。
-    - `limit`（`integer`，查询参数，默认值 `100`，最大值 `500`）：要返回的记录数量。
-
-    响应：一个 `items` 数组，包含若干条使用记录（结构与 `/usage/records` 相同）。
-
-    ```json
-    {
-      "items": [
-        {
-          "id": "usg-8c2d9e1fa410",
-          "requestId": "req-20260923-0001",
-          "userId": "user-123",
-          "tokenId": "mat-2c47de48a35b",
-          "groupId": "msg-4a8b41f3dd6c",
-          "groupName": "qwen3-8b",
-          "clusterId": "cluster-a",
-          "executionId": "exec-qwen3-8b",
-          "modelRef": "Qwen/Qwen3-8B",
-          "provider": "vllm",
-          "inputTokens": 512,
-          "cachedInputTokens": 0,
-          "cacheWriteTokens": 0,
-          "outputTokens": 196,
-          "usageSource": "engine",
-          "status": "success",
-          "streaming": false,
-          "ttftMs": 240,
-          "durationMs": 1310,
-          "createdAt": "2026-09-23T08:40:00Z"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    records = service.usage.list_all(group_ids=None, cluster_ids=["cluster-a"], limit=100)
-    for record in records:
-        print(record.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取网关状态
-
-获取跨集群的当前网关状态：已发布的成员、固定使用的提供方，以及共享 Gateway 的已编程状态。
-
-`gatewayNamespace` 和 `ippNamespace` 返回带集群注册稳定短 ID 的实际命名空间。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/gateway/status`**
-
-    请求：无请求体。
-
-    响应：序列化后的 `GatewayStatus` 载荷。
-
-    ```json
-    {
-      "clusters": [
-        {
-          "clusterId": "1234abcd",
-          "clusterName": "Primary cluster",
-          "members": [
-            {
-              "groupId": "msg-4a8b41f3dd6c",
-              "groupName": "qwen3-8b",
-              "executionId": "exec-qwen3-8b",
-              "endpointKind": "llm-d-epp",
-              "poolName": "qwen",
-              "target": "qwen-epp.ns:8000",
-              "status": "active"
-            }
-          ],
-          "gatewayProvider": "istio",
-          "gatewayState": "installed",
-          "gatewayNamespace": "lens-gateway-1234abcd",
-          "gatewayName": "lens-inference-gateway",
-          "gatewayReady": true,
-          "gatewayRunning": true,
-          "ippState": "installed",
-          "ippReady": false,
-          "ippName": "lens-ipp",
-          "ippNamespace": "lens-gateway-1234abcd",
-          "lastOperation": {
-            "id": "gop-2a7f0d9c0c11",
-            "kind": "reconcile-gateway",
-            "status": "succeeded",
-            "clusterId": "1234abcd",
-            "message": "gateway reconciled (istio); 1 model route(s)",
-            "createdAt": "2026-09-23T09:15:00Z",
-            "finishedAt": "2026-09-23T09:15:18Z"
-          }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
     async def main() -> None:
-        status = await GatewayOpsService().status()
-        print(status.api_payload())
+        issued = await lens.model_services.create_token(TokenCreateRequest(name="automation"))
+        print(issued.id, issued.token)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 协调单个网关集群并查看日志
+### 轮换或吊销 API 密钥
 
-重新渲染并应用单个集群的共享 Gateway、HTTPRoute 和提供方连接，并以 SSE 流返回操作日志。
-
-**`POST /api/v1/model-service/admin/gateway/reconcile/stream`**
-
-请求体：`{ "clusterId": "cluster-a" }`。需要 `model-service:gateway:reconcile`。
-
-### 调谐网关所在集群
-
-为当前拥有活跃成员的每个集群安排一次完整的数据面调谐。该路由会先发现受影响的集群 ID，然后在后台运行 `_reconcile_clusters()`。
+轮换会吊销当前有效的一个或多个密钥，并签发替代密钥。吊销单个密钥返回 `204`，使用该密钥的新请求将无法再通过认证。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/reconcile`**
 
-    请求：无请求体。
+```bash
+curl -X POST "$LENS_URL/api/v1/model-service/tokens/regenerate" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"default"}'
 
-    响应：确认调谐已被安排执行，并列出目标集群。
+curl -X DELETE "$LENS_URL/api/v1/model-service/tokens/<token-id>"
+```
 
-    ```json
-    {
-      "scheduled": true,
-      "clusters": [
-        "cluster-a",
-        "cluster-b"
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.model_service.contracts import TokenCreateRequest
+
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.model_service.router import _reconcile_clusters
-
     async def main() -> None:
-        await _reconcile_clusters(["cluster-a", "cluster-b"])
+        issued = await lens.model_services.regenerate_token(TokenCreateRequest(name="default"))
+        print(issued.token)
+        await lens.model_services.revoke_token("<token-id>")
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 安装或复用共享 Gateway
+### 查找可调用的模型和网关地址
 
-安装（或复用）该集群的共享 llm-d Gateway。提供方可由用户选择（`istio`、`gke`、`agentgateway`、`envoy-ai-gateway`）；若省略，则使用集群记录中固定的提供方。
-
-默认命名空间为 `lens-gateway-<cluster-id>`，自定义前缀也附加同一个稳定短 ID，
-Gateway 与 IPP 操作始终使用一致的命名空间。Istio 使用仅作用于该 Gateway Pod 的
-命名空间级 `EnvoyFilter`，HTTP 外部鉴权失败时拒绝访问，不注册全网格共享的鉴权提供方。
-不接管或删除旧无后缀资源；旧 Gateway 占用 NodePort 时仍视为冲突，
-需要选择空闲端口或主动退役旧 Gateway。操作流中的卸载只删除本注册带标签的
-命名空间内资源，不删除其他命名空间、共享 GatewayClass 或部署所属的 InferencePool。
+模型服务是集群范围的，因此列表项会包含 `clusterName`，用于区分不同集群中的同名公开模型。只有处于活动状态且存在在线、正权重提供方的模型才会出现。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/install`**
 
-    请求体（`ClusterGatewayRequest`）：
+```bash
+curl "$LENS_URL/api/v1/model-service/models"
+curl "$LENS_URL/api/v1/model-service/connection"
+```
 
-    - `clusterId`（`string`）：目标集群 ID。
-    - `provider`（`string`，可选）：`istio` | `gke` | `agentgateway` | `envoy-ai-gateway`。
-
-    ```json
-    { "clusterId": "1234abcd", "provider": "istio" }
-    ```
-
-    响应：记录此次安装所产生的 `GatewayOperation`。
-
-    ```json
-    {
-      "id": "gop-9c1a2b3d4e5f",
-      "kind": "install-gateway",
-      "status": "succeeded",
-      "clusterId": "1234abcd",
-      "message": "shared Gateway ready (istio)",
-      "detailJson": { "provider": "istio", "namespace": "lens-gateway-1234abcd", "name": "lens-inference-gateway", "programmed": true },
-      "createdAt": "2026-09-24T16:20:00Z",
-      "finishedAt": "2026-09-24T16:20:12Z"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    async def main() -> None:
-        operation = await GatewayOpsService().install_cluster_gateway("1234abcd", provider="istio")
-        print(operation.api_payload())
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 获取一个模型路由组
-
-按 ID 获取某一个路由组。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/groups/{group_id}`**
-
-    请求：无请求体。
-
-    响应：`ModelServiceGroup` 载荷（结构与列表端点相同）。
-
-    ```json
+```json
+{
+  "items": [
     {
       "id": "msg-4a8b41f3dd6c",
-      "name": "qwen3-8b",
-      "modelRef": "Qwen/Qwen3-8B",
+      "name": "<model>",
       "clusterId": "cluster-a",
-      "servedName": "Qwen/Qwen3-8B",
-      "baseModel": "Qwen/Qwen3-8B",
-      "selectionPolicy": "random",
+      "clusterName": "Cluster A",
       "status": "active"
     }
-    ```
+  ]
+}
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    group = default_service().get_group("msg-4a8b41f3dd6c")
-    print(group.api_payload() if group else None)
-    ```
-  </TabItem>
-</Tabs>
+```python
+from llm_d_lens.sdk import LensLocal
 
-### 更新一个模型路由组
+with LensLocal("<username>") as lens:
+    import asyncio
 
-更新路由组的可变字段（名称、模型引用、显示名称、描述、状态、集群、服务名称、基础模型）。
+    async def main() -> None:
+        models = await lens.model_services.list_models()
+        for model in models.items:
+            print(model.name, model.cluster_name)
 
-HTTP 处理函数保存配置并等待受影响集群的调谐提交。`status: "disabled"` 停止公开模型并
-移除路由，`"active"` 恢复在线且正权重提供方的路由，不改变提供方状态、权重或运行中的 Pod。
-调用方需要所有受影响集群的模型组管理权限，控制器收敛是异步的。
+        connection = await lens.model_services.model_service_connection()
+        for cluster in connection.clusters:
+            print(cluster.cluster_name, cluster.base_url, cluster.ready)
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PATCH /api/v1/model-service/admin/groups/{group_id}`**
+    asyncio.run(main())
+```
 
-    请求体（`GroupUpdateRequest`；所有字段均为可选）：`name`、`modelRef`、`displayName`、`description`、`status`（`active` | `disabled`）、`clusterId`、`servedName`、`baseModel`。
-
-    ```json
-    { "displayName": "Qwen3 8B (prod)", "status": "active" }
-    ```
-
-    响应：成功提交调谐后的 `ModelServiceGroup`。`502 model_publication_apply_failed`
-    表示配置已保存但路由应用失败，请用 Reconcile 重试。越权修改返回 `403`。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import GroupUpdateRequest
-    from llm_d_lens.model_service.service import default_service
-
-    group = default_service().update_group(
-        "msg-4a8b41f3dd6c",
-        GroupUpdateRequest(displayName="Qwen3 8B (prod)", status="active"),
-    )
-    print(group.api_payload())
-    ```
-
-    `update_group(..., principal=principal)` 检查集群范围内的管理权限，只持久化配置。
-    直接 Python 调用还需等待 `GatewayOpsService().reconcile_cluster(group.cluster_id)`
-    并检查操作状态。可信内部调用可省略 `principal`，HTTP 请求始终传入。
   </TabItem>
 </Tabs>
 
-### 启用或停止模型服务
+### 调用已发布的模型
 
-在不改变提供方状态、权重或运行中 Pod 的情况下启动或停止公开模型。
-
-**`POST /api/v1/model-service/admin/groups/{group_id}/status`**
-
-请求体：`{ "status": "active" }` 或 `{ "status": "disabled" }`。需要模型所在集群的 `model-service:group:toggle`。
-
-### 删除一个模型路由组
-
-需要模型所在集群的组管理权限，只允许移除空路由组。只要仍有关联提供方（包括离线或
-权重为 0 的提供方），就返回 `409 model_group_conflict`。处理函数与 Gateway 调谐串行，
-仅删除该模型由 Lens 管理的 HTTPRoute 和 IPP 映射，确认资源已删除后才删除记录。
-模型不存在返回 `404`；清理失败返回 `502 model_removal_failed` 并保留记录供重试。
-不删除其他模型、共享 Gateway 资源、部署或 Pod。
+将网关基础 URL 用于任意兼容 OpenAI 的客户端。请求中的 `model` 应填写公开模型名称，而不是提供方内部的模型名称。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/model-service/admin/groups/{group_id}`**
 
-    需要 `model-service:group:remove`。请求：无请求体。响应：`204 No Content`。
+```bash
+curl "$GATEWAY_URL/v1/chat/completions" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+要列出某个密钥可以调用的模型，请使用同一个密钥请求 `GET /v1/models`。
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.cluster.registry import gateway_lock
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-    from llm_d_lens.model_service.service import default_service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    async def remove_model(group_id, principal):
-        service = default_service()
-        group = service.require_empty_group(group_id, principal=principal)
-        async with gateway_lock(group.cluster_id):
-            group = service.require_empty_group(group_id, principal=principal)
-            await GatewayOpsService().remove_model_route(group)
-            service.delete_group(group_id, principal=principal)
-    ```
+```python
+from llm_d_lens.sdk import LensLocal
+from openai import OpenAI
 
-    单独调用 `delete_group()` 只删除数据库记录，并在事务内再次检查提供方是否为空。
-    对实际模型应使用上述完整流程，清理异常必须阻止记录删除。可信内部调用可在服务方法中
-    省略 principal；HTTP 请求始终传入。
-  </TabItem>
-</Tabs>
+with LensLocal("<username>") as lens:
+    import asyncio
 
-### 启动或停止所有提供方
+    async def main() -> None:
+        connection = await lens.model_services.model_service_connection()
+        models = await lens.model_services.list_models()
 
-需要模型所在集群的成员管理权限。原子修改所有提供方状态，然后对受影响集群各调谐一次。
-保留权重、父模型状态和 Pod。启动时要求每个部署均在其注册集群中就绪。空模型、部署未就绪
-或提供方并发变更返回 `409 model_member_conflict`，不会部分修改状态；模型不存在返回 `404`。
-`502 model_publication_apply_failed` 表示状态已保存但路由应用失败，请重试 **Reconcile**。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PUT /api/v1/model-service/admin/groups/{group_id}/providers/status`**
-
-    ```json
-    { "status": "disabled" }
-    ```
-
-    `"active"` 启动所有提供方，`"disabled"` 停止所有提供方。
-    成功返回 `200`，`{"items": [...]}` 中包含更新后的成员对象。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import ProvidersStatusRequest
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-    from llm_d_lens.model_service.service import default_service
-
-    async def stop_providers(group_id, principal):
-        members = default_service().set_providers_status(
-            group_id, ProvidersStatusRequest(status="disabled"), principal=principal
+        client = OpenAI(base_url=connection.clusters[0].base_url, api_key="<token>")
+        reply = client.chat.completions.create(
+            model=models.items[0].name,
+            messages=[{"role": "user", "content": "Hello"}],
         )
-        for cluster_id in {member.cluster_id for member in members}:
-            operation = await GatewayOpsService().reconcile_cluster(
-                cluster_id, actor=principal.user_id
+        print(reply.choices[0].message.content)
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 将就绪部署发布为模型
+
+就绪部署可以成为其所在集群中的一个新公开模型名称。如果该集群中已存在这个公开名称，请将该部署添加为提供方，而不是重复发布。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+# 查找就绪部署及其 executionId。
+curl "$LENS_URL/api/v1/model-service/admin/deployments"
+
+curl -X POST "$LENS_URL/api/v1/model-service/admin/groups/publish" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"<model>","clusterId":"<cluster-id>","executionId":"<execution-id>"}'
+```
+
+响应（`201`）是创建的模型服务。要向现有模型添加另一个部署，请使用 `POST /api/v1/model-service/admin/members`，并传入 `groupId` 和 `executionId`。
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.model_service.contracts import GroupPublishRequest
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        group = await lens.model_services.admin_publish_group(
+            GroupPublishRequest(
+                name="<model>",
+                clusterId="<cluster-id>",
+                executionId="<execution-id>",
             )
-            if operation.status != "succeeded":
-                raise RuntimeError(operation.message)
-        return members
-    ```
-
-    `set_providers_status()` 只持久化状态，直接调用时需如上调谐并检查操作结果。
-  </TabItem>
-</Tabs>
-
-### 列出可发布的部署
-
-列出可以作为成员发布的就绪部署（执行），其推导出的目标地址已经填好。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/deployments`**
-
-    请求：无请求体。
-
-    响应：返回一个 `items` 数组，其中每个元素都是 `PublishableDeployment` 载荷。
-
-    ```json
-    {
-      "items": [
-        {
-          "executionId": "exec-qwen3-8b",
-          "name": "qwen-qwen3-8b-202609210558",
-          "displayName": "Qwen3 8B",
-          "model": "Qwen/Qwen3-8B",
-          "clusterId": "cluster-a",
-          "clusterName": "Cluster A",
-          "namespace": "ns",
-          "service": "qwen-epp",
-          "port": 8000,
-          "endpointKind": "llm-d-epp",
-          "modelRef": "Qwen/Qwen3-8B",
-          "status": "ready"
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    for item in default_service().list_publishable_deployments():
-        print(item.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 更新一个成员
-
-更新成员状态并等待集群路由调谐。`disabled` 将提供方离线，但不改变保存的权重或缩容 Pod。
-重新上线要求该注册集群中的部署已就绪。权重 0 仍为 standby，已停止的父模型不会恢复。
-允许全部提供方离线；没有在线正权重提供方时移除 HTTPRoute，否则引用所有在线正权重池。
-健康探测不能撤销显式离线选择。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PATCH /api/v1/model-service/admin/members/{member_id}`**
-
-    请求体（`MemberUpdateRequest`；所有字段均为可选）：`status`（`active` | `disabled` | `unhealthy`）。
-
-    ```json
-    { "status": "disabled" }
-    ```
-
-    响应：成功提交调谐后的 `ModelServiceMember`。未就绪提供方上线返回
-    `409 model_member_conflict`，缺少集群成员管理权限返回 `403`。
-    `502 model_publication_apply_failed` 表示状态已保存但路由应用失败，请用 Reconcile 重试。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import MemberUpdateRequest
-    from llm_d_lens.model_service.service import default_service
-
-    member = default_service().update_member("msm-32d55cb7f9a1", MemberUpdateRequest(status="disabled"))
-    print(member.api_payload())
-    ```
-
-    传入 `principal=principal` 校验调用方权限。该方法只持久化状态，直接 Python 调用还需
-    等待 `GatewayOpsService().reconcile_cluster(member.cluster_id)` 并检查操作状态。
-    两个方法都不缩容提供方的 Pod。
-  </TabItem>
-</Tabs>
-
-### 移除一个成员
-
-移除一个已发布的成员。该处理函数会安排对其所在集群的调谐。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/model-service/admin/members/{member_id}`**
-
-    请求：无请求体。响应：`204 No Content`。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
-
-    default_service().delete_member("msm-32d55cb7f9a1")
-    ```
-  </TabItem>
-</Tabs>
-
-### 探测成员后端
-
-探测启用模型中未禁用的成员，刷新 `health_json` / `last_health_at`，
-并在 `active` 与 `unhealthy` 之间更新状态。跳过已停止模型和离线提供方，
-并发健康写入不能重新启用离线提供方。没有在线正权重提供方时，HTTPRoute 缺失属于预期，
-跳过 Gateway 服务检查，也不触发自动修复。
-
-已有的零权重 InferencePool 没有 Gateway 父状态时报告
-`healthJson.components.inferencePool: "standby"`，不会仅因此将健康提供方判为异常或
-触发 Gateway/IPP 修复。资源缺失、显式池拒绝、EPP 或模型服务器端点故障仍判为异常；
-正权重池仍要求 Gateway 接受。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/probe`**
-
-    请求：无请求体。
-
-    响应：
-
-    ```json
-    { "updated": 2 }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    updated = asyncio.run(GatewayOpsService().probe_members())
-    print(updated)
-    ```
-  </TabItem>
-</Tabs>
-
-### 同步网关使用量
-
-从 Prometheus 读取每个集群的 llm-d EPP token 计数器，并将自上次同步以来的增量写入使用量流水账，归属到请求的 `fairness_id` 背后的令牌/用户（Gateway 会根据 ext_authz 的决策注入 `x-llm-d-inference-fairness-id`）。该操作是幂等的：计数器未变化则不会新增任何记录。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/usage/sync`**
-
-    请求：无请求体。
-
-    响应：每个集群写入的记录数。
-
-    ```json
-    { "written": { "cluster-a": 3 } }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.service import default_service
-    from llm_d_lens.model_service.usage_sync import GatewayUsageSync
-
-    written = asyncio.run(GatewayUsageSync(service=default_service()).sync())
-    print(written)
-    ```
-  </TabItem>
-</Tabs>
-
-### 读取推理载荷处理器配置
-
-从集群的 ConfigMap 中读取该集群实时生效的推理载荷处理器（Inference Payload Processor）配置（Lens 本身并不存储此配置）。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/model-service/admin/gateway/ipp-config?clusterId=cluster-a`**
-
-    响应：
-
-    ```json
-    { "config": "apiVersion: llm-d.ai/v1alpha1\nkind: PayloadProcessorConfig\nplugins: []\n", "custom": false, "default": "plugins: []\n" }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    config = asyncio.run(GatewayOpsService().get_ipp_config("cluster-a"))
-    print(config["custom"], config["config"])
-    ```
-  </TabItem>
-</Tabs>
-
-### 保存推理载荷处理器配置
-
-将一份 `PayloadProcessorConfig` 请求体应用到集群，并升级 IPP（不涉及 Lens 存储）。空的 `config` 会恢复为 Helm chart 的默认配置。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/ipp-config`**
-
-    请求体（`IppConfigRequest`）：
-
-    - `clusterId`（`string`）：目标集群 ID。
-    - `config`（`string`）：`PayloadProcessorConfig` 的内容（以 `plugins:` 开头；chart 会添加 `apiVersion`/`kind`）。
-
-    ```json
-    { "clusterId": "cluster-a", "config": "plugins:\n- type: body-field-to-header\n" }
-    ```
-
-    响应：记录此次 IPP 安装所产生的 `GatewayOperation`。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    operation = asyncio.run(GatewayOpsService().set_ipp_config("cluster-a", "plugins:\n- type: body-field-to-header\n"))
-    print(operation.status)
-    ```
-  </TabItem>
-</Tabs>
-
-### 对集群进行预检
-
-在安装或调谐数据面之前，检查集群是否可达，以及是否存在活跃成员。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/preflight`**
-
-    请求体（`ClusterGatewayRequest`）：
-
-    - `clusterId`（`string`）：目标集群 ID。
-
-    ```json
-    { "clusterId": "cluster-a" }
-    ```
-
-    响应：记录此次预检所产生的 `GatewayOperation`。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    operation = asyncio.run(GatewayOpsService().preflight("cluster-a"))
-    print(operation.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 对数据面组件进行扩缩容
-
-将某个数据面 Deployment（Gateway 数据面、EPP 或模型服务器）扩缩容到指定的副本数。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/scale`**
-
-    请求体（`ComponentScaleRequest`）：
-
-    - `clusterId`（`string`）
-    - `namespace`（`string`）
-    - `name`（`string`）
-    - `replicas`（`integer`，`0`–`100`）
-    - `kind`（`string`，可选，默认值 `deployment`）
-
-    ```json
-    { "clusterId": "cluster-a", "namespace": "ns", "name": "qwen-epp", "replicas": 2 }
-    ```
-
-    响应：记录后的 `GatewayOperation`（`detailJson` 中携带 `namespace`、`name`、`replicas`）。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    operation = asyncio.run(
-        GatewayOpsService().scale_component("cluster-a", "ns", "qwen-epp", 2)
-    )
-    print(operation.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 以流式方式运行一次数据面操作
-
-运行一次数据面操作，并以 Server-Sent Events 的形式流式输出其日志行。管理员界面在安装/卸载/调谐时使用该端点，以便日志抽屉能够实时更新。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/stream`**
-
-    请求体（`GatewayStreamRequest`）：
-
-    - `clusterId`（`string`）
-    - `op`（`string`）：`install-gateway` | `uninstall-gateway` | `reconcile` | `scale` | `install-ipp` | `uninstall-ipp`
-    - `provider`、`namespace`、`name`、`replicas`、`kind`、`gatewayName`、`ippChart`、`ippVersion`（可选，依据 `op` 而定）
-
-    ```json
-    { "clusterId": "cluster-a", "op": "reconcile" }
-    ```
-
-    响应：`text/event-stream`；每个事件携带一行日志，最后是作为终态的 `GatewayOperation` 载荷。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    该流式接口是一种 HTTP 传输方式；与之等价的 Python 调用会直接运行该操作。
-
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    async def main() -> None:
-        ops = GatewayOpsService()
-        await ops.reconcile_cluster_gateway("cluster-a")          # op=reconcile
-        await ops.install_cluster_gateway("cluster-a")            # op=install-gateway
-        await ops.uninstall_inference_gateway("cluster-a")        # op=uninstall-gateway
-        await ops.install_ipp("cluster-a")                        # op=install-ipp
-        await ops.uninstall_ipp("cluster-a")                      # op=uninstall-ipp
-
-    asyncio.run(main())
-    ```
-  </TabItem>
-</Tabs>
-
-### 流式输出某个组件的日志
-
-流式输出（`kubectl logs -f`）某个数据面组件的实时日志。管理员数据面拓扑图使用该端点，以便实时查看 Gateway / IPP / EPP 的输出。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/model-service/admin/gateway/logs`**
-
-    请求体（`ComponentLogsRequest`）：
-    - `clusterId`（`string`）：目标集群。
-    - `component`（`string`，可选）：`gateway` 或 `ipp` —— 后端会据此解析出命名空间/名称。
-    - `namespace` / `name`（`string`，可选）：当未提供 `component` 时，显式指定坐标。
-    - `kind`（`string`，默认值 `deployment`）、`container`（`string`，可选）、`tail`（`integer`，默认值 `200`）。
-
-    ```json
-    { "clusterId": "cluster-a", "component": "gateway" }
-    ```
-
-    响应：`text/event-stream`；每个 `log` 事件携带一行日志，最后是一个作为终态的 `complete`。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
-
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService
-
-    async def main() -> None:
-        namespace, name = await GatewayOpsService().resolve_log_target(
-            "cluster-a", component="gateway", namespace=None, name=None
         )
-        async for line in GatewayOpsService().stream_component_logs("cluster-a", namespace, name, tail=50):
-            print(line)
+        print(group.id, group.name, group.status)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-## 内部端点（Edge ext_authz）
+### 查看用量
 
-这些 `/api/v1/internal/model-gateway/*` 路由只会被 Edge Envoy 的 `ext_authz` 过滤器和 llm-d EPP 调用，永远不会被 Lens 客户端直接调用；它们不携带任何 Lens 用户会话。
-
-### 对网关请求进行鉴权
-
-校验调用方的模型令牌，将请求的公开模型名称解析为该令牌可使用的一个活跃路由组，选择一个后端成员，并返回供 Edge Envoy 附加到上游请求的路由请求头。`GET /v1/models`（不带模型）只会做令牌校验；其他所有 HTTP 方法都会被接受，因为 Envoy 会转发客户端原始的请求方法。
+用量按请求记录。使用按日时间序列查看趋势，使用记录列表查看单个请求。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/internal/model-gateway/authorize`**（同时支持 `GET`/`PUT`/`PATCH`/`DELETE`，以及用于适配 Envoy 按集群划分路径形式的 `/authorize/{rest:path}`，例如 `.../authorize/cluster/<id>/...`）
 
-    请求：一个 JSON 请求体 `{"token": "...", "model": "..."}`，或者原始的 OpenAI 请求体，外加 `Authorization`/`x-api-key` 以及 `x-lens-model`/`x-gateway-base-model-name` 请求头。
+```bash
+curl "$LENS_URL/api/v1/model-service/usage/records?limit=50&offset=0"
+curl "$LENS_URL/api/v1/model-service/usage/timeseries?days=30"
+```
 
-    响应：成功时为 `200`，并附带 `AuthorizeResult` 载荷，以及供 Edge 转发到上游的 `x-lens-*` / `x-ai-eg-model` / `x-llm-d-inference-fairness-id` 路由请求头；失败时为 `401`（`token_invalid`）或 `404`（`model_not_found`）。
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import AuthorizeRequest
-    from llm_d_lens.model_service.service import default_service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    service = default_service()
-    result = service.authorize_request(
-        AuthorizeRequest(token="lens-mk-bTj9X7mW4zP1qN8sR6uC2yF5hL0aV3dK1mQ", model="qwen3-8b"),
-        cluster_id="cluster-a",
-    )
-    print(result.model_dump(mode="json", by_alias=True))
-    ```
-  </TabItem>
-</Tabs>
+```python
+from llm_d_lens.sdk import LensLocal
 
-### 记录推理使用量
+with LensLocal("<username>") as lens:
+    import asyncio
 
-将一次已完成推理的 token 使用情况记录到流水账中。该端点由 llm-d EPP/使用量同步流程调用；按 `requestId` 做幂等处理。
+    async def main() -> None:
+        records = await lens.model_services.usage_records(limit=50, offset=0)
+        for record in records.items:
+            print(record.group_name, record.input_tokens, record.output_tokens)
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/internal/model-gateway/record-usage`**
+        totals = await lens.model_services.usage_timeseries(days=30)
+        for item in totals.items:
+            print(item.date, item.requests, item.output_tokens)
 
-    请求体（`UsageRecordRequest`）：字段与 `UsageRecord`（参见“列出使用记录”）相同，以 `requestId` 作为键。
+    asyncio.run(main())
+```
 
-    响应：
-
-    ```json
-    { "recorded": true, "id": "usg-8c2d9e1fa410" }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.contracts import UsageRecordRequest
-    from llm_d_lens.model_service.service import default_service
-
-    service = default_service()
-    record = service.record_usage(UsageRecordRequest(requestId="req-20260923-0001", inputTokens=512, outputTokens=196))
-    print(record.id)
-    ```
   </TabItem>
 </Tabs>
 
-### 列出某个指定用户可调用的模型
+## 端点
 
-返回给定用户 ID 可调用的模型名称，用于为该用户提供 `/v1/models` 服务。
+面向使用者和 API 密钥的端点：
 
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/internal/model-gateway/models?user_id=user-123`**
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/model-service/tokens` | `model-service:token:manage` | 列出你的有效 API 密钥。 |
+| POST | `/api/v1/model-service/tokens` | `model-service:token:manage` | 创建密钥；明文只返回一次。 |
+| POST | `/api/v1/model-service/tokens/regenerate` | `model-service:token:manage` | 吊销有效密钥并签发替代密钥。 |
+| DELETE | `/api/v1/model-service/tokens/{token_id}` | `model-service:token:manage` | 吊销一个密钥。 |
+| GET | `/api/v1/model-service/models` | `model-service:inference:use` | 列出你可以调用的模型。 |
+| GET | `/api/v1/model-service/connection` | `model-service:inference:use` | 获取各集群的网关基础 URL。 |
+| GET | `/api/v1/model-service/usage/records` | `model-service:usage:read` | 列出你的近期用量。 |
+| GET | `/api/v1/model-service/usage/timeseries` | `model-service:usage:read` | 获取每日 token 总量。 |
+| GET | `/v1/models` | 模型 token | 兼容 OpenAI 的模型列表。 |
+| POST | `/v1/chat/completions` | 模型 token | 兼容 OpenAI 的聊天补全。 |
 
-    响应：一个 `items` 数组，其中每个元素都是 `ModelServiceGroup` 载荷（结构与“列出可访问的模型”相同）。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.model_service.service import default_service
+### 管理
 
-    service = default_service()
-    for group in service.list_models_for_user("user-123"):
-        print(group.api_payload())
-    ```
-  </TabItem>
-</Tabs>
+这些操作需要集群范围的模型服务权限。
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/model-service/admin/groups[/{group_id}]` | `model-service:group:read` | 列出或获取模型服务。 |
+| POST | `/api/v1/model-service/admin/groups` | `model-service:group:manage` | 创建模型服务，可选择同时加入一个部署。 |
+| POST | `/api/v1/model-service/admin/groups/publish` | `model-service:member:manage` | 将就绪部署发布为新模型。 |
+| PATCH | `/api/v1/model-service/admin/groups/{group_id}` | `model-service:group:manage` | 更新元数据或状态。 |
+| POST | `/api/v1/model-service/admin/groups/{group_id}/status` | `model-service:group:toggle` | 启用或停用模型。 |
+| DELETE | `/api/v1/model-service/admin/groups/{group_id}` | `model-service:group:remove` | 删除空模型。 |
+| GET/POST/DELETE | `/api/v1/model-service/admin/groups/{group_id}/access[/{binding_id}]` | `model-service:group:share` | 列出、授予或撤销推理访问权限。 |
+| PUT | `/api/v1/model-service/admin/groups/{group_id}/traffic` | `model-service:member:manage` | 替换提供方权重。 |
+| PUT | `/api/v1/model-service/admin/groups/{group_id}/providers/status` | `model-service:member:manage` | 启动或停止所有提供方。 |
+| GET | `/api/v1/model-service/admin/members` | `model-service:group:read` | 列出已发布的提供方。 |
+| POST | `/api/v1/model-service/admin/members` | `model-service:member:manage` | 向现有模型添加提供方。 |
+| PATCH/DELETE | `/api/v1/model-service/admin/members/{member_id}` | `model-service:member:manage` | 更改或移除提供方。 |
+| GET | `/api/v1/model-service/admin/deployments` | `model-service:group:read` | 列出可发布的部署。 |
+| GET | `/api/v1/model-service/admin/usage[/analytics]` | `usage:report:read` | 查看跨用户、模型和集群的用量。 |
+
+## 错误 / 限制
+
+- **模型 token 只返回一次。** 只有 `POST /api/v1/model-service/tokens` 和 `POST /api/v1/model-service/tokens/regenerate` 的响应包含 `token`。其他响应只显示 `tokenHint`。请立即保存 token。
+- **访问同时需要集群权限和模型授权。** 使用者需要在模型所属集群拥有推理权限，并在该模型上拥有直接或用户组授权。部署所有权不会授予推理访问权限。
+- **模型名称是集群范围的。** 不同集群可以存在相同的公开名称。使用 `clusterName` 选择正确的网关。
+- **模型需要至少一个活动、在线且权重为正的提供方。** 已停用的模型、离线的提供方和零权重提供方不会收到流量。
+- **发布需要同一集群中的就绪部署。** 公开名称重复会返回 `409`；请将该部署添加为成员，或选择其他名称。
+- **只有空模型可以删除。** 只要还关联任何提供方（包括离线或零权重提供方），就会返回 `409 model_group_conflict`。
+- **已保存状态可能在路由失败后仍保留。** 返回 `502` 且带有 `model_publication_apply_failed` 或 `model_traffic_apply_failed` 时，表示更改已保存但路由未应用；修复原因后重试 **Reconcile**。`model_removal_failed` 会保留记录，以便重试移除。
+- **常见状态码。** 模型 token 缺失、过期或已吊销时返回 `401 token_invalid`；缺少权限或集群范围不足返回 `403`；资源不存在返回 `404`；冲突返回 `409`；输入无效返回 `422`。
+- **分页限制。** 用量记录接受最大为 `500` 的 `limit`；时间序列接受 `1` 到 `365` 的 `days`。
+- **缓存 token 计数取决于引擎。** 用量账本支持缓存输入 token 和缓存写入 token，但某些引擎只报告输入和输出 token，因此这些字段可能为 `0`。
+
+## 相关
+
+- [模型服务用户指南](/user-guide/model-services)
+- [集成](/integrations) — 将兼容 OpenAI 的客户端和框架指向已发布的模型。
+- [API 参考约定](/api-reference) — 认证、错误和字段命名。
+- OpenAPI schema：`/api/v1/simulation/openapi.json`（Swagger UI 位于 `/api/v1/simulation/docs`）。

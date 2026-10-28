@@ -17,6 +17,12 @@ shell/Compose/Helm values 中导出它们。大多数变量在本地开发环境
 | `LENS_SECRET_KEY` | 用于加密已存储的外部服务提供方密钥的主密钥。未设置时，Lens 会在首次启动时在 `<LENS_DATA_DIR>/credentials/master_key.json`（权限 600）下生成一个；设置该变量可以固定密钥，或使**主密钥**页面变为只读。 | 首次启动时生成并存储 |
 | `LENS_SECRET_KEYS_OLD` | 以逗号分隔的历史主密钥列表，在轮换之后用作解密回退。 | `""` |
 | `LENS_INTERNAL_AUTH_SECRET` | 用于内部服务间调用（例如智能体式部署规划回调）的共享密钥。 | `""` |
+| `LENS_AUTH_JWT_SECRET` | 短期 Bearer Access Token 的签名密钥。未设置时 Lens 会从主密钥派生稳定密钥；生产环境建议显式设置。 | 从主密钥派生 |
+| `LENS_AUTH_JWT_SECRETS_OLD` | 以逗号分隔的历史 Access Token 签名密钥，用于密钥轮换。 | `""` |
+| `PRISM_ACCESS_TOKEN_TTL_SECONDS` | Bearer Access Token 有效期（秒）。 | `1800` |
+| `PRISM_ACCESS_TOKEN_AUDIENCE` | API 校验的 JWT audience。 | `lens-api` |
+| `PRISM_AUTH_COOKIE_FALLBACK` | 客户端迁移到 Bearer 期间保留 Cookie + CSRF 认证。 | `True` |
+| `PRISM_AUTH_LEGACY_OPAQUE_BEARER` | 迁移期间允许在 `Authorization: Bearer` 中继续使用旧的 opaque session token。 | `True` |
 | `PRISM_EXPOSE_API_DOCS` | 是否暴露 FastAPI 的 `/docs` 页面。 | `True` |
 
 ## 数据库
@@ -44,7 +50,7 @@ shell/Compose/Helm values 中导出它们。大多数变量在本地开发环境
 | `LENS_GATEWAY_EXPOSURE_INTERVAL_SECONDS` | Lens 为每个集群已暴露的 Gateway 端口重新建立公共 `0.0.0.0` 隧道的间隔。 | `60` |
 | `LENS_GATEWAY_USAGE_INTERVAL_SECONDS` | Lens 将每个集群 Prometheus 中的 llm-d EPP token 计数同步到用量台账的间隔。设为 `0` 可禁用。 | `60` |
 | `LENS_WELCOME_CHECK_INTERVAL_SECONDS` | Lens 刷新并保存欢迎页问题快照的间隔。设为 `0` 可禁用后台检查。 | `60` |
-| `LENS_MODEL_GATEWAY_AUTHZ_HOST` | 当某个集群未设置自己的**Lens authz 地址**时，作为后备使用的 Lens ext_authz 地址。优先使用按集群配置的值（创建/编辑集群表单 → `GET /api/cluster/lens-hosts`）。设置后，Gateway 会注入调用方身份（`x-llm-d-inference-fairness-id`）以支持按用户统计用量。 | *(未设置)* |
+| `LENS_MODEL_GATEWAY_AUTHZ_HOST` | 当某个集群未设置自己的**Lens authz 地址**时，作为后备使用的 Lens ext_authz 地址。优先使用按集群配置的值（创建/编辑集群表单 → `GET /api/v1/cluster/lens-hosts`）。设置后，Gateway 会注入调用方身份（`x-llm-d-inference-fairness-id`）以支持按用户统计用量。 | *(未设置)* |
 | `LENS_MODEL_GATEWAY_AUTHZ_PORT` | Gateway 使用的 Lens ext_authz 后端端口。 | `8081` |
 | `LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE` | 让 Istio 共享 Gateway 向 `lens-authz` Service 发起 TLS，但**跳过证书校验**。仅在 Lens 通过 HTTPS 提供 authz、且 Istio 无法验证该证书（例如本地自签名证书）时需要。**安全警告：** 这会让链路上的攻击者冒充 authz 服务、伪造授权结果并注入身份头；只能用于可信的本地/开发网络，绝不能用于生产。关闭该开关时，Lens 会删除这个不校验证书的 DestinationRule。本地 HTTPS 启动器会自动启用。只有在 authz 使用纯 HTTP，或集群信任该证书时才应关闭；否则 authz 会 fail closed。 | 未设置（本地 HTTPS 时为 `1`） |
 

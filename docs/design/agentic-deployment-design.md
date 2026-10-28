@@ -525,7 +525,7 @@ must call only `get_cluster_overview` and `search_candidates(sourceIds=["aic"])`
 Only when ordinary search returns no AIC candidates should it call
 `search_aic_with_relaxation(clusterId, workload, searchConfig)` (if available). This tool
 extracts the available GPU budget from cluster overview, then calls
-`POST /api/candidate-search/relaxed`. With the same model, ISL/OSL, hardware, and GPU budget,
+`POST /api/v1/candidate-search/relaxed`. With the same model, ISL/OSL, hardware, and GPU budget,
 the API tries original TTFT/TPOT limits, 1.25x limits, 1.5x limits, then no latency limits,
 stopping at a complete, resource-feasible result. It returns `attempts`, `candidates`, an
 `anchor` selected by relative violation of the original targets, `sloSatisfied`, and the

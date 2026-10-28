@@ -15,6 +15,7 @@ import os
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -26,9 +27,9 @@ from llm_d_lens.api.speech_models import router as speech_models_router
 from llm_d_lens.api.web import WebEntryMiddleware
 from llm_d_lens.api.web import router as web_router
 from llm_d_lens.auth.bootstrap import ensure_initial_admin, format_initial_admin_banner
-from llm_d_lens.auth.context import AuthContextMiddleware, require_route_permission
+from llm_d_lens.auth.context import AuthContextMiddleware, require_route_permission, with_principal_context
 from llm_d_lens.auth.maintenance import run_maintenance
-from llm_d_lens.auth.master_key import ensure_master_key
+from llm_d_lens.auth.master_key import ensure_master_key, resolve_master_key
 from llm_d_lens.auth.router import router as auth_router
 from llm_d_lens.auth.routes import validate_route_registry
 from llm_d_lens.auth.service import default_service as default_auth_service
@@ -40,7 +41,6 @@ from llm_d_lens.cluster.errors import ClusterOverviewError
 from llm_d_lens.cluster.router import legacy_router
 from llm_d_lens.cluster.router import router as cluster_management_router
 from llm_d_lens.configuration import router as configuration_router
-from llm_d_lens.configuration.router import legacy_router as legacy_configuration_router
 from llm_d_lens.dashboard.collector import reset_collector
 from llm_d_lens.dashboard.router import router as dashboard_router
 from llm_d_lens.db.system_router import router as system_database_router
@@ -73,12 +73,34 @@ app = FastAPI(
     title="Lens API",
     description="Model, inference, evaluation and cluster management backend for Lens",
     version="1.0.0",
-    docs_url="/api/simulation/docs" if auth_settings.expose_api_docs else None,
-    redoc_url="/api/simulation/redoc" if auth_settings.expose_api_docs else None,
-    openapi_url="/api/simulation/openapi.json" if auth_settings.expose_api_docs else None,
-    dependencies=[Depends(require_route_permission)],
+    docs_url="/api/v1/simulation/docs" if auth_settings.expose_api_docs else None,
+    redoc_url="/api/v1/simulation/redoc" if auth_settings.expose_api_docs else None,
+    openapi_url="/api/v1/simulation/openapi.json" if auth_settings.expose_api_docs else None,
+    dependencies=[Depends(require_route_permission), Depends(with_principal_context)],
 )
 install_problem_handlers(app)
+
+
+def _custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    components = schema.setdefault("components", {}).setdefault("securitySchemes", {})
+    components.setdefault(
+        "BearerAuth",
+        {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
+    )
+    schema["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi
 app.add_middleware(AuthContextMiddleware)
 app.add_middleware(WebEntryMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -227,6 +249,11 @@ async def _auth_startup() -> None:
     service.ensure_builtin_roles()
     current_settings = get_auth_settings()
     ensure_master_key(current_settings)
+    if not current_settings.access_token_secret and not resolve_master_key(current_settings).primary:
+        logger.warning(
+            "Access tokens use a process-local ephemeral key. Configure LENS_AUTH_JWT_SECRET "
+            "or LENS_SECRET_KEY before running multiple workers or replicas."
+        )
     initial = ensure_initial_admin(service, current_settings)
     if initial is not None:
         banner = format_initial_admin_banner(initial)
@@ -331,7 +358,6 @@ app.include_router(cluster_management_router)
 app.include_router(cluster_bootstrap_router)
 app.include_router(legacy_router)
 app.include_router(configuration_router)
-app.include_router(legacy_configuration_router)
 app.include_router(deploy_router)
 app.include_router(legacy_poc_router)
 app.include_router(guide_planning_router)
@@ -358,8 +384,9 @@ app.include_router(model_service_public_router)
 app.include_router(versions_router)
 
 
-@app.get("/api/health", tags=["system"])
-@app.get("/api/simulation/health", include_in_schema=False)
+@app.get("/api/v1/health", tags=["system"])
+@app.get("/api/health", include_in_schema=False)
+@app.get("/api/v1/simulation/health", include_in_schema=False)
 @app.get("/healthz", include_in_schema=False)
 async def health() -> dict[str, str]:
     return {

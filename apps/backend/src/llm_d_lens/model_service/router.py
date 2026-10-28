@@ -62,6 +62,17 @@ from llm_d_lens.model_service.gateway_ops import (
     gateway_base_url,
     local_public_ip,
 )
+from llm_d_lens.model_service.models import (
+    ModelServiceAdminResponse,
+    ModelServiceConnectionResponse,
+    ModelServiceInternalResponse,
+    ModelServiceModelListResponse,
+    ModelServiceModelResponse,
+    ModelTokenListResponse,
+    ModelTokenResponse,
+    UsageRecordsResponse,
+    UsageTimeseriesResponse,
+)
 from llm_d_lens.model_service.service import (
     ModelServiceConflictError,
     ModelServiceNotFoundError,
@@ -166,30 +177,35 @@ async def _apply_publication_change(cluster_ids: list[str], *, actor: str | None
     description="List the caller's active model access tokens. Plaintext token values are never returned.",
     operation_id="list_model_service_tokens",
 )
-async def list_tokens(request: Request) -> dict:
+async def list_tokens(request: Request) -> ModelTokenListResponse:
     user_id = _user_id(request)
-    return {"items": [token.api_payload() for token in _service.tokens.list_for_user(user_id, include_revoked=False)]}
+    return ModelTokenListResponse(
+        items=[
+            ModelTokenResponse.model_validate(token.api_payload())
+            for token in _service.tokens.list_for_user(user_id, include_revoked=False)
+        ]
+    )
 
 
 @router.post("/tokens", status_code=201, summary="Create a model access token; plaintext returned once.")
-async def create_token(request: Request, body: TokenCreateRequest) -> dict:
+async def create_token(request: Request, body: TokenCreateRequest) -> ModelTokenResponse:
     user_id = _user_id(request)
     token, raw = _service.tokens.create(user_id, name=body.name)
     payload = token.api_payload()
     payload["token"] = raw
     logger.info("event=model_token_created user_id=%s token_id=%s", user_id, token.id)
-    return payload
+    return ModelTokenResponse.model_validate(payload)
 
 
 @router.post("/tokens/regenerate", summary="Revoke the active token(s) and issue a new one.")
-async def regenerate_token(request: Request, body: TokenCreateRequest | None = None) -> dict:
+async def regenerate_token(request: Request, body: TokenCreateRequest | None = None) -> ModelTokenResponse:
     user_id = _user_id(request)
     name = body.name if body is not None else "default"
     token, raw = _service.tokens.regenerate(user_id, name=name)
     payload = token.api_payload()
     payload["token"] = raw
     logger.info("event=model_token_regenerated user_id=%s token_id=%s", user_id, token.id)
-    return payload
+    return ModelTokenResponse.model_validate(payload)
 
 
 @router.delete(
@@ -219,9 +235,11 @@ async def revoke_token(token_id: str, request: Request) -> Response:
     "Includes the cluster display name.",
     operation_id="list_model_service_models",
 )
-async def list_models(request: Request) -> dict:
+async def list_models(request: Request) -> ModelServiceModelListResponse:
     user_id = _user_id(request)
-    return {"items": _service.list_model_entries_for_user(user_id)}
+    return ModelServiceModelListResponse(
+        items=[ModelServiceModelResponse.model_validate(item) for item in _service.list_model_entries_for_user(user_id)]
+    )
 
 
 @router.get(
@@ -233,7 +251,7 @@ async def list_models(request: Request) -> dict:
     ),
     operation_id="get_model_service_connection",
 )
-async def model_service_connection(request: Request) -> dict:
+async def model_service_connection(request: Request) -> ModelServiceConnectionResponse:
     """Per-cluster Gateway base URLs a client copies into its OpenAI client.
 
     Each cluster runs its own shared Gateway with its own address, so callers get
@@ -268,7 +286,7 @@ async def model_service_connection(request: Request) -> dict:
                 "ready": bool(cluster.gateway_ready),
             }
         )
-    return {"baseUrl": global_url, "clusters": clusters}
+    return ModelServiceConnectionResponse.model_validate({"baseUrl": global_url, "clusters": clusters})
 
 
 @public_router.get(
@@ -307,10 +325,10 @@ async def public_list_models(request: Request) -> Response:
     description="List the caller's recent model inference usage records, newest first, with limit and offset.",
     operation_id="list_model_service_usage_records",
 )
-async def usage_records(request: Request, limit: int = 100, offset: int = 0) -> dict:
+async def usage_records(request: Request, limit: int = 100, offset: int = 0) -> UsageRecordsResponse:
     user_id = _user_id(request)
     records = _service.usage.list_for_user(user_id, limit=min(max(limit, 1), 500), offset=max(offset, 0))
-    return {"items": [record.api_payload() for record in records]}
+    return UsageRecordsResponse(items=[record.api_payload() for record in records])
 
 
 @router.get(
@@ -319,11 +337,11 @@ async def usage_records(request: Request, limit: int = 100, offset: int = 0) -> 
     description="Return daily token totals for the caller over the requested number of days.",
     operation_id="get_model_service_usage_timeseries",
 )
-async def usage_timeseries(request: Request, days: int = 30) -> dict:
+async def usage_timeseries(request: Request, days: int = 30) -> UsageTimeseriesResponse:
     user_id = _user_id(request)
     since = datetime.now(tz=None) - timedelta(days=max(1, min(days, 365)))
     records = _service.usage.list_for_user(user_id, since=since.replace(tzinfo=None), limit=10000)
-    return {"items": _daily_totals(records)}
+    return UsageTimeseriesResponse(items=_daily_totals(records))
 
 
 def _daily_totals(records) -> list[dict]:
@@ -1153,3 +1171,29 @@ async def internal_record_usage(body: UsageRecordRequest) -> dict:
 @internal_router.get("/models", summary="Model names a specific user may call (for /v1/models).")
 async def internal_models(user_id: str) -> dict:
     return {"items": [group.api_payload() for group in _service.list_models_for_user(user_id)]}
+
+
+for _route in router.routes:
+    _name = getattr(getattr(_route, "endpoint", None), "__name__", "")
+    if _name == "list_tokens":
+        _route.response_model = ModelTokenListResponse
+    elif _name in {"create_token", "regenerate_token"}:
+        _route.response_model = ModelTokenResponse
+    elif _name == "list_models":
+        _route.response_model = ModelServiceModelListResponse
+    elif _name == "model_service_connection":
+        _route.response_model = ModelServiceConnectionResponse
+    elif _name == "usage_records":
+        _route.response_model = UsageRecordsResponse
+    elif _name == "usage_timeseries":
+        _route.response_model = UsageTimeseriesResponse
+
+
+for _route in admin_router.routes:
+    if getattr(_route, "response_model", None) is dict:
+        _route.response_model = ModelServiceAdminResponse
+
+
+for _route in internal_router.routes:
+    if getattr(_route, "response_model", None) is dict:
+        _route.response_model = ModelServiceInternalResponse

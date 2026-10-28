@@ -54,7 +54,7 @@ export default function WelcomeIssuesPage({
 
     useEffect(() => {
         let cancelled = false;
-        requestJson('/api/cluster/clusters')
+        requestJson('/api/v1/cluster/clusters')
             .then((payload) => {
                 if (!cancelled) setClusters(payload?.items || []);
             })

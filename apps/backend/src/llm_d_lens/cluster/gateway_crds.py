@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from llm_d_lens.cluster.models import (
+    GatewayCrdApplyResult,
+    GatewayCrdsApplyResponse,
+    GatewayCrdsStatusResponse,
+)
 from llm_d_lens.infrastructure.kubernetes import scoped_runner
 from llm_d_lens.versions import stack
 
@@ -38,7 +43,7 @@ def manifest_urls() -> dict[str, str]:
     }
 
 
-async def apply_gateway_crds(cluster_id: str) -> dict[str, Any]:
+async def apply_gateway_crds(cluster_id: str) -> GatewayCrdsApplyResponse:
     """Apply both pinned CRD bundles; returns a per-bundle result.
 
     A bundle can contain optional resources a given Kubernetes version rejects
@@ -47,7 +52,7 @@ async def apply_gateway_crds(cluster_id: str) -> dict[str, Any]:
     *required* CRDs are present after the apply, not by ``kubectl``'s exit code.
     """
     runner = scoped_runner(cluster_id)
-    results: dict[str, Any] = {}
+    results: dict[str, dict[str, Any]] = {}
     for key, url in manifest_urls().items():
         # Server-side apply handles CRDs that already exist from an earlier
         # (client-side) install, which plain `kubectl apply` rejects with a
@@ -58,17 +63,30 @@ async def apply_gateway_crds(cluster_id: str) -> dict[str, Any]:
         message = (result.stderr or result.stdout or "").strip()
         results[key] = {"ok": result.returncode == 0, "message": message[:500]}
     status = await gateway_crds_status(cluster_id)
-    for key, presence in status.items():
-        results[key]["ok"] = presence == "ready"
-    return results
+    results["gateway_api"]["ok"] = status.gateway_api == "ready"
+    results["gateway_api_inference_extension"]["ok"] = status.gateway_api_inference_extension == "ready"
+    return GatewayCrdsApplyResponse(
+        gateway_api=GatewayCrdApplyResult(**results["gateway_api"]),
+        gateway_api_inference_extension=GatewayCrdApplyResult(**results["gateway_api_inference_extension"]),
+    )
 
 
-async def gateway_crds_status(cluster_id: str) -> dict[str, str]:
+async def gateway_crds_status(cluster_id: str) -> GatewayCrdsStatusResponse:
     """Report ``ready``/``missing`` per CRD bundle by listing the CRDs."""
     runner = scoped_runner(cluster_id)
     result = await runner.run(["kubectl", "get", "crd", "-o", "name"], timeout=_QUERY_TIMEOUT)
     names = result.stdout.split() if result.returncode == 0 else []
-    return {
-        key: "ready" if all(any(name.endswith(crd) for name in names) for crd in required) else "missing"
-        for key, required in _REQUIRED_CRDS.items()
-    }
+    return GatewayCrdsStatusResponse(
+        gateway_api=(
+            "ready"
+            if all(any(name.endswith(crd) for name in names) for crd in _REQUIRED_CRDS["gateway_api"])
+            else "missing"
+        ),
+        gateway_api_inference_extension=(
+            "ready"
+            if all(
+                any(name.endswith(crd) for name in names) for crd in _REQUIRED_CRDS["gateway_api_inference_extension"]
+            )
+            else "missing"
+        ),
+    )

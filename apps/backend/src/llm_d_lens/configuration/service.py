@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from llm_d_lens.cluster import require_active_session
+from llm_d_lens.deploy.capabilities import deployment_capabilities
 from llm_d_lens.deploy.contracts import DeployableConfiguration
 from llm_d_lens.infrastructure.artifacts.manifests import (
     configuration_checksum,
@@ -31,6 +32,7 @@ from .guide_settings import validate_configuration_extensions
 from .manifest_facts import validate_manifest_facts
 from .models import (
     ConfigurationArtifactRecord,
+    ConfigurationCapabilitiesResponse,
     ConfigurationFile,
     RenderRequest,
     RenderResponse,
@@ -46,6 +48,10 @@ from .validators import validate_candidate
 
 CONFIGURATION_OUTPUT_DIR = storage_path("data", "artifacts", "configurations")
 CONFIGURATION_ARTIFACT_DIR = storage_path("data", "metadata", "configurations")
+
+
+def configuration_capabilities() -> ConfigurationCapabilitiesResponse:
+    return ConfigurationCapabilitiesResponse(providers=deployment_capabilities())
 
 
 async def resolve_configurations(request: ResolveRequest) -> ResolveResponse:

@@ -20,7 +20,7 @@ def test_smoke_start_preserves_response_and_manifest(monkeypatch):
     launch = Mock()
     monkeypatch.setattr(poc, "launch", launch)
     monkeypatch.setenv("PRISM_K8S_TARGET_NODE", "worker-1")
-    response = TestClient(app).post("/api/deploy-poc/start", json={"config": "smoke-pause"})
+    response = TestClient(app).post("/api/v1/deploy-poc/start", json={"config": "smoke-pause"})
     assert response.json() == {"namespace": "prism-smoke-test", "config": "smoke-pause", "phase": "deploying"}
     arguments = launch.call_args.args
     namespace, pod = yaml.safe_load_all(arguments[5])
@@ -34,7 +34,7 @@ def test_invalid_session_never_falls_back(monkeypatch, operation):
     launch = Mock()
     monkeypatch.setattr(poc, "launch", launch)
     response = TestClient(app).post(
-        f"/api/deploy-poc/{operation}",
+        f"/api/v1/deploy-poc/{operation}",
         json={
             "config": "smoke-pause",
             "clusterSessionId": "not-a-session",
@@ -48,7 +48,7 @@ def test_running_deploy_returns_conflict(monkeypatch):
     launch = Mock()
     monkeypatch.setattr(poc, "launch", launch)
     poc.jobs["prism-smoke-test"] = {"action": "deploy", "phase": "running"}
-    response = TestClient(app).post("/api/deploy-poc/start", json={"config": "smoke-pause"})
+    response = TestClient(app).post("/api/v1/deploy-poc/start", json={"config": "smoke-pause"})
     assert response.status_code == 409
     launch.assert_not_called()
 
@@ -57,10 +57,10 @@ def test_validation_and_status_preserve_contract(monkeypatch):
     state = {"status": "ready", "pods_total": 2, "pods_ready": 2, "gateway_endpoint": "http://gateway"}
     monkeypatch.setattr(poc, "cluster_status", AsyncMock(return_value=(state, None)))
     client = TestClient(app)
-    validation = client.get("/api/deploy-poc/validate").json()
+    validation = client.get("/api/v1/deploy-poc/validate").json()
     assert validation["ready"] is True
     assert validation["passed"] == validation["total"] == 4
-    status = client.get("/api/deploy-poc/status").json()
+    status = client.get("/api/v1/deploy-poc/status").json()
     assert status["k8s"] == state
     assert status["job"] is None
     assert status["k8sError"] is None
@@ -94,7 +94,7 @@ def test_request_cannot_select_executable(monkeypatch, operation, config):
     monkeypatch.setenv("KUBECTL_BIN", "/trusted/kubectl")
     monkeypatch.setenv("OPTIMALBENCH_BIN", "/trusted/llm-d-bench")
     response = TestClient(app).post(
-        f"/api/deploy-poc/{operation}",
+        f"/api/v1/deploy-poc/{operation}",
         json={"config": config, "namespace": "user-selected", "executable": "/untrusted/program"},
     )
     assert response.status_code == 200

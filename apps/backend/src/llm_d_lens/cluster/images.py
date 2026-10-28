@@ -18,6 +18,11 @@ import os
 import shlex
 from typing import Any
 
+from llm_d_lens.cluster.models import (
+    ImagePrepullImageStatus,
+    ImagePrepullNodeStatus,
+    ImagePrepullStatusResponse,
+)
 from llm_d_lens.hardware.resolver import resolve_by_accelerator_key
 from llm_d_lens.infrastructure.kubernetes import scoped_runner
 from llm_d_lens.versions import (
@@ -138,11 +143,13 @@ def render_image_puller_daemonset(images: list[str], *, namespace: str, name: st
     return yaml.safe_dump(manifest, sort_keys=False)
 
 
-async def start_image_prepull(cluster_id: str, accelerators: list[str], provider: str | None = None) -> dict[str, Any]:
+async def start_image_prepull(
+    cluster_id: str, accelerators: list[str], provider: str | None = None
+) -> ImagePrepullStatusResponse:
     """Apply the puller DaemonSet for the selected accelerators/provider."""
     images = prepull_images(accelerators, provider)
     if not images:
-        return {"state": "idle", "desired": 0, "ready": 0, "nodes": [], "images": []}
+        return ImagePrepullStatusResponse(state="idle", desired=0, ready=0, nodes=[], images=[])
     _LAST_IMAGES[cluster_id] = images
     runner = scoped_runner(cluster_id)
     namespace_manifest = json.dumps({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": IMAGES_NAMESPACE}})
@@ -152,7 +159,7 @@ async def start_image_prepull(cluster_id: str, accelerators: list[str], provider
     return await image_prepull_status(cluster_id, images=images)
 
 
-async def image_prepull_status(cluster_id: str, *, images: list[str] | None = None) -> dict[str, Any]:
+async def image_prepull_status(cluster_id: str, *, images: list[str] | None = None) -> ImagePrepullStatusResponse:
     """Read the puller DaemonSet's per-node readiness."""
     resolved_images = images if images is not None else _LAST_IMAGES.get(cluster_id, [])
     runner = scoped_runner(cluster_id)
@@ -161,7 +168,7 @@ async def image_prepull_status(cluster_id: str, *, images: list[str] | None = No
         timeout=_QUERY_TIMEOUT,
     )
     if result.returncode != 0:
-        return {"state": "idle", "desired": 0, "ready": 0, "nodes": [], "images": []}
+        return ImagePrepullStatusResponse(state="idle", desired=0, ready=0, nodes=[], images=[])
     desired = int(json.loads(result.stdout).get("status", {}).get("desiredNumberScheduled") or 0)
 
     pods = await runner.run(
@@ -211,7 +218,13 @@ async def image_prepull_status(cluster_id: str, *, images: list[str] | None = No
     else:
         state = "pulling"
     ready = sum(1 for entry in per_image if entry["state"] == "ready")
-    return {"state": state, "desired": desired, "ready": ready, "nodes": nodes, "images": per_image}
+    return ImagePrepullStatusResponse(
+        state=state,
+        desired=desired,
+        ready=ready,
+        nodes=[ImagePrepullNodeStatus(**node) for node in nodes],
+        images=[ImagePrepullImageStatus(**entry) for entry in per_image],
+    )
 
 
 async def stop_image_prepull(cluster_id: str) -> None:

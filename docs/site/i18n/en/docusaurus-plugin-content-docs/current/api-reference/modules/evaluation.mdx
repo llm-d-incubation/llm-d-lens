@@ -1,1470 +1,426 @@
 ---
 title: Evaluation
-description: Benchmark-run and evaluation-workflow APIs behind Lens Evaluate.
+description: Benchmark deployments and compare model configurations with the REST API or in-process Python SDK.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-Benchmark execution records may include `harness_pod_label` (the current CLI
-invocation's unique app label) and `harness_pods` (Pod names mapped to UID, phase
-and container states). The existing execution path in
-`llm_d_bench.evaluate.router` passes this label as `harness.podLabel` to upstream
-and calls `llm_d_bench.evaluate.harness_watch.watch_harness` with the same run
-record. These fields are diagnostics, not user-supplied selectors. Explicit
-harness `OOMKilled` errors receive host-memory guidance; plain exit 137 remains
-unclassified.
+Lens Evaluate measures a ready deployment execution or a published Model Service, or deploys a configuration and benchmarks it in one workflow. Use this module to run throughput and latency tests, compare configurations, inspect saved results, and clean up runs. A benchmark requires a ready execution with an endpoint and an active cluster session.
 
+## Quick start
 
-## Harness proxy compatibility
-
-Lens preserves HTTP(S) proxies for external downloads while forwarding cluster
-addresses and CIDRs through `NO_PROXY`. Kubernetes Python client 35.0.0 can
-discard that value, causing accelerator detection to send Kubernetes API requests
-through the proxy and fail certificate verification.
-
-Runtime preparation applies the known SDK correction to both the host CLI
-environment and the selected checkout's harness Pod template. Newly created Pods
-repair the affected client before starting the original harness command, including
-warmup and matrix runs. Already-fixed clients remain unchanged; TLS verification
-and download proxies remain enabled. An incompatible template or a failure to
-write the affected container package stops startup with an explicit error rather
-than running without the correction.
-
-Existing Pods are not modified. A backend process without automatic reload must
-load the updated code before starting a new evaluation; do not restart it while
-it owns an active evaluation.
-
-## Concurrent backend instances
-
-Evaluation execution is protected by operating-system locks under
-`LENS_DATA_DIR/metadata/evaluations/locks`. Backends sharing evaluation records
-must share this directory on a filesystem supporting `flock`; sharing only the
-database with independent data directories is not supported by this guard.
-All participating backends must run the updated code. Separate development
-installations should use independent databases and data directories.
-
-Starting another backend does not mark a live owner's benchmark interrupted or
-launch the same workflow again. Locks remain held through asynchronous cleanup
-and are released automatically when the owning process exits. Automatic deployment
-cleanup is deferred while a benchmark still uses the deployment. A delayed duplicate
-executor cannot replay a completed workflow.
-
-Cancel, retry, and delete requests targeting work owned by another backend return
-HTTP `409` before changing records or cluster resources. Send the request to the
-backend executing that evaluation. Local cancellation retains ownership until its
-cleanup completes. The Python control callables enforce the same ownership checks.
-
-## Backend API
-
-Evaluation routes live in `llm_d_lens/evaluation/router.py` with the `/api/v1/evaluate` prefix. Request models are defined in `llm_d_lens.evaluation.models`; named HTTP response models are defined in `llm_d_lens.evaluation.api_models`.
-
-Run, workflow, case, and detail responses preserve additional stored fields. Optional fields absent from the record remain omitted; explicitly stored `null` values remain `null`. List responses retain their `{ "items": [...] }` envelope. Python route functions return dictionaries; FastAPI applies the named response models at the HTTP boundary.
-
-Errors use the application's `application/problem+json` response with `type`, `status`, `title`, `detail`, `code`, and an optional `requestId`. Client-error `detail` can contain structured validation errors; server-error `detail` is generic to avoid exposing internal exceptions. Authentication and resource permissions still apply; declaring a response model does not grant access.
-
-### Agentic benchmark evidence
-
-Existing run/detail REST responses and Python route dictionaries may include:
-
-- `benchmark_context`: versioned test-time model, hardware and runtime metadata,
-  source configuration checksum, capture/verification times and serving Pod identities.
-- `benchmark_context_error`: why collection or topology verification was unavailable.
-- `benchmark_model_metadata`: public descriptive model facts, API revision, lookup time
-  and whether that revision was pinned by the serving snapshot.
-- `benchmark_model_metadata_error`: best-effort public lookup failure, without failing archival.
-- `benchmark_hardware_metadata`: explicit historical operator declaration, declaration
-  time, configuration checksum and configured-card-count source; never a live observation.
-- `benchmark_evidence`: ingestion status (`stored`, `partial`, `skipped`, `error`),
-  eligible `record_ids`, `inserted_ids`, `existing_ids` and per-sample `issues`.
-  Missing/invalid evidence is not reported as stored. An evidence-storage error does
-  not change the original benchmark outcome.
-  Its `metadata` section reports missing descriptors, snapshot availability and lookup errors.
-
-No request fields are added. Both standalone and workflow benchmarks use the same
-terminal ingestion path. Cancelled/setup-only runs are ineligible. Failed samples
-require measured metrics, valid saved configuration/timestamps and an explicit failure reason.
-Each matrix point/stage has its own stable evidence ID. Missing optional performance
-metrics remain null; P95 values are read only from measured P95 distributions.
-Family, architecture, parameter counts, device details and runtime versions are optional.
-Each permanent record retains `provenance`; saved-configuration-only records are archived
-but excluded from predictive matching. Unknown hardware/quantization never matches another
-unknown value; missing runtime versions reduce similarity and confidence.
-
-Python normalization and ingestion use the same saved run dictionary:
-
-```python
-from llm_d_lens.evaluation.benchmark_evidence import ingest_evaluate_run, normalize_evaluate_run
-
-records, issues = normalize_evaluate_run(saved_run)
-preview = ingest_evaluate_run(saved_run, apply=False)
-```
-
-Neither call fetches current metadata or substitutes planning estimates. Only
-`ingest_evaluate_run(saved_run, apply=True)` appends eligible records. The administrator
-CLI `python -m llm_d_lens.evaluation.benchmark_evidence` defaults to preview, supports
-repeated `--run-id <uuid>` filters and requires `--apply` for writes. Preview reports
-`eligible` rather than `stored` for new valid records and uses `eligible_ids` instead
-of `inserted_ids`.
-Add `--enrich` for public model API/config lookup before normalization; failures are
-reported but do not block archival. Native lifecycle summaries are preferred over
-standardized YAML, including exact sibling members in `workspace.tar.zst`.
-Explicit historical hardware declarations require `--run-id` and all of
-`--hardware-accelerator`, `--hardware-vram-per-gpu-gib` and
-`--hardware-count-from-configuration`. Preview remains read-only; `--apply` persists
-the declaration and normalized records without changing their archive-only attribution.
-
-### Get benchmark defaults
-
-Get llm-d-benchmark default repository and runtime settings Lens Evaluate will use.
+Benchmark an existing ready deployment.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/evaluate/benchmark-defaults`**
 
-    Request: no body.
+```bash
+curl -sX POST http://127.0.0.1:3000/api/v1/evaluate/runs \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "deployment_execution_id": "<execution-id>",
+    "cluster_session_id": "<cluster-session-id>",
+    "workload": "sanity_random.yaml"
+  }'
+```
 
-    Response: HTTP `200`, `BenchmarkDefaultsResponse`.
+```json
+{
+  "kind": "benchmark",
+  "id": "<run-id>",
+  "status": "queued"
+}
+```
 
-    ```json
-    {
-      "mode": "managed-source",
-      "repository": "https://github.com/llm-d/llm-d-benchmark.git",
-      "revision": "main",
-      "localRuntimeConfigured": false
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-import asyncio
+from llm_d_lens.evaluation.models import EvaluateRunRequest
+from llm_d_lens.sdk import LensLocal
 
-from llm_d_lens.evaluation.router import benchmark_defaults
+with LensLocal("<username>") as lens:
+    import asyncio
 
+    async def main() -> None:
+        run = await lens.evaluation.create_run(
+            EvaluateRunRequest(
+                deployment_execution_id="<execution-id>",
+                cluster_session_id="<cluster-session-id>",
+                workload="sanity_random.yaml",
+            )
+        )
+        print(run.id, run.status)
 
-async def main() -> None:
-    defaults = await benchmark_defaults()
-    print(defaults["mode"], defaults["repository"], defaults["revision"])
-
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Estimate benchmark timing
+## Common tasks
+
+### Estimate benchmark time
+
+Preview the runtime and automatic timeout for a workload. This does not read or launch cluster resources.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
 
 **`POST /api/v1/evaluate/timing-estimate`**
 
-Accepts `BenchmarkSpec`, returns HTTP `200` with `BenchmarkTimingResponse`.
-Requires `evaluate:run:read` and the normal session/CSRF checks. This is a pure
-configuration preview: it does not access or launch a cluster resource.
+```json
+{
+  "parallelism": 1,
+  "matrix": [{"isl": 1024, "osl": 128}],
+  "concurrency_stages": [{"concurrency": 8, "num_requests": 96}]
+}
+```
+
+Response fields: `lower_seconds`, `upper_seconds`, `timeout_seconds`, `timeout_mode`, `assumptions`.
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.evaluation.models import BenchmarkSpec
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        timing = await lens.evaluation.estimate_timing(
+            BenchmarkSpec(
+                parallelism=1,
+                matrix=[{"isl": 1024, "osl": 128}],
+                concurrency_stages=[{"concurrency": 8, "num_requests": 96}],
+            )
+        )
+        print(timing.lower_seconds, timing.upper_seconds, timing.timeout_seconds)
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### Benchmark with a matrix and SLA targets
+
+Sweep input/output length points and attach optional targets. The run returns `202` when queued; poll it for progress.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/evaluate/runs`**
 
 ```json
 {
-  "wait_timeout_seconds": null,
-  "parallelism": 1,
-  "shared_prefix": {
-    "num_groups": 4,
-    "num_prompts_per_group": 5,
-    "system_prompt_len": 512,
-    "question_len": 128,
-    "output_len": 64,
-    "stages": [{"rate": 0.4, "duration": 20}, {"rate": 0.8, "duration": 20}]
+  "deployment_execution_id": "<execution-id>",
+  "cluster_session_id": "<cluster-session-id>",
+  "harness": "inference-perf",
+  "workload": "sanity_random.yaml",
+  "parallelism": 2,
+  "matrix": [{"isl": 1024, "osl": 128}],
+  "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
+  "sla_targets": {
+    "ttft_ms": 500,
+    "tpot_ms": 50,
+    "throughput_min_tps": 1000
   }
 }
 ```
 
-For this input, `measured_requests` is 24, `lower_seconds` is 160,
-`upper_seconds` is 340, and `timeout_seconds` is 900. The response also includes
-`basis` (`configuration` or `unknown`), `confidence` (`low`), `phases` (per-invocation
-lower/upper seconds), `timeout_mode`, `recommended_timeout_seconds`, nullable
-`timeout_warning`, and the explicit `assumptions` used for the estimate.
-
-Null or omitted `wait_timeout_seconds` selects automatic budgeting: 1.5 times the
-largest invocation's upper estimate plus 120 seconds, bounded to 900-14400 seconds.
-Explicit values from 1-14400 remain manual hard limits. Unknown workload timing
-returns null estimates/counts and an empty phase map, with a 7200-second automatic
-fallback. Supported estimates cover generated single-turn shared-prefix and
-explicit matrix/concurrency workloads with inference-perf; custom YAML and
-repository profiles remain unknown. Invalid input returns `422`.
+Response fields: `id`, `status`, `deployment_execution_id`, `matrix`, `sla_targets`.
 
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_bench.deploy.capabilities import shared_prefix_routing_workload
-from llm_d_bench.evaluate.models import BenchmarkSpec
-from llm_d_bench.evaluate.timing import benchmark_timing
+from llm_d_lens.evaluation.models import BenchmarkSlaTargets, EvaluateRunRequest
+from llm_d_lens.sdk import LensLocal
 
-spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload())
-timing = benchmark_timing(spec)
-print(timing["lower_seconds"], timing["upper_seconds"], timing["timeout_seconds"])
+with LensLocal("<username>") as lens:
+    import asyncio
 
-full_spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload(full=True))
-print(benchmark_timing(full_spec))
+    async def main() -> None:
+        run = await lens.evaluation.create_run(
+            EvaluateRunRequest(
+                deployment_execution_id="<execution-id>",
+                cluster_session_id="<cluster-session-id>",
+                harness="inference-perf",
+                workload="sanity_random.yaml",
+                parallelism=2,
+                matrix=[{"isl": 1024, "osl": 128}],
+                concurrency_stages=[{"concurrency": 8, "num_requests": 96}],
+                sla_targets=BenchmarkSlaTargets(
+                    ttft_ms=500,
+                    tpot_ms=50,
+                    throughput_min_tps=1000,
+                ),
+            )
+        )
+        print(run.id, run.status)
+
+    asyncio.run(main())
 ```
-
-The HTTP callable is `await llm_d_bench.evaluate.router.estimate_benchmark_timing(spec)`;
-it uses the same pure function as `create_run`.
 
   </TabItem>
 </Tabs>
 
-### Start a benchmark run
+### Benchmark a published Model Service
 
-Both REST `create_evaluate_run` and Python `create_run(EvaluateRunRequest(...))`
-require serving monitoring readiness before starting traffic. Preparation uses
-the resolved `wait_timeout_seconds` budget (600 seconds for legacy records with
-no budget); this is separate from each benchmark invocation's execution limit.
-Every discovered serving Pod needs `up=1` and two inference gauge samples, and a
-discovered EPP service needs a healthy target. Setup errors or timeout fail the
-queued run before traffic. Poll run details for `phase=preparing-monitoring`,
-`heartbeat_at` and `monitoring.message`; HTTP submission still returns 202.
-
-Recorded `metrics.observability.status` retains its aggregate sample-availability
-meaning. `flow_status` and `flow_reason` separately describe request/token sample
-availability. `monitoring.status=partial` means resources were saved but traffic
-samples are absent; `monitoring.preparation` retains the preflight evidence.
-For example: `{"status":"available","flow_status":"unavailable","flow_reason":"No inference request or token samples were recorded during the benchmark window. Resource samples do not establish serving traffic monitoring."}`.
-
-Start a benchmark run against a ready deployment execution or a published Model Service.
-
-Both configuration-driven workflows and existing-service benchmarks call
-`create_run()` and the same executor; workflows add deployment orchestration and
-comparison. The current UI selects a published Model Service for the existing-target
-flow, not an arbitrary URL. `deployment_ownership` controls cleanup, not metric
-semantics: cancelling an existing-service benchmark does not stop the model service.
-
-Both use `BenchmarkSpec` defaults: `parallelism=1`,
-`wait_timeout_seconds=null` (automatic), `harness_memory_gib=8` per worker, and
-`warmup_requests=2` for a matrix. Explicit settings take precedence; the UI's
-preset warmup may differ. Legacy callers needing 7200 seconds or 32 GiB must
-request those values explicitly.
-
-| Evidence operation | Current behavior |
-| --- | --- |
-| Monitoring preparation | Reuse a healthy Prometheus target (`up == 1`); otherwise attempt monitor resources and supporting RBAC. Discovery, setup and readiness share a 30-second deadline. Failure is recorded, not a benchmark failure. |
-| Prometheus collection | Query the benchmark window even after setup failure, with a 120-second deadline. Discover the cluster's central Prometheus; do not infer an external Prometheus URL from the model endpoint. Missing series remain unavailable, not zero. |
-| KV capture | Use already instrumented containers, starting/stopping capture via `kubectl exec`. Benchmarking never installs probes, changes model manifests or restarts the service. Unsupported layouts, missing probes/request IDs, capture conflicts or worker parallelism other than one produce unavailable evidence. |
-| Resource snapshots | Capture completion-time resources before cleanup, best-effort with a 30-second deadline. A missing historical snapshot is not replaced by current live resources. |
-
-Probe installation is a separate deployment-rendering step: eligible new vLLM
-manifests receive instrumentation; the current injector skips PD manifests.
-An existing instrumented deployment can be measured without redeployment.
-KV working-set collection requires compatible vLLM V1, prefix caching, a single
-FullAttention cache group and `parallelism=1`. It measures deduplicated complete
-prompt blocks from successful requests, excluding generated tokens and incomplete
-trailing blocks. Missing records or incomplete request association produce an
-unavailable result; whole-run evidence is not automatically assigned to individual
-load stages. Equal workloads and instrumentation provide the same metric coverage
-and semantics, not guaranteed identical measurements.
-
-For operator steps, see [Choose an evaluation Guide](/evaluation/guides).
-
-`EvaluateRunRequest.accelerator_profile` accepts registered IDs and aliases, including
-IDs without dots. When omitted, the execution's configuration supplies the profile.
-The benchmark worker records a `hardware_profile` snapshot and adds its declared
-device metrics to `monitoring.timeSeriesMetrics` in llm-d-benchmark. The Python
-`create_run` route below applies the same resolution and validation as REST.
-
-`wait_timeout_seconds` now defaults to null (automatic), while explicit numeric
-limits remain unchanged. `create_run` stores the original intent in `benchmark`,
-the resolved integer at the run's top-level `wait_timeout_seconds`, and the
-configuration estimate under `timing`. The CLI wait and Lens subprocess deadline
-use the same resolved limit per invocation. `benchmark_started_at` records the
-first subprocess start; `phase_started_at` resets for warm-up and each matrix
-point. Run/detail responses retain these fields. Failed historical runs are not
-reconfigured automatically. Both REST and Python `EvaluateRunRequest` calls use
-this behavior.
+Set `model_service_group_id` instead of `deployment_execution_id`. The harness resolves the group's active member and calls it through the shared Gateway. `api_key` is required and must be a model access token beginning with `lens-mk-`; it is never persisted.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/runs`**
 
-    Request body: `EvaluateRunRequest`
-    - `deployment_execution_id` (`string`, optional) — benchmark a specific deployment execution directly.
-    - `model_service_group_id` (`string`, optional) — benchmark a published, continuously health-probed
-      Model Service instead; the harness resolves it to the group's active member and published name and
-      requires `api_key`. Exactly one of `deployment_execution_id` or `model_service_group_id` must be set.
-    - `api_key` (`string`, optional) — model access token; required when `model_service_group_id` is set.
-    - `cluster_session_id` (`string`, optional; must match the execution session when supplied)
-    - `harness`, `workload`, `workload_yaml`, `parallelism`, `wait_timeout_seconds`, `harness_memory_gib`
-    - `accelerator_profile` (optional registered hardware identifier, for example `intel-xpu` or `nvidia`; must match the deployment), `storage_class_name`, `matrix`, `concurrency_stages`, `warmup_requests`, `shared_prefix`
-    - `sla_targets` (`BenchmarkSlaTargets`)
-    - `specification_file`, `http_proxy`, `https_proxy`, `no_proxy`, `benchmark_source`, `use_baseline_endpoint`
+**`POST /api/v1/evaluate/runs`**
 
-    ```json
-    {
-      "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "harness": "inference-perf",
-      "workload": "sanity_random.yaml",
-      "parallelism": 2,
-      "wait_timeout_seconds": 1800,
-      "harness_memory_gib": 8,
-      "matrix": [
-        {"isl": 1024, "osl": 128}
-      ],
-      "concurrency_stages": [
-        {"concurrency": 8, "num_requests": 96}
-      ],
-      "warmup_requests": 2,
-      "sla_targets": {
-        "ttft_ms": 500,
-        "ttft_percentile": "p99",
-        "tpot_ms": 50,
-        "tpot_percentile": "p99",
-        "throughput_min_tps": 1000,
-        "success_rate_min_percent": 99
-      },
-      "specification_file": "guides/optimized-baseline",
-      "http_proxy": "",
-      "https_proxy": "",
-      "no_proxy": "",
-      "benchmark_source": {
-        "repository": "https://github.com/llm-d/llm-d-benchmark.git",
-        "revision": "main"
-      },
-      "use_baseline_endpoint": false
-    }
-    ```
+```json
+{
+  "model_service_group_id": "<model-service-group-id>",
+  "api_key": "<token>",
+  "harness": "inference-perf",
+  "workload": "sanity_random.yaml"
+}
+```
 
-    To target a published Model Service instead, replace `deployment_execution_id` with
-    `model_service_group_id` and supply `api_key`:
-
-    ```json
-    {
-      "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
-      "api_key": "lens-mk-…",
-      "harness": "inference-perf",
-      "workload": "sanity_random.yaml"
-    }
-    ```
-
-    Response: HTTP `202`, `BenchmarkRunResponse`. queued benchmark run record.
-
-    ```json
-    {
-      "kind": "benchmark",
-      "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
-      "status": "queued",
-      "created_at": "2026-09-23T09:18:24.287000Z",
-      "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "cluster_id": "cluster-1",
-      "deployment_ownership": "existing-endpoint",
-      "owner_user_id": "user-1",
-      "harness": "inference-perf",
-      "workload": "sanity_random.yaml",
-      "parallelism": 2,
-      "wait_timeout_seconds": 1800,
-      "harness_memory_gib": 8,
-      "matrix": [{"isl": 1024, "osl": 128}],
-      "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
-      "warmup_requests": 2,
-      "sla_targets": {
-        "ttft_ms": 500,
-        "ttft_percentile": "p99",
-        "tpot_ms": 50,
-        "tpot_percentile": "p99",
-        "throughput_min_tps": 1000,
-        "success_rate_min_percent": 99
-      },
-      "benchmark_source": {
-        "repository": "https://github.com/llm-d/llm-d-benchmark.git",
-        "revision": "main"
-      },
-      "benchmark_runtime": {},
-      "benchmark": {
-        "harness": "inference-perf",
-        "workload": "sanity_random.yaml",
-        "parallelism": 2,
-        "wait_timeout_seconds": 1800,
-        "harness_memory_gib": 8,
-        "matrix": [{"isl": 1024, "osl": 128}],
-        "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
-        "warmup_requests": 2,
-        "shared_prefix": null,
-        "workload_yaml": null,
-        "accelerator_profile": null,
-        "storage_class_name": null
-      },
-      "specification_file": "guides/optimized-baseline"
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-import asyncio
-
 from llm_d_lens.evaluation.models import EvaluateRunRequest
-from llm_d_lens.evaluation.router import create_run
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    import asyncio
 
-async def main() -> None:
-    run = await create_run(
-        EvaluateRunRequest(
-            deployment_execution_id="00000000-0000-4000-8000-000000000001",
-            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-            workload="sanity_random.yaml",
-            parallelism=2,
-            matrix=[{"isl": 1024, "osl": 128}],
-            concurrency_stages=[{"concurrency": 8, "num_requests": 96}],
+    async def main() -> None:
+        run = await lens.evaluation.create_run(
+            EvaluateRunRequest(
+                model_service_group_id="<model-service-group-id>",
+                api_key="<token>",
+                workload="sanity_random.yaml",
+            )
         )
-    )
-    print(run["id"], run["status"])
+        print(run.id, run.status)
 
-    # Or target a published Model Service (resolves to its active member and
-    # published name; requires api_key):
-    run = await create_run(
-        EvaluateRunRequest(
-            model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
-            api_key="lens-mk-…",
-            workload="sanity_random.yaml",
-        )
-    )
-    print(run["id"], run["status"])
-
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### List benchmark runs
+### Deploy and benchmark in one workflow
 
-List one-off benchmark runs Lens Evaluate has recorded.
+Start an optimized-baseline deployment and benchmark it automatically.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/evaluate/runs`**
 
-    Request: no body.
+**`POST /api/v1/evaluate/workflow-runs`**
 
-    Response: HTTP `200`, `BenchmarkRunListResponse`.
-
-    ```json
-    {
-      "items": [
-        {
-          "kind": "benchmark",
-          "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
-          "status": "succeeded",
-          "created_at": "2026-09-23T09:18:24.287000Z",
-          "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-          "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-          "model": "Qwen/Qwen3-8B",
-          "endpoint": "http://127.0.0.1:38000/v1",
-          "deployment": {
-            "name": "00000000-0000-4000-8000-000000000001",
-            "namespace": "prism-eval-1",
-            "endpoint": "http://127.0.0.1:38000/v1"
-          }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.evaluation.router import _records
-
-for run in _records("benchmark"):
-    print(run["id"], run["status"])
+```json
+{
+  "model": "Qwen/Qwen3-8B",
+  "cluster_session_id": "<cluster-session-id>",
+  "replicas": 1,
+  "tensor_parallel_size": 1,
+  "workload": "sanity_random.yaml"
+}
 ```
+
+Response fields: `kind`, `id`, `status`, `deployment_run_id`.
+
   </TabItem>
-</Tabs>
-
-### Get a benchmark run
-
-`GET /api/v1/evaluate/runs/{run_id}` preserves the benchmark's top-level fields
-and adds known `configuration`, `deployment_configuration`, model/namespace/endpoint
-context and read-only `deployment_cases`. These links do not grant lifecycle ownership.
-Completion and terminal detail reads share client-metric, request-evidence,
-capacity/SLO, mechanism and diagnostic enrichment with workflow results.
-Saved client reports can support historical backfill; missing historical
-Prometheus samples, KV captures and resource snapshots cannot be recreated from
-current live data. Rerun to collect newly enabled evidence.
-
-Get benchmark results and read-only deployment evidence.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/evaluate/runs/{run_id}`**
-
-    Request: no body.
-    - Path parameter: `run_id` (`string`, required)
-
-    Response: HTTP `200`, `BenchmarkRunResponse`.
-
-    ```json
-    {
-      "kind": "benchmark",
-      "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
-      "status": "succeeded",
-      "created_at": "2026-09-23T09:18:24.287000Z",
-      "finished_at": "2026-09-23T09:24:10.000000Z",
-      "deployment_execution_id": "00000000-0000-4000-8000-000000000001",
-      "deployment_run_id": "deployment-1",
-      "deployment_case_id": "case-1",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "model": "Qwen/Qwen3-8B",
-      "namespace": "prism-eval-1",
-      "endpoint": "http://127.0.0.1:38000/v1",
-      "endpoint_used": "http://127.0.0.1:38000/v1",
-      "guide": "optimized-baseline",
-      "deployment_configuration": {
-        "schema_version": "deployable-configuration.v1",
-        "type": "baseline",
-        "format": "helm",
-        "provider_ref": "optimized-baseline",
-        "checksum": "sha256:9eb2d61d",
-        "content": {"model": {"name": "Qwen/Qwen3-8B"}},
-        "provenance": {}
-      },
-      "configuration": {
-        "configuration_artifact_id": "00000000-0000-4000-8000-000000000101",
-        "model": "Qwen/Qwen3-8B",
-        "guide": "optimized-baseline",
-        "guide_variant": null,
-        "runtime": null,
-        "accelerator": null,
-        "image": null,
-        "replicas": null,
-        "tensor_parallel_size": null,
-        "decode_replicas": null,
-        "decode_tensor_parallel_size": null,
-        "prefill_replicas": null,
-        "prefill_tensor_parallel_size": null,
-        "benchmark": {
-          "harness": "inference-perf",
-          "workload": "sanity_random.yaml",
-          "parallelism": 2,
-          "wait_timeout_seconds": 1800,
-          "harness_memory_gib": 8,
-          "matrix": [{"isl": 1024, "osl": 128}],
-          "concurrency_stages": [{"concurrency": 8, "num_requests": 96}],
-          "warmup_requests": 2,
-          "shared_prefix": null,
-          "workload_yaml": null,
-          "accelerator_profile": null,
-          "storage_class_name": null
-        }
-      },
-      "metrics": {
-        "throughput_tps": 1210.5,
-        "success_rate": 99.6,
-        "latency_distributions": {
-          "ttft": {"p99_ms": 420.0},
-          "tpot": {"p99_ms": 42.0}
-        }
-      },
-      "resource_snapshot": {},
-      "deployment_cases": [
-        {
-          "id": "case-1",
-          "execution_id": "00000000-0000-4000-8000-000000000001",
-          "guide": "optimized-baseline",
-          "namespace": "prism-eval-1",
-          "endpoint": "http://127.0.0.1:38000/v1",
-          "status": "ready",
-          "execution_status": "ready",
-          "monitoring_setup": null,
-          "diagnostics": null,
-          "resource_snapshot": {}
-        }
-      ]
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.evaluation.router import _benchmark_response, _get
-
-run = _get("benchmark", "7d698fda-8e2e-44b2-86aa-14d24098350d")
-if run is not None:
-    detail = _benchmark_response(run)
-    print(detail["id"], detail["status"])
-```
-  </TabItem>
-</Tabs>
-
-### Cancel a benchmark run
-
-Cancel an active one-off benchmark run.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/runs/{run_id}/cancel`**
-
-    Request: no body.
-    - Path parameter: `run_id` (`string`, required)
-
-    Response: HTTP `200`, `EvaluationCancelResponse`.
-
-    ```json
-    {
-      "id": "7d698fda-8e2e-44b2-86aa-14d24098350d",
-      "status": "cancelled"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.evaluation.router import cancel_run
-
-
-async def main() -> None:
-    result = await cancel_run("7d698fda-8e2e-44b2-86aa-14d24098350d")
-    print(result["id"], result["status"])
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Delete a benchmark run
-
-Delete a terminal standalone benchmark and its saved results.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/evaluate/runs/{run_id}`**
-
-    Request: no body.
-    - Path parameter: `run_id` (`string`, required)
-
-    Response: HTTP `204 No Content`. No JSON body is returned.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.evaluation.router import _delete_benchmark_history, _get
-
-run_id = "7d698fda-8e2e-44b2-86aa-14d24098350d"
-run = _get("benchmark", run_id)
-if run is not None and run.get("status") in {"succeeded", "failed", "cancelled"}:
-    _delete_benchmark_history(run_id)
-```
-  </TabItem>
-</Tabs>
-
-### Start a deployment-plus-benchmark workflow
-
-Start a simple deployment-plus-benchmark workflow that first creates an optimized baseline deployment, then benchmarks it.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/workflow-runs`**
-
-    Request body: `EvaluateWorkflowRequest`
-    - `model` (`string`, required)
-    - `cluster_session_id` (`string`, required)
-    - `replicas`, `tensor_parallel_size`, `image`, `harness`, `workload`, `parallelism`
-
-    ```json
-    {
-      "model": "Qwen/Qwen3-8B",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "replicas": 1,
-      "tensor_parallel_size": 1,
-      "image": "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
-      "harness": "inference-perf",
-      "workload": "sanity_random.yaml",
-      "parallelism": 1
-    }
-    ```
-
-    Response: HTTP `202`, `EvaluationWorkflowResponse`.
-
-    ```json
-    {
-      "kind": "workflow",
-      "deployment_ownership": "evaluation",
-      "id": "0e8dd5de-8a1c-4f96-9756-fd91c1da4faa",
-      "status": "deploying",
-      "created_at": "2026-09-23T09:18:24.287000Z",
-      "deployment_run_id": "deployment-1",
-      "cluster_id": "cluster-1",
-      "owner_user_id": "user-1",
-      "model": "Qwen/Qwen3-8B",
-      "harness": "inference-perf",
-      "workload": "sanity_random.yaml",
-      "parallelism": 1,
-      "benchmark_runtime": {}
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
 from llm_d_lens.evaluation.models import EvaluateWorkflowRequest
-from llm_d_lens.evaluation.router import create_workflow_run
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    import asyncio
 
-async def main() -> None:
-    workflow = await create_workflow_run(
-        EvaluateWorkflowRequest(
-            model="Qwen/Qwen3-8B",
-            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-            replicas=1,
-            tensor_parallel_size=1,
-            workload="sanity_random.yaml",
+    async def main() -> None:
+        workflow = await lens.evaluation.create_workflow_run(
+            EvaluateWorkflowRequest(
+                model="Qwen/Qwen3-8B",
+                cluster_session_id="<cluster-session-id>",
+                replicas=1,
+                tensor_parallel_size=1,
+                workload="sanity_random.yaml",
+            )
         )
-    )
-    print(workflow["id"], workflow["status"])
+        print(workflow.id, workflow.status)
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Start a multi-configuration evaluation
+### Compare saved configurations
 
-Start a multi-configuration evaluation workflow that can deploy, benchmark, compare, and optionally baseline several published configuration artifacts.
-
-For a `pd-disaggregation` source, independent baselines match the total prefill
-plus decode GPU budget by default:
-
-```text
-baseline replicas = (prefill replicas * prefill TP + decode replicas * decode TP) / baseline TP
-```
-
-Baseline TP inherits source decode/serving TP unless
-`benchmark_plans[].baseline_parameters[baseline_type].tensor_parallel_size`
-overrides it. A TP-only override recalculates replicas; explicit `replicas` wins
-and permits an intentionally unequal budget. For example, 2P2D at TP=1 produces
-four plain-vLLM replicas at TP=1, or two at baseline TP=2.
-Automatic matching must yield an exact integer in `1..32`; otherwise creation
-returns `409` before saving or queueing, without rounding or capping.
-Non-PD sources inherit decode/serving replicas; same-pod `kubernetes-service`
-comparisons reuse the candidate pool without independent replicas.
-These defaults apply to new evaluations, not stored/running snapshots or retries.
-An old unequal-budget comparison does not become equal-budget retroactively.
-See [Evaluation parameters](/evaluation/parameters) for override ranges.
+Deploy one or more saved configuration artifacts, benchmark them, and compare the results with optional baselines.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/evaluations`**
 
-    Request body: `EvaluationCreateRequest`
-    - `name` (`string`, default `"Evaluation"`)
-    - `cluster_session_id` (`string`, required)
-    - `runtime` (`RuntimeSpec`)
-    - `benchmark_source` (`BenchmarkSource`, optional)
-    - `benchmark_plans` (`BenchmarkPlan[]`, required)
-    - `compare_configurations` (`boolean`, default `true`)
+**`POST /api/v1/evaluate/evaluations`**
 
-    ```json
+```json
+{
+  "name": "Qwen comparison",
+  "cluster_session_id": "<cluster-session-id>",
+  "benchmark_plans": [
     {
-      "name": "Qwen comparison",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "runtime": {
-        "http_proxy": "",
-        "https_proxy": "",
-        "no_proxy": ""
-      },
-      "benchmark_source": {
-        "repository": "https://github.com/llm-d/llm-d-benchmark.git",
-        "revision": "main"
-      },
-      "benchmark_plans": [
-        {
-          "id": "candidate",
-          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-          "deployment_name": "qwen3-guide",
-          "deployment_description": "Candidate guide deployment",
-          "benchmark": {
-            "harness": "inference-perf",
-            "workload": "sanity_random.yaml",
-            "parallelism": 1,
-            "wait_timeout_seconds": 1800,
-            "harness_memory_gib": 8,
-            "matrix": [{"isl": 128, "osl": 64}],
-            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
-            "warmup_requests": 2,
-            "shared_prefix": null,
-            "workload_yaml": null,
-            "accelerator_profile": null,
-            "storage_class_name": null
-          },
-          "include_configuration": true,
-          "include_baseline": true,
-          "baseline_type": "direct-vllm",
-          "baseline_types": ["direct-vllm", "optimized-baseline"],
-          "baseline_parameters": {},
-          "preserve_deployment": false,
-          "scenarios": []
-        }
-      ],
-      "compare_configurations": true
+      "id": "candidate",
+      "configuration_artifact_id": "<configuration-artifact-id>",
+      "include_baseline": true,
+      "baseline_type": "direct-vllm",
+      "benchmark": {
+        "workload": "sanity_random.yaml",
+        "matrix": [{"isl": 1024, "osl": 128}]
+      }
     }
-    ```
+  ],
+  "compare_configurations": true
+}
+```
 
-    Response: HTTP `202`, `EvaluationWorkflowResponse`. queued workflow record with generated cases.
+Response fields: `kind`, `id`, `status`, `cases[]`.
 
-    ```json
-    {
-      "kind": "workflow",
-      "deployment_ownership": "evaluation",
-      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
-      "name": "Qwen comparison",
-      "status": "queued",
-      "created_at": "2026-09-23T09:18:24.287000Z",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "cluster_id": "cluster-1",
-      "owner_user_id": "user-1",
-      "benchmark_runtime": {},
-      "deployment_source": {},
-      "runtime": {
-        "http_proxy": "",
-        "https_proxy": "",
-        "no_proxy": ""
-      },
-      "configuration_artifacts": {
-        "00000000-0000-4000-8000-000000000001": "sha256:9eb2d61d"
-      },
-      "benchmark_plans": [
-        {
-          "id": "candidate",
-          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-          "deployment_name": "qwen3-guide",
-          "deployment_description": "Candidate guide deployment",
-          "benchmark": {
-            "harness": "inference-perf",
-            "workload": "sanity_random.yaml",
-            "parallelism": 1,
-            "wait_timeout_seconds": 1800,
-            "harness_memory_gib": 8,
-            "matrix": [{"isl": 128, "osl": 64}],
-            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
-            "warmup_requests": 2,
-            "shared_prefix": null,
-            "workload_yaml": null,
-            "accelerator_profile": null,
-            "storage_class_name": null
-          },
-          "include_configuration": true,
-          "include_baseline": true,
-          "baseline_type": "direct-vllm",
-          "baseline_types": ["direct-vllm", "optimized-baseline"],
-          "baseline_parameters": {},
-          "preserve_deployment": false,
-          "scenarios": []
-        }
-      ],
-      "compare_configurations": true,
-      "cases": [
-        {
-          "id": "guide-1",
-          "kind": "guide",
-          "status": "queued",
-          "workload_ids": ["candidate"],
-          "baseline_case_id": "baseline-1",
-          "baseline_case_ids": ["baseline-1", "baseline-2"],
-          "benchmark": {
-            "harness": "inference-perf",
-            "workload": "sanity_random.yaml",
-            "parallelism": 1,
-            "wait_timeout_seconds": 1800,
-            "harness_memory_gib": 8,
-            "matrix": [{"isl": 128, "osl": 64}],
-            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
-            "warmup_requests": 2,
-            "shared_prefix": null,
-            "workload_yaml": null,
-            "accelerator_profile": null,
-            "storage_class_name": null
-          },
-          "deployment_run_id": null,
-          "evaluation_run_id": null,
-          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-          "benchmark_plan_id": "candidate",
-          "deployment_group_id": "candidate:guide",
-          "preserve_deployment": false,
-          "deployment_configuration": {
-            "schema_version": "deployable-configuration.v1",
-            "type": "baseline",
-            "format": "helm",
-            "provider_ref": "optimized-baseline",
-            "checksum": "sha256:9eb2d61d",
-            "content": {"model": {"name": "Qwen/Qwen3-8B"}},
-            "provenance": {}
-          }
-        },
-        {
-          "id": "baseline-1",
-          "kind": "baseline",
-          "status": "queued",
-          "workload_ids": ["candidate"],
-          "benchmark": {
-            "harness": "inference-perf",
-            "workload": "sanity_random.yaml",
-            "parallelism": 1,
-            "wait_timeout_seconds": 1800,
-            "harness_memory_gib": 8,
-            "matrix": [{"isl": 128, "osl": 64}],
-            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
-            "warmup_requests": 2,
-            "shared_prefix": null,
-            "workload_yaml": null,
-            "accelerator_profile": null,
-            "storage_class_name": null,
-            "baseline_type": "direct-vllm",
-            "baseline_parameters": {}
-          },
-          "deployment_run_id": null,
-          "evaluation_run_id": null,
-          "configuration_artifact_id": null,
-          "benchmark_plan_id": "candidate",
-          "deployment_group_id": "candidate:baseline:direct-vllm",
-          "baseline_type": "direct-vllm",
-          "baseline_parameters": {},
-          "dependent_guide_case_id": null,
-          "preserve_deployment": false,
-          "deployment_configuration": {
-            "schema_version": "deployable-configuration.v1",
-            "type": "baseline",
-            "format": "helm",
-            "provider_ref": "baseline-vllm",
-            "checksum": "sha256:12b3ef20",
-            "content": {"model": {"name": "Qwen/Qwen3-8B"}},
-            "provenance": {"system_generated": true}
-          }
-        }
-      ],
-      "report": null
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-import asyncio
-
 from llm_d_lens.evaluation.models import EvaluationCreateRequest
-from llm_d_lens.evaluation.router import create_evaluation
+from llm_d_lens.sdk import LensLocal
 
+with LensLocal("<username>") as lens:
+    import asyncio
 
-async def main() -> None:
-    workflow = await create_evaluation(
-        EvaluationCreateRequest(
-            name="Qwen comparison",
-            cluster_session_id="123e4567-e89b-12d3-a456-426614174000",
-            benchmark_plans=[
-                {
-                    "id": "candidate",
-                    "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-                }
-            ],
+    async def main() -> None:
+        workflow = await lens.evaluation.create_evaluation(
+            EvaluationCreateRequest(
+                name="Qwen comparison",
+                cluster_session_id="<cluster-session-id>",
+                benchmark_plans=[
+                    {
+                        "id": "candidate",
+                        "configuration_artifact_id": "<configuration-artifact-id>",
+                        "include_baseline": True,
+                        "baseline_type": "direct-vllm",
+                        "benchmark": {
+                            "workload": "sanity_random.yaml",
+                            "matrix": [{"isl": 1024, "osl": 128}],
+                        },
+                    }
+                ],
+            )
         )
-    )
-    print(workflow["id"], workflow["status"], len(workflow["cases"]))
+        print(workflow.id, workflow.status, len(workflow.cases or []))
 
-
-asyncio.run(main())
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### List evaluation workflow runs
+### Inspect results and manage a run
 
-List evaluation workflow runs Lens has recorded, including multi-configuration evaluations and simple deployment-plus-benchmark workflows.
+Read a benchmark result or expanded workflow details, then cancel, retry, or delete it when it reaches the required state.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/evaluate/workflow-runs`**
 
-    Request: no body.
+**`GET /api/v1/evaluate/runs/<run-id>`**
 
-    Response: HTTP `200`, `EvaluationWorkflowListResponse`.
+**`GET /api/v1/evaluate/workflow-runs/<workflow-id>/details`**
 
-    ```json
-    {
-      "items": [
-        {
-          "kind": "workflow",
-          "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
-          "name": "Qwen comparison",
-          "status": "running",
-          "created_at": "2026-09-23T09:18:24.287000Z",
-          "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-          "cases": [
-            {
-              "id": "guide-1",
-              "kind": "guide",
-              "status": "benchmarking",
-              "benchmark_plan_id": "candidate",
-              "configuration": {
-                "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-                "model": "Qwen/Qwen3-8B",
-                "guide": "optimized-baseline",
-                "guide_variant": null,
-                "runtime": null,
-                "accelerator": null,
-                "image": null,
-                "replicas": null,
-                "tensor_parallel_size": null,
-                "decode_replicas": null,
-                "decode_tensor_parallel_size": null,
-                "prefill_replicas": null,
-                "prefill_tensor_parallel_size": null,
-                "benchmark": {
-                  "harness": "inference-perf",
-                  "workload": "sanity_random.yaml",
-                  "parallelism": 1,
-                  "wait_timeout_seconds": 1800,
-                  "harness_memory_gib": 8,
-                  "matrix": [{"isl": 128, "osl": 64}],
-                  "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
-                  "warmup_requests": 2,
-                  "shared_prefix": null,
-                  "workload_yaml": null,
-                  "accelerator_profile": null,
-                  "storage_class_name": null
-                }
-              }
-            }
-          ]
-        }
-      ]
-    }
-    ```
+```json
+{
+  "workflow": {"id": "<workflow-id>", "status": "succeeded"},
+  "report": {
+    "comparison_version": 2,
+    "comparisons": []
+  }
+}
+```
+
+Use `POST /api/v1/evaluate/workflow-runs/<workflow-id>/retry` for a failed or cancelled workflow, `POST /api/v1/evaluate/workflow-runs/<workflow-id>/cancel` to stop it, and `DELETE /api/v1/evaluate/workflow-runs/<workflow-id>` after it is terminal.
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
+  <TabItem value="python-api" label="In-process Python SDK">
 
 ```python
-from llm_d_lens.evaluation.router import _records
+from llm_d_lens.sdk import LensLocal
 
-for workflow in _records("workflow"):
-    print(workflow["id"], workflow["status"])
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        detail = await lens.evaluation.get_workflow_run_details("<workflow-id>")
+        print(detail["workflow"]["id"], detail["report"]["comparison_version"])
+
+        await lens.evaluation.cancel_workflow_run("<workflow-id>")
+        await lens.evaluation.delete_workflow_run("<workflow-id>")
+
+    asyncio.run(main())
 ```
+
   </TabItem>
 </Tabs>
 
-### Get an evaluation workflow run
-
-Get the current top-level record for one evaluation workflow run.
-
-For configuration evaluations, `status: "succeeded"`, `report`, and `finished_at`
-are persisted as soon as all benchmark cases succeed and the report is ready.
-The orchestration coroutine then continues final deployment cleanup without
-extending `finished_at`. This applies to both REST reads and Python `_get` reads;
-success is not a guarantee that deployment resources have already been released.
-Cleanup errors remain in the owning case's `cleanup_error` and do not replace a
-successful result. Deleting the workflow waits for its in-flight cleanup before
-removing history. Cancellation retains its existing cleanup-before-cancelled
-contract.
-Successful cleanup removes Evaluation-owned temporary deployment records from
-Deployments as well as their cluster resources, including on cancellation.
-Evaluation reports and captured evidence remain available. Borrowed deployments
-are not deleted; failed cleanup retains deployment records for retry.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/evaluate/workflow-runs/{workflow_id}`**
-
-    Request: no body.
-    - Path parameter: `workflow_id` (`string`, required)
-
-    Response: HTTP `200`, `EvaluationWorkflowResponse`.
-
-    ```json
-    {
-      "kind": "workflow",
-      "deployment_ownership": "evaluation",
-      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
-      "name": "Qwen comparison",
-      "status": "running",
-      "created_at": "2026-09-23T09:18:24.287000Z",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "cluster_id": "cluster-1",
-      "runtime": {
-        "http_proxy": "",
-        "https_proxy": "",
-        "no_proxy": ""
-      },
-      "configuration_artifacts": {
-        "00000000-0000-4000-8000-000000000001": "sha256:9eb2d61d"
-      },
-      "benchmark_plans": [
-        {
-          "id": "candidate",
-          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-          "baseline_types": ["direct-vllm", "optimized-baseline"],
-          "preserve_deployment": false,
-          "scenarios": []
-        }
-      ],
-      "compare_configurations": true,
-      "cases": [
-        {
-          "id": "guide-1",
-          "kind": "guide",
-          "status": "benchmarking",
-          "workload_ids": ["candidate"],
-          "baseline_case_id": "baseline-1",
-          "baseline_case_ids": ["baseline-1", "baseline-2"],
-          "benchmark": {
-            "harness": "inference-perf",
-            "workload": "sanity_random.yaml",
-            "parallelism": 1,
-            "wait_timeout_seconds": 1800,
-            "harness_memory_gib": 8,
-            "matrix": [{"isl": 128, "osl": 64}],
-            "concurrency_stages": [{"concurrency": 4, "num_requests": 32}],
-            "warmup_requests": 2,
-            "shared_prefix": null,
-            "workload_yaml": null,
-            "accelerator_profile": null,
-            "storage_class_name": null
-          },
-          "deployment_run_id": "deployment-1",
-          "evaluation_run_id": "benchmark-1",
-          "configuration_artifact_id": "00000000-0000-4000-8000-000000000001",
-          "benchmark_plan_id": "candidate",
-          "deployment_group_id": "candidate:guide",
-          "preserve_deployment": false
-        }
-      ],
-      "report": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-from llm_d_lens.evaluation.router import _get
-
-workflow = _get("workflow", "2d52bd97-a873-4d39-aa17-a182bf456922")
-if workflow is not None:
-    print(workflow["id"], workflow["status"])
-```
-  </TabItem>
-</Tabs>
-
-### Get detailed evaluation workflow results
-
-The linked benchmark and case results use the same enrichment as standalone
-benchmark detail. Case snapshots are saved completion-time evidence.
-`deployment_cases` may additionally include current Kubernetes snapshots for
-inspection; those live snapshots are not historical benchmark measurements.
-
-Get expanded evaluation workflow results and deployment links.
-
-For workflows with cases, the report uses `comparison_version: 2`. Older cached reports are regenerated from retained evidence when details are read. Matrix rows match unique successful `(isl, osl)` points and explicit `concurrency`; rate stages match explicit `rate`. Missing, non-finite, negative, or duplicate load keys do not establish a match, and array position is never a fallback. No matched rows means the corresponding statistics are `null`.
-
-Ratios are guide divided by baseline. A valid zero numerator is retained, including in the geometric mean; a zero denominator yields no ratio. Suite-normalized throughput uses only matched pairs where both sides have nonnegative output-token counts and positive measured durations. Mean, P90, and P99 aggregates remain separate.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/evaluate/workflow-runs/{workflow_id}/details`**
-
-    Request: no body.
-    - Path parameter: `workflow_id` (`string`, required)
-
-    Response: HTTP `200`, `EvaluationDetailsResponse`.
-
-    ```json
-    {
-      "workflow": {
-        "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
-        "name": "Qwen comparison",
-        "status": "succeeded",
-        "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-        "cases": [
-          {
-            "id": "guide-1",
-            "kind": "guide",
-            "status": "succeeded",
-            "deployment_run_id": "deployment-1",
-            "evaluation_run_id": "benchmark-1"
-          }
-        ]
-      },
-      "cases": [
-        {
-          "case": {
-            "id": "guide-1",
-            "kind": "guide",
-            "status": "succeeded",
-            "deployment_run_id": "deployment-1",
-            "evaluation_run_id": "benchmark-1"
-          },
-          "deployment": {
-            "id": "deployment-1",
-            "status": "succeeded"
-          },
-          "deployment_cases": [
-            {
-              "id": "case-1",
-              "status": "ready",
-              "guide": "optimized-baseline",
-              "attempt": 1,
-              "failure": null,
-              "execution_id": "00000000-0000-4000-8000-000000000001",
-              "namespace": "prism-eval-1",
-              "endpoint": "http://127.0.0.1:38000/v1",
-              "execution_status": "ready",
-              "monitoring_setup": null,
-              "diagnostics": null,
-              "resource_snapshot": {}
-            }
-          ],
-          "deployment_warning": null,
-          "evaluation": {
-            "id": "benchmark-1",
-            "status": "succeeded",
-            "deployment_cases": [
-              {
-                "id": "case-1",
-                "execution_id": "00000000-0000-4000-8000-000000000001",
-                "guide": "optimized-baseline",
-                "namespace": "prism-eval-1",
-                "endpoint": "http://127.0.0.1:38000/v1",
-                "status": "ready",
-                "execution_status": "ready",
-                "monitoring_setup": null,
-                "diagnostics": null,
-                "resource_snapshot": {}
-              }
-            ]
-          }
-        }
-      ],
-      "report": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.evaluation.router import get_workflow_run_details
-
-
-async def main() -> None:
-    detail = await get_workflow_run_details("2d52bd97-a873-4d39-aa17-a182bf456922")
-    print(detail["workflow"]["id"], len(detail.get("cases", [])))
-    report = detail.get("report") or {}
-    print(report.get("comparison_version"))
-    for comparison in report.get("comparisons", []):
-        print(comparison.get("matrix_statistics"), comparison.get("rate_stage_statistics"))
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Retry an evaluation workflow
-
-Retry a failed or cancelled multi-workload evaluation workflow.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/workflow-runs/{workflow_id}/retry`**
-
-    Request: no body.
-    - Path parameter: `workflow_id` (`string`, required)
-
-    Response: HTTP `202`, `EvaluationWorkflowResponse`.
-
-    ```json
-    {
-      "kind": "workflow",
-      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
-      "name": "Qwen comparison",
-      "status": "queued",
-      "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
-      "cases": [
-        {
-          "id": "guide-1",
-          "kind": "guide",
-          "status": "queued",
-          "deployment_run_id": null,
-          "evaluation_run_id": null,
-          "execution_id": null,
-          "error": null
-        }
-      ],
-      "report": null
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.evaluation.router import retry_workflow_run
-
-
-async def main() -> None:
-    workflow = await retry_workflow_run("2d52bd97-a873-4d39-aa17-a182bf456922")
-    print(workflow["id"], workflow["status"])
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Cancel an evaluation workflow
-
-Cancel an evaluation workflow and clean up its owned deployments.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/workflow-runs/{workflow_id}/cancel`**
-
-    Request: no body.
-    - Path parameter: `workflow_id` (`string`, required)
-
-    Response: HTTP `200`, `EvaluationCancelResponse`.
-
-    ```json
-    {
-      "id": "2d52bd97-a873-4d39-aa17-a182bf456922",
-      "status": "cancelled"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.evaluation.router import cancel_workflow_run
-
-
-async def main() -> None:
-    result = await cancel_workflow_run("2d52bd97-a873-4d39-aa17-a182bf456922")
-    print(result["id"], result["status"])
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Cancel an evaluation case
-
-Cancel an evaluation case and clean up its owned deployments.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/evaluate/workflow-runs/{workflow_id}/cases/{case_id}/cancel`**
-
-    Request: no body.
-    - Path parameters: `workflow_id` (`string`, required), `case_id` (`string`, required)
-
-    Response: HTTP `200`, `EvaluationCancelResponse`.
-
-    ```json
-    {
-      "id": "guide-1",
-      "status": "cancelled"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.evaluation.router import cancel_evaluation_case
-
-
-async def main() -> None:
-    result = await cancel_evaluation_case(
-        "2d52bd97-a873-4d39-aa17-a182bf456922",
-        "guide-1",
-    )
-    print(result["id"], result["status"])
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-### Delete an evaluation workflow
-
-Delete a terminal evaluation workflow and any retained child benchmark records it owns.
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/evaluate/workflow-runs/{workflow_id}`**
-
-    Request: no body.
-    - Path parameter: `workflow_id` (`string`, required)
-
-    Response: HTTP `204 No Content`. No JSON body is returned.
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-
-```python
-import asyncio
-
-from llm_d_lens.evaluation.router import delete_workflow_run
-
-
-async def main() -> None:
-    await delete_workflow_run("2d52bd97-a873-4d39-aa17-a182bf456922")
-
-
-asyncio.run(main())
-```
-  </TabItem>
-</Tabs>
-
-See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).
-
-
-Guide workload defaults returned through deployment capabilities use two stages
-for each recommended workload and the default P/D long-input scenario. Python
-consumers obtain the same fresh values with
-`llm_d_bench.deploy.capabilities.provider_capability(provider_id)`; saved
-benchmark specifications and explicitly selected throughput presets are unchanged.
-
-### Benchmark monitoring clock alignment
-
-`metrics.observability.clock_alignment` records `status` (`measured` or
-`unavailable`), `offset_seconds` (Prometheus minus Lens time, or null), and
-`query_window` (`start`, `end`) used for the Prometheus range queries. The original
-`window` and persisted series timestamps stay on the Lens timeline, including
-rate-stage slicing. If clock measurement fails, collection retains the original
-window and reports alignment as unavailable.
-
-The existing Python callable
-`llm_d_bench.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)`
-performs this alignment without changing its signature. For example:
-
-```python
-from llm_d_bench.monitoring.profiling.service import collect_benchmark_observability
-
-observability = await collect_benchmark_observability(
-    execution_id="deployment-id",
-    start="2026-10-09T09:50:00Z",
-    end="2026-10-09T09:55:00Z",
-    cluster_id="cluster-id",
-)
-print(observability.get("clock_alignment"))
-```
+## Endpoints
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/evaluate/benchmark-defaults` | `evaluate:run:read` | Show the default benchmark source and runtime |
+| `POST` | `/api/v1/evaluate/timing-estimate` | `evaluate:run:read` | Estimate duration and timeout |
+| `POST` | `/api/v1/evaluate/runs` | `evaluate:run:create` | Benchmark a ready execution or Model Service |
+| `GET` | `/api/v1/evaluate/runs` | `evaluate:run:read` | List benchmark runs |
+| `GET` | `/api/v1/evaluate/runs/{run_id}` | `evaluate:run:read` | Get benchmark results and evidence |
+| `POST` | `/api/v1/evaluate/runs/{run_id}/cancel` | `evaluate:run:cancel` | Cancel an active benchmark |
+| `DELETE` | `/api/v1/evaluate/runs/{run_id}` | `evaluate:run:delete` | Delete a terminal benchmark |
+| `POST` | `/api/v1/evaluate/workflow-runs` | `evaluate:workflow:create` | Deploy and benchmark in one workflow |
+| `POST` | `/api/v1/evaluate/evaluations` | `evaluate:workflow:create` | Run a multi-configuration evaluation |
+| `GET` | `/api/v1/evaluate/workflow-runs` | `evaluate:run:read` | List evaluation workflows |
+| `GET` | `/api/v1/evaluate/workflow-runs/{workflow_id}` | `evaluate:run:read` | Get a workflow record |
+| `GET` | `/api/v1/evaluate/workflow-runs/{workflow_id}/details` | `evaluate:run:read` | Get cases, results, and report |
+| `POST` | `/api/v1/evaluate/workflow-runs/{workflow_id}/retry` | `evaluate:run:retry` | Retry a failed or cancelled workflow |
+| `POST` | `/api/v1/evaluate/workflow-runs/{workflow_id}/cancel` | `evaluate:run:cancel` | Cancel a workflow |
+| `POST` | `/api/v1/evaluate/workflow-runs/{workflow_id}/cases/{case_id}/cancel` | `evaluate:run:cancel` | Cancel one evaluation case |
+| `DELETE` | `/api/v1/evaluate/workflow-runs/{workflow_id}` | `evaluate:run:delete` | Delete a terminal workflow |
+
+## Errors and limits
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| `401` / `403` | Not authenticated or missing permission | Check the token and the permission column above |
+| `404` | Execution, run, workflow, or Model Service not found | Re-list resources and confirm the id |
+| `409` | Not ready, lifecycle conflict, no healthy member, or owned by another backend | Check status and send the request to the owning backend |
+| `422` | Invalid request or malformed identifier | Fix the request fields |
+| `503` | Evaluation could not be queued | Check cluster access and retry |
+
+- A benchmark target must be a `ready` execution with an endpoint and an active cluster session. Otherwise creation returns `409`; a missing execution returns `404`.
+- Set exactly one of `deployment_execution_id` or `model_service_group_id`. Model Service benchmarks also require `api_key` beginning with `lens-mk-`.
+- HTTP `202` means the run is queued. Monitoring preparation must pass before traffic starts; setup failure stops the run before the benchmark.
+- `wait_timeout_seconds: null` uses an automatic budget between 900 and 14400 seconds. Explicit values must be 1-14400. `parallelism` is 1-32 and `harness_memory_gib` is 1-512.
+- Use at most one of `matrix`, `shared_prefix`, or `workload_yaml` as the workload generator.
+- Only `succeeded`, `failed`, and `cancelled` are terminal. Delete a benchmark or workflow only after it is terminal; active runs and benchmarks owned by a workflow return `409`.
+- Retry only failed or cancelled workflows. Cancel, retry, and delete requests for work owned by another backend return `409`; send them to that backend.
+- For a PD configuration, an automatic baseline replica count must be an exact integer from 1 to 32. Otherwise creation returns `409` before queueing; set explicit baseline replicas to override.
+- Missing historical telemetry, KV captures, or resource snapshots are not reconstructed from current live data. Rerun to collect newly enabled evidence.
+
+## Related
+
+- [Evaluation user guide](/user-guide/evaluation)
+- [Evaluation guides](/evaluation/guides)
+- [Evaluation parameters](/evaluation/parameters)
+- [Evaluate a deployment tutorial](/tutorials/evaluate-a-deployment)
+- [OpenAPI schema](/api-reference)

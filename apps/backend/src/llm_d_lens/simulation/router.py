@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
@@ -19,13 +19,23 @@ from .errors import SimulationConfigurationError
 from .models import (
     BackendName,
     ModelDiscoveryRequest,
+    SimulationBackendsResponse,
+    SimulationModelDiscoveryResponse,
+    SimulationResponseCodeIssuePage,
     SimulationScenario,
+    SimulationScenariosResponse,
     SimulationTask,
+    SimulationTaskActionResponse,
     SimulationTaskCreateRequest,
     SimulationTaskListPage,
+    SimulationTaskQueuedResponse,
     SimulationTaskRerunRequest,
     SimulationTaskStatus,
+    TraceDataset,
+    TraceDatasetCatalogResponse,
     TraceDatasetDownloadRequest,
+    TraceDatasetDownloadResponse,
+    TraceDatasetTimelineResponse,
     TraceFormat,
 )
 from .service import (
@@ -47,27 +57,35 @@ from .traces import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/simulation", tags=["simulation"])
+router = APIRouter(prefix="/api/v1/simulation", tags=["simulation"])
 
 # Previous router-local names remain importable without duplicating their schemas.
 CreateTaskRequest = SimulationTaskCreateRequest
 DownloadRequest = TraceDatasetDownloadRequest
 
 
-def _task_json(task: SimulationTask) -> dict[str, Any]:
-    exclude = {"live_summary"} if task.live_summary is None else None
-    return task.model_dump(mode="json", exclude=exclude)
+def _task_response(task: SimulationTask) -> SimulationTask:
+    """Keep ``live_summary`` absent (not null) for tasks that have no live data."""
+    payload = task.model_dump(mode="python")
+    if task.live_summary is None:
+        payload.pop("live_summary", None)
+    return SimulationTask.model_validate(payload)
 
 
-def _task_page_json(page: SimulationTaskListPage) -> dict[str, Any]:
-    return {
-        "tasks": [_task_json(task) for task in page.tasks],
-        "total": page.total,
-        "offset": page.offset,
-        "limit": page.limit,
-        "counts": page.counts,
-        "facets": page.facets,
-    }
+def _task_page_response(
+    page: SimulationTaskListPage,
+    *,
+    tasks: list[SimulationTask] | None = None,
+    total: int | None = None,
+) -> SimulationTaskListPage:
+    return SimulationTaskListPage(
+        tasks=[_task_response(task) for task in (page.tasks if tasks is None else tasks)],
+        total=page.total if total is None else total,
+        offset=page.offset,
+        limit=page.limit,
+        counts=page.counts,
+        facets=page.facets,
+    )
 
 
 @router.get(
@@ -79,9 +97,10 @@ def _task_page_json(page: SimulationTaskListPage) -> dict[str, Any]:
         "List Simulation backends Lens knows about and whether each backend is available in the current environment."
     ),
     operation_id="list_simulation_backends",
+    response_model=SimulationBackendsResponse,
 )
-async def backends_catalog() -> dict[str, Any]:
-    return {"backends": [backend.model_dump(mode="json") for backend in list_backends()]}
+async def backends_catalog() -> SimulationBackendsResponse:
+    return SimulationBackendsResponse(backends=list_backends())
 
 
 @router.post(
@@ -92,8 +111,9 @@ async def backends_catalog() -> dict[str, Any]:
         "when the target endpoint is not yet fully described."
     ),
     operation_id="discover_simulation_models",
+    response_model=SimulationModelDiscoveryResponse,
 )
-async def endpoint_models(request: ModelDiscoveryRequest) -> dict[str, Any]:
+async def endpoint_models(request: ModelDiscoveryRequest) -> SimulationModelDiscoveryResponse:
     try:
         return await discover_models(request.endpoint_url, api_key=request.api_key)
     except SimulationConfigurationError as error:
@@ -105,9 +125,10 @@ async def endpoint_models(request: ModelDiscoveryRequest) -> dict[str, Any]:
     summary=("List the simulation scenario catalog Lens exposes, such as chat, API-calling, and coding."),
     description=("List the simulation scenario catalog Lens exposes, such as chat, API-calling, and coding."),
     operation_id="list_simulation_scenarios",
+    response_model=SimulationScenariosResponse,
 )
-async def scenarios_catalog() -> dict[str, Any]:
-    return {"scenarios": [scenario.model_dump(mode="json") for scenario in list_scenarios()]}
+async def scenarios_catalog() -> SimulationScenariosResponse:
+    return SimulationScenariosResponse(scenarios=list_scenarios())
 
 
 @router.get(
@@ -115,8 +136,10 @@ async def scenarios_catalog() -> dict[str, Any]:
     summary="List registered trace datasets and the backends that can replay each one.",
     description="List registered trace datasets and the backends that can replay each one.",
     operation_id="list_trace_datasets",
+    response_model=TraceDatasetCatalogResponse,
+    response_model_exclude_unset=True,
 )
-async def trace_datasets_catalog() -> dict[str, Any]:
+async def trace_datasets_catalog() -> TraceDatasetCatalogResponse:
     backends = list_backends()
     datasets = []
     for dataset in trace_registry.list():
@@ -126,8 +149,8 @@ async def trace_datasets_catalog() -> dict[str, Any]:
             if any(scenario.name == dataset["scenario"] for scenario in backend.scenarios)
             and dataset["trace_format"] in backend.capabilities.get("trace_formats", [])
         ]
-        datasets.append({**dataset, "supported_backends": supported})
-    return {"data_dir": str(BaseTrace.trace_root()), "datasets": datasets}
+        datasets.append(TraceDataset.model_validate({**dataset, "supported_backends": supported}))
+    return TraceDatasetCatalogResponse(data_dir=str(BaseTrace.trace_root()), datasets=datasets)
 
 
 @router.post(
@@ -138,10 +161,11 @@ async def trace_datasets_catalog() -> dict[str, Any]:
         "Use this before replaying a dataset that is not yet present on disk."
     ),
     operation_id="download_trace_dataset",
+    response_model=TraceDatasetDownloadResponse,
 )
-async def download_trace_dataset(request: TraceDatasetDownloadRequest) -> dict[str, Any]:
+async def download_trace_dataset(request: TraceDatasetDownloadRequest) -> TraceDatasetDownloadResponse:
     try:
-        return await BaseTrace.download(request.dataset, request.force)
+        return TraceDatasetDownloadResponse.model_validate(await BaseTrace.download(request.dataset, request.force))
     except SimulationConfigurationError as error:
         code = 429 if "maximum number of concurrent trace downloads" in str(error) else 400
         raise HTTPException(status_code=code, detail=str(error)) from error
@@ -157,11 +181,12 @@ async def download_trace_dataset(request: TraceDatasetDownloadRequest) -> dict[s
         "Use this to inspect traffic intensity and replay shape before running Simulation."
     ),
     operation_id="get_trace_dataset_timeline",
+    response_model=TraceDatasetTimelineResponse,
 )
 async def trace_dataset_timeline(
     dataset_name: str,
     bins: int = Query(default=800, ge=50, le=2000),
-) -> dict[str, Any]:
+) -> TraceDatasetTimelineResponse:
     try:
         return await get_trace_timeline(dataset_name, bins)
     except KeyError as error:
@@ -184,6 +209,8 @@ async def trace_dataset_timeline(
         "creation window."
     ),
     operation_id="list_simulation_tasks",
+    response_model=SimulationTaskListPage,
+    response_model_exclude_unset=True,
 )
 async def tasks_catalog(
     request: Request = None,
@@ -199,7 +226,7 @@ async def tasks_catalog(
     created_before: datetime | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=10, ge=1, le=100),
-) -> dict[str, Any]:
+) -> SimulationTaskListPage:
     if search is not None:
         search = search.strip()
         if not search:
@@ -222,15 +249,8 @@ async def tasks_catalog(
         allowed = visible_cluster_ids(current_principal(request))
         if allowed is not None:
             tasks = [task for task in page.tasks if getattr(task, "endpoint_cluster_id", None) in allowed]
-            return {
-                "tasks": [_task_json(task) for task in tasks],
-                "total": len(tasks),
-                "offset": page.offset,
-                "limit": page.limit,
-                "counts": page.counts,
-                "facets": page.facets,
-            }
-        return _task_page_json(page)
+            return _task_page_response(page, tasks=tasks, total=len(tasks))
+        return _task_page_response(page)
     except Exception as error:
         logger.exception("Unable to list simulation tasks")
         raise HTTPException(status_code=500, detail="Unable to list simulation tasks") from error
@@ -242,13 +262,17 @@ async def tasks_catalog(
     summary="Create a Simulation task that replays a trace dataset against a target model endpoint.",
     description="Create a Simulation task that replays a trace dataset against a target model endpoint.",
     operation_id="create_simulation_task",
+    response_model=SimulationTaskQueuedResponse,
+    response_model_exclude_unset=True,
 )
-async def create_simulation_task(request: SimulationTaskCreateRequest, http_request: Request = None) -> dict[str, Any]:
+async def create_simulation_task(
+    request: SimulationTaskCreateRequest, http_request: Request = None
+) -> SimulationTaskQueuedResponse:
     try:
         if request.cluster_session_id:
             require_active_session(request.cluster_session_id)
         task = await create_task(request, http_request=http_request)
-        return {"task_id": task.id, "status": "queued", "task": _task_json(task)}
+        return SimulationTaskQueuedResponse(task_id=task.id, status="queued", task=_task_response(task))
     except SimulationConfigurationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -261,13 +285,15 @@ async def create_simulation_task(request: SimulationTaskCreateRequest, http_requ
     summary="Get one Simulation task by id, including progress, logs, and result artifacts when they exist.",
     description="Get one Simulation task by id, including progress, logs, and result artifacts when they exist.",
     operation_id="get_simulation_task",
+    response_model=SimulationTask,
+    response_model_exclude_unset=True,
 )
-async def simulation_task(task_id: str, request: Request = None) -> dict[str, Any]:
+async def simulation_task(task_id: str, request: Request = None) -> SimulationTask:
     task = await get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Simulation task not found")
     require_cluster_access(current_principal(request), getattr(task, "endpoint_cluster_id", None))
-    return _task_json(task)
+    return _task_response(task)
 
 
 @router.get(
@@ -306,13 +332,14 @@ async def download_simulation_artifact(task_id: str, kind: str):
         "Use this to inspect failing or anomalous responses in detail."
     ),
     operation_id="get_simulation_response_code_issues",
+    response_model=SimulationResponseCodeIssuePage,
 )
 async def simulation_response_code_issues(
     task_id: str,
     status_code: str = Query(min_length=3, max_length=7),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
-) -> dict[str, Any]:
+) -> SimulationResponseCodeIssuePage:
     if status_code == "unknown":
         parsed_status_code = None
     else:
@@ -331,7 +358,7 @@ async def simulation_response_code_issues(
         )
     except SimulationConfigurationError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return page.model_dump(mode="json", by_alias=True)
+    return page
 
 
 @router.post(
@@ -339,11 +366,12 @@ async def simulation_response_code_issues(
     summary="Stop an active Simulation task.",
     description="Stop an active Simulation task. Use this when a replay should be cancelled before it finishes.",
     operation_id="stop_simulation_task",
+    response_model=SimulationTaskActionResponse,
 )
-async def stop_simulation_task(task_id: str) -> dict[str, str]:
+async def stop_simulation_task(task_id: str) -> SimulationTaskActionResponse:
     try:
         await stop_task(task_id)
-        return {"task_id": task_id, "status": "cancelling"}
+        return SimulationTaskActionResponse(task_id=task_id, status="cancelling")
     except SimulationConfigurationError as error:
         code = 404 if str(error) == "Simulation task not found" else 400
         raise HTTPException(status_code=code, detail=str(error)) from error
@@ -364,15 +392,17 @@ async def stop_simulation_task(task_id: str) -> dict[str, str]:
         "execution."
     ),
     operation_id="rerun_simulation_task",
+    response_model=SimulationTaskQueuedResponse,
+    response_model_exclude_unset=True,
 )
 async def rerun_simulation_task(
     task_id: str,
     request: SimulationTaskRerunRequest | None = None,
     http_request: Request = None,
-) -> dict[str, Any]:
+) -> SimulationTaskQueuedResponse:
     try:
         task = await rerun_task(task_id, override=request, http_request=http_request)
-        return {"task_id": task.id, "status": "queued", "task": _task_json(task)}
+        return SimulationTaskQueuedResponse(task_id=task.id, status="queued", task=_task_response(task))
     except SimulationConfigurationError as error:
         code = 404 if str(error) == "Simulation task not found" else 400
         raise HTTPException(status_code=code, detail=str(error)) from error
@@ -389,11 +419,12 @@ async def rerun_simulation_task(
         "no longer needed."
     ),
     operation_id="delete_simulation_task",
+    response_model=SimulationTaskActionResponse,
 )
-async def delete_simulation_task(task_id: str) -> dict[str, str]:
+async def delete_simulation_task(task_id: str) -> SimulationTaskActionResponse:
     try:
         await delete_task(task_id)
-        return {"task_id": task_id, "status": "deleted"}
+        return SimulationTaskActionResponse(task_id=task_id, status="deleted")
     except SimulationConfigurationError as error:
         code = 404 if str(error) == "Simulation task not found" else 409
         raise HTTPException(status_code=code, detail=str(error)) from error

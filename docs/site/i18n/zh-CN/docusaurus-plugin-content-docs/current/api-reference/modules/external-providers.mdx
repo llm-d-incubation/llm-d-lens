@@ -1,391 +1,372 @@
 ---
 title: 外部服务提供方
-description: 用于保存的 AI 提供方连接的后端端点与直接 Python 入口点。
+description: 将 Lens 连接到兼容 OpenAI 或 Anthropic 的 AI 提供方。
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## 后端 API
+## 这个模块是什么
 
-路由位于 `llm_d_lens/ai_providers/router.py` 中。以下每个端点都记录了其 REST 契约，以及它所使用的 `AIProviderService` 对应方法、连通性探测或代理调用。
+外部提供方是 Lens 作为客户端使用的、已保存的出站 AI 连接，例如 OpenAI、Anthropic 或自托管的兼容 OpenAI 服务器。你可以用它测试连接、保存和更新提供方设置、通过已保存的提供方发送聊天补全，以及移除不再需要的连接。存储的 API 密钥永远不会返回；响应只暴露 `hasApiKey` 和 `apiKeyPreview`。
 
-出站请求会校验 HTTPS 提供方 URL 以及公网 DNS 解析结果。没有代理时，后端会在保留原始 Host 请求头和 TLS SNI 的同时，连接到一个经过校验的 IP。当主机环境配置了 HTTPS 代理时，后端默认使用该代理并发送原始主机名，确保 TLS SNI 正确。只有在需要固定某个经过验证的代理 URL 时才设置 `LENS_TRUSTED_AI_PROVIDER_PROXY`；设置不匹配或代理被绕过时，仍保留应用层 IP 绑定。系统不会跟随重定向。请只配置你信任、且用于解析公开提供方主机的出口代理。
+## 快速开始
 
-### 列出已保存的 AI 提供方
-
-列出 Lens 已知的、已保存的外部 AI 提供方连接。返回的记录会屏蔽已存储的 API 密钥，仅展示安全的预览信息。
+先测试草稿配置，再保存它。提供方请求由 Lens 后端发出，因此 URL 必须可访问且为公网地址。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/ai-providers`**
 
-    请求：无请求体。
+```bash
+curl -X POST "$LENS_URL/api/v1/ai-providers/test" \
+  -H "Content-Type: application/json" \
+  -d '{"baseUrl":"https://api.openai.com/","model":"gpt-4o-mini","apiKey":"<token>","providerType":"openai"}'
 
-    响应：返回一个 `items` 数组，包含已保存的 `AIProvider` 记录，其中以 `hasApiKey` 和 `apiKeyPreview` 代替原始的 `apiKey`。
+curl -X POST "$LENS_URL/api/v1/ai-providers" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"OpenAI","baseUrl":"https://api.openai.com/","model":"gpt-4o-mini","apiKey":"<token>","providerType":"openai","timeoutSeconds":30}'
+```
 
-    ```json
-    {
-      "items": [
-        {
-          "id": "ai-provider-7f3a2c1d",
-          "name": "OpenAI-compatible gateway",
-          "baseUrl": "https://llm.example.com/",
-          "model": "gpt-4o-mini",
-          "providerType": "openai",
-          "timeoutSeconds": 15,
-          "createdAt": "2026-09-23T08:00:00Z",
-          "updatedAt": "2026-09-23T08:00:00Z",
-          "hasApiKey": true,
-          "apiKeyPreview": "...cdef"
-        }
-      ]
-    }
-    ```
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.service import default_service
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    service = default_service()
-    providers = [provider.api_payload() for provider in service.list()]
-    print(providers)
-    ```
-  </TabItem>
-</Tabs>
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest, AIProviderTestRequest
 
-### 获取某个已保存的 AI 提供方
-
-通过 id 获取某个已保存的外部 AI 提供方连接。响应会屏蔽存储的 API 密钥，只包含安全的元数据。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/ai-providers/{provider_id}`**
-
-    请求：无请求体。路径参数：`provider_id`（`str`）。
-
-    响应：返回一个经过屏蔽处理的 `AIProvider` 负载。
-
-    ```json
-    {
-      "id": "ai-provider-7f3a2c1d",
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4o-mini",
-      "providerType": "openai",
-      "timeoutSeconds": 15,
-      "createdAt": "2026-09-23T08:00:00Z",
-      "updatedAt": "2026-09-23T08:00:00Z",
-      "hasApiKey": true,
-      "apiKeyPreview": "...cdef"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    provider = service.get("ai-provider-7f3a2c1d")
-    if provider is None:
-        raise RuntimeError("provider not found")
-    print(provider.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 创建一个 AI 提供方
-
-创建并持久化一个新的外部 AI 提供方配置。当需要为代理式规划或其他集成功能持久保存可复用的提供方定义时，使用此端点。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers`**
-
-    请求：请求体字段为 `name`（`str`）、`baseUrl`（`HttpUrl`）、`model`（`str`）、`apiKey`（`str`，可选）、`providerType`（`"openai" | "anthropic"`）以及 `timeoutSeconds`（`float`）。
-
-    ```json
-    {
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4o-mini",
-      "apiKey": "sk-example-secret",
-      "providerType": "openai",
-      "timeoutSeconds": 15
-    }
-    ```
-
-    响应：返回新创建的提供方，其密钥已被屏蔽。
-
-    ```json
-    {
-      "id": "ai-provider-7f3a2c1d",
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4o-mini",
-      "providerType": "openai",
-      "timeoutSeconds": 15,
-      "createdAt": "2026-09-23T08:00:00Z",
-      "updatedAt": "2026-09-23T08:00:00Z",
-      "hasApiKey": true,
-      "apiKeyPreview": "...cret"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    provider = service.create(
-        AIProviderCreateRequest(
-            name="OpenAI-compatible gateway",
-            baseUrl="https://llm.example.com/",
-            model="gpt-4o-mini",
-            apiKey="sk-example-secret",
-            providerType="openai",
-            timeoutSeconds=15,
-        )
-    )
-    print(provider.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 更新一个 AI 提供方
-
-通过 id 更新一个已存在的外部 AI 提供方配置。省略 `apiKey` 可保持已存储的密钥不变，传入空字符串则可清除它。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`PUT /api/v1/ai-providers/{provider_id}`**
-
-    请求：路径参数 `provider_id`（`str`）。请求体为 `AIProviderUpdateRequest`，其中每个字段都是可选的。
-
-    ```json
-    {
-      "name": "OpenAI-compatible gateway",
-      "model": "gpt-4.1-mini",
-      "timeoutSeconds": 30
-    }
-    ```
-
-    响应：返回更新后的提供方，存储的密钥仍然被屏蔽。
-
-    ```json
-    {
-      "id": "ai-provider-7f3a2c1d",
-      "name": "OpenAI-compatible gateway",
-      "baseUrl": "https://llm.example.com/",
-      "model": "gpt-4.1-mini",
-      "providerType": "openai",
-      "timeoutSeconds": 30,
-      "createdAt": "2026-09-23T08:00:00Z",
-      "updatedAt": "2026-09-23T08:05:00Z",
-      "hasApiKey": true,
-      "apiKeyPreview": "...cret"
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.contracts import AIProviderUpdateRequest
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    provider = service.update(
-        "ai-provider-7f3a2c1d",
-        AIProviderUpdateRequest(model="gpt-4.1-mini", timeoutSeconds=30),
-    )
-    print(provider.api_payload())
-    ```
-  </TabItem>
-</Tabs>
-
-### 删除一个 AI 提供方
-
-删除一个已保存的外部 AI 提供方配置。当某个提供方不应再对 Lens 可用时，使用此端点。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`DELETE /api/v1/ai-providers/{provider_id}`**
-
-    请求：无请求体。路径参数：`provider_id`（`str`）。
-
-    响应：无响应体。删除成功时端点返回 **204 No Content**。
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    from llm_d_lens.ai_providers.service import default_service
-
-    service = default_service()
-    service.delete("ai-provider-7f3a2c1d")
-    print("deleted")
-    ```
-  </TabItem>
-</Tabs>
-
-### 测试一个尚未保存的 AI 提供方草稿
-
-测试一个尚未保存的外部 AI 提供方配置的连通性。在创建或更新一个持久化的提供方记录之前，使用此端点。
-
-URL 必须使用公网 HTTPS 目标地址，且不得包含内嵌凭据、查询参数或片段标识符。支持带版本段的基础路径（例如 `/openai/v1.0`）。同样的目标地址规则也适用于已保存提供方的聊天请求和代理式请求。
-
-<Tabs>
-  <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers/test`**
-
-    请求：请求体字段为 `baseUrl`（`HttpUrl`）、`model`（`str`）、`apiKey`（`str`，可选）、`providerType`（`"openai" | "anthropic"`）以及 `timeoutSeconds`（`float`）。
-
-    ```json
-    {
-      "baseUrl": "https://api.openai.com/",
-      "model": "gpt-4o-mini",
-      "apiKey": "sk-abc",
-      "providerType": "openai",
-      "timeoutSeconds": 15
-    }
-    ```
-
-    响应：返回一个 `AIProviderTestResult`，包含是否成功、模型查找状态和延迟。
-
-    ```json
-    {
-      "success": true,
-      "message": "Connected successfully.",
-      "modelFound": true,
-      "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
-      "latencyMs": 182.4
-    }
-    ```
-  </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.ai_providers.service import check_connection
-
-
     async def main() -> None:
-        result = await check_connection(
-            "https://api.openai.com/",
-            "gpt-4o-mini",
-            "sk-abc",
-            15,
-            "openai",
+        result = await lens.external_providers.test_draft_provider(
+            AIProviderTestRequest(
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+            )
         )
-        print(result.model_dump(mode="json", by_alias=True))
+        print(result.success, result.message)
 
+        provider = await lens.external_providers.create_provider(
+            AIProviderCreateRequest(
+                name="OpenAI",
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+                timeoutSeconds=30,
+            )
+        )
+        print(provider.id, provider.has_api_key)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 测试一个已保存的 AI 提供方
+## 常见任务
 
-通过 id 测试一个已保存的外部 AI 提供方的连通性，复用其存储的 API 密钥。当需要验证一个已存在的提供方定义时，使用此端点。
+### 保存前测试配置
+
+测试会探测提供方的模型列表，并报告是否找到了配置的模型。无法访问的提供方会返回 `200` 且 `success: false`；请检查结果，不要只看 HTTP 状态码。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers/{provider_id}/test`**
 
-    请求：无请求体。路径参数：`provider_id`（`str`）。
+**`POST /api/v1/ai-providers/test`**
 
-    响应：使用该提供方持久化保存的 `baseUrl`、`model`、`apiKey`、`timeoutSeconds` 和 `providerType`，返回一个 `AIProviderTestResult`。
+```json
+{
+  "baseUrl": "https://api.openai.com/",
+  "model": "gpt-4o-mini",
+  "apiKey": "<token>",
+  "providerType": "openai",
+  "timeoutSeconds": 15
+}
+```
 
-    ```json
-    {
-      "success": true,
-      "message": "Connected successfully.",
-      "modelFound": true,
-      "availableModels": ["gpt-4o-mini", "gpt-4.1-mini"],
-      "latencyMs": 176.9
-    }
-    ```
+```json
+{
+  "success": true,
+  "message": "Connected successfully.",
+  "modelFound": true,
+  "availableModels": ["gpt-4o-mini"],
+  "latencyMs": 182.4
+}
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderTestRequest
+
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.ai_providers.service import check_connection, default_service
-
-
     async def main() -> None:
-        service = default_service()
-        provider = service.get("ai-provider-7f3a2c1d")
-        if provider is None:
-            raise RuntimeError("provider not found")
-        result = await check_connection(
-            str(provider.base_url),
-            provider.model,
-            provider.api_key,
-            provider.timeout_seconds,
-            provider.provider_type,
+        result = await lens.external_providers.test_draft_provider(
+            AIProviderTestRequest(
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+            )
         )
-        print(result.model_dump(mode="json", by_alias=True))
-
+        print(result.success, result.model_found, result.latency_ms)
 
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-### 通过已保存的提供方代理一次聊天补全请求
+### 保存提供方连接
 
-通过一个已保存的 AI 提供方发送一次聊天补全请求。该路由仅支持已保存的 `openai` 类型提供方，并会转发一个兼容 OpenAI 的 JSON 请求体，同时附加服务端保存的 API 密钥。
+为 Lens Assistant 和其他智能体功能保存持久连接。提供方名称唯一且忽略大小写；重复名称返回 `409 ai_provider_name_conflict`。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`POST /api/v1/ai-providers/{provider_id}/chat/completions`**
 
-    请求：路径参数 `provider_id`（`str`）。请求体会作为 OpenAI 风格的 `chat/completions` 负载被转发。如果省略了 `model`，路由会在代理之前填入已保存提供方的模型。
+**`POST /api/v1/ai-providers`**
 
-    ```json
-    {
-      "messages": [
-        {
-          "role": "user",
-          "content": "Give me a one-line health summary for cluster-123."
-        }
-      ]
-    }
-    ```
+```json
+{
+  "name": "OpenAI",
+  "baseUrl": "https://api.openai.com/",
+  "model": "gpt-4o-mini",
+  "apiKey": "<token>",
+  "providerType": "openai",
+  "timeoutSeconds": 30
+}
+```
 
-    响应：返回上游提供方的 JSON 响应。
+响应（`201`）：
 
-    ```json
-    {
-      "choices": [
-        {
-          "message": {
-            "role": "assistant",
-            "content": "Cluster cluster-123 is reachable and reports healthy control-plane status."
-          }
-        }
-      ]
-    }
-    ```
+```json
+{
+  "id": "ai-provider-7f3a2c1d",
+  "name": "OpenAI",
+  "baseUrl": "https://api.openai.com/",
+  "model": "gpt-4o-mini",
+  "providerType": "openai",
+  "timeoutSeconds": 30,
+  "hasApiKey": true,
+  "apiKeyPreview": "...cdef"
+}
+```
+
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderCreateRequest
+
+with LensLocal("<username>") as lens:
     import asyncio
 
-    from llm_d_lens.ai_providers.router import proxy_chat_completions
+    async def main() -> None:
+        provider = await lens.external_providers.create_provider(
+            AIProviderCreateRequest(
+                name="OpenAI",
+                baseUrl="https://api.openai.com/",
+                model="gpt-4o-mini",
+                apiKey="<token>",
+                providerType="openai",
+                timeoutSeconds=30,
+            )
+        )
+        print(provider.id, provider.model, provider.has_api_key)
 
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 更新提供方或轮换密钥
+
+所有字段都是可选的。省略 `apiKey` 会保留已存储的密钥，传入空字符串则会清除它。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`PUT /api/v1/ai-providers/{provider_id}`**
+
+```json
+{
+  "model": "gpt-4.1-mini",
+  "timeoutSeconds": 45,
+  "apiKey": "<token>"
+}
+```
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+from llm_d_lens.ai_providers.contracts import AIProviderUpdateRequest
+
+with LensLocal("<username>") as lens:
+    import asyncio
 
     async def main() -> None:
-        response = await proxy_chat_completions(
-            "ai-provider-7f3a2c1d",
+        provider = await lens.external_providers.update_provider(
+            "<provider-id>",
+            AIProviderUpdateRequest(
+                model="gpt-4.1-mini",
+                timeoutSeconds=45,
+                apiKey="<token>",
+            ),
+        )
+        print(provider.id, provider.model)
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 通过已保存的提供方发送聊天补全
+
+服务器会附带已保存的密钥转发 OpenAI 风格的请求体，并在省略 `model` 时填入已保存的模型。只有 `openai` 类型提供方支持此路由。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/ai-providers/{provider_id}/chat/completions`**
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Give me a one-line health summary."
+    }
+  ]
+}
+```
+
+响应是上游提供方返回的 JSON。
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        response = await lens.external_providers.proxy_chat_completions(
+            "<provider-id>",
             {"messages": [{"role": "user", "content": "Say hello in one sentence."}]},
         )
         print(response)
 
-
     asyncio.run(main())
-    ```
+```
+
   </TabItem>
 </Tabs>
 
-完整的请求/响应模式请参见 FastAPI 的 OpenAPI schema（可通过 `npm run docs:api` 重新生成）。
+### 测试已保存的提供方
+
+此操作会复用已存储的 URL、模型、密钥和超时设置。在编辑提供方后或诊断连接问题时使用它。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -X POST "$LENS_URL/api/v1/ai-providers/<provider-id>/test"
+```
+
+响应结构与草稿测试相同。
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        result = await lens.external_providers.test_saved_provider("<provider-id>")
+        print(result.success, result.message)
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+### 删除提供方
+
+删除会移除保存的配置及其存储的密钥。它不会影响外部提供方本身。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+```bash
+curl -X DELETE "$LENS_URL/api/v1/ai-providers/<provider-id>"
+```
+
+响应：`204 No Content`。
+
+  </TabItem>
+  <TabItem value="python-api" label="In-process Python SDK">
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    import asyncio
+
+    async def main() -> None:
+        await lens.external_providers.delete_provider("<provider-id>")
+
+    asyncio.run(main())
+```
+
+  </TabItem>
+</Tabs>
+
+## 端点
+
+| 方法 | 路径 | 权限 | 用途 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/ai-providers` | `ai-provider:provider:read` | 列出已保存的提供方，密钥已屏蔽。 |
+| GET | `/api/v1/ai-providers/{provider_id}` | `ai-provider:provider:read` | 获取一个已保存的提供方。 |
+| POST | `/api/v1/ai-providers` | `ai-provider:provider:create` | 保存新的提供方连接。 |
+| PUT | `/api/v1/ai-providers/{provider_id}` | `ai-provider:provider:update` | 更新提供方；轮换或清除密钥。 |
+| DELETE | `/api/v1/ai-providers/{provider_id}` | `ai-provider:provider:delete` | 删除已保存的提供方。 |
+| POST | `/api/v1/ai-providers/test` | `ai-provider:provider:test` | 测试未保存的配置。 |
+| POST | `/api/v1/ai-providers/{provider_id}/test` | `ai-provider:provider:test` | 测试已保存的提供方。 |
+| POST | `/api/v1/ai-providers/{provider_id}/chat/completions` | `ai-provider:provider:chat` | 代理 OpenAI 聊天补全。 |
+
+## 错误 / 限制
+
+- **API 密钥永远不会返回。** 列表、获取、创建和更新响应只暴露 `hasApiKey` 和 `apiKeyPreview`。
+- **更新时不传 `apiKey` 会保留旧密钥。** 传入 `"apiKey": ""` 可清除它，传入新值可轮换它。
+- **提供方名称唯一且忽略大小写。** 重复名称返回 `409 ai_provider_name_conflict`。
+- **出站 URL 必须使用公网 HTTPS。** 不要内嵌凭据、查询参数或片段标识符。支持带版本的基础路径，例如 `/openai/v1.0`。系统不会跟随重定向。只配置你信任的出口代理；设置 `LENS_TRUSTED_AI_PROVIDER_PROXY` 以固定某个经过验证的代理。
+- **连接测试失败不是 HTTP 错误。** 对于无法访问或被拒绝的探测，测试端点返回 `200` 且 `success: false`，并附带说明信息。无效请求字段返回 `422`。
+- **聊天代理仅支持 OpenAI 类型。** 其他提供方类型返回 `400`。提供方不存在返回 `404`；上游错误状态会原样返回；网络或超时失败返回 `502`。
+- **字段限制。** `name` 和 `model` 最多 200 个字符；`timeoutSeconds` 必须大于 `0` 且不超过 `120`；`providerType` 为 `openai` 或 `anthropic`。聊天代理调用使用单独的、更长的固定超时。
+- **支持的提供方类型。** 兼容 OpenAI 的 API 使用 `openai`，兼容 Anthropic 的 API 使用 `anthropic`。聊天代理目前仅支持 `openai`。
+
+## 相关
+
+- [外部提供方用户指南](/user-guide/external-providers)
+- [Lens Assistant](/user-guide/lens-assistant) — 已保存提供方的主要使用方。
+- [集成](/integrations) — 将兼容 OpenAI 的客户端连接到 Lens 模型服务。
+- [API 参考约定](/api-reference) — 认证、错误和字段命名。
+- OpenAPI schema：`/api/v1/simulation/openapi.json`（Swagger UI 位于 `/api/v1/simulation/docs`）。

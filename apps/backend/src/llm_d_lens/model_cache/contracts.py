@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -179,5 +179,36 @@ class ModelCacheEntry(StrictModel):
     created_at: datetime = Field(default_factory=utcnow, alias="createdAt")
     updated_at: datetime = Field(default_factory=utcnow, alias="updatedAt")
 
-    def api_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json", by_alias=True)
+
+class ModelCacheEntryResponse(ModelCacheEntry):
+    """A cache entry plus the node-sync drift computed for the API response."""
+
+    pending_sync_nodes: list[str] = Field(default_factory=list, alias="pendingSyncNodes")
+
+    @classmethod
+    def from_entry(
+        cls, entry: ModelCacheEntry, *, pending_sync_nodes: list[str] | None = None
+    ) -> ModelCacheEntryResponse:
+        return cls.model_validate(
+            {
+                **entry.model_dump(mode="json", by_alias=True),
+                "pendingSyncNodes": pending_sync_nodes or [],
+            }
+        )
+
+
+class ModelCacheEntryListResponse(StrictModel):
+    items: list[ModelCacheEntryResponse] = Field(default_factory=list)
+
+
+class ModelCacheDeletedResponse(StrictModel):
+    id: str
+    status: Literal["deleted"] = "deleted"
+
+
+class ModelCacheLogsResponse(StrictModel):
+    logs: str = ""
+
+
+class HuggingFaceModelSearchResponse(StrictModel):
+    items: list[HuggingFaceModelSummary] = Field(default_factory=list)

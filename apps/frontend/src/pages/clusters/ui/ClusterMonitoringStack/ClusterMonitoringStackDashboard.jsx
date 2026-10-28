@@ -89,7 +89,7 @@ export default function ClusterMonitoringStackDashboard({ onToggleMobileNav, ini
         let cancelled = false;
         (async () => {
             try {
-                const payload = await requestMonitoringJson('/api/cluster/clusters');
+                const payload = await requestMonitoringJson('/api/v1/cluster/clusters');
                 if (cancelled) return;
                 const ready = (payload?.items || []).filter((cluster) => cluster.ready);
                 setClusters(ready);

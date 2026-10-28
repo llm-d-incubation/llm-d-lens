@@ -30,8 +30,10 @@ class OrphanNamespace:
     created_at: str | None = None
     phase: str | None = None
 
-    def api_payload(self) -> dict:
-        return {"name": self.name, "createdAt": self.created_at, "phase": self.phase}
+    def api_payload(self):
+        from llm_d_lens.deploy.models import DeploymentOrphanNamespace
+
+        return DeploymentOrphanNamespace.from_orphan(self)
 
 
 def namespace_prefix() -> str:

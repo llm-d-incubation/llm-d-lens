@@ -16,27 +16,27 @@ from llm_d_lens.auth.settings import get_settings
 from .catalog import catalog, render_path
 
 SPECIAL_ROUTES = {
-    "list_deploy_poc_configs": ("GET", "/api/deploy-poc/config"),
-    "start_deploy_poc": ("POST", "/api/deploy-poc/start"),
-    "teardown_deploy_poc": ("POST", "/api/deploy-poc/teardown"),
-    "resolve_configurations": ("POST", "/api/configurations/resolve"),
-    "render_configuration": ("POST", "/api/configurations/render"),
-    "save_configuration": ("POST", "/api/configurations/save"),
-    "get_remote_deploy_defaults": ("GET", "/api/remote-deploy/defaults"),
-    "get_remote_deploy_fingerprint": ("POST", "/api/remote-deploy/fingerprint"),
-    "test_remote_deploy_target": ("POST", "/api/remote-deploy/test"),
-    "start_remote_deploy": ("POST", "/api/remote-deploy/start"),
-    "get_remote_deploy_status": ("POST", "/api/remote-deploy/status"),
-    "get_remote_deploy_logs": ("POST", "/api/remote-deploy/logs"),
-    "teardown_remote_deploy": ("POST", "/api/remote-deploy/teardown"),
-    "prepare_guide_plan": ("POST", "/api/guide-planning/prepare"),
-    "plan_guide_deployment": ("POST", "/api/guide-planning/plan"),
-    "check_candidate_support": ("POST", "/api/candidate-support"),
-    "search_candidates": ("POST", "/api/candidate-search"),
+    "list_deploy_poc_configs": ("GET", "/api/v1/deploy-poc/config"),
+    "start_deploy_poc": ("POST", "/api/v1/deploy-poc/start"),
+    "teardown_deploy_poc": ("POST", "/api/v1/deploy-poc/teardown"),
+    "resolve_configurations": ("POST", "/api/v1/configurations/resolve"),
+    "render_configuration": ("POST", "/api/v1/configurations/render"),
+    "save_configuration": ("POST", "/api/v1/configurations/save"),
+    "get_remote_deploy_defaults": ("GET", "/api/v1/remote-deploy/defaults"),
+    "get_remote_deploy_fingerprint": ("POST", "/api/v1/remote-deploy/fingerprint"),
+    "test_remote_deploy_target": ("POST", "/api/v1/remote-deploy/test"),
+    "start_remote_deploy": ("POST", "/api/v1/remote-deploy/start"),
+    "get_remote_deploy_status": ("POST", "/api/v1/remote-deploy/status"),
+    "get_remote_deploy_logs": ("POST", "/api/v1/remote-deploy/logs"),
+    "teardown_remote_deploy": ("POST", "/api/v1/remote-deploy/teardown"),
+    "prepare_guide_plan": ("POST", "/api/v1/guide-planning/prepare"),
+    "plan_guide_deployment": ("POST", "/api/v1/guide-planning/plan"),
+    "check_candidate_support": ("POST", "/api/v1/candidate-support"),
+    "search_candidates": ("POST", "/api/v1/candidate-search"),
     "estimate_vllm_capacity": ("POST", "/api/v1/capacity/estimate"),
-    "get_deploy_status": ("GET", "/api/deploy-poc/status"),
-    "get_deploy_validation": ("GET", "/api/deploy-poc/validate"),
-    "get_guide_catalog": ("GET", "/api/guide-planning/catalog"),
+    "get_deploy_status": ("GET", "/api/v1/deploy-poc/status"),
+    "get_deploy_validation": ("GET", "/api/v1/deploy-poc/validate"),
+    "get_guide_catalog": ("GET", "/api/v1/guide-planning/catalog"),
 }
 STATUS_KEYS = ("status", "phase", "state", "ready", "condition")
 TERMINAL = (
@@ -238,7 +238,7 @@ async def invoke_tool(request, name: str, arguments: dict):
         }
     if name == "search_aic_with_relaxation":
         result = await api_request(
-            request, "/api/cluster/overview" + query_string({"clusterId": arguments["clusterId"]})
+            request, "/api/v1/cluster/overview" + query_string({"clusterId": arguments["clusterId"]})
         )
         if result.get("error"):
             raise ValueError("Cluster overview failed: " + result["error"])
@@ -262,7 +262,7 @@ async def invoke_tool(request, name: str, arguments: dict):
             raise ValueError("Cluster overview has no valid AIC search GPU budget")
         return await api_request(
             request,
-            "/api/candidate-search/relaxed",
+            "/api/v1/candidate-search/relaxed",
             "POST",
             {
                 "workload": arguments["workload"],

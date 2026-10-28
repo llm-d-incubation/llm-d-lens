@@ -13,8 +13,12 @@ from llm_d_lens.model_cache import jobs
 from llm_d_lens.model_cache.contracts import (
     HuggingFaceSource,
     ModelCacheCreateRequest,
+    ModelCacheDeletedResponse,
     ModelCacheEntry,
+    ModelCacheEntryListResponse,
+    ModelCacheEntryResponse,
     ModelCacheEntryStatus,
+    ModelCacheLogsResponse,
     ModelSource,
     ModelSourceKind,
     NodeDownloadStatus,
@@ -161,6 +165,23 @@ class ModelCacheService:
 
     def __init__(self, store: ModelCacheStore | None = None) -> None:
         self._store = store or default_store()
+
+    def response(
+        self, entry: ModelCacheEntry, *, pending_sync_nodes: list[str] | None = None
+    ) -> ModelCacheEntryResponse:
+        return ModelCacheEntryResponse.from_entry(entry, pending_sync_nodes=pending_sync_nodes)
+
+    async def responses(self, entries: list[ModelCacheEntry]) -> ModelCacheEntryListResponse:
+        pending = await self.compute_pending_sync(entries)
+        return ModelCacheEntryListResponse(
+            items=[self.response(entry, pending_sync_nodes=pending.get(entry.id)) for entry in entries]
+        )
+
+    def deleted_response(self, entry_id: str) -> ModelCacheDeletedResponse:
+        return ModelCacheDeletedResponse(id=entry_id)
+
+    def logs_response(self, logs: str) -> ModelCacheLogsResponse:
+        return ModelCacheLogsResponse(logs=logs)
 
     async def list(
         self, *, cluster_id: str | None = None, storage_volume_id: str | None = None

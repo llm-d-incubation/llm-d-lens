@@ -12,10 +12,14 @@ from llm_d_lens.auth.access import current_principal, filter_by_cluster, require
 from llm_d_lens.model_cache import huggingface_hub
 from llm_d_lens.model_cache.contracts import (
     HuggingFaceModelDetail,
+    HuggingFaceModelSearchResponse,
     HuggingFaceModelSummary,
     ModelCacheCreateRequest,
-    ModelCacheEntry,
+    ModelCacheDeletedResponse,
+    ModelCacheEntryListResponse,
+    ModelCacheEntryResponse,
     ModelCacheEntryStatus,
+    ModelCacheLogsResponse,
 )
 from llm_d_lens.model_cache.service import (
     ModelCacheEntryExistsError,
@@ -31,19 +35,9 @@ logger = logging.getLogger(__name__)
 _service = default_service()
 
 
-def _payload(entry: ModelCacheEntry, *, pending_sync_nodes: list[str] | None = None) -> dict:
-    payload = entry.api_payload()
-    payload["pendingSyncNodes"] = pending_sync_nodes or []
-    return payload
-
-
-async def _payloads(entries: list[ModelCacheEntry]) -> list[dict]:
-    pending = await _service.compute_pending_sync(entries)
-    return [_payload(entry, pending_sync_nodes=pending.get(entry.id)) for entry in entries]
-
-
 @router.get(
     "/entries",
+    response_model=ModelCacheEntryListResponse,
     summary="List Model Cache entries, optionally filtered by cluster or storage volume.",
     description=(
         "List Model Cache entries, optionally filtered by cluster or storage volume. Use this to discover cached "
@@ -51,32 +45,36 @@ async def _payloads(entries: list[ModelCacheEntry]) -> list[dict]:
     ),
     operation_id="list_model_cache_entries",
 )
-async def list_entries(request: Request = None, cluster_id: str = "", storage_volume_id: str = "") -> dict:
+async def list_entries(
+    request: Request = None, cluster_id: str = "", storage_volume_id: str = ""
+) -> ModelCacheEntryListResponse:
     entries = await _service.list(cluster_id=cluster_id or None, storage_volume_id=storage_volume_id or None)
     entries = filter_by_cluster(entries, lambda entry: entry.cluster_id, current_principal(request))
-    return {"items": await _payloads(entries)}
+    return await _service.responses(entries)
 
 
 @router.get(
     "/entries/{entry_id}",
+    response_model=ModelCacheEntryResponse,
     summary=("Get one Model Cache entry by id, including source, token mode, node progress, and pending sync nodes."),
     description=(
         "Get one Model Cache entry by id, including source, token mode, node progress, and pending sync nodes."
     ),
     operation_id="get_model_cache_entry",
 )
-async def get_entry(entry_id: str, request: Request = None) -> dict:
+async def get_entry(entry_id: str, request: Request = None) -> ModelCacheEntryResponse:
     try:
         entry = await _service.get(entry_id)
     except ModelCacheNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     require_cluster_access(current_principal(request), entry.cluster_id)
     pending = await _service.compute_pending_sync([entry])
-    return _payload(entry, pending_sync_nodes=pending.get(entry.id))
+    return _service.response(entry, pending_sync_nodes=pending.get(entry.id))
 
 
 @router.post(
     "/entries",
+    response_model=ModelCacheEntryResponse,
     status_code=202,
     summary="Request a model download into Lens Model Cache.",
     description=(
@@ -87,7 +85,7 @@ async def get_entry(entry_id: str, request: Request = None) -> dict:
     ),
     operation_id="create_model_cache_entry",
 )
-async def create_entry(request: ModelCacheCreateRequest) -> dict:
+async def create_entry(request: ModelCacheCreateRequest) -> ModelCacheEntryResponse:
     try:
         entry = await _service.request_download(request)
     except ModelCacheEntryExistsError as error:
@@ -116,7 +114,7 @@ async def create_entry(request: ModelCacheCreateRequest) -> dict:
         entry.cluster_id,
     )
     asyncio.create_task(_provision(entry.id))
-    return _payload(entry)
+    return _service.response(entry)
 
 
 async def _provision(entry_id: str) -> None:
@@ -128,12 +126,13 @@ async def _provision(entry_id: str) -> None:
 
 @router.post(
     "/entries/{entry_id}/retry",
+    response_model=ModelCacheEntryResponse,
     status_code=202,
     summary="Retry a failed or retryable Model Cache entry download.",
     description="Retry a failed or retryable Model Cache entry download.",
     operation_id="retry_model_cache_entry",
 )
-async def retry_entry(entry_id: str) -> dict:
+async def retry_entry(entry_id: str) -> ModelCacheEntryResponse:
     try:
         entry = _service.retry(entry_id)
     except ModelCacheNotFoundError as error:
@@ -142,7 +141,7 @@ async def retry_entry(entry_id: str) -> dict:
         return problem(409, "Entry cannot be retried", str(error), "model_cache_invalid_state")
     logger.info("event=model_cache_retry_requested entry_id=%s", entry_id)
     asyncio.create_task(_provision(entry_id))
-    return _payload(entry)
+    return _service.response(entry)
 
 
 async def _provision_new_nodes(entry_id: str) -> None:
@@ -155,6 +154,7 @@ async def _provision_new_nodes(entry_id: str) -> None:
 
 @router.post(
     "/entries/sync-nodes",
+    response_model=ModelCacheEntryListResponse,
     status_code=202,
     summary="Trigger sync for all local-disk Model Cache entries that are missing on newly added nodes.",
     description=(
@@ -163,7 +163,7 @@ async def _provision_new_nodes(entry_id: str) -> None:
     ),
     operation_id="sync_model_cache_nodes",
 )
-async def sync_all_entry_nodes(cluster_id: str = "") -> dict:
+async def sync_all_entry_nodes(cluster_id: str = "") -> ModelCacheEntryListResponse:
     """One-click fix: (re)download onto every cluster node any ``local-disk``
     entry hasn't reached yet, across all entries (optionally scoped to a
     cluster). Meant for the Model Cache page's "Sync new nodes" action once
@@ -174,11 +174,12 @@ async def sync_all_entry_nodes(cluster_id: str = "") -> dict:
         asyncio.create_task(_provision_new_nodes(entry.id))
     if changed:
         logger.info("event=model_cache_sync_all_requested count=%d cluster_id=%s", len(changed), cluster_id or "*")
-    return {"items": [_payload(entry) for entry in changed]}
+    return ModelCacheEntryListResponse(items=[_service.response(entry) for entry in changed])
 
 
 @router.post(
     "/entries/{entry_id}/sync-nodes",
+    response_model=ModelCacheEntryResponse,
     status_code=202,
     summary="Trigger node sync for one specific Model Cache entry.",
     description=(
@@ -187,7 +188,7 @@ async def sync_all_entry_nodes(cluster_id: str = "") -> dict:
     ),
     operation_id="sync_model_cache_entry_nodes",
 )
-async def sync_entry_nodes(entry_id: str) -> dict:
+async def sync_entry_nodes(entry_id: str) -> ModelCacheEntryResponse:
     try:
         entry = await _service.sync_nodes(entry_id)
     except ModelCacheNotFoundError as error:
@@ -195,11 +196,12 @@ async def sync_entry_nodes(entry_id: str) -> dict:
     if entry.status == ModelCacheEntryStatus.DOWNLOADING:
         logger.info("event=model_cache_sync_requested entry_id=%s", entry_id)
         asyncio.create_task(_provision_new_nodes(entry_id))
-    return _payload(entry)
+    return _service.response(entry)
 
 
 @router.delete(
     "/entries/{entry_id}",
+    response_model=ModelCacheEntryResponse | ModelCacheDeletedResponse,
     status_code=202,
     summary=("Delete a Model Cache entry and, when required, schedule cleanup of its downloaded files."),
     description=(
@@ -208,7 +210,7 @@ async def sync_entry_nodes(entry_id: str) -> dict:
     ),
     operation_id="delete_model_cache_entry",
 )
-async def delete_entry(entry_id: str, keep_files: bool = False) -> dict:
+async def delete_entry(entry_id: str, keep_files: bool = False) -> ModelCacheEntryResponse | ModelCacheDeletedResponse:
     try:
         entry = await _service.request_delete(entry_id, keep_files=keep_files)
     except ModelCacheNotFoundError as error:
@@ -218,14 +220,15 @@ async def delete_entry(entry_id: str, keep_files: bool = False) -> dict:
         # nothing on the shared volume that needed a mount-dependent cleanup
         # Job (see ``service.request_delete``). Nothing left to provision.
         logger.info("event=model_cache_deleted_immediately entry_id=%s", entry_id)
-        return {"id": entry_id, "status": "deleted"}
+        return _service.deleted_response(entry_id)
     logger.info("event=model_cache_delete_requested entry_id=%s", entry_id)
     asyncio.create_task(_provision_delete(entry_id))
-    return _payload(entry)
+    return _service.response(entry)
 
 
 @router.get(
     "/entries/{entry_id}/logs",
+    response_model=ModelCacheLogsResponse,
     summary="Get logs for one Model Cache entry, optionally scoped to a specific node.",
     description=(
         "Get logs for one Model Cache entry, optionally scoped to a specific node. "
@@ -233,12 +236,12 @@ async def delete_entry(entry_id: str, keep_files: bool = False) -> dict:
     ),
     operation_id="get_model_cache_entry_logs",
 )
-async def get_entry_logs(entry_id: str, node: str = "") -> dict:
+async def get_entry_logs(entry_id: str, node: str = "") -> ModelCacheLogsResponse:
     try:
         logs = await _service.get_logs(entry_id, node=node or None)
     except ModelCacheNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return {"logs": logs}
+    return _service.logs_response(logs)
 
 
 async def _provision_delete(entry_id: str) -> None:
@@ -251,6 +254,7 @@ async def _provision_delete(entry_id: str) -> None:
 
 @router.get(
     "/huggingface/search",
+    response_model=HuggingFaceModelSearchResponse,
     summary="Search Hugging Face model repositories from Lens Model Cache.",
     description=(
         "Search Hugging Face model repositories from Lens Model Cache. "
@@ -258,20 +262,20 @@ async def _provision_delete(entry_id: str) -> None:
     ),
     operation_id="search_huggingface_models",
 )
-async def search_huggingface_models(query: str = "", limit: int = 20) -> dict:
+async def search_huggingface_models(query: str = "", limit: int = 20) -> HuggingFaceModelSearchResponse:
     needle = query.strip()
     if not needle:
-        return {"items": []}
+        return HuggingFaceModelSearchResponse()
     try:
         raw_items = await huggingface_hub.search_models(needle, limit=limit)
     except huggingface_hub.HuggingFaceHubError as error:
         return problem(502, "HuggingFace Hub unavailable", str(error), "huggingface_hub_unavailable")
-    items = [HuggingFaceModelSummary.from_hub_json(item).model_dump(mode="json", by_alias=True) for item in raw_items]
-    return {"items": items}
+    return HuggingFaceModelSearchResponse(items=[HuggingFaceModelSummary.from_hub_json(item) for item in raw_items])
 
 
 @router.get(
     "/huggingface/models/{repo_id:path}",
+    response_model=HuggingFaceModelDetail,
     summary=(
         "Get detailed Hugging Face metadata for one model repository, including the README snapshot Lens fetched."
     ),
@@ -280,11 +284,11 @@ async def search_huggingface_models(query: str = "", limit: int = 20) -> dict:
     ),
     operation_id="get_huggingface_model",
 )
-async def get_huggingface_model(repo_id: str) -> dict:
+async def get_huggingface_model(repo_id: str) -> HuggingFaceModelDetail:
     try:
         payload = await huggingface_hub.get_model_detail(repo_id)
     except huggingface_hub.HuggingFaceModelNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except huggingface_hub.HuggingFaceHubError as error:
         return problem(502, "HuggingFace Hub unavailable", str(error), "huggingface_hub_unavailable")
-    return HuggingFaceModelDetail.from_hub_payload(payload).model_dump(mode="json", by_alias=True)
+    return HuggingFaceModelDetail.from_hub_payload(payload)

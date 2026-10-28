@@ -20,6 +20,28 @@ verification and unresolved decisions. All source paths below are repo-relative.
   locate storage and Kubernetes helpers. A removed implementation or historical
   design document is not an available dependency.
 
+## REST and in-process Python SDK parity
+
+Any REST route, contract, permission, default, status-code or behavior change
+must update the matching in-process Python SDK surface and its docs in the same
+change. Follow the parity rule in
+[AGENTS.md](../../../AGENTS.md#rest-and-in-process-python-sdk-parity): update
+`apps/backend/src/llm_d_lens/sdk/local.py`, `apps/backend/tests/unit/sdk/`, and
+both locale tabs. SDK examples must call `lens.*`; direct `llm_d_lens.*` service
+calls are not SDK examples.
+
+Response-class coverage is mandatory: routes with `response_model=dict` or no
+`response_model` must be replaced with concrete Lens response classes, or have a
+recorded reason why no class is appropriate. SDK normalization alone is not
+completion.
+
+Public request/response classes live in the owning module's `models.py` (or its
+existing canonical models module). REST, the Python service operation and the
+in-process SDK must share those classes. The service operation is the single
+implementation; the router is only HTTP transport adaptation and the SDK only
+identity/permission context. Do not add response dict projections, generic
+`LensResponse` wrappers or public `lens.services.*` examples.
+
 ## Kubernetes operations
 
 This section owns the SDK/CLI operating contract. Prefer the existing `kubernetes_api` and

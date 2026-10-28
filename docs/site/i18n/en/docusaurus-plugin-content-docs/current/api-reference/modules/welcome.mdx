@@ -1,151 +1,125 @@
 ---
 title: Welcome
-description: Read-only issue composition endpoints for the Welcome landing page.
+description: Read the current cluster issues shown on the Welcome page.
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-## Backend API
+## What this module is
 
-Welcome routes come from `llm_d_lens/dashboard/router.py`. They return the latest
-issue snapshot only. A backend background task refreshes that snapshot every 60
-seconds; request handlers filter it per caller. Cluster capacity, service
-tables, deployment activity and usage remain on their owning APIs.
+Welcome is a read-only issue feed for the landing page. Use it to build an alert
+view or dashboard that combines current findings across clusters. It returns issue
+snapshots only; cluster capacity, model-service tables, deployment history, and
+usage remain on their owning APIs.
 
-Both routes require an authenticated session and `cluster:cluster:read`. Every
-issue is also filtered by the caller's reachable clusters and by the permissions
-of the issuing domain. An inaccessible explicit `clusterId` returns `403`
-without resource details.
+Both endpoints require an authenticated session with `cluster:cluster:read`.
+Results are filtered to the clusters and domain permissions available to the
+caller.
 
-### Get the Welcome overview
+## Quick start
 
-Return the scoped issue envelope for the Welcome page. When a snapshot exists,
-`refresh=true` schedules another background check and returns the current
-snapshot immediately; it does not block on remote sources.
+### Get the overview
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/welcome/overview`**
 
-    Query parameters:
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/welcome/overview?clusterId=cluster-a"
+```
 
-    - `clusterId` (`string`, optional): one accessible cluster.
-    - `refresh` (`boolean`, default `false`): schedule a background snapshot refresh.
+The response contains `generatedAt`, `scope`, and an `issues` envelope with the
+current issue array.
 
-    Response: `WelcomeOverview`.
-
-    ```json
-    {
-      "generatedAt": "2026-10-18T12:41:03Z",
-      "scope": {
-        "mode": "all",
-        "clusters": [{ "id": "cluster-a", "name": "prod-a" }]
-      },
-      "issues": {
-        "state": "complete",
-        "generatedAt": "2026-10-18T12:41:03Z",
-        "observedAt": "2026-10-18T12:40:30Z",
-        "stale": false,
-        "coverage": { "observed": 1, "expected": 1, "unit": "clusters" },
-        "data": [
-          {
-            "id": "model.provider_unhealthy|cluster-a|model_service|msg-123",
-            "code": "model.provider_unhealthy",
-            "severity": "warning",
-            "category": "model-service",
-            "title": "model-alpha: 1 provider(s) not ready",
-            "message": "At least one configured provider is unhealthy.",
-            "clusterId": "cluster-a",
-            "resource": { "type": "model_service", "id": "msg-123", "name": "model-alpha" },
-            "evidence": { "providers": { "ready": 1, "active": 2 } },
-            "primaryAction": {
-              "intent": "inspect_providers",
-              "view": "admin/model-service",
-              "params": { "clusterId": "cluster-a", "groupId": "msg-123" },
-              "permission": "model-service:group:read"
-            }
-          }
-        ]
-      }
-    }
-    ```
-
-    The response does not contain hardware summaries, cluster capacity, service
-    rows, deployment activity, token totals or AI provider configuration.
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.dashboard.service import default_service
+```python
+import asyncio
 
-    async def main(principal) -> None:
-        # `principal` normally comes from the authenticated request session.
-        overview = await default_service().welcome_overview(principal, cluster_id="cluster-a")
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        overview = await lens.dashboard.overview(cluster_id="cluster-a")
         for issue in overview.issues.data or []:
             print(issue.severity, issue.code, issue.title)
 
-    asyncio.run(main(principal))
-    ```
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-### List current issues
+## Common tasks
 
-Return the same normalized current findings with filters and cursor pagination.
-This is the API behind **View all issues**.
+### Filter and paginate current issues
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
-    **`GET /api/v1/welcome/issues`**
 
-    Query parameters:
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  "http://127.0.0.1:3000/api/v1/welcome/issues?severity=critical&category=model-service&limit=10"
+```
 
-    - `clusterId` (`string`, optional): one accessible cluster.
-    - `severity` (`critical`, `warning`, `info`, optional).
-    - `category` (`cluster`, `model-service`, `deployment`, `storage`, `model-cache`, `monitoring`, `ai-provider`, `access`, optional).
-    - `search` (`string`, optional): matches issue and resource identity, or text.
-    - `cursor` (`string`, optional): opaque cursor from `nextCursor`.
-    - `limit` (`integer`, default `25`, range `1..100`).
-
-    Response: `WelcomeIssuesResponse` with `snapshotId`, `total`, `items`,
-    `nextCursor` and `restarted`.
-
-    ```json
-    {
-      "generatedAt": "2026-10-18T12:41:03Z",
-      "snapshotId": "8e4f...",
-      "total": 3,
-      "items": [],
-      "nextCursor": null,
-      "restarted": false
-    }
-    ```
-
-    Cursors include the snapshot identity. If the snapshot expired or findings
-    changed, the server sets `restarted: true` and returns the first page.
   </TabItem>
-  <TabItem value="python-api" label="Python API">
-    ```python
-    import asyncio
+  <TabItem value="python-api" label="In-process Python SDK">
 
-    from llm_d_lens.dashboard.service import default_service
+```python
+import asyncio
 
-    async def main(principal) -> None:
-        page = await default_service().alerts(principal, severity="critical", limit=25)
-        print(page.total)
+from llm_d_lens.sdk import LensLocal
+
+
+async def main() -> None:
+    with LensLocal("<username>") as lens:
+        page = await lens.dashboard.alerts(
+            severity="critical", category="model-service", limit=10
+        )
+        print(page.total, page.next_cursor)
         for issue in page.items:
             print(issue.cluster_name, issue.title)
 
-    asyncio.run(main(principal))
-    ```
+
+asyncio.run(main())
+```
+
   </TabItem>
 </Tabs>
 
-## Related endpoints
+- Optional filters: `clusterId`, `severity`, `category`, and `search`.
+- Pass `nextCursor` back as `cursor`. If the snapshot changed or expired, the
+  response sets `restarted: true` and starts from the first page.
+- `category` values are `cluster`, `model-service`, `deployment`, `storage`,
+  `model-cache`, `monitoring`, `ai-provider`, and `access`.
 
-- `GET /api/v1/ai-providers`: provider list used by the Welcome composer.
-- `GET /api/cluster/overview`: complete cluster hardware and component payload.
-- `GET /api/v1/model-service/admin/gateway/status`: Gateway and IPP state.
-- `GET /api/v1/monitoring/cluster-stack/status`: monitoring stack detail.
+### Refresh the snapshot
+
+Set `refresh=true` on the overview request to schedule a background refresh. The
+call returns the current snapshot immediately and does not wait for remote
+sources. Check the `issues.stale` flag before treating values as current.
+
+## Endpoints
+
+| Method | Path | Use |
+| --- | --- | --- |
+| `GET` | `/api/v1/welcome/overview` | Scoped issue envelope for the landing page. |
+| `GET` | `/api/v1/welcome/issues` | Flat, filtered issue list with cursor pagination. |
+
+## Errors / limits
+
+- Missing or invalid authentication returns `401`; missing `cluster:cluster:read`
+  returns `403`.
+- An inaccessible explicit `clusterId` returns `403` without resource details.
+- `limit` must be between `1` and `100`.
+- Snapshots are refreshed in the background about every 60 seconds. `refresh=true`
+  only queues a refresh.
+
+## Related
+
+- [Welcome guide](/user-guide/welcome)
+- [OpenAPI schema](/api-reference)

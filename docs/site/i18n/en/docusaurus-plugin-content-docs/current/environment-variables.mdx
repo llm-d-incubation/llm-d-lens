@@ -18,6 +18,12 @@ to set the auth and gateway groups explicitly.
 | `LENS_SECRET_KEY` | Master key that encrypts stored external-provider secrets. When unset, Lens generates one on first start under `<LENS_DATA_DIR>/credentials/master_key.json` (mode 600); set it to pin the key or make the **Master key** page read-only. | generated and stored on first start |
 | `LENS_SECRET_KEYS_OLD` | Comma-separated previous master keys used as decryption fallback after a rotation. | `""` |
 | `LENS_INTERNAL_AUTH_SECRET` | Shared secret for internal service-to-service calls (for example agentic planning callbacks). | `""` |
+| `LENS_AUTH_JWT_SECRET` | Signing key for short-lived Bearer access tokens. When unset, Lens derives a stable key from the master key; production should set it explicitly. | derived from the master key |
+| `LENS_AUTH_JWT_SECRETS_OLD` | Comma-separated previous access-token signing keys used during key rotation. | `""` |
+| `PRISM_ACCESS_TOKEN_TTL_SECONDS` | Bearer access-token lifetime in seconds. | `1800` |
+| `PRISM_ACCESS_TOKEN_AUDIENCE` | JWT audience required by the API. | `lens-api` |
+| `PRISM_AUTH_COOKIE_FALLBACK` | Keep cookie + CSRF authentication available while clients migrate to Bearer. | `True` |
+| `PRISM_AUTH_LEGACY_OPAQUE_BEARER` | Accept legacy opaque session tokens in the `Authorization: Bearer` header during migration. | `True` |
 | `PRISM_EXPOSE_API_DOCS` | Whether to expose the FastAPI `/docs` page. | `True` |
 
 ## Database
@@ -44,7 +50,7 @@ Gateway Mode: the cluster installs one shared Gateway (provider-selectable at cl
 | `LENS_GATEWAY_EXPOSURE_INTERVAL_SECONDS` | How often Lens re-establishes the public `0.0.0.0` tunnel for each cluster's exposed Gateway port. | `60` |
 | `LENS_GATEWAY_USAGE_INTERVAL_SECONDS` | How often Lens syncs llm-d EPP token counters from each cluster's Prometheus into the usage ledger. Set `0` to disable. | `60` |
 | `LENS_WELCOME_CHECK_INTERVAL_SECONDS` | How often Lens refreshes and stores the Welcome page issue snapshot. Set `0` to disable the background check. | `60` |
-| `LENS_MODEL_GATEWAY_AUTHZ_HOST` | Fallback Lens ext_authz address when a cluster leaves its per-cluster **Lens authz address** unset. Prefer the per-cluster value (create/edit cluster form → `GET /api/cluster/lens-hosts`). When set, the Gateway injects the caller identity (`x-llm-d-inference-fairness-id`) for per-user usage. | *(unset)* |
+| `LENS_MODEL_GATEWAY_AUTHZ_HOST` | Fallback Lens ext_authz address when a cluster leaves its per-cluster **Lens authz address** unset. Prefer the per-cluster value (create/edit cluster form → `GET /api/v1/cluster/lens-hosts`). When set, the Gateway injects the caller identity (`x-llm-d-inference-fairness-id`) for per-user usage. | *(unset)* |
 | `LENS_MODEL_GATEWAY_AUTHZ_PORT` | Port of the Lens ext_authz backend used by the Gateway. | `8081` |
 | `LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE` | Originate TLS from the Istio shared Gateway to the `lens-authz` Service while **skipping certificate verification**. Only needed when Lens serves authz over HTTPS with a certificate Istio cannot verify, such as the local self-signed certificate. **Security warning:** this allows an on-path attacker to impersonate the authz service, forge approval, and inject identity headers; use only on a trusted local/dev network, never in production. The insecure DestinationRule is removed when the switch is disabled. The local HTTPS launcher enables it automatically. Disable it only when authz uses plain HTTP or a certificate the cluster trusts; otherwise authz fails closed. | unset (local HTTPS: `1`) |
 

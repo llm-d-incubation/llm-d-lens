@@ -21,8 +21,18 @@ from llm_d_lens.hardware.resolver import resolve_by_resource
 from llm_d_lens.infrastructure.ssh import SshTarget, inspect_host_key, remote_exec
 
 from .legacy_poc import timestamp
+from .models import (
+    RemoteDeploymentDefaultsResponse,
+    RemoteDeploymentStartResponse,
+    RemoteDeploymentStatusResponse,
+    RemoteFingerprintResponse,
+    RemoteLogsResponse,
+    RemotePodStatus,
+    RemoteTeardownResponse,
+    RemoteTestResponse,
+)
 
-router = APIRouter(prefix="/api/remote-deploy", include_in_schema=False)
+router = APIRouter(prefix="/api/v1/remote-deploy", include_in_schema=False)
 logger = logging.getLogger(__name__)
 HOST_PATTERN = r"(?=.{1,253}$)(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?)"
 NAMESPACE_PATTERN = r"(?=.{1,63}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?"
@@ -289,7 +299,7 @@ def deployment_command(plan: dict, target: dict, namespace: str, name: str) -> s
     return f"{repository['command']}; {host_environment} {command}; {patch_command}"
 
 
-async def start_remote(body: dict, target: dict, credentials: dict) -> dict:
+async def start_remote(body: dict, target: dict, credentials: dict) -> RemoteDeploymentStartResponse:
     plan = body.get("plan") or {}
     namespace, name = (
         str(plan.get("namespace") or "llm-d-optimized").strip(),
@@ -302,26 +312,30 @@ async def start_remote(body: dict, target: dict, credentials: dict) -> dict:
         raise RemoteError(
             f"Remote deploy exited with code {result['code']}: {result['stderr'] or result['stdout']}", 502
         )
-    response = {
-        "id": f"remote-{int(time.time() * 1000)}",
-        "name": name,
-        "candidateId": plan.get("candidateId") or None,
-        "candidateName": plan.get("candidateName") or "Standalone manual configuration",
-        "cluster": f"{target['username']}@{target['host']}:{target['port']}",
-        "remoteHost": target["host"],
-        "nodes": 1,
-        "gpusPerNode": len(target["cards"]),
-        "selectedCards": target["cards"],
-        "replicas": float(plan.get("replicas") or 1),
-        "namespace": namespace,
-        "status": "deploying",
-        "createdAt": timestamp(),
-        "endpoint": None,
-        "pods": [],
-        "logTail": combined(result).splitlines()[-100:],
+    optional_fields = {
+        field: plan[key]
+        for key, field in (("machineType", "machine_type"), ("accelerator", "accelerator"))
+        if key in plan
     }
-    response.update({key: plan[key] for key in ("machineType", "accelerator") if key in plan})
-    return response
+    return RemoteDeploymentStartResponse(
+        id=f"remote-{int(time.time() * 1000)}",
+        name=name,
+        candidate_id=plan.get("candidateId") or None,
+        candidate_name=plan.get("candidateName") or "Standalone manual configuration",
+        cluster=f"{target['username']}@{target['host']}:{target['port']}",
+        remote_host=target["host"],
+        nodes=1,
+        gpus_per_node=len(target["cards"]),
+        selected_cards=target["cards"],
+        replicas=float(plan.get("replicas") or 1),
+        namespace=namespace,
+        status="deploying",
+        created_at=timestamp(),
+        endpoint=None,
+        pods=[],
+        log_tail=combined(result).splitlines()[-100:],
+        **optional_fields,
+    )
 
 
 def combined(result: dict) -> str:
@@ -337,19 +351,19 @@ def parse_json(result: dict, label: str) -> dict:
         raise RemoteError(f"{label} returned invalid JSON", 502) from error
 
 
-async def remote_status(target: dict, credentials: dict, namespace: str) -> dict:
+async def remote_status(target: dict, credentials: dict, namespace: str) -> RemoteDeploymentStatusResponse:
     quoted = shlex.quote(namespace)
     result = await execute(target, credentials, f"kubectl get pods -n {quoted} -o json")
     if result["code"] and "not found" in combined(result).lower():
-        return {
-            "status": "not_found",
-            "pods": [],
-            "podsReady": 0,
-            "podsTotal": 0,
-            "endpoint": None,
-            "error": combined(result),
-            "logTail": [],
-        }
+        return RemoteDeploymentStatusResponse(
+            status="not_found",
+            pods=[],
+            pods_ready=0,
+            pods_total=0,
+            endpoint=None,
+            error=combined(result),
+            log_tail=[],
+        )
     pods = []
     for pod in parse_json(result, "kubectl get pods").get("items", []):
         statuses = pod.get("status", {}).get("containerStatuses", [])
@@ -367,22 +381,25 @@ async def remote_status(target: dict, credentials: dict, namespace: str) -> dict
             and not any(key.endswith(suffix) for suffix in profile.monitor_resource_suffixes)
         )
         pods.append(
-            {
-                "name": pod.get("metadata", {}).get("name", "unknown"),
-                "status": pod.get("status", {}).get("phase", "Unknown"),
-                "ready": any(
+            RemotePodStatus(
+                name=pod.get("metadata", {}).get("name", "unknown"),
+                status=pod.get("status", {}).get("phase", "Unknown"),
+                ready=any(
                     item.get("type") == "Ready" and item.get("status") == "True"
                     for item in pod.get("status", {}).get("conditions", [])
                 ),
-                "restarts": sum(item.get("restartCount", 0) for item in statuses),
-                "node": pod.get("spec", {}).get("nodeName"),
-                "gpuCount": gpu_count,
-                "reason": next((state["reason"] for state in states if state.get("reason")), None),
-                "message": next((state["message"] for state in states if state.get("message")), None),
-            }
+                restarts=sum(item.get("restartCount", 0) for item in statuses),
+                node=pod.get("spec", {}).get("nodeName"),
+                gpu_count=gpu_count,
+                reason=next((state["reason"] for state in states if state.get("reason")), None),
+                message=next((state["message"] for state in states if state.get("message")), None),
+            )
         )
-    failed = next((pod for pod in pods if pod["status"] == "Failed" or pod["reason"] in TERMINAL_REASONS), None)
-    ready = sum(pod["ready"] for pod in pods)
+    failed = next(
+        (pod for pod in pods if pod.status == "Failed" or pod.reason in TERMINAL_REASONS),
+        None,
+    )
+    ready = sum(pod.ready for pod in pods)
     state = "failed" if failed else "ready" if pods and ready == len(pods) else "deploying"
     gateways = parse_json(
         await execute(
@@ -430,31 +447,31 @@ async def remote_status(target: dict, credentials: dict, namespace: str) -> dict
         state = "ready_no_endpoint"
     error = None
     if failed:
-        error = f"{failed['name']}: {failed['reason'] or failed['status']}"
-        if failed["message"]:
-            error += f" \u2014 {failed['message']}"
-    return {
-        "status": state,
-        "pods": pods,
-        "podsReady": ready,
-        "podsTotal": len(pods),
-        "endpoint": endpoint,
-        "error": error,
-        "logTail": [],
-    }
+        error = f"{failed.name}: {failed.reason or failed.status}"
+        if failed.message:
+            error += f" \u2014 {failed.message}"
+    return RemoteDeploymentStatusResponse(
+        status=state,
+        pods=pods,
+        pods_ready=ready,
+        pods_total=len(pods),
+        endpoint=endpoint,
+        error=error,
+        log_tail=[],
+    )
 
 
-@router.get("/defaults")
-async def defaults():
-    return {
-        "repository": os.environ.get("LLM_D_ROOT") or os.environ.get("LLM_D_REPOSITORY", ""),
-        "branch": os.environ.get("LLM_D_BRANCH", ""),
-        "httpProxy": os.environ.get("HTTP_PROXY") or os.environ.get("LLM_D_HTTP_PROXY", ""),
-        "httpsProxy": os.environ.get("HTTPS_PROXY") or os.environ.get("LLM_D_HTTPS_PROXY", ""),
-        "noProxy": os.environ.get("NO_PROXY") or os.environ.get("LLM_D_NO_PROXY", ""),
-        "mountPath": os.environ.get("LLM_D_MOUNT_PATH", ""),
-        "mountModelName": os.environ.get("LLM_D_MOUNT_MODEL_NAME", ""),
-    }
+@router.get("/defaults", response_model=RemoteDeploymentDefaultsResponse)
+async def defaults() -> RemoteDeploymentDefaultsResponse:
+    return RemoteDeploymentDefaultsResponse(
+        repository=os.environ.get("LLM_D_ROOT") or os.environ.get("LLM_D_REPOSITORY", ""),
+        branch=os.environ.get("LLM_D_BRANCH", ""),
+        http_proxy=os.environ.get("HTTP_PROXY") or os.environ.get("LLM_D_HTTP_PROXY", ""),
+        https_proxy=os.environ.get("HTTPS_PROXY") or os.environ.get("LLM_D_HTTPS_PROXY", ""),
+        no_proxy=os.environ.get("NO_PROXY") or os.environ.get("LLM_D_NO_PROXY", ""),
+        mount_path=os.environ.get("LLM_D_MOUNT_PATH", ""),
+        mount_model_name=os.environ.get("LLM_D_MOUNT_MODEL_NAME", ""),
+    )
 
 
 async def remote_operation(request: Request):
@@ -466,7 +483,11 @@ async def remote_operation(request: Request):
         if operation == "fingerprint":
             target = parse_target(dict(raw_target, username=raw_target.get("username") or "probe", cards=["0"]), False)
             key = await asyncio.to_thread(inspect_host_key, target["host"].strip("[]"), target["port"], 10)
-            return {"fingerprint": key.fingerprint, "host": target["host"], "port": target["port"]}
+            return RemoteFingerprintResponse(
+                fingerprint=key.fingerprint,
+                host=target["host"],
+                port=target["port"],
+            )
         target = parse_target(raw_target)
         credentials = body.get("credentials") or {}
         if operation == "start":
@@ -484,7 +505,7 @@ async def remote_operation(request: Request):
                 "kubectl version --client; kubectl cluster-info"
             )
             result = await execute(target, credentials, command)
-            return {"ok": result["code"] == 0, "output": combined(result)[-12000:]}
+            return RemoteTestResponse(ok=result["code"] == 0, output=combined(result)[-12000:])
         namespace = parse_namespace(body.get("namespace"))
         if operation == "status":
             return await remote_status(target, credentials, namespace)
@@ -503,11 +524,18 @@ async def remote_operation(request: Request):
             result = await execute(target, credentials, f"{command} --tail {tail}")
             if result["code"]:
                 raise RemoteError(combined(result), 502)
-            return {"logs": result["stdout"][-32000:], "truncated": len(result["stdout"]) >= 32000}
+            return RemoteLogsResponse(
+                logs=result["stdout"][-32000:],
+                truncated=len(result["stdout"]) >= 32000,
+            )
         result = await execute(target, credentials, f"{executable} deploy cleanup -n {shlex.quote(namespace)} -f")
         if result["code"]:
             raise RemoteError(combined(result), 502)
-        return {"success": True, "namespace": namespace, "logTail": combined(result).splitlines()[-100:]}
+        return RemoteTeardownResponse(
+            success=True,
+            namespace=namespace,
+            log_tail=combined(result).splitlines()[-100:],
+        )
     except RemoteError as error:
         logger.warning("Remote deployment request failed", exc_info=True)
         return JSONResponse(
@@ -519,5 +547,20 @@ async def remote_operation(request: Request):
         return JSONResponse({"error": "Remote deployment failed"}, status_code=502)
 
 
-for operation in ("fingerprint", "test", "start", "status", "logs", "teardown"):
-    router.add_api_route(f"/{operation}", remote_operation, methods=["POST"])
+_REMOTE_RESPONSE_MODELS = {
+    "fingerprint": RemoteFingerprintResponse,
+    "test": RemoteTestResponse,
+    "start": RemoteDeploymentStartResponse,
+    "status": RemoteDeploymentStatusResponse,
+    "logs": RemoteLogsResponse,
+    "teardown": RemoteTeardownResponse,
+}
+
+for operation, response_model in _REMOTE_RESPONSE_MODELS.items():
+    router.add_api_route(
+        f"/{operation}",
+        remote_operation,
+        methods=["POST"],
+        response_model=response_model,
+        response_model_exclude_unset=operation == "start",
+    )

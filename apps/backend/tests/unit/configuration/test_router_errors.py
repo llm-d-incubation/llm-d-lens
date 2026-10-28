@@ -69,3 +69,15 @@ async def test_domain_errors_reach_problem_handler_unchanged(monkeypatch, operat
     assert raised.value.status_code == 409
     assert raised.value.code == "conflict"
     assert raised.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_capabilities_route_and_service_use_the_concrete_response_model():
+    from llm_d_lens.configuration.models import ConfigurationCapabilitiesResponse
+    from llm_d_lens.configuration.service import configuration_capabilities
+
+    route = next(route for route in router.router.routes if route.path == "/api/v1/configurations/capabilities")
+    assert route.response_model is ConfigurationCapabilitiesResponse
+    response = await router.capabilities()
+    assert isinstance(response, ConfigurationCapabilitiesResponse)
+    assert response == configuration_capabilities()

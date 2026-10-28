@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, Query, Request, Response, UploadFile
@@ -14,24 +13,33 @@ from pydantic import ValidationError
 
 from llm_d_lens.auth.access import current_principal, filter_by_cluster
 from llm_d_lens.cluster import gateway_crds, images, registry, repo_downloads, service, sessions
-from llm_d_lens.cluster.deployment_source import resolve_cluster_benchmark_source, resolve_cluster_deployment_source
 from llm_d_lens.cluster.errors import ClusterOverviewError
 from llm_d_lens.cluster.models import (
+    ClusterCreateRequest,
     ClusterRecord,
     ClusterSessionResponse,
     ClusterSettingsUpdateRequest,
     ClustersResponse,
     CreateClusterResponse,
+    GatewayCrdsApplyResponse,
+    GatewayCrdsStatusResponse,
+    GatewayPortCheckResponse,
     HfTokenSecretCreateRequest,
     HfTokenSecretRef,
     HfTokenSecretUpdateRequest,
     ImagePrepullRequest,
+    ImagePrepullStatusResponse,
     KubernetesSummary,
+    KubernetesVersionResponse,
+    LensHostsResponse,
+    LwsInstallResponse,
+    LwsStatusResponse,
+    ModelSecretsResponse,
     NodeMaintenanceRequest,
     NodeMaintenanceResponse,
     OverviewResponse,
+    OverviewSessionResponse,
     ProxyConfigDTO,
-    RepoDownloadStatus,
     SoftwareDownloadRequest,
     SoftwareDownloadStatusResponse,
 )
@@ -39,15 +47,16 @@ from llm_d_lens.cluster.sdk_discovery import router as planning_discovery_router
 from llm_d_lens.infrastructure.network.hostinfo import local_host_addresses
 from llm_d_lens.versions import stack as stack_profile
 
-router = APIRouter(prefix="/api/cluster", tags=["cluster"])
+router = APIRouter(prefix="/api/v1/cluster", tags=["cluster"])
 router.include_router(planning_discovery_router)
-legacy_router = APIRouter(prefix="/api/cluster-overview", tags=["cluster-overview"])
+legacy_router = APIRouter(prefix="/api/v1/cluster-overview", tags=["cluster-overview"])
 
 logger = logging.getLogger(__name__)
 
 
 @router.get(
     "/lens-hosts",
+    response_model=LensHostsResponse,
     summary="Candidate Lens host addresses a cluster can use for Gateway ext_authz.",
     description=(
         "Returns this Lens host's candidate IP addresses/hostnames so the cluster create/edit form can offer and "
@@ -56,9 +65,9 @@ logger = logging.getLogger(__name__)
     ),
     operation_id="list_lens_hosts",
 )
-async def list_lens_hosts() -> dict:
+async def list_lens_hosts() -> LensHostsResponse:
     """Candidate host/IP for the cluster's Lens address setting."""
-    return {"items": local_host_addresses()}
+    return LensHostsResponse(items=local_host_addresses())
 
 
 def _default_lens_host() -> str | None:
@@ -71,17 +80,18 @@ def _default_lens_host() -> str | None:
 
 @router.get(
     "/clusters/{cluster_id}/gateway-port-check",
+    response_model=GatewayPortCheckResponse,
     summary="Check a Gateway exposed port (NodePort) is free.",
     operation_id="check_gateway_port",
 )
-async def check_gateway_port(cluster_id: str, port: int = Query(ge=0, le=65535)) -> dict:
+async def check_gateway_port(cluster_id: str, port: int = Query(ge=0, le=65535)) -> GatewayPortCheckResponse:
     """Whether ``port`` can be used as the cluster Gateway's NodePort."""
     if not (30000 <= port <= 32767):
-        return {"available": False, "owner": None, "reason": "port must be between 30000 and 32767"}
+        return GatewayPortCheckResponse(available=False, owner=None, reason="port must be between 30000 and 32767")
     from llm_d_lens.model_service.gateway_ops import GatewayOpsService  # noqa: PLC0415
 
     owner = await GatewayOpsService().node_port_owner(cluster_id, port)
-    return {"available": owner is None, "owner": f"{owner[0]}/{owner[1]}" if owner else None}
+    return GatewayPortCheckResponse(available=owner is None, owner=f"{owner[0]}/{owner[1]}" if owner else None)
 
 
 async def _install_cluster_gateway(cluster_id: str, provider: str, *, install_prerequisites: bool = True) -> None:
@@ -113,52 +123,6 @@ async def _apply_node_sysctl(cluster_id: str, limits: int | None) -> None:
         logger.exception("event=cluster_node_sysctl_failed cluster_id=%s limit=%s", cluster_id, limits)
 
 
-def _record(cluster: registry.Cluster, *, ready: bool = False) -> ClusterRecord:
-    try:
-        source = resolve_cluster_deployment_source(cluster)
-    except ValueError as error:
-        source = {"resolved_from": "unavailable", "error": str(error)}
-    try:
-        benchmark_source = resolve_cluster_benchmark_source(cluster)
-    except ValueError as error:
-        benchmark_source = {"resolved_from": "unavailable", "error": str(error)}
-    return ClusterRecord(
-        id=cluster.id,
-        name=cluster.name,
-        description=cluster.description,
-        created_at=cluster.created_at,
-        ready=ready,
-        proxy=ProxyConfigDTO(
-            mode=cluster.proxy_mode,
-            httpProxy=cluster.http_proxy,
-            httpsProxy=cluster.https_proxy,
-            noProxy=cluster.no_proxy,
-        ),
-        llmDRef=cluster.llm_d_ref,
-        llmDBenchmarkRef=cluster.llm_d_lensmark_ref,
-        llmDRepoPath=cluster.llm_d_repo_path,
-        llmDBenchmarkRepoPath=cluster.llm_d_lensmark_repo_path,
-        gatewayProvider=cluster.gateway_provider,
-        gatewayNamespace=cluster.gateway_namespace,
-        gatewayName=cluster.gateway_name,
-        gatewayPublicUrl=cluster.gateway_public_url,
-        gatewayPort=cluster.gateway_port,
-        gatewayAuthzHost=cluster.gateway_authz_host,
-        inotifyMaxUserInstances=cluster.inotify_max_user_instances,
-        routerVersion=cluster.router_version,
-        gieVersion=cluster.gie_version,
-        ippVersion=cluster.ipp_version,
-        hfTokenSecret=(
-            HfTokenSecretRef(namespace=cluster.hf_token_secret_namespace, name=cluster.hf_token_secret_name)
-            if cluster.hf_token_secret_namespace and cluster.hf_token_secret_name
-            else None
-        ),
-        draft=cluster.draft,
-        deploymentSource=source,
-        benchmarkSource=benchmark_source,
-    )
-
-
 def _inactive() -> ClusterOverviewError:
     return ClusterOverviewError("Cluster session is no longer active", status_code=404, code="cluster_session_inactive")
 
@@ -180,7 +144,10 @@ async def list_clusters(
     clusters = filter_by_cluster(clusters, lambda cluster: cluster.id, current_principal(request))
     ready_flags = await asyncio.gather(*(service.cluster_is_ready(cluster) for cluster in clusters))
     return ClustersResponse(
-        items=[_record(cluster, ready=is_ready) for cluster, is_ready in zip(clusters, ready_flags, strict=False)],
+        items=[
+            ClusterRecord.from_cluster(cluster, ready=is_ready)
+            for cluster, is_ready in zip(clusters, ready_flags, strict=False)
+        ],
     )
 
 
@@ -218,28 +185,27 @@ async def create_cluster(
         raise ClusterOverviewError(
             "Kubeconfig must be UTF-8 text", status_code=422, code="invalid_kubeconfig"
         ) from error
-    proxy_config = _parse_proxy_form_field(proxy)
-    cluster, session = service.create_cluster(
-        name,
-        description,
-        kubeconfig_text,
-        proxy_mode=proxy_config.mode,
-        http_proxy=proxy_config.http_proxy,
-        https_proxy=proxy_config.https_proxy,
-        no_proxy=proxy_config.no_proxy,
-        llm_d_ref=(llm_d_ref or "").strip() or None,
-        llm_d_lensmark_ref=(llm_d_lensmark_ref or "").strip() or None,
-        gateway_provider=(gateway_provider or "").strip() or None,
-        gateway_public_url=(gateway_public_url or "").strip() or None,
-        gateway_port=gateway_port,
-        gateway_authz_host=(gateway_authz_host or "").strip() or _default_lens_host(),
-        inotify_max_user_instances=(inotify_max_user_instances if inotify_max_user_instances is not None else 8192),
+    request = ClusterCreateRequest(
+        name=name,
+        description=description,
+        kubeconfig=kubeconfig_text,
+        proxy=_parse_proxy_form_field(proxy),
+        llmDRef=(llm_d_ref or "").strip() or None,
+        llmDBenchmarkRef=(llm_d_lensmark_ref or "").strip() or None,
+        gatewayProvider=(gateway_provider or "").strip() or None,
+        gatewayPublicUrl=(gateway_public_url or "").strip() or None,
+        gatewayPort=gateway_port,
+        gatewayAuthzHost=(gateway_authz_host or "").strip() or _default_lens_host(),
+        inotifyMaxUserInstances=(inotify_max_user_instances if inotify_max_user_instances is not None else 8192),
         draft=draft,
     )
+    cluster, session = service.create_cluster(request)
     if cluster.gateway_provider:
         background.add_task(_install_cluster_gateway, cluster.id, cluster.gateway_provider)
     background.add_task(_apply_node_sysctl, cluster.id, cluster.inotify_max_user_instances)
-    return CreateClusterResponse(cluster=_record(cluster), session_id=session.id if session else None)
+    return CreateClusterResponse(
+        cluster=ClusterRecord.from_cluster(cluster), session_id=session.id if session else None
+    )
 
 
 def _parse_proxy_form_field(raw: str | None) -> ProxyConfigDTO:
@@ -306,28 +272,8 @@ async def update_cluster(
             if prior is not None:
                 await ops.release_gateway_port(cluster_id, prior.gateway_port)
         gateway_changed = True
-    cluster = service.update_cluster_settings(
-        cluster_id,
-        name=payload.name,
-        description=payload.description,
-        proxy_mode=payload.proxy.mode if payload.proxy is not None else None,
-        http_proxy=payload.proxy.http_proxy if payload.proxy is not None else None,
-        https_proxy=payload.proxy.https_proxy if payload.proxy is not None else None,
-        no_proxy=payload.proxy.no_proxy if payload.proxy is not None else None,
-        llm_d_ref=payload.llm_d_ref,
-        llm_d_lensmark_ref=payload.llm_d_lensmark_ref,
-        gateway_provider=payload.gateway_provider,
-        gateway_namespace=payload.gateway_namespace,
-        gateway_name=payload.gateway_name,
-        gateway_public_url=payload.gateway_public_url,
-        gateway_port=payload.gateway_port,
-        gateway_authz_host=authz_host,
-        inotify_max_user_instances=payload.inotify_max_user_instances,
-        router_version=payload.router_version,
-        gie_version=payload.gie_version,
-        ipp_version=payload.ipp_version,
-        draft=payload.draft,
-    )
+    request = payload.model_copy(update={"gateway_authz_host": authz_host})
+    cluster = service.update_cluster_settings(cluster_id, request)
     # Re-render/reconcile the shared Gateway when a data-plane setting changed.
     if gateway_changed and cluster.gateway_provider:
         background.add_task(
@@ -341,18 +287,7 @@ async def update_cluster(
     if payload.inotify_max_user_instances is not None:
         background.add_task(_apply_node_sysctl, cluster.id, cluster.inotify_max_user_instances)
     is_ready = await service.cluster_is_ready(cluster)
-    return CreateClusterResponse(cluster=_record(cluster, ready=is_ready))
-
-
-def _download_status_response(cluster_id: str) -> SoftwareDownloadStatusResponse:
-    llm_d = repo_downloads.get_status(cluster_id, "llm-d")
-    llm_d_lensmark = repo_downloads.get_status(cluster_id, "llm-d-benchmark")
-    return SoftwareDownloadStatusResponse(
-        llmD=RepoDownloadStatus(ref=llm_d.ref, state=llm_d.state, path=llm_d.path, error=llm_d.error),
-        llmDBenchmark=RepoDownloadStatus(
-            ref=llm_d_lensmark.ref, state=llm_d_lensmark.state, path=llm_d_lensmark.path, error=llm_d_lensmark.error
-        ),
-    )
+    return CreateClusterResponse(cluster=ClusterRecord.from_cluster(cluster, ready=is_ready))
 
 
 async def _download_and_record(cluster_id: str, repo: repo_downloads.RepoName, ref: str) -> None:
@@ -391,7 +326,7 @@ async def create_software_downloads(
     current = stack_profile()
     asyncio.create_task(_download_and_record(cluster_id, "llm-d", current.llm_d))
     asyncio.create_task(_download_and_record(cluster_id, "llm-d-benchmark", current.llm_d_lensmark))
-    return _download_status_response(cluster_id)
+    return service.software_download_status(cluster_id)
 
 
 @router.get(
@@ -406,11 +341,12 @@ async def create_software_downloads(
 )
 async def read_software_downloads(cluster_id: str) -> SoftwareDownloadStatusResponse:
     registry.require_cluster(cluster_id)
-    return _download_status_response(cluster_id)
+    return service.software_download_status(cluster_id)
 
 
 @router.post(
     "/clusters/{cluster_id}/images/prepull",
+    response_model=ImagePrepullStatusResponse,
     summary="Pre-pull the llm-d images for the selected accelerators onto every node.",
     description=(
         "Start a privileged DaemonSet that pulls the pinned llm-d-router (EPP, P/D sidecar) and "
@@ -419,13 +355,14 @@ async def read_software_downloads(cluster_id: str) -> SoftwareDownloadStatusResp
     ),
     operation_id="create_cluster_image_prepull",
 )
-async def create_cluster_image_prepull(cluster_id: str, payload: ImagePrepullRequest) -> dict:
+async def create_cluster_image_prepull(cluster_id: str, payload: ImagePrepullRequest) -> ImagePrepullStatusResponse:
     cluster = registry.require_cluster(cluster_id)
     return await images.start_image_prepull(cluster_id, payload.accelerators, cluster.gateway_provider)
 
 
 @router.get(
     "/clusters/{cluster_id}/images/prepull",
+    response_model=ImagePrepullStatusResponse,
     summary="Get the current image pre-pull status for a cluster.",
     description=(
         "Get the current image pre-pull status for a cluster: overall state, ready/desired node count "
@@ -433,13 +370,14 @@ async def create_cluster_image_prepull(cluster_id: str, payload: ImagePrepullReq
     ),
     operation_id="get_cluster_image_prepull",
 )
-async def read_cluster_image_prepull(cluster_id: str) -> dict:
+async def read_cluster_image_prepull(cluster_id: str) -> ImagePrepullStatusResponse:
     registry.require_cluster(cluster_id)
     return await images.image_prepull_status(cluster_id)
 
 
 @router.post(
     "/clusters/{cluster_id}/crds",
+    response_model=GatewayCrdsApplyResponse,
     summary="Apply the pinned Gateway API / Gateway API Inference Extension CRDs.",
     description=(
         "Apply the Gateway API and Gateway API Inference Extension CRD bundles pinned by the Lens "
@@ -447,13 +385,14 @@ async def read_cluster_image_prepull(cluster_id: str) -> dict:
     ),
     operation_id="create_cluster_crds",
 )
-async def create_cluster_crds(cluster_id: str) -> dict:
+async def create_cluster_crds(cluster_id: str) -> GatewayCrdsApplyResponse:
     registry.require_cluster(cluster_id)
     return await gateway_crds.apply_gateway_crds(cluster_id)
 
 
 @router.get(
     "/clusters/{cluster_id}/crds",
+    response_model=GatewayCrdsStatusResponse,
     summary="Get Gateway API / Gateway API Inference Extension CRD status.",
     description=(
         "Report whether the pinned Gateway API and Gateway API Inference Extension CRDs are present "
@@ -461,13 +400,15 @@ async def create_cluster_crds(cluster_id: str) -> dict:
     ),
     operation_id="get_cluster_crds",
 )
-async def read_cluster_crds(cluster_id: str) -> dict:
+async def read_cluster_crds(cluster_id: str) -> GatewayCrdsStatusResponse:
     registry.require_cluster(cluster_id)
     return await gateway_crds.gateway_crds_status(cluster_id)
 
 
 @router.post(
     "/clusters/{cluster_id}/lws",
+    response_model=LwsInstallResponse,
+    response_model_exclude_none=True,
     summary="Install the pinned LeaderWorkerSet controller and DisaggregatedSet API.",
     description=(
         "Install or upgrade the LeaderWorkerSet controller pinned by the Lens stack profile, enabling "
@@ -476,13 +417,15 @@ async def read_cluster_crds(cluster_id: str) -> dict:
     ),
     operation_id="install_cluster_lws",
 )
-async def install_cluster_lws(cluster_id: str) -> dict:
+async def install_cluster_lws(cluster_id: str) -> LwsInstallResponse:
     registry.require_cluster(cluster_id)
     return await service.install_lws(cluster_id)
 
 
 @router.get(
     "/clusters/{cluster_id}/lws",
+    response_model=LwsStatusResponse,
+    response_model_exclude_none=True,
     summary="Get LeaderWorkerSet controller and DisaggregatedSet API status.",
     description=(
         "Report whether the pinned LeaderWorkerSet CRD and controller are present on the cluster, "
@@ -490,13 +433,15 @@ async def install_cluster_lws(cluster_id: str) -> dict:
     ),
     operation_id="get_cluster_lws",
 )
-async def read_cluster_lws(cluster_id: str) -> dict:
+async def read_cluster_lws(cluster_id: str) -> LwsStatusResponse:
     registry.require_cluster(cluster_id)
     return await service.lws_status(cluster_id)
 
 
 @router.get(
     "/clusters/{cluster_id}/kubernetes-version",
+    response_model=KubernetesVersionResponse,
+    response_model_exclude_none=True,
     summary="Check a cluster's reachability and Kubernetes version against the stack minimum.",
     description=(
         "Probe the cluster's Kubernetes API for reachability and its server version, and compare it "
@@ -504,26 +449,9 @@ async def read_cluster_lws(cluster_id: str) -> dict:
     ),
     operation_id="get_cluster_kubernetes_version",
 )
-async def read_cluster_kubernetes_version(cluster_id: str) -> dict:
-    from llm_d_lens.hardware.version import server_kubernetes_version  # noqa: PLC0415
-    from llm_d_lens.versions import k8s_version_supports, min_k8s_version  # noqa: PLC0415
-
+async def read_cluster_kubernetes_version(cluster_id: str) -> KubernetesVersionResponse:
     registry.require_cluster(cluster_id)
-    minimum = min_k8s_version()
-    try:
-        parsed = await server_kubernetes_version(cluster_id)
-    except Exception:  # noqa: BLE001 - report any probe failure to the wizard
-        logger.exception("Unable to query Kubernetes version for cluster %s", cluster_id)
-        return {"reachable": False, "error": "Unable to query Kubernetes version", "min_k8s_version": minimum}
-    if parsed is None:
-        return {"reachable": False, "min_k8s_version": minimum}
-    version = f"{parsed[0]}.{parsed[1]}"
-    return {
-        "reachable": True,
-        "version": version,
-        "min_k8s_version": minimum,
-        "supported": k8s_version_supports(version),
-    }
+    return await service.cluster_kubernetes_version(cluster_id)
 
 
 @router.post(
@@ -549,7 +477,7 @@ async def create_hf_token_secret(cluster_id: str, payload: HfTokenSecretCreateRe
         raise ClusterOverviewError(str(error), status_code=503, code="kubectl_unavailable") from error
     except TimeoutError as error:
         raise ClusterOverviewError(str(error), status_code=504, code="kubectl_timeout") from error
-    return HfTokenSecretRef(**ref)
+    return ref
 
 
 @router.put(
@@ -578,7 +506,7 @@ async def update_hf_token_secret(cluster_id: str, payload: HfTokenSecretUpdateRe
         raise ClusterOverviewError(str(error), status_code=503, code="kubectl_unavailable") from error
     except TimeoutError as error:
         raise ClusterOverviewError(str(error), status_code=504, code="kubectl_timeout") from error
-    return HfTokenSecretRef(**ref)
+    return ref
 
 
 @router.delete(
@@ -616,7 +544,7 @@ async def cluster_session(
     cluster_id: str = Query(..., alias="clusterId", min_length=1, max_length=128),
 ) -> ClusterSessionResponse:
     cluster, session = service.get_cluster_session(cluster_id)
-    return ClusterSessionResponse(cluster=_record(cluster, ready=True), session_id=session.id)
+    return ClusterSessionResponse(cluster=ClusterRecord.from_cluster(cluster, ready=True), session_id=session.id)
 
 
 @router.get(
@@ -649,7 +577,7 @@ async def overview(
     # cluster, so it is reachable. A second ``/readyz`` probe here only added
     # latency to a request the Configure-deployment cluster field waits on.
     return OverviewResponse(
-        cluster=_record(cluster, ready=True),
+        cluster=ClusterRecord.from_cluster(cluster, ready=True),
         fetched_at=datetime.now(UTC).isoformat(),
         kubernetes=KubernetesSummary.model_validate(kubernetes),
     )
@@ -657,6 +585,7 @@ async def overview(
 
 @router.get(
     "/model-secrets",
+    response_model=ModelSecretsResponse,
     summary=(
         "List model-related secrets visible to a cluster, including whether host-managed Hugging Face credentials "
         "are available."
@@ -669,12 +598,9 @@ async def overview(
 )
 async def model_secrets(
     cluster_id: str = Query(..., alias="clusterId", min_length=1, max_length=128),
-) -> dict[str, object]:
+) -> ModelSecretsResponse:
     cluster = registry.require_cluster(cluster_id)
-    return {
-        "hostManagedAvailable": (Path.home() / ".cache" / "huggingface" / "token").is_file(),
-        "items": await service.list_model_secrets(cluster),
-    }
+    return await service.list_model_secrets(cluster)
 
 
 async def _apply_node_maintenance(
@@ -682,14 +608,13 @@ async def _apply_node_maintenance(
 ) -> NodeMaintenanceResponse:
     cluster = registry.require_cluster(cluster_id)
     try:
-        items = await service.set_node_maintenance(cluster, payload.names, disabled=disabled)
+        return await service.set_node_maintenance(cluster, payload.names, disabled=disabled)
     except ClusterOverviewError:
         raise
     except FileNotFoundError as error:
         raise ClusterOverviewError(str(error), status_code=503, code="kubectl_unavailable") from error
     except TimeoutError as error:
         raise ClusterOverviewError(str(error), status_code=504, code="kubectl_timeout") from error
-    return NodeMaintenanceResponse(items=items)
 
 
 @router.post(
@@ -726,18 +651,18 @@ async def uncordon_nodes(cluster_id: str, payload: NodeMaintenanceRequest) -> No
     return await _apply_node_maintenance(cluster_id, payload, disabled=False)
 
 
-@legacy_router.get("/sessions/{session_id}")
-async def get_overview_session(session_id: str) -> dict[str, object]:
+@legacy_router.get("/sessions/{session_id}", response_model=OverviewSessionResponse)
+async def get_overview_session(session_id: str) -> OverviewSessionResponse:
     try:
         session = sessions.require_active_session(session_id)
     except ValueError:
         raise _inactive() from None
-    return {
-        "id": session.id,
-        "serverId": session.server_id,
-        "createdAt": session.created_at,
-        "status": "connected",
-    }
+    return OverviewSessionResponse(
+        id=session.id,
+        serverId=session.server_id,
+        createdAt=session.created_at,
+        status="connected",
+    )
 
 
 @legacy_router.post("/sessions/{session_id}/disconnect", status_code=204)

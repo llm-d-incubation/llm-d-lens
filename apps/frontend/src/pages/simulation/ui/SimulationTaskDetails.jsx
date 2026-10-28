@@ -227,7 +227,7 @@ export default function SimulationTaskDetails({ onNavigate }) {
         if (task?.endpoint_deployment_execution_id || task?.endpoint_deployment_run_id || task?.endpoint_deployment_case_id) {
             return null;
         }
-        const payload = await requestJson('/api/cluster/clusters');
+        const payload = await requestJson('/api/v1/cluster/clusters');
         const clusters = (payload?.items || []).filter((cluster) => cluster.ready);
         if (!clusters.length) return null;
         const cluster = clusters.find((candidate) => candidate.id === task.endpoint_cluster_id) || clusters[0];

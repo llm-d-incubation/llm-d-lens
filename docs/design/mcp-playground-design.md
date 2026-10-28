@@ -35,12 +35,12 @@ without reimplementing business logic.
 | Domain | Existing implementation | Key paths |
 | --- | --- | --- |
 | Cluster/capacity facts | `server/planningDiscovery.ts` (`inspectPlanningCluster`) | Read-only |
-| Deploy PoC (local/simple deployment) | `server/deploy.ts` | `/api/deploy-poc/{config,start,status,validate,teardown}` |
-| Remote deployment | `server/remoteDeploy.ts` | `/api/remote-deploy/{defaults,fingerprint,test,start,status,logs,teardown}` |
-| Candidate/benchmark retrieval | `server/candidateSearch.ts` | `/api/candidate-support`, `/api/candidate-search` |
-| Guide catalog/planning | `server/guidePlanning.ts` | `/api/guide-planning/{catalog,prepare,plan}` |
-| **Agentic Deployment (core)** | `llm_d_lens/agentic/router.py` | `POST /api/agentic-deployments` (create plan)<br>`GET /api/agentic-deployments` (list)<br>`GET /api/agentic-deployments/{id}` (details)<br>`POST /api/agentic-deployments/{id}/select`<br>`POST /api/agentic-deployments/{id}/refine` (Recalculate)<br>`POST /api/agentic-deployments/{id}/approve` (the sole cluster-changing write) |
-| Simulation | `/api/simulation/*` in `simulation-design.md` | Read-only access and task submission |
+| Deploy PoC (local/simple deployment) | `server/deploy.ts` | `/api/v1/deploy-poc/{config,start,status,validate,teardown}` |
+| Remote deployment | `server/remoteDeploy.ts` | `/api/v1/remote-deploy/{defaults,fingerprint,test,start,status,logs,teardown}` |
+| Candidate/benchmark retrieval | `server/candidateSearch.ts` | `/api/v1/candidate-support`, `/api/v1/candidate-search` |
+| Guide catalog/planning | `server/guidePlanning.ts` | `/api/v1/guide-planning/{catalog,prepare,plan}` |
+| **Agentic Deployment (core)** | `llm_d_lens/agentic/router.py` | `POST /api/v1/agentic-deployments` (create plan)<br>`GET /api/v1/agentic-deployments` (list)<br>`GET /api/v1/agentic-deployments/{id}` (details)<br>`POST /api/v1/agentic-deployments/{id}/select`<br>`POST /api/v1/agentic-deployments/{id}/refine` (Recalculate)<br>`POST /api/v1/agentic-deployments/{id}/approve` (the sole cluster-changing write) |
+| Simulation | `/api/v1/simulation/*` in `simulation-design.md` | Read-only access and task submission |
 | Prometheus/cluster monitoring | `llm_d_lens/monitoring/{cluster_stack,profiling,accelerator,deployment}` | Existing PromQL wrappers (`_query`/`_query_range`), Grafana/Prometheus links, cluster-stack status |
 
 Agentic Deployment already resembles constrained tool calling: `DeterministicPlanner`
@@ -142,12 +142,12 @@ Classify tools by read/write semantics and risk. Phase 1 exposes read-only tools
 | Tool | Description | Existing capability |
 | --- | --- | --- |
 | `get_cluster_status` | Current session capacity, free GPUs, and node status | `inspectPlanningCluster` |
-| `search_benchmark_candidates` | Verified benchmark candidates by model/accelerator/workload | `/api/candidate-search`, `/api/candidate-support` |
-| `get_guide_catalog` | Available provider/accelerator/model-server/variant guides | `/api/guide-planning/catalog` |
-| `list_agentic_plans` | Current session plans and statuses | `GET /api/agentic-deployments` |
-| `get_agentic_plan` | Plan candidates, score source, and evidence | `GET /api/agentic-deployments/{id}` |
-| `get_simulation_result` | Completed Simulation result | `/api/simulation/tasks/{id}` |
-| `list_ready_deployments` | Current-session ready deployments exposing OpenAI-compatible gateways, aggregating PoC/remote/deployed Agentic runs | `/api/deploy-poc/status`, `/api/remote-deploy/status`, `GET /api/agentic-deployments` filtered by `status=deployed` |
+| `search_benchmark_candidates` | Verified benchmark candidates by model/accelerator/workload | `/api/v1/candidate-search`, `/api/v1/candidate-support` |
+| `get_guide_catalog` | Available provider/accelerator/model-server/variant guides | `/api/v1/guide-planning/catalog` |
+| `list_agentic_plans` | Current session plans and statuses | `GET /api/v1/agentic-deployments` |
+| `get_agentic_plan` | Plan candidates, score source, and evidence | `GET /api/v1/agentic-deployments/{id}` |
+| `get_simulation_result` | Completed Simulation result | `/api/v1/simulation/tasks/{id}` |
+| `list_ready_deployments` | Current-session ready deployments exposing OpenAI-compatible gateways, aggregating PoC/remote/deployed Agentic runs | `/api/v1/deploy-poc/status`, `/api/v1/remote-deploy/status`, `GET /api/v1/agentic-deployments` filtered by `status=deployed` |
 | `get_deployment_endpoint` | Resolve `gateway_endpoint` and served model ID for conversation | `gateway_endpoint` in `deploy-poc/validate` |
 
 ### 4.1b Prometheus/monitoring data (read-only, Phase 1)
@@ -181,17 +181,17 @@ Guardrails:
 
 | Tool | Description | Existing capability | Guardrail |
 | --- | --- | --- | --- |
-| `create_agentic_plan` | Model/cluster/cache plus optional SLO/workload/preference → `awaiting_approval` recommendation | `POST /api/agentic-deployments` | DeterministicPlanner and hard constraints still bound candidates; model cannot introduce new candidates |
+| `create_agentic_plan` | Model/cluster/cache plus optional SLO/workload/preference → `awaiting_approval` recommendation | `POST /api/v1/agentic-deployments` | DeterministicPlanner and hard constraints still bound candidates; model cannot introduce new candidates |
 | `select_plan_candidate` | Change selection among returned candidates | `POST .../select` | Validated candidate IDs only |
 | `refine_agentic_plan` | Recalculate with new preference | `POST .../refine` | Replace old preference and refresh facts/filtering |
-| `run_simulation` | Submit trace-replay/AIPerf Simulation | `/api/simulation/tasks` | Read-only cluster access; no side effects |
+| `run_simulation` | Submit trace-replay/AIPerf Simulation | `/api/v1/simulation/tasks` | Read-only cluster access; no side effects |
 
 ### 4.3 Cluster-changing tools (Phase 3, explicit confirmation)
 
 | Tool | Description | Existing capability | Guardrail |
 | --- | --- | --- | --- |
 | `approve_agentic_plan` | Approve and deploy | `POST .../approve` | Chat suspends the call and returns it to the UI; the user clicks Approve before execution. Existing server capacity/deployability revalidation remains |
-| `teardown_deployment` | Remove a deployment | `/api/deploy-poc/teardown`, `/api/remote-deploy/teardown` | UI confirmation and audit logging |
+| `teardown_deployment` | Remove a deployment | `/api/v1/deploy-poc/teardown`, `/api/v1/remote-deploy/teardown` | UI confirmation and audit logging |
 
 > A model request alone never executes a cluster-changing tool. A human confirmation action is
 > required, matching the existing `awaiting_approval -> user approval` flow; the model merely
@@ -204,7 +204,7 @@ Guardrails:
   (Node → FastAPI), not direct database/file access.
 - **Dependency:** official TypeScript `@modelcontextprotocol/sdk`.
 - **Transport:** stdio for local development/MCP Inspector; Streamable HTTP for hosting, mounted
-  as `mcpRouter` at `/api/mcp` in `server/server.js`, sharing existing `oauthRouter`/`limiter`
+  as `mcpRouter` at `/api/v1/mcp` in `server/server.js`, sharing existing `oauthRouter`/`limiter`
   authentication and rate limits.
 - **Authentication:** reuse session/cluster context (`clusterSession.ts`). Each call carries
   current Prism session credentials; MCP does not own a separate permission model.
@@ -213,7 +213,7 @@ Guardrails:
 ## 6. Playground frontend
 
 - Chat and tool-confirmation resumption use the shared `streamSseRequest` transport
-  in `apps/frontend/src/shared/api/sse.js`. Each POST to `/api/playground/chat`
+  in `apps/frontend/src/shared/api/sse.js`. Each POST to `/api/v1/playground/chat`
   sends the current `prism_csrf` cookie value in `X-Prism-CSRF`; Python enforces
   the same CSRF check as other authenticated browser mutations.
 - Add top-level Playground navigation with multiple use cases; "Talk with your Prism" comes first.
@@ -240,7 +240,7 @@ Guardrails:
 | 1 | Read-only tools (§4.1) and chat UI | Ask about free GPUs or verified H100 + vLLM benchmarks |
 | 2 | Plan generation/editing (§4.2), no real deployment | Generate recommendations and recalculate preferences in conversation |
 | 3 | Approve/teardown (§4.3), mandatory UI confirmation and audit | Conversation initiates deployment; a human performs the final action |
-| 4 | External MCP clients at `/api/mcp` | Requires separate API-key/OAuth-scope design outside this document |
+| 4 | External MCP clients at `/api/v1/mcp` | Requires separate API-key/OAuth-scope design outside this document |
 
 ## 8. Open questions
 
@@ -262,9 +262,9 @@ end-to-end Playground SSE, `npm run build`, and existing `server/*.test.ts` test
   `list_ready_deployments`, `list_agentic_plans`, `get_agentic_plan`, `get_guide_catalog`,
   `get_cluster_stack_status`, and `get_flow_map_metrics`.
 - `server/mcp/server.ts` + `server/mcp/router.ts`: stateless Streamable HTTP server at
-  `POST /api/mcp`, also directly usable by external MCP clients as required in §3.
-- `server/playground/chat.ts`: `GET /api/playground/deployments` for the selector and
-  `POST /api/playground/chat` for SSE (`tool_call`, `tool_result`, `blocked`, `message`,
+  `POST /api/v1/mcp`, also directly usable by external MCP clients as required in §3.
+- `server/playground/chat.ts`: `GET /api/v1/playground/deployments` for the selector and
+  `POST /api/v1/playground/chat` for SSE (`tool_call`, `tool_result`, `blocked`, `message`,
   `error`, `done`). Every non-`read` tool is blocked without execution, implementing §3.1's gate.
 - `src/components/Playground/PlaygroundPage.jsx` + `playgroundBackend.js`: select Cluster first,
   then Deployment; chat occupies the main left area, selectors the right sidebar, with a tool
@@ -278,7 +278,7 @@ end-to-end Playground SSE, `npm run build`, and existing `server/*.test.ts` test
    Remote and Agentic outputs lack stable run-to-namespace/endpoint associations and need a
    separate small task.
 2. Cluster selection currently enforces frontend ordering only: select/open/reuse its session
-   before choosing a Deployment. `GET /api/deploy-poc/status` and `/api/deploy-poc/validate`
+   before choosing a Deployment. `GET /api/v1/deploy-poc/status` and `/api/v1/deploy-poc/validate`
    do not yet filter by `clusterSessionId` (POST start/teardown do). The list is therefore **not
    truly filtered by cluster**; real filtering awaits multi-cluster PoC queries.
 3. `search_benchmark_candidates` remains **unimplemented**. Its complex

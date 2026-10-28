@@ -4,12 +4,20 @@
 > `apps/backend/src/llm_d_lens/`. The Python auth middleware and route registry
 > enforce the same session, CSRF and permission contracts without a Node gateway.
 > Node-specific diagrams and implementation phases below are historical design
-> context, not instructions to deploy a separate service.
+> context, not instructions to deploy a separate service. An optional outer REST
+> API wrapper may exist; §5.6 requires it to be a transparent Bearer proxy and
+> never a second identity authority.
 
 > Status: **Design draft (proposal)**. This document defines only the solution and does not modify code.
 > Any table-structure (schema) change must be approved by a human before it can be
 > implemented following the process in
 > `llm_d_lens/db/migrations/README.md` (see §15 and §18).
+>
+> **Bearer transport (implemented 2026-10-26):** §5.6 defines short-lived
+> Bearer access tokens for the Web UI, an outer REST API wrapper, and direct
+> Python API clients. It supersedes earlier text that treated the opaque session
+> token as the only Bearer credential. The opaque server-side session remains
+> the HttpOnly refresh credential.
 >
 > Related documents: [`AGENTS.md`](../../AGENTS.md),
 > [`AGENTS.md`](../../AGENTS.md),
@@ -43,8 +51,9 @@ these behaviors; other domains' ownership rules are unchanged.
 - Two identity-source paths (§5, §20): Lens self-managed (`local`, local users/groups are readable and writable) or an external IdP
   (v1 supports LDAP, with abstractions reserved for OIDC/SCIM). Administrators can manage users/groups inside Lens and can also
   connect an external directory.
-- After login succeeds, issue a **revocable** httpOnly session cookie (the DB stores only a hash, with idle/absolute
-  TTL); supports logout, password change, admin-forced sign-out, and immediate invalidation on permission changes (`principal_version`).
+- After login succeeds, issue a short-lived **Bearer access token** plus a **revocable** httpOnly refresh
+  session cookie (§5.6). The session DB stores only a hash with idle/absolute TTL; logout, password change,
+  admin-forced sign-out, and permission changes (`principal_version`) revoke it immediately.
 - For an empty database, use the CLI to create the first admin; the old `X-Prism-Github-Token` is **no longer compatible** (already removed).
 
 ### 0.2 Authorization: what you can do + to which resources
@@ -128,6 +137,8 @@ optional `owner_group_id` (team ownership, §7.4/§7.14).
 | Current-state evidence and goals | §1–§2 |
 | Data table structure | §4 |
 | Login/LDAP/session/TTL | §5 |
+| Bearer token transport (Web UI, REST wrapper, direct Python API) | §5.6 |
+| Local in-process Python SDK identity | §5.7 |
 | Third-party framework choices (Casbin / primitive libs / IdP) | §20 |
 | Full permission codes and page mapping | §6 |
 | Roles, scopes, ownership, decision algorithm | §7 |
@@ -602,7 +613,7 @@ Basics:
   may be disabled for development self-signed TLS), `SameSite=Lax`, `Path=/`,
   `Max-Age=absolute` (absolute upper bound; **not** `min(idle, absolute)`—see the
   2026-09-23 decision update below).
-- Also accepts `Authorization: Bearer <token>` for CLI-like clients.
+- Also accepts short-lived `Authorization: Bearer <access-token>` requests (§5.6). The opaque cookie remains the refresh credential; legacy opaque-session Bearer calls are accepted only during the migration window.
 - On logout, password change, or admin disable/delete of a user, **revoke all sessions of that user**.
 - **`X-Prism-Github-Token` is no longer accepted** (decision update, 2026-09-19): the new session Cookie
   has replaced it, and the old header is ignored in all cases; frontend-related reads and Node forwarding have been removed (§14.4, §22.3.1).
@@ -673,6 +684,12 @@ Why DB sessions instead of JWT/Redis:
   scheduled sweeping are enough. If later multi-instance, high-frequency sessions become a bottleneck, the session backend can be swapped to Redis
   while keeping the upper-layer interface (`create/validate/revoke`) unchanged.
 
+> **Bearer proposal update (2026-10-26):** refresh sessions stay DB-backed and
+> revocable; a short-lived JWT access token is layered on top for transport.
+> The access token carries the session id and is rejected when that session is
+> revoked or expired. This does not reintroduce long-lived stateless sessions.
+> See §5.6.
+
 ### 5.4 Bootstrap for first use
 
 - When the `users` table is empty and authentication is not disabled, **automatically seed** one global admin on startup
@@ -698,12 +715,281 @@ Why DB sessions instead of JWT/Redis:
 | Method | Path | Permission | Description |
 | --- | --- | --- | --- |
 | GET | `/api/v1/auth/providers` | public | Returns enabled login methods (local/ldap) for login page rendering |
-| POST | `/api/v1/auth/login` | public | `{username,password}` → Set-Cookie + principal |
+| POST | `/api/v1/auth/login` | public | `{username,password}` → `accessToken` + Set-Cookie refresh session + principal (§5.6) |
+| POST | `/api/v1/auth/refresh` | refresh Cookie | Exchange the HttpOnly refresh session for a new short-lived access token (§5.6) |
 | POST | `/api/v1/auth/logout` | authenticated | Revoke current session, clear Cookie |
 | GET | `/api/v1/auth/session` | authenticated | Current principal + permission set + whether password change is required |
 | POST | `/api/v1/auth/password` | authenticated | Change your own password; on success revoke other sessions |
 | POST | `/api/v1/auth/bootstrap` | public (only when there are no users) | Create the first admin |
 | POST | `/api/v1/auth/introspect` | internal secret | Node→Python session validation (never exposed as a browser route) |
+
+### 5.6 Bearer Token Transport (Web UI, Outer REST API, Direct Python API)
+
+**Status:** implemented for the Python API and Web UI on 2026-10-26. An outer REST API remains a transparent proxy and must forward `Authorization` unchanged.
+
+#### Scope and authority
+
+The Python API is the only token issuer and validator. An optional outer REST API
+is a transport wrapper, not a second identity authority:
+
+```text
+Web UI / Python client
+    Authorization: Bearer <access-token>
+              |
+              +--> Python API directly
+              |
+              +--> Outer REST API
+                       Authorization: Bearer <access-token>
+                              |
+                              v
+                         Python API
+```
+
+The REST wrapper must forward the user's token unchanged. It must not exchange
+it for a service identity, because Python derives `owner_user_id`, permissions,
+scope and audit actor from that token. Service-to-service calls that have no end
+user continue to use the internal HMAC assertion (§8.3) or a dedicated service
+credential; they must not impersonate a user.
+
+#### Token model
+
+Two credentials are used:
+
+1. **Access token**
+   - Short-lived signed JWT: default 30 minutes.
+   - Claims: `iss`, `sub`, `sid`, `aud`, `authzVersion`, `iat`, `exp`.
+   - The JWT is a short-lived bearer pointer, not a stateless session: every
+     request also validates the server-side session and compares `authzVersion`
+     with the current principal version.
+   - Sent as `Authorization: Bearer <access-token>`.
+   - Stored by the Web UI in memory only; never in `localStorage`.
+   - The Python API validates signature, issuer, audience, expiry and that the
+     referenced session is not revoked or idle-expired.
+
+2. **Refresh credential**
+   - The existing opaque server-side session, delivered as the HttpOnly
+     `prism_session` cookie.
+   - The database stores only its SHA-256 hash.
+   - Existing idle/absolute TTL, remember-me, single-session and revocation
+     behavior (§5.3) remain authoritative.
+   - Used only by `POST /api/v1/auth/refresh` (and logout); normal API requests
+     do not need this cookie.
+
+Login returns `accessToken`, `tokenType: "Bearer"`, `expiresIn` and
+`principal`, and sets the HttpOnly refresh cookie. The refresh endpoint
+exchanges a valid refresh session for a new access token. Logout revokes the
+session; any outstanding access token that references that `sid` becomes
+invalid immediately.
+
+This supersedes the earlier "DB sessions instead of JWT" rationale for the
+transport token only: refresh state remains DB-backed and revocable, while the
+access token is deliberately short-lived. Reusing the opaque session token as a
+long-lived Bearer credential is not recommended because it exposes the refresh
+credential to JavaScript.
+
+#### Validation and precedence
+
+The Python request middleware applies this order:
+
+```text
+signed internal assertion (service/background)
+    >
+Authorization: Bearer <access-token>
+    >
+prism_session Cookie fallback
+```
+
+Rules:
+
+- If an `Authorization` header is present, it is the only user credential
+  considered. An invalid Bearer token returns `401`; it never falls back to a
+  cookie.
+- Bearer requests are exempt from CSRF because the token is not automatically
+  attached by the browser (§12).
+- Cookie fallback keeps the existing CSRF double-submit check.
+- During migration, the backend may also accept the legacy opaque session token
+  as Bearer. This compatibility path is explicitly deprecated and must be
+  removed after the frontend and clients migrate.
+- A valid token must resolve to an active user and an unrevoked, unexpired
+  session. Permission enforcement continues to use the existing
+  principal/role/scope model; Bearer support does not change authorization.
+
+#### Outer REST API contract
+
+Recommended deployment: same-origin reverse proxy.
+
+- Proxy login, refresh and logout to the Python API without inventing a second
+  auth flow.
+- Forward `Authorization`, `X-Request-Id`, `traceparent` and the request body.
+- Forward `Set-Cookie` and streaming responses for auth, SSE, logs and downloads.
+- Do not log, cache or persist the Authorization header.
+- Do not strip the header or replace it with a service token for user requests.
+- Preserve the Python API's `401`/`403` status and problem codes.
+
+If the REST API is a different origin, Bearer passthrough still works, but the
+HttpOnly refresh cookie cannot be shared safely across origins. In that case:
+
+- keep the Web UI on the same origin as the REST API and let REST own/proxy the
+  refresh exchange, or
+- use a Personal Access Token for automation and direct clients.
+
+The same-origin proxy is preferred because it preserves the HttpOnly refresh
+cookie and avoids cross-origin CORS/cookie complexity.
+
+#### Direct Python API exposure
+
+The Python API accepts the same Bearer token when called directly. There is no
+alternate direct-user authentication path.
+
+When exposed to users, the deployment must provide:
+
+- TLS.
+- CORS allowlist with `Authorization` explicitly allowed if a browser calls it
+  cross-origin.
+- Login/refresh rate limits and request-size limits.
+- `WWW-Authenticate: Bearer` on `401`.
+- The same route-permission registry and default-deny behavior as proxied calls.
+
+Direct Python clients normally use Bearer only. They do not need the refresh
+cookie; long-running automation should use a Personal Access Token (phase 2) or
+perform a login/refresh flow explicitly.
+
+#### Web UI
+
+- `AuthProvider` keeps only the current access token and principal in memory.
+- On app load and on `401`, call `/api/v1/auth/refresh` once, then retry the
+  original request; if refresh fails, return to login.
+- `requestJson`, SSE and file downloads add `Authorization: Bearer`.
+- Bearer requests do not add `X-Prism-CSRF`; keep the CSRF path only for the
+  cookie fallback and the refresh/logout exchange.
+- Logout clears the in-memory token and revokes the server session.
+- Multi-tab behavior should either share token/refresh state or let each tab
+  refresh independently without rotating the refresh session.
+- The backend keeps cookie + CSRF fallback during migration
+  (`PRISM_AUTH_COOKIE_FALLBACK`), so a frontend/backend rollout mismatch does
+  not lock users out.
+
+#### Python and REST clients
+
+- REST clients call login (or refresh) and send `Authorization: Bearer`.
+- Python utilities and scripts should use a shared token provider with a
+  `LENS_TOKEN` environment override.
+- Personal Access Tokens are the recommended follow-up for CI/service
+  automation so they do not depend on an interactive refresh session.
+- Both the Python OpenAPI document and the outer REST OpenAPI document declare
+  `HTTPBearer` as a security scheme.
+
+#### Ownership and audit
+
+The principal is always derived from the validated user token, including when
+the request arrives through the REST wrapper. Therefore:
+
+- deployment `owner_user_id` is the authenticated creator;
+- mutating actions record the authenticated actor;
+- a REST service identity never becomes the owner of a user-created resource.
+
+#### Error contract
+
+| Condition | Status | Code |
+| --- | --- | --- |
+| Missing credential | 401 | `authentication_required` |
+| Invalid/expired/revoked access token | 401 | `invalid_token` / `session_expired` |
+| Invalid Bearer with a cookie also present | 401 | no cookie fallback |
+| Cookie fallback without valid CSRF | 403 | `csrf_failed` |
+| Authenticated but not permitted | 403 | `permission_denied` |
+| Refresh session missing/expired/revoked | 401 | `session_expired` |
+
+Responses must not include tokens, token hashes or signing material.
+
+#### Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PRISM_ACCESS_TOKEN_TTL_SECONDS` | `1800` | Access-token lifetime |
+| `PRISM_ACCESS_TOKEN_AUDIENCE` | `lens-api` | JWT audience |
+| `LENS_AUTH_JWT_SECRET` | — | Access-token signing key; required when Bearer is enabled |
+| `LENS_AUTH_JWT_SECRETS_OLD` | — | Previous keys for rotation |
+| `PRISM_AUTH_COOKIE_FALLBACK` | `true` during migration | Keep cookie/CSRF authentication available |
+| `PRISM_AUTH_LEGACY_OPAQUE_BEARER` | `true` during migration | Accept the legacy opaque session token in the Bearer header |
+
+The refresh session continues to use the existing `PRISM_SESSION_*` settings.
+
+#### Migration and compatibility
+
+1. Add JWT issuance/validation, refresh and OpenAPI support while keeping the
+   existing cookie flow.
+2. Update the outer REST API to transparently forward Authorization and proxy
+   the auth endpoints.
+3. Move the Web UI to memory-only Bearer tokens and refresh-on-load/401.
+4. Move Python/REST examples and clients to Bearer; introduce Personal Access
+   Tokens for automation.
+5. Remove legacy opaque-Bearer acceptance and, once no supported client needs
+   it, disable the cookie fallback.
+
+Existing sessions remain valid as refresh credentials. Access tokens are new,
+short-lived credentials and require no data migration.
+
+#### Testing
+
+- Python API: valid/expired/revoked JWT; session revocation; audience/issuer
+  mismatch; Bearer precedence over cookie; invalid Bearer with cookie present;
+  CSRF still enforced for cookie fallback; refresh/login/logout.
+- REST wrapper: Authorization passthrough, cookie/`Set-Cookie` passthrough,
+  streaming SSE and downloads, no token logging.
+- Direct Python API: same Bearer behavior without the wrapper.
+- Web UI: Authorization header injection, refresh-on-401 once, logout,
+  SSE/download headers, no localStorage token.
+- Ownership/audit: the user identity from the token, not the REST service,
+  owns created resources and appears in audit logs.
+
+#### Decisions
+
+- Python issues and validates all user tokens.
+- Short-lived JWT access token plus the existing opaque HttpOnly refresh
+  session.
+- Bearer-first with cookie fallback during migration.
+- Outer REST API is a transparent proxy; it never substitutes a service
+  identity for user requests.
+- Direct Python API uses the same Bearer validation.
+- Personal Access Tokens are a follow-up for automation.
+
+### 5.7 Local Python SDK (in-process)
+
+The local SDK is a trusted operator API shipped with Lens for CI and
+on-host automation. It follows the same user-context pattern as Odoo
+(`env.user`), Frappe (`session.user`), Tryton (`Transaction.user`) and
+Zope/Plone (security manager):
+
+```python
+from llm_d_lens.sdk import LensLocal
+
+lens = LensLocal("<username>")
+contexts = lens.deployments.list_executions()
+```
+
+The caller supplies a username (or an explicit user id). The SDK:
+
+1. Loads the user and builds the current `Principal` with role bindings,
+   permissions and cluster scope.
+2. Stores that principal in an ambient `LensContext` backed by
+   `contextvars.ContextVar`.
+3. Calls application/service functions; those functions enforce
+   `authorize`, `resource_readable`, owner and audit checks.
+
+The SDK must not implement its own `actor`-based authorization. The username
+or user id is an authorization context, not an authentication credential: in-process
+code is trusted in the same way as Odoo `env` or Frappe `set_user`. Real
+authentication happens only at the HTTP or local client-server boundary.
+
+```text
+HTTP + Bearer/PAT    -> middleware -> LensContext(principal) -> service/domain checks
+LensLocal("<username>") -> LensContext(principal) -> service/domain checks
+```
+
+CI that needs isolation from other local users should call the HTTP API
+(localhost or remote) with a PAT rather than relying on the trusted
+in-process boundary. `actor` strings and token files are not part of the
+local SDK identity contract.
 
 ---
 
@@ -822,9 +1108,9 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 | `deployment:run:cancel` | Cancel run | `POST /runs/{id}/cancel` |
 | `deployment:case:execute` | refresh/stop/restart/clean | `POST /runs/{id}/cases/{cid}/refresh|stop|restart|clean` |
 | `deployment:session:rebind` | Rebind cluster session | `POST /runs/{id}/cluster-session` |
-| `deployment:agentic:read` | View agentic deployments | `GET /api/agentic-deployments[/{id}]` |
-| `deployment:agentic:create` | create/refine/select | `POST /api/agentic-deployments`, `POST /{id}/refine`, `POST /{id}/select` |
-| `deployment:agentic:approve` | Approve and actually deploy | `POST /api/agentic-deployments/{id}/approve` |
+| `deployment:agentic:read` | View agentic deployments | `GET /api/v1/agentic-deployments[/{id}]` |
+| `deployment:agentic:create` | create/refine/select | `POST /api/v1/agentic-deployments`, `POST /{id}/refine`, `POST /{id}/select` |
+| `deployment:agentic:approve` | Approve and actually deploy | `POST /api/v1/agentic-deployments/{id}/approve` |
 | `deployment:run:share` | Share/revoke access to a single deployment (resource scope) | `GET/POST/DELETE /executions/{id}/access`, `/runs/{id}/access` |
 
 #### 6.3.6 Evaluation (`evaluate`, `configuration`, `aic`)
@@ -841,8 +1127,8 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 | `configuration:artifact:save` | Save configuration artifact | `POST /save` |
 | `configuration:artifact:delete` | Delete configuration artifact | `DELETE /artifacts/{id}` |
 | `configuration:artifact:render` | resolve/render | `POST /resolve`, `POST /render` |
-| `candidate:candidate:search` | Candidate search / supportability | `POST /api/candidate-support`, `POST /api/candidate-search`, `POST /api/v1/aic/support`, `/search`, `/estimate`, `/experiments` |
-| `guide:plan:execute` | guide planning catalog/plan/prepare | `GET /api/guide-planning/catalog`, `POST /plan`, `POST /prepare` |
+| `candidate:candidate:search` | Candidate search / supportability | `POST /api/v1/candidate-support`, `POST /api/v1/candidate-search`, `POST /api/v1/aic/support`, `/search`, `/estimate`, `/experiments` |
+| `guide:plan:execute` | guide planning catalog/plan/prepare | `GET /api/v1/guide-planning/catalog`, `POST /plan`, `POST /prepare` |
 
 #### 6.3.7 Simulation (`simulation`)
 
@@ -897,7 +1183,7 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 
 | Permission code | Description | Source |
 | --- | --- | --- |
-| `playground:chat:use` | Use Lens Assistant (read-only turns) | `POST /api/playground/chat` |
+| `playground:chat:use` | Use Lens Assistant (read-only turns) | `POST /api/v1/playground/chat` |
 | `playground:tool:write` | Assistant executes write-tier tools | MCP `riskTier=write` (`server/mcp/tools.ts:20-24`) |
 | `playground:tool:approve` | Assistant executes approve-tier tools | MCP `riskTier=approve` (`server/playground/chat.ts:596-650`) |
 
@@ -909,15 +1195,15 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 
 | Permission code | Description | Routes |
 | --- | --- | --- |
-| `remote-deploy:target:read` | Read default credentials/configuration | `GET /api/remote-deploy/defaults` |
-| `remote-deploy:target:connect` | fingerprint/test | `POST /api/remote-deploy/fingerprint`, `/test` |
-| `remote-deploy:deploy:execute` | start/status/logs | `POST /api/remote-deploy/start`, `/status`, `/logs` |
-| `remote-deploy:deploy:teardown` | teardown | `POST /api/remote-deploy/teardown` |
-| `deploy-poc:job:read` | Read configuration/status/validation | `GET /api/deploy-poc/config`, `/status`, `/validate` |
-| `deploy-poc:job:execute` | start | `POST /api/deploy-poc/start` |
-| `deploy-poc:job:teardown` | teardown | `POST /api/deploy-poc/teardown` |
-| `config:runtime:read` | Read frontend runtime config | `GET /api/config` (public, allowlisted fields only) |
-| `mcp:tool:invoke` | Invoke MCP directly | `POST /api/mcp` (guarded by both session + tool-level risk). **Implementation correction**: `/api/mcp` also accepts `playground:chat:use` (the Playground assistant loops back with the current user's signed internal identity); the actual action of each tool is still enforced by the target-route permissions, so this does not create privilege escalation |
+| `remote-deploy:target:read` | Read default credentials/configuration | `GET /api/v1/remote-deploy/defaults` |
+| `remote-deploy:target:connect` | fingerprint/test | `POST /api/v1/remote-deploy/fingerprint`, `/test` |
+| `remote-deploy:deploy:execute` | start/status/logs | `POST /api/v1/remote-deploy/start`, `/status`, `/logs` |
+| `remote-deploy:deploy:teardown` | teardown | `POST /api/v1/remote-deploy/teardown` |
+| `deploy-poc:job:read` | Read configuration/status/validation | `GET /api/v1/deploy-poc/config`, `/status`, `/validate` |
+| `deploy-poc:job:execute` | start | `POST /api/v1/deploy-poc/start` |
+| `deploy-poc:job:teardown` | teardown | `POST /api/v1/deploy-poc/teardown` |
+| `config:runtime:read` | Read frontend runtime config | `GET /api/v1/config` (public, allowlisted fields only) |
+| `mcp:tool:invoke` | Invoke MCP directly | `POST /api/v1/mcp` (guarded by both session + tool-level risk). **Implementation correction**: `/api/v1/mcp` also accepts `playground:chat:use` (the Playground assistant loops back with the current user's signed internal identity); the actual action of each tool is still enforced by the target-route permissions, so this does not create privilege escalation |
 
 ### 6.4 Page → permission mapping
 
@@ -1303,7 +1589,7 @@ Recommended two levels:
    `Principal` into `request.state`, and denies **unregistered** routes by default.
 
 Public allowlist (explicit, unauthenticated):
-`/api/health`, `/healthz`, `/api/simulation/health`, `/api/simulation/docs|redoc|openapi.json`,
+`/api/health`, `/healthz`, `/api/v1/simulation/health`, `/api/v1/simulation/docs|redoc|openapi.json`,
 `/api/v1/auth/login`, `/api/v1/auth/providers`, `/api/v1/auth/bootstrap` (only when there are no users).
 
 ### 8.3 Internal identity signature
@@ -1381,7 +1667,7 @@ app.use('/api/v1/auth', authProxyRouter);   // Cookie/Set-Cookie pass-through
 - Static assets and the SPA fallback (`server.js:83-101`) are not intercepted.
 - **Public allowlist (Node side, explicit)**: `/api/v1/auth/login`, `/api/v1/auth/logout`
   (idempotent), `/api/v1/auth/providers`, `/api/v1/auth/bootstrap` (only when there are no users),
-  `/api/health`, `/healthz`, `/api/config` (returns only de-sensitized allowlist fields),
+  `/api/health`, `/healthz`, `/api/v1/config` (returns only de-sensitized allowlist fields),
   and static assets. All other `/api/**` require login + permission.
 - **Internal loopback calls**: if the loopback in `server/mcp/internal.ts`, SSE/streaming, and
   monitoring proxy are backend-internal calls, allow them through a **separate internal-token header** (not browser Cookie)
@@ -1400,15 +1686,15 @@ app.use('/api/v1/auth', authProxyRouter);   // Cookie/Set-Cookie pass-through
 
 ### 9.4 Permissions for native Node routes
 
-The Node-side registry table covers: `/api/config`, `/api/deploy-poc/*`, `/api/remote-deploy/*`,
-`/api/guide-planning/*`, `/api/candidate-*`, `/api/configurations/*`,
-`/api/playground/chat`, `/api/mcp`. Only after validation does the Node native executor (SSH/kubectl)
+The Node-side registry table covers: `/api/v1/config`, `/api/v1/deploy-poc/*`, `/api/v1/remote-deploy/*`,
+`/api/v1/guide-planning/*`, `/api/candidate-*`, `/api/v1/configurations/*`,
+`/api/v1/playground/chat`, `/api/v1/mcp`. Only after validation does the Node native executor (SSH/kubectl)
 get invoked.
 
-- `/api/config` returns only the de-sensitized allowlist (keep existing `server/server.js:66-80` behavior) and stays public.
-- For `/api/playground/chat`, `readOnly` voice turns still require `playground:chat:use`;
+- `/api/v1/config` returns only the de-sensitized allowlist (keep existing `server/server.js:66-80` behavior) and stays public.
+- For `/api/v1/playground/chat`, `readOnly` voice turns still require `playground:chat:use`;
   write/approve tier tools require additional permissions per §6.3.10.
-- `/api/mcp` requires a session; its internal loopback tool calls use the internal token in §9.2 and do not re-authenticate.
+- `/api/v1/mcp` requires a session; its internal loopback tool calls use the internal token in §9.2 and do not re-authenticate.
 
 ### 9.5 Introspection cache
 
@@ -1467,6 +1753,11 @@ src/components/Administration/         # UsersPage/GroupsPage/RolesPage/Director
 
 ### 10.4 HTTP client
 
+> **Bearer update (2026-10-26):** the Web UI sends a short-lived
+> `Authorization: Bearer` token from memory and refreshes it through the HttpOnly
+> session cookie (§5.6). Cookie + CSRF remains a migration fallback. Direct
+> `fetch` call sites for SSE and downloads must add the same Authorization header.
+
 - In `src/api/httpClient.js`, `requestJson`:
   - uniformly uses `credentials: 'include'`;
   - automatically attaches the CSRF header for modifying requests (read from the `prism_csrf` Cookie, see §12);
@@ -1474,7 +1765,7 @@ src/components/Administration/         # UsersPage/GroupsPage/RolesPage/Director
   - on `403`, branches by `code` into `forbidden` (show no-permission prompt) / `csrf_failed` (refresh and retry) /
     `password_change_required` (go to password-change flow);
   - keeps the existing `problemError` semantics (including the new `code`).
-- **Streaming / SSE / downloads must carry credentials**: direct `fetch` calls in `playgroundBackend.js` (SSE read of `POST /api/playground/chat`),
+- **Streaming / SSE / downloads must carry credentials**: direct `fetch` calls in `playgroundBackend.js` (SSE read of `POST /api/v1/playground/chat`),
   `src/utils/download.js`, and the local `requestJson` wrappers in `SimulationDashboard.jsx`
   must explicitly set
   `credentials: 'include'`; otherwise the Cookie is not sent and causes 401.
@@ -1545,6 +1836,10 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | Session fixation | Regenerate token after login; revoke other sessions after password change / privilege elevation |
 | CSRF | `SameSite=Lax` + modifying requests require custom header `X-Prism-CSRF`, and `Origin` / `Referer` must validate as same-origin. **Mechanism detail**: on login, also issue a **non-httpOnly** `prism_csrf` Cookie (`SameSite=Lax`) and a response-body token; the frontend reads the Cookie and puts it into the `X-Prism-CSRF` header; the server compares “header value == Cookie value == value stored in session” (double-submit). Only GET/HEAD/OPTIONS are exempt; missing/mismatched values return `403 csrf_failed`. This avoids extra frontend token storage |
 | XSS stealing tokens | httpOnly Cookie; frontend does not store tokens; `prism_csrf` is readable but still requires XSS to exploit, so CSP is still necessary |
+| XSS stealing Bearer access tokens | Access tokens are memory-only and short-lived; the long-lived refresh credential stays in an HttpOnly Cookie; CSP remains required (§5.6) |
+| Bearer token passthrough | The outer REST API forwards `Authorization` unchanged, never substitutes a service identity, and never logs the header (§5.6) |
+| Cookie fallback CSRF | Bearer requests are CSRF-exempt; cookie fallback keeps the double-submit check, and the refresh endpoint is protected as a cookie-based mutation (§5.6) |
+| JWT signing-key compromise | Dedicated signing key with rotation support; short access-token TTL bounds exposure; refresh sessions can be revoked independently (§5.6) |
 | Brute-force cracking | Rate-limit by `username+IP` + failure lockout; generalized error messages. **External IdP users**: lockout counts are recorded on the Lens user, but LDAP-side errors (wrong password vs service unreachable) must be classified separately; service unreachable does not count as a failure (avoid false lockout) |
 | Replay of internal requests | Internal signature includes timestamp + path + method, with a ±60s window |
 | Header forgery | Node strips `x-prism-principal-*` / `x-prism-internal-*` at entry; Python trusts only signed ones |
@@ -1554,7 +1849,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | Privilege escalation | Built-in roles cannot be changed; only `admin` may change roles/members; users may not change their own roles; see §7.13 for anti-lockout |
 | Default-open behavior | Unregistered routes denied by default + startup self-check |
 | Key rotation | `LENS_SECRET_KEY` uses multiple keys: `LENS_SECRET_KEY` (current) + `LENS_SECRET_KEYS_OLD` (comma-separated old keys) for fallback decryption; after rotation, re-encrypt LDAP/OIDC secrets; rotating `LENS_INTERNAL_AUTH_SECRET` requires Node and Python to restart together (otherwise signatures mismatch) |
-| Documentation exposure | `/api/simulation/docs`, `/redoc`, `/openapi.json` are disabled by default in production (`PRISM_EXPOSE_API_DOCS=false`), or placed behind authentication, to avoid exposing the full route and permission registry |
+| Documentation exposure | `/api/v1/simulation/docs`, `/redoc`, `/openapi.json` are disabled by default in production (`PRISM_EXPOSE_API_DOCS=false`), or placed behind authentication, to avoid exposing the full route and permission registry |
 | Sensitive logging | Audit/access logs must not record passwords/tokens/keys/Secret contents (aligned with `observability-design.md:417-419`) |
 | Rate limiting | login/logout/password-change/bootstrap endpoints get independent limits (stricter than global `/api`), keyed by both `IP` and `username`; the existing global limiter is effectively disabled (`server/server.js:47-54`) and cannot serve as authentication protection |
 
@@ -1570,6 +1865,12 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | `PRISM_ALLOW_UNAUTHENTICATED` | `false` | Development only; prerequisite for `disabled` |
 | `LENS_SECRET_KEY` | — | Encrypts LDAP secrets and signatures |
 | `LENS_INTERNAL_AUTH_SECRET` | — | Internal signature between Node↔Python |
+| `LENS_AUTH_JWT_SECRET` | — | Access-token signing key; required when Bearer is enabled (§5.6) |
+| `LENS_AUTH_JWT_SECRETS_OLD` | — | Previous access-token keys for rotation (§5.6) |
+| `PRISM_ACCESS_TOKEN_TTL_SECONDS` | `1800` | Access-token lifetime (§5.6) |
+| `PRISM_ACCESS_TOKEN_AUDIENCE` | `lens-api` | JWT audience (§5.6) |
+| `PRISM_AUTH_LEGACY_OPAQUE_BEARER` | `true` | Accept legacy opaque session tokens as Bearer during migration (§5.6) |
+| `PRISM_AUTH_COOKIE_FALLBACK` | `true` | Keeps cookie/CSRF authentication during migration (§5.6) |
 | `PRISM_SESSION_TTL_SECONDS` | `43200` | Absolute session lifetime (not sliding, default 12 hours; hard upper bound only; everyday “logout after 30 minutes” is determined by the idle threshold) |
 | `PRISM_SESSION_IDLE_SECONDS` | `1800` | Idle lifetime (default 30 minutes; activity renews it, logout happens only after 30 consecutive minutes without requests) |
 | `PRISM_REMEMBER_SESSION_TTL_SECONDS` | `2592000` | “Keep me logged in” absolute lifetime (30 days) |
@@ -1652,6 +1953,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | --- | --- | --- |
 | Python unit | `pytest` (in-memory SQLite) | `security` (hashing/encryption/signatures/key-rotation fallback), `policy` (matching/wildcards/roles), `scope` (reachable clusters, owner, resource sharing requiring cluster reachability, create-target validation, no cross-cluster), `permissions` (catalog integrity), `principal_version` (changes invalidate immediately), `ldap` (mock `ldap3`) |
 | Python API | `TestClient` | login/logout/session/password change/401/403/forced password change/route-registry self-check; **cross-scope isolation for lists** (A cannot see B's clusters/deployments); **authorization failure = 403, nonexistence = 404**; **TTL**: rejection after idle/absolute thresholds, immediate rejection after revocation, sliding-write throttling effective; **anti-lockout**: deleting/disabling the last admin → 409; **bootstrap race**; CSRF missing/mismatch → 403 |
+| Bearer transport | `pytest` + `TestClient` | JWT issuance/validation, audience/issuer, expiry, session revocation, Bearer precedence over cookie, no fallback from invalid Bearer, CSRF exemption for Bearer, refresh/login/logout, REST-header passthrough, SSE/download headers (§5.6) |
 | Python DAO | `pytest` | CRUD and concurrency for user/group/role/binding/session/audit DAOs; `list(cluster_ids=…)` filtering; **session sweeps delete only expired / over-retention rows, in batches, with threshold-boundary coverage**; batched audit-retention cleanup |
 | Node | `node:test` | `auth.ts` route→permission matching, allowlist, signature injection, **stripping forged internal headers**, Cookie/Set-Cookie pass-through, internal loopback tokens (reference `server/backend-api-proxy.test.ts:40-58`); **streaming requests with Cookie** |
 | Frontend | `node:test` + `renderToStaticMarkup` | permission mapping, client 401/403/CSRF/`code` branching, LoginPage (including multi-provider), PermissionGate, direct fetch with `credentials` |
@@ -1674,6 +1976,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 | **P4 Management UI** | Users/Groups/Roles/Bindings/Sessions/Audit pages; cluster “access management”; deployment “share”; selecting owner group at creation | P3 |
 | **P5 IdP abstraction + LDAP** | `providers/` (base/local/ldap/registry) + identity-source config/test/sync + mapping UI; hybrid login | P4 |
 | **P6 Enhancements** | OIDC/SCIM providers; group hierarchy (downward inheritance only + sync flattening), API Token/Service Account, forced real-time introspection | P5 |
+| **P7 Bearer transport** | Short-lived JWT access tokens, refresh endpoint, Bearer-first middleware, outer REST API passthrough, Web UI memory-token client, direct Python API and client support (§5.6) | P1/P3 |
 
 Each phase is independently testable and releasable; after P1+P2, a minimally usable authentication system with “default deny” is formed,
 and P3 is required before there is a usable login interface.
@@ -1787,6 +2090,8 @@ human-review requirement from the [database skill](../../.agents/skills/database
 | D26 | end-user forbidden from creating deployments | Remove `deployment:run:create` from built-in `end-user` (covering `POST /runs`, `POST /standard-vllm-runs`), and remove `deployment:agentic:create` / `approve` (approve starts a deployment); add `evaluate:workflow:create` (`POST /evaluations`, `POST /workflow-runs`) to distinguish “benchmark an existing deployment” (`evaluate:run:create` retained) from “evaluation that creates a deployment”. end-users may use only existing or explicitly shared deployments (they can still use `evaluate:run:create` to benchmark existing deployments: the wizard locks to "Use existing endpoint" and disables "Design configurations"); all other read/operate capabilities remain unchanged. **Implementation correction (§21)**: change the Casbin matcher to `keyMatch`; otherwise `keyMatch2` treats `:` in permission codes as wildcards, causing `deployment:agentic:create` and similar to unexpectedly match `deployment:run:create` |
 | D27 | Single-session policy | **Finalized (user)**: an account may have only one active session at a time—new login revokes all other sessions for that account (`PRISM_SESSION_SINGLE_ACTIVE`, default `true`) and audits with `session_revoked`; when disabled, fall back to “keep the latest `PRISM_SESSION_MAX_PER_USER`” (§5.3) |
 | D28 | Model-service inference boundary (2026-10-17) | **Approved by user:** implement Alternative A. Retire deployment sharing and `deployment:run:share`; add `model-service:group:share` for admin and cluster-scoped maintainer without changing group/Gateway management restrictions. Consumers require an inference-capable binding in the model's cluster AND a user/group model grant; operators retain non-self-scoped inference in scope. Reuse resource bindings fixed to the end-user role, limited to inference. Approve nullable model `owner_user_id` / `owner_group_id` foreign keys with SET NULL, creator backfill and initially empty historical owner groups; ownership alone grants no consumer inference or sharing. Audit and remove old deployment shares without conversion; administrators/maintainers grant model access afresh. Downgrade must not resurrect retired grants. Native HTTPRoute/EPP behavior is unchanged. |
+| D29 | Bearer token transport (2026-10-26, proposed) | **Python is the sole token authority.** Issue a short-lived JWT access token and keep the existing opaque HttpOnly session as the refresh credential. Web UI keeps the access token in memory and refreshes on load/401. The outer REST API is a transparent proxy that forwards `Authorization` unchanged and never substitutes a service identity for user requests. Direct Python API exposure uses the same Bearer validation. Bearer-first with cookie/CSRF fallback during migration; legacy opaque Bearer is temporary. See §5.6. |
+| D30 | Local Python SDK identity (2026-10-26) | The trusted in-process SDK takes a username (or explicit user id), loads the real `Principal` into an ambient `LensContext`, and relies on service/domain permission checks. `actor`-string authorization is rejected; remote and local client-server callers use Bearer/PAT. See §5.7. |
 
 > D1–D24 correspond to the “recommended” paths in the preceding sections and have been synced into the relevant chapters; implementation should follow them,
 > and there are no remaining blocking undecided items other than the schema approval in §18.1.
@@ -2012,7 +2317,7 @@ Connected through `llm_d_lens/auth/access.py` (`current_principal` / `visible_cl
 
 | Domain | List filtering | Single-resource access validation |
 | --- | --- | --- |
-| clusters | ✅ `/api/cluster/clusters` | — |
+| clusters | ✅ `/api/v1/cluster/clusters` | — |
 | storage | ✅ `/volumes`; `/storage-classes`, `/nodes` validate `cluster_id` | ✅ `get_volume` |
 | model-cache | ✅ `/entries` | ✅ `get_entry` |
 | evaluate | ✅ `/runs`, `/workflow-runs` | ✅ `get_run`, `get_workflow_run` |

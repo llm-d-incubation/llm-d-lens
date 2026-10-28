@@ -1,71 +1,92 @@
 ---
 title: API 参考
-description: 后端 API 接口、契约和集成要点。
+description: 使用 Lens REST API 或进程内 Python SDK。
 slug: /api-reference
 ---
 
-Lens 通过 Python FastAPI 后端（`llm_d_lens`）暴露同源 HTTP API。
-开发环境中，Vite 将浏览器的 `/api/...` 请求直接代理到该后端。
-生产环境中，同一后端提供构建后的前端、API 和 MCP 端点，
-并负责校验、持久化和任务执行。
+Lens 提供两种方式执行同一组操作：
 
-```mermaid
-flowchart LR
-    UI["Lens UI"] --> PY["Python API (llm_d_lens) :3000"]
-    PY -->|/api/remote-deploy| SSH["Remote host over SSH"]
-    PY --> DB["Database"]
-    PY --> K8s["Kubernetes"]
+- **REST API**：供远程客户端、脚本和浏览器使用。
+- **进程内 Python SDK**：供 Lens 主机上的可信自动化使用。
+
+两者共享同一套请求/响应模型、权限和审计规则。
+
+## 快速开始
+
+### REST API
+
+使用 Bearer Access Token 或已认证的浏览器会话：
+
+```bash
+curl -H "Authorization: Bearer $LENS_TOKEN" \
+  http://127.0.0.1:3000/api/v1/deployments/executions
 ```
 
-Deploy 属于 Lens Python 后端，并非独立的 llm-d-bench API。
-部署路由在同一进程内执行，不再需要单独的 BFF 上游。
-本地开发使用 `scripts/lens-local.sh start`；当前启动与存储设置参见
-[安装](/installation)和[环境变量](/environment-variables)，不要沿用主机专属的 `/root/...` 路径。
-请求需要已认证的 Lens 会话及相应权限；非安全方法还需要匹配的 `prism_csrf` Cookie
-和 `x-prism-csrf` 请求头。未登录的冒烟请求可能返回 `401`，而不是资源列表。
+使用 Cookie 的非安全请求还需要在 `x-prism-csrf` 请求头中携带 `prism_csrf`
+Cookie。参见[认证](/user-guide/administration)。
 
-## 接口
+### 进程内 Python SDK
 
-| 接口 | 说明 |
+```python
+from llm_d_lens.sdk import LensLocal
+
+with LensLocal("<username>") as lens:
+    executions = lens.deployments.list_executions()
+    for execution in executions:
+        print(execution.execution_id, execution.status)
+```
+
+SDK 只用于运行在 Lens 主机上的代码。调用方在远程主机，或本机用户不可信时，
+请使用 REST。
+
+## 选择接口
+
+| 调用方 | 使用 |
 | --- | --- |
-| Python API | 用于部署、模拟、评估、存储、监控、认证和 Playground 的同源 FastAPI 路由；同时提供生产环境前端。 |
-| MCP 工具 | 从后端路由生成、可供助手调用的操作，纳入 MCP 目录。 |
-| Kubernetes 后端 | 通过官方 Python 客户端进行的服务端 Kubernetes 访问，支持 CLI 回滚。 |
+| 远程服务、CI Runner 或其他机器 | 带 Bearer Token 的 REST API |
+| 浏览器 UI | 带 Session Cookie 的 REST API |
+| Lens 主机上的可信脚本或 CI 任务 | 进程内 Python SDK |
+| Lens Assistant | MCP 工具 |
 
 ## 模块
 
-每个 Lens 模块都有一个专属页面，涵盖其后端 HTTP 端点，
-以及（如果存在的话）如何直接调用其 Python 服务层
-（供内部脚本、测试或自动化使用）而不是通过 HTTP：
+从与任务对应的模块开始：
 
 <CardGroup cols={3}>
-  <Card title="欢迎页" href="/api-reference/modules/welcome">按权限范围汇总当前问题和诊断链接。</Card>
-  <Card title="模型市场" href="/api-reference/modules/model-market">目录交接（仅前端目录）。</Card>
-  <Card title="部署" href="/api-reference/modules/deployments">运行、执行、用例、访问权限。</Card>
-  <Card title="评估" href="/api-reference/modules/evaluation">引导式基准测试任务。</Card>
-  <Card title="模拟" href="/api-reference/modules/simulation">基于轨迹的模拟运行。</Card>
-  <Card title="模型服务" href="/api-reference/modules/model-services">网关、提供方、选择策略。</Card>
-  <Card title="集群" href="/api-reference/modules/clusters">注册、引导、概览。</Card>
-  <Card title="存储" href="/api-reference/modules/storage">存储卷和存储后端。</Card>
-  <Card title="模型缓存" href="/api-reference/modules/model-cache">已缓存的模型制品。</Card>
-  <Card title="外部服务提供方" href="/api-reference/modules/external-providers">第三方 AI 提供方。</Card>
-  <Card title="可观测性" href="/api-reference/modules/observability">加速器、集群监控栈、GPU 驱动、性能分析。</Card>
-  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Python MCP 工具目录。</Card>
-  <Card title="管理" href="/api-reference/modules/administration">认证、RBAC 和系统设置。</Card>
+  <Card title="部署" href="/api-reference/modules/deployments">启动、查看和清理模型部署。</Card>
+  <Card title="评估" href="/api-reference/modules/evaluation">运行和查看基准测试。</Card>
+  <Card title="模拟" href="/api-reference/modules/simulation">用轨迹数据集回放模型。</Card>
+  <Card title="模型服务" href="/api-reference/modules/model-services">发布模型并管理网关访问。</Card>
+  <Card title="集群" href="/api-reference/modules/clusters">注册集群并引导 Kubernetes。</Card>
+  <Card title="存储" href="/api-reference/modules/storage">创建和管理模型存储卷。</Card>
+  <Card title="模型缓存" href="/api-reference/modules/model-cache">下载和同步缓存模型。</Card>
+  <Card title="外部提供方" href="/api-reference/modules/external-providers">连接 OpenAI 兼容提供方。</Card>
+  <Card title="可观测性" href="/api-reference/modules/observability">查看加速器、网关和驱动健康状态。</Card>
+  <Card title="管理" href="/api-reference/modules/administration">管理用户、角色、会话和系统设置。</Card>
+  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">MCP 传输和可用工具。</Card>
+  <Card title="欢迎页" href="/api-reference/modules/welcome">当前问题和诊断链接。</Card>
 </CardGroup>
-
-每个 Python 后端端点也都记录在生成的 FastAPI OpenAPI schema 中。
-在后端路由发生变化后，重新生成它：
-
-```bash
-source .venv/bin/activate
-npm run docs:api
-```
 
 ## 约定
 
-每一个新增或修改的、可供外部调用的 API（FastAPI 路由、HTTP 处理器、
-RPC/MCP 工具及其请求/响应契约）都必须使其描述与实际实现的行为、
-校验逻辑、授权、默认值、状态码和 schema 保持一致。参见
-`.github/instructions/api-documentation.instructions.md` 中仓库对
-API 描述的要求。
+- 除文件下载和事件流外，响应均为 JSON。
+- 错误使用 `application/problem+json`，包含稳定的 `code`、`message` 和可选
+  `details`。
+- 请求需要认证；使用 Cookie 的非安全请求还需要 CSRF。
+- 资源级权限和集群范围由服务层检查，不仅由路由检查。
+- HTTP 字段使用 camelCase；Python 模型使用 snake_case 属性，并在定义了别名时
+  同时接受两种写法。
+
+## 已弃用路径
+
+旧的 `/api/...` 路径，例如 `/api/cluster`、`/api/simulation` 和 `/api/mcp`，
+在客户端迁移期间仍作为 `/api/v1/...` 的临时别名保留。`/healthz` 继续用于进程探针。
+
+## 完整 schema
+
+生成的 OpenAPI schema 是请求/响应字段的最终来源：
+
+- Swagger UI：`/api/v1/simulation/docs`
+- OpenAPI JSON：`/api/v1/simulation/openapi.json`
+
+模块页面用于常见任务，完整字段定义请查 OpenAPI schema。

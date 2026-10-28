@@ -9,7 +9,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
 
 from llm_d_lens.api.problems import problem
 from llm_d_lens.auth.access import (
@@ -18,18 +17,11 @@ from llm_d_lens.auth.access import (
     owner_for_create,
     require_cluster_access,
     resource_readable,
-    visible_cluster_ids,
 )
+from llm_d_lens.core.exceptions import ForbiddenError, NotFoundError
 from llm_d_lens.db.dao.deployment_batch import DeploymentBatchDao
 from llm_d_lens.deploy.application import deployment_run_manager
-from llm_d_lens.deploy.contracts import (
-    DeploymentCaseStatus,
-    DeploymentMetadataUpdateRequest,
-    DeploymentRunCreateRequest,
-    DeploymentRunStatus,
-    DeploymentScaleRequest,
-    DeploymentStatus,
-)
+from llm_d_lens.deploy.contracts import DeploymentScaleRequest
 from llm_d_lens.deploy.endpoint import DeploymentEndpointResolutionError
 from llm_d_lens.deploy.executions import (
     DeploymentExecutionConflictError,
@@ -37,13 +29,46 @@ from llm_d_lens.deploy.executions import (
     DeploymentScaleError,
     ensure_execution_endpoint,
     find_execution_context,
-    list_execution_contexts,
+    get_local_execution,
+    list_local_executions,
     scale_deployment_execution,
-    serving_metadata,
     update_execution_metadata,
 )
 from llm_d_lens.deploy.executions import (
     delete_execution as delete_execution_record,
+)
+from llm_d_lens.deploy.models import (
+    CleanCaseRequest,
+    CleanOrphansRequest,
+    DeploymentCaseResponse,
+    DeploymentCaseRestartResponse,
+    DeploymentCaseStatus,
+    DeploymentCaseSummary,
+    DeploymentEndpointResponse,
+    DeploymentExecutionListResponse,
+    DeploymentExecutionResponse,
+    DeploymentLogPage,
+    DeploymentMetadataUpdateRequest,
+    DeploymentNodeLabel,
+    DeploymentNodeLabelsResponse,
+    DeploymentOrphanCleanupFailure,
+    DeploymentOrphanCleanupResponse,
+    DeploymentOrphanListResponse,
+    DeploymentOrphanNamespace,
+    DeploymentPod,
+    DeploymentPodContainer,
+    DeploymentPodLogsResponse,
+    DeploymentPodsResponse,
+    DeploymentRun,
+    DeploymentRunCancelResponse,
+    DeploymentRunCreateRequest,
+    DeploymentRunStatus,
+    DeploymentRuntimeClassesResponse,
+    DeploymentRuntimeClassItem,
+    DeploymentStatus,
+    RebindClusterSessionRequest,
+    RestartCaseRequest,
+    StandardKubernetesServiceRequest,
 )
 from llm_d_lens.deploy.orphans import (
     OrphanCleanupError,
@@ -53,10 +78,7 @@ from llm_d_lens.deploy.orphans import (
 )
 from llm_d_lens.deploy.providers.hardware_profile import active_profile, discover_runtime_classes
 from llm_d_lens.deploy.providers.target_node import validate_placement
-from llm_d_lens.deploy.standard_kubernetes_service import (
-    StandardKubernetesServiceRequest,
-    build_standard_kubernetes_service_configuration,
-)
+from llm_d_lens.deploy.standard_kubernetes_service import build_standard_kubernetes_service_configuration
 from llm_d_lens.hardware.resolver import deployment_mode
 from llm_d_lens.infrastructure.kubernetes import PortForwardError, list_resources
 
@@ -64,23 +86,6 @@ router = APIRouter(prefix="/api/v1/deployments", tags=["deployments"])
 _store = deployment_run_manager.store
 _refresh_task: asyncio.Task[None] | None = None
 logger = logging.getLogger(__name__)
-
-
-class CleanCaseRequest(BaseModel):
-    preserve_rendered_overlay: bool = False
-
-
-class RebindClusterSessionRequest(BaseModel):
-    cluster_session_id: str
-
-
-class CleanOrphansRequest(BaseModel):
-    cluster_id: str = Field(alias="clusterId")
-    namespaces: list[str] = Field(default_factory=list)
-
-
-class RestartCaseRequest(BaseModel):
-    model_token: str | None = None
 
 
 def _ready_model_cache_entry(entries, model: str):
@@ -193,6 +198,7 @@ async def _validate_cluster_placement(placement: dict | None, cluster_id: str | 
 
 @router.post(
     "/runs",
+    response_model=DeploymentRun,
     summary="Start a deployment run from one or more already-rendered deployable configurations.",
     description=(
         "Start a deployment run from one or more already-rendered deployable configurations. "
@@ -216,12 +222,15 @@ async def create_run(request: DeploymentRunCreateRequest, http_request: Request 
 
 @router.get(
     "/node-labels",
+    response_model=DeploymentNodeLabelsResponse,
     summary="List available node labels for deployment placement.",
     description="Return distinct node labels and values from the selected accessible cluster so callers can "
     "choose a placement label for a deployment.",
     operation_id="list_deployment_node_labels",
 )
-async def list_deployment_node_labels(cluster_id: str = Query(..., min_length=1), request: Request = None) -> dict:
+async def list_deployment_node_labels(
+    cluster_id: str = Query(..., min_length=1), request: Request = None
+) -> DeploymentNodeLabelsResponse:
     require_cluster_access(current_principal(request), cluster_id)
     nodes = await list_resources("nodes", cluster_id=cluster_id)
     labels = {
@@ -230,11 +239,14 @@ async def list_deployment_node_labels(cluster_id: str = Query(..., min_length=1)
         for key, value in ((node.get("metadata") or {}).get("labels") or {}).items()
         if isinstance(key, str) and isinstance(value, str)
     }
-    return {"items": [{"key": key, "value": value} for key, value in sorted(labels)]}
+    return DeploymentNodeLabelsResponse(
+        items=[DeploymentNodeLabel(key=key, value=value) for key, value in sorted(labels)]
+    )
 
 
 @router.get(
     "/runtime-classes",
+    response_model=DeploymentRuntimeClassesResponse,
     summary="Discover RuntimeClasses available to a target deployment cluster.",
     description=(
         "List RuntimeClass names, handlers, scheduling constraints and matching nodes for an accessible cluster. "
@@ -249,7 +261,7 @@ async def list_deployment_runtime_classes(
     accelerator: str | None = None,
     access_mode: str | None = None,
     request: Request = None,
-) -> dict:
+) -> DeploymentRuntimeClassesResponse:
     require_cluster_access(current_principal(request), cluster_id)
     profile = active_profile(accelerator) if accelerator else None
     if access_mode and profile is None:
@@ -269,36 +281,37 @@ async def list_deployment_runtime_classes(
         scheduling = runtime.get("scheduling") or {}
         selector = scheduling.get("nodeSelector") or {}
         items.append(
-            {
-                "name": runtime["metadata"]["name"],
-                "handler": runtime.get("handler"),
-                "scheduling": scheduling,
-                "overhead": runtime.get("overhead") or {},
-                "matching_nodes": [
+            DeploymentRuntimeClassItem(
+                name=runtime["metadata"]["name"],
+                handler=runtime.get("handler"),
+                scheduling=scheduling,
+                overhead=runtime.get("overhead") or {},
+                matching_nodes=[
                     node["metadata"]["name"]
                     for node in capabilities["nodes"]
                     if all(
                         node.get("metadata", {}).get("labels", {}).get(key) == value for key, value in selector.items()
                     )
                 ],
-            }
+            )
         )
     suggested = mode.get("runtime_class_name")
-    return {
-        "items": items,
-        "profile_suggestion": suggested,
-        "available_suggestion": suggested if any(item["name"] == suggested for item in items) else None,
-        "requirement": "unknown",
-        "node_runtime_readiness": "unknown",
-        "warnings": [
+    return DeploymentRuntimeClassesResponse(
+        items=items,
+        profile_suggestion=suggested,
+        available_suggestion=suggested if any(item.name == suggested for item in items) else None,
+        requirement="unknown",
+        node_runtime_readiness="unknown",
+        warnings=[
             "Class existence does not verify node handler, CDI or driver readiness. "
             "Use node-default only when the node default runtime provides device access."
         ],
-    }
+    )
 
 
 @router.post(
     "/standard-vllm-runs",
+    response_model=DeploymentRun,
     summary="Start a Standard Kubernetes Service deployment run using Lens\\'s allowlisted vLLM contract.",
     description=(
         "Start a Standard Kubernetes Service deployment run using Lens\\'s allowlisted vLLM contract. "
@@ -472,7 +485,7 @@ def _require_execution(execution_id: str):
     return context
 
 
-def _list_runs(query: str = "", principal=None):
+def _list_runs(query: str = "", principal=None) -> list[DeploymentRun]:
     needle = query.lower().strip()
     runs = list(reversed(_store.list_runs()))
     if principal is not None:
@@ -504,6 +517,7 @@ def _list_runs(query: str = "", principal=None):
 
 @router.get(
     "",
+    response_model=list[DeploymentRun],
     summary="List deployment runs from the collection root.",
     description=(
         "Return the same deployment run collection as the /runs endpoint. Use the optional query parameter to "
@@ -511,13 +525,14 @@ def _list_runs(query: str = "", principal=None):
     ),
     operation_id="list_deployments",
 )
-async def list_deployments(request: Request = None, query: str = ""):
+async def list_deployments(request: Request = None, query: str = "") -> list[DeploymentRun]:
     """List deployment runs for clients that use the collection root."""
     return _list_runs(query, current_principal(request))
 
 
 @router.get(
     "/runs",
+    response_model=list[DeploymentRun],
     summary="List deployment runs Lens has recorded.",
     description=(
         "List deployment runs Lens has recorded. Use the optional query string to search by run id, provider ref, "
@@ -525,12 +540,13 @@ async def list_deployments(request: Request = None, query: str = ""):
     ),
     operation_id="list_deployment_runs",
 )
-async def list_runs(request: Request = None, query: str = ""):
+async def list_runs(request: Request = None, query: str = "") -> list[DeploymentRun]:
     return _list_runs(query, current_principal(request))
 
 
 @router.get(
     "/executions",
+    response_model=DeploymentExecutionListResponse,
     summary="List deployment executions without creating new port-forwards.",
     description=(
         "List deployment executions without creating new port-forwards. Use this to discover execution ids, "
@@ -545,27 +561,21 @@ async def list_executions(
     cluster_id: str = "",
     query: str = "",
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
-):
+) -> DeploymentExecutionListResponse:
     """List deployment executions without creating endpoint port-forwards."""
-    principal = current_principal(request)
-    contexts = list_execution_contexts(
+    contexts = list_local_executions(
         status=status,
         statuses=statuses,
         cluster_id=cluster_id,
         query=query,
         limit=limit,
-        allowed_cluster_ids=visible_cluster_ids(principal),
     )
-    if principal is not None:
-        owners = DeploymentBatchDao().owner_map([context.run_id for context in contexts])
-        contexts = [
-            context for context in contexts if _execution_readable(principal, context, owners.get(context.run_id))
-        ]
-    return {"items": [context.api_payload() for context in contexts]}
+    return DeploymentExecutionListResponse(items=[context.api_payload() for context in contexts])
 
 
 @router.get(
     "/executions/{execution_id}",
+    response_model=DeploymentExecutionResponse,
     summary="Get one deployment execution by execution id.",
     description=(
         "Get one deployment execution by execution id. Use this to inspect the current deployment status, namespace, "
@@ -573,13 +583,14 @@ async def list_executions(
     ),
     operation_id="get_deployment_execution",
 )
-async def get_execution(execution_id: str, request: Request = None):
+async def get_execution(execution_id: str, request: Request = None) -> DeploymentExecutionResponse:
     """Return one deployment execution keyed by its own id."""
-    context = find_execution_context(execution_id)
-    if context is None:
-        raise HTTPException(status_code=404, detail="deployment execution not found")
-    _require_execution_permission(current_principal(request), context, "deployment:run:read")
-    return context.api_payload()
+    try:
+        return get_local_execution(execution_id).api_payload()
+    except NotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ForbiddenError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
 
 
 def _resolve_execution_cluster_id(context) -> str | None:
@@ -596,6 +607,7 @@ def _resolve_execution_cluster_id(context) -> str | None:
 
 @router.get(
     "/executions/{execution_id}/pods",
+    response_model=DeploymentPodsResponse,
     summary="Get live pod status for all pods in a deployment execution\\'s namespace.",
     description=(
         "Get live pod status for all pods in a deployment execution\\'s namespace. Use this for Kubernetes-level "
@@ -605,14 +617,19 @@ def _resolve_execution_cluster_id(context) -> str | None:
     ),
     operation_id="get_deployment_execution_pods",
 )
-async def get_execution_pods(execution_id: str, request: Request = None):
+async def get_execution_pods(execution_id: str, request: Request = None) -> DeploymentPodsResponse:
     """Return status and metadata for all pods running in the deployment's namespace."""
     context = find_execution_context(execution_id)
     if context is None:
-        return {"execution_id": execution_id, "namespace": None, "pods": [], "error": "Deployment initializing..."}
+        return DeploymentPodsResponse(
+            execution_id=execution_id,
+            namespace=None,
+            pods=[],
+            error="Deployment initializing...",
+        )
     _require_execution_permission(current_principal(request), context, "deployment:run:read")
     if not context.namespace:
-        return {"execution_id": execution_id, "namespace": None, "pods": []}
+        return DeploymentPodsResponse(execution_id=execution_id, namespace=None, pods=[])
 
     cluster_id = _resolve_execution_cluster_id(context)
     from llm_d_lens.infrastructure.kubernetes import run_kubectl
@@ -625,25 +642,30 @@ async def get_execution_pods(execution_id: str, request: Request = None):
         )
     except (FileNotFoundError, TimeoutError) as error:
         logger.warning("Unable to list deployment pods for %s: %s", execution_id, error)
-        return {
-            "execution_id": execution_id,
-            "namespace": context.namespace,
-            "pods": [],
-            "error": "Unable to list deployment pods",
-        }
+        return DeploymentPodsResponse(
+            execution_id=execution_id,
+            namespace=context.namespace,
+            pods=[],
+            error="Unable to list deployment pods",
+        )
 
     if result.returncode != 0:
-        return {
-            "execution_id": execution_id,
-            "namespace": context.namespace,
-            "pods": [],
-            "error": (result.stderr or result.stdout or "kubectl get pods failed").strip(),
-        }
+        return DeploymentPodsResponse(
+            execution_id=execution_id,
+            namespace=context.namespace,
+            pods=[],
+            error=(result.stderr or result.stdout or "kubectl get pods failed").strip(),
+        )
 
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return {"execution_id": execution_id, "namespace": context.namespace, "pods": [], "error": "invalid JSON"}
+        return DeploymentPodsResponse(
+            execution_id=execution_id,
+            namespace=context.namespace,
+            pods=[],
+            error="invalid JSON",
+        )
 
     items = payload.get("items") or []
     pods = []
@@ -681,40 +703,41 @@ async def get_execution_pods(execution_id: str, request: Request = None):
                 else "unknown"
             )
             containers.append(
-                {
-                    "name": cs.get("name"),
-                    "image": cs.get("image"),
-                    "ready": bool(cs.get("ready")),
-                    "restart_count": cs.get("restartCount", 0),
-                    "state": c_state,
-                }
+                DeploymentPodContainer(
+                    name=cs.get("name"),
+                    image=cs.get("image"),
+                    ready=bool(cs.get("ready")),
+                    restart_count=cs.get("restartCount", 0),
+                    state=c_state,
+                )
             )
 
         pods.append(
-            {
-                "name": metadata.get("name"),
-                "namespace": metadata.get("namespace"),
-                "labels": metadata.get("labels") or {},
-                "phase": status.get("phase", "Unknown"),
-                "ready": ready,
-                "pod_ip": status.get("podIP"),
-                "node_name": spec.get("nodeName"),
-                "restarts": restarts,
-                "status_reason": status_reason,
-                "containers": containers,
-                "creation_timestamp": metadata.get("creationTimestamp"),
-            }
+            DeploymentPod(
+                name=metadata.get("name"),
+                namespace=metadata.get("namespace"),
+                labels=metadata.get("labels") or {},
+                phase=status.get("phase", "Unknown"),
+                ready=ready,
+                pod_ip=status.get("podIP"),
+                node_name=spec.get("nodeName"),
+                restarts=restarts,
+                status_reason=status_reason,
+                containers=containers,
+                creation_timestamp=metadata.get("creationTimestamp"),
+            )
         )
 
-    return {
-        "execution_id": execution_id,
-        "namespace": context.namespace,
-        "pods": pods,
-    }
+    return DeploymentPodsResponse(
+        execution_id=execution_id,
+        namespace=context.namespace,
+        pods=pods,
+    )
 
 
 @router.get(
     "/executions/{execution_id}/pods/{pod_name}/logs",
+    response_model=DeploymentPodLogsResponse,
     summary="Get logs for one pod inside a deployment execution\\'s namespace.",
     description=(
         "Get logs for one pod inside a deployment execution\\'s namespace. Optionally scope to one container, tail "
@@ -729,7 +752,7 @@ async def get_execution_pod_logs(
     container: str | None = None,
     tail: int = Query(default=200, ge=1, le=2000),
     previous: bool = False,
-):
+) -> DeploymentPodLogsResponse:
     """Return logs for a specific pod or container within the deployment's namespace."""
     context = find_execution_context(execution_id)
     if context is None:
@@ -753,18 +776,19 @@ async def get_execution_pod_logs(
         raise HTTPException(status_code=502, detail=str(error)) from error
 
     logs = (result.stdout if result.returncode == 0 else result.stderr or result.stdout or "").strip()
-    return {
-        "execution_id": execution_id,
-        "namespace": context.namespace,
-        "pod_name": pod_name,
-        "container": container,
-        "logs": logs,
-        "success": result.returncode == 0,
-    }
+    return DeploymentPodLogsResponse(
+        execution_id=execution_id,
+        namespace=context.namespace,
+        pod_name=pod_name,
+        container=container,
+        logs=logs,
+        success=result.returncode == 0,
+    )
 
 
 @router.patch(
     "/executions/{execution_id}",
+    response_model=DeploymentExecutionResponse,
     summary=(
         "Update only the user-owned display metadata on a deployment execution, such as display name or description."
     ),
@@ -774,7 +798,9 @@ async def get_execution_pod_logs(
     ),
     operation_id="patch_deployment_execution",
 )
-async def patch_execution(execution_id: str, request: DeploymentMetadataUpdateRequest, http_request: Request = None):
+async def patch_execution(
+    execution_id: str, request: DeploymentMetadataUpdateRequest, http_request: Request = None
+) -> DeploymentExecutionResponse:
     """Update a deployment's descriptive metadata; runtime facts stay immutable."""
     existing = find_execution_context(execution_id)
     if existing is not None:
@@ -800,6 +826,7 @@ async def patch_execution(execution_id: str, request: DeploymentMetadataUpdateRe
 
 @router.post(
     "/executions/{execution_id}/scale",
+    response_model=DeploymentExecutionResponse,
     summary="Manually scale a deployment's live model-server replicas.",
     description=(
         "Scale the live Prefill and/or Decode model-server Deployments for a ready or failed deployment. "
@@ -872,6 +899,7 @@ async def delete_execution(execution_id: str, delete_namespace: bool = True, req
 
 @router.post(
     "/executions/{execution_id}/endpoint",
+    response_model=DeploymentEndpointResponse,
     summary="Create or reuse a reachable forwarded endpoint for a deployment execution and return the local URL.",
     description=(
         "Create or reuse a reachable forwarded endpoint for a deployment execution and return the local URL. "
@@ -879,7 +907,7 @@ async def delete_execution(execution_id: str, delete_namespace: bool = True, req
     ),
     operation_id="connect_deployment_execution_endpoint",
 )
-async def connect_execution_endpoint(execution_id: str, request: Request = None):
+async def connect_execution_endpoint(execution_id: str, request: Request = None) -> DeploymentEndpointResponse:
     """Port-forward a deployment execution's endpoint and return a reachable URL."""
     existing = find_execution_context(execution_id)
     if existing is not None:
@@ -896,21 +924,12 @@ async def connect_execution_endpoint(execution_id: str, request: Request = None)
     except PortForwardError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 
-    return {
-        "success": True,
-        "execution_id": execution_id,
-        "id": resolved.forward_id,
-        "local_port": resolved.local_port,
-        "endpoint": resolved.endpoint,
-        "forwarded_endpoint": resolved.endpoint,
-        "namespace": resolved.namespace,
-        "service": resolved.service,
-        "remote_port": resolved.remote_port,
-    }
+    return DeploymentEndpointResponse.from_resolved(execution_id, resolved)
 
 
 @router.get(
     "/cluster/{cluster_id}",
+    response_model=list[DeploymentCaseSummary],
     summary="List deployment case records targeting a specific cluster id.",
     description=(
         "List deployment case records targeting a specific cluster id. Use this when you want a cluster-scoped "
@@ -918,12 +937,12 @@ async def connect_execution_endpoint(execution_id: str, request: Request = None)
     ),
     operation_id="list_cluster_deployments",
 )
-async def list_cluster_deployments(cluster_id: str, request: Request = None):
+async def list_cluster_deployments(cluster_id: str, request: Request = None) -> list[DeploymentCaseSummary]:
     """List deployment records (cases) targeting a specific cluster."""
     principal = current_principal(request)
     if principal is not None and not cluster_allowed(principal, cluster_id):
         raise HTTPException(status_code=403, detail="cluster is not accessible")
-    deployments: list[dict] = []
+    deployments: list[DeploymentCaseSummary] = []
     for run in reversed(_store.list_runs()):
         if str(run.provenance.get("cluster_server_id") or "") != cluster_id:
             continue
@@ -931,18 +950,19 @@ async def list_cluster_deployments(cluster_id: str, request: Request = None):
             continue
         for case in run.cases:
             execution = _store.get_execution(case.execution_id) if case.execution_id else None
-            deployments.append(_deployment_payload(case, execution))
+            deployments.append(DeploymentCaseSummary.from_case(case, execution))
     return deployments
 
 
 @router.get(
     "/orphans",
+    response_model=DeploymentOrphanListResponse,
     summary="List deployment namespaces on a cluster that no Lens record references.",
     description="List namespaces under the deployment prefix with no execution record -- "
     "leftovers from records deleted without namespace cleanup, or from a rebuilt database.",
     operation_id="list_orphan_deployment_namespaces",
 )
-async def list_orphan_namespaces(cluster_id: str, request: Request = None) -> dict:
+async def list_orphan_namespaces(cluster_id: str, request: Request = None) -> DeploymentOrphanListResponse:
     """List namespaces under the deployment prefix with no Lens execution record."""
     principal = current_principal(request)
     require_cluster_access(principal, cluster_id)
@@ -950,21 +970,24 @@ async def list_orphan_namespaces(cluster_id: str, request: Request = None) -> di
         orphans = await scan_orphan_namespaces(cluster_id)
     except OrphanCleanupError as error:
         return problem(502, "Orphan scan failed", str(error), "orphan_scan_failed")
-    return {
-        "clusterId": cluster_id,
-        "prefix": namespace_prefix(),
-        "items": [orphan.api_payload() for orphan in orphans],
-    }
+    return DeploymentOrphanListResponse(
+        cluster_id=cluster_id,
+        prefix=namespace_prefix(),
+        items=[DeploymentOrphanNamespace.from_orphan(orphan) for orphan in orphans],
+    )
 
 
 @router.post(
     "/orphans/clean",
+    response_model=DeploymentOrphanCleanupResponse,
     summary="Delete selected orphan deployment namespaces.",
     description="Delete the given orphan namespaces. Names outside the deployment prefix, or "
     "still referenced by a Lens record, are refused rather than deleted.",
     operation_id="clean_orphan_deployment_namespaces",
 )
-async def clean_orphan_namespaces_route(body: CleanOrphansRequest, request: Request = None) -> dict:
+async def clean_orphan_namespaces_route(
+    body: CleanOrphansRequest, request: Request = None
+) -> DeploymentOrphanCleanupResponse:
     """Delete the caller-selected orphan namespaces."""
     principal = current_principal(request)
     require_cluster_access(principal, body.cluster_id)
@@ -974,11 +997,16 @@ async def clean_orphan_namespaces_route(body: CleanOrphansRequest, request: Requ
         len(body.namespaces),
     )
     cleaned, failed = await clean_orphan_namespaces(body.cluster_id, body.namespaces)
-    return {"clusterId": body.cluster_id, "cleaned": cleaned, "failed": failed}
+    return DeploymentOrphanCleanupResponse(
+        cluster_id=body.cluster_id,
+        cleaned=cleaned,
+        failed=[DeploymentOrphanCleanupFailure.model_validate(failure) for failure in failed],
+    )
 
 
 @router.get(
     "/runs/{run_id}",
+    response_model=DeploymentRun,
     summary="Get the full detail of one deployment run, including all cases and their current status.",
     description=(
         "Get the full detail of one deployment run, including all cases and their current status. A run or case "
@@ -988,7 +1016,7 @@ async def clean_orphan_namespaces_route(body: CleanOrphansRequest, request: Requ
     ),
     operation_id="get_deployment_run",
 )
-async def get_run(run_id: str, request: Request = None):
+async def get_run(run_id: str, request: Request = None) -> DeploymentRun:
     run = _store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="deployment run not found")
@@ -1019,6 +1047,7 @@ async def delete_run(run_id: str, request: Request = None) -> None:
 
 @router.post(
     "/runs/{run_id}/cancel",
+    response_model=DeploymentRunCancelResponse,
     status_code=202,
     summary="Request cancellation of an active deployment run.",
     description=(
@@ -1027,7 +1056,7 @@ async def delete_run(run_id: str, request: Request = None) -> None:
     ),
     operation_id="cancel_deployment_run",
 )
-async def cancel_run(run_id: str, request: Request = None) -> dict[str, str]:
+async def cancel_run(run_id: str, request: Request = None) -> DeploymentRunCancelResponse:
     run = _store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="deployment run not found")
@@ -1035,7 +1064,7 @@ async def cancel_run(run_id: str, request: Request = None) -> dict[str, str]:
     if run.status.value not in {"queued", "running", "cancelling"}:
         raise HTTPException(status_code=409, detail="deployment run is not active")
     deployment_run_manager.worker_for_run(run_id).request_cancel(run_id)
-    return {"id": run_id, "status": "cancelling"}
+    return DeploymentRunCancelResponse(id=run_id, status="cancelling")
 
 
 @router.post(
@@ -1063,6 +1092,7 @@ async def rebind_cluster_session(
 
 @router.get(
     "/runs/{run_id}/cases/{case_id}",
+    response_model=DeploymentCaseResponse,
     summary=(
         "Get one deployment case within a deployment run, including its associated execution and deployment summary "
         "payloads."
@@ -1073,7 +1103,7 @@ async def rebind_cluster_session(
     ),
     operation_id="get_deployment_case",
 )
-async def get_case(run_id: str, case_id: str, request: Request = None):
+async def get_case(run_id: str, case_id: str, request: Request = None) -> DeploymentCaseResponse:
     run = _store.get_run(run_id)
     if run is not None:
         _require_run_permission(current_principal(request), run, "deployment:run:read")
@@ -1081,11 +1111,12 @@ async def get_case(run_id: str, case_id: str, request: Request = None):
     if case is None:
         raise HTTPException(status_code=404, detail="deployment case not found")
     execution = _store.get_execution(case.execution_id) if case.execution_id else None
-    return _case_response(case, execution)
+    return DeploymentCaseResponse.from_records(case, execution)
 
 
 @router.post(
     "/runs/{run_id}/cases/{case_id}/refresh",
+    response_model=DeploymentCaseResponse,
     summary="Refresh a deployment case\\'s execution record from the live cluster.",
     description=(
         "Refresh a deployment case\\'s execution record from the live cluster. Use this when rollout state or "
@@ -1093,7 +1124,7 @@ async def get_case(run_id: str, case_id: str, request: Request = None):
     ),
     operation_id="refresh_deployment_case",
 )
-async def refresh_case(run_id: str, case_id: str, request: Request = None):
+async def refresh_case(run_id: str, case_id: str, request: Request = None) -> DeploymentCaseResponse:
     run = _store.get_run(run_id)
     if run is not None:
         _require_run_permission(current_principal(request), run, "deployment:case:execute")
@@ -1101,11 +1132,12 @@ async def refresh_case(run_id: str, case_id: str, request: Request = None):
         execution = await deployment_run_manager.worker_for_run(run_id).refresh_case_execution(run_id, case_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return _case_response(_store.get_case(run_id, case_id), execution)
+    return DeploymentCaseResponse.from_records(_store.get_case(run_id, case_id), execution)
 
 
 @router.get(
     "/runs/{run_id}/cases/{case_id}/logs",
+    response_model=DeploymentLogPage,
     summary="Get orchestration logs for one deployment case.",
     description=(
         "Get orchestration logs for one deployment case. Use this to inspect deploy-time actions, status changes, "
@@ -1113,7 +1145,7 @@ async def refresh_case(run_id: str, case_id: str, request: Request = None):
     ),
     operation_id="get_deployment_case_logs",
 )
-async def get_case_logs(run_id: str, case_id: str, limit: int = 200, request: Request = None):
+async def get_case_logs(run_id: str, case_id: str, limit: int = 200, request: Request = None) -> DeploymentLogPage:
     run = _store.get_run(run_id)
     if run is not None:
         _require_run_permission(current_principal(request), run, "deployment:run:read")
@@ -1127,6 +1159,7 @@ async def get_case_logs(run_id: str, case_id: str, limit: int = 200, request: Re
 
 @router.post(
     "/runs/{run_id}/cases/{case_id}/stop",
+    response_model=DeploymentCaseResponse,
     summary="Stop a deployment case and its associated execution.",
     description=(
         "Stop a deployment case and its associated execution. Use this when a single case within a run must be "
@@ -1134,7 +1167,7 @@ async def get_case_logs(run_id: str, case_id: str, limit: int = 200, request: Re
     ),
     operation_id="stop_deployment_case",
 )
-async def stop_case(run_id: str, case_id: str, request: Request = None):
+async def stop_case(run_id: str, case_id: str, request: Request = None) -> DeploymentCaseResponse:
     run = _store.get_run(run_id)
     if run is not None:
         _require_run_permission(current_principal(request), run, "deployment:case:execute")
@@ -1142,11 +1175,12 @@ async def stop_case(run_id: str, case_id: str, request: Request = None):
         case, execution = await deployment_run_manager.worker_for_run(run_id).stop_case(run_id, case_id)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    return _case_response(case, execution)
+    return DeploymentCaseResponse.from_records(case, execution)
 
 
 @router.post(
     "/runs/{run_id}/cases/{case_id}/restart",
+    response_model=DeploymentCaseRestartResponse,
     summary="Restart a deployment case.",
     description=(
         "Restart a deployment case. Optionally supply a model token override when the case needs a fresh secret or "
@@ -1154,7 +1188,9 @@ async def stop_case(run_id: str, case_id: str, request: Request = None):
     ),
     operation_id="restart_deployment_case",
 )
-async def restart_case(run_id: str, case_id: str, request: RestartCaseRequest, http_request: Request = None):
+async def restart_case(
+    run_id: str, case_id: str, request: RestartCaseRequest, http_request: Request = None
+) -> DeploymentCaseRestartResponse:
     run = _store.get_run(run_id)
     if run is not None:
         _require_run_permission(current_principal(http_request), run, "deployment:case:execute")
@@ -1164,11 +1200,12 @@ async def restart_case(run_id: str, case_id: str, request: RestartCaseRequest, h
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    return {"case": case}
+    return DeploymentCaseRestartResponse(case=case)
 
 
 @router.post(
     "/runs/{run_id}/cases/{case_id}/clean",
+    response_model=DeploymentCaseResponse,
     summary="Clean up one deployment case\\'s runtime resources and marks it cleaned.",
     description=(
         "Clean up one deployment case\\'s runtime resources and marks it cleaned. Use preserve_rendered_overlay "
@@ -1176,7 +1213,9 @@ async def restart_case(run_id: str, case_id: str, request: RestartCaseRequest, h
     ),
     operation_id="clean_deployment_case",
 )
-async def clean_case(run_id: str, case_id: str, request: CleanCaseRequest, http_request: Request = None):
+async def clean_case(
+    run_id: str, case_id: str, request: CleanCaseRequest, http_request: Request = None
+) -> DeploymentCaseResponse:
     run = _store.get_run(run_id)
     if run is not None:
         _require_run_permission(current_principal(http_request), run, "deployment:case:execute")
@@ -1186,34 +1225,4 @@ async def clean_case(run_id: str, case_id: str, request: CleanCaseRequest, http_
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    return _case_response(case, execution)
-
-
-def _deployment_payload(case, execution):
-    serving = serving_metadata(case, execution)
-    return {
-        "run_id": case.run_id if case else None,
-        "case_id": case.id if case else None,
-        "execution_id": case.execution_id if case else None,
-        "name": serving["name"],
-        "display_name": execution.metadata.display_name if execution else "",
-        "description": execution.metadata.description if execution else "",
-        "status": case.status.value if case else None,
-        "namespace": execution.namespace if execution else None,
-        "endpoint": execution.endpoint.url if execution and execution.endpoint else None,
-        "forwarded_endpoint": execution.forwarded_endpoint if execution else None,
-        "guide": serving["guide"],
-        "backend": serving["backend"],
-        "model_name": serving["model_name"],
-        "replicas": serving["replicas"],
-        "tensor_parallel_size": serving["tensor_parallel_size"],
-        "image": serving["image"],
-    }
-
-
-def _case_response(case, execution):
-    return {
-        "case": case,
-        "execution": execution,
-        "deployment": _deployment_payload(case, execution),
-    }
+    return DeploymentCaseResponse.from_records(case, execution)
