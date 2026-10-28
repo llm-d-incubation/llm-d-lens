@@ -9,15 +9,15 @@
 # frontend/backend proxies read the same variables so everything stays in sync.
 #
 # Usage:
-#   scripts/lens-local.sh check     # validate the environment without starting anything
-#   scripts/lens-local.sh start     # start all services (background, logs in .dev-logs/)
-#   scripts/lens-local.sh stop      # stop all services started by this script
-#   scripts/lens-local.sh restart [all|frontend|server|backend] # validate, then restart selected services
-#   scripts/lens-local.sh status    # show which services are running
-#   scripts/lens-local.sh clean [-y|--yes] [--cache|--hard|--all]
+#   hack/lens-local.sh check     # validate the environment without starting anything
+#   hack/lens-local.sh start     # start all services (background, logs in .dev-logs/)
+#   hack/lens-local.sh stop      # stop all services started by this script
+#   hack/lens-local.sh restart [all|frontend|server|backend] # validate, then restart selected services
+#   hack/lens-local.sh status    # show which services are running
+#   hack/lens-local.sh clean [-y|--yes] [--cache|--hard|--all]
 #                                    # stop services, delete app state; optionally
 #                                    # caches, the dev venv/toolchain, or everything
-#   scripts/lens-local.sh install-node  # install a supported Node.js into .dev-tools/
+#   hack/lens-local.sh install-node  # install a supported Node.js into .dev-tools/
 #
 # When the system Node.js is missing or older than NODE_MIN_MAJOR, 'start'
 # downloads an official Node.js build into .dev-tools/ (checksum-verified) and
@@ -74,7 +74,7 @@ LOCAL_NODE_DIR="$TOOLS_DIR/node"
 RUST_MIN_VERSION="${RUST_MIN_VERSION:-1.80.0}"
 
 # Shared persistent data, disposable cache and diagnostic log roots.
-source "$ROOT_DIR/scripts/storage-env.sh"
+source "$ROOT_DIR/hack/storage-env.sh"
 EVALUATE_STORE="$LENS_DATA_DIR/metadata/evaluations"
 
 # Optional IP address or DNS name advertised for deployment Model APIs. When
@@ -516,12 +516,12 @@ cmd_check() {
             log "  node:     $(node --version)"
         else
             fail "  node:     $(node --version) (required >= $NODE_MIN_MAJOR.x)"
-            warn "  Run 'scripts/lens-local.sh install-node' (or 'start') to install it locally."
+            warn "  Run 'hack/lens-local.sh install-node' (or 'start') to install it locally."
             ok=0
         fi
     else
         fail "  node:     MISSING (required >= $NODE_MIN_MAJOR.x)"
-        warn "  Run 'scripts/lens-local.sh install-node' (or 'start') to install it locally."
+        warn "  Run 'hack/lens-local.sh install-node' (or 'start') to install it locally."
         ok=0
     fi
     command -v npm  >/dev/null 2>&1 && log "  npm:      $(npm --version)"  || { fail "  npm:      MISSING"; ok=0; }
@@ -562,7 +562,7 @@ cmd_check() {
             && log "  python deps: llm_d_lens + uvicorn importable" \
             || { fail "  python deps: import failed — run 'pip install -e apps/backend'"; ok=0; }
     else
-        fail "  venv:     missing (.venv/bin/python) — 'scripts/lens-local.sh start' will create it"
+        fail "  venv:     missing (.venv/bin/python) — 'hack/lens-local.sh start' will create it"
         ok=0
     fi
 
@@ -619,7 +619,7 @@ ensure_tls() {
         return 0
     fi
     local cert_env
-    if ! cert_env="$("$ROOT_DIR/scripts/generate-self-signed-cert.sh" "$host" "$TLS_DIR")"; then
+    if ! cert_env="$("$ROOT_DIR/hack/generate-self-signed-cert.sh" "$host" "$TLS_DIR")"; then
         warn "failed to generate a self-signed TLS certificate; falling back to plain HTTP."
         ENABLE_HTTPS=0
         return 0
@@ -687,13 +687,13 @@ prepare_start() {
     if [[ "${1:-all}" != frontend ]]; then regenerate_mcp_tools || return 1; fi
     log "updating reusable capability map..."
     local reuse_status=0
-    node tools/reuse/cli.mjs map || reuse_status=$?
+    node hack/reuse/cli.mjs map || reuse_status=$?
     if [[ "$reuse_status" -ne 0 ]]; then
         fail "Reuse map update failed. Ask the coding AI to fix .reuse/catalog.json; services were not stopped."
         return "$reuse_status"
     fi
     log "validating reuse registrations and pending decisions..."
-    node tools/reuse/cli.mjs check --purpose startup || reuse_status=$?
+    node hack/reuse/cli.mjs check --purpose startup || reuse_status=$?
     if [[ "$reuse_status" -eq 2 ]]; then
         warn "Pending refactor decisions require review; continuing local startup. See the pending decisions above."
         return 0
@@ -799,7 +799,7 @@ start_services() {
         LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE="$authz_tls_insecure" \
         BACKEND_PORT="$BACKEND_PORT" BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}" \
         TLS_CERT_FILE="${TLS_CERT_FILE:-}" TLS_KEY_FILE="${TLS_KEY_FILE:-}" TLS_CA_FILE="${TLS_CA_FILE:-}" \
-        bash scripts/run-backend.sh
+        bash hack/run-backend.sh
     fi
 
     if [[ "$target" == all || "$target" == frontend ]]; then
@@ -974,7 +974,7 @@ cmd_clean() {
 # ---- dispatch ----------------------------------------------------------------
 print_usage() {
     cat <<'EOF'
-Usage: scripts/lens-local.sh COMMAND [OPTIONS]
+Usage: hack/lens-local.sh COMMAND [OPTIONS]
 
 Local source installation and service management:
   check          Validate the environment without starting services.

@@ -1594,7 +1594,7 @@ Pagination/filtering reuse the existing DTO + DAO conventions; import/export is 
 - See §9.2 for the adjusted mount order in `server.js`.
 - `.deploy_config.example` and the installer-written environment: inject `LENS_SECRET_KEY`,
   `LENS_INTERNAL_AUTH_SECRET` through secrets; in production set `PRISM_COOKIE_SECURE=true`.
-- `scripts/lens-local.sh`: for development paths other than the default `PRISM_AUTH_MODE=disabled`,
+- `hack/lens-local.sh`: for development paths other than the default `PRISM_AUTH_MODE=disabled`,
   provide a bootstrap admin; keep `SIMULATION_ALLOW_UNAUTHENTICATED` compatibility.
 - In production, `NODE_ENV=production` must be set and both keys must be non-empty; otherwise startup fails fast.
 
