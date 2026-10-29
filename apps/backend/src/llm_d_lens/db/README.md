@@ -325,7 +325,8 @@ transaction; there is no new table, migration, dependency, network fetch, query
 route, feature permission, or refresh scheduler.
 
 - The initial `llm-d` revision is
-  `080c14d957755da4cc363745638619fc748558f1`: 139 allowlisted files, consisting of
+  `080c14d957755da4cc363745638619fc748558f1`:
+  139 allowlisted files, consisting of
   97 Markdown files (including 20 result documents), five custom GLM JSON
   files, and 37 PNG figures. The initial `llm-d-benchmark` revision is
   `6e081de16d2debc7b29436ad53f2c62e8d475f2e`: 27 documentation Markdown files
@@ -400,15 +401,44 @@ available through `RefreshPlan.model_json_schema()` in
 | Field | Review requirement |
 | --- | --- |
 | `contract` | `benchmark-rag.refresh.v1` (default). |
-| `review_reference` | Actual approval of this revision, complete inventory and counts; not a test approval. |
-| `approval` | Exact existing `SourceApproval` from the source registry, including parser version, public/license approval and allowed paths. Refresh never creates or re-enables a source or changes its approval. |
-| `inventory` | `origin_id`, full commit or Prism ISO date `revision`, `complete: true`, and sorted `files` with exact `path`, `sha256`, `format`. All approved files must be listed. |
-| `expected_counts` | Exact post-parse per-kind counts, including `source` equal to the number of files. Counts describe index representations, not distinct experiments. |
-| `base_generation`, `base_manifest_id` | Current source status reviewed before the job; use explicit JSON `null` only when no release is active. |
-| `triggers` | Explicit subset of `manual`, `commit`, `periodic`. Default is manual only; Prism must remain manual only. |
-| `figure_reviews` | Exact PNG-path mapping of coverage, reason and any verified report/table links. Empty when there are no figures. Never derive numbers from pixels. |
-| `metadata_review_reference` | Optional, explicit review that the existing guide table/JSON adapter's source-specific model/hardware/runtime/workload assumptions remain valid at this exact inventory/commit. Required for numeric guide extraction outside the initial reviewed revision. Not approval for new layouts or schemas. |
-| `allow_empty` | Defaults to false. Removing every repository file requires explicit true plus the reviewed empty inventory/counts; incomplete listings are never interpreted as deletion. |
+
+Other review inputs:
+
+- **Field:** `review_reference`
+  - **Review requirement:** Actual approval of this revision, complete inventory
+    and counts; not a test approval.
+- **Field:** `approval`
+  - **Review requirement:** Exact existing `SourceApproval` from the source
+    registry, including parser version, public/license approval and allowed paths.
+    Refresh never creates or re-enables a source or changes its approval.
+- **Field:** `inventory`
+  - **Review requirement:** `origin_id`, full commit or Prism ISO date `revision`,
+    `complete: true`, and sorted `files` with exact `path`, `sha256`, `format`.
+    All approved files must be listed.
+- **Field:** `expected_counts`
+  - **Review requirement:** Exact post-parse per-kind counts, including `source`
+    equal to the number of files. Counts describe index representations, not
+    distinct experiments.
+- **Field:** `base_generation`, `base_manifest_id`
+  - **Review requirement:** Current source status reviewed before the job; use
+    explicit JSON `null` only when no release is active.
+- **Field:** `triggers`
+  - **Review requirement:** Explicit subset of `manual`, `commit`, `periodic`.
+    Default is manual only; Prism must remain manual only.
+- **Field:** `figure_reviews`
+  - **Review requirement:** Exact PNG-path mapping of coverage, reason and any
+    verified report/table links. Empty when there are no figures. Never derive
+    numbers from pixels.
+- **Field:** `metadata_review_reference`
+  - **Review requirement:** Optional, explicit review that the existing guide
+    table/JSON adapter's source-specific model/hardware/runtime/workload
+    assumptions remain valid at this exact inventory/commit. Required for numeric
+    guide extraction outside the initial reviewed revision. Not approval for new
+    layouts or schemas.
+- **Field:** `allow_empty`
+  - **Review requirement:** Defaults to false. Removing every repository file
+    requires explicit true plus the reviewed empty inventory/counts; incomplete
+    listings are never interpreted as deletion.
 
 The plan binds the metadata review to the exact inventory digest before
 parsing. Unknown numeric layouts/JSON schemas still fail. If a model, condition
@@ -591,7 +621,10 @@ from llm_d_lens.benchmark_rag.repository_initial import (
 from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN
 from llm_d_lens.db.dao.rag_transfer import transfer_database
 
-with transfer_database(os.environ["LLM_D_BENCH_DATABASE_URL"], schema="public") as dao:
+with transfer_database(
+    os.environ["LLM_D_BENCH_DATABASE_URL"],
+    schema="public",
+) as dao:
     dao.prepare()
     importer = RepositoryCorpusImporter(RagPublicationService(dao=dao))
     for origin, repo, approval_file in (
@@ -599,6 +632,7 @@ with transfer_database(os.environ["LLM_D_BENCH_DATABASE_URL"], schema="public") 
         (BENCHMARK_ORIGIN, "/srv/sources/llm-d-benchmark", "/secure/docs-approval.json"),
     ):
         approval = SourceApproval.model_validate_json(Path(approval_file).read_bytes())
+        reviews = initial_figure_reviews() if origin == LLM_D_ORIGIN else {}
         result = importer.import_repository(
             Path(repo),
             origin,
@@ -606,7 +640,7 @@ with transfer_database(os.environ["LLM_D_BENCH_DATABASE_URL"], schema="public") 
             approval,
             expected_counts=INITIAL_ITEM_COUNTS[origin],
             expected_inventory_digest=INITIAL_INVENTORY_DIGESTS[origin],
-            figure_reviews=initial_figure_reviews() if origin == LLM_D_ORIGIN else {},
+            figure_reviews=reviews,
         )
         print(result.model_dump_json())
 ```
@@ -780,21 +814,25 @@ the repository root and an existing `.venv`.
 # Keep /srv/lens-data owned by the operator; it is persistent, not a test path.
 
 # Rebuild from the complete, separately transferred initial Prism snapshot.
-PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin rebuild \
+PYTHONPATH=apps/backend/src .venv/bin/python \
+  -m llm_d_lens.benchmark_rag.admin rebuild \
   --snapshot private/prism-public-2026-10-13 \
   --approval /secure/prism-approval.json --data-dir /srv/lens-data --schema public
 
 # Export every RAG row, including staged/retired history and publication state,
 # together with all referenced original evidence bytes. Output must not exist.
-PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin backup \
+PYTHONPATH=apps/backend/src .venv/bin/python \
+  -m llm_d_lens.benchmark_rag.admin backup \
   --data-dir /srv/lens-data --schema public --output /backup/rag-backup.zip
 
 # Verify the copied bundle without database credentials or a target database.
-PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin verify \
+PYTHONPATH=apps/backend/src .venv/bin/python \
+  -m llm_d_lens.benchmark_rag.admin verify \
   --bundle /backup/rag-backup.zip
 
 # On the target machine, with its own DSN and persistent data directory:
-PYTHONPATH=apps/backend/src .venv/bin/python -m llm_d_lens.benchmark_rag.admin restore \
+PYTHONPATH=apps/backend/src .venv/bin/python \
+  -m llm_d_lens.benchmark_rag.admin restore \
   --bundle /backup/rag-backup.zip --data-dir /srv/lens-data --schema public
 ```
 
