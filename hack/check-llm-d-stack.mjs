@@ -5,8 +5,8 @@
 // cannot ship. Run in CI before a release, and locally before changing the
 // profile:
 //
-//   node tools/check-llm-d-stack.mjs           # static + network checks
-//   node tools/check-llm-d-stack.mjs --offline # static checks only
+//   node hack/check-llm-d-stack.mjs           # static + network checks
+//   node hack/check-llm-d-stack.mjs --offline # static checks only
 //
 // A non-zero exit means the profile must be fixed (or the referenced version
 // published) before release.
