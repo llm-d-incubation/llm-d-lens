@@ -29,7 +29,7 @@ def _query() -> BenchmarkQuery:
             quantization="bf16",
             tokenizer_id="qwen3",
         ),
-        hardware=HardwareDescriptor(accelerator="Gaudi3", vram_per_gpu_gib=96, gpu_count=4),
+        hardware=HardwareDescriptor(accelerator="Gaudi3", vram_per_gpu_gib=96, gpu_count=4, form_factor="OAM"),
         runtime=RuntimeFingerprint(backend="vllm", backend_version="0.8.5", accelerator_runtime="1.20"),
         workload=WorkloadProfile(
             mean_input_tokens=4096,
@@ -108,11 +108,28 @@ def test_missing_versions_lower_similarity_but_do_not_block_compatible_measureme
     assert retriever.retrieve("candidate", query, [record], now=NOW).matching_runs == 1
 
 
-def test_partial_model_descriptors_only_support_same_model_comparison():
+def test_partial_model_descriptors_support_aliases_but_not_different_model_suffixes():
     retriever = BenchmarkEvidenceRetriever()
     model = ModelDescriptor(model_id="org/model", quantization="bf16")
     assert 0 < retriever.model_similarity(model, model) < 1
-    assert retriever.model_similarity(model, model.model_copy(update={"model_id": "other/model"})) == 0
+    for alias in ("MODEL", "ORG-MODEL", "other/model"):
+        assert retriever.model_similarity(model, model.model_copy(update={"model_id": alias})) == 0.8
+    assert retriever.model_similarity(model, model.model_copy(update={"model_id": "org/model-fp8"})) == 0
+
+
+def test_benchmark_relevance_and_unpinned_model_guard_use_shared_aliases():
+    query = _query()
+    query.model = query.model.model_copy(
+        update={"model_id": "Publisher/Falcon-7B", "tokenizer_id": "Publisher/Falcon-7B"}
+    )
+    record = _record("alias-model")
+    record.model = query.model.model_copy(update={"model_id": "Falcon-7B", "tokenizer_id": "publisher-falcon-7b"})
+    record.provenance = {"model_enrichment": {"serving_revision_pinned": False}}
+    retriever = BenchmarkEvidenceRetriever()
+    assert retriever.model_similarity(record.model, query.model) == 1.0
+    assert retriever.retrieve("candidate", query, [record], now=NOW).matching_runs == 1
+    record.model.model_id = "Publisher/Falcon-7B-FP8"
+    assert retriever.retrieve("candidate", query, [record], now=NOW).matching_runs == 0
 
 
 def test_unpinned_public_enrichment_cannot_enable_cross_model_predictions():

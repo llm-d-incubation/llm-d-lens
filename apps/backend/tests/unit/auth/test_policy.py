@@ -1,7 +1,13 @@
 from llm_d_lens.auth.access import owner_for_create, resource_readable
 from llm_d_lens.auth.contracts import Principal, ResourceRef, RoleBinding, ScopeType
 from llm_d_lens.auth.permissions import BUILTIN_ROLE_PERMISSIONS, BUILTIN_ROLE_SELF_SCOPED
-from llm_d_lens.auth.policy import accessible_cluster_ids, authorize, principal_permissions, role_has_permission
+from llm_d_lens.auth.policy import (
+    accessible_cluster_ids,
+    authorize,
+    principal_global_permissions,
+    principal_permissions,
+    role_has_permission,
+)
 
 #: Synthetic self-scoped workload role for policy-engine tests. The built-in
 #: ``end-user`` is model-service-only (D15), so ownership/self-scope semantics
@@ -66,6 +72,27 @@ def test_global_admin_is_allowed_everything():
     assert authorize(admin, "cluster:cluster:delete", resource=ResourceRef("cluster", "c", "c1")).allowed
     assert authorize(admin, "system:database:configure").allowed
     assert accessible_cluster_ids(admin) is None
+
+
+def test_global_permission_projection_does_not_elevate_cluster_or_resource_bindings():
+    principal = Principal(
+        user_id="reader",
+        username="reader",
+        bindings=(
+            RoleBinding("global-reader", ScopeType.GLOBAL),
+            RoleBinding("cluster-reader", ScopeType.CLUSTER, scope_cluster_id="c1"),
+            RoleBinding(
+                "resource-reader", ScopeType.RESOURCE, scope_resource_type="model_service_group", scope_resource_id="m1"
+            ),
+        ),
+        role_permissions={
+            "global-reader": frozenset({"usage:usage:read"}),
+            "cluster-reader": frozenset({"benchmark-rag:query:read"}),
+            "resource-reader": frozenset({"model-service:inference:use"}),
+        },
+    )
+    assert principal_global_permissions(principal) == frozenset({"usage:usage:read"})
+    assert "benchmark-rag:query:read" in principal_permissions(principal)
 
 
 def _maintainer(cluster="c1", **kwargs):

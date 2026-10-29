@@ -20,7 +20,12 @@ from llm_d_lens.auth.bootstrap import clear_initial_admin_credentials
 from llm_d_lens.auth.context import CSRF_COOKIE, SESSION_COOKIE
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.auth.permissions import ALL_PERMISSIONS
-from llm_d_lens.auth.policy import accessible_cluster_ids, authorize, principal_permissions
+from llm_d_lens.auth.policy import (
+    accessible_cluster_ids,
+    authorize,
+    principal_global_permissions,
+    principal_permissions,
+)
 from llm_d_lens.auth.providers.registry import get_provider
 from llm_d_lens.auth.records import (
     IdentityProviderRecord,
@@ -118,6 +123,7 @@ def _principal_view(principal: Principal) -> dict[str, Any]:
         "userId": principal.user_id,
         "username": principal.username,
         "permissions": sorted(principal_permissions(principal)),
+        "globalPermissions": sorted(principal_global_permissions(principal)),
         "reachableClusters": None if clusters is None else sorted(clusters),
         "mustChangePassword": principal.must_change_password,
         "authzVersion": principal.authz_version,

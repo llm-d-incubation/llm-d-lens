@@ -236,6 +236,39 @@ PD deployments apply that utilization to both prefill and decode vLLM roles.
 The estimate uses GPU capacity and model overhead, not vLLM's measured free KV
 cache at startup.
 
+### Multi-source evidence in Agentic plans
+
+`AgenticDeploymentService.create()` and `.refine()` resolve evidence using the
+actual request principal. REST and streaming calls retain that identity.
+Public Prism observations use exact model/live hardware filters and require global
+`benchmark-rag:query:read`; internal experiments retain their resource authorization.
+Client-supplied public observations, cases and document packets are not trusted.
+Plans containing public observations keep the same read-permission requirement.
+
+The server normalizes explicit workload and latency requirements, aggregates
+experiments by configuration and series before limiting each SQL branch to 50
+cases, then selects at most 10 complete cases within a 16,000-byte evidence budget.
+Explicit workload fit precedes comparable lower latency; no workload means no
+workload penalty. Missing measurements remain unknown. Different statistics and
+experiments are not combined to manufacture an SLO result. Cases without comparable
+workload or valid latency are explicitly labelled fallback references.
+
+`planning_evidence` keeps public retrieval under `id="public-rag:query"`, including
+available, no-match, forbidden and unavailable outcomes. Configuration-case details
+retain source conditions, differences, unknowns, branch status and truncation.
+Candidate explanations and server-side audit retain their evidence boundaries:
+historical measurements are not proof of current performance, and AIC is an estimate.
+
+The optional public document branch is disabled in this delivery. Its contract is
+retained, but no public document retrieval/runtime endpoints or independent search
+page are installed. SQL planning works without public document OpenSearch/embedding
+dependencies; the preexisting diagnostic adapter is unaffected.
+
+Creation validates the registered model-cache storage volume without requiring
+downloaded model files. Refinement likewise skips download-readiness checks.
+Approval requires a ready cached model, resolves its current credential policy,
+refreshes resource validation and requires explicit user approval.
+
 Deployments live under the FastAPI router in `llm_d_lens/deploy/router.py` with the `/api/v1/deployments` prefix.
 
 Use the [installation instructions](/installation) and

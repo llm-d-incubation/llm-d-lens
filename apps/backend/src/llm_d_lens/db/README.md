@@ -100,6 +100,50 @@ Changing a table's shape:
 → full guide, worked examples for add-column/add-table/drop-table:
 `migrations/README.md`.
 
+## Public experiment evidence for Agentic planning
+
+Approved public Prism experiments live in `public_benchmark_records`, separately
+from authorized internal `agentic_benchmark_records`. The public record model and
+its existing migrations are retained together. No application database is migrated
+by feature validation; review and apply migrations through the normal installation
+workflow.
+
+The `rag_item`, `rag_publication`, `rag_query`, `rag_agentic_query` and `rag_transfer`
+DAOs own immutable records, publication state, authorized query aggregation and
+portable SQL transfer. Services never bypass these DAOs with raw sessions.
+Agentic aggregates complete experiment/configuration/series groups before ranking
+and limiting cases. Source conditions, units, statistics and provenance must survive
+that boundary; public measurements are not proof of current deployment performance.
+
+The retained operator CLI is SQL-only:
+
+```bash
+.venv/bin/python -m llm_d_lens.benchmark_rag.admin --help
+```
+
+| Command | Purpose and required inputs |
+| --- | --- |
+| `rebuild` | Import/publish the reviewed initial Prism snapshot using `--snapshot` and `--approval`; optional `--initialize`. |
+| `refresh` | Apply an approved manual Prism refresh using `--plan` and an explicit local `--source` snapshot. |
+| `status` | Inspect publication state using `--origin prism:public-snapshot`. |
+| `rollback` | Activate a retained manifest using `--origin`, `--manifest-id` and `--expected-generation`. |
+| `backup` | Export SQL records and pinned source bytes using `--output`. |
+| `restore` | Restore a verified SQL bundle using `--bundle`; optional `--initialize`. |
+| `verify` | Verify a bundle using `--bundle`, without connecting to a database. |
+
+Except `verify`, commands require `--data-dir` and an explicit database URL in the
+environment variable selected by `--database-url-env` (default
+`LLM_D_BENCH_DATABASE_URL`). `--schema` defaults to `public`. `--initialize` initializes
+benchmark SQL storage only and does not stamp application migrations.
+Transfer commands accept `--structured` for compatibility; SQL is the default and
+only installed backend in this delivery.
+
+Public document ingestion, OpenSearch document search, embeddings, runtime
+configuration and public REST/MCP search are a separate optional delivery.
+Document evidence returns `disabled` / `provider_not_installed`; SQL evidence
+planning must not import or require that document implementation.
+This does not remove the preexisting private diagnostic OpenSearch adapter.
+
 ## Testing
 
 Tests never run Alembic migrations and never talk to a real PostgreSQL
@@ -109,3 +153,7 @@ whatever `models/*.py` currently says, regardless of migration history) and
 rebinds the process-wide engine to it for the duration of that test. This means
 DAOs and service code under test always run against a real SQLAlchemy engine,
 just not a persistent/external one.
+
+The public benchmark SQL tests under `tests/unit/db` have a more specific fixture:
+they exercise PostgreSQL behavior using isolated temporary schemas. They do not
+apply application Alembic migrations or certify a production database upgrade.

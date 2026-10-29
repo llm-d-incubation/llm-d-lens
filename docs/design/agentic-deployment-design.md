@@ -102,7 +102,8 @@ flowchart TD
    SLO, workload profile, and preference are optional inputs.
 2. When creating a plan, the backend validates the active cluster session, and verifies that the
    selected storage is ready for the current cluster, has purpose `model-cache`, is not a
-   dynamic-PVC volume, and already has a ready cache entry for the target model.
+   dynamic-PVC volume. Planning and refinement do not require downloaded model files;
+   approval checks model-cache readiness and resolves the current credential policy.
 3. When external AI is configured, AI Generator starts from deployment intent and uses native tool
    calling to query cluster and AIC in parallel first; only after that may it query allowlisted
    historical evidence. Before submission it must obtain cluster overview and attempt at least one
@@ -621,6 +622,53 @@ This document describes how Agentic Deploy handles structured and unstructured e
 Structured data consists of `BenchmarkRecord`: model, hardware, runtime, workload, candidate configuration, measured performance metrics, outcome, and failure reason. Records reside in `agentic_benchmark_records` and are authoritative for performance numbers, failure facts, and candidate-level predictions.
 
 Live cluster overview is also structured evidence, with the highest authority: it determines whether candidates satisfy current VRAM, GPU, CPU-buffer, and other hard constraints. Historical benchmarks, AIC, and AI cannot override live-resource conclusions.
+
+#### Multi-source experiment planning
+
+Creation and refinement share server-resolved evidence from authorized internal
+experiments and approved public Prism experiments. Public experiments remain in
+PostgreSQL `public_benchmark_records`; they are not document search results.
+The actual authenticated principal needs global `benchmark-rag:query:read` to
+retrieve public observations or access plans containing them. Internal experiments
+retain their existing resource authorization.
+
+`PlanningRequirements` preserves explicit workload, latency targets, provenance
+and unknown fields. Form fields start blank: examples and AIC/use-case defaults
+are not explicit requirements, and mean input length is not copied into P95.
+Live hardware determines the public query's exact accelerator model; unknown or
+mixed models are reported rather than replaced with a cross-hardware fallback.
+Model aliases aid retrieval but do not prove unique identity or compatibility.
+
+`ConfigurationCase` retains experiment/configuration/series identity, original
+measurements, units, statistics, configuration, provenance, differences and
+unknowns. Each SQL branch aggregates complete experiments before ranking and
+selecting at most 50 cases. Explicit workload fit precedes comparable lower
+latency; without explicit workload there is no workload penalty. Latency targets
+select metric/statistic axes, not distance from the target. Different statistics
+are not mixed; Pareto comparison requires equal available axes. Missing or
+nonpositive latency is unknown. A case with neither comparable workload nor valid
+latency is a labelled fallback reference, not low-latency evidence.
+
+The shared evidence bundle keeps at most 10 complete cases within its
+16,000-byte serialized budget, preserving experiment rank. Historical observations
+inform candidate generation and selection, but do not prove current SLO compliance
+or override live-resource validation. AIC estimates remain a distinct evidence type.
+Source references stay in the server audit; model-facing aliases and explanations
+must not be presented as independently verified source usage.
+
+The document-evidence contract remains available for a later integration, but this
+delivery does not include public document ingestion, OpenSearch document indexes,
+embedding/hybrid search, a document runtime API or a standalone search page.
+The document branch reports disabled and supplies no passages. Client-supplied
+document packets are not trusted. Internal/public SQL planning and refinement
+must run without the optional document implementation or its dependencies.
+The existing private diagnostic search adapter is separate from public document RAG.
+
+The deployment workspace shows internal SQL experiments, public SQL observations
+and document-source status separately, including retrieval failures and unknowns.
+No permission, no match and unavailable outcomes are not interchangeable.
+Approval still revalidates resources and model-cache readiness and requires
+explicit user approval; retrieval never authorizes deployment.
 
 #### Unstructured data
 
