@@ -662,7 +662,8 @@ embedding/hybrid search, a document runtime API or a standalone search page.
 The document branch reports disabled and supplies no passages. Client-supplied
 document packets are not trusted. Internal/public SQL planning and refinement
 must run without the optional document implementation or its dependencies.
-The existing private diagnostic search adapter is separate from public document RAG.
+The existing private diagnostic search adapter is separate from public
+document RAG.
 
 The deployment workspace shows internal SQL experiments, public SQL observations
 and document-source status separately, including retrieval failures and unknowns.

@@ -121,15 +121,22 @@ The retained operator CLI is SQL-only:
 .venv/bin/python -m llm_d_lens.benchmark_rag.admin --help
 ```
 
-| Command | Purpose and required inputs |
+| Command | Purpose |
 | --- | --- |
-| `rebuild` | Import/publish the reviewed initial Prism snapshot using `--snapshot` and `--approval`; optional `--initialize`. |
-| `refresh` | Apply an approved manual Prism refresh using `--plan` and an explicit local `--source` snapshot. |
-| `status` | Inspect publication state using `--origin prism:public-snapshot`. |
-| `rollback` | Activate a retained manifest using `--origin`, `--manifest-id` and `--expected-generation`. |
-| `backup` | Export SQL records and pinned source bytes using `--output`. |
-| `restore` | Restore a verified SQL bundle using `--bundle`; optional `--initialize`. |
-| `verify` | Verify a bundle using `--bundle`, without connecting to a database. |
+| `rebuild` | Import and publish the reviewed initial Prism snapshot. |
+| `refresh` | Apply an approved manual Prism refresh. |
+| `status` | Inspect source publication state. |
+| `rollback` | Activate a retained manifest. |
+| `backup` | Export SQL records and pinned source bytes. |
+| `restore` | Restore a verified SQL bundle. |
+| `verify` | Verify a bundle without connecting to a database. |
+
+`rebuild` requires `--snapshot` and `--approval`; `refresh` requires `--plan`
+and an explicit local `--source`. `status` accepts
+`--origin prism:public-snapshot`. `rollback` requires `--origin`,
+`--manifest-id` and `--expected-generation`. `backup` requires `--output`;
+`restore` and `verify` require `--bundle`. `rebuild` and `restore` also accept
+the optional `--initialize` flag.
 
 Except `verify`, commands require `--data-dir` and an explicit database URL in the
 environment variable selected by `--database-url-env` (default
