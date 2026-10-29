@@ -13,10 +13,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from llm_d_lens.benchmark_rag.contracts import ItemKind, RagItem, normalize_statistic, normalize_unit
+from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN
 from llm_d_lens.db.dao.rag_item import RagItemDao, RagItemDaoError
 from llm_d_lens.db.engine import get_session_factory
 from llm_d_lens.db.models.agentic_benchmark_record import BenchmarkRecordRow
 from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow as RagItemRow
+
 
 @pytest.fixture(params=["sqlite", "postgresql"])
 def dao(request: pytest.FixtureRequest) -> RagItemDao:
@@ -29,7 +31,7 @@ def _item(kind: ItemKind, item_id: str, **changes: object) -> RagItem:
     values: dict[str, object] = {
         "item_id": item_id,
         "kind": kind,
-        "origin_id": "public:test",
+        "origin_id": PRISM_ORIGIN,
         "logical_key": item_id,
         "source_revision": "commit-a",
         "content_sha256": "a" * 64,
@@ -83,7 +85,7 @@ def test_all_kinds_round_trip_and_same_version_is_idempotent(dao: RagItemDao):
     for item in items:
         assert dao.get(item.item_id) == item
         assert dao.save(item) == item
-    assert len(dao.list_version("public:test", "commit-a")) == 6
+    assert len(dao.list_version(PRISM_ORIGIN, "commit-a")) == 6
     assert dao.get("missing") is None
     experiment = dao.get("experiment")
     assert experiment is not None
@@ -121,7 +123,7 @@ def test_conflicts_cannot_overwrite_historical_versions(dao: RagItemDao):
     [
         {"experiment_id": "missing"},
         {"experiment_id": "figure"},
-        {"experiment_id": "other-origin"},
+        {"origin_id": "public:other"},
         {"experiment_id": "other-revision"},
         {"parent_id": "figure"},
         {"parent_id": "another-experiment"},
@@ -131,7 +133,6 @@ def test_measurement_links_fail_closed(dao: RagItemDao, change: dict):
     dao.save(_item("experiment", "experiment"))
     dao.save(_item("experiment", "another-experiment"))
     dao.save(_item("figure", "figure"))
-    dao.save(_item("experiment", "other-origin", origin_id="public:other"))
     dao.save(_item("experiment", "other-revision", source_revision="commit-b"))
     with pytest.raises(RagItemDaoError):
         dao.save(_item("measurement", "invalid", **change))
@@ -156,9 +157,10 @@ def test_manifest_can_retain_old_pinned_items_without_publishing_them(dao: RagIt
         manifest_item_ids=[item.item_id for item in items],
     )
     assert dao.save(manifest) == manifest
-    assert all(item.publication_state == "staged" for item in dao.list_version("public:test", "commit-a"))
+    assert all(item.publication_state == "staged" for item in dao.list_version(PRISM_ORIGIN, "commit-a"))
     for members in (["missing"], ["manifest"], ["foreign"]):
-        dao.save(_item("passage", "foreign", origin_id="public:other"))
+        with pytest.raises(RagItemDaoError, match="immutable"):
+            dao.save(_item("passage", "foreign", origin_id="public:other"))
         with pytest.raises(RagItemDaoError):
             dao.save(_item("source", "bad-manifest", source_role="manifest", manifest_item_ids=members))
     registry = _item("source", "registry", source_role="registry", published_manifest_id="manifest")

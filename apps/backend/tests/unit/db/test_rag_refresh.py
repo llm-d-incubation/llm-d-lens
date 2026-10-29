@@ -22,6 +22,7 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     PublicationError,
     SourceApproval,
     content_digest,
+    registry_id,
 )
 from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
 from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
@@ -272,7 +273,6 @@ def test_web_document_refresh_cannot_repopulate_sql(publication, tmp_path):
     target.write_text("# llm-d\nPublic document context.\n")
     file = InventoryFile(path=path, sha256=hashlib.sha256(target.read_bytes()).hexdigest(), format="markdown")
     approval = _approval(origin)
-    publication.register_source(origin, approval)
     plan = RefreshPlan(
         review_reference="reviewed document-only snapshot",
         approval=approval,
@@ -284,6 +284,8 @@ def test_web_document_refresh_cannot_repopulate_sql(publication, tmp_path):
         base_manifest_id=None,
     )
     with pytest.raises(PublicationError, match="OpenSearch"):
+        publication.register_source(origin, approval)
+    with pytest.raises(PublicationError, match="source is not registered"):
         RagRefreshService(publication).run(plan, tmp_path)
-    assert publication.dao.head(origin).manifest is None
+    assert publication.dao.get(registry_id(origin)) is None
     assert publication.dao.list_version(origin, plan.inventory.revision) == []

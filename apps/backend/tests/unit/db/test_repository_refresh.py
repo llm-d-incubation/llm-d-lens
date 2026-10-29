@@ -1,4 +1,4 @@
-"""Local Git/PostgreSQL proofs for reviewed repository compatibility refreshes."""
+"""Local Git/OpenSearch proofs for reviewed document refreshes."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ import subprocess
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import pytest
 from sqlalchemy import Engine
-from sqlalchemy.orm import sessionmaker
 
+from llm_d_lens.benchmark_rag.document_repository import OpenSearchDocumentRepository
 from llm_d_lens.benchmark_rag.guide_json import parse_custom_json
 from llm_d_lens.benchmark_rag.guide_tables import REVIEWED_REVISION, parse_published_tables
 from llm_d_lens.benchmark_rag.publication import RagPublicationService
@@ -23,13 +24,12 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
 )
 from llm_d_lens.benchmark_rag.repository_corpus import (
     PARSER_VERSION,
-    FigureReview,
     RepositoryCorpusImporter,
     parse_repository,
     repository_counts,
 )
 from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, allowed_paths, collect_git
-from llm_d_lens.db.dao.rag_publication import RagPublicationDao
+from tests.unit.benchmark_rag.test_document_repository import MetadataServer
 
 _TABLE = "guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md"
 _JSON = "guides/p2p-kv-cache-sharing/benchmark-results/data/glm-5.2-c64/complete-policy-source-exact-window.json"
@@ -66,9 +66,13 @@ def _approval(origin: str) -> SourceApproval:
 @pytest.fixture
 def importer(postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "evidence"))
-    return RepositoryCorpusImporter(
-        RagPublicationService(dao=RagPublicationDao(sessionmaker(bind=postgres_engine, expire_on_commit=False)))
+    repository = OpenSearchDocumentRepository(
+        "http://metadata.test",
+        client=httpx.Client(transport=httpx.MockTransport(MetadataServer())),
+        lock_path=tmp_path / "publication.lock",
     )
+    repository.prepare(initialize=True)
+    return RepositoryCorpusImporter(RagPublicationService(dao=repository))
 
 
 @pytest.fixture
@@ -98,23 +102,10 @@ def test_refresh_add_delete_rename_edit_and_parse_failure_preserve_archive(impor
         f"{prefix}/delete.md": b"# Delete\nRetired evidence.\n",
         f"{prefix}/rename.md": b"# Rename\nUnchanged bytes at a new path.\n",
     }
-    image = "guides/test/benchmark-results/chart.png"
-    if origin == LLM_D_ORIGIN:
-        before[image] = b"\x89PNG\r\n\x1a\n"
     revision = _commit(repo, before)
     kwargs = {"expected_counts": {"source": 3, "passage": 3}, "figure_reviews": {}}
-    if origin == BENCHMARK_ORIGIN:
-        with pytest.raises(PublicationError, match="OpenSearch"):
-            importer.import_repository(repo, origin, revision, _approval(origin), **kwargs)
-        assert importer.publication.dao.head(origin).manifest is None
-        assert importer.publication.dao.list_version(origin, revision) == []
-        return
-    kwargs = {
-        "expected_counts": {"source": 4, "passage": 3, "figure": 1},
-        "figure_reviews": {image: FigureReview(coverage="unknown", reason="no verified numeric data")},
-    }
     first = importer.import_repository(repo, origin, revision, _approval(origin), **kwargs)
-    old_members = importer.publication.dao.list_published(origin)
+    old_members = importer.publication.dao.list_published(origin, kind=None)
     old_sources = [item for item in old_members if item.source_role == "file"]
     next_revision = _commit(
         repo,
@@ -127,25 +118,22 @@ def test_refresh_add_delete_rename_edit_and_parse_failure_preserve_archive(impor
         },
     )
     staged = importer.stage_repository(repo, origin, next_revision, _approval(origin), **kwargs)
-    assert importer.publication.dao.list_published(origin) == old_members
+    assert importer.publication.dao.list_published(origin, kind=None) == old_members
     with pytest.raises(PublicationError, match="exact inventory revision"):
         importer.stage_repository(
             repo, origin, next_revision, _approval(origin), reviewed_metadata_revision=revision, **kwargs
         )
-    assert importer.publication.dao.list_published(origin) == old_members
+    assert importer.publication.dao.list_published(origin, kind=None) == old_members
     refreshed = importer.publication.activate(origin, staged.item_id)
     assert refreshed.generation == first.generation + 1
-    current = importer.publication.dao.list_published(origin)
+    current = importer.publication.dao.list_published(origin, kind=None)
     assert {item.source_path for item in current} == {
         f"{prefix}/edit.md",
         f"{prefix}/renamed.md",
         f"{prefix}/added.md",
-        image,
     }
     assert any(item.heading_path == ["After"] and "Changed content." in item.passage_text for item in current)
-    assert not {item.item_id for item in current if item.source_path != image} & {
-        item.item_id for item in old_members if item.source_path != image
-    }
+    assert not {item.item_id for item in current} & {item.item_id for item in old_members}
     manifest = ReleaseManifest.model_validate(importer.publication.dao.head(origin).manifest.source_details)
     assert {file.path for file in manifest.inventory.files} == {item.source_path for item in current}
     for item in old_sources:
@@ -159,12 +147,17 @@ def test_refresh_add_delete_rename_edit_and_parse_failure_preserve_archive(impor
     with pytest.raises(PublicationError, match="unterminated"):
         importer.import_repository(repo, origin, broken, _approval(origin), **kwargs)
     assert importer.publication.dao.head(origin) == head
-    assert importer.publication.dao.list_published(origin) == current
+    assert importer.publication.dao.list_published(origin, kind=None) == current
 
 
 @pytest.fixture(params=[_TABLE, _JSON], ids=["published-table", "fixed-window-json"])
 def published_source(request) -> tuple[str, bytes]:
+    from llm_d_lens.cluster.repo_downloads import repo_dir
+
     checkout = Path(__file__).resolve().parents[6] / "llm-d"
+    cached = repo_dir("llm-d", REVIEWED_REVISION)
+    if (cached / ".git").is_dir():
+        checkout = cached
     if not (checkout / ".git").exists():
         pytest.skip("pinned published-number proofs need the separately provisioned local llm-d checkout")
     return request.param, subprocess.check_output(
@@ -180,10 +173,19 @@ def test_published_number_refresh_requires_exact_metadata_review(importer, repo:
     kwargs = {"expected_counts": counts, "figure_reviews": {}}
     with pytest.raises(PublicationError, match="metadata requires"):
         importer.import_repository(repo, LLM_D_ORIGIN, revision, _approval(LLM_D_ORIGIN), **kwargs)
-    first = importer.import_repository(
-        repo, LLM_D_ORIGIN, revision, _approval(LLM_D_ORIGIN), reviewed_metadata_revision=revision, **kwargs
-    )
-    old = importer.publication.dao.list_published(LLM_D_ORIGIN, kind="measurement")
+    with pytest.raises(PublicationError, match="explicit document split"):
+        importer.import_repository(
+            repo, LLM_D_ORIGIN, revision, _approval(LLM_D_ORIGIN), reviewed_metadata_revision=revision, **kwargs
+        )
+
+    def reviewed_measurements(revision):
+        inventory = collect_git(LLM_D_ORIGIN, repo, revision, _approval(LLM_D_ORIGIN), importer.publication.archive)
+        parsed = parse_repository(
+            inventory, importer.publication.archive, figure_reviews={}, reviewed_metadata_revision=revision
+        )
+        return [item for file in parsed for item in file.items if item.kind == "measurement"]
+
+    old = reviewed_measurements(revision)
     if path == _TABLE:
         assert b"| 30.3 s |" in original
         changed = original.replace(b"| 30.3 s |", b"| 31.7 s |", 1)
@@ -218,29 +220,32 @@ def test_published_number_refresh_requires_exact_metadata_review(importer, repo:
                 **kwargs,
             )
         assert importer.publication.dao.head(LLM_D_ORIGIN) == head
-    refreshed = importer.import_repository(
-        repo,
-        LLM_D_ORIGIN,
-        next_revision,
-        _approval(LLM_D_ORIGIN),
-        reviewed_metadata_revision=next_revision,
-        **kwargs,
-    )
-    assert refreshed.generation == first.generation + 1
-    measurements = importer.publication.dao.list_published(LLM_D_ORIGIN, kind="measurement")
+    with pytest.raises(PublicationError, match="explicit document split"):
+        importer.import_repository(
+            repo,
+            LLM_D_ORIGIN,
+            next_revision,
+            _approval(LLM_D_ORIGIN),
+            reviewed_metadata_revision=next_revision,
+            **kwargs,
+        )
+    assert importer.publication.dao.head(LLM_D_ORIGIN) == head
+    measurements = reviewed_measurements(next_revision)
     assert [item.value for item in measurements if select_measurement(item)] == [new_value]
     assert all(item.source_revision == next_revision for item in measurements)
     assert importer.publication.archive.read(hashlib.sha256(original).hexdigest()) == original
-    repeated = importer.import_repository(
-        repo,
-        LLM_D_ORIGIN,
-        next_revision,
-        _approval(LLM_D_ORIGIN),
-        reviewed_metadata_revision=next_revision,
-        **kwargs,
-    )
-    assert not repeated.changed
-    assert (repeated.manifest_id, repeated.generation) == (refreshed.manifest_id, refreshed.generation)
+    snapshot = importer.publication.dao.snapshot()
+    with pytest.raises(PublicationError, match="explicit document split"):
+        importer.import_repository(
+            repo,
+            LLM_D_ORIGIN,
+            next_revision,
+            _approval(LLM_D_ORIGIN),
+            reviewed_metadata_revision=next_revision,
+            **kwargs,
+        )
+    assert importer.publication.dao.snapshot() == snapshot
+    assert importer.publication.dao.list_published(LLM_D_ORIGIN, kind=None) == []
     if path == _TABLE:
         unsupported = changed.replace(b"Weight-load time per rank", b"Unknown new timing layout")
         match = "unreviewed published table layout"

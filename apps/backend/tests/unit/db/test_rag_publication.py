@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, Event
@@ -57,7 +58,7 @@ def service(postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "lens-data"))
     dao = RagPublicationDao(sessionmaker(bind=postgres_engine, expire_on_commit=False))
     service = RagPublicationService(dao=dao)
-    service.register_source(LLM_D_ORIGIN, _approval())
+    service.register_source(PRISM_ORIGIN, _approval(PRISM_ORIGIN))
     return service
 
 
@@ -67,46 +68,54 @@ def _inputs(
     documents: dict[str, bytes],
     *,
     parse_paths: set[str] | None = None,
-    origin: str = LLM_D_ORIGIN,
+    origin: str = PRISM_ORIGIN,
 ) -> tuple[PinnedInventory, tuple[ParsedFile, ...]]:
+    revision = {"a" * 40: "2026-10-11", "b" * 40: "2026-10-12", "c" * 40: "2026-10-13"}.get(revision, revision)
     files = []
     parsed = []
     for path, data in sorted(documents.items()):
-        digest = service.archive.put(data)
-        file = InventoryFile(path=path, sha256=digest, format="markdown")
+        source_path = f"results/json/{Path(path).stem}.json"
+        digest = service.archive.put(_payload(data))
+        file = InventoryFile(path=source_path, sha256=digest, format="json")
         files.append(file)
         if parse_paths is None or path in parse_paths:
-            key = f"{path}#passage"
-            passage = RagItem(
+            key = f"{source_path}#experiment"
+            experiment = RagItem(
                 item_id=item_id(origin, key, revision),
-                kind="passage",
+                kind="experiment",
                 logical_key=key,
                 origin_id=origin,
                 source_revision=revision,
                 content_sha256=digest,
                 access_classification="verified_public",
-                source_path=path,
-                format="markdown",
-                parent_id=item_id(origin, f"file:{path}", revision),
-                passage_text=data.decode(),
-                heading_path=["Test"],
-                source_pointer={"heading": "Test", "start": 0, "end": len(data.decode())},
+                source_path=source_path,
+                format="json",
+                parent_id=item_id(origin, f"file:{source_path}", revision),
+                configuration={"fixture": data.decode()},
+                source_pointer={"json_path": "$"},
             )
-            experiment_key = f"{path}#experiment"
-            experiment = RagItem(
-                item_id=item_id(origin, experiment_key, revision),
-                kind="experiment",
-                logical_key=experiment_key,
+            measurement_key = f"{source_path}#measurement"
+            measurement = RagItem(
+                item_id=item_id(origin, measurement_key, revision),
+                kind="measurement",
+                logical_key=measurement_key,
                 origin_id=origin,
                 source_revision=revision,
                 content_sha256=digest,
                 access_classification="verified_public",
-                source_path=path,
-                format="markdown",
-                parent_id=passage.parent_id,
-                source_pointer={"fixture": "structured mixed release"},
+                source_path=source_path,
+                format="json",
+                parent_id=experiment.item_id,
+                experiment_id=experiment.item_id,
+                metric="throughput",
+                value=len(data),
+                original_value=len(data),
+                unit="tokens/s",
+                original_unit="tokens/s",
+                evidence_type="raw_json",
+                source_pointer={"json_path": "$.value"},
             )
-            parsed.append(ParsedFile(path=path, items=(passage, experiment)))
+            parsed.append(ParsedFile(path=source_path, items=(experiment, measurement)))
     return PinnedInventory(origin_id=origin, revision=revision, complete=True, files=tuple(files)), tuple(parsed)
 
 
@@ -117,20 +126,28 @@ def _stage(service: RagPublicationService, inputs: tuple[PinnedInventory, tuple[
         parsed,
         expected_counts={
             "source": len(inventory.files),
-            "passage": len(inventory.files),
             "experiment": len(inventory.files),
+            "measurement": len(inventory.files),
         },
     )
 
 
 def _publish(service: RagPublicationService, revision: str, documents: dict[str, bytes]) -> RagItem:
     manifest = _stage(service, _inputs(service, revision, documents))
-    service.activate(LLM_D_ORIGIN, manifest.item_id)
+    service.activate(PRISM_ORIGIN, manifest.item_id)
     return manifest
 
 
 def _texts(service: RagPublicationService) -> set[str | None]:
-    return {item.passage_text for item in service.dao.list_published(LLM_D_ORIGIN, kind="passage")}
+    return {item.configuration["fixture"] for item in service.dao.list_published(PRISM_ORIGIN, kind="experiment")}
+
+
+def _payload(data: bytes) -> bytes:
+    return json.dumps({"fixture": data.decode(), "value": len(data)}, sort_keys=True).encode()
+
+
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(_payload(data)).hexdigest()
 
 
 def _row_count(engine: Engine) -> int:
@@ -143,18 +160,18 @@ def test_staging_is_invisible_and_activation_uses_exact_manifest(service: RagPub
     new_inputs = _inputs(service, "b" * 40, {"guides/a.md": b"new alpha", "guides/c.md": b"new gamma"})
     new = _stage(service, new_inputs)
     assert _texts(service) == {"old alpha", "old beta"}
-    assert service.dao.count_published(LLM_D_ORIGIN, kind="passage") == 2
-    assert service.dao.head(LLM_D_ORIGIN).manifest == old
-    result = service.activate(LLM_D_ORIGIN, new.item_id)
+    assert service.dao.count_published(PRISM_ORIGIN, kind="experiment") == 2
+    assert service.dao.head(PRISM_ORIGIN).manifest == old
+    result = service.activate(PRISM_ORIGIN, new.item_id)
     assert result.changed and result.generation == 2
     assert _texts(service) == {"new alpha", "new gamma"}
-    assert service.dao.count_published(LLM_D_ORIGIN) == 6
+    assert service.dao.count_published(PRISM_ORIGIN) == 6
     assert service.dao.get(old.item_id) == old
-    assert service.archive.read(hashlib.sha256(b"old beta").hexdigest()) == b"old beta"
+    assert service.archive.read(_digest(b"old beta")) == _payload(b"old beta")
     tombstones = [
-        item for item in service.dao.list_version(LLM_D_ORIGIN, "b" * 40) if item.publication_state == "tombstone"
+        item for item in service.dao.list_version(PRISM_ORIGIN, "2026-10-12") if item.publication_state == "tombstone"
     ]
-    assert {item.source_path for item in tombstones} == {"guides/a.md", "guides/b.md"}
+    assert {item.source_path for item in tombstones} == {"results/json/a.json", "results/json/b.json"}
     assert all(item.item_id not in new.manifest_item_ids for item in tombstones)
 
 
@@ -164,13 +181,13 @@ def test_staged_and_published_retries_create_no_duplicate_rows(service: RagPubli
     count = _row_count(postgres_engine)
     assert _stage(service, inputs) == first
     assert _row_count(postgres_engine) == count
-    initial = service.activate(LLM_D_ORIGIN, first.item_id)
+    initial = service.activate(PRISM_ORIGIN, first.item_id)
     unchanged = _stage(service, _inputs(service, "a" * 40, {"guides/a.md": b"alpha"}, parse_paths=set()))
     assert unchanged == first
-    result = service.activate(LLM_D_ORIGIN, unchanged.item_id)
+    result = service.activate(PRISM_ORIGIN, unchanged.item_id)
     assert not result.changed and result.generation == initial.generation
     assert _row_count(postgres_engine) == count
-    assert service.register_source(LLM_D_ORIGIN, _approval()).published_manifest_id == first.item_id
+    assert service.register_source(PRISM_ORIGIN, _approval(PRISM_ORIGIN)).published_manifest_id == first.item_id
 
 
 def test_new_commit_reuses_unchanged_file_versions(service: RagPublicationService, postgres_engine: Engine):
@@ -189,9 +206,9 @@ def test_new_commit_reuses_unchanged_file_versions(service: RagPublicationServic
     assert updated.manifest_item_ids == old.manifest_item_ids
     assert ReleaseManifest.model_validate(updated.source_details).files == old_metadata.files
     assert _row_count(postgres_engine) == before + 1
-    service.activate(LLM_D_ORIGIN, updated.item_id)
-    assert {item.source_revision for item in service.dao.list_published(LLM_D_ORIGIN)} == {"a" * 40}
-    assert service.dao.head(LLM_D_ORIGIN).manifest.source_revision == "b" * 40
+    service.activate(PRISM_ORIGIN, updated.item_id)
+    assert {item.source_revision for item in service.dao.list_published(PRISM_ORIGIN)} == {"2026-10-11"}
+    assert service.dao.head(PRISM_ORIGIN).manifest.source_revision == "2026-10-12"
 
 
 @pytest.mark.parametrize("failure", ["parser", "missing-parser", "counts", "unapproved-path", "missing-blob"])
@@ -200,13 +217,13 @@ def test_prepare_failure_preserves_previous_release(
 ):
     old = _publish(service, "a" * 40, {"guides/a.md": b"old"})
     inventory, parsed = _inputs(service, "b" * 40, {"guides/b.md": b"new"})
-    counts = {"source": 1, "passage": 1, "experiment": 1}
+    counts = {"source": 1, "experiment": 1, "measurement": 1}
     if failure == "parser":
         parsed = (parsed[0].model_copy(update={"errors": ("partial table",)}),)
     elif failure == "missing-parser":
         parsed = ()
     elif failure == "counts":
-        counts["passage"] = 2
+        counts["experiment"] = 2
     elif failure == "unapproved-path":
         inventory = inventory.model_copy(
             update={"files": (inventory.files[0].model_copy(update={"path": "private/leak.md"}),)}
@@ -219,7 +236,7 @@ def test_prepare_failure_preserves_previous_release(
     with pytest.raises((PublicationError, FileNotFoundError)):
         service.stage(inventory, parsed, expected_counts=counts)
     assert _row_count(postgres_engine) == before
-    assert service.dao.head(LLM_D_ORIGIN).manifest == old
+    assert service.dao.head(PRISM_ORIGIN).manifest == old
     assert _texts(service) == {"old"}
 
 
@@ -230,7 +247,7 @@ def test_incomplete_or_duplicate_inventory_rejected_without_retirement(service: 
         PinnedInventory.model_validate(inventory.model_dump() | {"complete": False})
     with pytest.raises(ValidationError):
         PinnedInventory.model_validate(inventory.model_dump() | {"files": [inventory.files[0], inventory.files[0]]})
-    assert service.dao.head(LLM_D_ORIGIN).manifest == old
+    assert service.dao.head(PRISM_ORIGIN).manifest == old
     assert _texts(service) == {"alpha", "beta"}
 
 
@@ -241,7 +258,7 @@ def test_failure_during_activation_rolls_back_pointer_history_and_tombstones(
     old = _publish(service, "a" * 40, {"guides/a.md": b"old"})
     staged = _stage(service, _inputs(service, "b" * 40, {"guides/b.md": b"new"}))
     before = _row_count(postgres_engine)
-    head = service.dao.head(LLM_D_ORIGIN)
+    head = service.dao.head(PRISM_ORIGIN)
 
     def fail_pointer_update(connection, cursor, statement, parameters, context, executemany):
         if statement.startswith("UPDATE public_benchmark_records SET ") and "published_manifest_id=" in statement:
@@ -250,11 +267,11 @@ def test_failure_during_activation_rolls_back_pointer_history_and_tombstones(
     event.listen(postgres_engine, "before_cursor_execute", fail_pointer_update)
     try:
         with pytest.raises(RuntimeError, match="pointer failure"):
-            service.activate(LLM_D_ORIGIN, staged.item_id)
+            service.activate(PRISM_ORIGIN, staged.item_id)
     finally:
         event.remove(postgres_engine, "before_cursor_execute", fail_pointer_update)
     assert _row_count(postgres_engine) == before
-    assert service.dao.head(LLM_D_ORIGIN) == head
+    assert service.dao.head(PRISM_ORIGIN) == head
     assert service.dao.get(old.item_id) == old
     assert _texts(service) == {"old"}
 
@@ -281,7 +298,7 @@ def test_concurrent_activations_serialize_and_readers_never_see_staged_rows(
     def activate(manifest: RagItem):
         start.wait(timeout=10)
         try:
-            return service.activate(LLM_D_ORIGIN, manifest.item_id)
+            return service.activate(PRISM_ORIGIN, manifest.item_id)
         except PublicationConflictError:
             return "conflict"
 
@@ -289,15 +306,15 @@ def test_concurrent_activations_serialize_and_readers_never_see_staged_rows(
         futures = [executor.submit(activate, manifest) for manifest in (left, right)]
         try:
             assert locked.wait(10)
-            assert service.dao.head(LLM_D_ORIGIN).manifest == old
+            assert service.dao.head(PRISM_ORIGIN).manifest == old
             assert _texts(service) == {"old"}
-            assert service.dao.count_published(LLM_D_ORIGIN, kind="passage") == 1
+            assert service.dao.count_published(PRISM_ORIGIN, kind="experiment") == 1
         finally:
             release.set()
         results = [future.result(timeout=10) for future in futures]
     assert results.count("conflict") == 1
     assert _texts(service) in ({"left"}, {"right"})
-    assert service.dao.head(LLM_D_ORIGIN).state.generation == 2
+    assert service.dao.head(PRISM_ORIGIN).state.generation == 2
 
 
 def test_rollback_restores_exact_manifest_and_prevents_aba_activation(service: RagPublicationService):
@@ -305,55 +322,55 @@ def test_rollback_restores_exact_manifest_and_prevents_aba_activation(service: R
     next_release = _stage(service, _inputs(service, "b" * 40, {"guides/b.md": b"new"}))
     stale = _stage(service, _inputs(service, "c" * 40, {"guides/c.md": b"stale"}))
     with pytest.raises(PublicationError, match="never published"):
-        service.rollback(LLM_D_ORIGIN, next_release.item_id, expected_generation=1)
-    service.activate(LLM_D_ORIGIN, next_release.item_id)
+        service.rollback(PRISM_ORIGIN, next_release.item_id, expected_generation=1)
+    service.activate(PRISM_ORIGIN, next_release.item_id)
     with pytest.raises(PublicationConflictError):
-        service.activate(LLM_D_ORIGIN, stale.item_id)
-    result = service.rollback(LLM_D_ORIGIN, old.item_id, expected_generation=2)
+        service.activate(PRISM_ORIGIN, stale.item_id)
+    result = service.rollback(PRISM_ORIGIN, old.item_id, expected_generation=2)
     assert result.changed and result.generation == 3
     assert _texts(service) == {"old"}
     assert service.dao.get(next_release.item_id) == next_release
-    assert service.archive.read(hashlib.sha256(b"new").hexdigest()) == b"new"
+    assert service.archive.read(_digest(b"new")) == _payload(b"new")
     with pytest.raises(PublicationConflictError):
-        service.activate(LLM_D_ORIGIN, stale.item_id)
+        service.activate(PRISM_ORIGIN, stale.item_id)
     with pytest.raises(PublicationConflictError):
-        service.rollback(LLM_D_ORIGIN, next_release.item_id, expected_generation=1)
+        service.rollback(PRISM_ORIGIN, next_release.item_id, expected_generation=1)
 
 
 def test_source_revocation_hides_members_and_invalidates_staged_releases(service: RagPublicationService):
     old = _publish(service, "a" * 40, {"guides/a.md": b"old"})
     staged = _stage(service, _inputs(service, "b" * 40, {"guides/b.md": b"new"}))
-    service.dao.set_enabled(LLM_D_ORIGIN, False, expected_generation=1)
-    assert service.dao.count_published(LLM_D_ORIGIN) == 0
-    assert service.dao.list_published(LLM_D_ORIGIN) == []
+    service.dao.set_enabled(PRISM_ORIGIN, False, expected_generation=1)
+    assert service.dao.count_published(PRISM_ORIGIN) == 0
+    assert service.dao.list_published(PRISM_ORIGIN) == []
     with pytest.raises(PublicationError, match="disabled"):
-        service.activate(LLM_D_ORIGIN, staged.item_id)
+        service.activate(PRISM_ORIGIN, staged.item_id)
     with pytest.raises(PublicationError, match="disabled"):
         _stage(service, _inputs(service, "b" * 40, {"guides/b.md": b"new"}))
-    service.dao.set_enabled(LLM_D_ORIGIN, True, expected_generation=2)
-    assert service.dao.head(LLM_D_ORIGIN).manifest == old
+    service.dao.set_enabled(PRISM_ORIGIN, True, expected_generation=2)
+    assert service.dao.head(PRISM_ORIGIN).manifest == old
     assert _texts(service) == {"old"}
     with pytest.raises(PublicationConflictError):
-        service.activate(LLM_D_ORIGIN, staged.item_id)
+        service.activate(PRISM_ORIGIN, staged.item_id)
 
 
 def test_corrupt_bytes_block_activation_and_rollback(service: RagPublicationService):
     old = _publish(service, "a" * 40, {"guides/a.md": b"old"})
     new = _publish(service, "b" * 40, {"guides/b.md": b"new"})
-    digest = hashlib.sha256(b"old").hexdigest()
+    digest = _digest(b"old")
     storage_path("data", "artifacts", "benchmark-rag", digest, "source").write_bytes(b"corrupt")
     with pytest.raises(PublicationError, match="hash verification"):
-        service.rollback(LLM_D_ORIGIN, old.item_id, expected_generation=2)
-    assert service.dao.head(LLM_D_ORIGIN).manifest == new
+        service.rollback(PRISM_ORIGIN, old.item_id, expected_generation=2)
+    assert service.dao.head(PRISM_ORIGIN).manifest == new
     with pytest.raises(PublicationError, match="immutable"):
-        service.archive.put(b"old")
+        service.archive.put(_payload(b"old"))
     assert storage_path("data", "artifacts", "benchmark-rag", digest, "source").read_bytes() == b"corrupt"
     staged = _stage(service, _inputs(service, "c" * 40, {"guides/c.md": b"pending"}))
-    digest = hashlib.sha256(b"pending").hexdigest()
+    digest = _digest(b"pending")
     storage_path("data", "artifacts", "benchmark-rag", digest, "source").write_bytes(b"corrupt")
     with pytest.raises(PublicationError, match="hash verification"):
-        service.activate(LLM_D_ORIGIN, staged.item_id)
-    assert service.dao.head(LLM_D_ORIGIN).manifest == new
+        service.activate(PRISM_ORIGIN, staged.item_id)
+    assert service.dao.head(PRISM_ORIGIN).manifest == new
     assert _texts(service) == {"new"}
 
 
@@ -362,13 +379,15 @@ def test_manifest_cannot_promote_unrelated_staged_or_wrong_source_items(service:
     bad = parsed[0].items[0].model_copy(update={"origin_id": BENCHMARK_ORIGIN})
     with pytest.raises(PublicationError, match="source identity"):
         service.stage(
-            inventory, (ParsedFile(path="guides/a.md", items=(bad,)),), expected_counts={"source": 1, "passage": 1}
+            inventory,
+            (ParsedFile(path=inventory.files[0].path, items=(bad,)),),
+            expected_counts={"source": 1, "experiment": 1},
         )
     staged = _stage(service, (inventory, parsed))
-    forged = staged.model_copy(update={"manifest_item_ids": [registry_id(LLM_D_ORIGIN)]})
+    forged = staged.model_copy(update={"manifest_item_ids": [registry_id(PRISM_ORIGIN)]})
     with pytest.raises(PublicationError, match="membership"):
         service.dao.stage(forged, ())
-    assert service.dao.count_published(LLM_D_ORIGIN) == 0
+    assert service.dao.count_published(PRISM_ORIGIN) == 0
 
 
 def test_stale_file_dependency_forces_reparse_and_failure_is_atomic(
@@ -378,18 +397,18 @@ def test_stale_file_dependency_forces_reparse_and_failure_is_atomic(
     file = inventory.files[0]
     figure_key = f"{file.path}#figure"
     figure = RagItem(
-        item_id=item_id(LLM_D_ORIGIN, figure_key, inventory.revision),
+        item_id=item_id(PRISM_ORIGIN, figure_key, inventory.revision),
         logical_key=figure_key,
         kind="figure",
-        origin_id=LLM_D_ORIGIN,
+        origin_id=PRISM_ORIGIN,
         source_revision=inventory.revision,
         content_sha256=file.sha256,
         access_classification="verified_public",
         source_path=file.path,
-        format="markdown",
+        format="json",
         coverage="unknown",
         source_pointer={"heading": "Test"},
-        parent_id=item_id(LLM_D_ORIGIN, f"file:{file.path}", inventory.revision),
+        parent_id=item_id(PRISM_ORIGIN, f"file:{file.path}", inventory.revision),
     )
     bad = parsed[0].items[0].model_copy(update={"parent_id": figure.item_id})
     before = _row_count(postgres_engine)
@@ -397,17 +416,17 @@ def test_stale_file_dependency_forces_reparse_and_failure_is_atomic(
         service.stage(
             inventory,
             (ParsedFile(path=file.path, items=(figure, bad)),),
-            expected_counts={"source": 1, "passage": 1, "figure": 1},
+            expected_counts={"source": 1, "experiment": 1, "figure": 1},
         )
     assert _row_count(postgres_engine) == before
-    assert service.dao.count_published(LLM_D_ORIGIN) == 0
+    assert service.dao.count_published(PRISM_ORIGIN) == 0
 
 
 def test_membership_filter_excludes_staged_structured_releases(service: RagPublicationService, postgres_engine: Engine):
     _publish(service, "a" * 40, {"guides/a.md": b"published benchmark definition"})
     _stage(service, _inputs(service, "b" * 40, {"guides/b.md": b"unpublished secretphrase definition"}))
     with sessionmaker(bind=postgres_engine)() as session:
-        statement = service.dao._published_members(LLM_D_ORIGIN).where(RagItemRow.source_revision == "b" * 40)
+        statement = service.dao._published_members(PRISM_ORIGIN).where(RagItemRow.source_revision == "2026-10-12")
         assert session.scalars(statement).all() == []
         assert session.scalar(select(func.count()).select_from(statement.subquery())) == 0
 
@@ -416,15 +435,17 @@ def test_unknown_sources_and_approval_expansion_fail_closed(service: RagPublicat
     with pytest.raises(PublicationError, match="allowlist"):
         service.register_source("https://example.invalid/unreviewed", _approval())
     with pytest.raises(PublicationError, match="allowlist"):
-        service.register_source(LLM_D_ORIGIN, _approval().model_copy(update={"allowed_paths": ("**/*",)}))
+        service.register_source(PRISM_ORIGIN, _approval(PRISM_ORIGIN).model_copy(update={"allowed_paths": ("**/*",)}))
     with pytest.raises(PublicationError, match="compatibility"):
-        service.register_source(LLM_D_ORIGIN, _approval().model_copy(update={"parser_version": "unreviewed-v2"}))
+        service.register_source(
+            PRISM_ORIGIN, _approval(PRISM_ORIGIN).model_copy(update={"parser_version": "unreviewed-v2"})
+        )
     assert service.dao.count_published(BENCHMARK_ORIGIN) == 0
 
 
 def test_postgres_required_for_publication_not_a_sqlite_fallback():
     with pytest.raises(PublicationError, match="PostgreSQL"):
-        RagPublicationDao().register(LLM_D_ORIGIN, _approval())
+        RagPublicationDao().register(PRISM_ORIGIN, _approval(PRISM_ORIGIN))
 
 
 def test_concurrent_staging_and_repeated_activation_are_idempotent(
@@ -446,36 +467,36 @@ def test_concurrent_staging_and_repeated_activation_are_idempotent(
 
     def activate(_: int):
         start.wait(timeout=10)
-        return service.activate(LLM_D_ORIGIN, manifests[0].item_id)
+        return service.activate(PRISM_ORIGIN, manifests[0].item_id)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(activate, range(2)))
     assert sorted(result.changed for result in results) == [False, True]
     assert _row_count(postgres_engine) == before
-    assert len(service.dao.head(LLM_D_ORIGIN).state.history) == 1
+    assert len(service.dao.head(PRISM_ORIGIN).state.history) == 1
 
 
 def test_row_state_cannot_bypass_manifest_membership(service: RagPublicationService):
     inventory, parsed = _inputs(service, "a" * 40, {"guides/a.md": b"published"})
     manifest = _stage(service, (inventory, parsed))
-    service.activate(LLM_D_ORIGIN, manifest.item_id)
+    service.activate(PRISM_ORIGIN, manifest.item_id)
     key = "guides/a.md#not-a-member"
     rogue = (
         parsed[0]
         .items[0]
         .model_copy(
             update={
-                "item_id": item_id(LLM_D_ORIGIN, key, inventory.revision),
+                "item_id": item_id(PRISM_ORIGIN, key, inventory.revision),
                 "logical_key": key,
                 "publication_state": "published",
-                "passage_text": "unpublished extra",
+                "configuration": {"fixture": "unpublished extra"},
             }
         )
     )
     service.dao.save(rogue)
     assert service.dao.get(rogue.item_id) == rogue
     assert _texts(service) == {"published"}
-    assert service.dao.count_published(LLM_D_ORIGIN, kind="passage") == 1
+    assert service.dao.count_published(PRISM_ORIGIN, kind="experiment") == 1
 
 
 def test_complete_empty_inventory_retires_all_members_and_remains_reversible(
@@ -491,11 +512,11 @@ def test_complete_empty_inventory_retires_all_members_and_remains_reversible(
     try:
         old = _publish(service, "a" * 40, {"guides/a.md": b"old"})
         empty = _stage(service, _inputs(service, "b" * 40, {}))
-        service.activate(LLM_D_ORIGIN, empty.item_id)
-        assert service.dao.list_published(LLM_D_ORIGIN) == []
-        assert service.dao.count_published(LLM_D_ORIGIN) == 0
+        service.activate(PRISM_ORIGIN, empty.item_id)
+        assert service.dao.list_published(PRISM_ORIGIN) == []
+        assert service.dao.count_published(PRISM_ORIGIN) == 0
         assert service.dao.get(old.item_id) == old
-        service.rollback(LLM_D_ORIGIN, old.item_id, expected_generation=2)
+        service.rollback(PRISM_ORIGIN, old.item_id, expected_generation=2)
         assert _texts(service) == {"old"}
     finally:
         event.remove(postgres_engine, "before_cursor_execute", capture)
@@ -507,62 +528,70 @@ def test_cross_file_links_cannot_survive_removal_of_their_target(
     service: RagPublicationService,
     postgres_engine: Engine,
 ):
-    inventory, _ = _inputs(service, "a" * 40, {"guides/a.md": b"experiment", "guides/b.md": b"figure"})
+    inventory, _ = _inputs(service, "a" * 40, {"guides/a.md": b"experiment", "guides/b.md": b"measurement"})
     first, second = inventory.files
     common = {
-        "origin_id": LLM_D_ORIGIN,
+        "origin_id": PRISM_ORIGIN,
         "source_revision": inventory.revision,
         "access_classification": "verified_public",
-        "format": "markdown",
-        "source_pointer": {"heading": "Test"},
+        "format": "json",
+        "source_pointer": {"json_path": "$"},
     }
     experiment = RagItem.model_validate(
         common
         | {
             "kind": "experiment",
-            "item_id": item_id(LLM_D_ORIGIN, f"{first.path}#experiment", inventory.revision),
+            "item_id": item_id(PRISM_ORIGIN, f"{first.path}#experiment", inventory.revision),
             "logical_key": f"{first.path}#experiment",
             "source_path": first.path,
             "content_sha256": first.sha256,
-            "parent_id": item_id(LLM_D_ORIGIN, f"file:{first.path}", inventory.revision),
+            "parent_id": item_id(PRISM_ORIGIN, f"file:{first.path}", inventory.revision),
         }
     )
-    figure = RagItem.model_validate(
+    other_experiment = RagItem.model_validate(
         common
         | {
-            "kind": "figure",
-            "item_id": item_id(LLM_D_ORIGIN, f"{second.path}#figure", inventory.revision),
-            "logical_key": f"{second.path}#figure",
+            "kind": "experiment",
+            "item_id": item_id(PRISM_ORIGIN, f"{second.path}#experiment", inventory.revision),
+            "logical_key": f"{second.path}#experiment",
             "source_path": second.path,
             "content_sha256": second.sha256,
-            "parent_id": item_id(LLM_D_ORIGIN, f"file:{second.path}", inventory.revision),
-            "coverage": "unknown",
+            "parent_id": item_id(PRISM_ORIGIN, f"file:{second.path}", inventory.revision),
         }
     )
     link = RagItem.model_validate(
         common
         | {
-            "kind": "figure_link",
-            "item_id": item_id(LLM_D_ORIGIN, f"{second.path}#link", inventory.revision),
+            "kind": "measurement",
+            "item_id": item_id(PRISM_ORIGIN, f"{second.path}#link", inventory.revision),
             "logical_key": f"{second.path}#link",
             "source_path": second.path,
             "content_sha256": second.sha256,
-            "parent_id": figure.item_id,
-            "referenced_item_id": experiment.item_id,
+            "parent_id": experiment.item_id,
+            "experiment_id": experiment.item_id,
+            "metric": "throughput",
+            "value": len(b"measurement"),
+            "original_value": len(b"measurement"),
+            "unit": "tokens/s",
+            "original_unit": "tokens/s",
+            "evidence_type": "raw_json",
         }
     )
     old = service.stage(
         inventory,
-        (ParsedFile(path=first.path, items=(experiment,)), ParsedFile(path=second.path, items=(figure, link))),
-        expected_counts={"source": 2, "experiment": 1, "figure": 1, "figure_link": 1},
+        (
+            ParsedFile(path=first.path, items=(experiment,)),
+            ParsedFile(path=second.path, items=(other_experiment, link)),
+        ),
+        expected_counts={"source": 2, "experiment": 2, "measurement": 1},
     )
-    service.activate(LLM_D_ORIGIN, old.item_id)
-    new_inventory, _ = _inputs(service, "b" * 40, {second.path: b"figure"}, parse_paths=set())
+    service.activate(PRISM_ORIGIN, old.item_id)
+    new_inventory, _ = _inputs(service, "b" * 40, {second.path: b"measurement"}, parse_paths=set())
     before = _row_count(postgres_engine)
     with pytest.raises(PublicationError, match="closed"):
-        service.stage(new_inventory, (), expected_counts={"source": 1, "figure": 1, "figure_link": 1})
+        service.stage(new_inventory, (), expected_counts={"source": 1, "experiment": 1, "measurement": 1})
     assert _row_count(postgres_engine) == before
-    assert service.dao.head(LLM_D_ORIGIN).manifest == old
+    assert service.dao.head(PRISM_ORIGIN).manifest == old
 
 
 @pytest.mark.parametrize(

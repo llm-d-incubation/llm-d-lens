@@ -137,7 +137,13 @@ def _response_issues(case: EvaluationCase, response: QueryResponse) -> list[str]
     if Counter(case.required_values) - values:
         issues.append("missing_exact_measurement")
     claims = Counter(
-        (origin, metric, statistic, Decimal(value), unit)
+        (
+            origin,
+            metric,
+            "unspecified statistic" if statistic == "mean (default; source statistic unreported)" else statistic,
+            Decimal(value),
+            unit,
+        )
         for origin, metric, statistic, value, unit in _NUMERIC_CLAIM.findall(response.answer)
     )
     supported = Counter(

@@ -43,6 +43,7 @@ class RagPublicationDao(RagItemDao):
 
     def register(self, origin_id: str, approval: SourceApproval) -> RagItem:
         validate_approval(origin_id, approval)
+        self._require_structured_release(origin_id, ())
         state = RegistryState(approval=approval)
         item = RagItem(
             item_id=registry_id(origin_id),

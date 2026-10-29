@@ -3,17 +3,15 @@ from __future__ import annotations
 import hashlib
 import subprocess
 from collections import Counter
-from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
-from uuid import uuid4
 
+import httpx
 import pytest
-from sqlalchemy import Engine, create_engine, func, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.schema import CreateSchema, DropSchema
+from sqlalchemy import Engine, func, select
 
 from llm_d_lens.benchmark_rag import sources
+from llm_d_lens.benchmark_rag.document_repository import OpenSearchDocumentRepository
 from llm_d_lens.benchmark_rag.publication import RagPublicationService
 from llm_d_lens.benchmark_rag.publication_contracts import (
     InventoryFile,
@@ -33,9 +31,8 @@ from llm_d_lens.benchmark_rag.repository_corpus import (
 )
 from llm_d_lens.benchmark_rag.repository_initial import initial_figure_reviews
 from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, SourceArchive, allowed_paths
-from llm_d_lens.db.dao.rag_publication import RagPublicationDao
-from llm_d_lens.db.dao.rag_transfer import RagTransferDao
 from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow as RagItemRow
+from tests.unit.benchmark_rag.test_document_repository import MetadataServer
 
 
 def approval(origin: str) -> SourceApproval:
@@ -152,9 +149,13 @@ def test_section_parser_does_not_invent_empty_passages():
 @pytest.fixture
 def importer(postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> RepositoryCorpusImporter:
     monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "evidence"))
-    return RepositoryCorpusImporter(
-        RagPublicationService(dao=RagPublicationDao(sessionmaker(bind=postgres_engine, expire_on_commit=False)))
+    repository = OpenSearchDocumentRepository(
+        "http://metadata.test",
+        client=httpx.Client(transport=httpx.MockTransport(MetadataServer())),
+        lock_path=tmp_path / "publication.lock",
     )
+    repository.prepare(initialize=True)
+    return RepositoryCorpusImporter(RagPublicationService(dao=repository))
 
 
 def git(repo: Path, *args: str) -> str:
@@ -227,19 +228,14 @@ def test_fork_checkout_cannot_be_imported_as_official(repo, tmp_path, monkeypatc
 
 
 def test_repository_publication_uses_pinned_git_and_is_idempotent(importer, repo: Path, postgres_engine: Engine):
-    image = "guides/test/benchmark-results/chart.png"
-    target = repo / image
-    target.parent.mkdir(parents=True)
-    target.write_bytes(b"\x89PNG\r\n\x1a\n")
-    git(repo, "add", image)
     revision = commit(repo, "# Guide\nPinned introduction.\n## Configuration\nNot a measured result.\n")
     (repo / "guides/example.md").write_text("dirty worktree is not input", encoding="utf-8")
     kwargs = {
-        "expected_counts": {"source": 2, "passage": 2, "figure": 1},
-        "figure_reviews": {image: FigureReview(coverage="unknown", reason="no verified numeric data")},
+        "expected_counts": {"source": 1, "passage": 2},
+        "figure_reviews": {},
     }
     result = importer.import_repository(repo, LLM_D_ORIGIN, revision, approval(LLM_D_ORIGIN), **kwargs)
-    assert result.counts == {"source": 2, "passage": 2, "figure": 1}
+    assert result.counts == {"source": 1, "passage": 2}
     with postgres_engine.connect() as connection:
         total = connection.scalar(select(func.count()).select_from(RagItemRow))
     again = importer.import_repository(repo, LLM_D_ORIGIN, revision, approval(LLM_D_ORIGIN), **kwargs)
@@ -305,21 +301,18 @@ def test_parser_rejects_unreviewed_figures_and_unsafe_links(tmp_path: Path, monk
 
 
 def test_activation_hash_failure_keeps_old_release(importer, repo: Path):
-    image = "guides/test/benchmark-results/chart.png"
-    target = repo / image
-    target.parent.mkdir(parents=True)
-    target.write_bytes(b"\x89PNG\r\n\x1a\n")
-    git(repo, "add", image)
     kwargs = {
-        "expected_counts": {"source": 2, "passage": 1, "figure": 1},
-        "figure_reviews": {image: FigureReview(coverage="unknown", reason="no verified numeric data")},
+        "expected_counts": {"source": 1, "passage": 1},
+        "figure_reviews": {},
     }
     revision = commit(repo, "# Guide\nOriginal.\n")
     original = importer.import_repository(repo, LLM_D_ORIGIN, revision, approval(LLM_D_ORIGIN), **kwargs)
     revision = commit(repo, "# Guide\nNew release.\n")
     staged = importer.stage_repository(repo, LLM_D_ORIGIN, revision, approval(LLM_D_ORIGIN), **kwargs)
     source = next(
-        item for item in importer.publication.dao.list_version(LLM_D_ORIGIN, revision) if item.source_role == "file"
+        item
+        for item in importer.publication.dao.snapshot()
+        if item.source_revision == revision and item.source_role == "file"
     )
     root = importer.publication.archive._root(source.content_sha256)
     (root / "source").write_bytes(b"corrupted test-only archived file")
@@ -383,13 +376,13 @@ def test_figure_review_requires_experiments_for_every_selected_table(
 def test_initial_repository_postgres_acceptance(
     origin: str, checkout: str, importer, postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    from llm_d_lens.benchmark_rag.document_transfer import DocumentBackupService
     from llm_d_lens.benchmark_rag.repository_initial import (
         INITIAL_FORMAT_COUNTS,
         INITIAL_INVENTORY_DIGESTS,
         INITIAL_ITEM_COUNTS,
         INITIAL_REVISIONS,
     )
-    from llm_d_lens.benchmark_rag.transfer import RagBackupService
     from llm_d_lens.cluster.repo_downloads import repo_dir
 
     repo = Path(__file__).resolve().parents[5].parent / checkout
@@ -405,10 +398,12 @@ def test_initial_repository_postgres_acceptance(
         "expected_inventory_digest": INITIAL_INVENTORY_DIGESTS[origin],
         "figure_reviews": initial_figure_reviews() if origin == LLM_D_ORIGIN else {},
     }
-    if origin == BENCHMARK_ORIGIN:
-        with pytest.raises(PublicationError, match="OpenSearch"):
+    if origin == LLM_D_ORIGIN:
+        with pytest.raises(PublicationError, match="explicit document split"):
             importer.import_repository(repo, origin, INITIAL_REVISIONS[origin], approval(origin), **kwargs)
         assert importer.publication.dao.head(origin).manifest is None
+        with postgres_engine.connect() as connection:
+            assert connection.scalar(select(func.count()).select_from(RagItemRow)) == 0
         return
     result = importer.import_repository(repo, origin, INITIAL_REVISIONS[origin], approval(origin), **kwargs)
     assert result.counts == INITIAL_ITEM_COUNTS[origin]
@@ -416,7 +411,7 @@ def test_initial_repository_postgres_acceptance(
     manifest = ReleaseManifest.model_validate(head.manifest.source_details)
     assert dict(Counter(file.format for file in manifest.inventory.files)) == INITIAL_FORMAT_COUNTS[origin]
     assert manifest.inventory.digest == INITIAL_INVENTORY_DIGESTS[origin]
-    items = importer.publication.dao.list_published(origin)
+    items = importer.publication.dao.list_published(origin, kind=None)
     assert dict(Counter(item.kind for item in items)) == INITIAL_ITEM_COUNTS[origin]
     by_id = {item.item_id: item for item in items}
     for item in items:
@@ -434,24 +429,9 @@ def test_initial_repository_postgres_acceptance(
     if origin == BENCHMARK_ORIGIN:
         assert {item.kind for item in items} == {"source", "passage"}
         assert any("rather than detailed traces" in (item.passage_text or "") for item in items)
-    else:
-        weight_rows = [
-            item
-            for item in items
-            if item.kind == "measurement" and item.source_path.endswith("/h200-ib-gpt-oss-120b.md")
-        ]
-        assert {Decimal("0.93"), Decimal("30.3")}.issubset({item.value for item in weight_rows if item.unit == "s"})
-        assert sum(item.kind == "figure" for item in items) == 37
-        assert len({item.source_path for item in items if item.kind == "source" and item.format == "json"}) == 5
-        assert (
-            sum(
-                item.kind == "source" and item.format == "markdown" and "/benchmark-results/" in item.source_path
-                for item in items
-            )
-            == 20
-        )
     with postgres_engine.connect() as connection:
         total = connection.scalar(select(func.count()).select_from(RagItemRow))
+    assert total == 0
     repeated = importer.import_repository(repo, origin, INITIAL_REVISIONS[origin], approval(origin), **kwargs)
     assert repeated.changed is False
     assert repeated.manifest_id == result.manifest_id
@@ -459,26 +439,21 @@ def test_initial_repository_postgres_acceptance(
     with postgres_engine.connect() as connection:
         assert connection.scalar(select(func.count()).select_from(RagItemRow)) == total
     bundle = tmp_path / "repository-rag.zip"
-    backup = RagBackupService(RagTransferDao(sessionmaker(bind=postgres_engine, expire_on_commit=False))).backup(bundle)
-    assert backup.row_count == total
-    assert RagBackupService.verify(bundle).backup_id == backup.backup_id
-    schema = f"rag_guide_restore_{uuid4().hex}"
-    with postgres_engine.begin() as connection:
-        connection.execute(CreateSchema(schema))
-    target = create_engine(postgres_engine.url.update_query_dict({"options": f"-csearch_path={schema}"}))
-    try:
-        dao = RagTransferDao(sessionmaker(bind=target, expire_on_commit=False))
-        dao.prepare(initialize=True)
-        monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "restored-evidence"))
-        service = RagBackupService(dao)
-        restored = service.restore(bundle)
-        assert restored.inserted == total
-        assert dao.list_published(origin) == items
-        repeated_restore = service.restore(bundle)
-        assert repeated_restore.inserted == repeated_restore.updated_sources == 0
-        for file in manifest.inventory.files:
-            assert hashlib.sha256(SourceArchive().read(file.sha256)).hexdigest() == file.sha256
-    finally:
-        target.dispose()
-        with postgres_engine.begin() as connection:
-            connection.execute(DropSchema(schema, cascade=True))
+    backup = DocumentBackupService(importer.publication.dao).backup(bundle)
+    assert backup.row_count == len(importer.publication.dao.snapshot())
+    assert DocumentBackupService.verify(bundle).backup_id == backup.backup_id
+    dao = OpenSearchDocumentRepository(
+        "http://metadata.test",
+        client=httpx.Client(transport=httpx.MockTransport(MetadataServer())),
+        lock_path=tmp_path / "restored-publication.lock",
+    )
+    dao.prepare(initialize=True)
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "restored-evidence"))
+    service = DocumentBackupService(dao)
+    restored = service.restore(bundle)
+    assert restored.inserted == backup.row_count
+    assert dao.list_published(origin, kind=None) == items
+    repeated_restore = service.restore(bundle)
+    assert repeated_restore.inserted == repeated_restore.updated_sources == 0
+    for file in manifest.inventory.files:
+        assert hashlib.sha256(SourceArchive().read(file.sha256)).hexdigest() == file.sha256
