@@ -8,7 +8,7 @@ from typing import Literal, Self
 
 from pydantic import Field, StrictInt, model_validator
 
-from llm_d_lens.benchmark_rag.contracts import ItemKind
+from llm_d_lens.benchmark_rag.contracts import Coverage, ItemKind
 from llm_d_lens.benchmark_rag.prism import PARSER_VERSION as PRISM_PARSER
 from llm_d_lens.benchmark_rag.prism import PrismSnapshotImporter
 from llm_d_lens.benchmark_rag.publication import RagPublicationService
@@ -23,14 +23,32 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     SourceHead,
     content_digest,
 )
+from llm_d_lens.benchmark_rag.repository_corpus import PARSER_VERSION as REPOSITORY_PARSER
+from llm_d_lens.benchmark_rag.repository_corpus import (
+    FigureReview,
+    RepositoryCorpusImporter,
+    ReviewedWebSnapshotImporter,
+)
 from llm_d_lens.benchmark_rag.sources import (
     PRISM_ORIGIN,
+    WEB_SOURCE_PATHS,
     input_format,
     validate_approval,
     validate_revision,
 )
 
 RefreshTrigger = Literal["manual", "commit", "periodic"]
+
+
+class FigurePolicy(PublicationModel):
+    coverage: Coverage
+    reason: str = Field(min_length=1)
+    report_path: str | None = None
+    table_indices: tuple[int, ...] = ()
+    missing_series: tuple[str, ...] = ()
+
+    def review(self) -> FigureReview:
+        return FigureReview(**self.model_dump())
 
 
 class RefreshPlan(PublicationModel):
@@ -43,12 +61,12 @@ class RefreshPlan(PublicationModel):
     base_manifest_id: str | None
     triggers: tuple[RefreshTrigger, ...] = ("manual",)
     allow_empty: bool = False
+    figure_reviews: dict[str, FigurePolicy] = Field(default_factory=dict)
+    metadata_review_reference: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def reviewed_scope(self) -> Self:
         origin = self.inventory.origin_id
-        if origin != PRISM_ORIGIN:
-            raise PublicationError("only Prism SQL benchmark refresh is available; document provider is not installed")
         validate_approval(origin, self.approval)
         validate_revision(origin, self.inventory.revision)
         if not self.triggers or len(set(self.triggers)) != len(self.triggers):
@@ -62,10 +80,24 @@ class RefreshPlan(PublicationModel):
         for file in self.inventory.files:
             if input_format(origin, file.path, self.approval) != file.format:
                 raise ValueError("refresh inventory includes an unapproved path or format")
-        if self.approval.parser_version != PRISM_PARSER:
+        expected_parser = PRISM_PARSER if origin == PRISM_ORIGIN else REPOSITORY_PARSER
+        if self.approval.parser_version != expected_parser:
             raise ValueError("refresh plan requires the supported source parser")
-        if self.triggers != ("manual",):
-            raise ValueError("Prism refresh is manual")
+        if origin == PRISM_ORIGIN and (
+            self.triggers != ("manual",) or self.figure_reviews or self.metadata_review_reference is not None
+        ):
+            raise ValueError("Prism refresh is manual and cannot use repository metadata reviews")
+        if origin in WEB_SOURCE_PATHS:
+            if self.triggers != ("manual",) or self.figure_reviews or self.metadata_review_reference is not None:
+                raise ValueError("web snapshot refresh is manual and supports context-only Markdown")
+            if self.inventory.revision != content_digest({file.path: file.sha256 for file in self.inventory.files}):
+                raise ValueError("web snapshot revision must match the reviewed file inventory SHA-256")
+            if set(self.expected_counts) - {"source", "passage"}:
+                raise ValueError("web snapshots cannot publish structured measurements or figures")
+        if set(self.figure_reviews) != {file.path for file in self.inventory.files if file.format == "png"}:
+            raise ValueError("figure reviews must exactly cover the pinned figures")
+        for review in self.figure_reviews.values():
+            review.review()
         return self
 
     @property
@@ -139,15 +171,36 @@ class RagRefreshService:
         origin = plan.inventory.origin_id
         head = self.publication.dao.head(origin)
         self._check_head(plan, head)
-        if source is None:
-            raise PublicationError("Prism refresh requires an explicit local snapshot source")
-        staged = PrismSnapshotImporter(self.publication).stage(
-            source,
-            plan.inventory.revision,
-            {file.path: file.sha256 for file in plan.inventory.files},
-            plan.approval,
-            expected_experiments=plan.expected_counts.get("experiment", 0),
-        )
+        if origin == PRISM_ORIGIN:
+            if source is None:
+                raise PublicationError("Prism refresh requires an explicit local snapshot source")
+            staged = PrismSnapshotImporter(self.publication).stage(
+                source,
+                plan.inventory.revision,
+                {file.path: file.sha256 for file in plan.inventory.files},
+                plan.approval,
+                expected_experiments=plan.expected_counts.get("experiment", 0),
+            )
+        elif origin in WEB_SOURCE_PATHS:
+            if source is None:
+                raise PublicationError("web refresh requires an explicit reviewed local Markdown snapshot")
+            staged = ReviewedWebSnapshotImporter(self.publication).stage_snapshot(
+                source,
+                plan.inventory,
+                plan.approval,
+                expected_counts=plan.expected_counts,
+            )
+        else:
+            staged = RepositoryCorpusImporter(self.publication).stage_repository(
+                source,
+                origin,
+                plan.inventory.revision,
+                plan.approval,
+                expected_counts=plan.expected_counts,
+                expected_inventory_digest=plan.inventory.digest,
+                figure_reviews={path: policy.review() for path, policy in plan.figure_reviews.items()},
+                reviewed_metadata_revision=plan.inventory.revision if plan.metadata_review_reference else None,
+            )
         metadata = ReleaseManifest.model_validate(staged.source_details)
         if metadata.inventory != plan.inventory or metadata.counts != {
             kind: count for kind, count in plan.expected_counts.items() if count

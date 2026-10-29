@@ -33,6 +33,8 @@ from llm_d_lens.benchmark_rag.query_contracts import (
     QueryFilters,
     QueryResponse,
 )
+from llm_d_lens.benchmark_rag.repository_corpus import markdown_sections
+from llm_d_lens.benchmark_rag.repository_initial import INITIAL_INVENTORY_DIGESTS, INITIAL_REVISIONS
 from llm_d_lens.benchmark_rag.service import PublicRagQueryService, _verify_measurement
 from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRISM_ORIGIN, allowed_paths
 from llm_d_lens.core.exceptions import DomainError
@@ -123,6 +125,13 @@ class _PublicCitationVerifier:
         start, end = pointer["start_char"], pointer["end_char"]
         assert type(start) is int and type(end) is int and 0 <= start < end <= len(text)
         assert text[start:end] == item.passage_text
+        section = next(section for section in markdown_sections(text) if section.start == start)
+        assert (section.end, section.start_line, section.end_line, section.heading_path) == (
+            end,
+            pointer["start_line"],
+            pointer["end_line"],
+            tuple(item.heading_path or ()),
+        )
 
     def _context(self, context: ExperimentContext, origin: str) -> RagItem:
         item = self.members[origin][context.item_id]
@@ -263,6 +272,9 @@ def test_public_baseline_is_fixed_and_covers_all_public_categories() -> None:
     }
     assert set(suite.source_pins) == set(_ORIGINS)
     assert suite.source_pins[PRISM_ORIGIN].revision == INITIAL_REVISION
+    for origin in (LLM_D_ORIGIN, BENCHMARK_ORIGIN):
+        assert suite.source_pins[origin].revision == INITIAL_REVISIONS[origin]
+        assert suite.source_pins[origin].inventory_sha256 == INITIAL_INVENTORY_DIGESTS[origin]
     assert all(not case.request.include_internal for case in suite.cases)
 
 

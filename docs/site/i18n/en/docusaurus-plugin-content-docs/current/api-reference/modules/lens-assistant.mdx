@@ -180,6 +180,925 @@ The Python router rejects session termination because it keeps no transport sess
 
 ## What the MCP tools call
 
+### Search public RAG documents
+
+The read-only `search_public_rag_documents` tool searches published public document
+passages, not internal experiments or diagnostic logs. The backend supports default
+lexical search, explicitly selected independent vector search, and opt-in hybrid
+retrieval with durable build coordination. Runtime rollout controls and sanitized
+resource/build diagnostics are available through the backend; connection credentials
+and the pinned local model remain operator-configured.
+Engineering support does not imply that the hybrid relevance or rollout gates have passed.
+The existing numeric `/benchmark-rag/query` contract is unchanged.
+
+RAG is backend-first, with controlled integration through Agentic Deploy. The existing
+standalone Document Search frontend is retained but no longer maintained or used
+as an acceptance entry point; no independent RAG frontend delivery is planned.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/benchmark-rag/search`**
+
+Requires a real authenticated caller with `benchmark-rag:query:read` at GLOBAL
+scope and the standard browser CSRF policy.
+
+```json
+{
+  "question": "prefix cache",
+  "origins": ["https://github.com/llm-d/llm-d"],
+  "limit": 10
+}
+```
+
+`question` is nonblank and at most 2,048 characters; `limit` is 1–50.
+`mode` defaults to `"lexical"`; pass `"vector"` to query the independent shadow
+vector index, or `"hybrid"` for parallel lexical/vector retrieval against that same
+fixed physical vector build. Hybrid returns at most ten parent passages and three
+per source document, even when a larger `limit` is supplied.
+Hybrid enables `query_enhancement: true` by default. The fixed `controlled-v1`
+policy preserves the original question and identifiers, appends up to eight
+matched glossary translations, and gives explicitly named publishers a 1.25 soft
+weight on the fused parent score. Other sources remain eligible; this is not a
+source filter or an LLM rewrite. Pass `"query_enhancement": false` to restore the
+previous unenhanced hybrid behavior. Explicit lexical/vector modes and the default
+lexical mode are unchanged. No reranker or intent router is enabled.
+Vector queries must also fit the model's 512-token budget including
+the `query: ` prefix and special tokens; over-budget inputs fail explicitly.
+Omitted `origins` selects the approved origin allowlist, not arbitrary URLs.
+Clients cannot supply an index name, query DSL or internal data scope.
+
+The `benchmark-rag.search.v1` response contains `retrieval_mode:
+"opensearch_lexical"`, `"opensearch_vector"` or `"hybrid"`, `retrieval_build_id`, `index_stale`, `affected_origins`,
+`candidate_count`, `excluded_count`, `truncated` and `results`.
+Each result contains the original passage, title, headings, evidence/chunk IDs,
+branch-specific rank (`lexical_rank` or `vector_rank`), score and the existing `Citation` shape.
+Vector responses include `embedding_contract` and parent-relative `chunk_start` /
+`chunk_end` character offsets; repeated table/fence context is used only for encoding,
+not fabricated into citation text. Multiple vector children are deduplicated by parent evidence.
+Hybrid results additionally expose `matched_branches`, both available ranks and
+`fusion_score` (RRF constant 60, never an addition of BM25 and vector scores).
+Each parent contributes at most once per branch. Stable evidence/chunk IDs break ties.
+Hybrid requests also return `query_enhancement` with `policy`, `enabled`,
+`effective_question`, `added_terms` and `source_hints`, including when hybrid
+degrades to lexical. It is `null` for explicit lexical/vector requests.
+The multiplier applies after RRF and before the existing document cap/Top-10;
+with enhancement disabled, no glossary additions or source weights are applied.
+`branch_status` records each branch's status and candidate count; `degraded_reason`
+is non-null only on explicit degradation. `refill_count` is at most two: each branch
+retrieves 50, then at most 75 and 75 additional candidates, at most 200 total.
+Filtering, parent deduplication and the per-document cap happen before deciding
+whether to refill. `candidate_count` counts branch candidates (including a chunk
+returned by both branches); `excluded_count` counts distinct rejected or deduplicated
+chunks, not twice the same cross-branch identity.
+The service checks publication membership in the OpenSearch document repository,
+plus retained source bytes and offsets, before returning it. Retrieval aliases
+are the sole active authority; SQL document membership is not consulted.
+Scores measure text relevance, not hardware compatibility or performance.
+
+An outdated source is excluded and reported in `affected_origins`; rebuild the
+index before expecting that source's new content; `rebuild_required` is explicit.
+Missing configuration,
+unavailable OpenSearch, partial shard results and corrupt index responses return
+503 rather than a successful empty response. Source-byte corruption also returns
+503. A successful search with no matches is a normal empty result. There is no
+automatic PostgreSQL fallback. Vector mode also returns 503 for a missing model,
+model/index contract mismatch, invalid vectors or corrupt cache; it does not silently
+fall back to lexical search. In hybrid mode an embedding/vector failure returns
+verified lexical results with `retrieval_mode: "opensearch_lexical"` and
+`degraded_reason: "vector_unavailable"` (or `"embedding_contract_mismatch"`).
+Hybrid model readiness has a separate bounded eight-second budget, using the
+shared cached encoder. Query embedding plus each vector page retains its
+five-second deadline; cold model initialization no longer consumes that query
+budget. Parent callers may impose a tighter overall deadline.
+Degradation logs expose only a sanitized failure stage/category, never raw
+exception text or source content. A broken active build, failed lexical
+branch, unavailable authority or corrupt source bytes still fails explicitly;
+unverified vector results are never used as a fallback.
+Authority member validation uses request-local `_mget` batches of at most 256
+records, retaining complete envelope/hash/identity validation and fresh source-head
+checks before results return; it does not introduce a persistent authority cache.
+Hybrid honors the caller's result limit (up to 50), including the Agentic
+twenty-candidate reranking pool, rather than silently capping it at ten.
+Nearest neighbors are not proof of answerability: hybrid/vector retrieval can return
+related text for a query with no supporting evidence. No calibrated abstention is claimed.
+The enhanced question is subject to the same embedding token budget without
+truncation; a budget failure follows the explicit hybrid degradation contract above.
+Development-set gains are not holdout, performance or launch acceptance.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.benchmark_rag.indexing import PublicRagIndexBuilder
+from llm_d_lens.benchmark_rag.embedding import configured_encoder
+from llm_d_lens.benchmark_rag.opensearch_evidence_search import (
+    OpenSearchEvidenceSearchRepository,
+)
+from llm_d_lens.benchmark_rag.search import PublicRagSearchService
+from llm_d_lens.benchmark_rag.search_contracts import PublicSearchRequest
+
+repository = OpenSearchEvidenceSearchRepository("http://127.0.0.1:9200")
+# Administrative operation on already approved and published source evidence:
+build = await PublicRagIndexBuilder(repository).build(
+    ("https://github.com/llm-d/llm-d",)
+)
+response = await PublicRagSearchService(repository).search(
+    PublicSearchRequest(question="prefix cache"), principal
+)
+# Separate administrative S2 build; never switches the lexical alias:
+vector_build = await PublicRagIndexBuilder(repository).build(
+    ("https://github.com/llm-d/llm-d",), encoder=configured_encoder()
+)
+vector_response = await PublicRagSearchService(repository).search(
+    PublicSearchRequest(question="prefix cache", mode="vector"), principal
+)
+hybrid_response = await PublicRagSearchService(repository).search(
+    PublicSearchRequest(question="prefix cache", mode="hybrid"), principal
+)
+unenhanced_response = await PublicRagSearchService(repository).search(
+    PublicSearchRequest(question="prefix cache", mode="hybrid", query_enhancement=False),
+    principal,
+)
+```
+
+For explicit document retrieval-build wiring, reuse the
+projection `repository` above with the synchronous metadata repository:
+
+```python
+from llm_d_lens.benchmark_rag.document_lifecycle import DocumentLifecycle
+from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
+from llm_d_lens.benchmark_rag.sources import SourceArchive
+
+metadata = DocumentRepository.from_environment()
+build = await PublicRagIndexBuilder(
+    repository,
+    dao=metadata,
+    archive=SourceArchive(),
+    lifecycle=DocumentLifecycle(metadata),
+).build(("https://github.com/llm-d/llm-d",))
+```
+
+Builder defaults use the OpenSearch document lifecycle.
+Source staging and publication are separate prerequisites, not performed by this
+retrieval rebuild. Existing mixed releases use verified external membership
+descriptors during migration, not copied experimental facts.
+The existing `admin.py rebuild` remains the Prism SQL import operation.
+Use the separate `search-rebuild` command below for OpenSearch retrieval rebuilding.
+
+`principal` must be the actual authorized caller, not an identity from request
+text. `build()` verifies complete source passages, writes a new physical index,
+checks bulk results/counts and source generations, then switches
+`public-rag-active`. It never clears the active index first. Builds retain full
+section text in lexical mode. S2 uses exact character-offset, token-aware children,
+preserves lexical fields in the vector index and publishes only the independent
+`public-rag-vector-shadow` alias after full verification. Encoding uses the pinned
+`intfloat/multilingual-e5-small` revision
+`614241f622f53c4eeff9890bdc4f31cfecc418b3`, 384 dimensions, attention-mask mean pooling,
+L2 normalization and cosine similarity. Prefixes and repeated structural context
+count toward the 512-token budget; truncation is disabled. Batches default to eight
+inputs with two CPU threads, and inference is serialized per encoder.
+
+The optional `apps/backend[rag-embedding]` extra supplies Transformers, safetensors
+and PyTorch; install a CPU PyTorch wheel first for local CPU-only deployments.
+Download approved pinned model/tokenizer files separately to the configured model
+path. Runtime model loading is offline, uses safetensors without remote code and
+checks pinned content hashes. The official model card declares MIT; that repository
+does not supply a standalone LICENSE file.
+
+Vectors are cached under the Lens cache root in `benchmark-rag/embeddings/`, keyed by
+input, model revision and encoding/chunking contract. Corrupt cache entries fail
+explicitly; an administrator can use `encoder.encode(inputs, rebuild_cache=True)`
+to rebuild known inputs. Cache is disposable, not an evidence backup.
+`public-rag-management-v1` retains build history and rebuild requests through
+`DocumentLifecycle`. Queries pin the physical index/model for the entire request
+and fail closed on unexplained alias/mapping drift. They do not use SQL build
+records, SQL active pointers or the removed SQL coordinator. Retrieval rebuilding
+is an administrative operation, not an expensive request-time side effect.
+
+  </TabItem>
+</Tabs>
+
+#### Controlled runtime and operations
+
+The backend is ready for controlled Agentic integration, not an independently
+published RAG product. There is no new standalone frontend. Existing direct
+document search remains enabled by default for compatibility; Agentic document
+consumption defaults to **disabled**, independently of the direct search API.
+Quality and performance acceptance are not implied by these controls.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`GET /api/v1/benchmark-rag/runtime`** (MCP: `get_public_rag_runtime`) requires
+`benchmark-rag:runtime:read` at GLOBAL scope. It reports:
+
+- The durable policy and its `generation`.
+- OpenSearch/API-key configuration presence, the pinned embedding contract,
+  `model_files_present`, and supported writer mode. Model-file presence is **not**
+  a hash verification or a readiness guarantee. URLs, keys and local paths are never returned.
+- Per-mode active/latest builds, latest task state and expected/actual counts,
+  staleness and rebuild requests. `missing`, `unavailable` and `recovery_required`
+  are explicit component states. An unconfigured OpenSearch service reports
+  `opensearch_configured: false` and an empty `builds` list, not a successful search.
+- Process-local search counts by mode/outcome, stale counts and total/max elapsed
+  milliseconds. These reset on restart and are not aggregated across workers;
+  structured `rag_public_search` logs support external monitoring. Questions,
+  passage text and caller identities are not metric labels.
+
+**`PUT /api/v1/benchmark-rag/runtime`** requires
+`benchmark-rag:runtime:configure` at GLOBAL scope and normal browser CSRF.
+These dedicated permissions are assigned only to the built-in global admin by
+default; custom roles need explicit grants. Query permission alone cannot manage
+rollout. This administrative mutation is deliberately excluded from MCP.
+The request replaces the complete settings; omitted settings use their defaults:
+
+```json
+{
+  "expected_generation": 0,
+  "search_enabled": true,
+  "advanced_search_enabled": true,
+  "agentic_mode": "shadow",
+  "agentic_user_ids": ["approved-user-id"],
+  "agentic_search_mode": "lexical",
+  "agentic_query_enhancement": true
+}
+```
+
+`agentic_mode` is `disabled`, `shadow` or `enabled`. Shadow/enabled require a
+nonempty explicit stable-user-ID allowlist; admins have no implicit bypass.
+The allowlist does not grant query permission. Lexical is the Agentic default;
+hybrid requires explicit selection and does not enable a reranker.
+Shadow retrieval must not influence model prompts, ranking or generated plans.
+Update with the last observed `expected_generation`; a stale write returns 409.
+To stop subsequent Agentic consumption, replace the policy with
+`{"expected_generation": CURRENT_GENERATION, "agentic_mode": "disabled"}`.
+
+`search_enabled: false` blocks document search, including the legacy definition
+query adapter; numeric/experimental SQL retrieval is not disabled.
+`advanced_search_enabled: false` blocks vector/hybrid search, leaving lexical
+available. Disabled search returns explicit 503, not empty results or SQL fallback.
+Switches apply to subsequent requests; drain in-flight work before emergency
+recovery. Policy updates do not download models, register sources, publish
+indexes, alter permissions or certify quality.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.benchmark_rag.runtime import (
+    RuntimeUpdate, load_runtime_policy, update_runtime_policy,
+)
+
+current = load_runtime_policy()
+updated = update_runtime_policy(RuntimeUpdate(
+    expected_generation=current.generation,
+    agentic_mode="shadow",
+    agentic_user_ids=("approved-user-id",),
+))
+```
+
+These are trusted administrative Python functions, not an authorization bypass
+for API handlers. Policy lives in `LENS_DATA_DIR/public-rag/runtime.json`, mode
+0600, with single-host locking, generation CAS, fsync and atomic replacement.
+All backend workers must share that data directory. Missing policy preserves
+existing direct search and disables Agentic consumption; invalid/unreadable policy
+fails explicitly, rather than resetting to enabled defaults.
+Document backup bundles deliberately exclude rollout settings, credentials,
+retrieval aliases and model caches. Restore into a clean data directory therefore
+does not enable Agentic users; do not copy old rollout settings into a recovery
+target without reviewing them.
+
+  </TabItem>
+</Tabs>
+
+Run management commands only in the configured backend environment:
+
+```bash
+python -m llm_d_lens.benchmark_rag.admin search-status --data-dir /var/lib/lens
+python -m llm_d_lens.benchmark_rag.admin search-rebuild --data-dir /var/lib/lens \
+  --mode lexical --origin https://github.com/llm-d/llm-d
+python -m llm_d_lens.benchmark_rag.admin source-disable --data-dir /var/lib/lens \
+  --origin https://github.com/llm-d/llm-d --expected-generation GENERATION
+```
+
+Repeat `--origin` for every approved published scope to include in a complete
+replacement build. `--mode vector` rebuilds the independent vector alias and
+verifies the approved local model; the CLI never downloads it.
+`source-enable` uses the same generation check. Re-enabling changes the source
+generation, so rebuild before expecting its content in search.
+Source-version rollback uses the existing `rollback --origin ... --manifest-id ...
+--expected-generation ... --data-dir ...` command, then a **fresh** retrieval
+build. Do not repoint an alias to an old physical index to evade current source
+generation checks. `search-recover --mode lexical|vector --requests-quiesced
+--data-dir ...` performs explicit uncertain-alias reconciliation only after the
+operator has actually drained requests; the flag does not drain them.
+Back up and verify source bundles before recovery. Clean restore still requires
+explicit source approval/publication and retrieval rebuilding; it never
+re-enables revoked sources automatically.
+
+#### D1 document authority and rollout
+
+The approved final architecture is OpenSearch-only for public documents; local
+cutover remains pending. Public documents, source approvals,
+publication manifests, build history and rebuild requests are managed in
+`public-rag-management-v1`. The selected public alias is the sole retrieval
+authority; each request fixes one physical build and its model contract rather
+than following alias changes mid-request. SQL `public_benchmark_records` is reserved
+only for Prism experiments and their required provenance/publication associations;
+it is not a source for OpenSearch RAG. This cleanup creates the table empty,
+without importing Prism or migrating any legacy records. Internal experiments are unchanged. Immutable source bytes
+remain in the approved local archive layout, not in OpenSearch or the vector cache.
+The `/benchmark-rag/query` definition branch uses the OpenSearch document
+repository; numeric, comparison and figure experiment retrieval remain SQL-backed.
+
+OpenSearch accepts only source and passage fact bodies, never experiment,
+measurement, figure or link bodies. Mixed releases retain external
+membership descriptors. Descriptors contain identity/dependency metadata and
+hashes, not model, configuration, workload, values or source-pointer fact bodies.
+Original shared manifest bytes, hashes and membership IDs remain unchanged;
+SQL retains provenance and publication associations only for future Prism imports.
+Prism is wholly SQL-owned in the new table and stays out of the OpenSearch
+document projection. The document repository rejects
+Prism registration and records. Other mixed document-source manifests retain
+their exact hashes and external membership descriptors.
+Complete verified descriptors permit mixed-release document migration and
+retrieval without SQL joins or splitting the original manifest. New document
+staging still rejects raw experimental fact bodies before writes. This does not
+require splitting source identities or manifest hashes. Future document updates
+publish through OpenSearch, not a continuing SQL document baseline.
+
+The approved cleanup discards `rag_items`, `rag_search_builds` and
+`rag_search_pointers`, then creates empty Prism-only `public_benchmark_records`.
+No legacy experiment or document records are copied. The operation refuses to
+discard existing Prism records or overwrite an existing target table.
+The SQL-only command durably backs up the old tables with checksums under
+exclusive transaction locks. It never connects to OpenSearch, changes aliases,
+rebuilds indexes or removes original source snapshots.
+Run from the configured backend environment:
+
+```bash
+python -m llm_d_lens.benchmark_rag.cutover --execute --writers-quiesced \
+  --backup-dir <persistent-backup-dir>
+```
+
+The caller must stop or quiesce **all legacy and document writers** and keep
+them frozen throughout. `--writers-quiesced` asserts this condition; the command
+does not stop the service itself. It preserves a verified `legacy-sql.zip`
+and initializes the empty table without indexing. Managed installations use
+revision `8bf2a6c1d903`; unversioned installations run the same guarded transaction
+without inventing Alembic history. A final `committed.json` confirms SQL cleanup
+only, not document migration, retrieval readiness or S3 quality acceptance.
+Existing OpenSearch indexes are left unchanged and are not certified usable by
+this cleanup. On failure, keep the service stopped and inspect backups
+and state; do not attempt a flag-only PostgreSQL rollback.
+
+`DocumentRepository.from_environment()` constructs the synchronous OpenSearch
+repository and requires its configured URL. The old document-authority selector
+is removed; legacy `postgres` settings are rejected. SQL document definition,
+full-text and coordinator paths are removed, with no SQL fallback.
+Lifecycle coordination uses persistent `flock` at
+`LENS_DATA_DIR/public-rag/publication.lock`; all writer processes on the host
+must share this persistent data path. Keep the full metadata/alias operation in
+the same synchronous thread/context. There is no expiring lease.
+`LENS_PUBLIC_RAG_WRITER_MODE` supports only `single-host` (default); construction
+rejects `multi-host` and every other unsupported value. This is not multi-host
+high availability. An unknown alias-mutation
+outcome fails closed: operators must drain outstanding requests using the old
+OpenSearch alias before recovery;
+neither normal requests nor restore automatically reset an alias.
+`DocumentLifecycle.reconcile(writer, vector=False, requests_quiesced=False)`
+requires an explicit `requests_quiesced=True` after that drain; its default
+fails closed. This assertion is not an automatic request-draining mechanism.
+There is no PostgreSQL document-mode rollback. Recovery must preserve new
+publications and revocations within the approved OpenSearch architecture.
+Backup/restore must preserve revocations and must not resurrect an earlier
+approval. An empty target requires explicit current source reapproval before
+serving restored documents. Restoring data does not automatically restore aliases.
+Document bundles retain exact shared manifests and store checksummed external
+descriptors separately in `external_records.jsonl`, without experimental bodies.
+Mixed bundles require complete valid descriptors; legacy bundles without these
+proofs fail closed. Restore imports immutable documents/descriptors but skips all
+source registries, aliases and active-build state. Empty targets therefore require
+current source registration/approval, republishing and rebuilding.
+
+Administrative `backup`, `verify` and `restore` default to OpenSearch document
+bundles; structured SQL bundles require explicit `--structured`.
+Document backup/restore does not require a database URL or open SQL;
+document verification is offline and needs no OpenSearch endpoint.
+For document restore, `--initialize` initializes the management index, not SQL.
+Administrative `refresh`, `status` and source-release `rollback` also select the
+document repository for non-Prism sources, without opening SQL or requiring a
+database URL. Source rollback is not retrieval-alias recovery.
+Explicit Prism `refresh`, `status` and `rollback` remain SQL
+(origin comes from the refresh plan or `--origin`), as does Prism `rebuild`.
+Document bundles exclude Prism records, references and blobs; structured backups
+cover the SQL evidence separately. Restore rejects Prism in a document bundle
+before writes. Use the Python builder above for document retrieval rebuilding.
+
+D1 architecture tests do not satisfy the S3 relevance/quality gate or establish
+live deployment acceptance. Local cutover and quality threshold completion are
+not claimed here.
+
+Development wiring uses `LENS_PUBLIC_RAG_OPENSEARCH_URL` and optionally
+`LENS_PUBLIC_RAG_OPENSEARCH_API_KEY`; an unset URL returns 503 rather than choosing
+a service automatically. Runtime management is backend-only in this delivery;
+connection/model changes remain operator-managed, without a new RAG resource UI.
+The loopback-only single-node development index uses one shard and
+zero replicas; this is not a production availability configuration.
+
+### Query public benchmark evidence
+
+The generated `query_public_benchmark_rag` tool is read-only despite using POST.
+The endpoint and operation ID retain their public-query names for compatibility,
+including when the caller opts into the authorized internal branch.
+It passes the REST body unchanged and returns the same `QueryResponse` JSON in
+an MCP text block. It is not a deployment-planner tool or a corpus ingestion API.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/benchmark-rag/query`**
+
+Requires a real authenticated caller with `benchmark-rag:query:read` at GLOBAL
+scope. Only GLOBAL admins receive it by default. Other roles require explicit
+GLOBAL grants; cluster grants, anonymous and disabled-auth `system` identities
+do not qualify. Browser cookie calls must also satisfy the standard CSRF policy.
+MCP callers additionally need `mcp:tool:invoke` or `playground:chat:use`.
+The Python MCP adapter forwards the actual caller through an in-process ASGI
+request using internal HMAC signatures, never a service principal or an identity
+provided in arguments. It validates strict input and response schemas without
+converting Decimal strings; failed or malformed responses become MCP tool errors
+without returning upstream evidence. No separate Node server is required.
+
+```json
+{
+  "question": "What published throughput measurements match this workload?",
+  "intent": "numeric",
+  "filters": {
+    "origins": ["prism:public-snapshot"],
+    "metric": "throughput",
+    "statistic": "mean",
+    "unit": "tokens/s",
+    "workload": {"batch_size": 8},
+    "value_min": "100.000000001",
+    "normalized": false
+  },
+  "limit": 10,
+  "include_internal": false
+}
+```
+
+`question` is required (1–2048 characters). `intent` is `auto` (default),
+`numeric`, `comparison`, `definition` or `figure`; `limit` defaults to 10
+(1–50 total returned evidence envelopes across both branches, after verified merges).
+`include_internal` is a boolean defaulting to `false`. Without opt-in, no internal
+data, counts or identity checks are accessed. With `true`, the existing GLOBAL
+RAG grant is still required, and internal records additionally require the existing
+`evaluate:run:read` policy in their owning evaluation context. Missing, deleted or
+unverifiable owners are excluded even for admins; opt-in is not an authorization bypass.
+Extra request/filter fields are rejected; there is no arbitrary SQL.
+Filters include `origins`, `source_revision`, `source_path`, `record_id`,
+`experiment_id`, `model`, `hardware`, `runtime`, `metric`, `statistic`, `unit`,
+structured JSON `workload` and `series`, `value_min`, `value_max` and `normalized`.
+Numeric ranges require an explicit `unit`; minimum must not exceed maximum.
+Null source statistics default to `mean` for SQL filters and planning comparisons,
+not to a requested percentile. Stored records and response `evidence[].statistic`
+retain the original null; numeric answer text labels it as
+`mean (default; source statistic unreported)`. Generator/planner measurements use
+`statistic: "mean"`, `statistic_original: null` and `statistic_basis: "default_mean"`
+to distinguish the default from an explicitly reported mean. No data backfill is required.
+Public and authorized internal SQL model filters generate aliases on both stored
+and requested names: trim/lowercase, keep the full name, take the suffix after the
+last `/`, and replace every `/` with `-` in the full name; remove duplicates and
+match intersecting alias sets. `Publisher/Falcon-7B` therefore matches
+`falcon-7b` or `publisher-falcon-7b` without a registry. Same-suffix names across
+publishers may match; this is name-based retrieval, not proof of unique identity.
+No variant suffixes are removed and no missing slash boundary is guessed from
+hyphens. Question/filter agreement and case applicability share this rule.
+Existing SQL rows work without a backfill; source names, IDs, revisions, filters
+and citations are preserved. Other filters, permissions and verified-run merge
+requirements are unchanged.
+Use Decimal strings to preserve precision. Normalized retrieval is explicit;
+responses retain original units and expose normalized values, units and rules
+separately rather than silently mixing incompatible measurements.
+Question planning uses bounded deterministic keyword rules, not general NLP or
+LLM inference. Numeric questions extract explicit statistics such as `p99`,
+`99th percentile`, `mean`/`average`/`avg` and `median` (`p50`), and model
+identifiers such as `Llama-3.1-70B` or `org/model`. Bare names can use
+`for Falcon on H100`; multiword names need a label such as `model "Custom Model"`.
+Quoted names are treated as one identifier, including embedded version numbers
+or repository-like tokens. An empty/missing model label abstains before retrieval.
+Recognized model/statistic conditions must agree with explicit filters;
+conflicts are validation errors, not overrides. Multiple statistics/models or
+an ambiguous model subject produce `statistic_scope_required` or
+`model_scope_required` abstentions before retrieval. Use separate exact queries
+for these comparisons. An absent requested model/statistic yields
+`no_exact_match`, never a different model or a mean substituted for p99.
+Other conditions still need explicit structured filters; these bounded rules
+are not a guarantee that arbitrary free-form constraints are understood.
+With `intent: "auto"` and no explicit measurement scope, `What is TTFT?`,
+`Define request latency` and metric-definition comparisons search passages.
+An explicit `filters.metric` is a measurement scope: a short question with only
+that filter stays numeric and requests experiment conditions rather than searching prose.
+Measurement questions recognize both `TTFT`/`time to first token` and
+`TPOT`/`time per output token`. An explicit `intent` is never overridden.
+Automatic keyword rules are English-only. Questions in other languages are
+supported through explicit `intent` and structured `filters`, not automatic
+language understanding.
+
+The response has `contract: "benchmark-rag.query.v1"`, resolved `intent`,
+`question`, `filters`, `status` (`answered`, `partial`, `abstained`), `answer`,
+`evidence`, `matched_items`, `returned_observations`, `truncated`, `abstentions` and `warnings`.
+It always reports `generation_mode: "deterministic"`.
+`internal_branch_enabled` defaults to `false` and reflects request opt-in, not
+whether any internal record was authorized or returned. `matched_items` counts
+candidate public index items plus authorized internal benchmark records; it is
+neither an independent-experiment count nor an exact distinct-run count.
+`returned_observations` counts returned metric/evidence envelopes **after verified
+merges**. `truncated` explicitly reports omitted results under the total `limit`.
+Evidence contains Decimal string values,
+units/statistics, experiment context, optional normalized values and figure
+coverage/missing-series information. Figure evidence may also include
+`related_experiments` (default: empty), containing only explicitly linked
+published scenarios with their experiment context; identities are not guessed.
+Public citations identify the origin,
+revision, path, SHA-256, archived artifact URI, source pointer, heading path
+and published manifest.
+
+Evidence `origin` is `public`, `agentic` or `public_and_agentic`; internal
+measurements use `evidence_type: "agentic_measurement"`. An `AgenticCitation`
+contains `origin_id: "agentic:evaluate"`, `evidence_type: "agentic_measurement"`,
+`benchmark_id`, `evaluate_run_id`, `cluster_id`, `resource_uri`, `record_sha256`,
+`metric_field`, `record_timestamp`, `access_scope: "owning_evaluation"` and
+`numeric_precision: "stored_float"`. Internal normalized metrics are persisted
+as Float values: their response Decimal strings represent the stored float,
+**not** the exact original source token. Public raw-byte precision is unchanged.
+
+Evidence text, source-pointer strings and experimental-context JSON preserve
+original whitespace, including JSON keys and table cells. Character offsets
+and numeric subvalue spans refer to those untrimmed strings. Request questions
+and filter strings continue to be trimmed independently.
+
+A public/internal merge requires a canonical `evaluate:<UUID>` identifier
+actually present in the pinned public raw JSON and a matching metric, statistic,
+unit and value. Model/workload similarity is not identity proof. A verified merge
+returns one envelope with the public `citation`, retained internal
+`corroborating_citations`, and
+`identity_verification: "canonical_evaluate_run_and_metric"`.
+Otherwise `corroborating_citations` defaults to empty and `identity_verification`
+is optional/null. Unknown overlaps remain separate; unauthorized records cannot
+affect overlap identity or leak through counts or citations. Historical writer
+records with eight-character simulation task IDs in `evaluate:<id>` lack a
+verifiable canonical evaluation owner and are intentionally omitted; querying
+does not rewrite them or change the planner.
+
+**Agentic planning experiment ranking (2026-10-28).**
+This internal service contract does not change the generic query endpoint above.
+Planning ranks all eligible, authorized, published exact-model/hardware
+experiment/configuration-and-series cases before applying internal
+`experiment_limit=50`, rather than ranking the first 50 measurement rows.
+Only measurements from the same experiment/configuration and series may combine.
+Explicit workload similarity/coverage comes first, lower observed valid latency second;
+default zeros are not explicit workload. Distance to SLO, minimum violation
+and SLO status are not ranking criteria.
+
+| Explicit workload | Explicit latency targets | Ranking |
+| --- | --- | --- |
+| Yes | Yes | Workload match, then lower observed latency for the target's exact metric/statistic pairs. |
+| No | Yes | Lower observed latency for those exact pairs; no workload penalty. |
+| Yes | No | Workload match, then available latency grouped by exact metric/statistic. |
+| No | No | Available latency grouped by exact metric/statistic; no workload penalty. |
+
+Targets restrict comparable pairs, not distance-to-threshold scoring. Null
+statistics default to mean under the policy above; explicit percentiles remain distinct.
+For multiple metrics, Pareto dominance applies only to equal available
+metric/statistic sets: no worse on all comparable metrics and better on at
+least one. Preserve tradeoffs and different coverage sets; never sum TTFT,
+TPOT and end-to-end latency or mix mean/p99. Coverage and unknowns are explicit.
+Missing observations are not zero. Latency must be positive, finite and have
+metric-specific compatible units; only documented compatible conversions apply.
+Zero error counters remain valid context, not latency. Lower historical latency
+does not prove current deployment SLO compliance.
+
+Ranking metadata carries `queue="ranked"|"fallback"` and `fallback_reason`.
+Fallback applies if and only if no measured workload fields were compared
+(`workload_similarity=null`, including no requested workload) and no valid latency
+exists on requested/comparable axes. Its reason is
+`no_comparable_workload_or_valid_latency`; ranked cases use null. Measured zero
+similarity is comparable, so absent latency alone does not make it fallback.
+SQL and Python both preserve unknown workload scores as null. Case model context,
+audit and UI explicitly label fallback references; they are never described as
+low latency. Query summaries describe selected experiment references neutrally.
+Experiment reference retrieval remains separate from deterministic candidate
+scoring and server SLO assessment.
+
+Candidate bundles and later budget selection preserve workload/latency ordering
+before quality/freshness tie-breaks, without restoring SLO-status order.
+Planning evidence preserves complete relevant measurements of selected
+experiments, subject to an explicit safety cap with visible exclusions, and
+may therefore exceed 50 measurement envelopes. Compact model budgets are separate:
+at most 10 complete cases, 20 passages and a 16,000-byte serialized evidence ceiling.
+Public `QueryRequest.limit` remains a 1–50 measurement/evidence-envelope limit;
+`experiment_limit` is not a public request field. Proposed optional planning
+response diagnostics are `matched_experiments`, `returned_experiments` and
+`experiment_limit`, without changing generic endpoint counts or behavior.
+Scoped regression and authenticated live create/refine acceptance passed; see
+[validation scope](/architecture/agentic-planning-evidence#scoped-ranking-validation-2026-10-28).
+The labelled H100-over-A100 simulation is not physical hardware/SLO certification;
+no approval/deployment occurred and S3/S4 gates remain open.
+
+Agentic configuration cases preserve nullable `workload_similarity` and
+`evidence_coverage`; `workload_match_status` distinguishes `not_requested`,
+`unknown` and `compared`. Unspecified workload is not a zero match or rejection
+reason. Measurement `quality` distinguishes informative finite positive performance
+from nonpositive performance, missing/nonfinite values, missing units and context-only
+counters/load. Values, statistics and units remain unchanged; zero error counters
+are valid context. Quality ranks information value, not current SLO certainty.
+After preserving workload/latency ranking, case budgets favor complete informative
+cases over degenerate-only cases and share capacity dynamically with complete
+documents. Final request-window trimming preserves that ranking and keeps
+ranked cases ahead of qualitative text. Generator/planner projections contain
+measurements, units, statistics, series, experimental conditions, applicability and
+ranking queue/fallback labels, plus stable compact references (`c:`, `m:`, `d:`). Original value/unit are primary, with
+`normalized` only when different. Documents contain title, complete text and a compact
+citation. Full hashes, archive pointers, import/index/embedding metadata and retrieval
+diagnostics stay backend-only, linked by the audit `model_reference_map`.
+Configuration `run_id`, `source_path` and `source_info.file_identifier` remain
+visible as untrusted source clues (including scorer/prefix-cache technique names),
+not verified serving settings. Bulky metadata and raw URLs are still omitted.
+Model replies are restored to canonical IDs before authorization/type-specific checks;
+unknown, dropped, wrong-kind or colliding references fail. Pruning refreshes the map
+without renumbering surviving IDs. Budgets count only the compact model projection;
+original serving conditions/measurements and audit citations are never truncated.
+
+An abstention is an explicit domain result; upstream
+authorization, transport or corrupt-response failures are MCP `isError: true`
+results without evidence, not successful empty responses.
+
+Missing or corrupt pinned evidence, including malformed archive manifests,
+returns REST HTTP 503 with code `rag_evidence_unavailable`, not an abstention
+or a partial answer. Restoring the unchanged valid manifest and source bytes
+allows subsequent queries to recover without reindexing.
+
+Only approved published public sources are eligible: `prism:public-snapshot`,
+`https://github.com/llm-d/llm-d`, and
+`https://github.com/llm-d/llm-d-benchmark.git`. Restore the published corpus and
+its immutable source archive together; database records alone are insufficient.
+These are the public branch's sources. The opt-in internal branch retrieves only
+authorized stored evaluation measurements, not arbitrary private data. Neither
+branch uses an Agentic generation path.
+Local-instance acceptance does not certify production, multi-Pod or cross-cluster
+deployment; validate the selected runtime and shared evidence storage separately.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+The transport delegates to the same caller-scoped query service. Python clients
+can validate the shared DTOs without creating a separate retrieval path:
+
+```python
+from llm_d_lens.benchmark_rag.query_contracts import QueryRequest, QueryResponse
+
+request = QueryRequest.model_validate({
+    "question": "What published throughput measurements are available?",
+    "intent": "numeric",
+    "filters": {"metric": "throughput", "unit": "tokens/s", "value_min": "100.1"},
+    "limit": 10,
+})
+body = request.model_dump(mode="json")
+# Send body to the authenticated REST endpoint; validate its successful JSON:
+# result = QueryResponse.model_validate(response_json)
+# print(result.model_dump(mode="json"))  # Decimal values remain strings.
+```
+
+DTO validation is not authorization: use an authenticated REST session, or the
+shared service with the real caller's resolved principal. Do not fabricate a
+`system`/admin identity or bypass GLOBAL permission checks.
+
+  </TabItem>
+</Tabs>
+
+### Administer reviewed benchmark refreshes
+
+Refreshing evidence is a target-local administration operation, **not** a
+REST endpoint or MCP tool. The query tool remains read-only and cannot approve
+sources, refresh them or roll back publication.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST / MCP">
+
+No write endpoint is exposed. A trusted operator/job runs:
+
+```bash
+export PYTHONPATH=apps/backend/src
+python -m llm_d_lens.benchmark_rag.admin refresh \
+  --schema public --data-dir /srv/lens-data \
+  --plan /secure/rag/approved-plan.json \
+  --trigger commit --event-revision "$REVIEWED_COMMIT"
+```
+
+Use `--trigger periodic` without `--event-revision` for cron/managed Jobs.
+Both triggers consume the same approved fixed-commit plan, never branch HEAD.
+Prism and reviewed web snapshot refreshes use `--trigger manual` only.
+Repository refreshes fetch the approved GitHub source at the plan's exact commit
+into the shared `LENS_CACHE_DIR/repos/` cache; no manually prepared checkout is
+required. `--source` remains an optional offline checkout override, whose origin
+and pinned commit must match the approved source. Prism snapshots still require
+an explicit local `--source`. Existing fork-origin evidence and audit snapshots
+are not relabeled as official-source evidence; reimport under the official origin.
+Non-Prism refresh/status/rollback use the OpenSearch document repository.
+Prism operations use SQL `public_benchmark_records`; configure their database
+credentials securely, never in arguments or reviewed plans.
+No scheduler or real cluster Job is installed
+automatically.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from pathlib import Path
+
+from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
+from llm_d_lens.benchmark_rag.publication import RagPublicationService
+from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+
+# Non-Prism document refresh; Prism uses the structured SQL admin path.
+# LENS_DATA_DIR must name the same persistent archive used by query instances.
+plan = RefreshPlan.model_validate_json(Path("/secure/rag/approved-plan.json").read_bytes())
+dao = DocumentRepository.from_environment()
+report = RagRefreshService(RagPublicationService(dao=dao)).run(
+    plan, trigger="periodic"
+)
+print(report.model_dump_json())
+```
+
+`RefreshPlan.model_json_schema()` describes the strict plan contract. Review
+the exact source approval, full inventory/path hashes, per-kind counts,
+base manifest/generation, allowed triggers and all figure coverage. New guide
+numeric revisions also require `metadata_review_reference` confirming that
+the existing adapter's model, hardware and workload assumptions remain valid;
+new schemas/layouts still require an adapter update. Empty inventories need
+explicit `allow_empty: true`. Plans never expand the source/path allowlist,
+re-enable a source or infer ownership from simulation IDs.
+
+  </TabItem>
+</Tabs>
+
+Success emits a `published` or `unchanged` JSON report containing plan/inventory
+hashes, review reference, revision, file and per-kind counts, timestamps and
+publication IDs/generation. Failure exits 1 with a failed JSON report on stderr,
+not a successful empty import. Persist job stdout/stderr for attempt history.
+`admin status --origin ...` reads the active source head/history; explicit
+`admin rollback --origin ... --manifest-id ... --expected-generation ...`
+restores a previously published source manifest, not a retrieval alias. Both use
+the same persistent data directory; SQL schema arguments apply to Prism.
+Old citations remain backed by retained bytes; new answers use only
+current published members. Stale plans, concurrent changes, incomplete
+inventories or pagination, and parser/hash/count failures cannot replace the
+active release. A direct approved replay is a no-op; an old periodic job cannot
+undo a rollback or access-policy change.
+
+### Approved blog sources and reviewed web snapshots
+
+The following origins are eligible for **reviewed, local Markdown snapshots**.
+Eligibility is not blanket approval of a publisher's content or a copyright
+license. An operator must review each article's llm-d relevance, public visibility,
+reuse permissions, provenance and exact snapshot bytes before publication.
+
+| Origin | Eligible article paths (before appending `.md`) |
+| --- | --- |
+| `https://llm-d.ai` | `blog/` |
+| `https://cloud.google.com` | `blog/` |
+| `https://aws.amazon.com` | `blogs/machine-learning/` |
+| `https://developers.redhat.com` | `articles/` |
+| `https://www.redhat.com` | `en/blog/` |
+| `https://research.ibm.com` | `blog/` |
+| `https://www.amd.com` | `en/developer/resources/technical-articles/` |
+| `https://rocm.blogs.amd.com` | `artificial-intelligence/` |
+| `https://kserve.github.io` | `website/blog/` |
+| `https://medium.com` | `google-cloud/` only, not arbitrary Medium publications |
+| `https://developer.nvidia.com` | `blog/` |
+| `https://www.coreweave.com` | `blog/` |
+| `https://github.com` | `llm-d/llm-d-kv-cache/blob/<ref>/benchmarking/` and `kserve/website/blob/<ref>/blog/` only |
+
+Keep each website in a separate snapshot root. Append `.md` to the article's
+exact origin-relative URL path: `/blog/example` becomes `blog/example.md`,
+`/report.html` becomes `report.html.md`, and `/article/` becomes
+`article/.md` (a hidden file). Do not include query strings or fragments.
+For GitHub snapshots, prefer a full commit in `<ref>`; these are reviewed web
+snapshots, not managed Git checkouts. The existing two managed Git origins are
+unchanged.
+
+Use `guide-evidence-v1` as the parser version. Snapshot `revision` is
+`content_digest({file.path: file.sha256 for file in files})`, a 64-character
+SHA-256 over the complete reviewed file/hash mapping, **not** a branch, date or
+hash of the concatenated files. `files` must be sorted by path. Narrow
+`SourceApproval.allowed_paths` to the specific reviewed article paths where
+possible; retain explicit reviewer, approval and license references.
+
+To prepare the first manual refresh after reviewing the snapshot:
+
+```python
+import json
+from pathlib import Path
+
+from llm_d_lens.benchmark_rag.publication_contracts import (
+    InventoryFile, PinnedInventory, SourceApproval, content_digest,
+)
+from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+
+# publication is RagPublicationService backed by the OpenSearch document repository.
+# Load these operator-reviewed files; do not discover or approve URLs here.
+approval = SourceApproval.model_validate_json(Path("/secure/rag/web-approval.json").read_bytes())
+files = tuple(
+    InventoryFile.model_validate(value)
+    for value in json.loads(Path("/secure/rag/web-files.json").read_text())
+)
+origin = "https://llm-d.ai"
+publication.register_source(origin, approval)
+head = publication.dao.head(origin)
+inventory = PinnedInventory(
+    origin_id=origin,
+    revision=content_digest({file.path: file.sha256 for file in files}),
+    complete=True,
+    files=files,
+)
+plan = RefreshPlan(
+    review_reference="operator review of article relevance, rights, bytes and passage counts",
+    approval=approval,
+    inventory=inventory,
+    expected_counts={"source": 1, "passage": 3},  # Replace with reviewed exact counts.
+    base_generation=head.state.generation,
+    base_manifest_id=head.registry.published_manifest_id,
+)
+report = RagRefreshService(publication).run(plan, Path("/secure/rag/web-snapshot"))
+```
+
+The same plan can be saved as JSON and passed to `admin refresh --plan ...`
+with `--source /secure/rag/web-snapshot --trigger manual`. Registration must
+precede the first refresh. No HTTP requests, RSS collection, link following or
+scheduler is enabled. Missing/extra approved files, symlinks, changed hashes,
+invalid Markdown or incorrect counts fail without replacing the active release.
+Replay, rollback, withdrawal and backup/restore use the existing lifecycle.
+
+Web snapshots publish **source and passage items only**. Article URLs are retained
+in `source_url` and citation `source_pointer.source_url`; offsets refer to the
+retained Markdown snapshot, not the live HTML page. Text, tables and external
+image links remain context, not verified numeric measurements or reconstructed
+plot points. Query them with a definition/context request and optional
+`filters.origins`; only explicitly published members are searchable. The fixed
+numeric baseline is unchanged and does not certify these new articles.
+
+### Evaluate the fixed evidence baseline
+
+This is a read-only acceptance API, not a REST/MCP tool or an LLM judge.
+`llm_d_lens.benchmark_rag.evaluation` exposes versioned `EvaluationSuite`,
+`EvaluationCase`, `EvaluationReport` and:
+
+```python
+report = run_evaluation(
+    suite,
+    execute=execute_authorized_case,
+    verify_evidence=verify_retained_source_evidence,
+)
+```
+
+Execution must use the actual caller's permissions. The mandatory independent
+verifier checks every primary/corroborating citation against retained bytes or
+authorized owning records; it returns a tuple of issue codes, empty only for
+valid evidence. The runner checks exact Decimal observations, deterministic
+measured answer lines, context/refusals, origin/type restrictions, limits,
+counts and leakage expectations. Unexpected errors propagate; expected denial
+requires the actual domain error. Every case must pass, with no skipped source
+acceptance. This does not evaluate arbitrary free-form model output.
+
+Replay the fixed public and internal suites from the repository root:
+
+```bash
+LENS_RAG_BASELINE_REPORT_DIR=/secure/acceptance/rag-v1 \
+PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
+  apps/backend/tests/unit/db/test_rag_public_baseline.py \
+  apps/backend/tests/unit/db/test_rag_internal_baseline.py \
+  apps/backend/tests/unit/benchmark_rag/test_evaluation.py -q
+```
+
+The public suite needs the separately provisioned pinned three-source inputs.
+Internal cases create isolated live-owner/Evaluate fixtures; they do not fix
+or broaden legacy simulation ingestion. Optional reports contain pinned source
+versions/inventory hashes, suite hashes,
+timestamps, case outcomes and issue codes, not raw private responses.
+`verified_citations` includes corroborating provenance;
+`numeric_observations` counts numeric envelopes.
+
+Passing the baseline does **not** enable additional sources. Every new
+repository/dataset, GCS/GIQ source or paper collection still needs separate
+visibility/license/permission approval, exact origin/path/revision inventory,
+adapter and original-byte regressions, manifest publication, rollback and
+withdrawal tests. Papers remain explanatory unless measurements are
+independently verified. URLs discovered in evidence never approve themselves;
+only the explicitly eligible origins and reviewed paths may be published.
+
 Representative generated MCP tools forward straight into existing Python-backed REST modules:
 
 | MCP tool | Forwarded HTTP endpoint | Underlying module |

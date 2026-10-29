@@ -1,1 +1,1 @@
-"""SQL public benchmark ingestion and authorized evidence for multi-source Agentic planning."""
+"""Answer-only public benchmark evidence, separate from Agentic planning."""

@@ -63,6 +63,68 @@ Authorization: ******
 
 ## 连接客户端
 
+### 公开基准证据
+
+`query_public_benchmark_rag` 是自动生成的 **read** 工具，直接包装
+`POST /api/v1/benchmark-rag/query`。工具参数就是 REST 请求体，文本结果包含相同的
+JSON 证据响应，包括 Decimal 字符串、引用和拒答原因。Lens Assistant 的只读模式
+可以使用该工具，但它**不在** Agentic Deployment 规划器的工具允许列表中。
+
+上述 MCP 调用权限只是必要条件：调用者还必须在 **GLOBAL** 作用域拥有
+`benchmark-rag:query:read`。默认仅 GLOBAL 管理员拥有此权限，其他角色需要显式的
+GLOBAL 授权。集群授权、匿名调用者和禁用认证模式的 `system` 哨兵身份均不能查询。
+Python 适配器通过进程内 ASGI 请求和现有内部 HMAC 签名转发真实已认证调用者，
+工具参数不能指定身份。严格的输入和响应校验保留 Decimal 字符串；失败时返回工具错误，
+不包含上游证据。无需独立 Node 服务或生成 TypeScript 工具目录。
+
+默认检索仅覆盖已发布的公开来源：获批准的 Prism 公开快照、`llm-d/llm-d` 和
+`llm-d/llm-d-benchmark`，以及显式审核并发布的
+[博客 Markdown 快照](/api-reference/modules/lens-assistant#approved-blog-sources-and-reviewed-web-snapshots)。
+博客快照仅作上下文，不自动抓取，也不会自动升级为已验证测量。
+部署必须恢复已发布语料**及其不可变来源归档**；
+仅复制数据库并不足够。布尔参数 `include_internal` 默认为 `false`；
+未显式启用时，不访问内部数据、计数或身份检查。设为 `true` 可同时检索已授权的
+存储 Agentic 评估测量值；仍须拥有 GLOBAL RAG 授权，并通过每条记录可验证的
+所属上下文中的现有 `evaluate:run:read` 策略。缺失、已删除或无法验证的所属对象
+即使对管理员也会排除。`internal_branch_enabled` 表示请求是否显式启用，
+而不是拥有所有内部记录的权限。端点、operation ID、只读级别和规划器排除均不变。
+响应固定使用 `generation_mode: "deterministic"`，不经过 LLM 生成路径。
+问题规划采用有界、确定性的关键词规则，而非通用自然语言处理
+或 LLM 推理；显式结构化筛选条件具有权威性。
+问题中识别出的模型和统计量必须与筛选条件一致，否则返回验证错误。
+含糊的模型描述、多个模型或多个统计量会在检索前拒答，不会扩大查询范围。
+`What is TTFT?` 等指标定义问题检索文档；带实验范围的 TTFT/TPOT 问题检索测量值。
+显式 `intent` 仍然优先。
+自动关键词规则仅支持英语。其他语言的问题请显式指定 `intent` 和结构化
+`filters`；系统不会自动推断语言。
+图表证据可以通过 `related_experiments` 展示显式关联的已发布场景，
+适配器不会猜测实验身份。
+证据来源为 `public`、`agentic` 或 `public_and_agentic`。内部
+`agentic_measurement` 引用保留所属评估来源，并声明 `numeric_precision: "stored_float"`：
+Decimal 字符串表示已存储 Float，而不是原始来源 token 的精确值；公开原始字节精度不变。
+只有固定版本的公开原始 JSON 中实际存在规范 `evaluate:<UUID>` 身份，且指标、
+统计量、单位和数值一致才允许合并；合并保留公开引用与内部 `corroborating_citations`，
+并标注 `identity_verification: "canonical_evaluate_run_and_metric"`。
+无法确定的重叠保持独立，未授权重叠不会泄露。历史八字符模拟任务 ID 无法证明
+评估所属关系，因此省略。
+`limit`（1–50）限制合并后返回的封装总数；`returned_observations` 统计这些封装，
+`matched_items` 统计候选公开索引项与已授权内部基准记录，而不是独立实验或精确的
+去重运行数量；`truncated` 明确报告省略的结果。
+上游拒绝、不可用或响应损坏时会返回明确的工具错误，
+不会返回伪装为成功的空答案。
+
+参阅[请求、筛选及响应契约](/api-reference/modules/lens-assistant#query-public-benchmark-evidence)。
+本集成有针对性的本地自动化测试覆盖，但**尚未完成真实部署验证**。
+
+证据刷新明确**不提供** MCP 写工具。可信管理员使用共用的目标机器本地
+`admin refresh` 命令，执行手动 Prism 快照刷新或已审核 commit/周期仓库任务。
+计划固定完整清单、哈希、计数和发布 generation；失败保留当前发布，
+旧周期计划不能撤销回滚或访问撤销。参阅[刷新管理](/api-reference/modules/lens-assistant#administer-reviewed-benchmark-refreshes)。
+[固定证据基线](/api-reference/modules/lens-assistant#evaluate-the-fixed-evidence-baseline)
+回放已知问答、精确数值、拒答和已授权内部场景，并独立核验引用。
+基线通过不会自动批准新来源、外部 URL 或论文。
+可选内部分支及 Evaluate 所属权限保持不变；simulation/benchmark 入库完善暂缓。
+
 ### MCP Inspector
 
 1. 启动 Lens 开发技术栈（`scripts/lens-local.sh start`）。

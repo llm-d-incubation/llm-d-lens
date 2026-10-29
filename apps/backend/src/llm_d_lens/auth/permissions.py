@@ -119,6 +119,8 @@ _PERMISSIONS: tuple[Permission, ...] = (
     _permission("evaluate:run:delete", "Delete evaluations"),
     # public benchmark corpus (global grants only)
     _permission("benchmark-rag:query:read", "Query public benchmark evidence", READ),
+    _permission("benchmark-rag:runtime:read", "Inspect public RAG runtime and rollout", READ),
+    _permission("benchmark-rag:runtime:configure", "Configure controlled public RAG rollout", APPROVE),
     # configuration
     _permission("configuration:artifact:read", "View configuration artifacts", READ),
     _permission("configuration:artifact:save", "Save configuration artifacts"),

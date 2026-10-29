@@ -69,13 +69,20 @@ def query_string(arguments) -> str:
     return "?" + urlencode(pairs) if pairs else ""
 
 
-async def api_request(request, path: str, method="GET", body=None) -> dict:
+async def api_request(request, path: str, method="GET", body=None, *, response_schema: dict | None = None) -> dict:
     headers = {
         key: request.headers[key] for key in ("cookie", "authorization", "x-prism-csrf") if key in request.headers
     }
     headers.update(accept="application/json", **{"x-prism-source": "assistant"})
     principal = getattr(request.state, "principal", None)
     secret = get_settings().internal_auth_secret
+    if response_schema is not None and (
+        not principal
+        or not principal.user_id
+        or (principal.user_id == "system" and principal.authz_version == 0)
+        or not secret
+    ):
+        raise ValueError("Authenticated signed caller required (status 401)")
     if principal and secret:
         timestamp = int(time.time())
         headers.update(
@@ -98,6 +105,15 @@ async def api_request(request, path: str, method="GET", body=None) -> dict:
         ) as client,
     ):
         response = await client.request(method, path, json=body, headers=headers)
+    if response_schema is not None:
+        if not response.is_success:
+            raise ValueError(f"Upstream request failed (status {response.status_code})")
+        try:
+            result = response.json()
+            Draft202012Validator(response_schema).validate(result)
+        except (ValueError, ValidationError):
+            raise ValueError("Invalid upstream query response (status 502)") from None
+        return result
     try:
         result = response.json() if response.content else None
     except ValueError:
@@ -195,6 +211,8 @@ async def invoke_tool(request, name: str, arguments: dict):
             {key: arguments.get(key) for key in tool["queryFields"]}
         )
         body = {key: arguments[key] for key in tool["bodyFields"] if key in arguments} or None
+        if "responseSchema" in tool:
+            return await api_request(request, path, tool["method"], body, response_schema=tool["responseSchema"])
         return await api_request(request, path, tool["method"], body)
     if name in SPECIAL_ROUTES:
         method, path = SPECIAL_ROUTES[name]

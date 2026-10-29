@@ -102,8 +102,9 @@ flowchart TD
    SLO, workload profile, and preference are optional inputs.
 2. When creating a plan, the backend validates the active cluster session, and verifies that the
    selected storage is ready for the current cluster, has purpose `model-cache`, is not a
-   dynamic-PVC volume. Planning and refinement do not require downloaded model files;
-   approval checks model-cache readiness and resolves the current credential policy.
+   dynamic-PVC volume. Planning and refinement do not require the target model to be
+   downloaded. Approval checks the ready cache entry and resolves its current
+   credential policy before starting deployment.
 3. When external AI is configured, AI Generator starts from deployment intent and uses native tool
    calling to query cluster and AIC in parallel first; only after that may it query allowlisted
    historical evidence. Before submission it must obtain cluster overview and attempt at least one
@@ -623,57 +624,371 @@ Structured data consists of `BenchmarkRecord`: model, hardware, runtime, workloa
 
 Live cluster overview is also structured evidence, with the highest authority: it determines whether candidates satisfy current VRAM, GPU, CPU-buffer, and other hard constraints. Historical benchmarks, AIC, and AI cannot override live-resource conclusions.
 
-#### Multi-source experiment planning
+#### Public benchmark RAG in recommendations
 
-Creation and refinement share server-resolved evidence from authorized internal
-experiments and approved public Prism experiments. Public experiments remain in
-PostgreSQL `public_benchmark_records`; they are not document search results.
-The actual authenticated principal needs global `benchmark-rag:query:read` to
-retrieve public observations or access plans containing them. Internal experiments
-retain their existing resource authorization.
+Create and refinement automatically query `PublicRagQueryService` before candidate
+generation, with exact model/hardware filters and `include_internal=false`,
+selecting at most 50 ranked published experiment/configuration-and-series cases
+per SQL branch, with complete selected measurements. After permission checks, the live target-cluster overview
+supplies the hardware profile and concrete accelerator model. Profile-declared
+family labels are not device models. Published hardware labels are matched by
+model tokens, ignoring only profile-declared vendor/accelerator decoration and
+separator/case differences; memory size and PCIe/SXM distinctions are retained.
+The selected published hardware label is an exact query filter, applied before
+the experiment limit. Unknown or mixed models produce `rag_hardware_unresolved`;
+no matching hardware produces `no_matches`, never an unfiltered or cross-hardware
+fallback. `planning_evidence.details.target_hardware` records the target cluster,
+profile and detected model; `details.query.filters.hardware` records the queried
+label. Refinement resolves live hardware again.
 
-`PlanningRequirements` preserves explicit workload, latency targets, provenance
-and unknown fields. Form fields start blank: examples and AIC/use-case defaults
-are not explicit requirements, and mean input length is not copied into P95.
-Live hardware determines the public query's exact accelerator model; unknown or
-mixed models are reported rather than replaced with a cross-hardware fallback.
-Model aliases aid retrieval but do not prove unique identity or compatibility.
+Model-name matching uses generated aliases, not an identity registry. Both stored
+names and requested names are trimmed and lowercased, then expanded to the full
+name, the suffix after the last `/`, and the full name with `/` replaced by `-`.
+For example, `Publisher/Falcon-7B` produces `publisher/falcon-7b`, `falcon-7b`
+and `publisher-falcon-7b`; duplicates are removed. A nonempty intersection matches.
+Public and authorized internal SQL retrieval, hardware-label discovery, question
+planning, case applicability and benchmark relevance share this rule. SQL derives
+aliases on both sides before filtering/counting/limiting, including existing rows;
+no table migration, model-name rewrite or duplicate experiment/measurement is needed.
+Raw source names, record IDs, revisions and citations remain unchanged.
+`details.retrieval.model_identity_aliases` records the query aliases.
 
-`ConfigurationCase` retains experiment/configuration/series identity, original
-measurements, units, statistics, configuration, provenance, differences and
-unknowns. Each SQL branch aggregates complete experiments before ranking and
-selecting at most 50 cases. Explicit workload fit precedes comparable lower
-latency; without explicit workload there is no workload penalty. Latency targets
-select metric/statistic axes, not distance from the target. Different statistics
-are not mixed; Pareto comparison requires equal available axes. Missing or
-nonpositive latency is unknown. A case with neither comparable workload nor valid
-latency is a labelled fallback reference, not low-latency evidence.
+Document indexing and lexical query identifiers use the same expansion; standalone
+vector and hybrid queries also include the generated forms independently of optional
+glossary enhancement. Existing pre-alias document projections remain readable with
+strict source verification; rebuild old indexes to populate all new keyword aliases.
+Source text, passage embeddings and chunk identities are not rewritten.
+Same-suffix names across publishers can match under this rule; name relevance alone
+is not unique model identity or proof of compatible weights. Quantization, version
+and other name suffixes are not removed, and other hardware/runtime/revision/ACL
+checks remain in force. A basename-only name and a hyphen-only name cannot recover a
+missing publisher boundary: `falcon-7b` alone does not imply `publisher-falcon-7b`.
+Verified experiment deduplication still requires the same evaluation ID and conditions,
+not merely intersecting name aliases.
 
-The shared evidence bundle keeps at most 10 complete cases within its
-16,000-byte serialized budget, preserving experiment rank. Historical observations
-inform candidate generation and selection, but do not prove current SLO compliance
-or override live-resource validation. AIC estimates remain a distinct evidence type.
-Source references stay in the server audit; model-facing aliases and explanations
-must not be presented as independently verified source usage.
+Decision evidence displays public SQL measured observations, document RAG passages
+and internal SQL experiments separately, with branch statuses and counts. Retrieved
+counts are separate from evidence retained within the planning budget. Disabled,
+forbidden and failed branches are not presented as zero matches. Document passages
+are qualitative context, not measured performance or proof of current SLO compliance.
+The hardware-simulation message counts public SQL observations only.
 
-The document-evidence contract remains available for a later integration, but this
-delivery does not include public document ingestion, OpenSearch document indexes,
-embedding/hybrid search, a document runtime API or a standalone search page.
-The document branch reports disabled and supplies no passages. Client-supplied
-document packets are not trusted. Internal/public SQL planning and refinement
-must run without the optional document implementation or its dependencies.
-The existing private diagnostic search adapter is separate from public
-document RAG.
+A temporary backend-only test override replaces the target hardware identity in
+the private planning view without modifying the cluster.
+`AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES` maps cluster registration IDs to test
+models; there is no form control or per-request override. Model-name aliases do not broaden hardware matching.
+RAG applicability, the generator's cluster overview, AIC search and estimates,
+fallback planning and ranking all use that effective model. It must map to one
+AIC system in the discovered hardware profile. Measured GPU counts and memory
+remain unchanged. The server sets `planning_hardware_model`; client values are cleared.
+Evidence records the effective `model`, observed `actual_model` and `simulation=true`,
+including no matches.
+The server resolves this override before requirement enrichment and parallel SQL
+retrieval, so internal filtering and configuration-case applicability use the
+same simulated identity as public retrieval, with the observed identity retained
+in branch diagnostics.
+This is identity simulation, not cross-hardware prediction: observations have no
+reference-only restriction. Explicit workload constraints and
+configuration changes still limit performance certainty. Simulated plans cannot
+be approved for deployment.
+Remove the cluster map entry and restart to undo the temporary override.
 
-The deployment workspace shows internal SQL experiments, public SQL observations
-and document-source status separately, including retrieval failures and unknowns.
-No permission, no match and unavailable outcomes are not interchangeable.
-Approval still revalidates resources and model-cache readiness and requires
-explicit user approval; retrieval never authorizes deployment.
+For capacity-only testing when telemetry is unavailable,
+`AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES='{"<cluster-id>":80}'` explicitly sets
+per-GPU planning VRAM in GiB. This independent override preserves discovered GPU
+counts, availability and hardware identity; it does not change the live overview
+or cluster resources. Both AI/MCP planning and deterministic fallback use the
+private overridden view. Cluster evidence records `simulation=true`, the observed
+VRAM bytes, the configured per-GPU GiB and a test-only warning. Approval rejects
+these plans even when public RAG is disabled or unavailable. Removing the entry
+and restarting disables the override; generate a new plan afterward.
+
+The actual request principal must pass the existing
+authenticated global `benchmark-rag:query:read` gate before any corpus access.
+Missing permission, no matches and retrieval errors are recorded as distinct
+outcomes in progress events, `planning_evidence` and the append-only snapshot.
+Planning continues with existing evidence when public RAG is unavailable.
+
+Planning keeps `filters.workload={}` and uses bounded public numeric/comparison
+queries with exact model and hardware scope. The normal public query API retains
+its exact workload-filter semantics.
+
+##### Experiment reference ranking (2026-10-28)
+
+Aggregate all eligible, authorized, published exact-model/hardware measurements
+by experiment/configuration and series before ranking and applying the internal
+`experiment_limit=50`. Never rank only the first 50 measurement rows or combine
+different runs, configurations or series to manufacture coverage. Return complete
+relevant measurements for selected cases; any explicit safety-cap exclusions remain
+visible. Planning may therefore return more than 50 measurement envelopes.
+The generic REST/MCP `QueryRequest.limit` still limits measurement/evidence
+envelopes to 1–50, not experiments; `experiment_limit` is not a public request field.
+
+The public SQL path scopes publication membership once, materializing the small
+publication-scoped experiment/file dimensions. It ranks compact, fully authorized
+experiment/series metadata, applies Top-K, then fetches complete rows by selected
+primary-key IDs. It does not repeat wide eligible-row/manifest joins after selection,
+relax publication checks, truncate eligible measurements before ranking or raise the
+15-second branch budget to accommodate repeated scans.
+
+Explicit workload similarity and coverage come first, lower valid measured latency
+second. Default zeros are not explicit workload input. Targets restrict the exact
+metric/statistic pairs to compare; numeric thresholds, distance to SLO, violation
+and SLO status do not determine experiment reference order.
+
+| Explicit workload | Explicit latency targets | Ranking |
+| --- | --- | --- |
+| Yes | Yes | Workload similarity/coverage, then lower latency on requested exact metric/statistic pairs. |
+| No | Yes | Lower latency on requested exact pairs, without a workload penalty. |
+| Yes | No | Workload similarity/coverage, then available latency grouped by exact metric/statistic. |
+| No | No | Available latency grouped by exact metric/statistic, without a workload penalty. |
+
+Pareto dominance applies only on equal available metric/statistic axes: no worse
+on all axes and better on at least one. Preserve nondominated tradeoffs and
+distinct coverage sets; never sum TTFT, TPOT and end-to-end latency or mix mean/p99.
+Missing statistics are unknown, not assumed mean. Missing, nonpositive, nonfinite
+or incompatible-unit latency is unknown; only documented compatible conversions
+are allowed. Zero error counters remain context, not latency.
+
+Ranking metadata carries `queue="ranked"|"fallback"` and `fallback_reason`.
+Fallback applies if and only if no measured workload fields were compared
+(`workload_similarity=null`, including no requested workload) **and** no valid
+latency exists on requested/comparable axes. Its reason is
+`no_comparable_workload_or_valid_latency`; ranked cases use null. A measured zero
+similarity is a real comparison, so it is not fallback merely because latency is
+absent. SQL and Python preserve unknown workload scores as null. Case model context,
+audit and UI must label fallback references explicitly, never call them low latency;
+query summaries describe selected experiment references neutrally.
+
+Budget selection preserves this workload/latency order before quality/freshness
+tie-breaks. This is experiment reference retrieval, not a replacement for the
+separate deterministic candidate scoring policy or server SLO assessment.
+
+##### Scoped ranking validation (2026-10-28)
+
+The seven-file Python regression passed 476 tests (five deprecation warnings,
+2,253.33 seconds), but started before the final SQL optimization and service-test
+edits. Subsequent public/internal SQL regression passed 99 tests (three deprecation
+warnings, 166.73 seconds), covering publication/revocation, authorization, complete
+retrieval, generic envelope limits and a 9,304-measurement deadline fixture with
+8,800 unrelated measurements. The fixture checks SQL under five seconds and total
+query under the unchanged 15-second budget. Updated isolated create/refine variants
+passed two tests, including persisted snapshots and FastAPI HTTP responses.
+JavaScript presentation tests passed 11 tests; affected Python lint/formatting and
+ESLint passed. These are separate runs, not a single final-tree 476-test result.
+
+After managed backend reload, authenticated browser/API acceptance passed for
+Qwen3-0.6B with no external AI provider. A generic query with `limit=3` returned
+three envelopes from 504 matching measurements. Planning creation with no workload
+or targets found 504 measurements across 63 experiment-series, selected 50 complete
+cases/400 measurements, then retained five ranked cases/40 measurements in 15,343
+bytes. Refinement to `TTFT P90 <= 10ms`, with no stored P90 measurements, retained
+five fallback cases/40 measurements in 15,542 bytes; both packets met the 16,000-byte
+ceiling. All five refined cases had the documented fallback reason, null workload
+score, zero latency coverage and unknown latency status; candidate SLOs stayed unknown.
+The neutral query summary, UI fallback count (five of five), and all 40 per-observation
+fallback/not-low-latency labels were verified. Authenticated HTTP GET returned 200
+with these fields; append-only created/refined snapshots retained ranked/fallback
+queues respectively and file mode `0600`.
+
+The plan remained `awaiting_approval`, with null deployment-run ID and provider.
+No approve, deploy or experiment-ingestion calls were made; no third-party model
+received data. The existing H100 target simulation over observed A100 hardware was
+explicitly labelled and deployment disabled: this is not physical H100 or SLO
+certification. An initial pre-optimization planning SQL timeout was reproduced and
+remains in audit history; final acceptance used the optimized path without increasing
+the branch timeout. A pre-existing duplicate React key warning (`aic:aic:support`)
+was observed during refinement and remains unresolved. This scoped acceptance does
+not complete S3/S4 quality/performance or deployment gates.
+
+Numeric ISL, OSL, concurrency and latency preferences recognized by the existing
+parser are applied before retrieval on both creation and refinement. Missing
+fields do not constrain matching. Use-case defaults, derived `prefill_heavy`,
+default `shared_prefix_ratio=0` and AIC token lengths are not measured traffic;
+explicit profile zero values still participate in approximate comparison.
+The form starts with blank workload and latency fields and does not fabricate
+input P95 from the mean.
+
+The versioned normalized requirements contract is shared by retrieval,
+generation and selection. Seconds are converted to milliseconds; `<` and `<=`
+and mean/P50/P95 remain distinct. Compact English and common Chinese numeric
+requirements retain field provenance. TTFT, TPOT and end-to-end latency targets
+default to mean when no statistic is specified in form or text input; explicit
+percentiles remain unchanged. Missing mean observations are not replaced with
+percentiles or unlabelled measurements. Conflicting form/text values and invalid
+units are validation errors, not silent preference overrides. Device count is
+separate from model identity; memory units and PCIe/SXM distinctions are retained.
+Only verified discovery/configuration enriches model and hardware identities.
+Unknown architecture, quantization, runtime versions and workload stay unknown.
+
+`details.retrieval` records the mode, inputs, matched/returned counts and
+truncation; `details.matches` records each observation's known workload
+differences, unknown fields, similarity, coverage and configuration basis.
+Similarity averages min/max ratios over known numeric fields; coverage is the
+fraction of requested fields reported. These are not performance confidence.
+Explicit shared-prefix/question/output lengths in a report can provide labelled
+nominal proxies for mean-length comparison, never measured means or P95.
+Latency status is `satisfied`, `not_satisfied`, `unknown` or `not_requested`,
+with original statistics, target deviations and missing metrics. Metrics are
+combined only within the same pinned source, experiment and series; ITL/NTPOT
+are not substituted for TPOT, and zero values from empty latency histograms
+remain unknown. These statuses describe source observations, not current SLO
+compliance. No workload difference, latency miss or unknown metric removes an
+observation from planning.
+
+Both the AI generator and selector receive original metric/statistic/value/unit,
+experiment conditions, matching annotations and pinned citations as `public_rag_evidence`.
+The planning case budget retains complete measurement units with their original
+conditions and citations. Large report bodies are omitted from model context;
+their pinned source citations remain available for source inspection.
+Applicable
+public observations take precedence over AIC estimates; unrelated or incomplete
+observations do not establish current performance. Retrieved text is untrusted
+data, never instructions. Both AI stages also receive `explicit_workload`, the
+same non-null operator-supplied profile fields. When empty, workload is not an
+applicability gate: `general-chat`, default zero prefix reuse and missing QPS or
+autoscaling signals cannot exclude public evidence. Published TTFT/TPOT and the
+associated configurations guide reverse selection toward the requested latency
+targets. The generator may propose an evidenced provider, TP and replica topology
+within live resource constraints, rather than requiring evidence to match an
+initial minimum-resource topology. The selector compares validated candidates
+using that evidence before falling back to AIC or resource minimization.
+Changed configurations and unknown experiment conditions must be disclosed;
+they do not transfer exact latency values or establish current SLO compliance.
+Historical citation IDs are not sent to either AI stage or requested in its response.
+The server records the actual budget-selected inputs as `reference_material_ids`
+on generated candidates and the scoring decision; these identify supplied material,
+not verified model usage. A ranking may depart from AIC-only latency-miss ordering
+when the server supplied informative public performance measurements with units.
+Missing, nonfinite, nonpositive or context-only values do not bypass that check;
+hard validation and server SLO assessment are unchanged.
+
+Public observations are not silently converted into internal `BenchmarkRecord`
+aggregates or deterministic predictions. Without AI they remain context only.
+The UI and snapshot distinguish retrieved context from evidence used for selection.
+Decision evidence displays public SQL observations, internal SQL experiments and
+document RAG passages in one collapsed section per source. Each header shows the
+branch status and reported retrieval/retention counts when available; expanding it
+reveals retained evidence, citations and applicability caveats. Missing counts are
+not shown as zero. The unified `configuration-cases` packet remains an internal
+structure, not a separate source card. Historical measurements have no unconditional
+priority over AIC estimates: their model, hardware, runtime and workload conditions
+must be considered. This presentation does not change planning or ranking policy.
+Read and mutation responses for a plan containing public observations retain the
+public-query permission gate, preventing plan APIs from becoming an alternate
+unauthorized corpus reader. Refinement queries again rather than reusing stale
+observations or a previous caller's access.
+
+#### Bounded multi-source planning cases
+
+Creation and refinement share the same retrieval path. Public SQL observations,
+caller-authorized internal SQL records and policy-gated OpenSearch documents
+are queried independently, with explicit branch outcomes. Internal records use
+the existing evaluation ownership/cluster SQL authorization before payload reads,
+and are rechecked before delivery and on later plan reads. Historical candidate
+seeds and performance scoring receive only the authorized selected records,
+never a whole-database planning fallback.
+
+`configuration-cases:query` in `planning_evidence` exposes `planning-cases.v1`:
+case IDs/revisions, model/hardware/runtime/workload/configuration, original and
+normalized measurement units/statistics, citations, applicability, differences,
+unknown fields and required validation. Each case is confined to one verified
+experiment, configuration, workload and series. P50 does not become P95, and
+metrics from different cases cannot jointly prove a target. Cross-source
+independence is not assumed. Canonical run identity plus matching conditions and
+non-conflicting measurements permits a merge retaining both citations. Otherwise
+cases remain separate, but a shared run or identical-condition duplicate group
+contributes at most one independent experiment. A source-scoped label alone is
+not verified identity.
+
+Each SQL branch selects at most 50 whole ranked experiments/configurations/series,
+after aggregating all eligible measurements. A packet holds at most 10 complete
+cases and 20 document passages, within a 16,000-byte serialized evidence ceiling.
+This is a conservative token upper bound, not a tokenizer measurement; the
+compatibility fields `token_budget` and `token_count_upper_bound` report this
+byte-based bound. A configured model window can reduce it further. Measurements
+already present in cases are not serialized again as legacy public observations.
+Selected observations, complete citations and per-identity exclusion reasons
+remain in planning facts and audit snapshots. Both generator and planner receive only
+measurements, units, statistics, series, serving/workload conditions, applicability,
+ranking queue/fallback labels and readable technique hints. Original value/unit are primary;
+`normalized` is included only when different. Document packets contain only title,
+complete text and semantic relevance cues, with shared untrusted/qualitative usage rules.
+Full hashes, archive pointers, import metadata, index/embedding settings and retrieval
+diagnostics stay exclusively in backend audit data, together with case, measurement,
+document and historical benchmark identities. Raw `run_id`, `source_path`,
+`source_info.file_identifier` and extracted source labels are not forwarded.
+The server deduplicates recognized techniques into hints containing
+`related_provider_ref`, a readable `technique_description` and
+`verification=unverified_source_hint`; these are possible provider associations,
+not verified historical serving settings or performance advantages. Complete source
+clues and identity mappings remain in the audit. Each experiment's measurements and
+conditions stay grouped without replacement case numbers or citation aliases.
+Generated candidates and decisions separately retain the server's supplied-reference
+list, excluding material pruned from that stage's request. Model output schemas no
+longer request historical citation IDs. Runtime tool evidence and current candidate
+IDs retain their existing roles. Budget checks count
+the actual semantic projection, not audit metadata. Selection preserves workload/latency
+ranking, retains a complete case and a complete document when they fit, then fills
+remaining capacity in that ranking order before quality/freshness tie-breaks; there is no
+fixed half-budget that can strand capacity. Units, statistics, conditions,
+citations and document passages remain indivisible. SQL
+authorization and known compatibility predicates precede whole-experiment ranking and
+the 50-experiment limit; record IDs are only deterministic tie breakers. Case ranking
+excludes known incompatible identities first, then preserves explicit workload
+similarity/coverage and lower valid latency, before information quality and freshness.
+Measured target status and threshold closeness never restore SLO ordering.
+Finite positive latency/TPOT/TTFT
+and throughput values are marked `quality: informative`, not certified for transfer.
+Nonpositive performance is preserved as `nonpositive_performance`, never valid latency
+proof; zero error counters and request-rate context remain `context_only`.
+`workload_similarity` and `evidence_coverage` are nullable: `workload_match_status`
+is `not_requested`, `unknown` or `compared`. No workload request means null/null;
+missing reported workload means null similarity/zero coverage; a measured zero
+similarity is preserved. Unknown is not mismatch, and `reference_only` still permits
+configuration guidance without proving current SLO. The backend audit includes selected counts,
+exclusion reasons, per-branch truncation and failures. Units, conditions and
+citations are never removed to squeeze in extra numeric values. Up to two
+nonrecursive supplementary document queries run after candidate validation and
+use terms from those candidates, not historical cases. Initial retrieval and
+supplementary queries share a 60-second evidence deadline; expired deadlines
+explicitly skip further requests. Query terms, candidate IDs, timeouts and outcomes
+are visible. Documents retain lexical/vector ranks and fusion scores as relevance
+metadata, not performance confidence. Documents remain qualitative evidence,
+separate from measured cases and AIC estimates; neither text similarity nor
+missing device/runtime fingerprints proves compatibility or current SLO.
+Final generator/planner request-window trimming preserves workload/latency ranking before
+quality/freshness tie-breaks and retains ranked cases ahead of qualitative text. Whole cases are
+never split, and removed document links and evidence IDs are kept consistent.
+
+Run responses include `candidate_evidence`, keyed by validated candidate ID,
+with configuration, case/measurement and document references, applicability,
+known differences, unknown conditions, considered/served preferences, exclusions
+and required performance validation. Reported measurements, historical predictions,
+AIC estimates and document advice remain distinct. Experiment and successful-sync
+timestamps have separate availability markers; a source without recorded sync
+metadata returns unknown, never the request time.
+
+Immediately before delivering a newly generated/refined plan, public SQL and
+document sources must still be enabled at the cited publication version.
+If a configured AI provider supplies `contextWindow`, generator and selector
+also check the complete serialized request, tools/schemas, completion allowance
+and framing reserve before outbound calls. Whole low-priority evidence units are
+selected against the actual remaining request budget, with explicit
+`request_context_budget` exclusions. If the non-evidence request alone cannot fit,
+the result is an explicit `context_budget_exceeded` fallback, not a silently
+truncated prompt. An absent
+provider context window remains unknown; this increment does not certify its
+capacity or infer a model limit.
+
+The implementation sequence is P0, then P2. Full online acquisition/scheduling
+(P1) remains the final stage. This backend integration does not waive S3/S4
+quality/performance gates, change the document rollout allowlist, enable new
+external models, or revive the standalone RAG frontend.
 
 #### Unstructured data
 
-Unstructured data includes deployment logs, profiling traces, artifact summaries, Guides, GitHub content, papers, planning-snapshot summaries, and planned raw benchmark reports from cloud storage. Searchable projections reside in OpenSearch; original artifacts remain in controlled filesystems, and cloud reports remain in their authorized storage locations.
+Unstructured data includes deployment logs, profiling traces, artifact summaries, Guides, GitHub content, papers, planning-snapshot summaries, and planned raw benchmark reports from cloud storage. Original artifacts remain in controlled filesystems, and cloud reports remain in their authorized storage locations. The concrete OpenSearch adapter has moved to the public `benchmark_rag` domain and no longer indexes diagnostics. Diagnostic projection and artifact-integrity helpers remain separate; their OpenSearch integration is not provided by that public adapter.
 
 Cloud benchmark report integration is not yet implemented. The plan is to index ACL-controlled summaries and object versions for discovery, then fetch the pinned source version under tenant/ACL controls and validate its content hash before use. Extract model, hardware, runtime, workload, topology, measured metrics, outcome, and provenance; validate units and required fields; normalize into request-local `BenchmarkRecord` objects. Reports with missing fields, unverifiable sources, or only estimates cannot become measured records. Unextracted or unvalidated report text is diagnostic only and cannot affect numeric prediction, failure blocking, or deterministic ranking. Qualified records still undergo structured benchmark compatibility filtering and similarity computation; retrieval alone does not establish performance.
 
@@ -692,7 +1007,11 @@ The server first applies coarse database filters for accelerator, backend, quant
 
 `match_similarity` expresses only the relevance of a historical record to the current target. It is not deployment success probability or a promise of current performance. Aggregate `confidence` and effective sample size belong only to the deterministic path.
 
-The current request does not require direct workload input. Versioned `resolve_workload_signals()` maps use case to query profile $q$, including token lengths, concurrency, request rate, shared-prefix and prefill signals. Explicit workload overrides only corresponding fields and records provenance. If the mapping is unknown or cannot provide comparison fields, do not fabricate workload; related history cannot become high-similarity performance evidence.
+Workload input is optional. Historical query profile $q$ uses only explicitly
+normalized workload and verified identities. Use-case defaults remain topology
+heuristics, not measured traffic: missing input P95, output length, concurrency,
+request rate, architecture, quantization and runtime are not synthesized.
+Incomplete identities cannot establish exact compatibility or qualified seeds.
 
 For historical record $r$ passing database hard filters and current candidate query $q$, the retriever computes configuration/workload and performance-target similarity $S$:
 
@@ -716,7 +1035,7 @@ $$
 S_{hardware} = 0.7 + 0.3e^{-|\ln(g_r/g_q)|}
 $$
 
-$S_{workload}$ averages five log-ratio scores for mean input, P95 input, mean output, concurrency, and request rate, plus two $1-|x_r-x_q|$ scores for shared-prefix and prefill fractions. Values in $q$ come from the use-case mapping or explicit overrides above. Candidate-configuration similarity is:
+$S_{workload}$ compares mean input, P95 input, mean output, concurrency and request rate using log-ratio scores, and shared-prefix/prefill fractions using $1-|x_r-x_q|$. Values in $q$ come only from explicit normalized fields; missing dimensions are not matches and cannot establish exact measured applicability. Candidate-configuration similarity is:
 
 $$
 S_{configuration} = 0.4e^{-|\ln(TP_r/TP_q)|} + 0.4e^{-|\ln(R_r/R_q)|} + 0.2J_{optimization}
@@ -756,7 +1075,41 @@ $W$ is **match similarity** in this document. It adds time/runtime effects to ba
 
 Logs, traces, artifacts, and external materials become bounded `DiagnosticEvidenceProjection` objects with fixed `evidence_id`, content hash, source revision, tenant, ACL, and necessary runtime metadata. Before use, artifacts must pass source validation against their manifest and file SHA-256.
 
-OpenSearch queries must apply tenant/ACL filters first. Use BM25 by default and kNN only when the caller explicitly supplies a vector. Projections are rebuildable. Unavailable OpenSearch, stale indexes, or no results yield empty features/diagnostics without affecting deterministic planning.
+Any future private diagnostic search must enforce tenant/ACL filters and cannot reuse the public RAG index. The public OpenSearch adapter provides default lexical search, explicitly selected vector search and controlled hybrid fusion over approved published passages, with publication and original-byte rechecks. The vector alias does not replace the lexical alias; each request pins its build/model and hybrid uses that fixed vector build for both branches. Hybrid engineering support does not certify S3 quality or performance. Public search outages are explicit failures, not empty diagnostic features or a PostgreSQL fallback. Document text never enters deterministic performance planning.
+
+#### Controlled public document integration
+
+S4 backend controls and D2 integration proceed together without an independent
+RAG frontend or standalone product launch. Both Agentic creation and refinement
+resolve the server-owned runtime policy and actual caller afresh. Public document
+retrieval remains separate from public SQL observations and authorized internal
+benchmark records; changing document controls does not grant access to either.
+
+The default document mode is disabled. Shadow mode runs bounded verified
+retrieval and records safe diagnostics but supplies no document text, IDs or
+citations to generator/scorer prompts or candidate decisions. Enabled mode is
+restricted to explicitly allowlisted stable user IDs with a separate GLOBAL
+query grant; there is no implicit admin bypass. Lexical is the default, with
+hybrid explicitly selected by runtime policy. Outstanding quality gates remain;
+S3 performance acceptance is deferred until the end.
+
+Enabled evidence is bounded, version-pinned public document context, distinct
+from measured observations. Its canonical source citations and document-reference
+IDs are produced by the server, not by an LLM. Generator and AI scorer references
+must resolve against the exact document packets supplied to that stage.
+Treat passage text as untrusted source data, never tool/system instructions.
+Documents may explain prerequisites, stated version requirements or preferences;
+they are not proof of actual compatibility or measured performance.
+They cannot supply TTFT, TPOT, throughput, SLO compliance or deterministic
+confidence. Existing benchmark/AIC validation and hard constraints remain authoritative.
+
+Refinement replaces document context and cited-document references rather than
+accumulating the previous retrieval. Disabling rollout stops new consumption;
+revoked permissions also block saved-plan document exposure. Sanitized disabled,
+forbidden, unavailable, stale, degraded and no-match outcomes are observable,
+not fabricated evidence or silently successful retrieval. Cancellation still
+propagates through planning. Recovery requires reviewing the target's local
+rollout policy; portable document restore does not copy or enable that policy.
 
 #### Two-stage retrieval of cloud benchmark reports
 
@@ -789,7 +1142,7 @@ AI generation and scoring are separate stages. The generator first retrieves his
 
 For each feasible provider, AI Generator must first propose the minimum-resource topology: the lowest TP satisfying memory constraints and one replica per serving role. Explicit provider preference selects a method; it cannot independently increase TP or replicas. Additional resources require explicit SLOs or complete AIC predictions. Scaling from a relaxed-search anchor remains an estimate requiring validation.
 
-AI scoring first shortlists at most ten hard-valid candidates: retain the best candidate per provider in deterministic order, then fill remaining places by rank. Only shortlisted candidates reach AI, each with at most five real historical benchmarks ordered by similarity. Raw benchmarks describe measured historical behavior: AI may compare TTFT, TPOT, throughput, outcome, and failure reason, for example avoiding candidates that previously caused OOM under similar workloads. ACL-filtered, bounded, version-pinned Guide/GitHub/paper feature packets are not yet integrated into AI scoring. Future packets may inform method prerequisites, version compatibility, and operator preference only; they are not measurements and cannot establish TTFT, TPOT, throughput, SLOs, or confidence.
+AI scoring first shortlists at most ten hard-valid candidates: retain the best candidate per provider in deterministic order, then fill remaining places by rank. Only shortlisted candidates reach AI, each with at most five real historical benchmarks ordered by similarity. Raw benchmarks describe measured historical behavior: AI may compare TTFT, TPOT, throughput, outcome, and failure reason, for example avoiding candidates that previously caused OOM under similar workloads. When explicitly enabled by the controlled document policy, separately validated public document packets may inform method prerequisites, stated version conditions and operator preference. They are not measurements or verified hardware compatibility, and cannot establish TTFT, TPOT, throughput, SLOs or deterministic confidence. Shadow packets never enter this stage.
 
 AI cannot generate new candidates or interpret unstructured features as performance measurements. Responses may select only server-provided candidate IDs. Invalid, timed-out, or unavailable responses fall back to the deterministic path.
 
@@ -883,6 +1236,8 @@ Example candidate in scoring context: historical values are measurements. The cu
 }
 ```
 
+`rationale` is user-facing prose. Historical techniques are supplied with readable descriptions, without raw imported source labels, paths or internal citation markers. Candidate IDs remain allowed for shortlist comparisons. The server does not reject, strip or regenerate a response merely because of marker-like text in the rationale; the normal JSON, candidate, score and SLO validation still applies. Source fidelity is preserved in backend reference material rather than model-declared historical citations.
+
 Minimal valid response example: `rationale` explains decisive differences without repeating every parameter or fabricating performance facts:
 
 ```json
@@ -943,7 +1298,7 @@ Logs, traces, artifacts, and snapshots remain diagnostic. All unstructured evide
   cannot reconstruct exchanges that were not recorded.
 - Historical candidate seeds default off. Enabling `AGENTIC_BENCHMARK_SEEDS_ENABLED` defaults to `shadow`: record qualifying seed counts without merging. Only `AGENTIC_HISTORICAL_SEEDS_MODE=apply` admits seeds after `CandidateValidator`. Nullable prefill parameters can participate in ranking without comparing `None` against integers and interrupting planning.
 - Snapshots separately save the selected candidate and its `evidence`, planning evidence, and `decision_evidence_ids`. The latter deduplicates cluster overview, applicable AIC refs, selected-candidate evidence refs, and historical sample IDs; it excludes unselected candidates. AI scoring scope is not the entire hard-valid catalog.
-- Diagnostic RAG foundations support searchable logs/traces/artifacts with access controls and artifact-integrity checks. This RAG is not yet integrated into deployment planning or AI scoring and cannot affect candidate generation, selection, or performance decisions.
+- Diagnostic RAG foundations retain bounded projection contracts and artifact-integrity checks, but the concrete OpenSearch adapter is now public-RAG-only. The public lexical/vector search backend is not yet integrated into deployment planning or AI scoring and cannot affect candidate generation, selection, or performance decisions. RAG delivery is backend-first; eventual integration belongs to Agentic Deploy, not a separately maintained RAG frontend.
 
 #### Incomplete work and next steps
 

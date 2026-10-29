@@ -1,42 +1,67 @@
-"""Document source contracts remain usable without a document implementation."""
+"""D2 control, isolation, provenance and real create/refine integration tests."""
 
 import asyncio
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from llm_d_lens.agentic import document_evidence as documents
-from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome, DocumentEvidencePacket
-from llm_d_lens.agentic.facts import PlanningEvidence, ResolvedPlanningFacts
+from llm_d_lens.agentic.document_evidence import (
+    DocumentEvidenceOutcome,
+    DocumentEvidencePacket,
+    document_context,
+    resolve_document_evidence,
+)
+from llm_d_lens.agentic.facts import PlanningEvidence, ResolvedPlanningFacts, with_document_evidence
+from llm_d_lens.agentic.generator import (
+    AICandidateGenerator,
+    CandidateGenerationError,
+    CandidateProposal,
+    CandidateValidator,
+)
 from llm_d_lens.agentic.models import AgenticCandidateRefinementRequest, AgenticDeploymentCreateRequest
+from llm_d_lens.agentic.planner import (
+    DeterministicPlanner,
+    OpenAICompatiblePlanner,
+    OpenAIPlannerSettings,
+    PlanningFacts,
+)
 from llm_d_lens.agentic.planning_snapshot import PlanningSnapshotStore
+from llm_d_lens.agentic.router import _require_plan_evidence_access
 from llm_d_lens.agentic.service import AgenticDeploymentService
-from llm_d_lens.auth.contracts import Principal, RoleBinding
+from llm_d_lens.ai_providers.client import AIProviderClientError
+from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
+from llm_d_lens.benchmark_rag.case_retrieval import compact_reference
 from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION, Citation
-from llm_d_lens.core.exceptions import ForbiddenError
+from llm_d_lens.benchmark_rag.runtime import RuntimePolicy
+from llm_d_lens.benchmark_rag.search_contracts import (
+    EmbeddingContract,
+    EvidenceSearchError,
+    PublicSearchResponse,
+    PublicSearchResult,
+)
+from llm_d_lens.core.exceptions import ForbiddenError, PasswordChangeRequiredError, UnauthenticatedError
 
 
-def _principal():
+def _principal(*, user_id="allowed", granted=True, scope=ScopeType.GLOBAL):
     return Principal(
-        user_id="allowed",
+        user_id=user_id,
         username="test",
-        bindings=(RoleBinding("reader"),),
-        role_permissions={"reader": frozenset({QUERY_PERMISSION})},
+        bindings=(RoleBinding("reader", scope_type=scope, scope_cluster_id="cluster-a"),),
+        role_permissions={"reader": frozenset({QUERY_PERMISSION}) if granted else frozenset()},
     )
 
 
-def _packet():
-    return DocumentEvidencePacket(
-        citation_id="document:chunk-0",
-        evidence_id="passage-0",
-        chunk_id="chunk-0",
-        retrieval_build_id="build-1",
-        retrieval_mode="opensearch_lexical",
-        matched_branches=("lexical",),
+def _result(index=0, *, text="Untrusted deployment guide."):
+    return PublicSearchResult(
+        evidence_id=f"passage-{index}",
+        chunk_id=f"chunk-{index}",
         title="Deployment guidance",
-        text="Untrusted deployment guide.",
+        heading_path=("Deployment",),
+        text=text,
         citation=Citation(
             origin_id="guide:llm-d",
             source_revision="rev-1",
@@ -46,49 +71,729 @@ def _packet():
             source_pointer={"line_start": 3, "line_end": 4},
             published_manifest_id="manifest-1",
         ),
+        chunk_start=10,
+        chunk_end=10 + len(text),
+        score=1,
     )
 
 
-@pytest.mark.parametrize("principal", [None, _principal()])
-def test_provider_is_explicitly_disabled_without_configuration(monkeypatch, principal):
-    monkeypatch.setenv("LENS_PUBLIC_RAG_OPENSEARCH_URL", "http://must-not-be-used.invalid")
-    outcome = asyncio.run(documents.resolve_document_evidence("deployment guidance", principal))
-    assert outcome.status == "disabled"
-    assert outcome.mode == "disabled"
-    assert outcome.reason == "provider_not_installed"
-    assert not outcome.packets
-    assert outcome.retrieved_count == 0
-    assert outcome.metadata()["reason"] == "provider_not_installed"
+def _packet(index=0):
+    result = _result(index)
+    return DocumentEvidencePacket(
+        citation_id=f"document:{result.chunk_id}",
+        evidence_id=result.evidence_id,
+        chunk_id=result.chunk_id,
+        retrieval_build_id="build-1",
+        retrieval_mode="opensearch_lexical",
+        matched_branches=result.matched_branches,
+        title=result.title,
+        text=result.text,
+        citation=result.citation,
+        chunk_start=result.chunk_start,
+        chunk_end=result.chunk_end,
+    )
 
 
-def test_saved_packets_cannot_be_revalidated_by_an_absent_provider():
-    documents.assert_document_sources_current(())
-    with pytest.raises(ForbiddenError, match="provider is not installed"):
-        documents.assert_document_sources_current((_packet(),))
-
-
-def test_packet_contract_preserves_provenance_and_rejects_invalid_offsets():
-    packet = _packet()
-    assert packet.source_timestamp is None
-    assert packet.last_successful_sync_at is None
-    assert packet.citation.published_manifest_id == "manifest-1"
-    with pytest.raises(ValidationError, match="offsets"):
-        DocumentEvidencePacket.model_validate({**packet.model_dump(), "chunk_start": 1, "chunk_end": 2})
-    with pytest.raises(ValidationError, match="only enabled"):
-        DocumentEvidenceOutcome(status="disabled", packets=(packet,))
-    with pytest.raises(ValueError, match="unknown document citation"):
-        documents.validate_document_citations(["document:invented"], (packet,))
-
-
-def test_document_context_is_untrusted_and_separate_from_measurements():
-    context = documents.document_context((_packet(),))
-    assert "not measured numeric performance" in context["document_evidence_usage"]
-    assert context["document_evidence"][0]["text"] == _packet().text
-    assert documents.document_context(()) == {}
+def _policy(mode="enabled", **kwargs):
+    return RuntimePolicy(generation=7, agentic_mode=mode, agentic_user_ids=("allowed",), **kwargs)
 
 
 @pytest.fixture
-def orchestration(monkeypatch, tmp_path):
+def search(monkeypatch):
+    state = SimpleNamespace(
+        calls=[],
+        closed=0,
+        results=(_result(),),
+        error=None,
+        configured=0,
+        degraded_reason=None,
+        response_fields={},
+    )
+
+    def repository(**_kwargs):
+        state.configured += 1
+        return object()
+
+    class Service:
+        def __init__(self, _repository):
+            self.dao = SimpleNamespace(close=self.close)
+
+        def close(self):
+            state.closed += 1
+
+        async def search(self, request, principal):
+            state.calls.append((request, principal))
+            if state.error is not None:
+                raise state.error
+            return PublicSearchResponse.model_validate(
+                {
+                    "retrieval_build_id": "build-1",
+                    "index_stale": False,
+                    "candidate_count": len(state.results),
+                    "excluded_count": 0,
+                    "truncated": False,
+                    "results": state.results,
+                    "degraded_reason": state.degraded_reason,
+                    **state.response_fields,
+                }
+            )
+
+    monkeypatch.setattr(documents, "configured_repository", repository)
+    monkeypatch.setattr(documents, "PublicRagSearchService", Service)
+    monkeypatch.setattr(documents, "load_runtime_policy", _policy)
+    return state
+
+
+@pytest.mark.parametrize(
+    ("policy", "principal"),
+    [
+        (RuntimePolicy(), _principal()),
+        (_policy(), _principal(user_id="not-allowed")),
+        (_policy(), None),
+        (_policy(), Principal("admin", "admin", bindings=(RoleBinding("admin"),))),
+        (_policy(search_enabled=False), _principal()),
+        (_policy(advanced_search_enabled=False), _principal()),
+    ],
+)
+def test_disabled_and_nonallowlisted_do_not_search(search, monkeypatch, policy, principal):
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: policy)
+    outcome = asyncio.run(resolve_document_evidence("model deployment", principal))
+    assert outcome.status == "disabled"
+    assert not outcome.packets
+    assert not search.calls and not search.configured
+
+
+@pytest.mark.parametrize("principal", [_principal(granted=False), _principal(scope=ScopeType.CLUSTER)])
+def test_allowlist_does_not_replace_global_query_grant(search, principal):
+    outcome = asyncio.run(resolve_document_evidence("model deployment", principal))
+    assert outcome.status == "forbidden" and outcome.reason == "query_forbidden"
+    assert not outcome.packets
+    resolved = with_document_evidence(
+        ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), outcome
+    )
+    assert resolved.evidence[0].status == "forbidden"
+    assert resolved.trace[0]["reason"] == "query_forbidden"
+    assert not search.calls and not search.configured
+
+
+def test_password_change_requirement_is_not_converted_to_document_fallback(search):
+    with pytest.raises(PasswordChangeRequiredError):
+        asyncio.run(resolve_document_evidence("model", replace(_principal(), must_change_password=True)))
+    assert not search.configured
+
+
+def test_allowlisted_disabled_auth_sentinel_is_explicitly_forbidden_without_retrieval(search, monkeypatch):
+    principal = replace(_principal(user_id="system"), authz_version=0)
+    monkeypatch.setattr(
+        documents,
+        "load_runtime_policy",
+        lambda: RuntimePolicy(generation=7, agentic_mode="enabled", agentic_user_ids=("system",)),
+    )
+    outcome = asyncio.run(resolve_document_evidence("model", principal))
+    assert outcome.status == "forbidden" and outcome.reason == "query_forbidden"
+    assert outcome.mode == "enabled" and outcome.generation == 7
+    assert not outcome.packets
+    assert not search.calls and not search.configured
+
+
+@pytest.mark.parametrize("error_type", [ForbiddenError, UnauthenticatedError])
+def test_service_authorization_failure_is_explicit_and_closes_owned_resources(search, error_type):
+    search.error = error_type("private grant details")
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "forbidden" and outcome.reason == "query_forbidden"
+    assert "private grant" not in outcome.model_dump_json()
+    assert search.closed == 1
+
+
+def test_service_password_change_requirement_propagates_and_closes_owned_resources(search):
+    search.error = PasswordChangeRequiredError("password change required")
+    with pytest.raises(PasswordChangeRequiredError):
+        asyncio.run(resolve_document_evidence("model", _principal()))
+    assert search.closed == 1
+
+
+def test_exact_packet_and_safe_diagnostic_provenance_schema(search, monkeypatch):
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: _policy(agentic_search_mode="hybrid"))
+    search.response_fields = {
+        "retrieval_mode": "opensearch_lexical",
+        "retrieval_build_id": "actual-fixed-build",
+        "embedding_contract": EmbeddingContract(),
+        "index_stale": True,
+        "rebuild_required": True,
+        "degraded_reason": "vector_unavailable",
+        "branch_status": {
+            "lexical": {"status": "ok", "candidate_count": 7},
+            "vector": {"status": "failed", "error": "vector_unavailable"},
+        },
+    }
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    packet = outcome.packets[0].model_dump(mode="json")
+    assert set(packet) == {
+        "citation_id",
+        "evidence_id",
+        "chunk_id",
+        "retrieval_build_id",
+        "retrieval_mode",
+        "embedding_contract",
+        "matched_branches",
+        "lexical_rank",
+        "vector_rank",
+        "score",
+        "fusion_score",
+        "source_timestamp",
+        "last_successful_sync_at",
+        "title",
+        "text",
+        "citation",
+        "chunk_start",
+        "chunk_end",
+        "source_trust",
+        "evidence_kind",
+    }
+    assert packet["chunk_id"] == "chunk-0"
+    assert packet["retrieval_build_id"] == "actual-fixed-build"
+    assert packet["retrieval_mode"] == "opensearch_lexical"
+    assert packet["matched_branches"] == ["lexical"]
+    assert packet["embedding_contract"] == EmbeddingContract().model_dump(mode="json")
+    metadata = outcome.metadata()
+    assert set(metadata) == {
+        "status",
+        "mode",
+        "generation",
+        "reason",
+        "retrieved_count",
+        "rejected_count",
+        "degraded",
+        "requested_mode",
+        "retrieval_build_id",
+        "retrieval_mode",
+        "embedding_contract",
+        "branch_status",
+        "degraded_reason",
+        "index_stale",
+        "rebuild_required",
+    }
+    assert metadata["requested_mode"] == "hybrid"
+    assert metadata["reason"] == "retrieval_stale"
+    assert metadata["index_stale"] and metadata["rebuild_required"] and metadata["degraded"]
+    assert metadata["degraded_reason"] == "vector_unavailable"
+    assert metadata["branch_status"]["vector"] == {
+        "status": "failed",
+        "candidate_count": 0,
+        "error": "vector_unavailable",
+    }
+    resolved = with_document_evidence(
+        ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), outcome
+    )
+    assert resolved.trace[0] == {"phase": "document_rag", **metadata}
+    for key, value in metadata.items():
+        assert resolved.evidence[0].details[key] == value
+    assert resolved.evidence[0].details["document_evidence"] == [packet]
+    assert resolved.evidence[0].details["model_reference_map"] == {
+        compact_reference(packet["citation_id"], "document"): packet["citation_id"]
+    }
+    assert len(outcome.packets) <= 5
+
+
+@pytest.mark.parametrize(
+    ("retrieval_mode", "matched_branches", "lexical_rank", "vector_rank", "score", "fusion_score", "degraded_reason"),
+    [
+        ("opensearch_lexical", ("lexical",), 7, None, 2.5, None, None),
+        ("opensearch_vector", ("vector",), None, 3, 0.9, None, None),
+        ("hybrid", ("lexical", "vector"), 7, 3, 0.032, 0.032, None),
+        ("opensearch_lexical", ("lexical",), 7, None, 0.015, None, "vector_unavailable"),
+        ("opensearch_lexical", ("lexical",), None, None, 0, None, None),
+    ],
+)
+def test_packet_preserves_authoritative_branch_ranks_and_scores(
+    search, retrieval_mode, matched_branches, lexical_rank, vector_rank, score, fusion_score, degraded_reason
+):
+    search.results = (
+        _result().model_copy(
+            update={
+                "matched_branches": matched_branches,
+                "lexical_rank": lexical_rank,
+                "vector_rank": vector_rank,
+                "score": score,
+                "fusion_score": fusion_score,
+            }
+        ),
+    )
+    search.response_fields = {"retrieval_mode": retrieval_mode}
+    search.degraded_reason = degraded_reason
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    packet = outcome.packets[0]
+    assert packet.lexical_rank == lexical_rank
+    assert packet.vector_rank == vector_rank
+    assert packet.score == score
+    assert packet.fusion_score == fusion_score
+    payload = document_context(outcome.packets)["document_evidence"][0]
+    assert set(payload) == {"title", "text", "decision_relevance"}
+    assert payload["text"] == packet.text
+
+
+def test_packet_does_not_infer_timestamps_from_citation_pointers_or_revisions(search):
+    result = _result()
+    search.results = (
+        result.model_copy(
+            update={
+                "citation": result.citation.model_copy(
+                    update={
+                        "source_revision": "2026-10-27",
+                        "source_pointer": {
+                            "timestamp": "2026-10-27T12:00:00Z",
+                            "last_successful_sync_at": "2026-10-27T13:00:00Z",
+                        },
+                    }
+                )
+            }
+        ),
+    )
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    packet = outcome.packets[0]
+    assert packet.source_timestamp is None
+    assert packet.last_successful_sync_at is None
+    assert packet.citation == search.results[0].citation
+    payload = document_context(outcome.packets)["document_evidence"][0]
+    assert "source_timestamp" not in payload
+    assert "last_successful_sync_at" not in payload
+
+
+def test_packet_new_provenance_fields_remain_optional_for_existing_callers():
+    packet = _packet()
+    assert packet.lexical_rank is None and packet.vector_rank is None
+    assert packet.score is None and packet.fusion_score is None
+    assert packet.source_timestamp is None and packet.last_successful_sync_at is None
+
+
+@pytest.mark.parametrize(
+    ("stale", "degraded_reason", "reason"),
+    [(False, None, "no_match"), (True, None, "retrieval_stale"), (False, "vector_unavailable", "retrieval_degraded")],
+)
+def test_no_match_stale_and_degraded_outcomes_are_explicit(search, stale, degraded_reason, reason):
+    search.results = ()
+    search.response_fields = {
+        "index_stale": stale,
+        "rebuild_required": stale,
+        "degraded_reason": degraded_reason,
+    }
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "empty" and outcome.reason == reason
+    assert outcome.index_stale is stale
+    assert outcome.degraded is (degraded_reason is not None)
+    assert not outcome.packets
+
+
+def test_shadow_provenance_has_no_source_text_query_or_unsafe_errors(search, monkeypatch):
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: _policy("shadow", agentic_search_mode="hybrid"))
+    search.response_fields = {
+        "retrieval_mode": "opensearch_lexical",
+        "degraded_reason": "private source text",
+        "embedding_contract": EmbeddingContract(),
+        "branch_status": {"vector": {"status": "failed", "error": "private endpoint and source"}},
+    }
+    outcome = asyncio.run(resolve_document_evidence("private query", _principal()))
+    assert outcome.status == "shadow" and not outcome.packets
+    assert outcome.retrieval_mode == "opensearch_lexical"
+    assert outcome.degraded_reason == "retrieval_degraded"
+    payload = outcome.model_dump_json()
+    for value in ("private", "Untrusted deployment guide", "chunk-0", "passage-0", "artifact://"):
+        assert value not in payload
+    assert outcome.branch_status["vector"].error == "retrieval_degraded"
+
+
+def test_enabled_search_is_bounded_and_keeps_citation_offsets(search, monkeypatch):
+    search.results = tuple(_result(index) for index in range(8))
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: _policy(agentic_search_mode="hybrid"))
+    principal = _principal()
+    outcome = asyncio.run(resolve_document_evidence("model deployment", principal))
+    request, caller = search.calls[0]
+    assert caller is principal
+    assert request.limit == 20 and request.mode == "hybrid" and request.query_enhancement
+    assert len(outcome.packets) == 5
+    assert outcome.packets[0].citation == search.results[0].citation
+    assert outcome.packets[0].chunk_start == 10
+    assert outcome.packets[0].chunk_end - 10 == len(outcome.packets[0].text)
+    assert outcome.packets[0].source_trust == "untrusted_source_data"
+    assert outcome.packets[0].evidence_kind == "document_context_not_measurement"
+    assert search.closed == 1
+
+
+def test_planning_reranks_candidate_pool_before_five_passage_limit(search):
+    search.results = (
+        *(_result(i, text="General rollout: deploy, monitor, cut over and clean up.") for i in range(6)),
+        _result(6, text="Prefill decode disaggregation requires configuring KV transfer and separate replicas."),
+        _result(7, text="Precise prefix cache routing requires enabling kv-scorer and cache tracking."),
+        _result(8, text="Tiered prefix cache requires CPU buffer configuration; offload has transfer overhead."),
+    )
+    outcome = asyncio.run(resolve_document_evidence("configuration limitations", _principal()))
+    assert [packet.chunk_id for packet in outcome.packets[:3]] == ["chunk-6", "chunk-7", "chunk-8"]
+    assert outcome.retrieved_count == 9
+    assert outcome.packets[0].text == search.results[6].text
+    assert outcome.packets[0].citation == search.results[6].citation
+
+
+def test_query_preserves_workload_statistics_slos_and_source_clues():
+    from llm_d_lens.agentic.planner import WorkloadProfile
+
+    facts = PlanningFacts(
+        8,
+        80,
+        4,
+        planning_hardware_model="H100",
+        ttft_slo_ms=100,
+        tpot_slo_ms=20,
+        workload_profile=WorkloadProfile(
+            mean_input_tokens=2260, p95_input_tokens=4096, mean_output_tokens=87, concurrency=20
+        ),
+    )
+    query = documents.planning_document_query("Qwen/Qwen3-0.6B", facts, "precise-prefix-cache-routing")
+    for expected in (
+        "ISL_mean=2260",
+        "ISL_p95=4096",
+        "OSL_mean=87",
+        "concurrency=20",
+        "TTFT_ms=100",
+        "TPOT_ms=20",
+        "hardware=H100",
+        "kv-scorer",
+        "prefix-scorer",
+    ):
+        assert expected in query
+    assert len(query) <= 2048
+
+
+def test_title_and_source_path_alone_are_not_configuration_support():
+    packet = _packet().model_copy(
+        update={
+            "title": "precise-prefix-cache-routing configuration",
+            "text": "Production readiness for chat: supports the OpenAI Chat API.",
+        }
+    )
+    support = documents.document_decision_relevance(packet)
+    assert support["category"] == "generic_context"
+    assert support["techniques"] == []
+    context = document_context((packet,))["document_evidence"][0]
+    assert context["decision_relevance"] == support
+    assert "not configuration support" in document_context((packet,))["document_evidence_usage"]
+
+
+def test_rerank_preserves_technique_diversity_and_complete_limitation_text():
+    texts = [
+        "Prefill decode disaggregation requires configuring separate replicas and KV transfer.",
+        "Prefill decode disaggregation requires configuring separate worker pools.",
+        "Tiered prefix cache requires CPU buffer configuration; it is not supported on all backends.",
+    ]
+    packets = tuple(_packet(i).model_copy(update={"text": text}) for i, text in enumerate(texts))
+    ranked = documents.rank_document_evidence(packets)
+    assert [packet.chunk_id for packet in ranked] == ["chunk-0", "chunk-2", "chunk-1"]
+    assert ranked[1].text == texts[2]
+    assert documents.document_decision_relevance(ranked[1])["category"] == "configuration_guidance"
+
+
+def test_candidate_specific_rerank_does_not_prefer_an_unrelated_technique():
+    unrelated = _packet().model_copy(update={"text": "Tiered prefix cache requires CPU buffer configuration."})
+    relevant = _packet(1).model_copy(update={"text": "Prefill decode disaggregation separates execution roles."})
+    assert documents.rank_document_evidence((unrelated, relevant), techniques=("pd-disaggregation",)) == (
+        relevant,
+        unrelated,
+    )
+
+
+def test_target_scope_precedes_keyword_count_and_unknown_hardware_stays_neutral():
+    broad = _packet().model_copy(
+        update={
+            "text": "Prefill decode disaggregation requires configuring tiered prefix cache and precise prefix cache routing.",
+            "citation": _packet().citation.model_copy(
+                update={"source_path": "guides/agentic-serving/qwen3-coder-480b-tpu.md"}
+            ),
+        }
+    )
+    guide = _packet(1).model_copy(
+        update={"text": "Prefill decode disaggregation requires configuring KV transfer and separate replicas."}
+    )
+    ranked = documents.rank_document_evidence(
+        (broad, guide), model="Qwen/Qwen3-0.6B", hardware="H100", techniques=("pd-disaggregation",)
+    )
+    assert ranked == (guide, broad)
+    cues = documents.document_decision_relevance(broad, model="Qwen/Qwen3-0.6B", hardware="H100")
+    assert cues["model_scope"] == "other_model_example"
+    assert cues["hardware_scope"] == "unspecified"
+    target = guide.model_copy(
+        update={"citation": guide.citation.model_copy(update={"source_path": "guides/qwen3-0.6b.md"})}
+    )
+    assert documents.document_decision_relevance(target, model="Qwen/Qwen3-0.6B")["model_scope"] == "target_mentioned"
+
+
+def test_technique_coverage_keeps_source_specific_guidance_before_repeated_generic_examples():
+    texts = [
+        "H100 prefill decode disaggregation requires configuring tiered prefix cache offload.",
+        "H100 prefill decode disaggregation requires configuring worker replicas.",
+        "Qwen3-32B H100 precise prefix cache routing requires enabling kv-scorer.",
+    ]
+    packets = tuple(_packet(i).model_copy(update={"text": text}) for i, text in enumerate(texts))
+    ranked = documents.rank_document_evidence(
+        packets,
+        model="Qwen/Qwen3-0.6B",
+        hardware="H100",
+        techniques=("pd-disaggregation", "tiered-prefix-cache", "precise-prefix-cache-routing"),
+    )
+    assert ranked[:2] == (packets[0], packets[2])
+    assert (
+        documents.document_decision_relevance(ranked[1], model="Qwen/Qwen3-0.6B")["model_scope"]
+        == "other_model_example"
+    )
+
+
+@pytest.mark.parametrize(
+    ("technique", "text"),
+    [
+        ("pd-disaggregation", "MooncakeConnector requires same TP on prefill and decode."),
+        ("precise-prefix-cache-routing", "--page-size=64 matches blockSizeTokens; requires render/standalone/."),
+        ("tiered-prefix-cache", "CPU cache must be configured manually (lruCapacityPerServer)."),
+    ],
+)
+def test_source_clues_assist_actual_configuration_and_constraint_bodies(technique, text):
+    packet = _packet().model_copy(
+        update={
+            "text": text,
+            "citation": _packet().citation.model_copy(update={"source_path": f"guides/{technique}/README.md"}),
+        }
+    )
+    relevance = documents.document_decision_relevance(packet)
+    assert relevance["category"] == "configuration_guidance"
+    assert technique in relevance["techniques"]
+
+
+def test_policy_revocation_during_supplement_discards_previously_enabled_packets(monkeypatch):
+    from llm_d_lens.benchmark_rag.case_retrieval import CaseEvidenceBundle, InternalCaseOutcome
+
+    async def resolve(question, _principal):
+        if "pd-disaggregation" in question:
+            return DocumentEvidenceOutcome(status="disabled")
+        return DocumentEvidenceOutcome(status="available", mode="enabled", packets=(_packet(1),))
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_document_evidence", resolve)
+    facts = PlanningFacts(8, 32, 4)
+    template = DeterministicPlanner().candidates(facts)[0]
+    candidates = [
+        template.model_copy(update={"id": technique, "provider_ref": technique})
+        for technique in ("optimized-baseline", "pd-disaggregation")
+    ]
+    selected, _, outcome, _, bundle = asyncio.run(
+        AgenticDeploymentService()._candidate_document_context(
+            candidates,
+            replace(facts, document_evidence=(_packet(),)),
+            PlanningEvidence(id="public-rag:query", source="public-benchmark-rag", status="empty"),
+            DocumentEvidenceOutcome(status="available", mode="enabled", packets=(_packet(),)),
+            InternalCaseOutcome(),
+            CaseEvidenceBundle(),
+            "model",
+            _principal(),
+            None,
+        )
+    )
+    assert outcome.status == "disabled"
+    assert not outcome.packets and not selected.document_evidence
+    assert bundle.branch_status["document_supplement"]["status"] == "partial"
+
+
+def test_oversized_and_invalid_offset_passages_are_rejected_not_truncated(search):
+    search.results = (
+        _result(text="x" * 4001),
+        _result(1).model_copy(update={"chunk_end": 999}),
+        _result(2),
+    )
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "available"
+    assert outcome.rejected_count == 2
+    assert [packet.citation_id for packet in outcome.packets] == ["document:chunk-2"]
+
+
+def test_rejected_passages_and_degraded_search_have_explicit_sanitized_outcomes(search):
+    search.results = (_result(text="x" * 4001),)
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "empty" and outcome.reason == "passages_rejected"
+    search.results = (_result(),)
+    search.degraded_reason = "private endpoint details"
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "available" and outcome.degraded
+    assert outcome.reason == "retrieval_degraded"
+    assert "private endpoint" not in outcome.model_dump_json()
+
+
+def test_search_disabled_status_is_observable_without_packets(search, monkeypatch):
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: _policy(advanced_search_enabled=False))
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    resolved = with_document_evidence(
+        ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), outcome
+    )
+    assert resolved.evidence[0].status == "disabled"
+    assert resolved.evidence[0].details["reason"] == "search_disabled"
+    assert "document_evidence" not in resolved.evidence[0].details
+    assert not search.calls
+
+
+def test_shadow_discards_all_source_content_citations_and_scores(search, monkeypatch):
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: _policy("shadow"))
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "shadow"
+    assert not outcome.packets
+    serialized = outcome.model_dump_json()
+    for forbidden in ("Untrusted deployment guide", "chunk-0", "passage-0", "artifact://", "score", "citation"):
+        assert forbidden not in serialized
+    assert document_context(outcome.packets) == {}
+    resolved = with_document_evidence(
+        ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), outcome
+    )
+    assert not resolved.facts.document_evidence
+    assert "document_evidence" not in resolved.evidence[0].details
+    assert search.closed == 1
+
+
+def test_shadow_packet_construction_is_rejected():
+    with pytest.raises(ValidationError, match="only enabled"):
+        DocumentEvidenceOutcome(status="shadow", mode="shadow", packets=(_packet(),))
+
+
+def test_expected_retrieval_failure_is_explicit_and_sanitized(search, caplog):
+    search.error = EvidenceSearchError("sensitive source text / secret endpoint")
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "unavailable"
+    assert outcome.reason == "retrieval_unavailable"
+    assert "sensitive" not in outcome.model_dump_json() + caplog.text
+    assert search.closed == 1
+
+
+@pytest.mark.parametrize("error", [RuntimeError("programming bug"), asyncio.CancelledError()])
+def test_unexpected_failure_and_cancellation_propagate_and_close(search, error):
+    search.error = error
+    with pytest.raises(type(error)):
+        asyncio.run(resolve_document_evidence("model", _principal()))
+    assert search.closed == 1
+
+
+def test_corrupt_policy_is_explicit_without_search(search, monkeypatch):
+    def invalid_policy():
+        raise EvidenceSearchError("private path")
+
+    monkeypatch.setattr(documents, "load_runtime_policy", invalid_policy)
+    outcome = asyncio.run(resolve_document_evidence("model", _principal()))
+    assert outcome.status == "unavailable" and outcome.reason == "invalid_policy"
+    assert not search.configured
+
+
+def test_packets_do_not_change_deterministic_ranking_or_measured_evidence():
+    planner = DeterministicPlanner()
+    facts = PlanningFacts(8, 32, 4, evidence_ids=("cluster-overview:c", "aic:search"))
+    original = ResolvedPlanningFacts(
+        facts=replace(facts, public_rag_evidence=({"evidence_id": "public-rag:measurement"},)),
+        cluster_snapshot={},
+        evidence=[PlanningEvidence(id="aic:search", source="aic", status="available")],
+    )
+    resolved = with_document_evidence(
+        original, DocumentEvidenceOutcome(status="available", mode="enabled", packets=(_packet(),))
+    )
+    candidates = planner.candidates(facts)
+    assert planner.ranking_trace(facts, candidates) == planner.ranking_trace(resolved.facts, candidates)
+    assert resolved.facts.public_rag_evidence == original.facts.public_rag_evidence
+    assert resolved.facts.evidence_ids == original.facts.evidence_ids
+
+
+@pytest.mark.parametrize("reference", ["document:chunk-0", "document:invented", "d:0000000000"])
+def test_generator_does_not_promote_model_document_ids_to_used_evidence(reference):
+    proposal = CandidateProposal(
+        provider_ref="optimized-baseline",
+        replicas=1,
+        tensor_parallel_size=1,
+        rationale="A bounded proposal.",
+        evidence_ids=[reference],
+    )
+    facts = replace(PlanningFacts(8, 32, 4), document_evidence=(_packet(),))
+    result = CandidateValidator().validate(facts, [proposal])
+    assert not result.accepted[0].evidence_ids
+    assert result.accepted[0].reference_material_ids == ["document:chunk-0"]
+
+
+def test_generator_keeps_supplied_document_material_separate_from_measurements():
+    facts = replace(PlanningFacts(8, 32, 4), document_evidence=(_packet(),))
+    result = CandidateValidator().validate(
+        facts,
+        [
+            CandidateProposal(
+                provider_ref="optimized-baseline",
+                replicas=1,
+                tensor_parallel_size=1,
+                rationale="Qualitative context.",
+            )
+        ],
+    )
+    assert result.accepted[0].reference_material_ids == ["document:chunk-0"]
+    assert not result.accepted[0].evidence_ids
+    assert not result.accepted[0].historical_benchmarks
+
+
+def test_ai_ranking_sends_document_semantics_and_records_sources_only_on_server(monkeypatch):
+    captured = {}
+    facts = replace(PlanningFacts(8, 32, 1), document_evidence=(_packet(),))
+    candidate = next(c for c in DeterministicPlanner().candidates(facts) if c.deployable)
+
+    class Client:
+        async def complete(self, **kwargs):
+            captured.update(kwargs)
+            return json.dumps(
+                {
+                    "candidate_id": candidate.id,
+                    "candidate_ids": [candidate.id],
+                    "scores": {candidate.id: 1},
+                    "confidence": 0.8,
+                    "rationale": "Qualitative guidance.",
+                }
+            )
+
+    monkeypatch.setattr("llm_d_lens.agentic.planner.client_for", lambda **_kwargs: Client())
+    planner = OpenAICompatiblePlanner("http://provider", "planner")
+    decision, _ = asyncio.run(planner.recommend(facts, [candidate]))
+    assert decision.reference_material_ids == ["document:chunk-0"]
+    assert not decision.evidence_ids
+    payload = json.loads(captured["user_content"].split("Planning context (JSON):\n", 1)[1].split("\n\n")[0])
+    assert "citation_id" not in payload["document_evidence"][0]
+    assert "document:chunk-0" not in json.dumps(captured)
+    assert compact_reference("document:chunk-0", "document") not in json.dumps(captured)
+    assert "document_evidence_ids" not in json.dumps(captured)
+    assert "document_evidence" not in payload["planning_facts"]
+    assert "not measured numeric performance" in payload["document_evidence_usage"]
+    assert "compatibility proof" in captured["system_prompt"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_generator_prompt_only_contains_enabled_packets(monkeypatch, enabled):
+    captured = {}
+
+    class Client:
+        async def complete_tool_turn(self, **kwargs):
+            captured.update(kwargs)
+            raise AIProviderClientError("capture only")
+
+    class Tools:
+        async def available_tools(self):
+            return [
+                {"name": name, "description": "test", "input_schema": {"type": "object"}}
+                for name in ("get_cluster_overview", "search_candidates")
+            ]
+
+    monkeypatch.setattr("llm_d_lens.agentic.generator.client_for", lambda **_kwargs: Client())
+    facts = replace(PlanningFacts(8, 32, 4), document_evidence=(_packet(),) if enabled else ())
+    generator = AICandidateGenerator(OpenAIPlannerSettings(base_url="http://provider", model="test"), tools=Tools())
+    with pytest.raises(CandidateGenerationError):
+        asyncio.run(generator.generate("c", "m", facts, None))
+    payload = json.loads(captured["messages"][0]["content"].split("Planning context (JSON):\n", 1)[1])
+    assert ("document_evidence" in payload) is enabled
+    assert "document_evidence" not in payload["deployment_intent"]
+
+
+@pytest.fixture
+def orchestration(monkeypatch, tmp_path, search):
     from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome
 
     captured = []
@@ -121,12 +826,13 @@ def orchestration(monkeypatch, tmp_path):
     monkeypatch.setattr(AgenticDeploymentService, "_public_rag_context", public_context)
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", resolve)
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_internal_cases", internal)
+    monkeypatch.setattr("llm_d_lens.agentic.service.assert_document_sources_current", lambda _packets: None)
     monkeypatch.setattr("llm_d_lens.agentic.service.require_active_session", lambda _id: SimpleNamespace(server_id="c"))
     monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_provider_id", lambda _id: None)
     service = AgenticDeploymentService(snapshot_store=PlanningSnapshotStore(tmp_path))
     request = AgenticDeploymentCreateRequest(
         model="model",
-        deployment_name="split-test",
+        deployment_name="d2-test",
         cluster_session_id="a" * 36,
         storage_volume_id="volume",
         replicas=1,
@@ -136,48 +842,171 @@ def orchestration(monkeypatch, tmp_path):
     return service, request, captured, tmp_path
 
 
-def test_actual_create_refine_works_without_document_backend(orchestration):
+def test_actual_create_refine_replaces_packets_and_disabled_removes_old_ids(orchestration, monkeypatch, search):
     service, request, captured, root = orchestration
     run = asyncio.run(service.create(request, principal=_principal()))
-    assert run.selected_candidate is not None
-    assert not captured[-1].document_evidence
+    supplement = next(item for item in run.planning_evidence if item.source == "configuration-cases").details[
+        "branch_status"
+    ]["document_supplement"]
+    assert len(search.calls) == 1 + supplement["query_count"]
+    assert supplement["query_count"] == len(set(supplement["terms"]))
+    searches_before_refine = len(search.calls)
+    assert captured[-1].document_evidence[0].citation_id == "document:chunk-0"
     evidence = next(item for item in run.planning_evidence if item.source == "public-document-rag")
-    assert evidence.status == "disabled"
-    assert evidence.details["reason"] == "provider_not_installed"
+    assert evidence.details["document_evidence"][0]["citation_id"] == "document:chunk-0"
     snapshot = json.loads((root / run.planning_snapshot_path).read_text())
-    assert not snapshot["resolved_planning_facts"]["document_evidence"]
+    assert snapshot["resolved_planning_facts"]["document_evidence"][0]["citation_id"] == "document:chunk-0"
+    search.results = (_result(1),)
     run = asyncio.run(
-        service.refine(
-            run.id,
-            AgenticCandidateRefinementRequest(planner_prompt="refine"),
-            principal=_principal(),
-        )
+        service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="refine"), principal=_principal())
     )
-    assert run.selected_candidate is not None
+    evidence = next(item for item in run.planning_evidence if item.source == "public-document-rag")
+    assert len(evidence.details["document_evidence"]) == 1
+    assert evidence.details["document_evidence"][0]["citation_id"] == "document:chunk-1"
+    assert "document:chunk-0" not in run.model_dump_json()
+    refined_supplement = next(item for item in run.planning_evidence if item.source == "configuration-cases").details[
+        "branch_status"
+    ]["document_supplement"]
+    assert len(search.calls) == searches_before_refine + 1 + refined_supplement["query_count"]
+    searches_before_disabled = len(search.calls)
+    run.decision_evidence_ids.append("document:chunk-1")
+    run.selected_candidate.evidence.append("document:chunk-1")
+    monkeypatch.setattr(documents, "load_runtime_policy", RuntimePolicy)
+    run = asyncio.run(
+        service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="disable"), principal=_principal())
+    )
     assert not captured[-1].document_evidence
+    assert not any(item.source == "public-document-rag" for item in run.planning_evidence)
     assert "document:chunk-" not in run.model_dump_json()
-    assert any(item.source == "configuration-cases" for item in run.planning_evidence)
+    assert len(search.calls) == searches_before_disabled
 
 
-def test_refine_removes_document_packets_from_an_old_plan(orchestration, monkeypatch):
+def test_actual_shadow_create_never_supplies_packets_or_citations(orchestration, monkeypatch):
+    service, request, captured, root = orchestration
+    monkeypatch.setattr(documents, "load_runtime_policy", lambda: _policy("shadow"))
+    run = asyncio.run(service.create(request, principal=_principal()))
+    assert not captured[-1].document_evidence
+    assert not any(reference.startswith("document:") for reference in run.decision_evidence_ids)
+    payload = run.model_dump_json() + (root / run.planning_snapshot_path).read_text()
+    assert "Untrusted deployment guide" not in payload and "document:chunk-0" not in payload
+    evidence = next(item for item in run.planning_evidence if item.source == "public-document-rag")
+    assert evidence.status == "shadow" and "document_evidence" not in evidence.details
+
+
+def test_saved_document_plan_reads_require_query_access(orchestration):
+    service, request, _captured, _root = orchestration
+    run = asyncio.run(service.create(request, principal=_principal()))
+    with pytest.raises(UnauthenticatedError):
+        _require_plan_evidence_access(run, None)
+    with pytest.raises(ForbiddenError):
+        _require_plan_evidence_access(run, _principal(scope=ScopeType.CLUSTER))
+    _require_plan_evidence_access(run, _principal())
+
+
+def test_case_supplement_is_bounded_and_failures_survive_create_refine(orchestration, monkeypatch):
+    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome
+
     service, request, captured, _root = orchestration
+    queries = []
+    candidate_batches = []
+    candidate_document_context = AgenticDeploymentService._candidate_document_context
 
-    async def previously_enabled(*_args):
+    async def candidate_context(self, candidates, *args, **kwargs):
+        candidate_batches.append(tuple(candidate for candidate in candidates if candidate.deployable)[:10])
+        return await candidate_document_context(self, candidates, *args, **kwargs)
+
+    async def public_context(_self, _cluster, model, facts, _principal, _progress):
+        entry = {
+            "evidence_id": "public-rag:measured",
+            "item_id": "measured",
+            "metric": "ttft",
+            "statistic": "p95",
+            "value": "100",
+            "unit": "ms",
+            "citation": {"origin_id": "public", "source_revision": "rev", "sha256": "a" * 64},
+            "experiment": {
+                "item_id": "experiment",
+                "origin_id": "public",
+                "model": model,
+                "hardware": "accelerator",
+                "runtime": "vllm",
+                "workload": {},
+                "configuration": {"optimizations": ["prefix-cache", "routing", "never-query-third"]},
+            },
+        }
+        return replace(facts, public_rag_evidence=(entry,)), PlanningEvidence(
+            id="public-rag:query",
+            source="public-benchmark-rag",
+            status="available",
+            details={"message": "Measured experiment", "target_hardware": {"model": "accelerator"}},
+        )
+
+    async def internal(*_args, **_kwargs):
+        return InternalCaseOutcome(status="forbidden", reason="query_forbidden")
+
+    async def documents_query(question, _principal):
+        queries.append(question)
+        if any(term in question for term in documents.DOCUMENT_TECHNIQUES):
+            raise TimeoutError
         return DocumentEvidenceOutcome(status="available", mode="enabled", packets=(_packet(),))
 
-    with monkeypatch.context() as enabled:
-        enabled.setattr("llm_d_lens.agentic.service.resolve_document_evidence", previously_enabled)
-        enabled.setattr("llm_d_lens.agentic.service.assert_document_sources_current", lambda _packets: None)
-        run = asyncio.run(service.create(request, principal=_principal()))
+    monkeypatch.setattr(AgenticDeploymentService, "_public_rag_context", public_context)
+    monkeypatch.setattr(AgenticDeploymentService, "_candidate_document_context", candidate_context)
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_internal_cases", internal)
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_document_evidence", documents_query)
+    run = asyncio.run(service.create(request, principal=_principal()))
+    assert captured[-1].configuration_cases
     assert captured[-1].document_evidence
-    run.decision_evidence_ids.append("document:chunk-0")
-    run.selected_candidate.evidence.append("document:chunk-0")
-    run = asyncio.run(
-        service.refine(
-            run.id,
-            AgenticCandidateRefinementRequest(planner_prompt="without documents"),
-            principal=_principal(),
+    packet = next(item for item in run.planning_evidence if item.source == "configuration-cases")
+    assert packet.details["branch_status"]["internal_sql"]["status"] == "forbidden"
+    supplement = packet.details["branch_status"]["document_supplement"]
+    expected_terms = list(
+        dict.fromkeys(
+            candidate.provider_ref
+            for candidate in candidate_batches[0]
+            if candidate.provider_ref in documents.DOCUMENT_TECHNIQUES
         )
     )
-    assert not captured[-1].document_evidence
-    assert "document:chunk-0" not in run.model_dump_json()
+    assert len(queries) == 1 + len(expected_terms)
+    assert supplement["candidate_ids"] == [candidate.id for candidate in candidate_batches[0]]
+    assert supplement["terms"] == expected_terms
+    assert all(term in query for term, query in zip(expected_terms, queries[1:], strict=True))
+    assert all(term not in {"prefix-cache", "routing", "never-query-third"} for term in expected_terms)
+    assert supplement["status"] == "partial"
+    assert all(item["status"] == "unavailable" for item in supplement["outcomes"])
+    queries_before_refine = len(queries)
+    run = asyncio.run(
+        service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="same"), principal=_principal())
+    )
+    refined_supplement = next(item for item in run.planning_evidence if item.source == "configuration-cases").details[
+        "branch_status"
+    ]["document_supplement"]
+    assert refined_supplement["candidate_ids"] == [candidate.id for candidate in candidate_batches[1]]
+    assert len(queries) == queries_before_refine + 1 + refined_supplement["query_count"]
+    assert all(
+        term in query
+        for term, query in zip(refined_supplement["terms"], queries[queries_before_refine + 1 :], strict=True)
+    )
+    assert captured[-1].configuration_cases[0]["experiment_id"] == "experiment"
+    assert (
+        next(item for item in run.planning_evidence if item.source == "configuration-cases").details[
+            "token_count_upper_bound"
+        ]
+        <= 8000
+    )
+
+
+def test_document_withdrawal_during_generation_cannot_be_delivered(monkeypatch):
+    closed = []
+
+    class Dao:
+        def head(self, _origin):
+            return SimpleNamespace(state=SimpleNamespace(enabled=False), manifest=None)
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(documents.DocumentRepository, "from_environment", lambda: Dao())
+    with pytest.raises(ForbiddenError, match="source changed"):
+        documents.assert_document_sources_current((_packet(),))
+    assert closed == [True]

@@ -7,13 +7,14 @@ import logging
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
 
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.benchmark_rag.access import require_query_access
 from llm_d_lens.benchmark_rag.agentic_answers import agentic_evidence, merge_verified, pinned_evaluate_identity
 from llm_d_lens.benchmark_rag.contracts import RagItem, model_identities_match, normalize_statistic
-from llm_d_lens.benchmark_rag.publication_contracts import PublicationError
+from llm_d_lens.benchmark_rag.publication_contracts import InventoryFile, PublicationError
 from llm_d_lens.benchmark_rag.query_contracts import (
     Abstention,
     AgenticCitation,
@@ -30,6 +31,7 @@ from llm_d_lens.db.dao.rag_query import QueryMatch, RagQueryDao
 from llm_d_lens.infrastructure.artifacts.store import artifact_uri
 
 if TYPE_CHECKING:
+    from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
     from llm_d_lens.db.dao.rag_agentic_query import RagAgenticQueryDao
 
 logger = logging.getLogger(__name__)
@@ -438,8 +440,37 @@ def _context(item: RagItem) -> ExperimentContext:
     )
 
 
+@lru_cache(maxsize=32)
+def _published_context_passages(file: InventoryFile, revision: str, data: bytes) -> tuple[RagItem, ...]:
+    from llm_d_lens.benchmark_rag.guide_json import parse_custom_json
+    from llm_d_lens.benchmark_rag.guide_tables import parse_published_tables
+
+    if file.format == "markdown":
+        items = parse_published_tables(file, revision, data)
+    elif file.format == "json":
+        items = parse_custom_json(file, revision, data)
+    else:
+        raise PublicationError("unsupported published passage format")
+    return tuple(item for item in items if item.kind == "passage")
+
+
 def _verify_passage_text(item: RagItem, data: bytes) -> None:
     pointer = item.source_pointer or {}
+    if "start_char" not in pointer and item.origin_id == LLM_D_ORIGIN:
+        try:
+            candidates = _published_context_passages(
+                InventoryFile(path=item.source_path, sha256=item.content_sha256, format=item.format),
+                item.source_revision,
+                data,
+            )
+        except PublicationError as error:
+            raise EvidenceUnavailableError("published passage cannot be reproduced from its pinned source") from error
+        if not any(
+            candidate.model_dump(exclude={"publication_state"}) == item.model_dump(exclude={"publication_state"})
+            for candidate in candidates
+        ):
+            raise EvidenceUnavailableError("published passage disagrees with its pinned table or narrative")
+        return
     start, end = pointer.get("start_char"), pointer.get("end_char")
     try:
         text = data.decode("utf-8")
@@ -460,10 +491,12 @@ class PublicRagQueryService:
         dao: RagQueryDao | None = None,
         archive: SourceArchive | None = None,
         agentic_dao: RagAgenticQueryDao | None = None,
+        document_dao: DocumentRepository | None = None,
     ) -> None:
         self.dao = dao if dao is not None else RagQueryDao()
         self.archive = archive if archive is not None else SourceArchive()
         self.agentic_dao = agentic_dao
+        self.document_dao = document_dao
 
     def query(
         self,
@@ -509,8 +542,6 @@ class PublicRagQueryService:
                 abstentions=(plan.precondition,),
                 internal_branch_enabled=request.include_internal,
             )
-        if plan.intent == "definition":
-            raise EvidenceUnavailableError("Document definitions require a document provider, which is not installed")
         internal_result = None
         internal_dao = self.agentic_dao
         if request.include_internal and plan.intent in ("numeric", "comparison"):
@@ -519,21 +550,39 @@ class PublicRagQueryService:
 
                 internal_dao = RagAgenticQueryDao(self.dao._get_session_factory())
             internal_result = internal_dao.search(plan.filters, principal, limit=50)
-        if experiment_limit is not None:
-            result = self.dao.search(
-                plan.filters,
-                intent=plan.intent,
-                text_query=plan.text_query,
-                limit=None,
-                experiment_limit=experiment_limit,
-            )
-        else:
-            result = self.dao.search(
-                plan.filters,
-                intent=plan.intent,
-                text_query=plan.text_query,
-                limit=None if all_matches else 50 if request.include_internal else request.limit,
-            )
+        query_dao: RagQueryDao | DocumentRepository = self.dao
+        if plan.intent == "definition":
+            from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
+
+            try:
+                if self.document_dao is not None:
+                    query_dao = self.document_dao
+                else:
+                    query_dao = DocumentRepository.from_environment()
+            except (PublicationError, OSError) as error:
+                logger.warning("event=rag_document_configuration_failed reason=%s", type(error).__name__)
+                raise EvidenceUnavailableError("Public document authority configuration is unavailable") from error
+        try:
+            if experiment_limit is not None:
+                result = self.dao.search(
+                    plan.filters,
+                    intent=plan.intent,
+                    text_query=plan.text_query,
+                    limit=None,
+                    experiment_limit=experiment_limit,
+                )
+            else:
+                result = query_dao.search(
+                    plan.filters,
+                    intent=plan.intent,
+                    text_query=plan.text_query,
+                    limit=None if all_matches else 50 if request.include_internal else request.limit,
+                )
+        except (PublicationError, OSError) as error:
+            if query_dao is self.dao:
+                raise
+            logger.warning("event=rag_document_query_failed reason=%s", type(error).__name__)
+            raise EvidenceUnavailableError("Public document evidence is unavailable") from error
         evidence: list[QueryEvidence] = []
         identities: dict[str, str] = {}
         cache: dict[str, bytes] = {}
@@ -610,7 +659,13 @@ class PublicRagQueryService:
         )
         if not all_matches and experiment_limit is None:
             evidence = evidence[: request.limit]
-        self.dao.assert_current(result.matches)
+        try:
+            query_dao.assert_current(result.matches)
+        except (PublicationError, OSError) as error:
+            if query_dao is self.dao:
+                raise
+            logger.warning("event=rag_document_query_failed reason=%s", type(error).__name__)
+            raise EvidenceUnavailableError("Public document evidence changed during retrieval") from error
         if internal_result is not None and internal_dao is not None:
             internal_dao.assert_current(internal_result.matches, principal)
         abstentions = []

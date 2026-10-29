@@ -18,12 +18,6 @@ test('loading pages use their own navigation or detail title', () => {
   assert.equal(viewTitle(''), 'Lens');
 });
 
-test('Agentic-only delivery does not expose the optional document search page', () => {
-  assert.equal(resolveView('public-rag'), 'model-market');
-  assert.equal(NAVIGATION_GROUPS.some(group => group.items.some(item => item.view === 'public-rag')), false);
-  assert.equal(Object.hasOwn(VIEW_PERMISSIONS, 'public-rag'), false);
-});
-
 test('landing page follows the first accessible sidebar entry, including custom grants', () => {
   for (const [permissions, expected] of [
     [['*:*:*'], 'welcome'],
@@ -49,6 +43,7 @@ test('sidebar preserves every destination once in the requested group and order'
     ['Inference', [['Deployments', 'optimization-deployments'], ['Model Services', 'admin/model-service'], ['Model Catalog', 'model-market']]],
     ['Performance', [['Evaluation', 'optimization-evaluate'], ['Trace Replayer', 'optimization-simulate']]],
     ['Infrastructure', [['Clusters', 'clusters'], ['Observability', 'cluster-monitoring-stack'], ['Storage', 'storage-management'], ['Model Cache', 'model-cache']]],
+    ['Knowledge', [['Document Search', 'public-rag']]],
     ['My Resources', [['Services', 'model-service'], ['API Keys', 'api-keys'], ['Usage', 'usage']]],
     ['Administration', [
       ['Model Usage', 'admin/usage'], ['External Providers', 'ai-providers'],
@@ -58,7 +53,7 @@ test('sidebar preserves every destination once in the requested group and order'
     ['', [['Lens Assistant', 'playground']]],
   ]);
   const views = NAVIGATION_GROUPS.flatMap(group => group.items.map(item => item.view));
-  assert.equal(views.length, 23);
+  assert.equal(views.length, 24);
   assert.equal(new Set(views).size, views.length);
 });
 
@@ -79,13 +74,14 @@ test('sidebar renders the administration accordions and fixed footer controls', 
   const html = renderToStaticMarkup(
     createElement(AuthContext.Provider, {
       value: {
-        canView: view => canAccessView(['*:*:*'], view),
+        canView: view => canAccessView(['*:*:*'], view, ['*:*:*']),
         principal: { username: 'sidebar-test' },
         logout() {},
       },
     }, createElement(LeftNavigation, { currentView: 'welcome', isExpanded: true })),
   );
   assert.match(html, /id="nav-group-administration"/);
+  assert.match(html, />Document Search</);
   assert.match(html, />Platform</);
   assert.match(html, />Model Usage</);
   assert.match(html, /id="navigation-footer"/);
@@ -108,6 +104,7 @@ test('sidebar renders the administration accordions and fixed footer controls', 
     }, createElement(LeftNavigation, { currentView: 'playground', isExpanded: false })),
   );
   assert.match(collapsed, /aria-label="Account menu"/);
+  assert.doesNotMatch(collapsed, /Document Search/);
   assert.match(collapsed, /aria-label="Lens Assistant"/);
   assert.doesNotMatch(collapsed, />Account</);
   assert.match(collapsed, /role="tooltip"[^>]*>Lens Assistant<\/span>/);

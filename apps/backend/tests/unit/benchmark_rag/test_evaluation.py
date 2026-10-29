@@ -29,7 +29,7 @@ def _response():
         intent="numeric",
         filters={},
         status="answered",
-        answer="[public] throughput (mean (default; source statistic unreported)): 42 tokens/s; fixture.",
+        answer="[public] throughput (unspecified statistic): 42 tokens/s; fixture.",
         evidence=(
             QueryEvidence(
                 item_id="measurement",

@@ -28,6 +28,45 @@ shell/Compose/Helm values 中导出它们。大多数变量在本地开发环境
 | `LLM_D_BENCH_EMBEDDED_DB_DIR` / `LLM_D_BENCH_EMBEDDED_DB_PASSWORD` | 内置数据库的数据目录和密码。 | `LLM_D_BENCH_EMBEDDED_DB_DIR`：`~/.llm-d-lens/db/data`<br />`LLM_D_BENCH_EMBEDDED_DB_PASSWORD`：—（必填，无默认值） |
 | `LLM_D_BENCH_DB_BOOTSTRAP_FILE` | 首次启动引导时应用的可选 SQL/种子文件。 | `~/.llm-d-lens/db-bootstrap.json` |
 
+## 公开 RAG 文档检索
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `LENS_PUBLIC_RAG_WRITER_MODE` | 文档仓库写入协调模式。只支持 `single-host`；构造时拒绝 `multi-host` 及其他不支持的值。所有写进程必须共享 `LENS_DATA_DIR/public-rag/publication.lock`。 | `single-host` |
+| `LENS_PUBLIC_RAG_OPENSEARCH_URL` | 公开文档检索使用的明确 OpenSearch 服务 URL。缺少配置返回 503；不要在 URL 内嵌入凭据。 | 未设置 |
+| `LENS_PUBLIC_RAG_OPENSEARCH_API_KEY` | 可选的服务 API key，通过认证头传递，不向客户端回显。 | 未设置 |
+| `LENS_PUBLIC_RAG_MODEL_PATH` | 显式向量模式使用的本地固定 multilingual-e5-small 快照目录。离线 safetensors 加载并校验固定文件哈希，请求时不下载。 | Lens cache 根目录 + `models/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3` |
+
+公开文档只由 OpenSearch 管理，真实环境切换仍待完成。
+默认全文使用 `public-rag-active`，
+显式向量模式使用 `public-rag-vector-shadow`；每次请求固定物理构建及模型。
+选定 alias 是唯一活动检索权威，将公开文档、来源审批、清单、
+构建历史及重建请求管理在 `public-rag-management-v1` 中；不可变来源字节仍保留在已批准的本地归档。
+OpenSearch 只接收 source/passage 事实正文，绝不写入 experiment、measurement、figure 或 link 正文。
+混合发布使用外部身份/依赖描述符及哈希保留完全一致的共享清单，不复制实验事实。
+切换必须在服务写入冻结期间验证新鲜基线，保留当前审批与撤销，并在停用 SQL 文档存储前验证 alias。
+后续文档发布直接使用 OpenSearch，不再持续同步 SQL 文档权威库。
+直接文档暂存仍拒绝原始结构化事实。
+文档备份/恢复携带带校验和的外部描述符；缺少完整有效证明的混合备份包会 fail closed。
+管理 backup/verify/restore 默认操作 OpenSearch 文档；结构化 SQL 传输必须显式指定
+`--structured`。来源 refresh/status/rollback 将非 Prism 来源路由到 OpenSearch，
+将 Prism 路由到 SQL；Prism rebuild 仍使用 SQL。
+Prism 记录/引用不进入 OpenSearch 文档投影或文档传输。检索重建使用 Python 构建器。
+协调使用 `LENS_DATA_DIR/public-rag/publication.lock` 上的单主机共享持久 `flock`，
+不是运行时目录锁或会过期的租约，也不提供多主机高可用。
+alias 变更结果未知时必须 fail closed；操作员恢复前须暂停并等待在途请求结束，不自动恢复 alias。
+
+旧文档权威选择器已移除，遗留 `postgres` 配置会被拒绝，不提供 SQL 文档回退或仅修改开关的回滚。
+SQL `public_benchmark_records` 仅用于 Prism，不作为 OpenSearch RAG 的数据源。
+本次清理备份并删除旧三张 SQL RAG 表，然后创建空表，不迁移旧数据、不导入 Prism。
+若旧表已有 Prism 记录或目标表已存在，命令会拒绝删除或覆盖。
+OpenSearch 索引/alias 和原始文件快照保持不变，不重建索引，也不填充文档权威存储。
+清理全程必须冻结服务写入，沿用应用数据库设置，将已验证备份保留在持久目录中。
+已实现的命令及显式写入冻结要求见下方切换说明；命令不会自行停止服务。
+恢复不得复活审批，空目标必须显式重新审批当前来源、发布并重建。
+架构测试不代表 S3 质量或真实部署已通过验收；此处不声称本地切换或质量验收已完成。参见
+[文档权威存储与切换](./api-reference/modules/lens-assistant#d1-document-authority-and-rollout)。
+
 ## 模型服务网关（共享的 llm-d Gateway）
 
 网关模式：每个集群安装一个共享的 Gateway（在创建集群时可选择提供方）；
@@ -72,6 +111,7 @@ Inference Payload Processor 的 Helm chart 和版本无法通过环境变量配�
 | `SIMULATION_TASK_ROOT` | 模拟任务状态和轨迹的根目录。 | `~/.cache/llm-d-bench/simulations`（遗留导入回退路径） |
 | `SIMULATION_MAX_CONCURRENT_DOWNLOADS` | 限制模拟过程中并发下载轨迹/资源的数量上限。 | `1` |
 | `AGENTIC_OPENAI_BASE_URL` / `AGENTIC_OPENAI_API_KEY` / `AGENTIC_OPENAI_MODEL` / `AGENTIC_OPENAI_TIMEOUT_SECONDS` | 当某次请求未选择特定提供方时，智能体式部署规划所使用的默认聊天模型。 | `AGENTIC_OPENAI_BASE_URL`：`""`<br />`AGENTIC_OPENAI_API_KEY`：`""`<br />`AGENTIC_OPENAI_MODEL`：`""`<br />`AGENTIC_OPENAI_TIMEOUT_SECONDS`：`30` |
+| `AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES` | 临时后端集群验证：集群注册 ID 到精确测试型号的 JSON 映射，仅对映射内集群生效。RAG、私有规划概览、AIC 与排序统一使用测试身份，资源实测值和真实硬件不变；测试计划禁止部署。不提供产品表单或请求级选项；删除映射条目并重启后端可撤销临时覆盖。 | `{}` |
 | `LLM_D_BENCHMARK_ROOT` / `LLM_D_BENCH_SPECIFICATION_FILE` | 用于驱动基准测试运行的 `llm-d-benchmark` 检出目录及其规格文件的位置。 | `LLM_D_BENCHMARK_ROOT`：`""`<br />`LLM_D_BENCH_SPECIFICATION_FILE`：基线/默认运行时为 `guides/optimized-baseline`；未设置时则根据所选指南计算得出 |
 
 ## Kubernetes 与网络

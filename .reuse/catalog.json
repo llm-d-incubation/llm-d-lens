@@ -930,19 +930,19 @@
       ]
     },
     {
-      "id": "agentic-opensearch-evidence-search",
-      "path": "apps/backend/src/llm_d_lens/agentic/opensearch_evidence_search.py",
+      "id": "public-rag-opensearch-evidence-search",
+      "path": "apps/backend/src/llm_d_lens/benchmark_rag/opensearch_evidence_search.py",
       "symbols": [
         "OpenSearchEvidenceSearchRepository",
-        "verify_artifact_evidence"
+        "OpenSearchEvidenceProjectionWriter"
       ],
-      "purpose": "Search rebuildable log, trace, and reference-material projections in OpenSearch, validating manifests and content checksums before using local artifact hits.",
-      "boundaries": "Handles only unstructured diagnostics and methodological evidence; does not read/compute performance metrics or change candidate ranking. Every query enforces tenant/ACL filters; kNN runs only with caller-provided embeddings. Source retrieval is limited to controlled artifact/dataset roots for evidence/diagnostic retention; raw text does not enter planner or provider prompts.",
+      "purpose": "Build and search versioned OpenSearch lexical projections of published public RAG passages.",
+      "boundaries": "Public documents only; no diagnostic indexes or internal experiments. Queries pin one physical build and filter approved source manifests. The service rechecks current PostgreSQL membership, original bytes and citations. Scores do not assert performance. Embeddings and hybrid retrieval remain separate later stages.",
       "examples": [
-        "apps/backend/src/llm_d_lens/agentic/evidence_search_repository.py"
+        "apps/backend/src/llm_d_lens/benchmark_rag/search.py"
       ],
       "tests": [
-        "apps/backend/tests/unit/agentic/test_opensearch_evidence_search.py"
+        "apps/backend/tests/unit/benchmark_rag/test_opensearch_evidence_search.py"
       ]
     },
     {

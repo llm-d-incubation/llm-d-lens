@@ -7,6 +7,8 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import event, select
 from sqlalchemy.orm import sessionmaker
 
@@ -43,7 +45,6 @@ from llm_d_lens.benchmark_rag.query_contracts import (
     AgenticCitation,
     QueryFilters,
     QueryRequest,
-    QueryResponse,
 )
 from llm_d_lens.benchmark_rag.service import PublicRagQueryService
 from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN, allowed_paths
@@ -343,12 +344,20 @@ def test_query_uses_no_writes_and_does_not_mutate_planner_record(branch, postgre
     assert before == after
 
 
-def test_query_contract_preserves_authorized_internal_envelope(branch):
+def test_real_rest_contract_preserves_authorized_internal_envelope(branch, monkeypatch):
+    from llm_d_lens.benchmark_rag import router
+
     service, owner, _factory, _runs, _users = branch
+    monkeypatch.setattr(router, "get_service", lambda: service)
+    monkeypatch.setattr(router, "current_principal", lambda _request: owner)
+    app = FastAPI()
+    app.include_router(router.router)
     payload = request()
-    response = service.query(payload, owner)
-    assert QueryResponse.model_validate_json(response.model_dump_json()) == response
-    assert response.model_dump(mode="json")["evidence"][0]["value"] == "42.0"
+    expected = service.query(payload, owner).model_dump(mode="json")
+    with TestClient(app) as client:
+        response = client.post("/api/v1/benchmark-rag/query", json=payload.model_dump(mode="json", exclude_unset=True))
+    assert response.status_code == 200 and response.json() == expected
+    assert response.json()["evidence"][0]["value"] == "42.0"
     assert isinstance(service.query(payload, owner).evidence[0].citation, AgenticCitation)
 
 

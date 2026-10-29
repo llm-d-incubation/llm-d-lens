@@ -38,10 +38,6 @@ async def _validate_model_cache(*_args, **_kwargs) -> None:
 
 @pytest.fixture(autouse=True)
 def validated_model_cache(monkeypatch, tmp_path):
-    async def hardware(_cluster, _model, facts, _principal):
-        return facts, {"status": "unavailable"}
-
-    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_retrieval_hardware", hardware)
     monkeypatch.setattr(AgenticDeploymentService, "_validate_model_cache", staticmethod(_validate_model_cache))
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.PlanningSnapshotStore",
@@ -193,7 +189,6 @@ def test_create_generates_an_approval_plan_without_deploying(monkeypatch):
     assert [item["phase"] for item in run.planning_trace] == [
         "input",
         "public_rag",
-        "document_rag",
         "configuration_cases",
         "generation",
         "candidate_validation",

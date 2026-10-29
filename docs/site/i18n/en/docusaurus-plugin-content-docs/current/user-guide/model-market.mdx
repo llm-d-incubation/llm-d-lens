@@ -101,7 +101,7 @@ next action, rather than silently falling back to predictions without a load tar
 To change the recommendation, enter your revised preference below the alternatives
 and click **Recalculate selection**. This also works without an external AI provider.
 
-Every new recommendation and recalculation queries published public SQL experiments
+Every new recommendation and recalculation queries published public benchmark RAG
 before AIC planning, using the selected model. With an external AI provider, relevant
 public observations take precedence over AIC estimates in candidate generation and
 ranking; AIC supplements missing or inapplicable evidence. Live resource constraints
@@ -113,17 +113,13 @@ the cluster name. Vendor/separator spelling differences may match, but memory si
 and PCIe/SXM variants remain distinct. Unknown or mixed hardware is reported;
 missing matches never fall back to another hardware family.
 
-Under **Decision evidence**, review **Public SQL measured observations** for
+Under **Decision evidence**, review **Public benchmark RAG (priority over AIC)** for
 the retrieval outcome, original values and units, source path, revision and checksum.
 No matches, query failures or missing authenticated global `benchmark-rag:query:read`
 permission are explicitly reported, and planning continues with existing evidence.
 Plans containing public RAG observations retain that same read-permission requirement.
 Without external AI, retrieved observations remain context only: they do not silently
 become deterministic performance predictions or change the displayed SLO assessment.
-
-Internal SQL experiments are listed separately. The document RAG source is disabled
-in this delivery; no document search service or independent search page is required
-for Agentic planning.
 
 With an external AI provider, both generation and selection prompts put your full
 preference before the planning context. Explicit requirements such as one GPU or no

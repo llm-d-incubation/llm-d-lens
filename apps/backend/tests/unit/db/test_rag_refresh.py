@@ -25,6 +25,7 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
 )
 from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
 from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.benchmark_rag.repository_corpus import PARSER_VERSION
 from llm_d_lens.benchmark_rag.service import PublicRagQueryService
 from llm_d_lens.benchmark_rag.sources import (
     PRISM_ORIGIN,
@@ -50,7 +51,7 @@ def _approval(origin: str = PRISM_ORIGIN) -> SourceApproval:
         approved_by="isolated refresh test",
         approval_reference="test only, not production approval",
         license_reference="fixture",
-        parser_version=PRISM_PARSER if origin == PRISM_ORIGIN else "unavailable-document-parser",
+        parser_version=PRISM_PARSER if origin == PRISM_ORIGIN else PARSER_VERSION,
         allowed_paths=allowed_paths(origin),
     )
 
@@ -271,14 +272,18 @@ def test_web_document_refresh_cannot_repopulate_sql(publication, tmp_path):
     target.write_text("# llm-d\nPublic document context.\n")
     file = InventoryFile(path=path, sha256=hashlib.sha256(target.read_bytes()).hexdigest(), format="markdown")
     approval = _approval(origin)
-    with pytest.raises(ValidationError, match="document provider is not installed"):
-        RefreshPlan(
-            review_reference="reviewed document-only snapshot",
-            approval=approval,
-            inventory=PinnedInventory(
-                origin_id=origin, revision=content_digest({path: file.sha256}), complete=True, files=(file,)
-            ),
-            expected_counts={"source": 1, "passage": 1},
-            base_generation=0,
-            base_manifest_id=None,
-        )
+    publication.register_source(origin, approval)
+    plan = RefreshPlan(
+        review_reference="reviewed document-only snapshot",
+        approval=approval,
+        inventory=PinnedInventory(
+            origin_id=origin, revision=content_digest({path: file.sha256}), complete=True, files=(file,)
+        ),
+        expected_counts={"source": 1, "passage": 1},
+        base_generation=0,
+        base_manifest_id=None,
+    )
+    with pytest.raises(PublicationError, match="OpenSearch"):
+        RagRefreshService(publication).run(plan, tmp_path)
+    assert publication.dao.head(origin).manifest is None
+    assert publication.dao.list_version(origin, plan.inventory.revision) == []

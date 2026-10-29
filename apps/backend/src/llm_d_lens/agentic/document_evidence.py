@@ -2,24 +2,35 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, Self, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from llm_d_lens.auth.contracts import Principal
+from llm_d_lens.benchmark_rag.access import require_query_access
 from llm_d_lens.benchmark_rag.contracts import model_identity_aliases
+from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
 from llm_d_lens.benchmark_rag.query_contracts import Citation
+from llm_d_lens.benchmark_rag.runtime import load_runtime_policy
+from llm_d_lens.benchmark_rag.search import PublicRagSearchService, configured_repository
 from llm_d_lens.benchmark_rag.search_contracts import (
     EmbeddingContract,
+    EvidenceSearchError,
+    PublicSearchRequest,
     SearchBranchStatus,
 )
-from llm_d_lens.core.exceptions import ForbiddenError
+from llm_d_lens.benchmark_rag.service import EvidenceUnavailableError
+from llm_d_lens.core.exceptions import ForbiddenError, PasswordChangeRequiredError, UnauthenticatedError
 from llm_d_lens.hardware.registry import all_profiles
 
 from .planning_requirements import normalize_hardware
 
+logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from .planner import PlanningFacts
 
@@ -125,7 +136,6 @@ class DocumentEvidenceOutcome(BaseModel):
             "no_match",
             "query_forbidden",
             "evidence_budget_exhausted",
-            "provider_not_installed",
         ]
         | None
     ) = None
@@ -283,6 +293,12 @@ def rank_document_evidence(
     return tuple(ranked)
 
 
+def _safe_degraded_reason(value: str | None) -> DegradedReason | None:
+    if value in ("embedding_contract_mismatch", "vector_unavailable"):
+        return value
+    return "retrieval_degraded" if value is not None else None
+
+
 def document_context(
     packets: tuple[DocumentEvidencePacket, ...], *, model: str | None = None, hardware: str | None = None
 ) -> dict[str, object]:
@@ -307,10 +323,162 @@ def validate_document_citations(references: list[str], packets: tuple[DocumentEv
 
 
 def assert_document_sources_current(packets: tuple[DocumentEvidencePacket, ...]) -> None:
-    if packets:
-        raise ForbiddenError("Document evidence provider is not installed; recalculate the plan without documents")
+    if not packets:
+        return
+    dao = DocumentRepository.from_environment()
+    try:
+        for packet in packets:
+            head = dao.head(packet.citation.origin_id)
+            if (
+                not head.state.enabled
+                or head.manifest is None
+                or head.manifest.item_id != packet.citation.published_manifest_id
+                or packet.evidence_id not in (head.manifest.manifest_item_ids or ())
+            ):
+                raise ForbiddenError("Document source changed during planning; recalculate the plan")
+    finally:
+        dao.close()
 
 
 async def resolve_document_evidence(question: str, principal: Principal | None) -> DocumentEvidenceOutcome:
-    """Keep the source contract explicit without loading a document backend or runtime policy."""
-    return DocumentEvidenceOutcome(status="disabled", reason="provider_not_installed")
+    """Search only after durable policy, explicit user allowlist and global authorization."""
+    try:
+        policy = load_runtime_policy()
+    except EvidenceSearchError:
+        logger.warning("event=agentic_document_evidence status=unavailable reason=invalid_policy")
+        return DocumentEvidenceOutcome(status="unavailable", reason="invalid_policy")
+    if policy.agentic_mode == "disabled" or principal is None or principal.user_id not in policy.agentic_user_ids:
+        return DocumentEvidenceOutcome(status="disabled")
+    mode = policy.agentic_mode
+    try:
+        require_query_access(principal)
+    except PasswordChangeRequiredError:
+        raise
+    except (ForbiddenError, UnauthenticatedError):
+        logger.warning("event=agentic_document_evidence status=forbidden reason=query_forbidden")
+        return DocumentEvidenceOutcome(
+            status="forbidden", mode=mode, generation=policy.generation, reason="query_forbidden"
+        )
+    if not policy.search_enabled or not policy.advanced_search_enabled:
+        logger.info(
+            "event=agentic_document_evidence status=disabled mode=%s generation=%d reason=search_disabled",
+            mode,
+            policy.generation,
+        )
+        return DocumentEvidenceOutcome(
+            status="disabled", mode=mode, generation=policy.generation, reason="search_disabled"
+        )
+    service = None
+    try:
+        async with httpx.AsyncClient() as client:
+            repository = configured_repository(client=client)
+            try:
+                service = PublicRagSearchService(repository)
+                response = await service.search(
+                    PublicSearchRequest(
+                        question=question[:2048],
+                        limit=MAX_DOCUMENT_CANDIDATES,
+                        mode=policy.agentic_search_mode,
+                        query_enhancement=policy.agentic_query_enhancement,
+                    ),
+                    principal,
+                )
+            finally:
+                if service is not None:
+                    await run_in_threadpool(service.dao.close)
+    except PasswordChangeRequiredError:
+        raise
+    except (ForbiddenError, UnauthenticatedError):
+        logger.warning("event=agentic_document_evidence status=forbidden reason=query_forbidden")
+        return DocumentEvidenceOutcome(
+            status="forbidden", mode=mode, generation=policy.generation, reason="query_forbidden"
+        )
+    except (EvidenceSearchError, EvidenceUnavailableError) as error:
+        logger.warning("event=agentic_document_evidence status=unavailable reason=%s", type(error).__name__)
+        return DocumentEvidenceOutcome(
+            status="unavailable", mode=mode, generation=policy.generation, reason="retrieval_unavailable"
+        )
+    degraded_reason = _safe_degraded_reason(response.degraded_reason)
+    retrieval = {
+        "requested_mode": policy.agentic_search_mode,
+        "retrieval_build_id": response.retrieval_build_id,
+        "retrieval_mode": response.retrieval_mode,
+        "embedding_contract": response.embedding_contract,
+        "index_stale": response.index_stale,
+        "rebuild_required": response.rebuild_required,
+        "degraded": degraded_reason is not None,
+        "degraded_reason": degraded_reason,
+        "branch_status": {
+            branch: status.model_copy(update={"error": _safe_degraded_reason(status.error)})
+            for branch, status in response.branch_status.items()
+        },
+    }
+    retrieval_reason = "retrieval_stale" if response.index_stale else "retrieval_degraded" if degraded_reason else None
+    if mode == "shadow":
+        outcome = DocumentEvidenceOutcome(
+            status="shadow",
+            mode=mode,
+            generation=policy.generation,
+            retrieved_count=len(response.results),
+            reason=retrieval_reason or ("no_match" if not response.results else None),
+            **retrieval,
+        )
+    else:
+        packets: list[DocumentEvidencePacket] = []
+        rejected = 0
+        seen: set[str] = set()
+        for result in response.results[:MAX_DOCUMENT_CANDIDATES]:
+            try:
+                packet = DocumentEvidencePacket(
+                    citation_id=DOCUMENT_PREFIX + result.chunk_id,
+                    evidence_id=result.evidence_id,
+                    chunk_id=result.chunk_id,
+                    retrieval_build_id=response.retrieval_build_id,
+                    retrieval_mode=response.retrieval_mode,
+                    embedding_contract=response.embedding_contract,
+                    matched_branches=result.matched_branches,
+                    lexical_rank=result.lexical_rank,
+                    vector_rank=result.vector_rank,
+                    score=result.score,
+                    fusion_score=result.fusion_score,
+                    title=result.title,
+                    text=result.text,
+                    citation=result.citation,
+                    chunk_start=result.chunk_start,
+                    chunk_end=result.chunk_end,
+                )
+            except ValidationError:
+                rejected += 1
+                continue
+            if packet.citation_id not in seen:
+                packets.append(packet)
+                seen.add(packet.citation_id)
+        outcome = DocumentEvidenceOutcome(
+            status="available" if packets else "empty",
+            mode=mode,
+            generation=policy.generation,
+            retrieved_count=len(response.results),
+            rejected_count=rejected,
+            packets=rank_document_evidence(
+                tuple(packets),
+                techniques=tuple(name for name in DOCUMENT_TECHNIQUES if name in question),
+                model=match.group(1) if (match := re.search(r"\bmodel=(\S+)", question)) else None,
+                hardware=match.group(1) if (match := re.search(r"\bhardware=(\S+)", question)) else None,
+            )[:MAX_DOCUMENT_PASSAGES],
+            reason=(
+                "passages_rejected"
+                if rejected and not packets
+                else retrieval_reason or ("no_match" if not packets else None)
+            ),
+            **retrieval,
+        )
+    logger.info(
+        "event=agentic_document_evidence status=%s mode=%s generation=%s retrieved=%d rejected=%d reason=%s",
+        outcome.status,
+        outcome.mode,
+        outcome.generation,
+        outcome.retrieved_count,
+        outcome.rejected_count,
+        outcome.reason,
+    )
+    return outcome

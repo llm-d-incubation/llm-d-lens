@@ -8,7 +8,7 @@ const VIEW_ALIASES = {
   'optimization-explore': 'optimization-evaluate-new',
 };
 
-const SUPPORTED_VIEWS = new Set(['welcome', 'welcome/issues', 'cluster-monitoring-stack', 'clusters', 'storage-management', 'model-cache', 'ai-providers', 'model-service', 'api-keys', 'usage', 'playground', 'optimization-deployments', 'model-market', 'optimization-evaluate', 'optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-simulate', 'optimization-simulate-details', 'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/master-key', 'admin/sessions', 'admin/audit', 'admin/model-service', 'admin/usage']);
+const SUPPORTED_VIEWS = new Set(['welcome', 'welcome/issues', 'cluster-monitoring-stack', 'clusters', 'storage-management', 'model-cache', 'ai-providers', 'model-service', 'api-keys', 'usage', 'playground', 'public-rag', 'optimization-deployments', 'model-market', 'optimization-evaluate', 'optimization-evaluate-new', 'optimization-evaluation-details', 'optimization-simulate', 'optimization-simulate-details', 'admin/users', 'admin/groups', 'admin/roles', 'admin/identity-providers', 'admin/master-key', 'admin/sessions', 'admin/audit', 'admin/model-service', 'admin/usage']);
 
 export function resolveView(view, fallback = 'model-market') {
   const resolved = VIEW_ALIASES[view] || view;
@@ -46,6 +46,13 @@ export const NAVIGATION_GROUPS = [
       { id: 'cluster-monitoring-stack', label: 'Observability', icon: 'Webcam', view: 'cluster-monitoring-stack', iconColor: 'text-[#037ffc] dark:text-white' },
       { id: 'storage', label: 'Storage', icon: 'HardDrive', view: 'storage-management', iconColor: 'text-[#037ffc] dark:text-white' },
       { id: 'model-cache', label: 'Model Cache', icon: 'Download', view: 'model-cache', iconColor: 'text-[#037ffc] dark:text-white' },
+    ],
+  },
+  {
+    id: 'knowledge',
+    title: 'Knowledge',
+    items: [
+      { id: 'public-rag', label: 'Document Search', icon: 'Database', view: 'public-rag', iconColor: 'text-theme-text' },
     ],
   },
   {

@@ -20,6 +20,7 @@ import { ClusterMonitoringStackDashboard, OptimizationClusterOverview } from '..
 import { WelcomeIssuesPage, WelcomePage } from '../pages/welcome';
 import { DeploymentManagementPage } from '../pages/deployment';
 import { ModelMarketPage } from '../pages/model-market';
+import PublicRagSearchPage from '../pages/public-rag/ui/PublicRagSearchPage';
 import { StorageManagementPage } from '../pages/storage';
 import { ModelCachePage } from '../pages/model-cache';
 import { AIProvidersPage } from '../pages/ai-providers';
@@ -347,6 +348,7 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
             {currentView === 'welcome/issues' && <WelcomeIssuesPage onNavigate={handleNavigate} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} initialClusterId={navigationParams.clusterId || ''} initialSeverity={navigationParams.severity || ''} initialCategory={navigationParams.category || ''} initialSearch={navigationParams.issueSearch || ''} />}
             {currentView === 'cluster-monitoring-stack' && <ClusterMonitoringStackDashboard onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} initialClusterId={navigationParams.clusterId} initialProfileDeployment={navigationParams.profileDeployment} />}
             {currentView === 'clusters' && <OptimizationClusterOverview onNavigate={handleNavigate} initialClusterId={navigationParams.clusterId || ''} initialAction={navigationParams.action || ''} onNavigateBack={() => handleNavigate('home')} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
+            {currentView === 'public-rag' && <PublicRagSearchPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'storage-management' && <StorageManagementPage onNavigate={handleNavigate} initialClusterId={navigationParams.clusterId || ''} initialVolumeId={navigationParams.volumeId || ''} initialAction={navigationParams.action || ''} initialPurpose={navigationParams.purpose || ''} />}
             {currentView === 'model-cache' && <ModelCachePage onNavigate={handleNavigate} initialClusterId={navigationParams.clusterId || ''} initialEntryId={navigationParams.entryId || ''} initialAction={navigationParams.action || ''} initialDownload={navigationParams.downloadModel} onDownloadHandled={() => setNavigationParams((current) => ({ ...current, downloadModel: null }))} onNavigateBack={cacheFromModelMarket ? () => handleNavigate('model-market') : undefined} />}
             {currentView === 'ai-providers' && <AIProvidersPage initialAction={navigationParams.action || ''} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
@@ -393,7 +395,7 @@ function AuthGate({ theme, onToggleTheme }) {
   }
   if (status === 'anonymous') {
     return <LoginPage theme={theme} onToggleTheme={onToggleTheme} onSignedIn={(signedInPrincipal) => {
-      const view = firstAccessibleView((candidate) => canAccessView(signedInPrincipal.permissions || [], candidate));
+      const view = firstAccessibleView((candidate) => canAccessView(signedInPrincipal.permissions || [], candidate, signedInPrincipal.globalPermissions || []));
       const params = new URLSearchParams();
       if (view) params.set('view', view);
       window.history.replaceState({}, '', `${window.location.pathname}${params.size ? `?${params}` : ''}`);

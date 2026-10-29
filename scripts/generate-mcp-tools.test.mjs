@@ -11,12 +11,11 @@ test('compatibility launcher validates the Python catalog without generating a N
     assert.equal(result.status, 0, result.error?.message || result.stderr);
     const tools = JSON.parse(result.stdout);
     assert.equal(new Set(tools.map(tool => tool.name)).size, tools.length);
-    const query = tools.find(tool => tool.name === 'get_cluster_overview');
+    const query = tools.find(tool => tool.name === 'query_public_benchmark_rag');
     assert.ok(query);
     assert.equal(query.riskTier, 'read');
-    assert.equal(query.inputSchema.type, 'object');
-    assert.ok(query.inputSchema.required.includes('clusterId'));
-    assert.equal(query.route, '/api/cluster/overview');
+    assert.equal(query.inputSchema.additionalProperties, false);
+    assert.ok(query.responseSchema);
 });
 
 test('compatibility launcher rejects unsupported arguments', () => {

@@ -7,6 +7,7 @@ import json
 import logging
 import zipfile
 from collections import Counter
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -35,16 +36,23 @@ from llm_d_lens.benchmark_rag.sources import (
 from llm_d_lens.db.dao.rag_item import RagItemDaoError
 from llm_d_lens.db.dao.rag_publication import RagPublicationDao
 
+if TYPE_CHECKING:
+    from llm_d_lens.benchmark_rag.document_repository import OpenSearchDocumentRepository
+
 logger = logging.getLogger(__name__)
 
 
 class RagPublicationService:
     def __init__(
         self,
-        dao: RagPublicationDao | None = None,
+        dao: RagPublicationDao | OpenSearchDocumentRepository | None = None,
         archive: SourceArchive | None = None,
     ) -> None:
-        self.dao = dao if dao is not None else RagPublicationDao()
+        if dao is None:
+            from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
+
+            dao = DocumentRepository.from_environment()
+        self.dao = dao
         self.archive = archive if archive is not None else SourceArchive()
 
     def register_source(self, origin_id: str, approval: SourceApproval) -> RagItem:
@@ -220,8 +228,11 @@ class RagPublicationService:
         self,
         origin_id: str,
         manifest_id: str,
+        *,
+        expected_generation: int | None = None,
     ) -> PublicationResult:
-        return self._activate(origin_id, manifest_id)
+        """Optionally approve an imported document release against the current target generation."""
+        return self._activate(origin_id, manifest_id, expected_generation=expected_generation)
 
     def rollback(self, origin_id: str, manifest_id: str, *, expected_generation: int) -> PublicationResult:
         return self._activate(origin_id, manifest_id, rollback_generation=expected_generation)
@@ -232,14 +243,28 @@ class RagPublicationService:
         manifest_id: str,
         *,
         rollback_generation: int | None = None,
+        expected_generation: int | None = None,
     ) -> PublicationResult:
         try:
-            result = self.dao.activate(
-                origin_id,
-                manifest_id,
-                self._verify_manifest,
-                rollback_generation=rollback_generation,
-            )
+            if expected_generation is not None:
+                from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
+
+                if not isinstance(self.dao, DocumentRepository):
+                    raise PublicationError("explicit imported document activation requires a document repository")
+                result = self.dao.activate(
+                    origin_id,
+                    manifest_id,
+                    self._verify_manifest,
+                    rollback_generation=rollback_generation,
+                    expected_generation=expected_generation,
+                )
+            else:
+                result = self.dao.activate(
+                    origin_id,
+                    manifest_id,
+                    self._verify_manifest,
+                    rollback_generation=rollback_generation,
+                )
         except (PublicationError, ValidationError, OSError) as error:
             logger.warning("event=rag_activation_failed origin=%s reason=%s", origin_id, type(error).__name__)
             raise

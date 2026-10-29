@@ -876,8 +876,8 @@ def test_document_examples_are_not_sql_measurements(query_service):
     assert no_measurement.matched_items == 0
 
 
-def test_repository_definition_requires_an_installed_document_provider(query_service):
-    with pytest.raises(EvidenceUnavailableError, match="document provider, which is not installed"):
+def test_repository_definition_requires_opensearch_authority(query_service):
+    with pytest.raises(EvidenceUnavailableError, match="document authority configuration"):
         query_service.query(
             QueryRequest(
                 question="What is TTFT?",
@@ -961,7 +961,13 @@ def test_missing_or_corrupt_bytes_are_errors_not_empty_success(query_service):
         "mismatched_path",
     ],
 )
-def test_corrupt_evidence_manifest_is_unavailable_and_recovers(query_service, corruption):
+def test_corrupt_evidence_manifest_returns_503_and_recovers(query_service, monkeypatch, corruption):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from llm_d_lens.api.problems import install_problem_handlers
+    from llm_d_lens.benchmark_rag import router
+
     request = numeric()
     expected = query_service.query(request, reader()).model_dump(mode="json")
     digest = hashlib.sha256(_RAW).hexdigest()
@@ -994,8 +1000,22 @@ def test_corrupt_evidence_manifest_is_unavailable_and_recovers(query_service, co
     with pytest.raises(EvidenceUnavailableError, match="missing or corrupt"):
         query_service.query(request, reader())
 
-    manifest_path.write_bytes(original)
-    assert query_service.query(request, reader()).model_dump(mode="json") == expected
+    monkeypatch.setattr(router, "get_service", lambda: query_service)
+    monkeypatch.setattr(router, "current_principal", lambda _request: reader())
+    app = FastAPI()
+    install_problem_handlers(app)
+    app.include_router(router.router)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/benchmark-rag/query", json=request.model_dump(mode="json", exclude_unset=True))
+        assert response.status_code == 503
+        assert response.headers["content-type"] == "application/problem+json"
+        assert response.json()["code"] == "rag_evidence_unavailable"
+        assert response.json()["detail"] == "An unexpected error occurred."
+        assert "evidence" not in response.json()
+        manifest_path.write_bytes(original)
+        recovered = client.post("/api/v1/benchmark-rag/query", json=request.model_dump(mode="json", exclude_unset=True))
+        assert recovered.status_code == 200
+        assert recovered.json() == expected
 
 
 def test_manifest_membership_not_per_row_published_flag(query_service):
@@ -1041,12 +1061,23 @@ def test_question_plans_are_auditable_and_not_inferred_from_unrelated_permission
     assert plan_query(QueryRequest(question="Show internal records")).precondition.code == "internal_branch_disabled"
 
 
-def test_database_evidence_contract_roundtrips_exact_decimal(query_service):
-    from llm_d_lens.benchmark_rag.query_contracts import QueryResponse
+def test_rest_uses_identical_database_evidence_contract(query_service, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
-    response = query_service.query(numeric(), reader())
-    assert QueryResponse.model_validate_json(response.model_dump_json()) == response
-    assert response.model_dump(mode="json")["evidence"][0]["value"] == "6131.06177725188"
+    from llm_d_lens.benchmark_rag import router
+
+    monkeypatch.setattr(router, "get_service", lambda: query_service)
+    monkeypatch.setattr(router, "current_principal", lambda _request: reader())
+    app = FastAPI()
+    app.include_router(router.router)
+    request = numeric()
+    expected = query_service.query(request, reader()).model_dump(mode="json")
+    with TestClient(app) as client:
+        response = client.post("/api/v1/benchmark-rag/query", json=request.model_dump(mode="json", exclude_unset=True))
+    assert response.status_code == 200
+    assert response.json() == expected
+    assert response.json()["evidence"][0]["value"] == "6131.06177725188"
 
 
 def test_real_prism_snapshot_answer_acceptance(postgres_engine, tmp_path, monkeypatch):

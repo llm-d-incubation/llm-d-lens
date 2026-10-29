@@ -236,38 +236,12 @@ PD deployments apply that utilization to both prefill and decode vLLM roles.
 The estimate uses GPU capacity and model overhead, not vLLM's measured free KV
 cache at startup.
 
-### Multi-source evidence in Agentic plans
-
-`AgenticDeploymentService.create()` and `.refine()` resolve evidence using the
-actual request principal. REST and streaming calls retain that identity.
-Public Prism observations use exact model/live hardware filters and require global
-`benchmark-rag:query:read`; internal experiments retain their resource authorization.
-Client-supplied public observations, cases and document packets are not trusted.
-Plans containing public observations keep the same read-permission requirement.
-
-The server normalizes explicit workload and latency requirements, aggregates
-experiments by configuration and series before limiting each SQL branch to 50
-cases, then selects at most 10 complete cases within a 16,000-byte evidence budget.
-Explicit workload fit precedes comparable lower latency; no workload means no
-workload penalty. Missing measurements remain unknown. Different statistics and
-experiments are not combined to manufacture an SLO result. Cases without comparable
-workload or valid latency are explicitly labelled fallback references.
-
-`planning_evidence` keeps public retrieval under `id="public-rag:query"`, including
-available, no-match, forbidden and unavailable outcomes. Configuration-case details
-retain source conditions, differences, unknowns, branch status and truncation.
-Candidate explanations and server-side audit retain their evidence boundaries:
-historical measurements are not proof of current performance, and AIC is an estimate.
-
-The optional public document branch is disabled in this delivery. Its contract is
-retained, but no public document retrieval/runtime endpoints or independent search
-page are installed. SQL planning works without public document OpenSearch/embedding
-dependencies; the preexisting diagnostic adapter is unaffected.
-
-Creation validates the registered model-cache storage volume without requiring
-downloaded model files. Refinement likewise skips download-readiness checks.
-Approval requires a ready cached model, resolves its current credential policy,
-refreshes resource validation and requires explicit user approval.
+`AgenticDeploymentService.create()` validates the selected model-cache storage
+volume but does not inspect model-file presence or download readiness.
+`.refine()` likewise does not require a downloaded model. `.approve()` requires
+a ready model in that volume and resolves its current credential policy before
+starting deployment. The registered-storage requirement and non-Agentic checks
+are unchanged.
 
 Deployments live under the FastAPI router in `llm_d_lens/deploy/router.py` with the `/api/v1/deployments` prefix.
 
@@ -294,6 +268,210 @@ external clients should use authenticated HTTP so route permissions and resource
 scope checks apply.
 
 Optimized and precise routing capability metadata reuse `shared_prefix_routing_workload()` in `llm_d_lens.deploy.capabilities`. Each scenario and recommended workload receives independent nested values; provider-specific baselines and goals are unchanged. Precise-provider calibration and model discovery share lazy modelserver invocation traversal while retaining their respective last-value and first-model selection rules.
+
+### Public RAG evidence in Agentic plans
+
+The target session's live cluster overview supplies the accelerator model before
+retrieval. The query includes an exact published `filters.hardware` label, matched
+to that model without discarding memory-size or PCIe/SXM variants. Unknown/mixed
+hardware is reported as `unavailable` with `rag_hardware_unresolved`; no hardware
+matches produce `no_matches`, without cross-hardware fallback. Evidence details
+include `target_hardware` (cluster ID, profile ID and model) and the actual query.
+
+Temporary backend-only cluster test configuration can supply a validation-only target identity to RAG,
+the private planning overview, AIC search/estimates and ranking, including fallback
+and refinement. The model must map uniquely to an AIC system in the discovered
+hardware profile. The server sets `PlanningFacts.planning_hardware_model` and
+ignores client-supplied values. There is no request-level hardware override.
+`target_hardware.model` is effective,
+`actual_model` is observed, and `simulation=true` marks the plan.
+These details persist even for no matches; observations are not reference-only.
+Exact model matching, explicit workload constraints and configuration uncertainty remain. Measured resource capacity and physical
+cluster state are unchanged. Approval rejects simulated plans before deployment effects.
+
+`AgenticDeploymentService.create()` and `.refine()` accept the actual request
+`principal` in addition to the MCP `principal_id`. Both REST and streaming routes
+pass it explicitly. Before generation, the service calls the authorized public
+query with `filters.model=request.model`, exact hardware, `intent="comparison"`
+and `include_internal=false`. The internal planning query aggregates all eligible
+measurements by experiment/configuration and series, ranks whole cases, then applies
+`experiment_limit=50` per SQL branch and returns complete selected measurements.
+The generic public REST/MCP `limit` remains 1–50 measurement/evidence envelopes,
+not experiments. Clients cannot supply trusted public evidence through
+`planning_facts`; it is cleared and resolved by the server on each planning pass.
+
+Planning leaves `filters.workload={}` and ranks eligible exact-model/hardware
+experiment references. With explicit non-null `planning_facts.workload_profile` fields,
+including explicit zero, it ranks by approximate workload similarity and coverage,
+then lower valid latency. Targets restrict exact metric/statistic axes, not SLO
+closeness, violation or status. Without workload, compare lower valid latency
+without a workload penalty; without targets, compare available exact metric/statistic
+axes. Pareto dominance applies only on equal available axes and preserves tradeoffs;
+never sum latency metrics or mix statistics. Missing/nonpositive/nonfinite latency,
+and incompatible units remain unknown. Null source statistics default to mean,
+with the original null retained in audit and explicit default markers in model context;
+explicit percentiles remain distinct. Configuration run IDs and source file paths
+remain visible as untrusted technique clues, not verified serving settings.
+Recognized numeric workload and latency
+preferences are applied first on creation and refinement. Use-case heuristics and
+AIC defaults are not explicit traffic. Workload and latency form defaults are blank;
+mean input is never copied into P95.
+
+Ranking metadata exposes `queue="ranked"|"fallback"` and `fallback_reason`.
+Fallback applies only when no measured workload fields were compared (null
+similarity, including no requested workload) and no valid latency exists on
+requested/comparable axes. Its reason is
+`no_comparable_workload_or_valid_latency`; ranked cases use null.
+Measured zero similarity is comparable, not fallback merely because latency is
+missing. SQL and Python preserve unknown workload scores as null. Case model context,
+audit and UI label fallback references explicitly, never as low latency; query
+summaries use neutral language. Budget selection preserves workload/latency rank
+before quality/freshness, with at most 10 complete cases, 20 passages and a
+16,000-byte serialized evidence ceiling. Experiment reference ranking is separate
+from deterministic candidate scoring and server SLO assessment.
+Scoped 2026-10-28 regression and authenticated create/refine acceptance passed; see
+[validation scope](/architecture/agentic-planning-evidence#scoped-ranking-validation-2026-10-28).
+The labelled hardware simulation is not physical H100/SLO certification.
+No approval/deployment occurred; S3/S4 gates remain open.
+
+`details.retrieval` records mode, inputs, matched/returned counts and truncation.
+`details.matches` records each evidence ID's known differences, unknown fields,
+similarity/coverage, configuration basis and source latency status
+(`satisfied`, `not_satisfied`, `unknown`, `not_requested`), with original statistics
+and target deviations. Similarity is the mean known-field min/max ratio, not
+performance confidence. Nominal report prompt lengths are labelled proxies, not
+measured means/P95. Latency comparisons never combine different experiments or
+series, substitute ITL/NTPOT for TPOT, or treat empty histograms as zero latency.
+These annotations do not establish current deployment SLO compliance or remove
+observations. The normal public query endpoint's exact workload semantics are unchanged.
+
+Both AI stages receive these fields as `explicit_workload`. If empty, workload
+must not gate RAG applicability, including default `shared_prefix_ratio=0`,
+`general-chat`, or missing QPS/autoscaling signals. Published TTFT/TPOT and their
+associated configurations guide candidate generation and ranking toward the
+requested latency targets, within live resource constraints. Published topology
+need not match the initial minimum-resource topology: it is a configuration to
+consider. Adaptations remain unverified and cannot transfer exact latency values
+or override server-computed SLO status.
+
+The run's `planning_evidence` includes `id="public-rag:query"` with status
+`available`, `no_matches`, `forbidden` or `unavailable`; `details` retains the
+query, an explicit message and, when successful, the original `QueryResponse`.
+The same outcome is emitted as progress and saved in the planning snapshot.
+Permission failures and query failures do not abort recommendation generation.
+Plans containing retrieved public observations require the existing authenticated
+global `benchmark-rag:query:read` permission for read and mutation responses; list
+responses omit such plans for callers without that permission.
+
+`PlanningFacts.public_rag_evidence` carries all retrieved, cited observations and
+their `planning_match` annotations to both AI
+stages. Relevant public evidence takes precedence over AIC; the selector returns
+`public_rag_evidence_ids` for the retrieved observations it used. Unknown IDs are
+rejected. These references and `public-rag:query` appear in `decision_evidence_ids`
+when used. A cited public-evidence ranking is not vetoed solely by the AIC-only
+latency ordering, but resource validation and computed SLO status are unchanged.
+Public retrieval alone never creates deterministic performance aggregates.
+Without AI the observations remain context only. Load-target candidate generation
+still validates exact native AIC topologies rather than inventing capacity from
+public observations with different or missing conditions.
+
+Model-facing configurations include `technique_hints` for recognized labels in
+`run_id`, `source_path` and `source_info.file_identifier`. Each hint preserves
+`provider_ref`, the matched `technique`, `source_field`, `source_value` and
+`verification="unverified_source_hint"`; it is not a verified historical provider,
+guide or serving configuration. The selector prompt requires reasons and
+case/measurement references for adopting or excluding related supplied candidate
+providers, including those outside its top three. This does not change
+deterministic ranking or guarantee model compliance. No frontend field is added.
+
+#### Controlled public document context
+
+Creation and refinement also share a separate OpenSearch document branch.
+It is **disabled by default**, independently of the already available public SQL
+observation branch. Configure its allowlist and `disabled|shadow|enabled` mode
+through the [RAG runtime API](./lens-assistant.mdx#controlled-runtime-and-operations).
+Only actual authenticated allowlisted users with GLOBAL
+`benchmark-rag:query:read` may retrieve documents. Admins do not bypass the allowlist.
+Agentic uses lexical by default; hybrid must be selected explicitly by the server policy.
+This is backend integration, not a standalone document frontend or a production
+quality/performance acceptance claim.
+
+`PlanningFacts.document_evidence` contains only server-derived enabled context;
+client-supplied packets are cleared on every planning pass. Each document query
+reranks up to twenty candidates and retains at most five complete passages;
+the shared final evidence bundle allows at most twenty passages.
+Each passage is at most 4,000 characters; oversized passages are rejected,
+not silently truncated. A packet has `citation_id` (a `document:` reference),
+original `evidence_id` and `chunk_id`, fixed `retrieval_build_id`, actual
+`retrieval_mode`, `embedding_contract`, `matched_branches`, `title`, `text`, canonical `citation`, optional
+`chunk_start`/`chunk_end`,
+`source_trust="untrusted_source_data"` and
+`evidence_kind="document_context_not_measurement"`.
+Provided offsets must exactly locate the retained text.
+Documents are explicitly separated from measurements in both AI prompts: they
+may explain method prerequisites or stated version conditions, but cannot prove
+hardware compatibility, supply measured latency/throughput or change deterministic
+performance confidence/SLO checks.
+
+Initial queries express configuration intent (settings, applicability, prerequisites,
+limitations and tradeoffs), workload and SLO context, rather than only model/chat keywords.
+After validated candidate generation, supplementary queries cover every distinct
+deployable provider technique (at most five), not generic guide variants such as `vllm`.
+The initial evidence stage retains its 60-second deadline. Supplementation has a
+separate, shared 10-second budget starting after generation, so slow generation
+cannot exhaust it; timeouts retain successful branches and are recorded explicitly.
+Disabled, shadow, forbidden and unavailable document outcomes do not trigger supplementation.
+
+An explainable passage-level heuristic prioritizes method-specific configuration
+and constraint cues, then marginal technique coverage, with original retrieval
+order as the final tie-breaker. Source/title hints can identify a technique only
+when the body also contains configuration/constraint cues; title or API support
+alone is not configuration support. This heuristic does not verify applicability
+or guarantee that a citation supports a claim. Explicit other-model examples and
+other registered hardware profiles are deprioritized before keyword coverage.
+Unknown hardware remains neutral; a matching hardware profile is not proof of
+the exact device or runtime. Both model projections expose
+`decision_relevance` and instruct the model to cite only actual supporting text
+or abstain. Budgets reserve the highest-ranked complete measurement case first,
+then method-diverse configuration guidance. Once one passage is chosen, previously
+uncovered methods precede repeated contexts, including qualified other-model examples.
+Request-time selection discards
+tail-ranked documents before informative measurement cases. Complete paragraphs,
+qualifications, citations and offsets are retained; SQL case ordering is unchanged.
+`configuration-cases` branch diagnostics record the `document_selection` policy,
+ranked/selected IDs and relevance cues, plus supplementary terms, outcomes,
+timed-out terms and elapsed/budget seconds.
+
+The generator and AI ranking accept a separate `document_evidence_ids` list
+(at most five). Unknown document references are explicitly rejected; citations
+are resolved from server packets, never accepted from model-generated URLs.
+Validated used references reach recommendation `evidence_ids` and the run's
+`decision_evidence_ids`. Refinement retrieves fresh context and removes stale
+document packets/references, including after rollout is disabled.
+
+Shadow retrieval stores only safe status/count diagnostics; document text,
+packets and citation IDs never enter either AI prompt, ranking or selected
+evidence. Ordinary disabled/nonallowlisted calls retain the prior output without
+a document entry. When recorded, `planning_evidence` uses
+`id="document-rag:query"`, `source="public-document-rag"`, and trace phase
+`document_rag`; metadata is persisted in the final plan/snapshot, not a new
+dedicated streaming progress event. Enabled context is kept separately from
+`public-rag:query` and public numeric observations.
+Details/trace include `status`, configured `mode`, policy `generation`, sanitized
+`reason`, `retrieved_count`, `rejected_count`, `degraded`, `requested_mode`,
+`retrieval_build_id`, actual `retrieval_mode`, `embedding_contract`,
+`branch_status`, `degraded_reason`, `index_stale` and `rebuild_required`.
+Statuses distinguish `disabled`, `shadow`, `available`, `empty`, `forbidden`
+and `unavailable`; reason codes distinguish `query_forbidden`, `no_match`,
+`retrieval_stale`, `retrieval_degraded` and other controlled failures.
+An allowlisted caller without the independent query grant gets explicit
+forbidden diagnostics before searching. Hybrid degradation retains its actual
+lexical response mode; stale/degraded indicators can coexist. Branch errors and
+degradation reasons are sanitized, not raw dependency exception strings.
+Saved plans containing document context retain the independent global query
+permission requirement; policy rollback affects subsequent planning, not
+retroactive deletion of authorized history. Drain in-flight work for a complete
+emergency cutover.
 
 Agentic candidate generation requires its first tool batch to contain exactly
 `get_cluster_overview` and `search_candidates`. An invalid first batch is not executed;
