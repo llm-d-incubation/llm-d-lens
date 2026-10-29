@@ -33,16 +33,11 @@ def reset_storage(connection: sa.Connection, *, discard_legacy: bool = False) ->
     if inspector.has_table("public_benchmark_records"):
         raise RuntimeError("public_benchmark_records already exists; refusing to overwrite it")
     tables = [
-        sa.Table(name, sa.MetaData(), autoload_with=connection)
-        for name in LEGACY_TABLES
-        if inspector.has_table(name)
+        sa.Table(name, sa.MetaData(), autoload_with=connection) for name in LEGACY_TABLES if inspector.has_table(name)
     ]
     for table in tables:
         connection.execute(sa.text(f'LOCK TABLE "{table.name}" IN ACCESS EXCLUSIVE MODE'))
-    counts = {
-        table.name: connection.scalar(sa.select(sa.func.count()).select_from(table)) or 0
-        for table in tables
-    }
+    counts = {table.name: connection.scalar(sa.select(sa.func.count()).select_from(table)) or 0 for table in tables}
     legacy = next((table for table in tables if table.name == "rag_items"), None)
     if legacy is not None and connection.scalar(
         sa.select(sa.func.count()).select_from(legacy).where(legacy.c.origin_id == "prism:public-snapshot")

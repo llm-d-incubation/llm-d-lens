@@ -490,7 +490,7 @@ async def test_historical_observations_ignore_current_topology_map(task):
 
 
 @pytest.mark.asyncio
-async def test_planning_evidence_exposes_only_saved_verified_observations(task, monkeypatch):
+async def test_supplementary_evidence_never_reads_unscoped_simulation_history(task, monkeypatch):
     from llm_d_lens.agentic import facts
     from llm_d_lens.agentic.planner import PlanningFacts
     from llm_d_lens.aic.service import AICError
@@ -499,14 +499,16 @@ async def test_planning_evidence_exposes_only_saved_verified_observations(task, 
         raise AICError("offline")
 
     monkeypatch.setattr(facts, "check_support", offline)
-    monkeypatch.setattr(facts, "list_tasks", AsyncMock(return_value=SimpleNamespace(total=1, tasks=[task])))
-    resolved = await facts._supplementary_evidence("org/model", PlanningFacts(8, 1, 99), 99, {})
-    history = next(item for item in resolved if item.id == "simulation-history")
-    assert history.details["observations"][0]["hardware"]["vram_per_gpu_gib"] == 64
-    task.benchmark_evidence = None
-    resolved = await facts._supplementary_evidence("org/model", PlanningFacts(8, 1, 99), 99, {})
-    history = next(item for item in resolved if item.id == "simulation-history")
-    assert "observations" not in history.details
+    monkeypatch.setattr(SimulationTaskDao, "list_ids", lambda *_: pytest.fail("Unscoped simulation history query"))
+    for snapshot in (task.benchmark_evidence, None):
+        task.benchmark_evidence = snapshot
+        resolved = await facts._supplementary_evidence("org/model", PlanningFacts(8, 1, 99), 99, {})
+        history = next(item for item in resolved if item.id == "simulation-history")
+        assert history.status == "unavailable"
+        assert history.details == {
+            "reason": "unscoped_history_disabled",
+            "replacement": "configuration-cases:query",
+        }
 
 
 def test_failed_evidence_requires_actual_measurements_and_reason(task):

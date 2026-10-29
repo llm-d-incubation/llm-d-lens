@@ -34,13 +34,11 @@ def legacy(postgres_engine, postgres_config):
                 "source_role, source_details) VALUES "
                 "('old-source', 'source', 'old-document', 'file', 'revision', :hash, "
                 "'verified_public', 'staged', 'document.md', 'markdown', 'file', "
-                "'{\"parser_version\":\"test\"}'::jsonb)"
+                '\'{"parser_version":"test"}\'::jsonb)'
             ),
             {"hash": "b" * 64},
         )
-        connection.execute(
-            sa.text("INSERT INTO rag_search_pointers (mode,generation) VALUES ('lexical',1)")
-        )
+        connection.execute(sa.text("INSERT INTO rag_search_pointers (mode,generation) VALUES ('lexical',1)"))
     return postgres_engine, postgres_config
 
 
@@ -108,7 +106,7 @@ def test_new_table_rejects_non_prism_origins(postgres_engine):
                 "source_path, format, source_role, source_details) VALUES "
                 "('not-prism', 'source', 'other-origin', 'file', 'revision', :hash, "
                 "'verified_public', 'staged', 'source.json', 'json', 'file', "
-                "'{\"parser_version\":\"test\"}'::jsonb)"
+                '\'{"parser_version":"test"}\'::jsonb)'
             ),
             {"hash": "b" * 64},
         )

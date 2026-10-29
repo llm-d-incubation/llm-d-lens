@@ -99,6 +99,31 @@ def test_archived_unknown_hardware_does_not_match_even_another_unknown_hardware(
     assert evidence.matching_runs == 0
 
 
+def test_hardware_labels_preserve_provenance_and_parse_explicit_dimensions():
+    hardware = HardwareDescriptor(accelerator="4x NVIDIA H100 80GiB SXM")
+    assert hardware.accelerator == "4x NVIDIA H100 80GiB SXM"
+    assert hardware.accelerator_key == "H100"
+    assert hardware.gpu_count == 4
+    assert hardware.vram_per_gpu_gib == 80
+    assert hardware.form_factor == "SXM"
+    assert hardware.profile_id is not None
+    assert HardwareDescriptor.model_validate(hardware.model_dump()) == hardware
+
+
+@pytest.mark.parametrize(
+    "changes",
+    ({}, {"form_factor": "PCIE"}, {"profile_id": "other-profile"}, {"interconnect": "other-link"}),
+)
+def test_hardware_comparison_normalizes_labels_without_collapsing_variants(changes):
+    query = _query()
+    record = _record("raw-hardware")
+    query.hardware = HardwareDescriptor(accelerator="4x H100 80GiB SXM")
+    record.hardware = HardwareDescriptor(accelerator="NVIDIA H100 80GiB SXM", gpu_count=4)
+    record.hardware = record.hardware.model_copy(update=changes)
+    assert BenchmarkEvidenceRetriever._compatible(record, query) is (not changes)
+    assert record.hardware.accelerator == "NVIDIA H100 80GiB SXM"
+
+
 def test_missing_versions_lower_similarity_but_do_not_block_compatible_measurement():
     query = _query()
     record = _record("version-unavailable")

@@ -55,7 +55,6 @@ class HardwareDescriptor(BaseModel):
             return value
         result = dict(value)
         identity = normalize_hardware(result.get("accelerator"), device_count=result.get("gpu_count"))
-        result["accelerator"] = identity.device_model
         for field, parsed in (
             ("gpu_count", identity.device_count),
             ("vram_per_gpu_gib", identity.memory_gib),
@@ -65,6 +64,10 @@ class HardwareDescriptor(BaseModel):
             if result.get(field) is None:
                 result[field] = parsed
         return result
+
+    @property
+    def accelerator_key(self) -> str | None:
+        return normalize_hardware(self.accelerator).device_model
 
 
 class WorkloadProfile(BaseModel):
@@ -386,14 +389,14 @@ class BenchmarkEvidenceRetriever:
         ):
             return False
         return (
-            _known(record.hardware.accelerator)
+            _known(record.hardware.accelerator_key)
             and _known(record.runtime.backend)
             and _known(record.model.quantization)
             and record.hardware.vram_per_gpu_gib is not None
             and query.hardware.vram_per_gpu_gib is not None
             and record.hardware.gpu_count is not None
             and query.hardware.gpu_count is not None
-            and record.hardware.accelerator == query.hardware.accelerator
+            and record.hardware.accelerator_key == query.hardware.accelerator_key
             and record.hardware.form_factor == query.hardware.form_factor
             and record.hardware.profile_id == query.hardware.profile_id
             and record.hardware.interconnect == query.hardware.interconnect
