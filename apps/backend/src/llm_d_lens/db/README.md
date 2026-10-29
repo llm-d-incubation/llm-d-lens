@@ -260,7 +260,9 @@ from pathlib import Path
 
 from llm_d_lens.benchmark_rag.prism import PrismSnapshotImporter
 from llm_d_lens.benchmark_rag.prism_initial import (
-    INITIAL_EXPERIMENTS, INITIAL_FILES, INITIAL_REVISION,
+    INITIAL_EXPERIMENTS,
+    INITIAL_FILES,
+    INITIAL_REVISION,
 )
 
 # Both arguments come from an explicitly configured administrative caller.
