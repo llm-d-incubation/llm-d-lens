@@ -1,4 +1,4 @@
-"""Internal, answer-index publication; not a corpus parser or public endpoint."""
+"""Approved Prism SQL publication with retained manifests and audit history."""
 
 from __future__ import annotations
 
@@ -25,12 +25,9 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     registry_id,
 )
 from llm_d_lens.benchmark_rag.sources import (
-    BENCHMARK_ORIGIN,
-    WEB_SOURCE_PATHS,
     SourceArchive,
     input_format,
     validate_revision,
-    web_source_url,
 )
 from llm_d_lens.db.dao.rag_item import RagItemDaoError
 from llm_d_lens.db.dao.rag_publication import RagPublicationDao
@@ -56,12 +53,12 @@ class RagPublicationService:
         try:
             if file.format == "json":
                 json.loads(data)
-            elif file.format in ("markdown", "jq"):
+            elif file.format == "jq":
                 data.decode("utf-8")
-            elif file.format == "png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise PublicationError("source is not a PNG")
             elif file.format == "zip" and not zipfile.is_zipfile(io.BytesIO(data)):
                 raise PublicationError("source is not a ZIP")
+            elif file.format not in ("json", "jq", "zip"):
+                raise PublicationError("unsupported Prism source format")
         except (json.JSONDecodeError, UnicodeError) as error:
             raise PublicationError("source format validation failed") from error
 
@@ -125,16 +122,11 @@ class RagPublicationService:
                 parent_id=registry_id(inventory.origin_id),
                 access_classification="verified_public",
                 source_path=file.path,
-                source_url=(
-                    web_source_url(inventory.origin_id, file.path) if inventory.origin_id in WEB_SOURCE_PATHS else None
-                ),
                 format=file.format,
                 source_details={"parser_version": head.state.approval.parser_version},
             )
             staged.append(source)
             for item in parsed.items:
-                if inventory.origin_id in WEB_SOURCE_PATHS and item.kind != "passage":
-                    raise PublicationError("web snapshots support context passages only")
                 if (
                     item.kind == "source"
                     or item.origin_id != inventory.origin_id
@@ -148,8 +140,7 @@ class RagPublicationService:
                 ):
                     raise PublicationError("parser result does not match its exact pinned source identity")
                 if item.kind == "measurement" and (
-                    inventory.origin_id == BENCHMARK_ORIGIN
-                    or (item.evidence_type == "raw_json" and file.format != "json")
+                    (item.evidence_type == "raw_json" and file.format != "json")
                     or (item.evidence_type == "published_table" and file.format != "markdown")
                 ):
                     raise PublicationError("this source cannot support the claimed measurement evidence type")

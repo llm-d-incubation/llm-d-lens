@@ -302,7 +302,6 @@ def test_validator_records_supplied_reference_material_without_claiming_model_us
             {
                 "case_id": "case:authorized",
                 "measurements": [{"evidence_id": "benchmark:authorized"}],
-                "supporting_passage_ids": ["document:qualitative"],
             },
         ),
     )
@@ -318,11 +317,8 @@ def test_validator_records_supplied_reference_material_without_claiming_model_us
     assert not result.accepted[0].evidence_ids
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["configuration_case_evidence_ids", "document_evidence_ids"],
-)
-def test_generator_schema_no_longer_requests_historical_citation_ids(field):
+def test_generator_schema_rejects_unknown_fields():
+    field = "unknown_field"
     assert field not in CandidateProposal.model_json_schema()["properties"]
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CandidateProposal(

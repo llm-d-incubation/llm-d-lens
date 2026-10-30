@@ -25,11 +25,7 @@ router = APIRouter(prefix="/api/agentic-deployments", tags=["agentic-deployments
 
 
 def _require_plan_evidence_access(run: AgenticDeploymentRun, principal: Principal | None) -> None:
-    if any(
-        item.source in {"public-benchmark-rag", "public-document-rag", "configuration-cases"}
-        and item.status == "available"
-        for item in run.planning_evidence
-    ):
+    if any(item.source == "public-benchmark-rag" and item.status == "available" for item in run.planning_evidence):
         require_query_access(principal)
     for item in run.planning_evidence:
         if item.source == "configuration-cases":

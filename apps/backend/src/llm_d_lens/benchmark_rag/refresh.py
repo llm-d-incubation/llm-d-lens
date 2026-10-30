@@ -1,4 +1,4 @@
-"""Reviewed refresh jobs with pinned GitHub downloads; no discovery or background scheduler."""
+"""Reviewed manual refresh jobs for pinned local Prism snapshots."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from llm_d_lens.benchmark_rag.sources import (
     validate_revision,
 )
 
-RefreshTrigger = Literal["manual", "commit", "periodic"]
+RefreshTrigger = Literal["manual"]
 
 
 class RefreshPlan(PublicationModel):
@@ -103,7 +103,7 @@ class RagRefreshService:
         ):
             return
         # Only a direct successful replay may reuse the reviewed base. A rollback
-        # or access-policy change must not be undone by an old periodic job.
+        # or access-policy change must not be undone by an old reviewed plan.
         if head.manifest is not None and head.state.history:
             event = head.state.history[-1]
             manifest = ReleaseManifest.model_validate(head.manifest.source_details)
@@ -126,15 +126,10 @@ class RagRefreshService:
         source: Path | None = None,
         *,
         trigger: RefreshTrigger = "manual",
-        event_revision: str | None = None,
     ) -> RefreshReport:
         plan = RefreshPlan.model_validate(plan.model_dump())
         if trigger not in plan.triggers:
             raise PublicationError("trigger is not approved by this refresh plan")
-        if (trigger == "commit" and event_revision != plan.inventory.revision) or (
-            trigger != "commit" and event_revision is not None
-        ):
-            raise PublicationError("commit trigger needs its exact reviewed event revision; other triggers omit it")
         started = datetime.now(UTC)
         origin = plan.inventory.origin_id
         head = self.publication.dao.head(origin)

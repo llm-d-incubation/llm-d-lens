@@ -49,7 +49,7 @@ class Site:
         monkeypatch.setenv("LENS_DATA_DIR", str(self.root))
 
     def args(self) -> list[str]:
-        return ["--structured", "--schema", self.schema, "--data-dir", str(self.root)]
+        return ["--schema", self.schema, "--data-dir", str(self.root)]
 
 
 @pytest.fixture
@@ -435,7 +435,7 @@ def test_cli_requires_explicit_database_and_never_echoes_credentials(
     url: str,
 ):
     monkeypatch.delenv("LLM_D_BENCH_DATABASE_URL", raising=False)
-    args = ["backup", "--structured", "--data-dir", str(tmp_path), "--output", str(tmp_path / "rag.zip")]
+    args = ["backup", "--data-dir", str(tmp_path), "--output", str(tmp_path / "rag.zip")]
     assert main(args) == 1
     assert "explicit database" in capsys.readouterr().err
     monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", url)
@@ -458,7 +458,7 @@ def test_cli_backup_verify_restore_into_new_machine(
     assert main(["backup", *source.args(), "--output", str(bundle)]) == 0
     exported = json.loads(capsys.readouterr().out)
     monkeypatch.delenv("LLM_D_BENCH_DATABASE_URL")
-    assert main(["verify", "--structured", "--bundle", str(bundle)]) == 0
+    assert main(["verify", "--bundle", str(bundle)]) == 0
     assert json.loads(capsys.readouterr().out)["backup_id"] == exported["backup_id"]
     monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", target.url)
     assert main(["restore", *target.args(), "--bundle", str(bundle), "--initialize"]) == 0
@@ -493,7 +493,7 @@ def test_real_snapshot_cli_rebuild_and_portable_migration(
         main(
             [
                 "rebuild",
-                *source.args()[1:],
+                *source.args(),
                 "--snapshot",
                 str(_REAL_SNAPSHOT),
                 "--approval",

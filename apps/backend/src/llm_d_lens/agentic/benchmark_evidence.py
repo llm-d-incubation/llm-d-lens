@@ -442,11 +442,22 @@ class BenchmarkEvidenceRetriever:
             if not optimization_union
             else len(set(record.optimizations) & set(query.optimizations)) / len(optimization_union)
         )
-        return (
-            0.4 * exp(-abs(log(record.decode_tp / query.decode_tp)))
-            + 0.4 * exp(-abs(log(record.decode_replicas / query.decode_replicas)))
-            + 0.2 * optimization_score
-        )
+        dimensions: list[tuple[int | None, int | None]] = [
+            (record.decode_tp, query.decode_tp),
+            (record.decode_replicas, query.decode_replicas),
+        ]
+        if query.topology == "pd-disaggregation":
+            dimensions.extend(
+                [
+                    (record.prefill_tp, query.prefill_tp),
+                    (record.prefill_replicas, query.prefill_replicas),
+                ]
+            )
+        topology_score = sum(
+            exp(-abs(log(actual / requested))) if actual is not None and requested is not None else 0.0
+            for actual, requested in dimensions
+        ) / len(dimensions)
+        return 0.8 * topology_score + 0.2 * optimization_score
 
     @staticmethod
     def _aggregate_metrics(matches: list[tuple[BenchmarkRecord, WeightedBenchmark]]) -> BenchmarkMetrics:

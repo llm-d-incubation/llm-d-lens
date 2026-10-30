@@ -65,16 +65,6 @@ def principal_permissions(principal: Principal) -> frozenset[str]:
     return frozenset(codes)
 
 
-def principal_global_permissions(principal: Principal) -> frozenset[str]:
-    """Actions granted by GLOBAL bindings, without elevating cluster-only roles."""
-    return frozenset(
-        code
-        for binding in principal.bindings
-        if binding.scope_type is ScopeType.GLOBAL
-        for code in principal.permissions_for(binding.role)
-    )
-
-
 def _resource_share_allows(principal: Principal, required: str, resource: ResourceRef) -> bool:
     # Resource grants only convey model inference, never management or cluster access.
     if resource.resource_type != "model_service_group" or required != "model-service:inference:use":

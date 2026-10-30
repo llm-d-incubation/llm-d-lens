@@ -7,7 +7,6 @@ from dataclasses import replace
 import pytest
 from pydantic import TypeAdapter
 
-from llm_d_lens.agentic.document_evidence import DocumentEvidencePacket, document_context
 from llm_d_lens.agentic.planner import (
     AICCandidatePrediction,
     DeterministicPlanner,
@@ -27,7 +26,6 @@ from llm_d_lens.agentic.planner import (
     validate_request_context_budget,
 )
 from llm_d_lens.benchmark_rag.case_retrieval import compact_reference, configuration_case_context, model_reference_map
-from llm_d_lens.benchmark_rag.query_contracts import Citation
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +60,30 @@ def test_public_context_keeps_observations_without_audit_reports_or_hashes():
         assert item["experiment"]["configuration"] == {"tp": 2}
         assert item["planning_match"]["workload"]["unknown_fields"] == ["p95_input_tokens"]
     assert facts.public_rag_evidence[0]["experiment"]["configuration"]["published_report"] == report
+
+
+def test_incomplete_historical_latency_is_unknown_not_a_known_slo_failure():
+    facts = PlanningFacts(
+        8,
+        80,
+        2,
+        ttft_slo_ms=500,
+        tpot_slo_ms=50,
+        performance_score_inputs=(
+            PerformanceScoreInput(
+                candidate_id="optimized-baseline-tp1-r1",
+                source="benchmark",
+                status="measured",
+                ttft_p95_ms=100,
+                confidence=0.9,
+                effective_sample_size=3,
+            ),
+        ),
+    )
+    requirements = normalize_planning_facts(facts, "P95 TTFT <= 500ms; P95 TPOT <= 50ms")
+    planner = DeterministicPlanner()
+    candidate = next(item for item in planner.candidates(requirements) if item.id == "optimized-baseline-tp1-r1")
+    assert planner._slo_assessment(requirements, candidate) == ("unknown", 0)
 
 
 def test_public_context_keeps_configuration_cases_separate_from_slo_observations():
@@ -159,7 +181,6 @@ def test_planner_sends_semantic_technique_hints_without_source_or_case_markers(m
         compact_reference("public-rag:tpot", "measurement"),
         "configuration_case_evidence_ids",
         "public_rag_evidence_ids",
-        "document_evidence_ids",
     ):
         assert internal not in serialized
     assert "adopted or excluded" in request["system_prompt"]
@@ -255,51 +276,31 @@ def test_request_shape_selection_preserves_complete_units_and_exclusion_metadata
     observations = tuple(
         {"evidence_id": f"public-rag:{index}", "value": index, "citation": {"revision": "pinned"}} for index in range(2)
     )
-    document = DocumentEvidencePacket(
-        citation_id="document:chunk",
-        evidence_id="passage",
-        chunk_id="chunk",
-        retrieval_build_id="build",
-        retrieval_mode="opensearch_lexical",
-        matched_branches=("lexical",),
-        title="Guide",
-        text="Complete untrusted reference.",
-        citation=Citation(
-            origin_id="guide",
-            source_revision="rev",
-            source_path="guide.md",
-            sha256="a" * 64,
-            artifact_uri="artifact://guide",
-            source_pointer={},
-            published_manifest_id="manifest",
-        ),
-    )
     facts = PlanningFacts(
         8,
         32,
         4,
         configuration_cases=cases,
         public_rag_evidence=observations,
-        document_evidence=(document,),
-        evidence_ids=("cluster:a", "case:0", "case:1", "public-rag:0", "public-rag:1", "document:chunk"),
+        evidence_ids=("cluster:a", "case:0", "case:1", "public-rag:0", "public-rag:1"),
         configuration_case_status={
             "selected_count": 2,
             "excluded": {"case:earlier": "case_limit"},
-            "model_reference_map": model_reference_map(cases, observations, [document.citation_id]),
+            "model_reference_map": model_reference_map(cases, observations),
         },
     )
 
     def request_builder(selected):
         return {
             "system_prompt": "Rules",
-            "context": {**public_rag_context(selected), **document_context(selected.document_evidence)},
+            "context": public_rag_context(selected),
             "tools": [{"parameters": {"payload": "t" * 100}}],
             "catalog": [{"id": "candidate"}],
         }
 
     expected_status = {
         "selected_count": 1,
-        "model_reference_map": model_reference_map(cases[:1], observations[:1], [document.citation_id]),
+        "model_reference_map": model_reference_map(cases[:1], observations[:1]),
         "truncated": True,
         "excluded": {
             "case:earlier": "case_limit",
@@ -321,14 +322,13 @@ def test_request_shape_selection_preserves_complete_units_and_exclusion_metadata
     assert selected.configuration_cases == cases[:1]
     assert selected.configuration_cases[0] is cases[0]
     assert selected.public_rag_evidence == observations[:1]
-    assert selected.document_evidence == (document,)
     assert selected.configuration_case_status == expected_status
-    assert selected.evidence_ids == ("cluster:a", "case:0", "public-rag:0", "document:chunk")
+    assert selected.evidence_ids == ("cluster:a", "case:0", "public-rag:0")
     assert facts.configuration_cases == cases and facts.public_rag_evidence == observations
     assert facts.configuration_case_status == {
         "selected_count": 2,
         "excluded": {"case:earlier": "case_limit"},
-        "model_reference_map": model_reference_map(cases, observations, [document.citation_id]),
+        "model_reference_map": model_reference_map(cases, observations),
     }
     with pytest.raises(ValueError, match="Model context budget exceeded"):
         validate_request_context_budget(
@@ -341,43 +341,13 @@ def test_request_shape_selection_preserves_complete_units_and_exclusion_metadata
         completion_tokens=8192,
     )
     assert not smaller.configuration_cases and not smaller.public_rag_evidence
-    assert smaller.document_evidence == (document,)
     with pytest.raises(ValueError, match="Model context budget exceeded"):
         select_request_evidence(
             settings.model_copy(update={"context_window": 8192}), facts, request_builder, completion_tokens=8192
         )
-    document_facts = replace(
-        facts,
-        configuration_cases=(),
-        public_rag_evidence=(),
-        configuration_case_status=None,
-        evidence_ids=("cluster:a", document.citation_id),
-    )
-    no_document = replace(
-        document_facts,
-        document_evidence=(),
-        configuration_case_status={
-            "truncated": True,
-            "selected_count": 0,
-            "excluded": {document.citation_id: "request_context_budget"},
-        },
-    )
-    document_bound = 2 * len(json.dumps(request_builder(no_document), ensure_ascii=True).encode("utf-8")) + 8192 + 1024
-    selected, actual = select_request_evidence(
-        settings.model_copy(update={"context_window": document_bound}),
-        document_facts,
-        request_builder,
-        completion_tokens=8192,
-    )
-    assert not selected.document_evidence
-    assert selected.evidence_ids == ("cluster:a",)
-    assert actual == request_builder(no_document)
-    assert document_facts.document_evidence == (document,)
 
 
-@pytest.mark.parametrize("with_zero_case", [False, True])
-@pytest.mark.parametrize("linked", [False, True])
-def test_request_budget_keeps_informative_case_before_zero_only_cases_and_documents(with_zero_case, linked):
+def test_request_budget_keeps_informative_case_before_zero_only_cases():
     useful = {
         "case_id": "case:useful",
         "measurements": [{"evidence_id": "public-rag:useful", "metric": "tpot", "value": "20", "unit": "ms/token"}],
@@ -387,67 +357,30 @@ def test_request_budget_keeps_informative_case_before_zero_only_cases_and_docume
         "case_id": "case:zero",
         "measurements": [{"evidence_id": "public-rag:zero", "metric": "latency", "value": "0", "unit": "ms"}],
     }
-    packet = DocumentEvidencePacket(
-        citation_id="document:chunk",
-        evidence_id="passage",
-        chunk_id="chunk",
-        retrieval_build_id="build",
-        retrieval_mode="opensearch_lexical",
-        matched_branches=("lexical",),
-        title="Guide",
-        text="x" * 2000,
-        citation=Citation(
-            origin_id="guide",
-            source_revision="rev",
-            source_path="guide.md",
-            sha256="a" * 64,
-            artifact_uri="artifact://guide",
-            source_pointer={},
-            published_manifest_id="manifest",
-        ),
-    )
-    if linked:
-        useful.update(
-            supporting_passage_ids=[packet.citation_id],
-            reference_passage_ids=[packet.citation_id],
-            reference_differences={packet.citation_id: ["different experiment"]},
-        )
     facts = PlanningFacts(
         8,
         80,
         8,
-        configuration_cases=(zero, useful) if with_zero_case else (useful,),
-        document_evidence=(packet,),
+        configuration_cases=(zero, useful),
     )
 
     def request_builder(selected):
-        return {**public_rag_context(selected), **document_context(selected.document_evidence)}
+        return public_rag_context(selected)
 
-    excluded = {packet.citation_id: "request_context_budget"}
-    if with_zero_case:
-        excluded.update({"case:zero": "request_context_budget", "public-rag:zero": "request_context_budget"})
-    retained = (
-        {**useful, "supporting_passage_ids": [], "reference_passage_ids": [], "reference_differences": {}}
-        if linked
-        else useful
-    )
+    excluded = {"case:zero": "request_context_budget", "public-rag:zero": "request_context_budget"}
     expected = replace(
         facts,
-        configuration_cases=(retained,),
-        document_evidence=(),
+        configuration_cases=(useful,),
         configuration_case_status={"truncated": True, "selected_count": 1, "excluded": excluded},
     )
     bound = 2 * len(json.dumps(request_builder(expected), ensure_ascii=True).encode()) + 8192 + 1024
     settings = OpenAIPlannerSettings(base_url="http://provider", model="planner", context_window=bound)
     selected, request = select_request_evidence(settings, facts, request_builder, completion_tokens=8192)
-    assert selected.configuration_cases == (retained,)
-    assert not selected.document_evidence
+    assert selected.configuration_cases == (useful,)
     assert selected.configuration_cases[0]["workload_similarity"] is None
     assert selected.configuration_case_status == expected.configuration_case_status
     assert request == request_builder(expected)
-    assert facts.document_evidence == (packet,)
-    if linked:
-        assert facts.configuration_cases[-1]["supporting_passage_ids"] == [packet.citation_id]
+    assert facts.configuration_cases == (zero, useful)
 
 
 def test_request_budget_removes_tail_ranked_case_not_the_fewest_metrics(monkeypatch):
@@ -476,48 +409,6 @@ def test_request_budget_removes_tail_ranked_case_not_the_fewest_metrics(monkeypa
         completion_tokens=8192,
     )
     assert selected.configuration_cases == (cases[0],)
-
-
-def test_request_budget_retains_configuration_support_not_first_generic_document(monkeypatch):
-    citation = Citation(
-        origin_id="guide",
-        source_revision="rev",
-        source_path="guide.md",
-        sha256="a" * 64,
-        artifact_uri="artifact://guide",
-        source_pointer={},
-        published_manifest_id="manifest",
-    )
-    documents = tuple(
-        DocumentEvidencePacket(
-            citation_id=f"document:{i}",
-            evidence_id=f"passage-{i}",
-            chunk_id=str(i),
-            retrieval_build_id="build",
-            retrieval_mode="opensearch_lexical",
-            matched_branches=("lexical",),
-            title="Guide",
-            text=text,
-            citation=citation,
-        )
-        for i, text in enumerate(
-            ("Deploy, cut over and monitor.", "Prefill decode disaggregation requires configuring KV transfer.")
-        )
-    )
-
-    def validate(_settings, request, *, completion_tokens):
-        if len(request["documents"]) > 1:
-            raise ValueError("fixture request budget exceeded")
-
-    monkeypatch.setattr("llm_d_lens.agentic.planner.validate_request_context_budget", validate)
-    selected, _ = select_request_evidence(
-        OpenAIPlannerSettings(base_url="http://provider", model="planner"),
-        PlanningFacts(8, 80, 8, document_evidence=documents),
-        lambda value: {"documents": value.document_evidence},
-        completion_tokens=8192,
-    )
-    assert selected.document_evidence == (documents[1],)
-    assert selected.configuration_case_status["excluded"] == {"document:0": "request_context_budget"}
 
 
 def test_planner_records_only_reference_material_in_actual_budgeted_request(monkeypatch):
@@ -612,7 +503,6 @@ def test_planner_keeps_reference_material_separate_from_used_evidence_and_slo_pr
             {
                 "case_id": "case:authorized",
                 "measurements": [{"evidence_id": "benchmark:authorized"}, {"evidence_id": "document:qualitative"}],
-                "supporting_passage_ids": ["document:qualitative"],
             },
         ),
     )

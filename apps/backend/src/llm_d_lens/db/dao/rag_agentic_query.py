@@ -1,7 +1,9 @@
 """Read-only, caller-scoped measured Agentic evidence.
 
-Only canonical ``evaluate:<uuid>`` records with a live, unambiguous evaluation
-and owner are eligible. Legacy simulation task references are not evaluations.
+Access uses evaluation resource permissions, not public-corpus query grants.
+Only canonical ``evaluate:<uuid>`` records and individually identified stage or
+matrix-stage samples with a live, unambiguous evaluation and owner are eligible.
+Legacy simulation task references are not evaluations.
 TTFT/E2E milliseconds and throughput tokens/s have identity normalization; the
 throughput denominator does not establish output tokens. TPOT ms/token and
 fraction normalization are unsupported; raw fraction ranges are supported.
@@ -29,11 +31,10 @@ from llm_d_lens.agentic.benchmark_evidence import (
 from llm_d_lens.auth.contracts import Principal, ScopeType
 from llm_d_lens.auth.permissions import permission_granted
 from llm_d_lens.auth.scope import reachable_clusters
-from llm_d_lens.benchmark_rag.access import require_query_access
 from llm_d_lens.benchmark_rag.agentic_metrics import AGENTIC_METRICS, metric_matches
 from llm_d_lens.benchmark_rag.contracts import planning_latency_axes
 from llm_d_lens.benchmark_rag.query_contracts import QueryFilters
-from llm_d_lens.core.exceptions import ConflictError, UnauthenticatedError
+from llm_d_lens.core.exceptions import ConflictError, PasswordChangeRequiredError, UnauthenticatedError
 from llm_d_lens.db.dao.base import BaseDao
 from llm_d_lens.db.dao.rag_query import latency_dominator_count, model_identity_condition
 from llm_d_lens.db.models.agentic_benchmark_record import BenchmarkRecordRow
@@ -112,7 +113,13 @@ def _verified() -> list[ColumnElement[bool]]:
     return [
         EvaluateRunRow.id.op("~")(_UUID),
         BenchmarkRecordRow.evaluate_run_id == EvaluateRunRow.id,
-        BenchmarkRecordRow.benchmark_id == "evaluate:" + EvaluateRunRow.id,
+        BenchmarkRecordRow.benchmark_id.regexp_match(
+            func.concat(
+                "^evaluate:",
+                EvaluateRunRow.id,
+                "(:stage:(0|[1-9][0-9]*)|:matrix:(0|[1-9][0-9]*):stage:(0|[1-9][0-9]*))?$",
+            )
+        ),
         EvaluateRunRow.kind == "benchmark",
         EvaluateRunRow.cluster_id.is_not(None),
         func.length(func.trim(EvaluateRunRow.cluster_id)) > 0,
@@ -245,9 +252,10 @@ def _planning_selection(
 class RagAgenticQueryDao(BaseDao):
     @staticmethod
     def _caller(session: Session, principal: Principal) -> None:
-        require_query_access(principal)
-        if principal.user_id == "system":
+        if principal is None or not principal.user_id or principal.user_id == "system":
             raise UnauthenticatedError("authentication required")
+        if principal.must_change_password:
+            raise PasswordChangeRequiredError("password change required before continuing")
         caller = session.get(UserRow, principal.user_id)
         if (
             caller is None

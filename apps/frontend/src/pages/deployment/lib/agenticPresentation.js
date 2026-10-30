@@ -5,8 +5,6 @@ export function retrievalBranchSummaries(run) {
     const publicSql = evidence.find((item) => item.id === 'public-rag:query');
     const cases = evidence.find((item) => item.source === 'configuration-cases')?.details;
     const branches = cases?.branch_status;
-    const documents = evidence.find((item) => item.source === 'public-document-rag')
-        || (branches?.documents ? { status: branches.documents.status, details: branches.documents } : null);
     const internal = branches?.internal_sql;
     const retainedCases = cases?.cases || [];
     const sourceCases = (internal) => retainedCases.filter((item) =>
@@ -24,18 +22,6 @@ export function retrievalBranchSummaries(run) {
             summary: ['available', 'no_matches'].includes(publicSql?.status || branches.public_sql.status) && retrieval
                 ? `Retrieved ${retrieval.returned_observations ?? 'unknown'} of ${retrieval.matched_observations ?? 'unknown'} matching observations; ${response?.evidence?.length ?? sourceCases(false).reduce((count, item) => count + (item.measurements?.length ?? 0), 0)} retained for planning.`
                 : diagnostic(publicSql?.status || branches.public_sql.status, code),
-        });
-    }
-    if (documents) {
-        const details = documents.details || {};
-        rows.push({
-            id: 'documents',
-            label: 'Document RAG passages',
-            status: documents.status,
-            evidence: documents,
-            summary: ['available', 'empty', 'shadow'].includes(documents.status)
-                ? `Retrieved ${details.retrieved_count ?? 'unknown'} passages; ${details.document_evidence?.length ?? 0} retained for planning. Qualitative context, not measured performance.${details.reason ? ` ${diagnostic(details.reason)}` : ''}`
-                : diagnostic(documents.status, details.reason),
         });
     }
     if (internal) {
@@ -59,7 +45,7 @@ export function retrievalBranchSummaries(run) {
 }
 
 export function planningEvidenceLabel(item, hasAicPrediction) {
-    if (item.id === 'public-rag:query' || ['public-document-rag', 'configuration-cases'].includes(item.source)) return null;
+    if (item.id === 'public-rag:query' || item.source === 'configuration-cases') return null;
     if (item.id === 'aic:support' && hasAicPrediction) return null;
     if (item.id === 'aic:search') return 'AIC performance prediction';
     if (item.id.startsWith('cluster-overview:')) return 'Live cluster capacity';

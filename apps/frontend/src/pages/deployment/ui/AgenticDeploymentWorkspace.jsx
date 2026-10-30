@@ -141,11 +141,9 @@ export function RetrievalEvidenceSources({ run }) {
         const details = branch.evidence?.details || {};
         const observations = details.response?.evidence || [];
         const matches = new Map((details.matches || []).map((match) => [match.evidence_id, match]));
-        const passages = details.document_evidence || [];
         const sourceUsage = usage([
             branch.evidence?.id,
             ...observations.map((observation) => `public-rag:${observation.item_id}`),
-            ...passages.map((passage) => passage.citation_id),
             ...(branch.cases || []).flatMap(caseReferences),
         ]);
         return <details key={branch.id} className="group p-3 text-theme-text">
@@ -159,12 +157,9 @@ export function RetrievalEvidenceSources({ run }) {
             <div className="mt-3 space-y-2 text-[11px] text-theme-muted">
                 <Badge tone={sourceUsage === 'used for selection' ? 'success' : 'neutral'} size="xs">{sourceUsage}</Badge>
                 {branch.warning && <p>{branch.warning}</p>}
-                {branch.id !== 'documents' && <p>Historical measurements apply to their reported conditions, not current deployment SLO compliance. Compare model, hardware, runtime and workload before using them alongside AIC estimates.</p>}
+                <p>Historical measurements apply to their reported conditions, not current deployment SLO compliance. Compare model, hardware, runtime and workload before using them alongside AIC estimates.</p>
                 {details.message && <p>{details.message}</p>}
                 {details.retrieval?.mode && <p>Retrieval: {details.retrieval.mode.replaceAll('_', ' ')}.</p>}
-                {details.retrieval_mode && <p>Retrieval: {details.retrieval_mode}; build: {details.retrieval_build_id}.</p>}
-                {details.degraded_reason && <p>Retrieval degradation: {details.degraded_reason}.</p>}
-                {details.index_stale && <p>The document index is stale.</p>}
                 {details.retrieval?.model_identity_aliases && <p>Query model name aliases: {details.retrieval.model_identity_aliases.join(', ')}. Stored names use the same rule; source labels and citations are unchanged.</p>}
                 {branch.id === 'public_sql' && <ul className="space-y-3">
                     {observations.map((observation) => <li key={observation.item_id}>
@@ -173,16 +168,6 @@ export function RetrievalEvidenceSources({ run }) {
                         {publicRagMatchSummary(matches.get(`public-rag:${observation.item_id}`)).map((line) => <p key={line}>{line}</p>)}
                         <p className="break-all">{observation.citation?.source_path} @ {observation.citation?.source_revision}</p>
                         <p className="break-all">SHA-256: {observation.citation?.sha256}</p>
-                    </li>)}
-                </ul>}
-                {branch.id === 'documents' && <ul className="space-y-3">
-                    {passages.map((passage) => <li key={passage.citation_id}>
-                        <p className="font-semibold text-theme-text">{passage.title}</p>
-                        <Badge tone={usedIds.has(passage.citation_id) ? 'success' : 'neutral'} size="xs">{usage([passage.citation_id])}</Badge>
-                        <p className="whitespace-pre-wrap">{passage.text}</p>
-                        <p className="break-all">{passage.citation?.source_path} @ {passage.citation?.source_revision}</p>
-                        <p className="break-all">SHA-256: {passage.citation?.sha256}</p>
-                        <p>Retrieval: {passage.retrieval_mode}; build: {passage.retrieval_build_id}.</p>
                     </li>)}
                 </ul>}
                 {branch.id === 'internal_sql' && <ul className="space-y-3">
@@ -201,7 +186,7 @@ export function RetrievalEvidenceSources({ run }) {
                     </li>)}
                 </ul>}
                 {details.response?.truncated && <p>More observations matched; only the bounded retrieved subset was supplied to planning.</p>}
-                {!observations.length && !passages.length && !branch.cases?.length && <p>No retained evidence details for this source.</p>}
+                {!observations.length && !branch.cases?.length && <p>No retained evidence details for this source.</p>}
             </div>
         </details>;
     });

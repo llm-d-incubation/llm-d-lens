@@ -23,13 +23,15 @@ from llm_d_lens.db.dao.rag_transfer import transfer_database
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Refresh is manual and requires an approved plan plus an explicit local Prism snapshot.",
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
     for name in ("rebuild", "backup", "restore", "verify", "refresh", "status", "rollback"):
         command = subcommands.add_parser(name)
         if name in ("backup", "restore", "verify"):
             command.add_argument("--max-bytes", type=int, default=MAX_BACKUP_BYTES)
-            command.add_argument("--structured", action="store_true", help="Transfer SQL public benchmark records")
         if name in ("verify", "restore"):
             command.add_argument("--bundle", type=Path, required=True)
         if name == "verify":
@@ -51,8 +53,6 @@ def _parser() -> argparse.ArgumentParser:
         elif name == "refresh":
             command.add_argument("--plan", type=Path, required=True)
             command.add_argument("--source", type=Path, help="Pinned local Prism snapshot directory")
-            command.add_argument("--trigger", choices=("manual", "commit", "periodic"), default="manual")
-            command.add_argument("--event-revision")
         elif name in ("status", "rollback"):
             command.add_argument("--origin", choices=(PRISM_ORIGIN,), required=True)
             if name == "rollback":
@@ -95,9 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(result.model_dump_json())
             elif args.command == "refresh":
                 assert plan is not None
-                result = RagRefreshService(publication).run(
-                    plan, args.source, trigger=args.trigger, event_revision=args.event_revision
-                )
+                result = RagRefreshService(publication).run(plan, args.source)
                 print(result.model_dump_json())
             elif args.command == "status":
                 print(dao.head(args.origin).model_dump_json())
@@ -120,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "status": "failed",
                         "command": "refresh",
-                        "trigger": args.trigger,
+                        "trigger": "manual",
                         "error_type": type(error).__name__,
                         "message": message,
                     },

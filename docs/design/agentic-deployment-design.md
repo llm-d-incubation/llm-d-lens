@@ -120,9 +120,19 @@ flowchart TD
 6. The recommendation remains in `awaiting_approval`. The user may select a different validated
    candidate or click Recalculate. The new preference in Recalculate **replaces** the old
    preference and reloads live facts and candidates; it does not retain the previous round's
-   preference.
+   preference. Refinement commits only after access revalidation and snapshot persistence;
+   failures preserve the previous plan, and concurrent plan changes reject a stale refinement.
+   Selecting an alternative updates decision SLO/evidence metadata without rewriting the
+   earlier planning audit snapshot.
 7. Deployment starts only after explicit user approval. Before approval, resources and candidate
-   deployability are validated again to avoid using a stale plan.
+   deployability are validated again to avoid using a stale plan. The service rechecks the plan
+   version and leaves the approval state before submitting to Deploy. Failed or cancelled
+   submissions leave a failed Agentic run, not an automatically retryable approval.
+
+SLO conclusions require every requested latency metric at the requested statistic.
+Missing historical or AIC metrics remain unknown, and TTFT/TPOT alone cannot prove
+an end-to-end latency target. Historical PD similarity includes both prefill and
+decode TP/replica dimensions; changing prefill cannot remain an exact measured match.
 
 ### UI inputs and interaction
 
@@ -656,17 +666,12 @@ or override live-resource validation. AIC estimates remain a distinct evidence t
 Source references stay in the server audit; model-facing aliases and explanations
 must not be presented as independently verified source usage.
 
-The document-evidence contract remains available for a later integration, but this
-delivery does not include public document ingestion, OpenSearch document indexes,
-embedding/hybrid search, a document runtime API or a standalone search page.
-The document branch reports disabled and supplies no passages. Client-supplied
-document packets are not trusted. Internal/public SQL planning and refinement
-must run without the optional document implementation or its dependencies.
-The existing private diagnostic search adapter is separate from public
-document RAG.
+Planning consumes SQL experiments only. Public document ingestion, retrieval,
+packet contracts and search UI are outside this capability. The existing private
+diagnostic search adapter remains separate and unchanged.
 
-The deployment workspace shows internal SQL experiments, public SQL observations
-and document-source status separately, including retrieval failures and unknowns.
+The deployment workspace shows internal SQL experiments and public SQL observations
+separately, including retrieval failures and unknowns.
 No permission, no match and unavailable outcomes are not interchangeable.
 Approval still revalidates resources and model-cache readiness and requires
 explicit user approval; retrieval never authorizes deployment.

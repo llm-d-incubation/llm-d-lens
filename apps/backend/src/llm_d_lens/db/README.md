@@ -114,6 +114,9 @@ portable SQL transfer. Services never bypass these DAOs with raw sessions.
 Agentic aggregates complete experiment/configuration/series groups before ranking
 and limiting cases. Source conditions, units, statistics and provenance must survive
 that boundary; public measurements are not proof of current deployment performance.
+Prism is the only public SQL source. Question parsing retains explicit hardware
+conditions; unrecognized or compound hardware requires clarification rather than
+an unconstrained search.
 
 Internal planning retrieves positive measurement cases and negative failure history
 under the same authorization and verification filters, with independent bounds of
@@ -122,6 +125,9 @@ guardrails; only successful records become numeric observations, and OOM outcome
 are never promoted to measured facts. Prompt case budgets do not prune raw
 guardrail records, and AI ranking excludes candidates blocked by deterministic
 failure checks.
+Canonical evaluation records and individually identified `:stage:n` and
+`:matrix:i:stage:j` samples retain their complete identities and owning evaluation
+ACLs. Internal-only access does not require the global public-corpus query grant.
 
 The retained operator CLI is SQL-only:
 
@@ -150,8 +156,20 @@ Except `verify`, commands require `--data-dir` and an explicit database URL in t
 environment variable selected by `--database-url-env` (default
 `LLM_D_BENCH_DATABASE_URL`). `--schema` defaults to `public`. `--initialize` initializes
 benchmark SQL storage only and does not stamp application migrations.
-Transfer commands accept `--structured` for compatibility; SQL is the default and
-only installed backend in this delivery.
+SQL is the only transfer backend; there is no backend-selection flag. Refresh is
+manual-only and accepts no commit-event or periodic-trigger options.
+For example, after configuring the database URL:
+
+```bash
+.venv/bin/python -m llm_d_lens.benchmark_rag.admin refresh \
+  --data-dir /srv/lens-data \
+  --plan /secure/approved-plan.json \
+  --source /srv/prism-snapshot
+```
+
+The plan must pin the complete reviewed inventory and current publication base.
+Refresh, rollback and portable transfer retain source approvals, publication
+manifests and audit history.
 
 Public document ingestion, OpenSearch document search, embeddings, runtime
 configuration and public REST/MCP search are a separate optional delivery.

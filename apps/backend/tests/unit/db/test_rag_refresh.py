@@ -1,4 +1,4 @@
-"""Structured SQL refresh; document lifecycle coverage lives in benchmark_rag."""
+"""Reviewed Prism-only SQL refresh and source approval boundaries."""
 
 from __future__ import annotations
 
@@ -28,11 +28,9 @@ from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
 from llm_d_lens.benchmark_rag.service import PublicRagQueryService
 from llm_d_lens.benchmark_rag.sources import (
     PRISM_ORIGIN,
-    WEB_SOURCE_PATHS,
     allowed_paths,
     input_format,
     validate_approval,
-    web_source_url,
 )
 from llm_d_lens.db.dao.rag_publication import RagPublicationDao
 from llm_d_lens.db.dao.rag_query import RagQueryDao
@@ -44,14 +42,14 @@ def publication(postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.Mon
     return RagPublicationService(RagPublicationDao(sessionmaker(bind=postgres_engine, expire_on_commit=False)))
 
 
-def _approval(origin: str = PRISM_ORIGIN) -> SourceApproval:
+def _approval() -> SourceApproval:
     return SourceApproval(
         verified_public=True,
         approved_by="isolated refresh test",
         approval_reference="test only, not production approval",
         license_reference="fixture",
-        parser_version=PRISM_PARSER if origin == PRISM_ORIGIN else "unavailable-document-parser",
-        allowed_paths=allowed_paths(origin),
+        parser_version=PRISM_PARSER,
+        allowed_paths=allowed_paths(PRISM_ORIGIN),
     )
 
 
@@ -101,9 +99,41 @@ def _snapshot(tmp_path: Path, publication: RagPublicationService, revision: str,
     return root, plan
 
 
-def test_refresh_cli_allows_managed_repository_source():
+def test_refresh_cli_defers_missing_snapshot_error_to_reviewed_runner():
     args = _parser().parse_args(["refresh", "--data-dir", "/srv/lens-data", "--plan", "/secure/approved-plan.json"])
     assert args.source is None
+
+
+def test_refresh_cli_accepts_an_explicit_local_prism_snapshot():
+    args = _parser().parse_args(
+        [
+            "refresh",
+            "--data-dir",
+            "/srv/lens-data",
+            "--plan",
+            "/secure/approved-plan.json",
+            "--source",
+            "/srv/prism-snapshot",
+        ]
+    )
+    assert args.source == Path("/srv/prism-snapshot")
+
+
+@pytest.mark.parametrize(
+    "unsupported", [["--trigger", "commit"], ["--trigger", "periodic"], ["--event-revision", "a" * 40]]
+)
+def test_refresh_cli_rejects_uninstalled_event_workflows(unsupported):
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(
+            ["refresh", "--data-dir", "/srv/lens-data", "--plan", "/secure/approved-plan.json", *unsupported]
+        )
+    assert error.value.code == 2
+
+
+def test_transfer_cli_rejects_obsolete_backend_selection():
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["verify", "--bundle", "/secure/benchmark.zip", "--structured"])
+    assert error.value.code == 2
 
 
 def test_prism_refresh_still_requires_local_snapshot(publication, tmp_path):
@@ -220,47 +250,37 @@ def test_invalid_plans_do_not_expand_scope(publication, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "origin,path",
+    "origin",
     [
-        ("https://llm-d.ai.evil.invalid", "blog/article.md"),
-        ("http://llm-d.ai", "blog/article.md"),
-        ("https://medium.com", "unapproved-publication/article.md"),
-        ("https://github.com", "unapproved/repo/blob/main/report.md"),
-        ("https://cloud.google.com", "account/private.md"),
-        ("https://llm-d.ai", "blog/../../private.md"),
-        ("https://llm-d.ai", "blog/raw.json"),
+        "https://llm-d.ai",
+        "https://llm-d.ai.evil.invalid",
+        "https://medium.com",
+        "https://github.com",
+        "https://cloud.google.com",
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
     ],
 )
-def test_web_source_scope_does_not_approve_arbitrary_sites_or_paths(origin, path):
+def test_sql_source_scope_rejects_all_document_and_repository_origins(origin):
     with pytest.raises(PublicationError):
-        web_source_url(origin, path)
-    if origin in WEB_SOURCE_PATHS and ".." not in path:
-        assert input_format(origin, path) is None
+        allowed_paths(origin)
+    with pytest.raises(PublicationError):
+        input_format(origin, "blog/article.md")
+    with pytest.raises(PublicationError):
+        validate_approval(origin, _approval())
+    with pytest.raises(PublicationError):
+        input_format(origin, "archives/llm-d-benchmarks.json", _approval())
 
 
-def test_web_approval_can_narrow_to_reviewed_articles_but_cannot_expand_scope():
-    origin = "https://llm-d.ai"
-    path = "blog/kvcache-wins-you-can-see.md"
-    approval = _approval(origin).model_copy(update={"allowed_paths": (path,)})
-    validate_approval(origin, approval)
-    assert input_format(origin, path, approval) == "markdown"
-    assert input_format(origin, "blog/unreviewed.md", approval) is None
-    for paths in (("**/*.md",), ("private/article.md",), (path, path)):
+def test_prism_approval_cannot_expand_scope_or_duplicate_paths():
+    path = "archives/archived_drive_data.json"
+    approval = _approval().model_copy(update={"allowed_paths": (path,)})
+    validate_approval(PRISM_ORIGIN, approval)
+    assert input_format(PRISM_ORIGIN, path, approval) == "json"
+    assert input_format(PRISM_ORIGIN, "archives/llm-d-benchmarks.json", approval) is None
+    for paths in (("**/*.json",), ("private/article.md",), (path, path)):
         with pytest.raises(PublicationError):
-            validate_approval(origin, approval.model_copy(update={"allowed_paths": paths}))
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "kserve/website/blob/main/blog/2026-04-21-production-grade-llm-inference-kserve-llm-d-vllm.md",
-        "llm-d/llm-d-kv-cache/blob/main/benchmarking/73-capacity/README.md",
-    ],
-)
-def test_github_web_source_url_preserves_markdown_extension(path):
-    origin = "https://github.com"
-    assert input_format(origin, path) == "markdown"
-    assert web_source_url(origin, path) == f"{origin}/{path}"
+            validate_approval(PRISM_ORIGIN, approval.model_copy(update={"allowed_paths": paths}))
 
 
 def test_web_document_refresh_cannot_repopulate_sql(publication, tmp_path):
@@ -270,7 +290,7 @@ def test_web_document_refresh_cannot_repopulate_sql(publication, tmp_path):
     target.parent.mkdir(parents=True)
     target.write_text("# llm-d\nPublic document context.\n")
     file = InventoryFile(path=path, sha256=hashlib.sha256(target.read_bytes()).hexdigest(), format="markdown")
-    approval = _approval(origin)
+    approval = _approval()
     with pytest.raises(ValidationError, match="document provider is not installed"):
         RefreshPlan(
             review_reference="reviewed document-only snapshot",

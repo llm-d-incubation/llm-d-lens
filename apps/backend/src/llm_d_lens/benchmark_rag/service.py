@@ -24,7 +24,7 @@ from llm_d_lens.benchmark_rag.query_contracts import (
     QueryRequest,
     QueryResponse,
 )
-from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRISM_ORIGIN, SourceArchive
+from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN, SourceArchive
 from llm_d_lens.core.exceptions import DomainError, DomainValidationError
 from llm_d_lens.db.dao.rag_query import QueryMatch, RagQueryDao
 from llm_d_lens.infrastructure.artifacts.store import artifact_uri
@@ -34,6 +34,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE)
+_EVALUATE_ID = re.compile(
+    r"\bevaluate:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"(?::stage:(?:0|[1-9][0-9]*)|:matrix:(?:0|[1-9][0-9]*):stage:(?:0|[1-9][0-9]*))?(?![\w:.-])",
+    re.IGNORECASE,
+)
+_HARDWARE_NAME = re.compile(
+    r"\b(?:[HAB]\d{2,4}|MI\d{3}X?|(?:Intel\s+)?Gaudi\s*\d+|TPU(?:\s+v\d+[a-z]?)?)\b",
+    re.IGNORECASE,
+)
 _STATISTIC = re.compile(
     r"\b(?:p\d{1,3}(?:\.\d+)?|\d{1,3}(?:\.\d+)?(?:st|nd|rd|th)?\s+percentile"
     r"|mean|average|avg|median|minimum|maximum|min|max)\b",
@@ -123,6 +132,31 @@ def _query_statistic(value: str) -> str:
     return normalize_statistic(value) or value
 
 
+def _question_hardware(question: str) -> tuple[str | None, Literal["ambiguous", "unrecognized"] | None]:
+    clauses = tuple(
+        re.finditer(
+            r"\b(?:on\s+|(?:hardware|accelerator|device|gpu)(?:\s*[:=]\s*|\s+))(.+?)"
+            r"(?=\s+(?:for|with|at|under|using|in|concurrency|runtime)\b|[?;!]|$)",
+            question,
+            re.IGNORECASE,
+        )
+    )
+    names = tuple(_HARDWARE_NAME.finditer(question))
+    if clauses:
+        hardware = clauses[0][1].strip().rstrip(".").strip('"`')
+        if (
+            len(clauses) > 1
+            or re.search(r"\b(?:and|or|versus|vs)\b|[,;/+]", hardware, re.IGNORECASE)
+            or any(not clauses[0].start(1) <= name.start() < clauses[0].end(1) for name in names)
+        ):
+            return hardware, "ambiguous"
+        return hardware, None if _HARDWARE_NAME.search(hardware) else "unrecognized"
+    values = tuple(dict.fromkeys(match[0].casefold() for match in names))
+    if not values and re.search(r"\b(?:on|hardware|accelerator|device|gpu)\s*[:=]?\s*[?.!]*$", question, re.IGNORECASE):
+        return None, "ambiguous"
+    return (names[0][0] if names else None), "ambiguous" if len(values) > 1 else None
+
+
 def _question_models(question: str, hardware: str | None) -> tuple[tuple[str, ...], bool]:
     named = tuple(
         re.finditer(
@@ -147,6 +181,8 @@ def _question_models(question: str, hardware: str | None) -> tuple[tuple[str, ..
             models.append(value.rstrip("."))
     for match in re.finditer(r"\bfor\s+(.+?)(?=\s+(?:on|with|at|under|in|using)\b|[?;!]|$)", question, re.IGNORECASE):
         subject = match[1].strip().rstrip(".")
+        if hardware is not None and subject.casefold() == hardware.casefold():
+            continue
         if (
             re.match(r"(?:prism|record|run|benchmark|evaluate)\b", subject, re.IGNORECASE)
             or _UUID.fullmatch(subject)
@@ -199,6 +235,7 @@ def _metric_definition(question: str, filters: QueryFilters) -> bool:
 def plan_query(request: QueryRequest) -> QueryPlan:
     question = request.question.casefold()
     ids = tuple(dict.fromkeys(value.lower() for value in _UUID.findall(question)))
+    evaluate_ids = tuple(dict.fromkeys(match[0].lower() for match in _EVALUATE_ID.finditer(question)))
     metric = next(
         (
             metric
@@ -228,7 +265,11 @@ def plan_query(request: QueryRequest) -> QueryPlan:
         phrase in question for phrase in ("evaluate:", "internal benchmark", "agentic", "my evaluation")
     )
     if len(ids) == 1:
-        record_id = f"evaluate:{ids[0]}" if internal_identity else ids[0]
+        record_id = (
+            evaluate_ids[0]
+            if internal_identity and len(evaluate_ids) == 1
+            else (f"evaluate:{ids[0]}" if internal_identity else ids[0])
+        )
         permitted_ids = {ids[0], record_id}
         if request.include_internal:
             permitted_ids.add(f"evaluate:{ids[0]}")
@@ -254,33 +295,22 @@ def plan_query(request: QueryRequest) -> QueryPlan:
             updates["statistic"] = statistics[0]
         if request.filters.metric is None and metric is not None:
             updates["metric"] = metric
-        if (
-            any(word in question for word in ("weight-load", "weight load", "weight loading"))
-            and "gpt-oss-120b" in question
-            and "h200" in question
-            and request.filters.source_path is None
-        ):
-            updates["source_path"] = "guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md"
-            if "origins" not in request.filters.model_fields_set:
-                updates["origins"] = (LLM_D_ORIGIN,)
-    elif (
-        intent == "definition" and "benchmark report" in question and "origins" not in request.filters.model_fields_set
-    ):
-        updates["origins"] = (BENCHMARK_ORIGIN,)
-        if request.filters.source_path is None and any(word in question for word in ("intended", "capture", "meant")):
-            updates["source_path"] = "docs/benchmark_report.md"
-    elif (
-        intent == "figure" and "qwen3" in question and ("coder" in question or "480" in question) and "tpu" in question
-    ):
-        if request.filters.source_path is None:
-            updates["source_path"] = "guides/agentic-serving/benchmark-results/latency_vs_throughput.png"
-        if "origins" not in request.filters.model_fields_set:
-            updates["origins"] = (LLM_D_ORIGIN,)
     if intent in ("numeric", "comparison"):
-        hardware = re.search(r"\b(?:H100|H200|A100|B200|B300|B60|MI300X|MI325X)\b", request.question, re.IGNORECASE)
-        if hardware is not None and request.filters.hardware is None:
-            updates["hardware"] = hardware[0]
-        models, ambiguous_model = _question_models(request.question, hardware[0] if hardware is not None else None)
+        hardware, hardware_scope = _question_hardware(request.question)
+        if hardware is not None:
+            if request.filters.hardware is not None and request.filters.hardware.casefold() != hardware.casefold():
+                raise DomainValidationError("the question's hardware conflicts with the explicit filter")
+            if request.filters.hardware is None:
+                updates["hardware"] = hardware
+        if hardware_scope == "ambiguous" or (hardware_scope == "unrecognized" and request.filters.hardware is None):
+            condition_precondition = condition_precondition or Abstention(
+                code="hardware_scope_required",
+                message=(
+                    "Supply one exact hardware filter and an unambiguous question; "
+                    "no unrecognized or compound hardware condition was discarded."
+                ),
+            )
+        models, ambiguous_model = _question_models(request.question, hardware)
         if len(models) > 1 or ambiguous_model:
             condition_precondition = condition_precondition or Abstention(
                 code="model_scope_required",
@@ -313,16 +343,27 @@ def plan_query(request: QueryRequest) -> QueryPlan:
     )[:20]
     text_query = " OR ".join(f'"{token}"' for token in tokens)
     precondition = None
-    if len(ids) > 1:
+    if len(ids) > 1 or len(evaluate_ids) > 1:
         precondition = Abstention(
             code="comparison_requires_explicit_scope",
             message=(
                 "Use separate exact record queries; this interface does not infer a comparison between multiple IDs."
             ),
         )
+    elif "evaluate:" in question and len(tuple(_EVALUATE_ID.finditer(question))) != question.count("evaluate:"):
+        precondition = Abstention(
+            code="record_scope_required",
+            message="Supply a complete canonical evaluation, stage, or matrix-stage record identifier.",
+        )
     elif not request.include_internal and any(
         phrase in question
-        for phrase in ("internal benchmark", "agentic benchmark record", "my evaluation", "internal records")
+        for phrase in (
+            "evaluate:",
+            "internal benchmark",
+            "agentic benchmark record",
+            "my evaluation",
+            "internal records",
+        )
     ):
         precondition = Abstention(
             code="internal_branch_disabled",

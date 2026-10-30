@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from llm_d_lens.agentic.document_evidence import DocumentEvidencePacket, document_context
 from llm_d_lens.agentic.planner import (
     DeterministicPlanner,
     PlannedCandidate,
@@ -29,7 +28,6 @@ from llm_d_lens.benchmark_rag.case_retrieval import (
     resolve_internal_cases,
     restore_model_references,
 )
-from llm_d_lens.benchmark_rag.query_contracts import Citation
 from llm_d_lens.core.exceptions import ForbiddenError
 
 
@@ -63,7 +61,6 @@ def observation(identity="one", *, experiment="run", series=None, **changes):
 def bundle(*entries, budget=8000):
     return build_case_bundle(
         entries,
-        (),
         PlanningFacts(8, 80, 8, workload_profile=WorkloadProfile(mean_input_tokens=4096)),
         model="model",
         hardware="accelerator",
@@ -73,7 +70,7 @@ def bundle(*entries, budget=8000):
 
 
 def test_metrics_preserve_experiment_series_statistics_and_units():
-    result, kept, _ = bundle(
+    result, kept = bundle(
         observation("first"),
         observation("second", statistic="p95", value="3"),
         observation("third", experiment="another"),
@@ -95,7 +92,7 @@ def test_metrics_preserve_experiment_series_statistics_and_units():
 def test_incompatible_identity_is_excluded_before_model_context():
     entry = observation()
     entry["experiment"]["hardware"] = "different"
-    result, kept, _ = bundle(entry)
+    result, kept = bundle(entry)
     assert not result.cases and not kept
     assert list(result.excluded.values()) == ["incompatible_identity"]
 
@@ -115,9 +112,8 @@ def test_incompatible_identity_is_excluded_before_model_context():
 def test_model_alias_retrieval_survives_case_selection_without_rewriting_provenance(requested, reported, matches):
     entry = observation("public-rag:alias")
     entry["experiment"]["model"] = reported
-    result, kept, _ = build_case_bundle(
+    result, kept = build_case_bundle(
         (entry,),
-        (),
         PlanningFacts(8, 80, 8),
         model=requested,
         hardware="accelerator",
@@ -137,7 +133,7 @@ def test_model_alias_retrieval_survives_case_selection_without_rewriting_provena
 def test_unknown_workload_is_not_a_match_or_current_slo_proof():
     entry = observation()
     entry["experiment"]["workload"] = {}
-    result, _, _ = bundle(entry)
+    result, _ = bundle(entry)
     assert "workload.mean_input_tokens" in result.cases[0].unknown_fields
     assert result.cases[0].validation_required
     assert "SLO compliance" in result.usage
@@ -155,9 +151,8 @@ def test_unknown_workload_is_not_a_match_or_current_slo_proof():
 def test_workload_comparison_preserves_unknown_and_explicit_zero(profile, workload, similarity, coverage, status):
     entry = observation()
     entry["experiment"]["workload"] = workload
-    result, _, _ = build_case_bundle(
+    result, _ = build_case_bundle(
         (entry,),
-        (),
         PlanningFacts(8, 80, 8, workload_profile=profile),
         model="model",
         hardware="accelerator",
@@ -182,7 +177,7 @@ def test_workload_comparison_preserves_unknown_and_explicit_zero(profile, worklo
 )
 def test_measurement_quality_does_not_rewrite_values_or_zero_counters(metric, value, quality):
     entry = observation(metric=metric, value=value, normalized_value=value)
-    result, kept, _ = bundle(entry)
+    result, kept = bundle(entry)
     measurement = result.cases[0].measurements[0]
     assert measurement["quality"] == quality
     assert measurement["value"] == measurement["normalized_value"] == value
@@ -194,7 +189,7 @@ def test_informative_cases_precede_zero_only_cases_and_preserve_complete_series(
     zero = observation("zero", experiment="zero", metric="latency", statistic="p99", normalized_value="0", value="0")
     tpot = observation("tpot", experiment="useful", metric="tpot", normalized_value="20")
     throughput = observation("throughput", experiment="useful", metric="throughput", normalized_value="3000")
-    result, kept, _ = bundle(zero, tpot, throughput)
+    result, kept = bundle(zero, tpot, throughput)
     assert result.cases[0].experiment_id == "useful"
     assert {measurement["evidence_id"] for measurement in result.cases[0].measurements} == {"tpot", "throughput"}
     assert {entry["evidence_id"] for entry in kept} >= {"tpot", "throughput"}
@@ -215,7 +210,7 @@ def test_model_projection_omits_duplicate_import_metadata_but_preserves_conditio
         "json_pointer": "/15/metrics/tpot",
         "original_source": {"raw_url": "x" * 8000},
     }
-    result, kept, _ = bundle(entry)
+    result, kept = bundle(entry)
     assert len(result.cases) == 1
     case = result.cases[0].model_dump(mode="json")
     facts = PlanningFacts(8, 80, 8, configuration_cases=(case,), public_rag_evidence=kept)
@@ -247,7 +242,7 @@ def test_model_projection_replaces_configuration_source_clues_with_semantic_hint
         "source_info": {"file_identifier": path, "raw_url": "x" * 8000},
     }
     original = deepcopy(entry)
-    result, kept, _ = bundle(entry)
+    result, kept = bundle(entry)
     facts = PlanningFacts(
         8, 80, 8, configuration_cases=(result.cases[0].model_dump(mode="json"),), public_rag_evidence=kept
     )
@@ -327,7 +322,7 @@ def test_legacy_observation_context_also_extracts_technique_hints():
 
 def test_missing_statistic_defaults_to_mean_in_model_context_without_rewriting_audit():
     entry = observation(statistic=None)
-    result, kept, _ = bundle(entry)
+    result, kept = bundle(entry)
     facts = PlanningFacts(8, 80, 8, configuration_cases=(result.cases[0].model_dump(mode="json"),))
     measurement = public_rag_context(facts)["configuration_cases"][0]["measurements"][0]
     assert measurement["statistic"] == "mean"
@@ -341,7 +336,7 @@ def test_semantic_projection_keeps_distinct_experiment_measurements_grouped_with
     first = observation("public-rag:first", experiment="first", value="1")
     second = observation("public-rag:second", experiment="second", value="2")
     second["experiment"]["configuration"]["tp"] = 2
-    result, kept, _ = bundle(first, second)
+    result, kept = bundle(first, second)
     facts = PlanningFacts(
         8,
         80,
@@ -370,7 +365,7 @@ def test_model_measurements_remain_grouped_while_full_citations_stay_in_audit():
             "json_pointer": f"/15/metrics/{entry['metric']}",
             "original_source": {"raw_url": "x" * 2000},
         }
-    result, kept, _ = bundle(first, second)
+    result, kept = bundle(first, second)
     facts = PlanningFacts(
         8,
         80,
@@ -390,31 +385,11 @@ def test_model_measurements_remain_grouped_while_full_citations_stay_in_audit():
     assert result.cases[0].provenance[0] == first["citation"]
 
 
-def test_case_larger_than_half_budget_can_coexist_with_a_complete_document():
+def test_complete_case_can_use_more_than_half_the_budget():
     entry = observation("public-rag:large")
     entry["experiment"]["configuration"]["vllm_arguments"] = [["--custom-options", "x" * 4000]]
-    packet = DocumentEvidencePacket(
-        citation_id="document:chunk",
-        evidence_id="passage",
-        chunk_id="chunk",
-        retrieval_build_id="build",
-        retrieval_mode="opensearch_lexical",
-        matched_branches=("lexical",),
-        title="Guide",
-        text="Complete guide.",
-        citation=Citation(
-            origin_id="guide",
-            source_revision="rev",
-            source_path="guide.md",
-            sha256="a" * 64,
-            artifact_uri="artifact://guide",
-            source_pointer={},
-            published_manifest_id="manifest",
-        ),
-    )
-    result, kept, packets = build_case_bundle(
+    result, kept = build_case_bundle(
         (entry,),
-        (packet,),
         PlanningFacts(8, 80, 8),
         model="model",
         hardware="accelerator",
@@ -422,67 +397,24 @@ def test_case_larger_than_half_budget_can_coexist_with_a_complete_document():
         token_budget=10_000,
     )
     assert len(result.cases) == 1 and len(kept) == 1
-    assert packets == (packet,) and packets[0].text == "Complete guide."
-    assert len(json.dumps(result.cases[0].model_dump(mode="json"))) > 5000
-    assert result.token_count_upper_bound <= 10_000
-
-
-def test_bundle_budget_reserves_complete_configuration_guidance_before_generic_rollout():
-    useful = DocumentEvidencePacket(
-        citation_id="document:configuration",
-        evidence_id="passage",
-        chunk_id="configuration",
-        retrieval_build_id="build",
-        retrieval_mode="opensearch_lexical",
-        matched_branches=("lexical",),
-        title="Guide",
-        text="Prefill decode disaggregation requires configuring KV transfer; same TP is required on both roles.",
-        citation=Citation(
-            origin_id="guide",
-            source_revision="rev",
-            source_path="guide.md",
-            sha256="a" * 64,
-            artifact_uri="artifact://guide",
-            source_pointer={},
-            published_manifest_id="manifest",
-        ),
-    )
-    generic = useful.model_copy(
-        update={"citation_id": "document:rollout", "chunk_id": "rollout", "text": "Rollout monitoring. " * 180}
-    )
-    result, kept, packets = build_case_bundle(
-        (observation(),),
-        (generic, useful),
-        PlanningFacts(8, 80, 8),
-        model="model",
-        hardware="accelerator",
-        branch_status={},
-        token_budget=5000,
-    )
-    assert len(result.cases) == len(kept) == 1
-    assert packets == (useful,)
-    assert result.token_count_upper_bound <= 5000
-    selection = result.branch_status["document_selection"]
-    assert selection["ranked_ids"] == [useful.citation_id, generic.citation_id]
-    assert selection["selected_ids"] == [useful.citation_id]
-    assert result.excluded[generic.citation_id] == "token_budget"
+    assert 5000 < result.token_count_upper_bound <= 10_000
 
 
 def test_budget_does_not_remove_units_or_partial_case():
     entries = [observation(str(index), experiment=str(index)) for index in range(50)]
-    result, kept, _ = bundle(*entries, budget=1800)
+    result, kept = bundle(*entries, budget=1800)
     assert result.truncated
     assert result.token_count_upper_bound <= 1800
     assert len(result.cases) <= 10
     assert all(entry["unit"] and entry["citation"] and entry["experiment"] for entry in kept)
-    empty, kept, _ = bundle(*entries, budget=0)
+    empty, kept = bundle(*entries, budget=0)
     assert empty.cases == () and kept == ()
     assert empty.token_count_upper_bound == 0
 
 
 def test_model_context_deduplicates_measurements_without_losing_audit_evidence():
     entry = observation("public-rag:one")
-    result, kept, _ = bundle(entry)
+    result, kept = bundle(entry)
     facts = PlanningFacts(
         8,
         80,
@@ -503,42 +435,21 @@ def test_model_context_deduplicates_measurements_without_losing_audit_evidence()
     assert "evidence_id" not in mixed["public_rag_evidence"][0]
 
 
-def test_sql_and_documents_share_budget_without_loading_audit_exclusion_lists():
-    citation = Citation(
-        origin_id="https://llm-d.ai",
-        source_revision="rev",
-        source_path="guide.md",
-        sha256="a" * 64,
-        artifact_uri="artifact://public/guide.md",
-        source_pointer={"line_start": 1},
-        published_manifest_id="manifest",
-    )
-    packet = DocumentEvidencePacket(
-        citation_id="document:chunk",
-        evidence_id="passage",
-        chunk_id="chunk",
-        retrieval_build_id="build",
-        retrieval_mode="hybrid",
-        matched_branches=("lexical", "vector"),
-        title="Deployment guidance",
-        text="Qualitative prefix caching guidance. " * 30,
-        citation=citation,
-    )
+def test_sql_budget_does_not_load_audit_exclusion_lists():
     incompatible = []
     for index in range(50):
         entry = observation(f"public-rag:excluded-{index}", experiment=f"other-{index}")
         entry["experiment"]["hardware"] = "different"
         incompatible.append(entry)
-    result, kept, packets = build_case_bundle(
+    result, kept = build_case_bundle(
         (observation("public-rag:one"), *incompatible),
-        (packet,),
         PlanningFacts(8, 80, 8),
         model="model",
         hardware="accelerator",
         branch_status={},
         token_budget=8000,
     )
-    assert len(result.cases) == 1 and packets == (packet,)
+    assert len(result.cases) == 1
     assert len(result.excluded) == 50
     facts = PlanningFacts(
         8,
@@ -547,9 +458,8 @@ def test_sql_and_documents_share_budget_without_loading_audit_exclusion_lists():
         configuration_cases=tuple(case.model_dump(mode="json") for case in result.cases),
         configuration_case_status=result.model_dump(mode="json", exclude={"cases"}),
         public_rag_evidence=kept,
-        document_evidence=packets,
     )
-    context = {**public_rag_context(facts), **document_context(packets)}
+    context = public_rag_context(facts)
     assert "configuration_case_status" not in context
     size = len(json.dumps(context, ensure_ascii=True).encode())
     assert size <= result.token_count_upper_bound <= 8000
@@ -557,7 +467,7 @@ def test_sql_and_documents_share_budget_without_loading_audit_exclusion_lists():
 
 
 def test_no_experiment_context_cannot_be_promoted_to_measurement_case():
-    result, kept, _ = bundle(observation(experiment=None))
+    result, kept = bundle(observation(experiment=None))
     assert not kept
     assert result.excluded == {"one": "missing_experiment_context"}
 
@@ -568,7 +478,7 @@ def test_cross_source_identity_is_not_automatically_independent_corroboration():
     second = observation("two")
     second["experiment"] = {**first["experiment"], "origin_id": "agentic:evaluate"}
     second["citation"] = {"origin_id": "agentic:evaluate", "benchmark_id": "evaluate:one"}
-    result, _, _ = bundle(first, second)
+    result, _ = bundle(first, second)
     assert len(result.cases) == 2
     assert {case.possible_duplicate_group for case in result.cases} == {"evaluate:one"}
     assert all(case.cross_source_independence == "not_established" for case in result.cases)
@@ -594,7 +504,7 @@ def test_verified_cross_source_run_and_identical_conditions_merge_without_extra_
         tokenizer_id=reported_model,
     )
     second["citation"] = {"origin_id": "agentic:evaluate", "benchmark_id": "evaluate:one"}
-    result, kept, _ = bundle(first, second)
+    result, kept = bundle(first, second)
     assert len(result.cases) == 1
     case = result.cases[0]
     assert case.identity_verification == "verified_run_and_conditions"
@@ -618,7 +528,7 @@ def test_same_run_with_different_conditions_or_values_is_not_merged(difference):
         second["series"] = {"rate": 2}
     else:
         second["normalized_value"] = "3000"
-    result, _, _ = bundle(first, second)
+    result, _ = bundle(first, second)
     assert len(result.cases) == 2
     assert result.independent_experiment_count == 1
 
@@ -627,7 +537,7 @@ def test_ranking_prefers_matching_workload_before_identifier_order():
     far = observation("a", experiment="a")
     far["experiment"]["workload"] = {"mean_input_tokens": 8192}
     near = observation("z", experiment="z")
-    result, _, _ = bundle(far, near)
+    result, _ = bundle(far, near)
     assert result.cases[0].experiment_id == "z"
     assert result.cases[0].workload_similarity == 1
 
@@ -657,8 +567,8 @@ def test_case_budget_preserves_lower_latency_ranking_not_slo_boundary_or_identif
             normalized_unit="ms",
         ),
     ]
-    result, kept, _ = build_case_bundle(
-        tuple(entries), (), facts, model="model", hardware="accelerator", branch_status={}, token_budget=16000
+    result, kept = build_case_bundle(
+        tuple(entries), facts, model="model", hardware="accelerator", branch_status={}, token_budget=16000
     )
     assert [case.experiment_id for case in result.cases] == ["z-fast", "a-near"]
     assert [entry["evidence_id"] for entry in kept] == ["fast", "near-boundary"]
@@ -671,8 +581,8 @@ def test_fallback_queue_is_last_and_labeled_in_audit_and_model_context():
     fallback = observation("fallback", experiment="a-fallback", metric="throughput", value="42")
     fallback["experiment"]["workload"] = {}
     ranked = observation("ranked", experiment="z-ranked")
-    result, _, _ = build_case_bundle(
-        (fallback, ranked), (), PlanningFacts(8, 80, 8), model="model", hardware="accelerator", branch_status={}
+    result, _ = build_case_bundle(
+        (fallback, ranked), PlanningFacts(8, 80, 8), model="model", hardware="accelerator", branch_status={}
     )
     assert [case.experiment_id for case in result.cases] == ["z-ranked", "a-fallback"]
     audit = result.model_dump(mode="json")
@@ -694,25 +604,26 @@ def test_device_count_is_a_reported_difference_not_an_exact_match():
             update={"hardware": facts.requirements.hardware.model_copy(update={"device_count": 8})}
         ),
     )
-    result, _, _ = build_case_bundle((entry,), (), facts, model="model", hardware="accelerator", branch_status={})
+    result, _ = build_case_bundle((entry,), facts, model="model", hardware="accelerator", branch_status={})
     assert "hardware.device_count" in result.cases[0].known_differences
     assert result.cases[0].applicability == "reference_only"
 
 
 def test_audit_branch_metadata_does_not_consume_model_budget():
-    result, kept, packets = build_case_bundle(
+    result, kept = build_case_bundle(
         (observation(),),
-        (),
         PlanningFacts(8, 80, 8),
         model="model",
         hardware="accelerator",
-        branch_status={"documents": {"status": "unavailable", "reason": "x" * 3000}},
+        branch_status={"documents": {"status": "disabled", "reason": "provider_not_installed", "audit": "x" * 3000}},
         token_budget=4000,
     )
-    assert not result.model_context_omitted and kept and not packets
+    assert not result.model_context_omitted and kept
+    assert result.branch_status["documents"]["status"] == "disabled"
+    assert "document_selection" not in result.branch_status
     assert result.token_count_upper_bound < 4000
     assert result.metadata_token_count < 100
-    normal, _, _ = bundle(observation())
+    normal, _ = bundle(observation())
     assert normal.metadata_token_count > 0
     projected = public_rag_context(
         PlanningFacts(8, 80, 8, configuration_cases=(normal.cases[0].model_dump(mode="json"),))
@@ -722,13 +633,12 @@ def test_audit_branch_metadata_does_not_consume_model_budget():
 
 def test_compact_references_are_stable_and_only_resolve_selected_evidence(monkeypatch):
     cases = [{"case_id": "case:first", "measurements": [{"evidence_id": "public-rag:one"}]}, {"case_id": "case:second"}]
-    mapping = model_reference_map(cases, document_ids=["document:chunk"])
+    mapping = model_reference_map(cases)
     references = [
         compact_reference("case:first", "case"),
         compact_reference("public-rag:one", "measurement"),
-        compact_reference("document:chunk", "document"),
     ]
-    assert restore_model_references(references, mapping) == ["case:first", "public-rag:one", "document:chunk"]
+    assert restore_model_references(references, mapping) == ["case:first", "public-rag:one"]
     assert restore_model_references(["case:first"], mapping) == ["case:first"]
     pruned = model_reference_map(cases[1:])
     assert pruned[compact_reference("case:second", "case")] == "case:second"
@@ -754,9 +664,7 @@ def test_candidate_contract_never_joins_metrics_from_separate_experiments_to_cla
         normalized_value="10",
         normalized_unit="ms",
     )
-    result, _, _ = build_case_bundle(
-        (first, second), (), facts, model="model", hardware="accelerator", branch_status={}
-    )
+    result, _ = build_case_bundle((first, second), facts, model="model", hardware="accelerator", branch_status={})
     candidates = DeterministicPlanner().candidates(facts)
     mappings = candidate_evidence_results(candidates[:2], result, facts)
     assert {mapping.candidate_id for mapping in mappings} == {candidate.id for candidate in candidates[:2]}
@@ -808,7 +716,7 @@ def test_exact_candidate_measurements_require_matching_serving_configuration(cha
             **changes,
         },
     )
-    result, _, _ = build_case_bundle((entry,), (), facts, model="model", hardware=hardware, branch_status={})
+    result, _ = build_case_bundle((entry,), facts, model="model", hardware=hardware, branch_status={})
     candidate = PlannedCandidate(
         id="validated",
         replicas=1,
@@ -874,6 +782,9 @@ def test_retained_internal_evidence_rechecks_access_before_plan_read(monkeypatch
 
 @pytest.mark.parametrize("enabled,manifest_id", [(False, "manifest"), (True, "new-version")])
 def test_source_withdrawal_or_version_change_during_planning_blocks_delivery(monkeypatch, enabled, manifest_id):
+    from llm_d_lens.auth.contracts import Principal, RoleBinding
+    from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION
+
     class Dao:
         def head(self, origin):
             assert origin == "public"
@@ -883,45 +794,20 @@ def test_source_withdrawal_or_version_change_during_planning_blocks_delivery(mon
 
     monkeypatch.setattr("llm_d_lens.benchmark_rag.case_retrieval.RagQueryDao", Dao)
     cases = ({"provenance": [{"origin_id": "public", "published_manifest_id": "manifest"}]},)
-    with pytest.raises(ForbiddenError, match="source changed"):
-        assert_case_access(cases, None, check_public_sources=True)
-
-
-def test_document_direct_link_requires_explicit_pinned_experiment_identity():
-    from llm_d_lens.agentic.document_evidence import DocumentEvidencePacket
-    from llm_d_lens.benchmark_rag.query_contracts import Citation
-
-    def packet(identity, pointer):
-        return DocumentEvidencePacket(
-            citation_id=f"document:{identity}",
-            evidence_id=identity,
-            chunk_id=identity,
-            retrieval_build_id="build",
-            retrieval_mode="opensearch_lexical",
-            matched_branches=("lexical",),
-            title="Guide",
-            text="model configuration advice is not a measurement",
-            citation=Citation(
-                origin_id="public",
-                source_revision="rev",
-                source_path="guide.md",
-                sha256="a" * 64,
-                artifact_uri="artifact://guide",
-                source_pointer=pointer,
-                published_manifest_id="manifest",
-            ),
-        )
-
-    result, _, packets = build_case_bundle(
-        (observation(),),
-        (packet("direct", {"experiment_id": "run"}), packet("similar", {})),
-        PlanningFacts(8, 80, 8),
-        model="model",
-        hardware="accelerator",
-        branch_status={},
+    principal = Principal(
+        user_id="caller",
+        username="caller",
+        bindings=(RoleBinding("query"),),
+        role_permissions={"query": frozenset({QUERY_PERMISSION})},
     )
-    assert len(packets) == 2
-    case = result.cases[0]
-    assert case.supporting_passage_ids == ("document:direct",)
-    assert case.reference_passage_ids == ("document:similar",)
-    assert len(case.measurements) == 1
+    with pytest.raises(ForbiddenError, match="source changed"):
+        assert_case_access(cases, principal, check_public_sources=True)
+
+
+def test_public_cases_require_public_query_permission_before_source_reads():
+    from llm_d_lens.auth.contracts import Principal
+
+    cases = ({"provenance": [{"origin_id": "public", "published_manifest_id": "manifest"}]},)
+    principal = Principal(user_id="caller", username="caller")
+    with pytest.raises(ForbiddenError, match="permission denied"):
+        assert_case_access(cases, principal, check_public_sources=True)

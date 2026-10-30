@@ -90,6 +90,16 @@ def test_model_similarity_uses_architecture_quantization_and_parameter_scale():
     assert quantized == 0.0
 
 
+@pytest.mark.parametrize("changes", [{"prefill_tp": 1}, {"prefill_replicas": 1}, {"prefill_tp": None}])
+def test_pd_configuration_similarity_does_not_ignore_prefill_topology(changes):
+    query = _query()
+    configuration = query.candidate.model_copy(update=changes)
+    retriever = BenchmarkEvidenceRetriever()
+    assert retriever.configuration_similarity(configuration, query.candidate) < 1
+    records = [_record(f"pd-{index}").model_copy(update={"configuration": configuration}) for index in range(3)]
+    assert retriever.retrieve("candidate", query, records, now=NOW).status != "measured"
+
+
 def test_archived_unknown_hardware_does_not_match_even_another_unknown_hardware():
     query = _query()
     record = _record("archive-only")

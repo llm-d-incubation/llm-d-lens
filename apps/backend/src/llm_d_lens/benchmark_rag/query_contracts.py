@@ -8,16 +8,10 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from llm_d_lens.benchmark_rag.sources import (
-    BENCHMARK_ORIGIN,
-    LLM_D_ORIGIN,
-    PRISM_ORIGIN,
-    WEB_SOURCE_PATHS,
-    validate_path,
-)
+from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN, validate_path
 
 QUERY_PERMISSION = "benchmark-rag:query:read"
-PUBLIC_ORIGINS = (PRISM_ORIGIN, LLM_D_ORIGIN, BENCHMARK_ORIGIN, *WEB_SOURCE_PATHS)
+PUBLIC_ORIGINS = (PRISM_ORIGIN,)
 QueryIntent = Literal["auto", "numeric", "comparison", "definition", "figure"]
 EvidenceType = Literal["raw_json", "published_table", "prose_summary", "image_trend", "agentic_measurement"]
 

@@ -18,12 +18,6 @@ test('loading pages use their own navigation or detail title', () => {
   assert.equal(viewTitle(''), 'Lens');
 });
 
-test('Agentic-only delivery does not expose the optional document search page', () => {
-  assert.equal(resolveView('public-rag'), 'model-market');
-  assert.equal(NAVIGATION_GROUPS.some(group => group.items.some(item => item.view === 'public-rag')), false);
-  assert.equal(Object.hasOwn(VIEW_PERMISSIONS, 'public-rag'), false);
-});
-
 test('landing page follows the first accessible sidebar entry, including custom grants', () => {
   for (const [permissions, expected] of [
     [['*:*:*'], 'welcome'],

@@ -34,14 +34,14 @@ from llm_d_lens.benchmark_rag.query_contracts import (
     QueryResponse,
 )
 from llm_d_lens.benchmark_rag.service import PublicRagQueryService, _verify_measurement
-from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRISM_ORIGIN, allowed_paths
+from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN, allowed_paths
 from llm_d_lens.core.exceptions import DomainError
 from llm_d_lens.db.dao.rag_query import QueryMatch, RagQueryDao
 from llm_d_lens.infrastructure.artifacts.store import artifact_uri
 
 _ROOT = Path(__file__).resolve().parents[5]
 _SUITE = Path(__file__).resolve().parents[2] / "fixtures/benchmark_rag/public_baseline_v1.json"
-_ORIGINS = (PRISM_ORIGIN, LLM_D_ORIGIN, BENCHMARK_ORIGIN)
+_ORIGINS = (PRISM_ORIGIN,)
 
 
 def _reader(*, authorized: bool = True) -> Principal:
@@ -88,8 +88,6 @@ def public_baseline_corpus(postgres_engine: Engine, tmp_path: Path, monkeypatch:
         expected_experiments=INITIAL_EXPERIMENTS,
     )
     assert dao.count_published(PRISM_ORIGIN) > 0
-    assert dao.count_published(LLM_D_ORIGIN) == 0
-    assert dao.count_published(BENCHMARK_ORIGIN) == 0
     return _Corpus(dao=dao, service=service, publication=publication)
 
 
@@ -249,12 +247,9 @@ class _PublicCitationVerifier:
 def test_public_baseline_is_fixed_and_covers_all_public_categories() -> None:
     suite = EvaluationSuite.model_validate_json(_SUITE.read_bytes())
     assert suite.name == "public-baseline-v1"
-    assert len(suite.cases) == 20
+    assert len(suite.cases) == 10
     assert {case.category for case in suite.cases} == {
         "numeric",
-        "conditions",
-        "definition",
-        "figure_gap",
         "false_join",
         "comparison",
         "access",
@@ -269,25 +264,6 @@ def test_public_baseline_is_fixed_and_covers_all_public_categories() -> None:
 def test_real_prism_structured_baseline(public_baseline_corpus: _Corpus) -> None:
     corpus = public_baseline_corpus
     suite = EvaluationSuite.model_validate_json(_SUITE.read_bytes())
-    prism_case_ids = {
-        "prism-exact-original-throughput",
-        "prism-record-does-not-join-unrelated-hardware",
-        "prism-record-does-not-join-unrelated-model",
-        "unsupported-multiple-id-comparison",
-        "unsupported-unscoped-comparison",
-        "similar-model-names-do-not-prove-run-overlap",
-        "inactive-prism-source-no-evidence",
-        "reader-permission-revoked",
-        "unauthenticated-query-denied",
-        "new-unapproved-origin-cannot-enter-index",
-    }
-    suite = suite.model_copy(
-        update={
-            "name": "prism-structured-baseline-v1",
-            "cases": tuple(case for case in suite.cases if case.case_id in prism_case_ids),
-            "source_pins": {PRISM_ORIGIN: suite.source_pins[PRISM_ORIGIN]},
-        }
-    )
     for origin, pin in suite.source_pins.items():
         head = corpus.dao.head(origin)
         assert head.state.enabled and head.manifest is not None
@@ -304,7 +280,7 @@ def test_real_prism_structured_baseline(public_baseline_corpus: _Corpus) -> None
 
     def execute(case: EvaluationCase) -> QueryResponse:
         if case.actor in ("inactive_source", "revoked_source"):
-            origin = PRISM_ORIGIN if case.actor == "inactive_source" else LLM_D_ORIGIN
+            origin = PRISM_ORIGIN
             head = corpus.dao.head(origin)
             corpus.dao.set_enabled(origin, False, expected_generation=head.state.generation)
             try:

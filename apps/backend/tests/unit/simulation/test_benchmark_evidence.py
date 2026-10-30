@@ -476,20 +476,6 @@ def test_real_saved_backend_artifact_shapes_are_normalized(task, backend):
 
 
 @pytest.mark.asyncio
-async def test_historical_observations_ignore_current_topology_map(task):
-    from llm_d_lens.agentic.facts import _similar_historical_observations
-    from llm_d_lens.agentic.planner import PlanningFacts
-
-    observed = await _similar_historical_observations(
-        [task], PlanningFacts(8, 1, 99), {"execution-1": {"replicas": 99, "tensor_parallel_size": 99}}
-    )
-    assert observed[0]["replicas"] == 1
-    assert observed[0]["tensor_parallel_size"] == 1
-    assert observed[0]["hardware"]["vram_per_gpu_gib"] == 64
-    assert observed[0]["benchmark_id"] == "simulation:abcdef12"
-
-
-@pytest.mark.asyncio
 async def test_supplementary_evidence_never_reads_unscoped_simulation_history(task, monkeypatch):
     from llm_d_lens.agentic import facts
     from llm_d_lens.agentic.planner import PlanningFacts

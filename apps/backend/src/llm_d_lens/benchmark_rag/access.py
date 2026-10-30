@@ -23,10 +23,6 @@ def require_query_access(principal: Principal | None) -> None:
     _require_global_access(principal, QUERY_PERMISSION)
 
 
-def require_runtime_access(principal: Principal | None, *, configure: bool = False) -> None:
-    _require_global_access(principal, "benchmark-rag:runtime:configure" if configure else "benchmark-rag:runtime:read")
-
-
 def _require_global_access(principal: Principal | None, permission: str) -> None:
     if principal is None or not principal.user_id or (principal.user_id == "system" and principal.authz_version == 0):
         raise UnauthenticatedError("authentication required")

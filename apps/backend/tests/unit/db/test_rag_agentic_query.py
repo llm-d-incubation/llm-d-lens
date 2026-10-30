@@ -19,7 +19,6 @@ from llm_d_lens.agentic.benchmark_evidence import (
     RuntimeFingerprint,
     WorkloadProfile,
 )
-from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
 from llm_d_lens.agentic.facts import PlanningEvidence
 from llm_d_lens.agentic.performance_evidence import BenchmarkPerformanceEvidence
 from llm_d_lens.agentic.planner import DeterministicPlanner, PlanningFacts
@@ -384,7 +383,7 @@ def test_sql_metric_selection_agrees_with_shared_measured_fields(store: Store) -
         assert result.total == int(bool(measured_values(record, raw_range)))
 
 
-def test_caller_authentication_query_grant_and_persisted_freshness(store: Store) -> None:
+def test_caller_authentication_and_persisted_freshness(store: Store) -> None:
     store.add()
     good = _principal(RoleBinding("reader"))
     with store.factory.begin() as session:
@@ -394,7 +393,6 @@ def test_caller_authentication_query_grant_and_persisted_freshness(store: Store)
         (replace(good, user_id="system", authz_version=0), UnauthenticatedError),
         (replace(good, user_id="system"), UnauthenticatedError),
         (replace(good, must_change_password=True), PasswordChangeRequiredError),
-        (replace(good, bindings=(RoleBinding("reader"),)), ForbiddenError),
         (replace(good, user_id="missing"), ConflictError),
         (replace(good, authz_version=2), ConflictError),
     ):
@@ -413,6 +411,28 @@ def test_caller_authentication_query_grant_and_persisted_freshness(store: Store)
                 .where(UserRow.id == "alice")
                 .values(status="active", must_change_password=False, principal_version=1)
             )
+
+
+def test_internal_case_access_needs_resource_access_not_public_query_grant(store, monkeypatch):
+    from llm_d_lens.benchmark_rag.agentic_answers import agentic_evidence
+    from llm_d_lens.benchmark_rag.case_retrieval import assert_case_access
+
+    run_id = store.add()
+    store.add(cluster="cluster2")
+    principal = replace(
+        _principal(RoleBinding("reader", ScopeType.CLUSTER, "cluster1")),
+        bindings=(RoleBinding("reader", ScopeType.CLUSTER, "cluster1"),),
+    )
+    filters = QueryFilters()
+    result = store.dao.search(filters, principal, limit=50)
+    assert {match.evaluate_run_id for match in result.matches} == {run_id}
+    store.dao.assert_current(result.matches, principal)
+    citation = agentic_evidence(result.matches[0], filters)[0].citation.model_dump(mode="json")
+    monkeypatch.setattr("llm_d_lens.benchmark_rag.case_retrieval.RagAgenticQueryDao", lambda: store.dao)
+    cases = ({"provenance": [citation]},)
+    assert_case_access(cases, principal, check_public_sources=True)
+    with pytest.raises(ForbiddenError, match="no longer accessible"):
+        assert_case_access(cases, replace(principal, bindings=()))
 
 
 @pytest.mark.parametrize(
@@ -462,6 +482,95 @@ def test_read_only_api_and_bounded_limit(store: Store) -> None:
     for limit in (0, 51):
         with pytest.raises(ValueError):
             store.dao.search(QueryFilters(), principal, limit=limit)
+
+
+def test_stages_keep_complete_sample_identity_and_resource_authorization(store, monkeypatch):
+    from llm_d_lens.benchmark_rag.agentic_answers import agentic_evidence
+    from llm_d_lens.benchmark_rag.case_retrieval import assert_case_access
+
+    run_id = store.add()
+    identities = {f"evaluate:{run_id}{suffix}" for suffix in ("", ":stage:0", ":matrix:1:stage:2")}
+    with store.factory.begin() as session:
+        for identity in identities - {f"evaluate:{run_id}"}:
+            session.add(BenchmarkRecordRow.from_dto(_record(run_id).model_copy(update={"benchmark_id": identity})))
+    principal = replace(
+        _principal(RoleBinding("reader", ScopeType.CLUSTER, "cluster1")),
+        bindings=(RoleBinding("reader", ScopeType.CLUSTER, "cluster1"),),
+    )
+    filters = QueryFilters(record_id=run_id)
+    result = store.dao.search(filters, principal, limit=50)
+    assert {match.record.benchmark_id for match in result.matches} == identities
+    assert result.total == 3
+    facts = PlanningFacts(8, 96, 4)
+    planned = store.dao.planning_search("Qwen/Qwen3-8B", principal, facts)
+    assert {match.record.benchmark_id for match in planned.matches} == identities
+    observations = tuple(
+        {"evidence_id": f"internal:{item.item_id}", **item.model_dump(mode="json")}
+        for match in planned.matches
+        for item in agentic_evidence(match, QueryFilters())
+    )
+    bundle, kept = build_case_bundle(observations, facts, model="Qwen/Qwen3-8B", hardware=None, branch_status={})
+    assert {case.experiment_id for case in bundle.cases} == identities
+    assert len(kept) == len(observations)
+    assert all(
+        len(case.measurements) == len(agentic_evidence(result.matches[0], QueryFilters())) for case in bundle.cases
+    )
+    for identity in identities:
+        exact = store.dao.search(QueryFilters(record_id=identity), principal, limit=50)
+        assert {match.record.benchmark_id for match in exact.matches} == {identity}
+    store.dao.assert_current(result.matches, principal)
+    monkeypatch.setattr("llm_d_lens.benchmark_rag.case_retrieval.RagAgenticQueryDao", lambda: store.dao)
+    cases = tuple(case.model_dump(mode="json") for case in bundle.cases)
+    assert_case_access(cases, principal)
+    assert not store.dao.search(filters, replace(principal, bindings=()), limit=50).matches
+    with pytest.raises(ConflictError):
+        store.dao.assert_current(result.matches, replace(principal, bindings=()))
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        ":stage:-1",
+        ":stage:01",
+        ":stage:",
+        ":stage:1:extra",
+        ":matrix:1",
+        ":matrix:01:stage:0",
+        ":stage:1.0",
+        ":matrix:1:stage:-2",
+    ],
+)
+def test_malformed_stage_id_cannot_borrow_a_live_run(store, suffix):
+    run_id = store.add()
+    with store.factory.begin() as session:
+        row = BenchmarkRecordRow.from_dto(
+            _record(run_id).model_copy(update={"benchmark_id": f"evaluate:{run_id}{suffix}"})
+        )
+        row.evaluate_run_id = run_id
+        session.add(row)
+    result = store.dao.search(QueryFilters(record_id=run_id), _principal(RoleBinding("reader")), limit=50)
+    assert [match.record.benchmark_id for match in result.matches] == [f"evaluate:{run_id}"]
+
+
+def test_failed_stage_is_retained_and_revalidated_as_negative_evidence(store):
+    run_id = store.add()
+    identity = f"evaluate:{run_id}:matrix:0:stage:1"
+    with store.factory.begin() as session:
+        session.add(
+            BenchmarkRecordRow.from_dto(
+                _record(run_id).model_copy(
+                    update={"benchmark_id": identity, "outcome": "failed", "failure_reason": "measured stage failure"}
+                )
+            )
+        )
+    principal = _principal(RoleBinding("reader", ScopeType.CLUSTER, "cluster1"))
+    failures = store.dao.planning_failures("Qwen/Qwen3-8B", principal, PlanningFacts(8, 96, 4))
+    assert [match.record.benchmark_id for match in failures.matches] == [identity]
+    store.dao.assert_current(failures.matches, principal)
+    with store.factory.begin() as session:
+        session.execute(update(EvaluateRunRow).where(EvaluateRunRow.id == run_id).values(version_id=2))
+    with pytest.raises(ConflictError):
+        store.dao.assert_current(failures.matches, principal)
 
 
 @pytest.mark.parametrize("token_budget", [0, 8000])
@@ -532,17 +641,15 @@ def test_authorized_failures_block_planning_independently_of_prompt_budget(store
     observations = tuple(
         {"evidence_id": f"internal:{item.item_id}", **item.model_dump(mode="json")} for item in internal.observations
     )
-    bundle, kept, packets = build_case_bundle(
-        observations, (), facts, model="Qwen/Qwen3-8B", hardware="Gaudi3", branch_status={}, token_budget=token_budget
+    bundle, kept = build_case_bundle(
+        observations, facts, model="Qwen/Qwen3-8B", hardware="Gaudi3", branch_status={}, token_budget=token_budget
     )
     *_, retained, _bundle = AgenticDeploymentService._apply_case_selection(
         facts,
         PlanningEvidence(id="public", source="public-benchmark-rag", status="empty"),
-        DocumentEvidenceOutcome(status="disabled", mode="disabled"),
         internal,
         bundle,
         kept,
-        packets,
     )
     assert retained.records == internal.records
     candidate = next(

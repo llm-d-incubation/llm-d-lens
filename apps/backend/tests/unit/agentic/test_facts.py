@@ -7,7 +7,6 @@ import pytest
 
 from llm_d_lens.agentic.facts import (
     ResolvedPlanningFacts,
-    _configuration_topology,
     rank_public_rag_evidence,
     resolve_planning_facts,
     resolve_public_rag_evidence,
@@ -340,6 +339,16 @@ def test_public_no_workload_or_latency_returns_all_records_without_inferred_targ
     assert all(match["latency"]["status"] == "not_requested" for match in matches)
 
 
+@pytest.mark.parametrize("mean_value,expected", [(None, "unknown"), ("300", "not_satisfied"), ("100", "satisfied")])
+def test_public_latency_checks_every_requested_statistic_in_the_same_experiment(mean_value, expected):
+    facts = normalize_planning_facts(PlanningFacts(8, 80, 5), "mean TTFT < 200ms; P95 TTFT < 500ms")
+    records = [{**_observation("p95", experiment="same"), "statistic": "p95"}]
+    if mean_value is not None:
+        records.append({**_observation("mean", value=mean_value, experiment="same"), "statistic": "mean"})
+    _, matches = rank_public_rag_evidence(records, facts)
+    assert all(match["latency"]["status"] == expected for match in matches)
+
+
 @pytest.fixture
 def public_hardware(monkeypatch):
     hardware = {"accelerators": [{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}]}
@@ -473,7 +482,7 @@ def test_public_rag_is_public_only_exact_model_and_preserves_citations(
     assert result.status == ("available" if has_evidence else "no_matches")
     assert "SQL measured observations" in result.details["message"]
     if simulated:
-        assert "Document RAG and internal experiments are reported separately" in result.details["message"]
+        assert "Internal experiments are reported separately" in result.details["message"]
     context = with_public_rag_evidence(
         ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), result
     )
@@ -934,7 +943,6 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
     monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", support)
     monkeypatch.setattr("llm_d_lens.agentic.facts.search", aic_search)
-    monkeypatch.setattr("llm_d_lens.agentic.facts._historical_topology_by_execution", lambda: {})
     resolved = asyncio.run(
         resolve_planning_facts(
             "cluster-a",
@@ -1015,22 +1023,6 @@ def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkey
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
     monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", unavailable_aic)
     monkeypatch.setattr("llm_d_lens.simulation.service.list_tasks", history)
-    monkeypatch.setattr(
-        "llm_d_lens.agentic.facts._historical_topology_by_execution",
-        lambda: {
-            "execution-1": {
-                "provider_ref": "pd-disaggregation",
-                "replicas": 1,
-                "tensor_parallel_size": 1,
-                "prefill_replicas": 1,
-                "prefill_tensor_parallel_size": 1,
-                "guide_variant": "vllm",
-                "max_model_len": 4096,
-                "gpu_memory_utilization": 0.9,
-                "required_gpus": 2,
-            },
-        },
-    )
 
     resolved = asyncio.run(
         resolve_planning_facts(
@@ -1050,30 +1042,3 @@ def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkey
     assert simulation_evidence.status == "unavailable"
     assert simulation_evidence.details["reason"] == "unscoped_history_disabled"
     assert "observations" not in simulation_evidence.details
-
-
-def test_configuration_topology_captures_candidate_equivalent_pd_fields():
-    configuration = SimpleNamespace(
-        provider_ref="pd-disaggregation",
-        provenance={"agentic_candidate_id": "legacy-internal-id"},
-        content={
-            "decode": {"replicaCount": 2, "tensorParallelSize": 2, "maxModelLen": 8192, "gpuMemoryUtilization": 0.9},
-            "prefill": {"replicaCount": 1, "tensorParallelSize": 2},
-            "guideVariant": "vllm",
-        },
-    )
-
-    topology = _configuration_topology(configuration)
-
-    assert topology == {
-        "candidate_id": "legacy-internal-id",
-        "provider_ref": "pd-disaggregation",
-        "replicas": 2,
-        "tensor_parallel_size": 2,
-        "prefill_replicas": 1,
-        "prefill_tensor_parallel_size": 2,
-        "guide_variant": "vllm",
-        "max_model_len": 8192,
-        "gpu_memory_utilization": 0.9,
-        "required_gpus": 6,
-    }

@@ -33,12 +33,14 @@ from llm_d_lens.benchmark_rag.service import (
     PublicRagQueryService,
     plan_query,
 )
-from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, PRISM_ORIGIN, allowed_paths
+from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN, allowed_paths
 from llm_d_lens.core.exceptions import ConflictError, DomainValidationError, ForbiddenError, UnauthenticatedError
 from llm_d_lens.db.dao.rag_query import RagQueryDao
 
 _PATH = "archives/llm-d-benchmarks.json"
 _REVISION = "2026-10-13"
+LLM_D_ORIGIN = "https://github.com/llm-d/llm-d"
+BENCHMARK_ORIGIN = "https://github.com/llm-d/llm-d-benchmark.git"
 _RAW = (
     b'{"runs":[{"id":"run-a","throughput":6131.06177725188,"latency":1.234567890123456789},'
     b'{"id":"run-b","throughput":99,"latency":0.5}]}'
@@ -156,8 +158,6 @@ def query_service(postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.M
     publication = RagPublicationService(dao=dao, archive=service.archive)
     publish_numeric(publication)
     assert dao.count_published(PRISM_ORIGIN) > 0
-    assert dao.count_published(LLM_D_ORIGIN) == 0
-    assert dao.count_published(BENCHMARK_ORIGIN) == 0
     return service
 
 
@@ -183,7 +183,8 @@ def test_hardware_options_are_model_specific_and_published_only(query_service):
     assert query_service.dao.hardware_options(QueryFilters(model="unreported-model")) == ()
     publish_numeric(RagPublicationService(dao=query_service.dao), revision="2026-10-14", activate=False)
     assert query_service.dao.hardware_options(QueryFilters(model="Qwen3-0.6B")) == ("H100", "H200")
-    assert query_service.dao.hardware_options(QueryFilters(model="Qwen3-0.6B", origins=(LLM_D_ORIGIN,))) == ()
+    with pytest.raises(ValidationError, match="approved public"):
+        QueryFilters(model="Qwen3-0.6B", origins=(LLM_D_ORIGIN,))
 
 
 @pytest.mark.parametrize("model", ["Qwen/Qwen3-0.6B", "qwen/qwen3-0.6b", "Qwen3-0.6B", "another-org/Qwen3-0.6B"])
@@ -209,7 +210,8 @@ def test_generated_model_aliases_preserve_hardware_and_source_scope(query_servic
         ).total
         == 0
     )
-    assert query_service.dao.hardware_options(filters.model_copy(update={"origins": (LLM_D_ORIGIN,)})) == ()
+    with pytest.raises(PublicationError, match="allowlist"):
+        query_service.dao.hardware_options(filters.model_copy(update={"origins": (LLM_D_ORIGIN,)}))
 
 
 @pytest.mark.parametrize(
@@ -862,18 +864,9 @@ def test_numeric_normalization_range_and_statistic_alias(query_service):
     assert result.evidence[0].normalized_value == Decimal("1234.567890123456789000")
 
 
-def test_document_examples_are_not_sql_measurements(query_service):
-    no_measurement = query_service.query(
-        QueryRequest(
-            question="Example throughput",
-            intent="numeric",
-            filters=QueryFilters(
-                origins=(BENCHMARK_ORIGIN,), source_path="docs/benchmark_report.md", metric="throughput"
-            ),
-        ),
-        reader(),
-    )
-    assert no_measurement.matched_items == 0
+def test_document_origins_are_not_sql_query_sources():
+    with pytest.raises(ValidationError, match="approved public"):
+        QueryFilters(origins=(BENCHMARK_ORIGIN,), source_path="docs/benchmark_report.md", metric="throughput")
 
 
 def test_repository_definition_requires_an_installed_document_provider(query_service):
@@ -883,13 +876,13 @@ def test_repository_definition_requires_an_installed_document_provider(query_ser
                 question="What is TTFT?",
                 intent="definition",
                 filters=QueryFilters(
-                    origins=(BENCHMARK_ORIGIN,),
                     source_path="docs/benchmark_report.md",
                 ),
             ),
             reader(),
         )
-    assert query_service.dao.count_published(BENCHMARK_ORIGIN) == 0
+    with pytest.raises(PublicationError, match="allowlist"):
+        query_service.dao.count_published(BENCHMARK_ORIGIN)
 
 
 def test_repository_figure_evidence_is_not_stored_in_prism_sql(query_service):
@@ -897,7 +890,7 @@ def test_repository_figure_evidence_is_not_stored_in_prism_sql(query_service):
         QueryRequest(
             question="Show explicitly linked H100 figure scenarios",
             intent="figure",
-            filters=QueryFilters(origins=(LLM_D_ORIGIN,), hardware="H100"),
+            filters=QueryFilters(hardware="H100"),
         ),
         reader(),
     )
@@ -1079,5 +1072,6 @@ def test_real_prism_snapshot_answer_acceptance(postgres_engine, tmp_path, monkey
     assert prism.evidence[0].experiment.model == "Qwen3-0.6B"
     assert dao.count_published(PRISM_ORIGIN, kind="experiment") == 249
     assert dao.count_published(PRISM_ORIGIN, kind="measurement") == 9060
-    assert dao.count_published(LLM_D_ORIGIN) == 0
-    assert dao.count_published(BENCHMARK_ORIGIN) == 0
+    for origin in (LLM_D_ORIGIN, BENCHMARK_ORIGIN):
+        with pytest.raises(PublicationError, match="allowlist"):
+            dao.count_published(origin)

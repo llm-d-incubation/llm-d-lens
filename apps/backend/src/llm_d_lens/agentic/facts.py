@@ -20,7 +20,6 @@ from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, A
 from llm_d_lens.aic.service import AICError, check_support, search
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.benchmark_rag.access import require_query_access
-from llm_d_lens.benchmark_rag.case_retrieval import model_reference_map
 from llm_d_lens.benchmark_rag.contracts import (
     WORKLOAD_ALIASES,
     effective_statistic,
@@ -46,13 +45,11 @@ from llm_d_lens.core.exceptions import (
     UnauthenticatedError,
 )
 from llm_d_lens.db.dao.rag_query import RagQueryDao
-from llm_d_lens.deploy.application import deployment_run_manager
 from llm_d_lens.hardware.models import HardwareProfile
 from llm_d_lens.hardware.registry import all_profiles
 
-from .document_evidence import DOCUMENT_PREFIX, DOCUMENT_USAGE, DocumentEvidenceOutcome
 from .planner import AICCandidatePrediction, PlanningFacts, public_rag_workload, resolve_workload_signals
-from .planning_requirements import enrich_planning_requirements
+from .planning_requirements import NumericRequirement, enrich_planning_requirements
 
 _GIB = 1024**3
 logger = logging.getLogger(__name__)
@@ -70,50 +67,6 @@ class ResolvedPlanningFacts(BaseModel):
     cluster_snapshot: dict[str, Any]
     evidence: list[PlanningEvidence] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)
-
-
-def with_document_evidence(resolved: ResolvedPlanningFacts, outcome: DocumentEvidenceOutcome) -> ResolvedPlanningFacts:
-    """Replace document packets without adding them to deterministic evidence or scores."""
-    evidence = [item for item in resolved.evidence if item.source != "public-document-rag"]
-    trace = [item for item in resolved.trace if item.get("phase") != "document_rag"]
-    if outcome.status != "disabled" or outcome.reason is not None:
-        evidence.append(
-            PlanningEvidence(
-                id="document-rag:query",
-                source="public-document-rag",
-                status=outcome.status,
-                details={
-                    **outcome.metadata(),
-                    **(
-                        {
-                            "document_evidence_usage": DOCUMENT_USAGE,
-                            "document_evidence": [packet.model_dump(mode="json") for packet in outcome.packets],
-                            "model_reference_map": model_reference_map(
-                                (), document_ids=[packet.citation_id for packet in outcome.packets]
-                            ),
-                        }
-                        if outcome.packets
-                        else {}
-                    ),
-                },
-            )
-        )
-        trace.append({"phase": "document_rag", **outcome.metadata()})
-    return resolved.model_copy(
-        update={
-            "facts": replace(
-                resolved.facts,
-                document_evidence=outcome.packets,
-                evidence_ids=tuple(
-                    reference
-                    for reference in resolved.facts.evidence_ids
-                    if not reference.startswith((DOCUMENT_PREFIX, "document-rag:"))
-                ),
-            ),
-            "evidence": evidence,
-            "trace": trace,
-        }
-    )
 
 
 def _hardware_model_key(model: str, profile: HardwareProfile) -> tuple[str, ...]:
@@ -304,14 +257,12 @@ def rank_public_rag_evidence(
         )
         if target is not None
     }
-    typed_targets = (
-        {
-            "latency" if target.field == "e2e" else target.field: target
-            for target in facts.requirements.performance_targets
-        }
-        if facts and facts.requirements
-        else {}
-    )
+    typed_targets: dict[str, list[NumericRequirement]] = {}
+    if facts and facts.requirements:
+        for requirement in facts.requirements.performance_targets:
+            metric = "latency" if requirement.field == "e2e" else requirement.field
+            typed_targets.setdefault(metric, []).append(requirement)
+            targets.setdefault(metric, requirement.value)
     groups: dict[str, list[dict[str, Any]]] = {}
     scopes = {}
     for item in observations:
@@ -355,52 +306,61 @@ def rank_public_rag_evidence(
         configuration = experiment.get("configuration") or {}
         latency_fields = {}
         for metric, target in targets.items():
-            requirement = typed_targets.get(metric)
-            statistic = effective_statistic(requirement.statistic if requirement is not None else None)
-            values = [
-                {
-                    "evidence_id": f"public-rag:{peer['item_id']}",
-                    "statistic": effective_statistic(peer.get("statistic")),
-                    **(
-                        {"statistic_original": None, "statistic_basis": "default_mean"}
-                        if peer.get("statistic") is None
-                        else {}
-                    ),
-                    "value_ms": value,
-                }
-                for peer in groups[scopes[item["item_id"]]]
-                if ("latency" if peer.get("metric") == "e2e" else peer.get("metric")) == metric
-                and effective_statistic(peer.get("statistic")) == statistic
-                and (value := _public_latency_value(peer)) is not None
-            ]
-            for value in values:
-                value["relative_deviation"] = value["value_ms"] / target - 1
-                operator = requirement.operator if requirement is not None else "<="
-                value["target_satisfied"] = {
-                    "<": value["value_ms"] < target,
-                    "<=": value["value_ms"] <= target,
-                    ">": value["value_ms"] > target,
-                    ">=": value["value_ms"] >= target,
-                    "=": value["value_ms"] == target,
-                    "==": value["value_ms"] == target,
-                }[operator]
+            constraints = list(
+                dict.fromkeys(
+                    (effective_statistic(requirement.statistic), requirement.value, requirement.operator)
+                    for requirement in typed_targets.get(metric, ())
+                )
+            ) or [(effective_statistic(None), target, "<=")]
+            assessments = []
+            for statistic, bound, operator in constraints:
+                values = [
+                    {
+                        "evidence_id": f"public-rag:{peer['item_id']}",
+                        "statistic": effective_statistic(peer.get("statistic")),
+                        **(
+                            {"statistic_original": None, "statistic_basis": "default_mean"}
+                            if peer.get("statistic") is None
+                            else {}
+                        ),
+                        "value_ms": value,
+                    }
+                    for peer in groups[scopes[item["item_id"]]]
+                    if ("latency" if peer.get("metric") == "e2e" else peer.get("metric")) == metric
+                    and effective_statistic(peer.get("statistic")) == statistic
+                    and (value := _public_latency_value(peer)) is not None
+                ]
+                for value in values:
+                    deviation = value["value_ms"] / bound - 1
+                    value["relative_deviation"] = (
+                        -deviation if operator in {">", ">="} else abs(deviation) if operator == "=" else deviation
+                    )
+                    value["target_satisfied"] = {
+                        "<": value["value_ms"] < bound,
+                        "<=": value["value_ms"] <= bound,
+                        ">": value["value_ms"] > bound,
+                        ">=": value["value_ms"] >= bound,
+                        "=": value["value_ms"] == bound,
+                    }[operator]
+                assessments.append(
+                    {"target_ms": bound, "operator": operator, "statistic": statistic, "observations": values}
+                )
             latency_fields[metric] = {
-                "target_ms": target,
-                "operator": requirement.operator if requirement is not None else "<=",
-                "statistic": statistic,
-                "observations": values,
+                **assessments[-1],
+                **({"targets": assessments} if len(assessments) > 1 else {}),
             }
-        deviations = [
-            value["relative_deviation"] for field in latency_fields.values() for value in field["observations"]
+        assessments = [assessment for field in latency_fields.values() for assessment in field.get("targets", [field])]
+        deviations = [value["relative_deviation"] for assessment in assessments for value in assessment["observations"]]
+        unknown_metrics = [
+            metric
+            for metric, field in latency_fields.items()
+            if any(not assessment["observations"] for assessment in field.get("targets", [field]))
         ]
-        unknown_metrics = [metric for metric, field in latency_fields.items() if not field["observations"]]
         status = (
             "not_requested"
             if not targets
             else "not_satisfied"
-            if any(
-                not value["target_satisfied"] for field in latency_fields.values() for value in field["observations"]
-            )
+            if any(not value["target_satisfied"] for assessment in assessments for value in assessment["observations"])
             else "unknown"
             if unknown_metrics
             else "satisfied"
@@ -605,7 +565,7 @@ async def resolve_public_rag_evidence(
                 f"TEST HARDWARE IDENTITY: treating this cluster as {simulated_model} for RAG and AIC validation. "
                 "This is a simulated target, not a cross-hardware transfer; deployment is disabled. "
                 f"SQL measured observations: retrieved {len(response.evidence)} for the requested model name aliases. "
-                "Document RAG and internal experiments are reported separately."
+                "Internal experiments are reported separately."
             )
     return PlanningEvidence(
         id="public-rag:query",
@@ -752,7 +712,6 @@ async def resolve_planning_facts(
             model_name=model_name or requested.model_name,
             model_config_dict=model_config_dict,
             planning_hardware_model=requested.planning_hardware_model,
-            document_evidence=requested.document_evidence,
             public_rag_evidence=requested.public_rag_evidence,
             configuration_cases=requested.configuration_cases,
             configuration_case_status=requested.configuration_case_status,
@@ -959,125 +918,3 @@ def _positive_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return numeric if numeric > 0 else None
-
-
-def _positive_int(value: Any) -> int | None:
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if numeric > 0 else None
-
-
-def _historical_topology_by_execution() -> dict[str, dict[str, Any]]:
-    topologies: dict[str, dict[str, Any]] = {}
-    for run in deployment_run_manager.store.list_runs():
-        for case in run.cases:
-            if not case.execution_id:
-                continue
-            configuration = run.source_configurations[case.source_configuration_ordinal]
-            topology = _configuration_topology(configuration)
-            if topology is not None:
-                topologies[case.execution_id] = topology
-    return topologies
-
-
-def _configuration_topology(configuration) -> dict[str, Any] | None:
-    content = configuration.content
-    decode = content.get("decode") if isinstance(content, dict) else None
-    if not isinstance(decode, dict):
-        return None
-    replicas = _positive_int(decode.get("replicaCount"))
-    tensor_parallel_size = _positive_int(decode.get("tensorParallelSize"))
-    if replicas is None or tensor_parallel_size is None:
-        return None
-    prefill = content.get("prefill") if isinstance(content, dict) else None
-    prefill_replicas = _positive_int(prefill.get("replicaCount")) if isinstance(prefill, dict) else None
-    prefill_tensor_parallel_size = (
-        _positive_int(prefill.get("tensorParallelSize")) if isinstance(prefill, dict) else None
-    )
-    required_gpus = replicas * tensor_parallel_size
-    if prefill_replicas and prefill_tensor_parallel_size:
-        required_gpus += prefill_replicas * prefill_tensor_parallel_size
-    return {
-        "candidate_id": configuration.provenance.get("agentic_candidate_id"),
-        "provider_ref": configuration.provider_ref,
-        "replicas": replicas,
-        "tensor_parallel_size": tensor_parallel_size,
-        "prefill_replicas": prefill_replicas,
-        "prefill_tensor_parallel_size": prefill_tensor_parallel_size,
-        "guide_variant": content.get("guideVariant"),
-        "max_model_len": _positive_int(decode.get("maxModelLen")),
-        "gpu_memory_utilization": _positive_float(decode.get("gpuMemoryUtilization")),
-        "required_gpus": required_gpus,
-    }
-
-
-async def _similar_historical_observations(
-    tasks,
-    facts: PlanningFacts,
-    topology_by_execution: dict[str, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    from llm_d_lens.simulation.benchmark_evidence import normalize_simulation_task
-
-    del topology_by_execution
-    observations: list[dict[str, Any]] = []
-    for task in tasks:
-        records, issues = normalize_simulation_task(task)
-        if issues:
-            logger.warning("Simulation %s is not reusable evidence: %s", task.id, issues)
-        for record in records:
-            configuration = record.configuration
-            observations.append(
-                {
-                    "provider_ref": configuration.topology,
-                    "replicas": configuration.decode_replicas,
-                    "tensor_parallel_size": configuration.decode_tp,
-                    "prefill_replicas": configuration.prefill_replicas,
-                    "prefill_tensor_parallel_size": configuration.prefill_tp,
-                    "required_gpus": record.hardware.gpu_count,
-                    "task_id": task.id,
-                    "benchmark_id": record.benchmark_id,
-                    "measured_at": record.timestamp.isoformat(),
-                    "model": record.model.model_dump(),
-                    "hardware": record.hardware.model_dump(),
-                    "runtime": record.runtime.model_dump(),
-                    "scenario": task.scenario,
-                    "similarity": _workload_similarity(
-                        facts, task.scenario, record.workload.mean_input_tokens, record.workload.mean_output_tokens
-                    ),
-                    "ttft_p95_ms": record.metrics.ttft_p95_ms,
-                    "tpot_p95_ms": record.metrics.tpot_p95_ms,
-                    "throughput_tokens_per_sec": record.metrics.throughput_tokens_per_s,
-                }
-            )
-    return sorted(observations, key=lambda item: (-item["similarity"], item["task_id"]))[:3]
-
-
-def _mean(values) -> float | None:
-    positive = [float(value) for value in values if value and value > 0]
-    return sum(positive) / len(positive) if positive else None
-
-
-def _p95(values: list[float]) -> float | None:
-    return values[min(len(values) - 1, int(len(values) * 0.95))] if values else None
-
-
-def _workload_similarity(
-    facts: PlanningFacts,
-    scenario: str,
-    observed_input: float | None,
-    observed_output: float | None,
-) -> float:
-    profile = facts.workload_profile
-    target_input = profile.mean_input_tokens if profile else None
-    target_output = profile.mean_output_tokens if profile else None
-    distances = [0.0 if scenario == _scenario_for_use_case(facts.use_case) else 0.25]
-    for target, observed in ((target_input, observed_input), (target_output, observed_output)):
-        if target and observed:
-            distances.append(min(abs(target - observed) / max(target, observed), 1.0))
-    return round(max(0.0, 1 - sum(distances) / len(distances)), 3)
-
-
-def _scenario_for_use_case(use_case: str) -> str:
-    return "coding" if use_case == "code-generation" else "chat"

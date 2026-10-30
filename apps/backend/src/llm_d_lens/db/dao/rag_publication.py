@@ -24,12 +24,10 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     registry_id,
 )
 from llm_d_lens.benchmark_rag.sources import (
-    WEB_SOURCE_PATHS,
     allowed_paths,
     input_format,
     validate_approval,
     validate_revision,
-    web_source_url,
 )
 from llm_d_lens.db.dao.rag_item import RagItemDao
 from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow as RagItemRow
@@ -110,10 +108,6 @@ class RagPublicationDao(RagItemDao):
             raise PublicationError("invalid source manifest")
         metadata = ReleaseManifest.model_validate(item.source_details)
         validate_revision(origin_id, metadata.inventory.revision)
-        if origin_id in WEB_SOURCE_PATHS and metadata.inventory.revision != content_digest(
-            {file.path: file.sha256 for file in metadata.inventory.files}
-        ):
-            raise PublicationError("web manifest revision does not match its reviewed inventory")
         digest = content_digest(metadata.model_dump(mode="json"))
         if (
             metadata.inventory.origin_id != origin_id
@@ -185,11 +179,6 @@ class RagPublicationDao(RagItemDao):
                 raise PublicationError("manifest file source is invalid")
             for member_id in file.member_ids:
                 item = members[member_id]
-                if manifest.origin_id in WEB_SOURCE_PATHS and (
-                    item.kind not in ("source", "passage")
-                    or item.source_url != web_source_url(manifest.origin_id, file.file.path)
-                ):
-                    raise PublicationError("web members must be context-only with their approved article URL")
                 if (
                     item.origin_id != manifest.origin_id
                     or item.source_path != file.file.path
@@ -410,7 +399,7 @@ class RagPublicationDao(RagItemDao):
         )
 
     def list_published(self, origin_id: str, *, kind: ItemKind | None = None) -> list[RagItem]:
-        """Internal membership only. Caller authentication is a step-5 service boundary."""
+        """Internal membership only; query services enforce caller authentication."""
         with self._read_only() as session:
             self._require_postgres(session)
             statement = self._published_members(origin_id)

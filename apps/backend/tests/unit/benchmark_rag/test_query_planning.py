@@ -101,18 +101,108 @@ def test_hardware_only_question_does_not_invent_a_model_filter():
     assert plan.precondition is None
 
 
-def test_known_guide_alias_also_respects_an_explicit_source_path():
+@pytest.mark.parametrize("hardware", ["Intel Gaudi 3", "Gaudi3", "MI355X", "H100"])
+def test_explicit_hardware_condition_is_never_discarded(hardware):
+    plan = plan_query(QueryRequest(question=f"What was throughput for Qwen3-0.6B on {hardware}?"))
+    assert plan.filters.hardware == hardware
+    assert plan.filters.model == "Qwen3-0.6B"
+    assert plan.precondition is None
+
+
+def test_unknown_hardware_requires_clarification_without_broadening_query():
+    plan = plan_query(QueryRequest(question="Throughput for Qwen3-0.6B on Mystery-Accelerator9?"))
+    assert plan.filters.hardware == "Mystery-Accelerator9"
+    assert plan.precondition.code == "hardware_scope_required"
+    explicit = plan_query(
+        QueryRequest(
+            question="Throughput for Qwen3-0.6B on Mystery-Accelerator9?",
+            filters=QueryFilters(hardware="Mystery-Accelerator9"),
+        )
+    )
+    assert explicit.filters.hardware == "Mystery-Accelerator9" and explicit.precondition is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Throughput for Qwen3-0.6B on?",
+        "Throughput for Qwen3-0.6B hardware: Unknown9?",
+        "Throughput for Qwen3-0.6B on Unknown9?",
+    ],
+)
+def test_unknown_or_missing_named_hardware_fails_closed(question):
+    plan = plan_query(QueryRequest(question=question))
+    assert plan.precondition.code == "hardware_scope_required"
+
+
+def test_multiword_hardware_subject_is_not_mistaken_for_a_model():
+    plan = plan_query(QueryRequest(question="What was throughput for Intel Gaudi 3?"))
+    assert plan.filters.hardware == "Intel Gaudi 3"
+    assert plan.filters.model is None and plan.precondition is None
+
+
+def test_conflicting_or_compound_hardware_cannot_drop_conditions():
+    with pytest.raises(DomainValidationError, match="hardware"):
+        plan_query(QueryRequest(question="Throughput on MI355X", filters=QueryFilters(hardware="H100")))
+    plan = plan_query(QueryRequest(question="Throughput for Qwen3-0.6B on H100 and MI355X?"))
+    assert plan.precondition.code == "hardware_scope_required"
+
+
+@pytest.mark.parametrize("suffix", [":stage:0", ":stage:2", ":matrix:1:stage:2"])
+def test_internal_question_keeps_full_stage_identity(suffix):
+    identity = f"evaluate:02c8f038-1cad-4ee8-a72e-724affa923f4{suffix}"
+    plan = plan_query(QueryRequest(question=f"Throughput for {identity}?", include_internal=True))
+    assert plan.filters.record_id == identity
+    assert plan.precondition is None
+
+
+@pytest.mark.parametrize("suffix", [":stage:-1", ":stage:01", ":matrix:1", ":matrix:1:stage:2:extra"])
+def test_malformed_stage_question_cannot_fall_back_to_whole_run(suffix):
+    plan = plan_query(
+        QueryRequest(
+            question=f"Throughput for evaluate:02c8f038-1cad-4ee8-a72e-724affa923f4{suffix}?", include_internal=True
+        )
+    )
+    assert plan.precondition.code == "record_scope_required"
+
+
+def test_distinct_stages_of_same_run_are_not_collapsed_to_one_record_query():
+    identity = "evaluate:02c8f038-1cad-4ee8-a72e-724affa923f4"
+    plan = plan_query(
+        QueryRequest(
+            question=f"Compare throughput for {identity}:stage:0 and {identity}:stage:1?", include_internal=True
+        )
+    )
+    assert plan.precondition.code == "comparison_requires_explicit_scope"
+
+
+def test_question_terms_do_not_override_an_explicit_prism_source_path():
     plan = plan_query(
         QueryRequest(
             question="Compare H200 gpt-oss-120b weight-load times",
             filters=QueryFilters(
                 model="openai/gpt-oss-120b",
-                source_path="guides/modelexpress-p2p/benchmark-results/h200-ib-gpt-oss-120b.md",
+                source_path="archives/llm-d-benchmarks.json",
             ),
         )
     )
     assert plan.filters.model == "openai/gpt-oss-120b"
+    assert plan.filters.source_path == "archives/llm-d-benchmarks.json"
     assert plan.precondition is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Compare H200 gpt-oss-120b weight-load times",
+        "What is a benchmark report intended to capture?",
+        "Show Qwen3 Coder TPU PNG",
+    ],
+)
+def test_legacy_guide_labels_do_not_route_queries_to_other_sources(question):
+    plan = plan_query(QueryRequest(question=question))
+    assert plan.filters.origins == ("prism:public-snapshot",)
+    assert plan.filters.source_path is None
 
 
 @pytest.mark.parametrize(
