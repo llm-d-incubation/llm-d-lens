@@ -21,9 +21,9 @@ migration = importlib.import_module(
 )
 
 
-def assert_empty_benchmark_storage(engine):
+def assert_benchmark_storage(engine, *, expected_count=0):
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT count(*) FROM public_benchmark_records")) == 0
+        assert connection.scalar(sa.text("SELECT count(*) FROM public_benchmark_records")) == expected_count
         assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == migration.revision
         assert set(sa.inspect(connection).get_table_names()) == set(Base.metadata.tables) | {"alembic_version"}
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
@@ -55,7 +55,35 @@ def test_revision_chain_and_backup_stamp(postgres_config):
 
 
 def test_upgrade_matches_metadata(postgres_engine):
-    assert_empty_benchmark_storage(postgres_engine)
+    assert_benchmark_storage(postgres_engine)
+
+
+def test_repeated_current_revision_upgrade_preserves_data_and_schema(postgres_engine, postgres_config):
+    table = Base.metadata.tables["public_benchmark_records"]
+    with postgres_engine.begin() as connection:
+        connection.execute(
+            sa.insert(table).values(
+                item_id="source-before-repeated-upgrade",
+                kind="source",
+                origin_id="prism:public-snapshot",
+                logical_key="file",
+                source_revision="synthetic-current-revision",
+                content_sha256="b" * 64,
+                access_classification="verified_public",
+                publication_state="staged",
+                source_path="source.json",
+                format="json",
+                source_role="file",
+                source_details={"parser_version": "test"},
+            )
+        )
+        before = connection.execute(sa.select(table)).mappings().all()
+    assert_benchmark_storage(postgres_engine, expected_count=1)
+    for _ in range(2):
+        command.upgrade(postgres_config, PUBLIC_BENCHMARK_RECORD_SCHEMA_REVISION)
+        with postgres_engine.connect() as connection:
+            assert connection.execute(sa.select(table)).mappings().all() == before
+        assert_benchmark_storage(postgres_engine, expected_count=1)
 
 
 def test_downgrade_and_reupgrade(postgres_engine, postgres_config):
@@ -84,7 +112,7 @@ def test_downgrade_and_reupgrade(postgres_engine, postgres_config):
         ) | {"alembic_version"}
         assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == migration.down_revision
     command.upgrade(postgres_config, migration.revision)
-    assert_empty_benchmark_storage(postgres_engine)
+    assert_benchmark_storage(postgres_engine)
 
 
 def test_new_table_rejects_non_prism_origins(postgres_engine):

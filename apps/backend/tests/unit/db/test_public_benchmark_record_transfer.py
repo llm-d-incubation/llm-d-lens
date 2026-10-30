@@ -12,6 +12,7 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateSchema, DropSchema
@@ -199,6 +200,45 @@ def test_migration_retains_history_and_supports_rollback(sites, monkeypatch: pyt
         PRISM_ORIGIN, old.item_id, expected_generation=head.state.generation
     )
     assert target.dao.head(PRISM_ORIGIN).manifest == old
+
+
+def test_old_schema_revision_backup_is_rejected_before_restore_writes(sites, monkeypatch, tmp_path):
+    source, target = sites("source"), sites("target")
+    source.select(monkeypatch)
+    _publish(source, REVISION_OLD, b"synthetic-source")
+    bundle = tmp_path / "current.zip"
+    manifest = PublicBenchmarkRecordBackupService(source.dao).backup(bundle)
+    assert manifest.schema_revision == "8bf2a6c1d903"
+    with zipfile.ZipFile(bundle) as original:
+        members = {name: original.read(name) for name in original.namelist()}
+    metadata = json.loads(members["manifest.json"])
+    metadata["schema_revision"] = "7a12c8e49b60"
+    members["manifest.json"] = json.dumps(metadata).encode()
+    old_bundle = tmp_path / "old-revision.zip"
+    with zipfile.ZipFile(old_bundle, "w") as output:
+        for name, data in members.items():
+            output.writestr(name, data)
+    target.select(monkeypatch)
+    local = _publish(target, REVISION_LOCAL, b"synthetic-local")
+    before = target.dao.snapshot()
+    tables = inspect(target.engine).get_table_names()
+    service = PublicBenchmarkRecordBackupService(target.dao)
+
+    def unexpected_write(*_args, **_kwargs):
+        pytest.fail("Old schema revision must be rejected before archive or database writes")
+
+    monkeypatch.setattr(service.archive, "put", unexpected_write)
+    monkeypatch.setattr(target.dao, "restore", unexpected_write)
+    for operation in (service.verify, service.restore):
+        with pytest.raises(ValidationError) as rejected:
+            operation(old_bundle)
+        errors = rejected.value.errors()
+        assert len(errors) == 1
+        assert errors[0]["loc"] == ("schema_revision",)
+        assert errors[0]["type"] == "literal_error"
+    assert target.dao.snapshot() == before
+    assert target.dao.head(PRISM_ORIGIN).manifest == local
+    assert inspect(target.engine).get_table_names() == tables
 
 
 def test_nonempty_merge_preserves_target_history_and_disabled_policy(

@@ -66,6 +66,26 @@ historical plan.
 
 ### Ownership and reuse decisions
 
+Follow-up integration adopts baseline `205fbde` in the integration checkpoint.
+Session/login serialization now supplies global-only grants
+separately from scoped permissions; changing the UI grant set does not relax
+server authorization. Hardware document context derives from the shared
+requirements rather than restoring removed test-only hardware overrides.
+
+The Prism baseline failure was a stale verifier expectation: a stored null
+runtime is projected through the existing `effective_runtime` policy. The
+verifier now applies that same policy while continuing to compare published
+SQL identities, immutable source bytes, hashes and source pointers. Fabricated
+context fields must still fail verification.
+
+Isolated compatibility tests cover repeated upgrades at `8bf2a6c1d903` without
+changing existing rows/schema and explicit rejection of old
+`7a12c8e49b60` backup stamps before any writes. They do not implement conversion
+from a removed migration node. Actual legacy database access and data changes
+are excluded from this follow-up by operator choice. Local live OpenSearch
+acceptance is restricted to randomized test indexes/aliases and temporary
+archives; existing publication indexes and aliases must remain unchanged.
+
 | Capability | Migration decision |
 | --- | --- |
 | Prism ingestion, approvals and reviewed inventory | Reuse the latest public-record implementation and required external manifest. |
@@ -148,8 +168,62 @@ merged implementation. Earlier RAG tests had external pinned-repository fixture
 errors; no complete live OpenSearch/model/corpus acceptance was performed in
 this review. Quality and annotation gates remain outstanding.
 
-Implementation status: review recorded; structural approval and source migration
-pending. Update this status and the actual validation results as work completes.
+### Integration checkpoint (2026-10-30)
+
+This checkpoint is a partial integration, not completed migration acceptance.
+The operator requested stopping the document migration subtask and committing
+and pushing the persisted work. No document publication/index-builder lifecycle
+fix was delivered. Existing untracked caches, lockfiles and runtime artifacts
+are excluded from the commit and remain untouched.
+
+Completed changes include the latest baseline integration, global-only session
+grants, shared-hardware document context, exact document-context budget
+accounting, Agentic test migration, strict Prism baseline verification and
+isolated schema/backup compatibility checks. Prompt trimming continues to
+preserve authorized failed experiment history.
+
+Verified results on the persisted implementation:
+
+| Validation | Result |
+| --- | --- |
+| Public-record domain and database unit tests | 630 passed |
+| Authentication unit tests and MCP contract | 227 passed |
+| Affected Agentic planner/generator/service tests | 219 passed |
+| Document-evidence and generic streaming tests | 89 passed, including 12 added SSE cases; overlaps the Agentic coverage above |
+| Hardware and cluster baseline tests | 104 passed |
+| Live OpenSearch integration file | 3 passed; existing index identities and alias targets unchanged, isolated test resources cleaned up |
+| Frontend routing/search and tool tests | 22 passed |
+| Frontend type check and production build | Passed |
+| English and Chinese documentation production builds | Passed |
+| MCP catalog | 207 tools, no unexpected skips |
+
+These are separate, partly overlapping suites, not a combined test total or a
+claim that the full document unit suite passes. The earlier document run had
+42 failures before the session fix; the remaining document test migration and
+a final combined document regression are still outstanding.
+
+Remaining acceptance work:
+
+- Close default-owned publication and index-builder clients on success and
+  failure, then add and run the corresponding lifecycle regressions.
+- Finish stale document tests and fixture migration; rerun the combined
+  document/Agentic regression on stable document sources.
+- Run the synthetic 10,000-passage, ten-concurrent-request, 500-query acceptance
+  test. It has not started; the service and authenticated HTTP p95 threshold
+  remains two seconds.
+- Obtain approved frozen corpus and local embedding-model inputs before vector
+  and relevance-quality acceptance. No such acceptance is claimed here.
+- Keep actual legacy database access and conversion out of this checkpoint,
+  as explicitly requested by the operator.
+
+The repository-wide English check was attempted but is blocked by a pre-existing
+untracked non-UTF-8 raw-source artifact under `.cache/pytest-structured-acceptance/`.
+Do not modify archived source bytes or ignore rules to conceal this finding.
+The staged English check also rejects the existing Chinese design translation
+outside the site's translation exemption and two existing Chinese retrieval
+test inputs. The operator explicitly approved preserving those existing
+contents and committing/pushing this checkpoint with these check failures
+recorded. No English-check rules or test semantics were weakened.
 
 ## Earlier execution status (2026-10-27)
 
@@ -308,17 +382,16 @@ Reproduced input issues:
 
 Primary implementation references:
 
-- [Historical evidence schema][historical-rag-schema] for the former
+- Historical evidence schema (retired revision `7a12c8e49b60`) for the former
   `apps/backend/src/llm_d_lens/db/models/rag_item.py`;
   [current Prism evidence model][prism-evidence-model].
-- [Public retrieval](../apps/backend/src/llm_d_lens/db/dao/rag_query.py).
+- [Public retrieval](../apps/backend/src/llm_d_lens/db/dao/public_benchmark_record_query.py).
 - [Sources and archives](../apps/backend/src/llm_d_lens/agentic/document_rag/sources.py)
   .
 - [Publication](../apps/backend/src/llm_d_lens/agentic/document_rag/publication.py).
 - [Planning evidence](../apps/backend/src/llm_d_lens/agentic/facts.py).
 - [Preference parsing](../apps/backend/src/llm_d_lens/agentic/generator.py).
 
-[historical-rag-schema]: ../apps/backend/src/llm_d_lens/db/migrations/versions/7a12c8e49b60_create_rag_items.py
 [prism-evidence-model]: ../apps/backend/src/llm_d_lens/db/models/public_benchmark_record.py
 
 ## 3. Target architecture and invariants

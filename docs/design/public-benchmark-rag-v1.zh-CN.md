@@ -1,5 +1,23 @@
 # 公开基准测试 RAG v1（中文译本）
 
+## 当前重组后的运行契约（2026-10-30）
+
+本节取代下方旧版 SQL/OpenSearch 混合管理与 cutover 操作说明。公开数值证据使用
+`agentic.public_benchmark_record`；独立文档导入、发布、检索与备份使用
+`agentic.document_rag`。文档导入只生成 source 和 passage，SQL 发布仍只接受 Prism。
+
+旧混合 `--structured` 分发、SQL 文档迁移与破坏性 cutover 模块已经退出运行链。
+分别使用各领域的管理入口，不通过替换导入路径恢复已删除命令。旧数据库修订与混合 SQL
+备份必须先盘点，再单独审核转换方案。由 `42a3e9b47726` 创建最终结构的迁移不支持从已移除的
+`7a12c8e49b60` 或 `df3a4d42cbb7` 普通升级；已有 `8bf2a6c1d903` 数据库不得重新初始化。
+
+登录与会话响应在合并各作用域的 `permissions` 之外，返回仅全局授权的
+`globalPermissions`。保留的 Document Search 页面使用全局权限集；后端授权仍是权威。
+文档是可选的定性上下文，提示词裁剪不得移除确定性失败保护使用的已授权内部历史。
+
+离线测试、隔离真实服务测试与实际部署/数据迁移是不同验收门槛。前两项通过不代表允许改写现有数据库，
+也不证明遗留数据转换已经完成。下方带日期的旧架构、操作命令与部署结果仅作历史记录。
+
 > 本文首节是当前存储架构及 D1 状态，和英文方案的已批准架构保持一致；下方 S1、截至 2026-10-20 的实施/部署记录及旧方案均为历史材料，不代表当
 > 前职责或部署状态。路径、技术标识及历史测试数据按记录保留。当前英文方案见
 > [公开基准测试 RAG v1](./public-benchmark-rag-v1.md)。
@@ -304,19 +322,19 @@ URL 返回 404，下载前仍须核对完整许可材料。本轮未下载权重
 
 ### 第 1 步已交付内容与验证
 
-[historical-rag-schema]: ../../apps/backend/src/llm_d_lens/db/migrations/versions/7a12c8e49b60_create_rag_items.py
+[historical-rag-schema]: ../../apps/backend/src/llm_d_lens/db/migrations/README.md
 
 1. [存储契约](../../apps/backend/src/llm_d_lens/agentic/document_rag/contracts.py)：六类条目、逐类型
    字段校验、原始值/单位保留、显式单位与统计量映射，以及未知值保留规则。
 2. [历史单表 schema][historical-rag-schema]（原模型路径：
    `apps/backend/src/llm_d_lens/db/models/rag_item.py`）：`rag_items`、来
    源范围版本唯一键、自引用外键、CHECK 约束、类型化数值字段、JSONB，以及 PostgreSQL 生成的 TSVECTOR/GIN 索引。
-3. [导入侧 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_item.py)：不可变版本写入、同版本与并
+3. 旧导入侧 DAO（历史路径 `db/dao/rag_item.py`）：不可变版本写入、同版本与并
    发重试幂等、冲突显式报错、链接目标类型和来源/版本校验；不提供更新/删除操作。内部审计读取不是面向用户的授权检索。
-4. [Alembic 迁移](../../apps/backend/src/llm_d_lens/db/migrations/versions/7a12c8e49b60_create_rag_items.py)
+4. 旧 Alembic 迁移（历史修订 `7a12c8e49b60`）
    ：修订 `7a12c8e49b60` 接在 `42a3e9b47726`
    之后，只新增 RAG 表及相关约束/索引。
-5. [数据库测试](../../apps/backend/tests/unit/db/test_rag_item_dao.py) 和
+5. 旧数据库测试（历史文件 `test_rag_item_dao.py`）和
    [数据库说明](../../apps/backend/src/llm_d_lens/db/README.md)：最后一次数据库层回归为 **98 项通过
    **，包括隔离 PostgreSQL
    16.2 上的增量迁移 upgrade/downgrade、精确数值过滤、全文检索与 GIN、非法行拒绝、并发幂等、引用删除保护，以及 SQLite 单测
@@ -336,14 +354,14 @@ URL 返回 404，下载前仍须核对完整许可材料。本轮未下载权重
 3. **不可变原始字节：**复用共享持久化存储和 artifact 注册，按 SHA256 归档；排他发布并同步到磁盘，读取时校验哈希，既有字节不覆盖。没有实
    现删除或 GC，保守地无限期保留历史，满足至少 365 天及保留引用依赖的要求。
 4. [发布服务](../../apps/backend/src/llm_d_lens/agentic/document_rag/publication.py)与
-   [发布 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_publication.py)：原子暂存、完整
+   旧发布 DAO（历史路径 `db/dao/rag_publication.py`）：原子暂存、完整
    成员与依赖闭包校验、未变化旧固定版本复用，以及同源行锁和指针/递增 generation 双重比较。激活重新校验源字节，在同一事务中写删除标记、切换指针并
    记录历史；失败保留旧版本。
 5. **回滚与可见性：**回滚只能选择曾发布的清单，并要求当前 generation；防止回滚后的旧暂存版本误激活。来源禁用立即隐藏成员。内部列表/计数在单条
    SQL 中经当前已发布清单过滤，发生在全文排序/计数前，不能通过把独立条目标成
    `published`
    绕过成员关系。只有注册行的指针和操作状态可变，证据与清单保持不可变。
-6. [发布测试](../../apps/backend/tests/unit/db/test_rag_publication.py)：**35 项通过**，覆
+6. 旧发布测试（历史文件 `test_rag_publication.py`）：**35 项通过**，覆
    盖准备/切换失败、同源竞争、重复暂存与激活幂等、完整空清单退役、跨文件引用失效、旧字节保留、回滚、禁用、截断盘点和二进制归档；SQL 捕获确认发布/退役/
    回滚流程不访问 Agentic 记录表。
 7. **最终回归：**整个数据库单测目录 **133 项通过**，包含隔离 PostgreSQL
@@ -360,11 +378,11 @@ HTTP/MCP 入口或刷新触发器。内部成员过滤不是调用者授权检�
 
 ### 第 3 步已交付内容与验证
 
-1. [Prism 适配器](../../apps/backend/src/llm_d_lens/agentic/document_rag/prism.py)：消费现有
+1. 旧 Prism 适配器（历史文件 `benchmark_rag/prism.py`）：消费现有
    `normalize-and-merge.jq`
    生成的归档结构和合并 ID 清单，不重写或执行规范化脚本。历史实验引用原始归档行；阶段实验引用原始完整运行 JSON，保留合并文件的路径/哈希/行指针，并
    与原报告身份、工作负载核对。
-2. [初始固定输入](../../apps/backend/src/llm_d_lens/agentic/document_rag/prism_initial.py)：记录
+2. 旧初始固定输入（历史文件 `benchmark_rag/prism_initial.py`）：记录
    原方案审核过的 2026-10-13 快照 22 份文件哈希和初始 249 条实验门槛。导入 API 每次接收审核清单和预期实验数，249 不是未来刷新时
    写死的永久总数；测试中的两条实验快照同样可以导入。
 3. **精确值与单位：**JSON/YAML 数值直接解析为 Decimal，保留原始报告数值及单位；不把 jq 浮点转换产生的毫秒舍入值当作原始测量。显式新
@@ -415,7 +433,7 @@ Agentic 规划。真实导入仅在用户选定的隔离验收环境中执行；
 1. [管理命令](../../apps/backend/src/llm_d_lens/agentic/document_rag/admin.py)：
    `rebuild / backup / verify / restore`，显式要求数据库环境变量与持久化证据目录。失败非零退出，成功输出 JSON；不回
    退到默认/嵌入式数据库，不回显 DSN 或密码。
-2. [逻辑包与证据迁移](../../apps/backend/src/llm_d_lens/agentic/document_rag/transfer.py)：单条
+2. 旧逻辑包与证据迁移（历史文件 `benchmark_rag/transfer.py`）：单条
    PostgreSQL
    MVCC 查询取得一致的全量 RAG 快照，包含暂存、历史、删除标记、注册/发布清单；备份包包含规范化 DTO
    JSONL、清单和按 SHA256 寻址的原始字节。Decimal 精度不丢失，不包含可执行 SQL，也不复制机器绝对归档路径。
@@ -423,7 +441,7 @@ Agentic 规划。真实导入仅在用户选定的隔离验收环境中执行；
    解压。默认未压缩上限 1
    GiB，可显式通过 `--max-bytes`
    调整。哈希只证明完整性，不能替代对备份来源的信任。
-4. [迁移 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_transfer.py)：目标支持空表及非空
+4. 旧迁移 DAO（历史路径 `db/dao/rag_transfer.py`）：目标支持空表及非空
    表。在同一事务中锁定受影响来源、插入缺少依赖、保存迁移收据并切换指针；本地 generation 递增，原机器历史独立保留，连续迁移后仍可回滚到旧发布版
    本。
 5. **目标策略优先：**保留目标已有来源批准；导入清单必须满足该路径/解析器策略。任一侧已禁用即保持禁用。不相关来源及目标自己的旧版本不删除。重复恢复同一个
@@ -433,7 +451,7 @@ Agentic 规划。真实导入仅在用户选定的隔离验收环境中执行；
    Alembic；已有 Lens 管理库缺表时要求先走审核迁移。已有表不兼容则报错，不自动 ALTER。没有修改模型、增加表列或新增迁移文件。
 7. **文件与事务边界：**先校验并不可变地复制证据，再执行数据库事务。数据库合并失败时旧库状态保持不变，但新复制且未引用的 blob 可能留存，不会冒险删除
    其他操作可能引用的文件。既有损坏证据不覆盖。
-8. [迁移测试](../../apps/backend/tests/unit/db/test_rag_transfer.py)：**20 项通过**，覆盖新
+8. 旧迁移测试（历史文件 `test_rag_transfer.py`）：**20 项通过**，覆盖新
    库、非空增量、二次迁移历史、禁用策略、内容冲突、指针故障整笔回滚、提交前旧版本可见性、校验损坏包、只创建 RAG 表、全文索引重建及 CLI 错误不泄漏凭
    据。
 9. **真实快照跨目标验收：**通过 CLI 重建 249 条实验、9,060 条测量、4 条摘要及 22 个文件来源，再导出并恢复到另一独立
@@ -474,7 +492,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
 
 1. [仓库导入器](../../apps/backend/src/llm_d_lens/agentic/document_rag/repository_corpus.py)
    复用来源批准、完整 Git 清单、原始字节归档与原子发布。读取固定 commit，而非脏工作区；不联网、不执行文档中的示例命令，不扩大已批准来源或路径。
-2. [初始清单与图审核](../../apps/backend/src/llm_d_lens/agentic/document_rag/repository_initial.py)
+2. 旧初始清单与图审核（历史文件 `benchmark_rag/repository_initial.py`）
    固定 `llm-d` 的
    `080c14d957755da4cc363745638619fc748558f1`：97 份 Markdown（含 20 份结果文档）、5 份自定义
    JSON、37 张 PNG，共 139 个文件；固定
@@ -483,14 +501,14 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
    SHA256 和逐类型数量独立核验。
 3. **精确段落：**保留原文、标题层级、固定版本的字符偏移/行范围、文档链接及图片引用/图注；代码围栏中的标题不当成正文标题。基准文档与 JSON/YAML
    示例不生成实验或测量。
-4. [表格适配器](../../apps/backend/src/llm_d_lens/agentic/document_rag/guide_tables.py)审核全部
+4. 旧表格适配器（历史文件 `benchmark_rag/guide_tables.py`）审核全部
    97 份指南的
    **155 张 GFM 表格**，不仅处理结果目录，也覆盖正文中的实际结果。输出
    **421 条来源范围实验、1,559 条精确测量、475 条审计上下文**。每个数值追溯到表/行/列/单元格，复合数值带子值位置；保留场景、配置、工作负
    载与限定条件。
 5. **不提升为精确观测：**配置/参考表、已计算的差异、近似值和范围、缺失值、空延迟直方图、无法安全解释的历史/叙述证据保持上下文并给出原因。混合模型和
    GLM 多场景分开，不因文件名或硬件相似合并。重复刊载的表格不视为新增独立实验。
-6. [自定义 JSON 适配器](../../apps/backend/src/llm_d_lens/agentic/document_rag/guide_json.py)
+6. 旧自定义 JSON 适配器（历史文件 `benchmark_rag/guide_json.py`）
    分别处理五份 GLM 数据，输出
    **24 条来源范围实验、594 条测量、5 条上下文**。Decimal 与原始 JSON
    pointer 逐值往返；配置不是指标，重复和聚合记录明确标注非独立，不把它们套用成 Prism
@@ -524,10 +542,10 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
    GPT-OSS 权重加载样本精确保留 **0.93 s / 30.3
    s**。新语料逻辑备份后恢复到另一独立 schema/证据目录，发布 DTO 一致、全部原始字节哈希一致，重复恢复无更新。没有执行真实远程迁移。
 10. **测试：**
-    [Markdown 表格测试](../../apps/backend/tests/unit/db/test_guide_tables.py)
-    **57项**，[JSON 测试](../../apps/backend/tests/unit/db/test_guide_json.py)
+    旧 Markdown 表格测试（历史文件 `test_guide_tables.py`）
+    **57项**，旧 JSON 测试（历史文件 `test_guide_json.py`）
     **37 项**，
-    [仓库集成测试](../../apps/backend/tests/unit/db/test_repository_corpus.py)
+    旧仓库集成测试（历史文件 `test_repository_corpus.py`）
     **14 项**。完整数据库目录
     **281 项通过、无跳过、10 条既有弃用警告**；随后增强的两项真实仓库恢复验收也通过。最终 Ruff 检查/格式化、Pylance 语法、IDE
     问题检查、文档链接、仓库英文及 Git 空白检查通过；不声称完整 Pylance 类型检查已通过。
@@ -547,7 +565,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
 
 1. **统一契约与服务：**
    [查询 DTO](../../apps/backend/src/llm_d_lens/agentic/document_rag/query_contracts.py)、
-   [只读检索 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_query.py)和
+   旧只读检索 DAO（历史路径 `db/dao/rag_query.py`）和
    [确定性问答服务](../../apps/backend/src/llm_d_lens/agentic/document_rag/service.py)提供同一公开分
    支；REST 为
    `POST /api/v1/benchmark-rag/query`，只读 MCP 为
@@ -600,7 +618,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
    `evaluate:<UUID>` 与真实存活 `evaluate_runs`
    的一致关系；旧 simulation 历史保持不可检索，不修改原生产者、数据或排序，也不猜测回填。
 3. **独立只读授权查询：**
-   [内部检索 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_agentic_query.py)在
+   旧内部检索 DAO（历史路径 `db/dao/rag_agentic_query.py`）在
    SQL 中验证 evaluation、真实存活 owner 用户及 typed/legacy
    JSON 归属/cluster/id 不冲突，并在排序、计数、分页及记录离开分支前应用原有
    `evaluate:run:read`
@@ -609,7 +627,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
 4. **撤销与读后复查：**内部请求验证当前用户存活、激活状态、权限版本和改密状态；发出结果前重新检查 evaluation 归属、版本、访问权限及存在性。过
    期 principal、查询期间删除/归属变更或撤权返回冲突，不发出旧证据。公开来源继续执行原有归档哈希与发布 generation 复查。
 5. **内部证据范围与精度：**
-   [指标契约](../../apps/backend/src/llm_d_lens/agentic/document_rag/agentic_metrics.py)只返回
+   旧指标契约（历史文件 `benchmark_rag/agentic_metrics.py`）只返回
    已有成功记录中的 TTFT
    p95、TPOT p95、E2E p95、未声明统计量的 throughput 和 error
    rate；不使用预测/插值。明确标记 `agentic_measurement`、owning evaluation API
@@ -617,7 +635,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
    度，citation 显式写入
    `numeric_precision=stored_float`；公开数值仍验证原始 token。
 6. **验证后合并，而非名称去重：**
-   [内部证据与合并](../../apps/backend/src/llm_d_lens/agentic/document_rag/agentic_answers.py)
+   旧内部证据与合并（历史文件 `benchmark_rag/agentic_answers.py`）
    要求固定公开 Prism 原始 JSON 对象本身包含规范
    `evaluate:<UUID>`，且已授权内部值的metric/statistic/unit/value 与已报告模型/硬件/运行时/workload
    一致，无未解释的 series。符合时返回一个
@@ -767,7 +785,7 @@ task 记录视作 measured benchmark。
    benchmark
    DTO 不变。这些 fixture 不代表修复了 6a。
 4. **公开基线通过：**
-   [公开固定用例](../../apps/backend/tests/fixtures/benchmark_rag/public_baseline_v1.json)
+   旧公开固定用例（历史路径 `fixtures/benchmark_rag/public_baseline_v1.json`）
    覆盖全部 9 类场景，真实固定 Prism 与两个本地 Git 语料完成 **20/20**
    回放，27 条引用、3 个数值封装核验通过。校验实际导入 manifest 的来源版本/两个 Git 清单 digest 和 Prism 完整固定文件哈
    希；正文切片、图引用/关联、测量指针和原始值均独立验证。包括 6131.06177725188

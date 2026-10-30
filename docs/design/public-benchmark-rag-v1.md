@@ -1,5 +1,31 @@
 # Public Benchmark RAG v1
 
+## Current reorganized runtime (2026-10-30)
+
+This section supersedes the older mixed SQL/OpenSearch administration and
+cutover instructions below. Public numeric evidence lives in
+`agentic.public_benchmark_record`; independent document ingestion, publication,
+search and transfer live in `agentic.document_rag`. Document ingestion emits
+only source and passage records. SQL publication remains Prism-only.
+
+The old mixed `--structured` dispatcher, SQL document migration and destructive
+cutover module are no longer runtime commands. Use the domain-specific
+administration entry points; do not reconstruct removed commands by renaming
+imports. Legacy database revisions and mixed SQL backups require explicit
+inventory and a separately reviewed transition. The final-shape migration from
+`42a3e9b47726` is not a transition from removed `7a12c8e49b60` or
+`df3a4d42cbb7`; an existing `8bf2a6c1d903` database must not be reinitialized.
+
+Login and session responses expose global-only `globalPermissions` alongside
+the union of scoped `permissions`. The retained Document Search page uses the
+global set; server authorization remains authoritative. Document context is
+optional and qualitative, and prompt selection must retain all authorized
+internal failure history used by deterministic guardrails.
+
+Offline tests, isolated live-service tests and deployment/data migration
+acceptance are separate gates. Passing the first two does not authorize
+rewriting an existing database or certify legacy data conversion.
+
 ## P0 / P2 delivery order
 
 Implement input normalization (P0) before bounded multi-source recommendation

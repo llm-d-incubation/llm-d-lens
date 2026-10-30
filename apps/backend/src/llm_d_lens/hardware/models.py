@@ -317,6 +317,7 @@ class PlanningContribution:
     aic_system_models: tuple[Mapping[str, str], ...] = ()
     model_label_keys: tuple[str, ...] = ()
     model_family_names: tuple[str, ...] = ()
+    node_memory: Mapping[str, str] = field(default_factory=dict)
     default_backend: str = "vllm"
     device_class_allow_pattern: str = ""
 
@@ -329,6 +330,7 @@ class PlanningContribution:
             aic_system_models=tuple(data.get("aic_system_models") or ()),
             model_label_keys=_tuple_of_str(data.get("model_label_keys")),
             model_family_names=_tuple_of_str(data.get("model_family_names")),
+            node_memory=_str_map(data.get("node_memory")),
             default_backend=str(data.get("default_backend") or "vllm"),
             device_class_allow_pattern=str(data.get("device_class_allow_pattern") or ""),
         )
@@ -341,6 +343,7 @@ class PlanningContribution:
             "aic_system_models": list(self.aic_system_models),
             "model_label_keys": list(self.model_label_keys),
             "model_family_names": list(self.model_family_names),
+            "node_memory": dict(self.node_memory),
             "default_backend": self.default_backend,
             "device_class_allow_pattern": self.device_class_allow_pattern,
         }

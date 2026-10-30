@@ -256,7 +256,11 @@ Plans containing public observations keep the same read-permission requirement.
 
 Each `create()` or `refine()` call shares one request-local hardware discovery
 snapshot between planning facts and public evidence retrieval. Later calls and
-deployment approval discover resources afresh. Historical matching uses the
+deployment approval discover resources afresh. Accelerator identity and usable
+VRAM come only from live automatic discovery; test-only hardware and VRAM
+environment overrides are no longer supported. Missing usable VRAM stops
+planning rather than substituting a simulated capacity. Previously created
+simulation plans remain blocked from deployment. Historical matching uses the
 deployment runtime's serving backend. Public records with a missing, blank or
 `unknown` backend default to `vllm` in SQL matching and returned experiment/case
 context; explicit other backends are not reclassified. Stored records and original
@@ -286,8 +290,15 @@ Candidate explanations and server-side audit retain their evidence boundaries:
 historical measurements are not proof of current performance, and AIC is an estimate.
 
 Planning uses public and internal SQL experiments, without a document retrieval
-branch or document packet contracts. The existing private diagnostic adapter is
-unaffected.
+branch, embedding/vector search or document packet contracts. Model prompts name
+these sources published benchmark evidence and internal benchmark history and
+instruct decision explanations to use those terms. Standalone public observations use the model-context key
+`published_benchmark_evidence`; an empty context means no evidence was supplied for
+that request, not that the databases contain no data.
+The stored `public_rag_evidence` field, `public-rag:query` evidence ID and
+`benchmark-rag:query:read` permission remain legacy compatibility identifiers, not
+claims of document retrieval capability. The existing private diagnostic adapter
+is unaffected.
 
 Creation validates the registered model-cache storage volume without requiring
 downloaded model files. Refinement likewise skips download-readiness checks.
@@ -380,10 +391,9 @@ summaries use neutral language. Budget selection preserves workload/latency rank
 before quality/freshness, with at most 10 complete cases, 20 passages and a
 16,000-byte serialized evidence ceiling. Experiment reference ranking is separate
 from deterministic candidate scoring and server SLO assessment.
-Scoped 2026-10-28 regression and authenticated create/refine acceptance passed; see
-[validation scope](/architecture/agentic-planning-evidence#scoped-ranking-validation-2026-10-28).
-The labelled hardware simulation is not physical H100/SLO certification.
-No approval/deployment occurred; S3/S4 gates remain open.
+See the current [evidence contract](/architecture/agentic-planning-evidence).
+Historical scoped and simulated checks do not certify physical hardware or
+current SLO compliance. Deployment approval and S3/S4 gates remain separate.
 
 `details.retrieval` records mode, inputs, matched/returned counts and truncation.
 `details.matches` records each evidence ID's known differences, unknown fields,

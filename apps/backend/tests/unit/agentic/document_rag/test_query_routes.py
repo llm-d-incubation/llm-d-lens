@@ -230,6 +230,60 @@ def test_session_reports_authoritative_global_document_search_grants(transport, 
     assert (QUERY_PERMISSION in response.json()["globalPermissions"]) == (scope == "global")
 
 
+@pytest.mark.parametrize("role", ["admin", "query-reader"])
+def test_login_and_session_return_the_same_global_grants(transport, role):
+    client, auth, _ = transport
+    _login(client, auth, role=role)
+    login = client.post("/api/v1/auth/login", json={"username": "query-caller", "password": PASSWORD})
+    assert login.status_code == 200
+    session = client.get("/api/v1/auth/session")
+    assert session.status_code == 200
+    assert login.json()["principal"]["globalPermissions"] == session.json()["globalPermissions"]
+    assert QUERY_PERMISSION in session.json()["globalPermissions"]
+
+
+def test_global_grants_do_not_inherit_cluster_or_resource_actions():
+    from llm_d_lens.auth.router import _principal_view
+
+    principal = Principal(
+        user_id="mixed",
+        username="mixed",
+        bindings=(
+            RoleBinding("global", ScopeType.GLOBAL),
+            RoleBinding("cluster", ScopeType.CLUSTER, scope_cluster_id="cluster-a"),
+            RoleBinding(
+                "resource",
+                ScopeType.RESOURCE,
+                scope_cluster_id="cluster-a",
+                scope_resource_type="model_service_group",
+                scope_resource_id="group-a",
+            ),
+        ),
+        role_permissions={
+            "global": frozenset({"benchmark-rag:*:read"}),
+            "cluster": frozenset({"cluster:cluster:read"}),
+            "resource": frozenset({"model-service:inference:use"}),
+        },
+    )
+    view = _principal_view(principal)
+    assert view["globalPermissions"] == ["benchmark-rag:*:read"]
+    assert view["permissions"] == ["benchmark-rag:*:read", "cluster:cluster:read"]
+
+
+def test_session_refresh_removes_revoked_global_grants(transport):
+    client, auth, _ = transport
+    _, role = _login(client, auth)
+    before = client.get("/api/v1/auth/session")
+    assert before.status_code == 200
+    assert QUERY_PERMISSION in before.json()["globalPermissions"]
+    auth.set_role_permissions(role.id, set())
+    after = client.get("/api/v1/auth/session")
+    assert after.status_code == 200
+    assert after.json()["globalPermissions"] == []
+    assert QUERY_PERMISSION not in after.json()["permissions"]
+    assert after.json()["authzVersion"] > before.json()["authzVersion"]
+
+
 def test_document_search_uses_existing_global_permission_and_returns_configuration_503(transport, monkeypatch):
     client, auth, _ = transport
     monkeypatch.delenv("LENS_PUBLIC_RAG_OPENSEARCH_URL", raising=False)

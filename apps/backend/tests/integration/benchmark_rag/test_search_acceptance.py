@@ -17,14 +17,8 @@ from fastapi import Depends, FastAPI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from llm_d_lens.api.problems import install_problem_handlers
-from llm_d_lens.auth import context as auth_context
-from llm_d_lens.auth import router as auth_routes
-from llm_d_lens.auth.context import AuthContextMiddleware, require_route_permission
-from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
-from llm_d_lens.auth.service import AuthService
-from llm_d_lens.auth.settings import AuthSettings, set_settings_for_testing
 from llm_d_lens.agentic.document_rag import document_repository as metadata
+from llm_d_lens.agentic.document_rag import indexing
 from llm_d_lens.agentic.document_rag import opensearch_evidence_search as adapter
 from llm_d_lens.agentic.document_rag import router as search_routes
 from llm_d_lens.agentic.document_rag.document_transfer import MAX_BACKUP_BYTES, DocumentBackupService
@@ -42,8 +36,20 @@ from llm_d_lens.agentic.document_rag.publication_contracts import (
 from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION
 from llm_d_lens.agentic.document_rag.repository_corpus import PARSER_VERSION, parse_markdown
 from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
-from llm_d_lens.agentic.document_rag.search_contracts import EvidenceSearchError, PublicSearchRequest, PublicSearchResponse
+from llm_d_lens.agentic.document_rag.search_contracts import (
+    EvidenceSearchError,
+    PublicSearchRequest,
+    PublicSearchResponse,
+)
 from llm_d_lens.agentic.document_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, SourceArchive, allowed_paths
+from llm_d_lens.api.problems import install_problem_handlers
+from llm_d_lens.auth import context as auth_context
+from llm_d_lens.auth import router as auth_routes
+from llm_d_lens.auth import settings as auth_settings
+from llm_d_lens.auth.context import AuthContextMiddleware, require_route_permission
+from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
+from llm_d_lens.auth.service import AuthService
+from llm_d_lens.auth.settings import AuthSettings
 from llm_d_lens.core.exceptions import ForbiddenError, UnauthenticatedError
 from llm_d_lens.db.base import Base
 from llm_d_lens.db.dao.audit_log import AuditLogDao
@@ -87,7 +93,7 @@ def authenticated_http_app(factory, monkeypatch):
     auth.add_user_binding(user.id, role.id, scope_type="global")
     monkeypatch.setattr(auth_context, "default_service", lambda: auth)
     monkeypatch.setattr(auth_routes, "default_service", lambda: auth)
-    set_settings_for_testing(settings)
+    monkeypatch.setattr(auth_settings, "_override", settings)
     app = FastAPI(dependencies=[Depends(require_route_permission)])
     install_problem_handlers(app)
     app.add_middleware(AuthContextMiddleware)
@@ -127,10 +133,16 @@ def environment(tmp_path, monkeypatch):
     server = pgserver.get_server(tmp_path / "postgres", cleanup_mode="stop")
     engine = create_engine(server.get_uri().replace("postgresql://", "postgresql+psycopg://", 1), pool_size=12)
     indexes = []
+
+    def build_identity():
+        identity = uuid4()
+        indexes.append(adapter.INDEX_PREFIX + identity.hex)
+        return identity
+
+    monkeypatch.setattr(indexing, "uuid4", build_identity)
     repository = adapter.OpenSearchEvidenceSearchRepository(endpoint, timeout_seconds=20)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     dao = metadata.DocumentRepository(endpoint)
-    dao.prepare(initialize=True)
     archive = SourceArchive()
     principal = Principal(
         user_id="acceptance-reader",
@@ -139,13 +151,14 @@ def environment(tmp_path, monkeypatch):
         role_permissions={"reader": frozenset({QUERY_PERMISSION})},
     )
     try:
+        dao.prepare(initialize=True)
         yield dao, archive, repository, principal, indexes, factory
     finally:
 
         async def cleanup():
             for index in indexes:
-                await repository._request("DELETE", "/" + index)
-            await repository._request("DELETE", "/" + metadata.MANAGEMENT_INDEX)
+                await repository._request("DELETE", "/" + index, allow_missing=True)
+            await repository._request("DELETE", "/" + metadata.MANAGEMENT_INDEX, allow_missing=True)
 
         try:
             asyncio.run(cleanup())
@@ -156,7 +169,7 @@ def environment(tmp_path, monkeypatch):
 
 
 def test_frozen_corpus_quality_and_publication_guards(environment):
-    dao, archive, repository, principal, indexes, _ = environment
+    dao, archive, repository, principal, _indexes, _ = environment
     bundle = os.environ.get("LENS_RAG_ACCEPTANCE_BUNDLE")
     if not bundle:
         pytest.skip("Set LENS_RAG_ACCEPTANCE_BUNDLE to the verified eight-scope backup")
@@ -173,7 +186,6 @@ def test_frozen_corpus_quality_and_publication_guards(environment):
 
     async def run():
         build = await PublicRagIndexBuilder(repository, dao=dao, archive=archive).build(tuple(suite.manifests))
-        indexes.append(adapter.INDEX_PREFIX + build.build_id)
         passage_count = sum(len(dao.list_published(origin, kind="passage")) for origin in suite.manifests)
         assert build.document_count == passage_count
         service = PublicRagSearchService(repository, dao=dao, archive=archive)
@@ -224,7 +236,7 @@ def test_real_model_vector_corpus_cache_replay_and_quality(environment, tmp_path
         pytest.skip("Set approved model path and corpus backup for real S2 acceptance")
     from llm_d_lens.agentic.document_rag.embedding import LocalE5Encoder, passage_input
 
-    dao, archive, repository, principal, indexes, auth_factory = environment
+    dao, archive, repository, principal, _indexes, auth_factory = environment
     suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance_v2.json")
     restore_document_corpus(dao, archive, bundle, suite.manifests)
     assert {
@@ -249,12 +261,9 @@ def test_real_model_vector_corpus_cache_replay_and_quality(environment, tmp_path
     async def run():
         builder = PublicRagIndexBuilder(repository, dao=dao, archive=archive)
         lexical = await builder.build(tuple(suite.manifests))
-        indexes.append(adapter.INDEX_PREFIX + lexical.build_id)
         vector = await builder.build(tuple(suite.manifests), encoder=encoder)
-        indexes.append(adapter.INDEX_PREFIX + vector.build_id)
         encoded = encoder.encoded_inputs
         replay = await builder.build(tuple(suite.manifests), encoder=encoder)
-        indexes.append(adapter.INDEX_PREFIX + replay.build_id)
         assert encoder.encoded_inputs == encoded and encoder.cache_hits > 0
         assert (await repository.active_build())[1] == lexical
         assert vector.document_count == replay.document_count == len(chunks)
@@ -355,7 +364,7 @@ def test_real_model_vector_corpus_cache_replay_and_quality(environment, tmp_path
                 "parent_passages": passage_count,
                 "indexed_chunks": replay.document_count,
                 "measurement_boundary": "service: embedding, both searches, RRF, authority, archive and citations",
-                "isolation": "disposable PostgreSQL, unique test indexes, shared OpenSearch and host",
+                "isolation": "disposable PostgreSQL authentication, unique document authority and retrieval indexes, shared OpenSearch and host",
                 "ten_thousand_passage_gate_verified": False,
                 "python_version": platform.python_version(),
                 "opensearch_version": (await repository._request("GET", "/"))["version"]["number"],
@@ -419,7 +428,7 @@ def test_real_model_vector_corpus_cache_replay_and_quality(environment, tmp_path
 
 
 def test_ten_thousand_passages_ten_concurrent_five_hundred_queries(environment, monkeypatch, tmp_path):
-    dao, archive, repository, principal, indexes, auth_factory = environment
+    dao, archive, repository, principal, _indexes, auth_factory = environment
     publication = RagPublicationService(dao=dao, archive=archive)
     publication.register_source(
         BENCHMARK_ORIGIN,
@@ -469,7 +478,6 @@ def test_ten_thousand_passages_ten_concurrent_five_hundred_queries(environment, 
         build = await PublicRagIndexBuilder(repository, dao=dao, archive=archive).build(
             (BENCHMARK_ORIGIN,), encoder=encoder
         )
-        indexes.append(adapter.INDEX_PREFIX + build.build_id)
         assert build.document_count == 10000
         service = PublicRagSearchService(repository, dao=dao, archive=archive)
 
@@ -499,11 +507,11 @@ def test_ten_thousand_passages_ten_concurrent_five_hundred_queries(environment, 
                     "document_count": build.document_count,
                     "fixture_kind": "synthetic-performance-only: 100 repeated sections across 100 distinct paths",
                     "retrieval_mode": mode,
-                    "measurement_boundary": "service: authorization, embedding when hybrid, OpenSearch, RRF when hybrid, PostgreSQL authority, archive, citations",
+                    "measurement_boundary": "service: authorization, embedding when hybrid, OpenSearch retrieval and document authority, RRF when hybrid, archive, citations",
                     "python_version": platform.python_version(),
                     "host_cpu_count": os.cpu_count(),
                     "opensearch_version": (await repository._request("GET", "/"))["version"]["number"],
-                    "isolation": "disposable PostgreSQL and unique indexes; OpenSearch and host isolation must be recorded by the operator",
+                    "isolation": "disposable PostgreSQL authentication and unique document authority and retrieval indexes; OpenSearch and host isolation must be recorded by the operator",
                     "embedding_contract": encoder.contract.model_dump(mode="json") if encoder else None,
                     "encoded_inputs": encoder.encoded_inputs if encoder else None,
                     "cache_hits": encoder.cache_hits if encoder else None,

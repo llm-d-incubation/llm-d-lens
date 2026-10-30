@@ -203,6 +203,11 @@ as an acceptance entry point; no independent RAG frontend delivery is planned.
 Requires a real authenticated caller with `benchmark-rag:query:read` at GLOBAL
 scope and the standard browser CSRF policy.
 
+Login and `GET /api/v1/auth/session` expose `globalPermissions` separately from
+the union of scoped `permissions`. The retained Document Search page uses the
+global set for navigation; cluster or resource grants do not enable that page.
+The backend independently enforces the global query grant.
+
 ```json
 {
   "question": "prefix cache",
@@ -214,8 +219,8 @@ scope and the standard browser CSRF policy.
 `question` is nonblank and at most 2,048 characters; `limit` is 1–50.
 `mode` defaults to `"lexical"`; pass `"vector"` to query the independent shadow
 vector index, or `"hybrid"` for parallel lexical/vector retrieval against that same
-fixed physical vector build. Hybrid returns at most ten parent passages and three
-per source document, even when a larger `limit` is supplied.
+fixed physical vector build. Hybrid honors `limit` up to fifty parent passages
+and returns at most three per source document.
 Hybrid enables `query_enhancement: true` by default. The fixed `controlled-v1`
 policy preserves the original question and identifiers, appends up to eight
 matched glossary translations, and gives explicitly named publishers a 1.25 soft
@@ -803,10 +808,9 @@ Public `QueryRequest.limit` remains a 1–50 measurement/evidence-envelope limit
 `experiment_limit` is not a public request field. Proposed optional planning
 response diagnostics are `matched_experiments`, `returned_experiments` and
 `experiment_limit`, without changing generic endpoint counts or behavior.
-Scoped regression and authenticated live create/refine acceptance passed; see
-[validation scope](/architecture/agentic-planning-evidence#scoped-ranking-validation-2026-10-28).
-The labelled H100-over-A100 simulation is not physical hardware/SLO certification;
-no approval/deployment occurred and S3/S4 gates remain open.
+See the current [evidence contract](/architecture/agentic-planning-evidence).
+Historical scoped and simulated checks do not certify physical hardware or
+current SLO compliance. Deployment approval and S3/S4 gates remain separate.
 
 Agentic configuration cases preserve nullable `workload_similarity` and
 `evidence_coverage`; `workload_match_status` distinguishes `not_requested`,

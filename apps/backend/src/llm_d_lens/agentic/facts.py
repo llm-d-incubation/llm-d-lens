@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -39,7 +38,6 @@ from llm_d_lens.cluster.errors import ClusterOverviewError
 from llm_d_lens.cluster.service import build_overview
 from llm_d_lens.core.exceptions import (
     DomainError,
-    DomainValidationError,
     ForbiddenError,
     PasswordChangeRequiredError,
     UnauthenticatedError,
@@ -146,86 +144,6 @@ def _public_rag_hardware(overview: dict[str, Any]) -> tuple[HardwareProfile, str
     if len(keys) != 1 or not next(iter(keys)):
         return None
     return profile, sorted(models)[0]
-
-
-def _test_cluster_hardware(cluster_id: str) -> str | None:
-    try:
-        configured = json.loads(os.environ.get("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", "{}"))
-    except json.JSONDecodeError as error:
-        raise DomainValidationError("Test cluster hardware overrides must be a JSON object") from error
-    if not isinstance(configured, dict) or any(
-        not isinstance(label, str) or not label.strip() or len(label) > 256 for label in configured.values()
-    ):
-        raise DomainValidationError("Test cluster hardware overrides require nonempty hardware labels")
-    return configured.get(cluster_id, "").strip() or None
-
-
-def planning_hardware_overview(
-    overview: dict[str, Any], model: str | None, *, cluster_id: str | None = None
-) -> dict[str, Any]:
-    """Apply explicit test overrides only to a private planning view."""
-    overview = _planning_capacity_overview(overview, cluster_id)
-    if not model:
-        return overview
-    result = deepcopy(overview)
-    context = result if "hardware" in result else result.get("kubernetes", {})
-    target = _public_rag_hardware(context)
-    if target is None:
-        raise DomainValidationError("Hardware identity simulation requires one unambiguous accelerator model")
-    profile, _actual_model = target
-    systems = {
-        row["system"]
-        for row in profile.planning.aic_system_models
-        if row.get("pattern") and re.search(row["pattern"], model, re.IGNORECASE)
-    }
-    if len(systems) != 1:
-        raise DomainValidationError("Simulated hardware must identify one AIC system in the target hardware profile")
-    for accelerator in context["hardware"]["accelerators"]:
-        if accelerator.get("id") == profile.id:
-            accelerator["models"] = [model]
-    for node in context.get("nodes", []):
-        models = node.get("gpuModelsByProfile", {})
-        if profile.id in models:
-            models[profile.id] = [model]
-    return result
-
-
-def _planning_capacity_overview(overview: dict[str, Any], cluster_id: str | None) -> dict[str, Any]:
-    if cluster_id is None:
-        return overview
-    try:
-        configured = json.loads(os.environ.get("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", "{}"))
-    except json.JSONDecodeError as error:
-        raise DomainValidationError("Test cluster VRAM overrides must be a JSON object") from error
-    if not isinstance(configured, dict) or any(
-        isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or value <= 0
-        for value in configured.values()
-    ):
-        raise DomainValidationError("Test cluster VRAM overrides require positive finite per-GPU GiB values")
-    if cluster_id not in configured:
-        return overview
-    result = deepcopy(overview)
-    context = result if "hardware" in result else result.get("kubernetes", {})
-    hardware = context.get("hardware") or {}
-    gpu_count = int(hardware.get("gpuCount") or 0)
-    if gpu_count < 1:
-        raise DomainValidationError("Test VRAM simulation requires a discovered accelerator count")
-    per_gpu_gib = configured[cluster_id]
-    hardware.setdefault(
-        "planningCapacitySimulation",
-        {
-            "simulation": True,
-            "observed_vram_bytes": hardware.get("vramBytes"),
-            "message": "TEST CAPACITY: simulated per-GPU VRAM; validation only, deployment is disabled.",
-        },
-    )
-    hardware["planningCapacitySimulation"]["vram_per_gpu_gib"] = per_gpu_gib
-    hardware["vramBytes"] = int(per_gpu_gib * _GIB) * gpu_count
-    context["hardware"] = hardware
-    logger.warning(
-        "TEST CAPACITY: cluster %s planning uses %s GiB per GPU; deployment disabled", cluster_id, per_gpu_gib
-    )
-    return result
 
 
 def _reported_number(value: Any) -> float | None:
@@ -465,10 +383,6 @@ async def resolve_retrieval_hardware(
                 if hardware_snapshot is not None
                 else await build_overview(registry.require_cluster(cluster_server_id))
             )
-        observed_target = _public_rag_hardware(overview)
-        simulated_model = _test_cluster_hardware(cluster_server_id)
-        effective_model = simulated_model or facts.planning_hardware_model
-        overview = planning_hardware_overview(overview, effective_model, cluster_id=cluster_server_id)
         target = _public_rag_hardware(overview)
         if target is None:
             logger.warning("event=planning_retrieval_hardware reason=ambiguous_hardware")
@@ -486,16 +400,16 @@ async def resolve_retrieval_hardware(
             else 0
         )
         enriched = enrich_planning_requirements(
-            replace(facts, vram_per_gpu_gib=verified_vram, planning_hardware_model=effective_model),
+            replace(facts, vram_per_gpu_gib=verified_vram),
             model_name=model,
             hardware_model=hardware,
             profile_id=profile.id,
             model_config=facts.model_config_dict,
         )
-        status: dict[str, Any] = {"status": "available", "hardware": hardware}
-        if simulated_model and observed_target is not None:
-            status.update(actual_model=observed_target[1], simulation=True)
-        return replace(enriched, vram_per_gpu_gib=facts.vram_per_gpu_gib), status
+        return replace(enriched, vram_per_gpu_gib=facts.vram_per_gpu_gib), {
+            "status": "available",
+            "hardware": hardware,
+        }
     except PasswordChangeRequiredError:
         raise
     except (DomainError, ClusterOverviewError, OSError, TimeoutError) as error:
@@ -531,10 +445,10 @@ async def resolve_public_rag_evidence(
             target = _public_rag_hardware(overview)
             if target is None:
                 message = (
-                    "Public RAG was not queried: the target cluster does not identify one unambiguous "
-                    "accelerator model. Continuing with existing planning evidence."
+                    "Published benchmark evidence was not queried: the target cluster does not identify one "
+                    "unambiguous accelerator model. Continuing with existing planning evidence."
                 )
-                logger.warning("Agentic public RAG hardware unavailable for cluster %s", cluster_server_id)
+                logger.warning("Agentic published benchmark hardware unavailable for cluster %s", cluster_server_id)
                 return PlanningEvidence(
                     id="public-rag:query",
                     source="public-benchmark-rag",
@@ -543,29 +457,16 @@ async def resolve_public_rag_evidence(
                 )
             profile, hardware_model = target
             target_hardware.update(profile_id=profile.id, model=hardware_model)
-            simulated_model = _test_cluster_hardware(cluster_server_id)
             dao = PublicBenchmarkRecordQueryDao()
             dao.planning_facts = planning_facts
-            if simulated_model:
-                planning_hardware_overview(overview, simulated_model, cluster_id=cluster_server_id)
-                hardware_filter = simulated_model
-                target_hardware.update(
-                    actual_model=hardware_model,
-                    model=simulated_model,
-                    override=True,
-                    simulation=True,
-                )
-            else:
-                options = await run_in_threadpool(dao.hardware_options, query.filters)
-                aliases = [
-                    name
-                    for name in options
-                    if _hardware_model_key(name, profile) == _hardware_model_key(hardware_model, profile)
-                ]
-                # Keep exact published labels in the request and citation; never collapse device variants.
-                hardware_filter = (
-                    hardware_model if hardware_model in aliases else (sorted(aliases) or [hardware_model])[0]
-                )
+            options = await run_in_threadpool(dao.hardware_options, query.filters)
+            aliases = [
+                name
+                for name in options
+                if _hardware_model_key(name, profile) == _hardware_model_key(hardware_model, profile)
+            ]
+            # Keep exact published labels in the request and citation; never collapse device variants.
+            hardware_filter = hardware_model if hardware_model in aliases else (sorted(aliases) or [hardware_model])[0]
             query = query.model_copy(update={"filters": query.filters.model_copy(update={"hardware": hardware_filter})})
             response = await run_in_threadpool(
                 PublicBenchmarkRecordQueryService(dao=dao).query,
@@ -575,20 +476,26 @@ async def resolve_public_rag_evidence(
             )
     except (ForbiddenError, UnauthenticatedError) as error:
         status = "forbidden"
-        message = "Public RAG was not queried: authenticated global benchmark-rag:query:read permission is required."
+        message = (
+            "Published benchmark evidence was not queried: authenticated global published benchmark "
+            "read permission is required."
+        )
         details = {"code": error.code}
     except (DomainError, PublicationError, SQLAlchemyError, OSError, TimeoutError) as error:
         status = "unavailable"
-        message = "Public RAG retrieval failed; continuing with existing planning evidence and supplementary AIC."
+        message = (
+            "Published benchmark retrieval failed; continuing with existing planning evidence and supplementary AIC."
+        )
         details = {"code": error.code if isinstance(error, DomainError) else type(error).__name__}
-        logger.warning("Agentic public RAG retrieval unavailable: %s", details["code"])
+        logger.warning("Agentic published benchmark retrieval unavailable: %s", details["code"])
     else:
         status = "available" if response.evidence else "no_matches"
         message = (
-            f"SQL measured observations: retrieved {len(response.evidence)} for {model_name} on {hardware_filter}; "
+            f"Published benchmark SQL observations: retrieved {len(response.evidence)} "
+            f"for {model_name} on {hardware_filter}; "
             "applicable evidence takes precedence over AIC estimates."
             if response.evidence
-            else f"SQL measured observations: no matches for {model_name} on {hardware_filter}; "
+            else f"Published benchmark SQL observations: no matches for {model_name} on {hardware_filter}; "
             "no cross-hardware fallback. "
             "Continuing with existing planning evidence and supplementary AIC."
         )
@@ -625,13 +532,6 @@ async def resolve_public_rag_evidence(
             },
             "matches": matches,
         }
-        if target_hardware.get("override"):
-            message = (
-                f"TEST HARDWARE IDENTITY: treating this cluster as {simulated_model} for RAG and AIC validation. "
-                "This is a simulated target, not a cross-hardware transfer; deployment is disabled. "
-                f"SQL measured observations: retrieved {len(response.evidence)} for the requested model name aliases. "
-                "Internal experiments are reported separately."
-            )
     return PlanningEvidence(
         id="public-rag:query",
         source="public-benchmark-rag",
@@ -666,11 +566,6 @@ def with_public_rag_evidence(resolved: ResolvedPlanningFacts, evidence: Planning
             "facts": replace(
                 resolved.facts,
                 public_rag_evidence=observations,
-                planning_hardware_model=(
-                    evidence.details["target_hardware"]["model"]
-                    if evidence.details.get("target_hardware", {}).get("simulation")
-                    else None
-                ),
             ),
             "evidence": [*resolved.evidence, evidence],
             "trace": [
@@ -692,14 +587,10 @@ async def resolve_planning_facts(
     """Use a live cluster overview for hard constraints and record other evidence."""
     requested = resolve_workload_signals(requested)
     cluster = registry.require_cluster(cluster_server_id)
-    overview = planning_hardware_overview(
-        (
-            await hardware_snapshot.get(cluster_server_id)
-            if hardware_snapshot is not None
-            else await build_overview(cluster)
-        ),
-        requested.planning_hardware_model,
-        cluster_id=cluster_server_id,
+    overview = (
+        await hardware_snapshot.get(cluster_server_id)
+        if hardware_snapshot is not None
+        else await build_overview(cluster)
     )
     hardware = overview.get("hardware") or {}
     available_gpus = int(hardware.get("availableGpuCount") or 0)
@@ -720,7 +611,6 @@ async def resolve_planning_facts(
         source="cluster-overview",
         status="available",
         details={
-            **hardware.get("planningCapacitySimulation", {}),
             "cluster_id": cluster.id,
             "available_gpu_count": available_gpus,
             "total_gpu_count": gpu_count,
@@ -783,14 +673,13 @@ async def resolve_planning_facts(
             custom_gpu_count=requested.custom_gpu_count,
             model_name=model_name or requested.model_name,
             model_config_dict=model_config_dict,
-            planning_hardware_model=requested.planning_hardware_model,
             public_rag_evidence=requested.public_rag_evidence,
             configuration_cases=requested.configuration_cases,
             configuration_case_status=requested.configuration_case_status,
             requirements=requested.requirements,
         )
     )
-    discovered = _public_rag_hardware(overview) if requested.planning_hardware_model is None else None
+    discovered = _public_rag_hardware(overview)
     facts = enrich_planning_requirements(
         facts,
         model_name=model_name,

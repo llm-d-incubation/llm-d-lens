@@ -197,6 +197,10 @@ RAG 优先交付后端，最终通过 Agentic Deploy 集成。已有独立 Docum
 要求真实已认证调用者在 GLOBAL 作用域拥有 `benchmark-rag:query:read`，
 浏览器请求遵循标准 CSRF 策略。
 
+登录和 `GET /api/v1/auth/session` 将 `globalPermissions` 与合并各作用域的
+`permissions` 分开返回。保留的 Document Search 页面使用全局权限集决定导航可见性；
+集群或资源授权不会启用该页面。后端仍独立校验全局查询授权。
+
 ```json
 {
   "question": "prefix cache",
@@ -208,7 +212,7 @@ RAG 优先交付后端，最终通过 Agentic Deploy 集成。已有独立 Docum
 `question` 非空且不超过 2,048 个字符；`limit` 为 1–50。
 `mode` 默认为 `"lexical"`；传入 `"vector"` 可选择独立影子向量索引，
 传入 `"hybrid"` 则在同一个固定物理向量构建上并行执行全文和向量检索。
-混合模式最多返回 10 个父段落、同一来源文档最多 3 个，即使 `limit` 更大也不突破此上限。
+混合模式遵循 `limit`，最多返回 50 个父段落，同一来源文档最多 3 个。
 混合模式默认启用 `query_enhancement: true`。固定的 `controlled-v1` 策略保留原始问题及技术标识符，
 追加最多八条命中词表的英文术语，并对明确提及的来源给予融合后父证据分数 1.25 倍软权重。
 其他来源仍可竞争，不是来源过滤或 LLM 改写。传入 `"query_enhancement": false` 可恢复原先未增强的混合行为。
@@ -683,9 +687,9 @@ fallback 参考，不能称为低延迟；查询摘要使用中性的实验参�
 公开 `QueryRequest.limit` 仍按 measurement/证据封装计数，范围 1–50；
 `experiment_limit` 不是公开请求字段。拟议规划响应可选诊断为
 `matched_experiments`、`returned_experiments`、`experiment_limit`，不改变通用端点计数或行为。
-有限范围回归及已认证真实服务创建/细化验收通过，详见
-[验证范围](/architecture/agentic-planning-evidence#scoped-ranking-validation-2026-10-28)。
-明确标注的 H100 覆盖 A100 模拟不是物理硬件/SLO 认证；未批准或部署，S3/S4 门槛仍未完成。
+当前约束见[证据契约](/architecture/agentic-planning-evidence)。
+历史有限范围测试与模拟不证明物理硬件或当前 SLO 合规。
+部署批准和 S3/S4 门槛仍需分别验收。
 
 Agentic 配置案例保留可空的 `workload_similarity` 与 `evidence_coverage`；
 `workload_match_status` 区分 `not_requested`、`unknown`、`compared`，未指定负载不是零匹配或拒绝依据。

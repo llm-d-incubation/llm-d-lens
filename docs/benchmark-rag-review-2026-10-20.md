@@ -166,10 +166,10 @@ Additional checks:
 ## Relevant implementation and tests
 
 - [Query planning and answer service](../apps/backend/src/llm_d_lens/agentic/document_rag/service.py)
-- [Prism importer](../apps/backend/src/llm_d_lens/agentic/document_rag/prism.py)
+- [Prism importer](../apps/backend/src/llm_d_lens/agentic/public_benchmark_record/prism.py)
 - [Repository parser](../apps/backend/src/llm_d_lens/agentic/document_rag/repository_corpus.py)
-- [Planning regressions](../apps/backend/tests/unit/agentic/document_rag/test_query_planning.py)
-- [Public query regressions](../apps/backend/tests/unit/db/test_rag_query.py)
-- [Internal query regressions](../apps/backend/tests/unit/db/test_rag_agentic_service.py)
+- [Planning regressions](../apps/backend/tests/unit/agentic/public_benchmark_record/test_query_planning.py)
+- [Public query regressions](../apps/backend/tests/unit/db/test_public_benchmark_record_query.py)
+- [Internal query regressions](../apps/backend/tests/unit/db/test_benchmark_experiment_query.py)
 - [Prism dependency regressions](../apps/backend/tests/unit/db/test_prism_import.py)
-- [Figure review regressions](../apps/backend/tests/unit/db/test_repository_corpus.py)
+- Historical figure review regressions: retired `test_repository_corpus.py`.

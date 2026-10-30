@@ -8,7 +8,6 @@ from uuid import uuid4
 import pytest
 from starlette.requests import Request
 
-from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
 from llm_d_lens.agentic.document_rag import document_repository as metadata
 from llm_d_lens.agentic.document_rag import indexing
 from llm_d_lens.agentic.document_rag import opensearch_evidence_search as adapter
@@ -26,7 +25,12 @@ from llm_d_lens.agentic.document_rag.publication_contracts import (
     SourceApproval,
     registry_id,
 )
-from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
+from llm_d_lens.agentic.document_rag.query_contracts import (
+    QUERY_PERMISSION,
+    CompatibilityFilters,
+    QueryFilters,
+    QueryRequest,
+)
 from llm_d_lens.agentic.document_rag.repository_corpus import PARSER_VERSION, parse_markdown
 from llm_d_lens.agentic.document_rag.runtime import (
     RuntimePolicy,
@@ -38,8 +42,9 @@ from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
 from llm_d_lens.agentic.document_rag.search_contracts import EvidenceSearchError, PublicSearchBuild, PublicSearchRequest
 from llm_d_lens.agentic.document_rag.service import EvidenceUnavailableError, PublicRagQueryService
 from llm_d_lens.agentic.document_rag.sources import BENCHMARK_ORIGIN, SourceArchive, allowed_paths
+from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
 from llm_d_lens.core.exceptions import ConflictError
-from llm_d_lens.db.dao.rag_query import QuerySlice, RagQueryDao
+from llm_d_lens.db.dao.public_benchmark_record_query import PublicBenchmarkRecordQueryDao, QuerySlice
 
 
 def test_real_public_index_search_citation_and_withdrawal(tmp_path, monkeypatch):
@@ -48,6 +53,7 @@ def test_real_public_index_search_citation_and_withdrawal(tmp_path, monkeypatch)
         pytest.skip("Set LENS_RAG_TEST_OPENSEARCH_URL to an explicitly approved test service")
     monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "evidence"))
     monkeypatch.setattr(adapter, "ACTIVE_ALIAS", "public-rag-test-" + uuid4().hex)
+    monkeypatch.setattr(adapter, "VECTOR_ALIAS", "public-rag-vector-test-" + uuid4().hex)
     monkeypatch.setattr(metadata, "MANAGEMENT_INDEX", "public-rag-management-test-" + uuid4().hex)
     dao = metadata.DocumentRepository(endpoint)
     indexes = []
@@ -87,8 +93,11 @@ def test_real_public_index_search_citation_and_withdrawal(tmp_path, monkeypatch)
         )
 
         async def run():
-            build = await PublicRagIndexBuilder(repository, dao=dao, archive=archive).build((BENCHMARK_ORIGIN,))
-            indexes.append(adapter.INDEX_PREFIX + build.build_id)
+            identity = uuid4()
+            indexes.append(adapter.INDEX_PREFIX + identity.hex)
+            with monkeypatch.context() as patch:
+                patch.setattr(indexing, "uuid4", lambda: identity)
+                await PublicRagIndexBuilder(repository, dao=dao, archive=archive).build((BENCHMARK_ORIGIN,))
             writer = OpenSearchEvidenceProjectionWriter(repository)
             lifecycle = DocumentLifecycle(dao)
             scopes = dao.public_search_scopes((BENCHMARK_ORIGIN,))
@@ -205,6 +214,7 @@ def test_real_isolated_document_restore_rebuild_and_version_rollback(tmp_path, m
     def isolated_target(name):
         monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / name))
         monkeypatch.setattr(adapter, "ACTIVE_ALIAS", "public-rag-test-" + uuid4().hex)
+        monkeypatch.setattr(adapter, "VECTOR_ALIAS", "public-rag-vector-test-" + uuid4().hex)
         management_index = "public-rag-management-test-" + uuid4().hex
         management_indexes.append(management_index)
         monkeypatch.setattr(metadata, "MANAGEMENT_INDEX", management_index)
@@ -350,25 +360,42 @@ def test_document_kill_switch_preserves_structured_query_api(tmp_path, monkeypat
     retrieval = AsyncMock()
     service = PublicRagSearchService(retrieval, dao=Mock(), archive=Mock())
     monkeypatch.setattr(query_routes, "get_search_service", lambda request: service)
-    payload = QueryRequest(question="Published throughput", filters=QueryFilters(model="recovery-fixture-model"))
-    sql = Mock(spec=RagQueryDao)
+    payload = QueryRequest(
+        question="Published throughput", filters=CompatibilityFilters(model="recovery-fixture-model")
+    )
+    sql = Mock(spec=PublicBenchmarkRecordQueryDao)
     sql.search.return_value = QuerySlice(matches=(), total=0)
     documents = Mock(spec=metadata.DocumentRepository)
-    documents.search.side_effect = lambda *args, **kwargs: metadata.DocumentRepository.search(
-        documents, *args, **kwargs
-    )
     structured = PublicRagQueryService(dao=sql, document_dao=documents, archive=Mock())
     monkeypatch.setattr(query_routes, "get_service", lambda: structured)
     request = Request({"type": "http", "method": "POST", "path": "/api/v1/benchmark-rag/query"})
     response = query_routes.query_public_benchmark_rag(payload, request)
     assert response.intent == "numeric"
     assert sql.search.call_args.kwargs["intent"] == "numeric"
+    assert sql.search.call_args.args[0].model == "recovery-fixture-model"
+    documents.search.assert_not_called()
+    definition = QueryRequest(question="What is prefix caching?")
+    documents.search.return_value = metadata.DocumentSlice(matches=(), total=0)
+    definition_response = query_routes.query_public_benchmark_rag(definition, request)
+    assert definition_response.intent == "definition"
+    assert definition_response.status == "abstained"
+    assert documents.search.call_args.kwargs == {
+        "intent": "definition",
+        "text_query": definition.question,
+        "limit": definition.limit,
+    }
+    assert set(documents.search.call_args.args[0].origins) == set(QueryFilters().origins)
+    documents.assert_current.assert_called_once_with(())
+    assert sql.search.call_count == 1
+    documents.search.side_effect = lambda *args, **kwargs: metadata.DocumentRepository.search(
+        documents, *args, **kwargs
+    )
     update_runtime_policy(RuntimeUpdate(expected_generation=0, search_enabled=False))
     with pytest.raises(EvidenceSearchError, match="administratively disabled"):
         asyncio.run(query_routes.search_public_rag_documents(PublicSearchRequest(question="cache"), request))
     assert retrieval.mock_calls == []
     with pytest.raises(EvidenceUnavailableError, match="document evidence is unavailable"):
-        query_routes.query_public_benchmark_rag(QueryRequest(question="What is prefix caching?"), request)
+        query_routes.query_public_benchmark_rag(definition, request)
     documents._request.assert_not_called()
     documents.publication_lock.assert_not_called()
     assert query_routes.query_public_benchmark_rag(payload, request) == response
