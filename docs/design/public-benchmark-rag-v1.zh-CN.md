@@ -306,7 +306,7 @@ URL 返回 404，下载前仍须核对完整许可材料。本轮未下载权重
 
 [historical-rag-schema]: ../../apps/backend/src/llm_d_lens/db/migrations/versions/7a12c8e49b60_create_rag_items.py
 
-1. [存储契约](../../apps/backend/src/llm_d_lens/benchmark_rag/contracts.py)：六类条目、逐类型
+1. [存储契约](../../apps/backend/src/llm_d_lens/agentic/document_rag/contracts.py)：六类条目、逐类型
    字段校验、原始值/单位保留、显式单位与统计量映射，以及未知值保留规则。
 2. [历史单表 schema][historical-rag-schema]（原模型路径：
    `apps/backend/src/llm_d_lens/db/models/rag_item.py`）：`rag_items`、来
@@ -328,14 +328,14 @@ URL 返回 404，下载前仍须核对完整许可材料。本轮未下载权重
 
 ### 第 2 步已交付内容与验证
 
-1. [发布契约](../../apps/backend/src/llm_d_lens/benchmark_rag/publication_contracts.py)
+1. [发布契约](../../apps/backend/src/llm_d_lens/agentic/document_rag/publication_contracts.py)
    ：显式公开来源批准、固定版本完整清单、解析结果、文件/成员映射、逐类型计数和发布历史；使用完整载荷哈希生成确定性身份，不复用会脱敏字段的部署哈希。
-2. [来源与归档](../../apps/backend/src/llm_d_lens/benchmark_rag/sources.py)：固定来源及路径/格
+2. [来源与归档](../../apps/backend/src/llm_d_lens/agentic/document_rag/sources.py)：固定来源及路径/格
    式允许列表；离线 Git 按完整 commit 读取整棵固定树，保留二进制原始字节，不读取脏工作区；Prism 本地快照与人工审核的路径/哈希清单比对。缺
    失、额外、截断、符号链接和哈希不符均显式失败，不当作删除证据。
 3. **不可变原始字节：**复用共享持久化存储和 artifact 注册，按 SHA256 归档；排他发布并同步到磁盘，读取时校验哈希，既有字节不覆盖。没有实
    现删除或 GC，保守地无限期保留历史，满足至少 365 天及保留引用依赖的要求。
-4. [发布服务](../../apps/backend/src/llm_d_lens/benchmark_rag/publication.py)与
+4. [发布服务](../../apps/backend/src/llm_d_lens/agentic/document_rag/publication.py)与
    [发布 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_publication.py)：原子暂存、完整
    成员与依赖闭包校验、未变化旧固定版本复用，以及同源行锁和指针/递增 generation 双重比较。激活重新校验源字节，在同一事务中写删除标记、切换指针并
    记录历史；失败保留旧版本。
@@ -360,11 +360,11 @@ HTTP/MCP 入口或刷新触发器。内部成员过滤不是调用者授权检�
 
 ### 第 3 步已交付内容与验证
 
-1. [Prism 适配器](../../apps/backend/src/llm_d_lens/benchmark_rag/prism.py)：消费现有
+1. [Prism 适配器](../../apps/backend/src/llm_d_lens/agentic/document_rag/prism.py)：消费现有
    `normalize-and-merge.jq`
    生成的归档结构和合并 ID 清单，不重写或执行规范化脚本。历史实验引用原始归档行；阶段实验引用原始完整运行 JSON，保留合并文件的路径/哈希/行指针，并
    与原报告身份、工作负载核对。
-2. [初始固定输入](../../apps/backend/src/llm_d_lens/benchmark_rag/prism_initial.py)：记录
+2. [初始固定输入](../../apps/backend/src/llm_d_lens/agentic/document_rag/prism_initial.py)：记录
    原方案审核过的 2026-10-13 快照 22 份文件哈希和初始 249 条实验门槛。导入 API 每次接收审核清单和预期实验数，249 不是未来刷新时
    写死的永久总数；测试中的两条实验快照同样可以导入。
 3. **精确值与单位：**JSON/YAML 数值直接解析为 Decimal，保留原始报告数值及单位；不把 jq 浮点转换产生的毫秒舍入值当作原始测量。显式新
@@ -412,10 +412,10 @@ Agentic 规划。真实导入仅在用户选定的隔离验收环境中执行；
 
 **已实现：:**
 
-1. [管理命令](../../apps/backend/src/llm_d_lens/benchmark_rag/admin.py)：
+1. [管理命令](../../apps/backend/src/llm_d_lens/agentic/document_rag/admin.py)：
    `rebuild / backup / verify / restore`，显式要求数据库环境变量与持久化证据目录。失败非零退出，成功输出 JSON；不回
    退到默认/嵌入式数据库，不回显 DSN 或密码。
-2. [逻辑包与证据迁移](../../apps/backend/src/llm_d_lens/benchmark_rag/transfer.py)：单条
+2. [逻辑包与证据迁移](../../apps/backend/src/llm_d_lens/agentic/document_rag/transfer.py)：单条
    PostgreSQL
    MVCC 查询取得一致的全量 RAG 快照，包含暂存、历史、删除标记、注册/发布清单；备份包包含规范化 DTO
    JSONL、清单和按 SHA256 寻址的原始字节。Decimal 精度不丢失，不包含可执行 SQL，也不复制机器绝对归档路径。
@@ -451,16 +451,16 @@ Agentic 规划。真实导入仅在用户选定的隔离验收环境中执行；
 
 ```bash
 PYTHONPATH=apps/backend/src .venv/bin/python \
-  -m llm_d_lens.benchmark_rag.admin rebuild \
+  -m llm_d_lens.agentic.document_rag.admin rebuild \
   --snapshot private/prism-public-2026-10-13 \
   --approval /secure/prism-approval.json --data-dir /srv/lens-data
 PYTHONPATH=apps/backend/src .venv/bin/python \
-  -m llm_d_lens.benchmark_rag.admin backup \
+  -m llm_d_lens.agentic.document_rag.admin backup \
   --data-dir /srv/lens-data --output /backup/rag-backup.zip
 PYTHONPATH=apps/backend/src .venv/bin/python \
-  -m llm_d_lens.benchmark_rag.admin verify --bundle /backup/rag-backup.zip
+  -m llm_d_lens.agentic.document_rag.admin verify --bundle /backup/rag-backup.zip
 PYTHONPATH=apps/backend/src .venv/bin/python \
-  -m llm_d_lens.benchmark_rag.admin restore \
+  -m llm_d_lens.agentic.document_rag.admin restore \
   --bundle /backup/rag-backup.zip --data-dir /srv/lens-data
 ```
 
@@ -472,9 +472,9 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
 
 ### 第 4 步已交付内容与验证（review 通过）
 
-1. [仓库导入器](../../apps/backend/src/llm_d_lens/benchmark_rag/repository_corpus.py)
+1. [仓库导入器](../../apps/backend/src/llm_d_lens/agentic/document_rag/repository_corpus.py)
    复用来源批准、完整 Git 清单、原始字节归档与原子发布。读取固定 commit，而非脏工作区；不联网、不执行文档中的示例命令，不扩大已批准来源或路径。
-2. [初始清单与图审核](../../apps/backend/src/llm_d_lens/benchmark_rag/repository_initial.py)
+2. [初始清单与图审核](../../apps/backend/src/llm_d_lens/agentic/document_rag/repository_initial.py)
    固定 `llm-d` 的
    `080c14d957755da4cc363745638619fc748558f1`：97 份 Markdown（含 20 份结果文档）、5 份自定义
    JSON、37 张 PNG，共 139 个文件；固定
@@ -483,14 +483,14 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
    SHA256 和逐类型数量独立核验。
 3. **精确段落：**保留原文、标题层级、固定版本的字符偏移/行范围、文档链接及图片引用/图注；代码围栏中的标题不当成正文标题。基准文档与 JSON/YAML
    示例不生成实验或测量。
-4. [表格适配器](../../apps/backend/src/llm_d_lens/benchmark_rag/guide_tables.py)审核全部
+4. [表格适配器](../../apps/backend/src/llm_d_lens/agentic/document_rag/guide_tables.py)审核全部
    97 份指南的
    **155 张 GFM 表格**，不仅处理结果目录，也覆盖正文中的实际结果。输出
    **421 条来源范围实验、1,559 条精确测量、475 条审计上下文**。每个数值追溯到表/行/列/单元格，复合数值带子值位置；保留场景、配置、工作负
    载与限定条件。
 5. **不提升为精确观测：**配置/参考表、已计算的差异、近似值和范围、缺失值、空延迟直方图、无法安全解释的历史/叙述证据保持上下文并给出原因。混合模型和
    GLM 多场景分开，不因文件名或硬件相似合并。重复刊载的表格不视为新增独立实验。
-6. [自定义 JSON 适配器](../../apps/backend/src/llm_d_lens/benchmark_rag/guide_json.py)
+6. [自定义 JSON 适配器](../../apps/backend/src/llm_d_lens/agentic/document_rag/guide_json.py)
    分别处理五份 GLM 数据，输出
    **24 条来源范围实验、594 条测量、5 条上下文**。Decimal 与原始 JSON
    pointer 逐值往返；配置不是指标，重复和聚合记录明确标注非独立，不把它们套用成 Prism
@@ -546,9 +546,9 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
 ### 第 5 步已交付内容与隔离验收（review 通过）
 
 1. **统一契约与服务：**
-   [查询 DTO](../../apps/backend/src/llm_d_lens/benchmark_rag/query_contracts.py)、
+   [查询 DTO](../../apps/backend/src/llm_d_lens/agentic/document_rag/query_contracts.py)、
    [只读检索 DAO](../../apps/backend/src/llm_d_lens/db/dao/rag_query.py)和
-   [确定性问答服务](../../apps/backend/src/llm_d_lens/benchmark_rag/service.py)提供同一公开分
+   [确定性问答服务](../../apps/backend/src/llm_d_lens/agentic/document_rag/service.py)提供同一公开分
    支；REST 为
    `POST /api/v1/benchmark-rag/query`，只读 MCP 为
    `query_public_benchmark_rag`。MCP 转发真实调用者和相同请求，不另外实现检索，不替换为服务身份。
@@ -609,7 +609,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
 4. **撤销与读后复查：**内部请求验证当前用户存活、激活状态、权限版本和改密状态；发出结果前重新检查 evaluation 归属、版本、访问权限及存在性。过
    期 principal、查询期间删除/归属变更或撤权返回冲突，不发出旧证据。公开来源继续执行原有归档哈希与发布 generation 复查。
 5. **内部证据范围与精度：**
-   [指标契约](../../apps/backend/src/llm_d_lens/benchmark_rag/agentic_metrics.py)只返回
+   [指标契约](../../apps/backend/src/llm_d_lens/agentic/document_rag/agentic_metrics.py)只返回
    已有成功记录中的 TTFT
    p95、TPOT p95、E2E p95、未声明统计量的 throughput 和 error
    rate；不使用预测/插值。明确标记 `agentic_measurement`、owning evaluation API
@@ -617,7 +617,7 @@ PYTHONPATH=apps/backend/src .venv/bin/python \
    度，citation 显式写入
    `numeric_precision=stored_float`；公开数值仍验证原始 token。
 6. **验证后合并，而非名称去重：**
-   [内部证据与合并](../../apps/backend/src/llm_d_lens/benchmark_rag/agentic_answers.py)
+   [内部证据与合并](../../apps/backend/src/llm_d_lens/agentic/document_rag/agentic_answers.py)
    要求固定公开 Prism 原始 JSON 对象本身包含规范
    `evaluate:<UUID>`，且已授权内部值的metric/statistic/unit/value 与已报告模型/硬件/运行时/workload
    一致，无未解释的 series。符合时返回一个
@@ -717,9 +717,9 @@ task 记录视作 measured benchmark。
 ### 第 7 步：刷新场景与触发机制（review 已通过）
 
 1. **共用入口：**
-   [刷新服务与契约](../../apps/backend/src/llm_d_lens/benchmark_rag/refresh.py)提供严格
+   [刷新服务与契约](../../apps/backend/src/llm_d_lens/agentic/document_rag/refresh.py)提供严格
    `RefreshPlan` 和 `RefreshReport`；
-   [管理 CLI](../../apps/backend/src/llm_d_lens/benchmark_rag/admin.py)新增
+   [管理 CLI](../../apps/backend/src/llm_d_lens/agentic/document_rag/admin.py)新增
    `refresh`、`status`、`rollback`。Prism 仅允许 manual；仓库按用户选择同时支持
    manual/commit/periodic，复用同一固定版本入口，不自动 fetch 或追踪分支。
 2. **审核计划与触发：**固定 origin/revision、完整有序路径/哈希清单、来源审批、逐类型计数、base
@@ -755,7 +755,7 @@ task 记录视作 measured benchmark。
 ### 第 8 步：固定问答基线与额外来源接入门槛（review 已通过）
 
 1. **固定可复现用例：**
-   [评估契约与 runner](../../apps/backend/src/llm_d_lens/benchmark_rag/evaluation.py)
+   [评估契约与 runner](../../apps/backend/src/llm_d_lens/agentic/document_rag/evaluation.py)
    接受版本化用例集，固定问题/条件、预期状态/拒答、精确 Decimal、证据类型与来源、计数、禁止泄漏片段；报告绑定用例集哈希及来源版本/清单哈希。预期结
    果不从实际答案自动生成。
 2. **独立验证而非自证：**必传 verifier 对每一条主引用及 corroborating 引用核验实际保留字节/DB 记录、值/单位/条件/指针、

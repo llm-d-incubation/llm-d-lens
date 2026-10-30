@@ -261,7 +261,7 @@ async def test_rag_transport_preserves_caller_json_and_rejects_error_evidence(mo
     from llm_d_lens.auth.contracts import Principal
     from llm_d_lens.auth.security import sign_internal
     from llm_d_lens.auth.settings import AuthSettings
-    from llm_d_lens.benchmark_rag.query_contracts import QueryResponse
+    from llm_d_lens.agentic.document_rag.query_contracts import QueryResponse
     from llm_d_lens.mcp import tools
 
     settings = AuthSettings(internal_auth_secret="rag-contract-test-key")  # noqa: S106 - isolated test key

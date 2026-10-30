@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from llm_d_lens.agentic.facts import (
+    PlanningHardwareSnapshot,
     ResolvedPlanningFacts,
-    _configuration_topology,
     rank_public_rag_evidence,
     resolve_planning_facts,
     resolve_public_rag_evidence,
@@ -15,10 +15,68 @@ from llm_d_lens.agentic.facts import (
     with_public_rag_evidence,
 )
 from llm_d_lens.agentic.planner import PlanningFacts, WorkloadProfile, normalize_planning_facts
+from llm_d_lens.agentic.public_benchmark_record.publication_contracts import PublicationError
+from llm_d_lens.agentic.public_benchmark_record.query_contracts import (
+    Citation,
+    QueryEvidence,
+    QueryFilters,
+    QueryResponse,
+)
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
-from llm_d_lens.benchmark_rag.publication_contracts import PublicationError
-from llm_d_lens.benchmark_rag.query_contracts import Citation, QueryEvidence, QueryFilters, QueryResponse
 from llm_d_lens.core.exceptions import DomainError
+
+
+def test_request_hardware_snapshot_shares_concurrent_discovery_and_isolates_mutation(monkeypatch):
+    calls = []
+
+    async def overview(cluster):
+        calls.append(cluster.id)
+        await asyncio.sleep(0)
+        return {"hardware": {"gpuCount": 4}}
+
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
+
+    async def resolve():
+        snapshot = PlanningHardwareSnapshot("cluster-a")
+        first, second = await asyncio.gather(snapshot.get("cluster-a"), snapshot.get("cluster-a"))
+        first["hardware"]["gpuCount"] = 0
+        assert second["hardware"]["gpuCount"] == 4
+        assert (await snapshot.get("cluster-a"))["hardware"]["gpuCount"] == 4
+        with pytest.raises(ValueError, match="different cluster"):
+            await snapshot.get("cluster-b")
+        await PlanningHardwareSnapshot("cluster-a").get("cluster-a")
+
+    asyncio.run(resolve())
+    assert calls == ["cluster-a", "cluster-a"]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_request_hardware_snapshot_does_not_retry_failed_discovery(monkeypatch, cancelled):
+    calls = []
+
+    async def overview(cluster):
+        calls.append(cluster.id)
+        if cancelled:
+            raise asyncio.CancelledError
+        raise OSError("discovery unavailable")
+
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
+
+    async def resolve():
+        snapshot = PlanningHardwareSnapshot("cluster-a")
+        with pytest.raises(asyncio.CancelledError if cancelled else OSError):
+            await snapshot.get("cluster-a")
+        with pytest.raises(TimeoutError if cancelled else OSError):
+            await snapshot.get("cluster-a")
+
+    asyncio.run(resolve())
+    assert calls == ["cluster-a"]
 
 
 def _public_response(*, evidence=True):
@@ -340,6 +398,16 @@ def test_public_no_workload_or_latency_returns_all_records_without_inferred_targ
     assert all(match["latency"]["status"] == "not_requested" for match in matches)
 
 
+@pytest.mark.parametrize("mean_value,expected", [(None, "unknown"), ("300", "not_satisfied"), ("100", "satisfied")])
+def test_public_latency_checks_every_requested_statistic_in_the_same_experiment(mean_value, expected):
+    facts = normalize_planning_facts(PlanningFacts(8, 80, 5), "mean TTFT < 200ms; P95 TTFT < 500ms")
+    records = [{**_observation("p95", experiment="same"), "statistic": "p95"}]
+    if mean_value is not None:
+        records.append({**_observation("mean", value=mean_value, experiment="same"), "statistic": "mean"})
+    _, matches = rank_public_rag_evidence(records, facts)
+    assert all(match["latency"]["status"] == expected for match in matches)
+
+
 @pytest.fixture
 def public_hardware(monkeypatch):
     hardware = {"accelerators": [{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}]}
@@ -353,7 +421,7 @@ def public_hardware(monkeypatch):
     )
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
     monkeypatch.setattr(
-        "llm_d_lens.agentic.facts.RagQueryDao",
+        "llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao",
         lambda: SimpleNamespace(hardware_options=lambda _filters: ("Intel B60 XPU", "NVIDIA A100 80GB PCIe")),
     )
     return hardware
@@ -409,8 +477,8 @@ def test_public_rag_checks_global_permission_before_constructing_query_service(m
     def forbidden_service():
         pytest.fail("Unauthorized recommendations must not access the public corpus")
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", forbidden_service)
-    monkeypatch.setattr("llm_d_lens.agentic.facts.RagQueryDao", forbidden_service)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", forbidden_service)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao", forbidden_service)
     monkeypatch.setattr("llm_d_lens.agentic.facts.registry.require_cluster", lambda _id: forbidden_service())
     result = asyncio.run(resolve_public_rag_evidence("Qwen/Qwen3-8B", principal, cluster_server_id="cluster-a"))
     assert result.status == "forbidden"
@@ -448,7 +516,7 @@ def test_public_rag_is_public_only_exact_model_and_preserves_citations(
             calls.append((request, caller))
             return _public_response(evidence=has_evidence)
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     if simulated:
         monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}')
     result = asyncio.run(
@@ -473,7 +541,7 @@ def test_public_rag_is_public_only_exact_model_and_preserves_citations(
     assert result.status == ("available" if has_evidence else "no_matches")
     assert "SQL measured observations" in result.details["message"]
     if simulated:
-        assert "Document RAG and internal experiments are reported separately" in result.details["message"]
+        assert "Internal experiments are reported separately" in result.details["message"]
     context = with_public_rag_evidence(
         ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), result
     )
@@ -502,7 +570,7 @@ def test_public_rag_failure_is_explicit_and_non_fatal(monkeypatch, failure, capl
         def query(self, request, caller, *, all_matches=False, experiment_limit=None):
             raise failure
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     result = asyncio.run(resolve_public_rag_evidence("Qwen/Qwen3-8B", principal, cluster_server_id="cluster-a"))
     assert result.status == "unavailable"
     assert "continuing" in result.details["message"]
@@ -522,7 +590,7 @@ def test_public_rag_never_broadens_to_other_hardware(monkeypatch, public_hardwar
     public_hardware["accelerators"] = [{"id": profile_id, "gpuCount": 4, "models": models}]
     calls = []
     monkeypatch.setattr(
-        "llm_d_lens.agentic.facts.RagQueryDao",
+        "llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao",
         lambda: SimpleNamespace(
             hardware_options=lambda _filters: ("Intel B60 XPU", "NVIDIA A100 40GB PCIe", "NVIDIA A100 SXM4 40GB")
         ),
@@ -536,7 +604,7 @@ def test_public_rag_never_broadens_to_other_hardware(monkeypatch, public_hardwar
             calls.append(request)
             return _public_response(evidence=profile_id == "intel-xpu")
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     result = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",
@@ -573,7 +641,7 @@ def test_public_rag_unknown_or_mixed_hardware_does_not_query_corpus(monkeypatch,
     def forbidden_dao():
         pytest.fail("Unknown or mixed hardware must not cause an unfiltered corpus query")
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.RagQueryDao", forbidden_dao)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao", forbidden_dao)
     result = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",
@@ -607,7 +675,7 @@ def test_test_hardware_is_cluster_scoped_visible_and_reversible(
             calls.append(request)
             return _public_response()
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     evidence = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",
@@ -934,7 +1002,6 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
     monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", support)
     monkeypatch.setattr("llm_d_lens.agentic.facts.search", aic_search)
-    monkeypatch.setattr("llm_d_lens.agentic.facts._historical_topology_by_execution", lambda: {})
     resolved = asyncio.run(
         resolve_planning_facts(
             "cluster-a",
@@ -1015,22 +1082,6 @@ def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkey
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
     monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", unavailable_aic)
     monkeypatch.setattr("llm_d_lens.simulation.service.list_tasks", history)
-    monkeypatch.setattr(
-        "llm_d_lens.agentic.facts._historical_topology_by_execution",
-        lambda: {
-            "execution-1": {
-                "provider_ref": "pd-disaggregation",
-                "replicas": 1,
-                "tensor_parallel_size": 1,
-                "prefill_replicas": 1,
-                "prefill_tensor_parallel_size": 1,
-                "guide_variant": "vllm",
-                "max_model_len": 4096,
-                "gpu_memory_utilization": 0.9,
-                "required_gpus": 2,
-            },
-        },
-    )
 
     resolved = asyncio.run(
         resolve_planning_facts(
@@ -1050,30 +1101,3 @@ def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkey
     assert simulation_evidence.status == "unavailable"
     assert simulation_evidence.details["reason"] == "unscoped_history_disabled"
     assert "observations" not in simulation_evidence.details
-
-
-def test_configuration_topology_captures_candidate_equivalent_pd_fields():
-    configuration = SimpleNamespace(
-        provider_ref="pd-disaggregation",
-        provenance={"agentic_candidate_id": "legacy-internal-id"},
-        content={
-            "decode": {"replicaCount": 2, "tensorParallelSize": 2, "maxModelLen": 8192, "gpuMemoryUtilization": 0.9},
-            "prefill": {"replicaCount": 1, "tensorParallelSize": 2},
-            "guideVariant": "vllm",
-        },
-    )
-
-    topology = _configuration_topology(configuration)
-
-    assert topology == {
-        "candidate_id": "legacy-internal-id",
-        "provider_ref": "pd-disaggregation",
-        "replicas": 2,
-        "tensor_parallel_size": 2,
-        "prefill_replicas": 1,
-        "prefill_tensor_parallel_size": 2,
-        "guide_variant": "vllm",
-        "max_model_len": 8192,
-        "gpu_memory_utilization": 0.9,
-        "required_gpus": 6,
-    }

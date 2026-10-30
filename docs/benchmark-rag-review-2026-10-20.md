@@ -165,10 +165,10 @@ Additional checks:
 
 ## Relevant implementation and tests
 
-- [Query planning and answer service](../apps/backend/src/llm_d_lens/benchmark_rag/service.py)
-- [Prism importer](../apps/backend/src/llm_d_lens/benchmark_rag/prism.py)
-- [Repository parser](../apps/backend/src/llm_d_lens/benchmark_rag/repository_corpus.py)
-- [Planning regressions](../apps/backend/tests/unit/benchmark_rag/test_query_planning.py)
+- [Query planning and answer service](../apps/backend/src/llm_d_lens/agentic/document_rag/service.py)
+- [Prism importer](../apps/backend/src/llm_d_lens/agentic/document_rag/prism.py)
+- [Repository parser](../apps/backend/src/llm_d_lens/agentic/document_rag/repository_corpus.py)
+- [Planning regressions](../apps/backend/tests/unit/agentic/document_rag/test_query_planning.py)
 - [Public query regressions](../apps/backend/tests/unit/db/test_rag_query.py)
 - [Internal query regressions](../apps/backend/tests/unit/db/test_rag_agentic_service.py)
 - [Prism dependency regressions](../apps/backend/tests/unit/db/test_prism_import.py)

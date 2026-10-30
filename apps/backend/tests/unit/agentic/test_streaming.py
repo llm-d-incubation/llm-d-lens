@@ -114,3 +114,32 @@ async def test_public_rag_plans_are_not_an_alternate_unauthorized_corpus_read(mo
     )
     assert await router.get_agentic_deployment("enriched", admin) is enriched
     assert await router.list_agentic_deployments(admin) == [enriched, ordinary]
+
+
+@pytest.mark.asyncio
+async def test_internal_case_plans_use_case_authorization_without_public_corpus_permission(monkeypatch):
+    case = {"origins": ["agentic:evaluate"], "experiment_ids": ["benchmark-1"]}
+    run = SimpleNamespace(
+        id="internal",
+        planning_evidence=[
+            PlanningEvidence(
+                id="configuration-cases:query",
+                source="configuration-cases",
+                status="available",
+                details={"cases": [case]},
+            )
+        ],
+    )
+    principal = Principal("reader", "reader")
+    request = SimpleNamespace(state=SimpleNamespace(principal=principal))
+    checked = []
+
+    def authorize_cases(cases, actual_principal):
+        assert actual_principal is principal
+        checked.append(cases)
+
+    monkeypatch.setattr(router, "assert_case_access", authorize_cases)
+    monkeypatch.setattr(router, "service", SimpleNamespace(list=lambda: [run], get=lambda _id: run))
+    assert await router.list_agentic_deployments(request) == [run]
+    assert await router.get_agentic_deployment("internal", request) is run
+    assert checked == [(case,), (case,)]

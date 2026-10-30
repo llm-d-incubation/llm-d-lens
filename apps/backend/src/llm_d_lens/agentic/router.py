@@ -5,10 +5,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from llm_d_lens.agentic.public_benchmark_record.access import require_query_access
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import assert_case_access
 from llm_d_lens.auth.access import current_principal, owner_for_create
 from llm_d_lens.auth.contracts import Principal
-from llm_d_lens.benchmark_rag.access import require_query_access
-from llm_d_lens.benchmark_rag.case_retrieval import assert_case_access
 from llm_d_lens.core.exceptions import ForbiddenError, UnauthenticatedError
 
 from .models import (
@@ -17,7 +17,7 @@ from .models import (
     AgenticDeploymentCreateRequest,
     AgenticDeploymentRun,
 )
-from .service import service
+from .service import assert_plan_document_sources_current, service
 from .streaming import planning_stream_response
 
 logger = logging.getLogger(__name__)
@@ -26,14 +26,14 @@ router = APIRouter(prefix="/api/agentic-deployments", tags=["agentic-deployments
 
 def _require_plan_evidence_access(run: AgenticDeploymentRun, principal: Principal | None) -> None:
     if any(
-        item.source in {"public-benchmark-rag", "public-document-rag", "configuration-cases"}
-        and item.status == "available"
+        item.source in {"public-benchmark-rag", "public-document-rag"} and item.status == "available"
         for item in run.planning_evidence
     ):
         require_query_access(principal)
     for item in run.planning_evidence:
         if item.source == "configuration-cases":
             assert_case_access(tuple(item.details.get("cases", ())), principal)
+    assert_plan_document_sources_current(run)
 
 
 @router.post(

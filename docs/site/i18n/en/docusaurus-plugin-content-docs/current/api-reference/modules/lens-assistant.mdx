@@ -290,13 +290,13 @@ Development-set gains are not holdout, performance or launch acceptance.
   <TabItem value="python-api" label="Python API">
 
 ```python
-from llm_d_lens.benchmark_rag.indexing import PublicRagIndexBuilder
-from llm_d_lens.benchmark_rag.embedding import configured_encoder
-from llm_d_lens.benchmark_rag.opensearch_evidence_search import (
+from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder
+from llm_d_lens.agentic.document_rag.embedding import configured_encoder
+from llm_d_lens.agentic.document_rag.opensearch_evidence_search import (
     OpenSearchEvidenceSearchRepository,
 )
-from llm_d_lens.benchmark_rag.search import PublicRagSearchService
-from llm_d_lens.benchmark_rag.search_contracts import PublicSearchRequest
+from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
+from llm_d_lens.agentic.document_rag.search_contracts import PublicSearchRequest
 
 repository = OpenSearchEvidenceSearchRepository("http://127.0.0.1:9200")
 # Administrative operation on already approved and published source evidence:
@@ -326,9 +326,9 @@ For explicit document retrieval-build wiring, reuse the
 projection `repository` above with the synchronous metadata repository:
 
 ```python
-from llm_d_lens.benchmark_rag.document_lifecycle import DocumentLifecycle
-from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
-from llm_d_lens.benchmark_rag.sources import SourceArchive
+from llm_d_lens.agentic.document_rag.document_lifecycle import DocumentLifecycle
+from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
+from llm_d_lens.agentic.document_rag.sources import SourceArchive
 
 metadata = DocumentRepository.from_environment()
 build = await PublicRagIndexBuilder(
@@ -446,7 +446,7 @@ indexes, alter permissions or certify quality.
   <TabItem value="python-api" label="Python API">
 
 ```python
-from llm_d_lens.benchmark_rag.runtime import (
+from llm_d_lens.agentic.document_rag.runtime import (
     RuntimeUpdate, load_runtime_policy, update_runtime_policy,
 )
 
@@ -475,10 +475,10 @@ target without reviewing them.
 Run management commands only in the configured backend environment:
 
 ```bash
-python -m llm_d_lens.benchmark_rag.admin search-status --data-dir /var/lib/lens
-python -m llm_d_lens.benchmark_rag.admin search-rebuild --data-dir /var/lib/lens \
+python -m llm_d_lens.agentic.document_rag.admin search-status --data-dir /var/lib/lens
+python -m llm_d_lens.agentic.document_rag.admin search-rebuild --data-dir /var/lib/lens \
   --mode lexical --origin https://github.com/llm-d/llm-d
-python -m llm_d_lens.benchmark_rag.admin source-disable --data-dir /var/lib/lens \
+python -m llm_d_lens.agentic.document_rag.admin source-disable --data-dir /var/lib/lens \
   --origin https://github.com/llm-d/llm-d --expected-generation GENERATION
 ```
 
@@ -538,7 +538,7 @@ rebuilds indexes or removes original source snapshots.
 Run from the configured backend environment:
 
 ```bash
-python -m llm_d_lens.benchmark_rag.cutover --execute --writers-quiesced \
+python -m llm_d_lens.agentic.document_rag.cutover --execute --writers-quiesced \
   --backup-dir <persistent-backup-dir>
 ```
 
@@ -858,7 +858,7 @@ The transport delegates to the same caller-scoped query service. Python clients
 can validate the shared DTOs without creating a separate retrieval path:
 
 ```python
-from llm_d_lens.benchmark_rag.query_contracts import QueryRequest, QueryResponse
+from llm_d_lens.agentic.document_rag.query_contracts import QueryRequest, QueryResponse
 
 request = QueryRequest.model_validate({
     "question": "What published throughput measurements are available?",
@@ -892,7 +892,7 @@ No write endpoint is exposed. A trusted operator/job runs:
 
 ```bash
 export PYTHONPATH=apps/backend/src
-python -m llm_d_lens.benchmark_rag.admin refresh \
+python -m llm_d_lens.agentic.document_rag.admin refresh \
   --schema public --data-dir /srv/lens-data \
   --plan /secure/rag/approved-plan.json \
   --trigger commit --event-revision "$REVIEWED_COMMIT"
@@ -919,9 +919,9 @@ automatically.
 ```python
 from pathlib import Path
 
-from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
-from llm_d_lens.benchmark_rag.publication import RagPublicationService
-from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
+from llm_d_lens.agentic.document_rag.publication import RagPublicationService
+from llm_d_lens.agentic.document_rag.refresh import RagRefreshService, RefreshPlan
 
 # Non-Prism document refresh; Prism uses the structured SQL admin path.
 # LENS_DATA_DIR must name the same persistent archive used by query instances.
@@ -1003,10 +1003,10 @@ To prepare the first manual refresh after reviewing the snapshot:
 import json
 from pathlib import Path
 
-from llm_d_lens.benchmark_rag.publication_contracts import (
+from llm_d_lens.agentic.document_rag.publication_contracts import (
     InventoryFile, PinnedInventory, SourceApproval, content_digest,
 )
-from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.agentic.document_rag.refresh import RagRefreshService, RefreshPlan
 
 # publication is RagPublicationService backed by the OpenSearch document repository.
 # Load these operator-reviewed files; do not discover or approve URLs here.
@@ -1053,7 +1053,7 @@ numeric baseline is unchanged and does not certify these new articles.
 ### Evaluate the fixed evidence baseline
 
 This is a read-only acceptance API, not a REST/MCP tool or an LLM judge.
-`llm_d_lens.benchmark_rag.evaluation` exposes versioned `EvaluationSuite`,
+`llm_d_lens.agentic.document_rag.evaluation` exposes versioned `EvaluationSuite`,
 `EvaluationCase`, `EvaluationReport` and:
 
 ```python
@@ -1080,7 +1080,7 @@ LENS_RAG_BASELINE_REPORT_DIR=/secure/acceptance/rag-v1 \
 PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_rag_public_baseline.py \
   apps/backend/tests/unit/db/test_rag_internal_baseline.py \
-  apps/backend/tests/unit/benchmark_rag/test_evaluation.py -q
+  apps/backend/tests/unit/agentic/document_rag/test_evaluation.py -q
 ```
 
 The public suite needs the separately provisioned pinned three-source inputs.

@@ -306,7 +306,8 @@ _PATTERN = re.compile(
     rf"(?P<field>{'|'.join(map(re.escape, sorted(_FIELDS, key=len, reverse=True)))})(?![a-z])"
     rf"\s*(?:(?P<after>{_STAT})\s*)?(?:of\s*|[:\uff1a]\s*)?"
     rf"(?P<op>{_OP})?\s*(?P<value>-?(?:\d+(?:\.\d+)?|\.\d+))"
-    r"\s*(?P<unit>(?:milliseconds?|seconds?|msec|ms|secs?|s|tokens?|requests?/s|qps|requests?|users?|"
+    r"\s*(?P<unit>(?:(?:milliseconds?|seconds?|msec|ms|secs?|s)/tokens?|"
+    r"milliseconds?|seconds?|msec|ms|secs?|s|tokens?|requests?/s|qps|requests?|users?|"
     r"\u6beb\u79d2|\u79d2|\u4e2a)(?![a-zA-Z/]))?",
     re.IGNORECASE,
 )
@@ -351,6 +352,9 @@ def normalize_requirements(
             end=match.end(),
         )
         unit = (match["unit"] or "").lower()
+        per_token = unit.endswith(("/token", "/tokens"))
+        if per_token and field == "tpot":
+            unit = unit.split("/", 1)[0]
         value = float(match["value"])
         suffix = text[match.end() :]
         # A trailing unknown unit must not silently become milliseconds/tokens.

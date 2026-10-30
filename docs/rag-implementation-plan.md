@@ -14,7 +14,144 @@
   authorize changes to application code, databases, deployment configuration, or
   running services.
 
-## Current execution status (2026-10-27)
+## Reorganization review and migration (2026-10-30)
+
+### Baseline and evidence
+
+The implementation review compared RAG head `eb49f8d` with the reorganized
+`feat/multi-source-agentic-deploy` baseline `56106f9`, using merge base
+`8f77d58`. A three-dot branch diff alone omits the base-only restructuring and
+is not sufficient evidence of integration.
+
+The user requested implementation in this order: adopt the latest baseline,
+separate document contracts and ingestion, reconnect Agentic, then remove
+obsolete runtime paths. Structural file changes require the separate approval
+specified in the repository development rules. No production database or
+OpenSearch mutation is authorized by this source migration.
+
+Review findings:
+
+1. Repository ingestion still emits experiments, measurements and figures.
+   The OpenSearch document store accepts only sources/passages, while the SQL
+   store accepts only Prism. A synthetic import generated four experiments,
+   100 measurements and one passage, then failed publication. Routing the same
+   non-Prism source to SQL also failed. Remove the obsolete mixed ingestion
+   pipeline rather than widening SQL ownership.
+2. RAG prompt selection prunes authorized internal records to selected cases.
+   A focused execution with a real failed benchmark record retained zero of
+   one records on RAG head, versus one of one on the latest baseline.
+   Prompt selection must not remove history used by deterministic guardrails.
+3. Document origins and publication validation depend on old SQL contracts
+   and private DAO methods. The latest SQL query filters and source policy
+   reject the actual llm-d GitHub origin. Import renaming cannot repair this
+   domain mismatch.
+4. Git's directory-rename inference suggests relocating new document search,
+   embedding and lifecycle files into the public-record package. These are
+   conflict-resolution suggestions, not the desired architecture.
+5. The old SQL cutover imports migration helpers removed by the approved
+   baseline consolidation. Legacy revisions `7a12c8e49b60` and
+   `df3a4d42cbb7` are absent from its revision graph. Old SQL backups declare a
+   different schema revision from current public-record backups.
+6. Agentic's advanced-search gate also disables lexical retrieval, and tests
+   encode that behavior. Other observed issues include unclosed request-owned
+   synchronous clients and authority-read amplification: resolving one hit in a
+   1,000-passage release fetched 1,001 members in four `_mget` requests.
+   This is not a measured live-latency failure.
+
+The earlier implementation plan describes a ten-result hybrid cap, while the
+current architecture explicitly allows a larger requested candidate pool.
+Resolve this documentation discrepancy against the approved Agentic candidate
+contract; do not cap its twenty-candidate pool to ten merely to satisfy the
+historical plan.
+
+### Ownership and reuse decisions
+
+| Capability | Migration decision |
+| --- | --- |
+| Prism ingestion, approvals and reviewed inventory | Reuse the latest public-record implementation and required external manifest. |
+| Immutable SQL records, publication and rollback | Reuse the consolidated public-record DAO; no document ownership in SQL. |
+| Numeric queries, normalization, experiment ranking and answers | Reuse the latest public-record service and contracts. |
+| Internal experiment queries and authorization | Reuse the renamed benchmark-experiment DAO and existing guardrails. |
+| SQL backup, restore, refresh and administration | Reuse the latest public-record implementations, not the mixed backend dispatcher. |
+| Git/Web source policy and pinned acquisition | Independent document domain; preserve approved origins and immutable revisions. |
+| Markdown passages and original-text verification | Independent document ingestion; do not emit numeric experiment records. |
+| Document DTOs, citations, filters and publication validation | Independent document contracts; no SQL DAO private-method dependencies. |
+| OpenSearch authority, publication heads and retrieval builds | Independent document domain; preserve publication fencing and fresh-head checks. |
+| Embedding, chunking, lexical/vector/hybrid search and runtime policy | Preserve existing document capabilities and rollout controls. |
+| Document backup and restore | Preserve provenance without restoring publication authority or Prism facts. |
+| Agentic document packets and selection | Optional adapter on the latest orchestration, not a restored old service. |
+| HTTP and MCP compatibility | Preserve public wire contracts at the boundary; no document dispatch inside the SQL service. |
+| Raw source bytes, hashes, IDs and artifacts | Reuse existing neutral helpers; extract only into existing infrastructure if needed. |
+| Hardcoded Prism initial inventory | Retire in favor of the reviewed external manifest. |
+| Guide numeric/table/figure experiment adapters | Remove from live document ingestion; retain historical readers only for demonstrated compatibility needs. |
+| SQL document shadow/promote and destructive cutover | Retire from normal operation; do not execute or silently discard existing data. |
+| Mixed evaluation and offline ablations | Separate document evaluation from SQL evidence; keep offline experiments out of runtime dependencies. |
+
+Preserve `benchmark-rag` wire discriminators, permission identifiers, artifact
+owner/URIs, content hashes and manifest identities where they are persisted
+contracts. A historical identifier is not automatically obsolete code.
+Document DTOs may accept explicitly bounded historical membership proofs for
+existing archives without reviving numeric record ingestion.
+
+The internal diagnostic OpenSearch adapter and the public document adapter are
+different capabilities. Preserve diagnostic tenant/ACL filtering and its
+existing interface; do not replace it with public-corpus search.
+
+### Agentic integration requirements
+
+- Adopt the latest shared hardware snapshot, preference handling and exact
+  model/hardware matching before introducing the document branch.
+- Keep public/internal SQL retrieval concurrent under the existing initial
+  60-second evidence deadline. The approved candidate-specific document
+  supplement has its separate shared ten-second budget; report both honestly.
+- Preserve full authorized internal history for deterministic failure checks
+  independently of prompt budgets or selected cases.
+- Keep documents qualitative and untrusted: not measured performance,
+  compatibility proof, numeric evidence or an exception to SLO constraints.
+- Wire create, refine, SSE, generator/planner budget selection, append-only
+  snapshots and server-owned reference IDs consistently.
+- Preserve disabled/shadow/allowlisted rollout, explicit degraded outcomes,
+  source revocation and saved-plan freshness/access checks.
+
+### Migration and acceptance checks
+
+Database states must be distinguished before any operator migration:
+
+| Existing state | Required handling |
+| --- | --- |
+| Stable baseline `42a3e9b47726` | Use the approved final-shape public-record migration. |
+| Legacy `7a12c8e49b60` or `df3a4d42cbb7` | Inventory first; a real deployment needs an explicit reviewed transition, not a blind stamp. |
+| Already at `8bf2a6c1d903` | Validate actual schema; never repeat empty-table initialization or cutover. |
+| Legacy mixed SQL backup | Explicit rejection or reviewed conversion; not an ordinary current Prism restore. |
+
+Source-migration acceptance:
+
+- Fresh-process imports use the new owners; no live dependency on the old
+  mixed package or its SQL DAO names remains.
+- A pinned document follows ingestion, publication, indexing, search and
+  exact original-text verification without numeric experiment adapters.
+- Numeric/Prism queries and diagnostic evidence retain their baseline behavior.
+- Nonempty failed history survives empty/budget-pruned prompt selection.
+- Lexical Agentic retrieval works with advanced search disabled; vector/hybrid
+  remain gated. Disabled, shadow, revoked, stale and timeout cases stay explicit.
+- Request-owned clients close; retrieval validates only required authority
+  dependencies with fresh-head checks rather than blindly scanning releases.
+- Current document archives, retained references and immutable identities remain
+  readable or are rejected with an explicit compatibility error.
+- Run affected Python tests, lint, MCP catalog validation and documentation
+  checks; do not infer integration success from baseline-only tests.
+
+Before migration, the isolated latest-baseline checks passed 297 tests with
+one skipped test. They cover record contracts, DAO behavior, backup/restore,
+refresh, migration DDL and selected Agentic/SSE contracts. They do not prove a
+merged implementation. Earlier RAG tests had external pinned-repository fixture
+errors; no complete live OpenSearch/model/corpus acceptance was performed in
+this review. Quality and annotation gates remain outstanding.
+
+Implementation status: review recorded; structural approval and source migration
+pending. Update this status and the actual validation results as work completes.
+
+## Earlier execution status (2026-10-27)
 
 ### Current S4/D2 delivery decision
 
@@ -175,9 +312,9 @@ Primary implementation references:
   `apps/backend/src/llm_d_lens/db/models/rag_item.py`;
   [current Prism evidence model][prism-evidence-model].
 - [Public retrieval](../apps/backend/src/llm_d_lens/db/dao/rag_query.py).
-- [Sources and archives](../apps/backend/src/llm_d_lens/benchmark_rag/sources.py)
+- [Sources and archives](../apps/backend/src/llm_d_lens/agentic/document_rag/sources.py)
   .
-- [Publication](../apps/backend/src/llm_d_lens/benchmark_rag/publication.py).
+- [Publication](../apps/backend/src/llm_d_lens/agentic/document_rag/publication.py).
 - [Planning evidence](../apps/backend/src/llm_d_lens/agentic/facts.py).
 - [Preference parsing](../apps/backend/src/llm_d_lens/agentic/generator.py).
 
@@ -648,11 +785,11 @@ Modify only affected portions of existing files:
 
 - **Area:** Sources and publication
   - **Repository-relative locations:**
-      `apps/backend/src/llm_d_lens/benchmark_rag/{sources,publication_contracts,publication,refresh,admin}.py`
+      `apps/backend/src/llm_d_lens/agentic/document_rag/{sources,publication_contracts,publication,refresh,admin}.py`
 
 - **Area:** Query contracts and orchestration
   - **Repository-relative locations:**
-      `apps/backend/src/llm_d_lens/benchmark_rag/{query_contracts,service,router}.py`
+      `apps/backend/src/llm_d_lens/agentic/document_rag/{query_contracts,service,router}.py`
       ; `agentic/service.py`
 
 - **Area:** Models and DAOs
@@ -1149,9 +1286,9 @@ substitute for those checks. The original two-repository v1 set remains
 unchanged.
 
 **Development-only candidate diagnosis and ablations (2026-10-27).** The opt-in
-[experiment runner](../apps/backend/src/llm_d_lens/benchmark_rag/retrieval_experiments.py)
+[experiment runner](../apps/backend/src/llm_d_lens/agentic/document_rag/retrieval_experiments.py)
 and
-[tests](../apps/backend/tests/unit/benchmark_rag/test_retrieval_experiments.py)
+[tests](../apps/backend/tests/unit/agentic/document_rag/test_retrieval_experiments.py)
 do not change the service, indexes, aliases, labels or default retrieval. Only
 the 45 development positives were evaluated; holdout and absence cases were not
 scored in this experiment.
@@ -1264,7 +1401,7 @@ below the numerical quality goals.
 **Local online controlled enhancement integration (2026-10-27).** After explicit
 approval, hybrid requests now default to `query_enhancement=true`; explicit
 lexical/vector modes and the default lexical mode remain unchanged. The
-[shared policy](../apps/backend/src/llm_d_lens/benchmark_rag/query_enhancement.py)
+[shared policy](../apps/backend/src/llm_d_lens/agentic/document_rag/query_enhancement.py)
 is used by both the online service and experiments, without a runtime dependency
 on the experimental runner. It preserves the question, appends at most eight
 matched glossary translations for both branches, and applies the fixed 1.25
@@ -1295,16 +1432,16 @@ previous experiment checkpoints remain historical, and S3 is not accepted.
 Run the explicitly opt-in stages with:
 
 ```bash
-python -m llm_d_lens.benchmark_rag.retrieval_experiments \
+python -m llm_d_lens.agentic.document_rag.retrieval_experiments \
   --stage diagnose --suite /path/to/search_acceptance_v2.json \
   --output /path/to/experiment-output \
   --baseline-report /path/to/s3-hybrid-quality.json
-python -m llm_d_lens.benchmark_rag.retrieval_experiments \
+python -m llm_d_lens.agentic.document_rag.retrieval_experiments \
   --stage experiment --suite /path/to/search_acceptance_v2.json \
   --output /path/to/experiment-output \
   --model-path /path/to/pinned-reranker \
   --model-pin /path/to/verified-reranker-model-pin.json
-python -m llm_d_lens.benchmark_rag.retrieval_experiments \
+python -m llm_d_lens.agentic.document_rag.retrieval_experiments \
   --stage coverage-intent --suite /path/to/search_acceptance_v2.json \
   --inputs /path/to/experiment-output/enhanced-candidate-inputs.json \
   --reference-report /path/to/experiment-output/development-experiment.json \

@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
+from llm_d_lens.agentic.facts import PlanningHardwareSnapshot
 from llm_d_lens.agentic.generator import (
     AgenticMcpClient,
     AICandidateGenerator,
@@ -19,9 +21,9 @@ from llm_d_lens.agentic.planner import (
     WorkloadProfile,
     validate_request_context_budget,
 )
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import configuration_case_context
 from llm_d_lens.ai_providers.client import AIProviderClientError, AIToolCall, AIToolTurn
 from llm_d_lens.auth.security import verify_internal
-from llm_d_lens.benchmark_rag.case_retrieval import configuration_case_context
 
 
 def test_generator_schema_excludes_direct_vllm_and_accepts_optimized_baseline():
@@ -302,7 +304,6 @@ def test_validator_records_supplied_reference_material_without_claiming_model_us
             {
                 "case_id": "case:authorized",
                 "measurements": [{"evidence_id": "benchmark:authorized"}],
-                "supporting_passage_ids": ["document:qualitative"],
             },
         ),
     )
@@ -318,11 +319,8 @@ def test_validator_records_supplied_reference_material_without_claiming_model_us
     assert not result.accepted[0].evidence_ids
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["configuration_case_evidence_ids", "document_evidence_ids"],
-)
-def test_generator_schema_no_longer_requests_historical_citation_ids(field):
+def test_generator_schema_rejects_unknown_fields():
+    field = "unknown_field"
     assert field not in CandidateProposal.model_json_schema()["properties"]
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CandidateProposal(
@@ -479,10 +477,24 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
     ],
 )
 @pytest.mark.parametrize("profile", [None, WorkloadProfile(), WorkloadProfile(shared_prefix_ratio=0)])
+@pytest.mark.parametrize("shared_snapshot", [False, True])
 def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
-    monkeypatch, accelerators, simulated, expected_system, profile
+    monkeypatch, accelerators, simulated, expected_system, profile, shared_snapshot
 ):
     captured = {"tool_args": []}
+    discoveries = []
+
+    async def overview(cluster):
+        discoveries.append(cluster.id)
+        result = _cluster_result()
+        if accelerators is not None:
+            result["hardware"]["accelerators"] = accelerators
+        return result
+
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
 
     class Tools:
         async def available_tools(self):
@@ -552,10 +564,20 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
         workload_profile=profile,
     )
 
-    proposals = asyncio.run(generator.generate("cluster-a", "Qwen/Qwen3-8B", facts, "prefer throughput"))
+    async def generate():
+        snapshot = PlanningHardwareSnapshot("cluster-a") if shared_snapshot else None
+        if snapshot is not None:
+            first = await snapshot.get("cluster-a")
+            first["hardware"]["availableGpuCount"] = 0
+        return await generator.generate(
+            "cluster-a", "Qwen/Qwen3-8B", facts, "prefer throughput", hardware_snapshot=snapshot
+        )
 
+    proposals = asyncio.run(generate())
+
+    assert discoveries == (["cluster-a"] if shared_snapshot else [])
     assert captured["tool_args"] == [
-        ("get_cluster_overview", {"clusterId": "cluster-a"}),
+        *([] if shared_snapshot else [("get_cluster_overview", {"clusterId": "cluster-a"})]),
         (
             "search_candidates",
             {**_aic_arguments(), "searchConfig": {"aicSystemName": expected_system, "totalGpus": 4}},
@@ -1985,6 +2007,10 @@ def test_ai_generator_prompt_encodes_candidate_priorities_and_tool_policy():
     assert "code-generation or a high shared_prefix_ratio" not in prompt
     assert "prefill_heavy workloads, prefer pd-disaggregation" not in prompt
     assert "historical configuration references, not current deployment SLO proof" in prompt
+    assert "mapping_basis=source_label" in prompt
+    assert "Do not describe the technique mapping as unverified" in prompt
+    assert "Configuration equivalence and performance transfer still require validation" in prompt
+    assert "unverified_source_hint" not in prompt
     assert "never combine different cases or series into synthetic measurements" in prompt
     assert "materially diverse candidates" in prompt
     assert "each feasible provider_ref" in prompt

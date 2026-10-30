@@ -3,6 +3,7 @@
 import asyncio
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import httpx
@@ -38,6 +39,10 @@ async def _validate_model_cache(*_args, **_kwargs) -> None:
 
 @pytest.fixture(autouse=True)
 def validated_model_cache(monkeypatch, tmp_path):
+    async def hardware(_cluster, _model, facts, _principal, *, hardware_snapshot=None):
+        return facts, {"status": "unavailable"}
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_retrieval_hardware", hardware)
     monkeypatch.setattr(AgenticDeploymentService, "_validate_model_cache", staticmethod(_validate_model_cache))
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.PlanningSnapshotStore",
@@ -234,14 +239,14 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
     observations = []
     principal = Principal("admin-user", "admin", bindings=(RoleBinding("admin"),))
 
-    async def hardware(_cluster, _model, facts, _principal):
+    async def hardware(_cluster, _model, facts, _principal, *, hardware_snapshot=None):
         return facts, {"status": "unavailable"}
 
     for module in ("generator", "planner", "facts"):
         monkeypatch.setattr(f"llm_d_lens.agentic.{module}.load_model_config", lambda _model: None)
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_retrieval_hardware", hardware)
 
-    async def query(model, caller, *, cluster_server_id, planning_facts):
+    async def query(model, caller, *, cluster_server_id, planning_facts, hardware_snapshot=None):
         assert model == "Qwen/Qwen3-8B"
         assert caller is principal
         assert cluster_server_id == "cluster-a"
@@ -321,7 +326,7 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
         return candidates, facts
 
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_public_rag_evidence", query)
-    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome
 
     async def internal_query(*_args, **_kwargs):
         return InternalCaseOutcome(status="empty")
@@ -390,197 +395,8 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
     assert wire_packet["details"]["cases"][0]["ranking"]["queue"] == ("fallback" if fallback else "ranked")
 
 
-def test_candidate_document_queries_follow_validated_generation_on_create_and_refine(monkeypatch):
-    from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
-
-    calls = []
-    original_generate = AgenticDeploymentService._generate_candidates
-
-    async def generate(self, *args, **kwargs):
-        result = await original_generate(self, *args, **kwargs)
-        calls.append(("generated", [candidate.id for candidate in result[0] if candidate.deployable]))
-        return result
-
-    async def documents(query, principal):
-        calls.append(("documents", query))
-        return DocumentEvidenceOutcome(status="empty", mode="enabled")
-
-    monkeypatch.setattr(AgenticDeploymentService, "_generate_candidates", generate)
-    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_document_evidence", documents)
-    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
-    monkeypatch.setattr(
-        "llm_d_lens.agentic.service.require_active_session", lambda _id: SimpleNamespace(server_id="cluster-a")
-    )
-    monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_provider_id", lambda _id: None)
-    service = AgenticDeploymentService()
-    run = asyncio.run(service.create(_request()))
-    assert calls[0][0] == "documents" and calls[1][0] == "generated"
-    initial_query = calls[0][1]
-    assert "configuration" in initial_query and "limitations" in initial_query
-    assert "prefill decode" in initial_query and "prefix cache" in initial_query
-    assert 1 <= len(calls[2:]) <= 5
-    packet = next(item for item in run.planning_evidence if item.source == "configuration-cases")
-    stage = packet.details["branch_status"]["document_supplement"]
-    assert stage["candidate_ids"] and stage["query_count"] == len(calls[2:])
-    assert all(term in query for term, (_, query) in zip(stage["terms"], calls[2:], strict=True))
-    assert len(stage["terms"]) == len(set(stage["terms"]))
-    assert "vllm" not in stage["terms"]
-    assert {item.candidate_id for item in run.candidate_evidence} == {item.id for item in run.candidates}
-    assert all(item.validated and item.configuration for item in run.candidate_evidence)
-    calls.clear()
-    refined = asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency")))
-    assert calls[0][0] == "documents" and calls[1][0] == "generated"
-    assert {item.candidate_id for item in refined.candidate_evidence} == {item.id for item in refined.candidates}
-
-
-def test_candidate_queries_cover_distinct_techniques_not_variants(monkeypatch):
-    from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
-    from llm_d_lens.benchmark_rag.case_retrieval import CaseEvidenceBundle, InternalCaseOutcome
-
-    queries = []
-
-    async def documents(query, _principal):
-        queries.append(query)
-        return DocumentEvidenceOutcome(status="empty", mode="enabled")
-
-    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_document_evidence", documents)
-    facts = PlanningFacts(8, 32, 8)
-    template = DeterministicPlanner().candidates(facts)[0]
-    providers = [
-        *(["optimized-baseline"] * 11),
-        "pd-disaggregation",
-        "tiered-prefix-cache",
-        "precise-prefix-cache-routing",
-    ]
-    candidates = [
-        template.model_copy(update={"id": f"candidate-{i}", "provider_ref": provider, "guide_variant": "vllm"})
-        for i, provider in enumerate(providers)
-    ]
-
-    async def check():
-        return await AgenticDeploymentService()._candidate_document_context(
-            candidates,
-            facts,
-            PlanningEvidence(id="public-rag:query", source="public-benchmark-rag", status="unavailable"),
-            DocumentEvidenceOutcome(status="empty", mode="enabled"),
-            InternalCaseOutcome(),
-            CaseEvidenceBundle(deadline=asyncio.get_running_loop().time() + 60),
-            "Qwen/Qwen3-0.6B",
-            None,
-            None,
-        )
-
-    *_, bundle = asyncio.run(check())
-    stage = bundle.branch_status["document_supplement"]
-    assert stage["terms"] == list(dict.fromkeys(providers))
-    assert len(stage["candidate_ids"]) == 10
-    assert stage["technique_candidate_ids"]["pd-disaggregation"] == "candidate-11"
-    assert len(queries) == 4
-    assert "prefill decode" in queries[1]
-    assert "CPU" in queries[2]
-    assert "kv-scorer" in queries[3] and "prefix-scorer" in queries[3]
-    assert all("configuration" in query and "limitations" in query for query in queries)
-
-
-def test_candidate_supplement_has_reserved_time_after_generation_expires_initial_deadline(monkeypatch):
-    from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
-    from llm_d_lens.benchmark_rag.case_retrieval import CaseEvidenceBundle, InternalCaseOutcome
-
-    queries = []
-
-    async def documents(query, _principal):
-        queries.append(query)
-        return DocumentEvidenceOutcome(status="empty", mode="enabled")
-
-    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_document_evidence", documents)
-
-    async def check():
-        facts = PlanningFacts(8, 32, 4)
-        service = AgenticDeploymentService()
-        return await service._candidate_document_context(
-            DeterministicPlanner().candidates(facts),
-            facts,
-            PlanningEvidence(id="public-rag:query", source="public-benchmark-rag", status="unavailable"),
-            DocumentEvidenceOutcome(status="empty", mode="enabled"),
-            InternalCaseOutcome(),
-            CaseEvidenceBundle(deadline=asyncio.get_running_loop().time() - 1),
-            "model",
-            None,
-            None,
-        )
-
-    *_, bundle = asyncio.run(check())
-    stage = bundle.branch_status["document_supplement"]
-    assert stage["status"] == "ok" and stage["query_count"] == len(queries) > 0
-    assert stage["initial_deadline_expired"] is True
-    assert stage["budget_seconds"] == 10
-
-
-def test_candidate_supplement_is_bounded_and_keeps_partial_success(monkeypatch):
-    from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
-    from llm_d_lens.benchmark_rag.case_retrieval import CaseEvidenceBundle, InternalCaseOutcome
-
-    cancelled = []
-
-    async def documents(query, _principal):
-        if "pd-disaggregation" in query:
-            try:
-                await asyncio.sleep(10)
-            except asyncio.CancelledError:
-                cancelled.append(query)
-                raise
-        return DocumentEvidenceOutcome(status="empty", mode="enabled")
-
-    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_document_evidence", documents)
-    monkeypatch.setattr("llm_d_lens.agentic.service.DOCUMENT_SUPPLEMENT_TIMEOUT_SECONDS", 0.02)
-    facts = PlanningFacts(8, 32, 4)
-    template = DeterministicPlanner().candidates(facts)[0]
-    candidates = [
-        template.model_copy(update={"id": provider, "provider_ref": provider})
-        for provider in ("optimized-baseline", "pd-disaggregation")
-    ]
-
-    async def check():
-        return await asyncio.wait_for(
-            AgenticDeploymentService()._candidate_document_context(
-                candidates,
-                facts,
-                PlanningEvidence(id="public-rag:query", source="public-benchmark-rag", status="unavailable"),
-                DocumentEvidenceOutcome(status="empty", mode="enabled"),
-                InternalCaseOutcome(),
-                CaseEvidenceBundle(),
-                "model",
-                None,
-                None,
-            ),
-            timeout=1,
-        )
-
-    *_, bundle = asyncio.run(check())
-    stage = bundle.branch_status["document_supplement"]
-    assert stage["status"] == "partial" and stage["query_count"] == 2
-    assert stage["timed_out_terms"] == ["pd-disaggregation"]
-    assert len(cancelled) == 1
-
-
-def test_evidence_budget_shrinks_with_model_window_and_actual_candidate_catalog():
-    facts = PlanningFacts(8, 32, 4)
-    large = SimpleNamespace(settings=SimpleNamespace(context_window=128_000))
-    small = SimpleNamespace(settings=SimpleNamespace(context_window=25_000))
-    assert AgenticDeploymentService._remaining_evidence_budget(facts, large)[0] == 16000
-    assert AgenticDeploymentService._remaining_evidence_budget(facts, small)[0] == 0
-    _, large_remaining = AgenticDeploymentService._remaining_evidence_budget(facts, large)
-    window = SimpleNamespace(settings=SimpleNamespace(context_window=128_000 - large_remaining + 12_000))
-    without, remaining = AgenticDeploymentService._remaining_evidence_budget(facts, window)
-    with_candidates, after = AgenticDeploymentService._remaining_evidence_budget(
-        facts, window, DeterministicPlanner().candidates(facts)
-    )
-    assert after < remaining and with_candidates < without
-
-
-def test_decision_stage_reselects_original_evidence_against_its_own_budget():
-    from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
-    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome, build_case_bundle
+def test_case_selection_preserves_authorized_internal_history():
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome, build_case_bundle
 
     facts = PlanningFacts(8, 32, 4)
     observation = {
@@ -601,35 +417,22 @@ def test_decision_stage_reselects_original_evidence_against_its_own_budget():
             "configuration": {"tp": 1},
         },
     }
-    bundle, _, _ = build_case_bundle((observation,), (), facts, model="model", hardware="accelerator", branch_status={})
+    bundle, kept = build_case_bundle((observation,), facts, model="model", hardware="accelerator", branch_status={})
     assert bundle.cases
-    trimmed = replace(
-        facts,
-        configuration_case_status={
-            "excluded": {bundle.cases[0].case_id: "request_context_budget"},
-        },
-    )
     public = PlanningEvidence(
         id="public-rag:query",
         source="public-benchmark-rag",
         status="available",
         details={"response": {"evidence": [observation]}, "target_hardware": {"model": "accelerator"}},
     )
-    *_, selected = asyncio.run(
-        AgenticDeploymentService()._candidate_document_context(
-            DeterministicPlanner().candidates(facts),
-            trimmed,
-            public,
-            DocumentEvidenceOutcome(status="disabled", mode="disabled"),
-            InternalCaseOutcome(),
-            bundle,
-            "model",
-            None,
-            None,
-        )
+    internal = InternalCaseOutcome()
+    selected_facts, selected_public, selected_internal, selected = AgenticDeploymentService._apply_case_selection(
+        facts, public, internal, bundle, kept
     )
     assert len(selected.cases) == 1
-    assert selected.branch_status["generator_request_selection"]["excluded"]
+    assert selected_facts.configuration_cases[0]["case_id"] == selected.cases[0].case_id
+    assert selected_public.details["response"]["evidence"][0]["item_id"] == "measurement"
+    assert selected_internal is internal
 
 
 def test_approve_publishes_configuration_then_starts_existing_deploy(monkeypatch):
@@ -757,14 +560,135 @@ def test_select_candidate_only_allows_a_validated_alternative(monkeypatch):
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
     run = asyncio.run(service.create(_request()))
     alternative = run.candidates[1]
+    alternative.slo_status = "not_satisfied"
+    alternative.slo_confidence = 0.9
+    alternative.evidence_ids = ["cluster-overview:cluster-a", "benchmark:alternative"]
+    run.decision.evidence_ids = ["benchmark:previous"]
 
     updated = service.select_candidate(run.id, alternative.id)
 
     assert updated.selected_candidate.id == alternative.id
     assert updated.decision is not None
     assert updated.decision.rationale.startswith("Selected by the user")
+    assert updated.decision.slo_status == alternative.slo_status
+    assert updated.decision.slo_confidence == alternative.slo_confidence
+    assert updated.decision.evidence_ids == alternative.evidence_ids
+    assert "benchmark:alternative" in updated.decision_evidence_ids
+    assert "benchmark:previous" not in updated.decision_evidence_ids
     with pytest.raises(ValueError, match="not a validated alternative"):
         service.select_candidate(run.id, "not-a-candidate")
+
+
+@pytest.mark.parametrize("failure", ["authorization", "snapshot"])
+def test_failed_refinement_preserves_the_previous_plan(monkeypatch, failure):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    run = asyncio.run(service.create(_request()))
+    original = run.model_dump(mode="json")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("refinement was not committed")
+
+    if failure == "authorization":
+        monkeypatch.setattr("llm_d_lens.agentic.service.assert_case_access", fail)
+    else:
+        monkeypatch.setattr(service._snapshot_store, "save", fail)
+    with pytest.raises(OSError, match="not committed"):
+        asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency")))
+    assert service.get(run.id).model_dump(mode="json") == original
+
+
+def test_refinement_does_not_overwrite_a_selection_made_during_generation(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    run = asyncio.run(service.create(_request()))
+    alternative = run.candidates[1]
+
+    async def progress(event):
+        if event["phase"] == "validation" and event["status"] == "complete":
+            service.select_candidate(run.id, alternative.id)
+
+    with pytest.raises(ValueError, match="changed"):
+        asyncio.run(
+            service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency"), progress)
+        )
+    assert service.get(run.id).selected_candidate.id == alternative.id
+    assert service.get(run.id).request.planner_prompt is None
+
+
+def test_approval_cannot_submit_the_same_plan_twice(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    run = asyncio.run(service.create(_request()))
+    submissions = []
+
+    async def start_run(request, **_kwargs):
+        submissions.append(request)
+        if len(submissions) == 1:
+            with pytest.raises(ValueError, match="awaiting approval"):
+                await service.approve(run.id)
+        return SimpleNamespace(id="deploy-run-1")
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.deployment_run_manager.start_run", start_run)
+    asyncio.run(service.approve(run.id))
+    assert len(submissions) == 1
+
+
+def test_approval_rejects_a_selection_changed_during_preflight(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    run = asyncio.run(service.create(_request()))
+    alternative = run.candidates[1]
+
+    async def resolve(*_args, **_kwargs):
+        service.select_candidate(run.id, alternative.id)
+        return _resolved_facts()
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", resolve)
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.deployment_run_manager.start_run",
+        lambda *_args, **_kwargs: pytest.fail("A changed selection must be reviewed before submission"),
+    )
+    with pytest.raises(ValueError, match="changed"):
+        asyncio.run(service.approve(run.id))
+    assert run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+    assert run.selected_candidate.id == alternative.id
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+def test_uncertain_deployment_submission_is_not_left_approvable(monkeypatch, error_type):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    run = asyncio.run(service.create(_request()))
+
+    async def start_run(*_args, **_kwargs):
+        raise error_type("submission interrupted")
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.deployment_run_manager.start_run", start_run)
+    with pytest.raises(error_type):
+        asyncio.run(service.approve(run.id))
+    assert run.status == AgenticDeploymentStatus.FAILED
+    assert run.error
 
 
 def test_approve_carries_model_specific_vllm_arguments_to_deployment(monkeypatch):
@@ -916,6 +840,240 @@ def test_create_records_selected_benchmark_refs_in_decision_snapshot(monkeypatch
     assert "benchmark:run-2" in run.decision_evidence_ids
     snapshot = json.loads((tmp_path / run.planning_snapshot_path).read_text(encoding="utf-8"))
     assert snapshot["decision_evidence_ids"] == run.decision_evidence_ids
+
+
+def test_create_and_refine_exclude_failure_blocked_candidates_from_ai_ranking(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    blocked_id = "optimized-baseline-tp1-r1"
+    ranked = []
+
+    def score_inputs(_self, _model, _facts, candidates, *, records):
+        assert blocked_id in {candidate.id for candidate in candidates}
+        return (
+            PerformanceScoreInput(
+                candidate_id=blocked_id,
+                source="benchmark",
+                status="interpolated",
+                has_blocking_negative_evidence=True,
+                evidence_refs=("benchmark:oom-1", "benchmark:oom-2", "benchmark:oom-3"),
+            ),
+        )
+
+    class Provider:
+        async def recommend(self, facts, candidates, **_kwargs):
+            ids = {candidate.id for candidate in candidates}
+            assert ids and blocked_id not in ids
+            ranked.append(ids)
+            planner = DeterministicPlanner()
+            return planner.decide(facts, candidates), planner.score(facts, candidates)
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.BenchmarkPerformanceEvidence.score_inputs", score_inputs)
+    monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_environment", lambda: Provider())
+    run = asyncio.run(service.create(_request()))
+    assert run.planner == "openai-compatible"
+    assert run.selected_candidate.id != blocked_id
+    refined = asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency")))
+    assert refined.planner == "openai-compatible"
+    assert refined.selected_candidate.id != blocked_id
+    assert len(ranked) == 2
+
+
+@pytest.fixture
+def live_planning_boundaries(monkeypatch):
+    from llm_d_lens.agentic.facts import resolve_retrieval_hardware
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome
+    from llm_d_lens.agentic.public_benchmark_record.query_contracts import QueryFilters, QueryResponse
+    from llm_d_lens.auth.contracts import Principal, RoleBinding
+
+    discoveries, queries, internal_facts = [], [], []
+
+    async def overview(cluster):
+        discoveries.append(cluster.id)
+        return {
+            "hardware": {
+                "gpuCount": 4,
+                "availableGpuCount": 4,
+                "vramBytes": 4 * 80 * 1024**3,
+                "accelerators": [{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe"]}],
+            },
+            "discovery": len(discoveries),
+        }
+
+    class PublicQuery:
+        def __init__(self, *, dao):
+            self.dao = dao
+
+        def query(self, query, _principal, **_kwargs):
+            queries.append((query, self.dao.planning_facts))
+            return QueryResponse(
+                question=query.question,
+                intent="comparison",
+                filters=QueryFilters(model=query.filters.model, hardware=query.filters.hardware),
+                status="abstained",
+                answer="No public matches.",
+                evidence=(),
+                matched_items=0,
+                returned_observations=0,
+                truncated=False,
+            )
+
+    records = []
+
+    async def internal(_model, _principal, *, facts):
+        internal_facts.append(facts)
+        return InternalCaseOutcome(status="available", records=tuple(records))
+
+    async def supplementary(*_args):
+        return []
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_retrieval_hardware", resolve_retrieval_hardware)
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
+    monkeypatch.setattr("llm_d_lens.agentic.facts._supplementary_evidence", supplementary)
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao",
+        lambda: SimpleNamespace(hardware_options=lambda _filters: ("NVIDIA-A100-80GB-PCIe",)),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", PublicQuery)
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_internal_cases", internal)
+    monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_provider_id", lambda _id: None)
+    request = _request()
+    request.planning_facts = replace(
+        request.planning_facts,
+        model_config_dict={"quantization": "bf16"},
+        workload_profile=WorkloadProfile(
+            mean_input_tokens=1000, p95_input_tokens=1000, mean_output_tokens=200, shared_prefix_ratio=0.25
+        ),
+    )
+    return SimpleNamespace(
+        discoveries=discoveries,
+        queries=queries,
+        internal_facts=internal_facts,
+        records=records,
+        request=request,
+        principal=Principal("admin-user", "admin", bindings=(RoleBinding("admin"),)),
+    )
+
+
+@pytest.mark.parametrize("backend", ["vllm", "sglang"])
+@pytest.mark.parametrize("outcome", ["failed", "succeeded"])
+def test_create_refine_real_history_backend_guardrails(
+    live_planning_boundaries, tmp_path, monkeypatch, backend, outcome
+):
+    from llm_d_lens.agentic.benchmark_evidence import BenchmarkRecord
+
+    boundary = live_planning_boundaries
+    boundary.records.extend(
+        BenchmarkRecord.model_validate(
+            {
+                "benchmark_id": f"oom-{index}",
+                "timestamp": datetime.now(UTC),
+                "model": {"model_id": boundary.request.model, "quantization": "bf16"},
+                "hardware": {
+                    "accelerator": "A100",
+                    "profile_id": "nvidia",
+                    "form_factor": "PCIE",
+                    "vram_per_gpu_gib": 80 * 10**9 / 2**30,
+                    "gpu_count": 4,
+                },
+                "runtime": {"backend": backend},
+                "workload": {
+                    "mean_input_tokens": 1000,
+                    "p95_input_tokens": 1000,
+                    "mean_output_tokens": 200,
+                    "shared_prefix_ratio": 0.25,
+                },
+                "configuration": {
+                    "topology": "optimized-baseline",
+                    "decode_tp": 1,
+                    "decode_replicas": 1,
+                    "optimizations": [""],
+                },
+                "metrics": {},
+                "outcome": outcome,
+                "failure_reason": "OOM" if outcome == "failed" else None,
+            }
+        )
+        for index in range(3)
+    )
+    service = AgenticDeploymentService(historical_seed_mode="apply", snapshot_store=PlanningSnapshotStore(tmp_path))
+    retrieved_seeds = []
+    retrieve = service._historical_seed_retriever.retrieve
+
+    def seeds(*args, **kwargs):
+        result = retrieve(*args, **kwargs)
+        retrieved_seeds.append(result)
+        return result
+
+    monkeypatch.setattr(service._historical_seed_retriever, "retrieve", seeds)
+    run = asyncio.run(service.create(boundary.request, principal=boundary.principal))
+    refined = asyncio.run(
+        service.refine(
+            run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency"), principal=boundary.principal
+        )
+    )
+    for result in (run, refined):
+        payload = json.loads((tmp_path / result.planning_snapshot_path).read_text())
+        blocked = outcome == "failed" and backend == "vllm"
+        scores = payload["resolved_planning_facts"]["performance_score_inputs"]
+        score = next(item for item in scores if item["candidate_id"] == "optimized-baseline-tp1-r1")
+        assert score["has_blocking_negative_evidence"] is blocked
+        if blocked:
+            assert result.selected_candidate.id != "optimized-baseline-tp1-r1"
+            assert "optimized-baseline-tp1-r1" not in {candidate.id for candidate in result.candidates}
+        assert bool(score["evidence_refs"]) is (backend == "vllm")
+    assert len(retrieved_seeds) == 2
+    assert all(bool(seeds) is (outcome == "succeeded" and backend == "vllm") for seeds in retrieved_seeds)
+    for facts in boundary.internal_facts:
+        assert facts.requirements.runtime.backend == "vllm"
+        assert facts.requirements.runtime.backend_version is None
+        assert facts.requirements.runtime.accelerator_runtime is None
+        assert facts.requirements.runtime.driver_version is None
+        assert facts.requirements.runtime.container_digest is None
+
+
+def test_create_refine_share_one_discovery_but_approval_refreshes(live_planning_boundaries, monkeypatch):
+    boundary = live_planning_boundaries
+    service = AgenticDeploymentService()
+    run = asyncio.run(service.create(boundary.request, principal=boundary.principal))
+    assert boundary.discoveries == ["cluster-a"]
+    assert run.planning_cluster_snapshot["discovery"] == 1
+    refined = asyncio.run(
+        service.refine(
+            run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency"), principal=boundary.principal
+        )
+    )
+    assert boundary.discoveries == ["cluster-a", "cluster-a"]
+    assert refined.planning_cluster_snapshot["discovery"] == 2
+    assert len(boundary.queries) == 2
+    for (_, public_facts), internal_facts in zip(boundary.queries, boundary.internal_facts, strict=True):
+        assert public_facts.requirements.hardware == internal_facts.requirements.hardware
+    for (query, facts), result in zip(boundary.queries, (run, refined), strict=True):
+        models = result.planning_cluster_snapshot["hardware"]["accelerators"][0]["models"]
+        assert query.filters.hardware == facts.requirements.hardware.raw == models[0]
+
+    another = asyncio.run(service.create(boundary.request, principal=boundary.principal))
+    assert another.planning_cluster_snapshot["discovery"] == 3
+
+    async def unavailable(_cluster):
+        boundary.discoveries.append("approval")
+        raise ValueError("fresh approval discovery")
+
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", unavailable)
+    with pytest.raises(ValueError, match="fresh approval discovery"):
+        asyncio.run(service.approve(run.id))
+    assert boundary.discoveries == ["cluster-a", "cluster-a", "cluster-a", "approval"]
 
 
 def test_decision_evidence_includes_selected_ai_raw_samples_once():
@@ -1242,7 +1400,8 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
     assert "resource_policy" not in supplied_by_id["optimized-baseline-tp2-r1"]
 
 
-def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatch):
+@pytest.mark.parametrize("refine", [False, True])
+def test_ai_ranking_omits_aggregate_inputs_but_honors_failure_blocks(monkeypatch, refine):
     service = AgenticDeploymentService()
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.require_active_session",
@@ -1254,9 +1413,7 @@ def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatc
     class Provider:
         async def recommend(self, facts, candidates, **_kwargs):
             captured["performance_score_inputs"] = facts.performance_score_inputs
-            captured["baseline_deployable"] = next(
-                candidate.deployable for candidate in candidates if candidate.id == "optimized-baseline-tp1-r1"
-            )
+            captured["candidate_ids"] = {candidate.id for candidate in candidates}
             planner = DeterministicPlanner()
             return planner.decide(facts, candidates), planner.score(facts, candidates)
 
@@ -1286,12 +1443,14 @@ def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatc
     monkeypatch.setattr("llm_d_lens.agentic.planner.DeterministicPlanner.decide", decide_spy)
 
     run = asyncio.run(service.create(_request(ai_provider_id="provider-1")))
+    if refine:
+        run = asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency")))
 
     assert run.decision_metadata is not None
     assert run.decision_metadata.planner == "openai-compatible"
     assert deterministic_calls[0][0].has_blocking_negative_evidence
     assert captured["performance_score_inputs"] == ()
-    assert captured["baseline_deployable"] is True
+    assert "optimized-baseline-tp1-r1" not in captured["candidate_ids"]
 
 
 def test_relaxed_candidate_gets_exact_estimate_before_scoring(monkeypatch):
@@ -1658,7 +1817,7 @@ def test_refine_regenerates_candidates_with_ai_and_mcp(monkeypatch, tmp_path, pl
                 raise OpenAIPlannerError("invalid recorded response")
             return DeterministicPlanner().decide(facts, candidates), DeterministicPlanner().score(facts, candidates)
 
-    async def generate(_self, _cluster_id, _model, facts, operator_prompt, on_progress=None):
+    async def generate(_self, _cluster_id, _model, facts, operator_prompt, on_progress=None, *, hardware_snapshot=None):
         from llm_d_lens.agentic.generator import CandidateGenerationResult
 
         await OpenAICompatibleClient("https://api.openai.com/", "generator-model").complete(

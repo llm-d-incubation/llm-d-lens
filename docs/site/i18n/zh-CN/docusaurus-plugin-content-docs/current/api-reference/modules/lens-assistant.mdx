@@ -260,13 +260,13 @@ RAG 优先交付后端，最终通过 Agentic Deploy 集成。已有独立 Docum
   <TabItem value="python-api" label="Python API">
 
 ```python
-from llm_d_lens.benchmark_rag.indexing import PublicRagIndexBuilder
-from llm_d_lens.benchmark_rag.embedding import configured_encoder
-from llm_d_lens.benchmark_rag.opensearch_evidence_search import (
+from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder
+from llm_d_lens.agentic.document_rag.embedding import configured_encoder
+from llm_d_lens.agentic.document_rag.opensearch_evidence_search import (
     OpenSearchEvidenceSearchRepository,
 )
-from llm_d_lens.benchmark_rag.search import PublicRagSearchService
-from llm_d_lens.benchmark_rag.search_contracts import PublicSearchRequest
+from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
+from llm_d_lens.agentic.document_rag.search_contracts import PublicSearchRequest
 
 repository = OpenSearchEvidenceSearchRepository("http://127.0.0.1:9200")
 # Administrative operation on already approved and published source evidence:
@@ -296,9 +296,9 @@ unenhanced_response = await PublicRagSearchService(repository).search(
 并注入同步元数据仓库：
 
 ```python
-from llm_d_lens.benchmark_rag.document_lifecycle import DocumentLifecycle
-from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
-from llm_d_lens.benchmark_rag.sources import SourceArchive
+from llm_d_lens.agentic.document_rag.document_lifecycle import DocumentLifecycle
+from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
+from llm_d_lens.agentic.document_rag.sources import SourceArchive
 
 metadata = DocumentRepository.from_environment()
 build = await PublicRagIndexBuilder(
@@ -397,7 +397,7 @@ OpenSearch 检索重建使用下述独立 `search-rebuild` 命令。
   <TabItem value="python-api" label="Python API">
 
 ```python
-from llm_d_lens.benchmark_rag.runtime import (
+from llm_d_lens.agentic.document_rag.runtime import (
     RuntimeUpdate, load_runtime_policy, update_runtime_policy,
 )
 
@@ -422,10 +422,10 @@ updated = update_runtime_policy(RuntimeUpdate(
 仅在已配置的后端环境执行管理命令：
 
 ```bash
-python -m llm_d_lens.benchmark_rag.admin search-status --data-dir /var/lib/lens
-python -m llm_d_lens.benchmark_rag.admin search-rebuild --data-dir /var/lib/lens \
+python -m llm_d_lens.agentic.document_rag.admin search-status --data-dir /var/lib/lens
+python -m llm_d_lens.agentic.document_rag.admin search-rebuild --data-dir /var/lib/lens \
   --mode lexical --origin https://github.com/llm-d/llm-d
-python -m llm_d_lens.benchmark_rag.admin source-disable --data-dir /var/lib/lens \
+python -m llm_d_lens.agentic.document_rag.admin source-disable --data-dir /var/lib/lens \
   --origin https://github.com/llm-d/llm-d --expected-generation GENERATION
 ```
 
@@ -469,7 +469,7 @@ Prism 完全由新 SQL 表管理，不进入 OpenSearch 文档投影。
 在已配置的后端环境中执行：
 
 ```bash
-python -m llm_d_lens.benchmark_rag.cutover --execute --writers-quiesced \
+python -m llm_d_lens.agentic.document_rag.cutover --execute --writers-quiesced \
   --backup-dir <persistent-backup-dir>
 ```
 
@@ -723,7 +723,7 @@ generator/planner 投影只包含测量、单位、统计口径、序列、实�
 而无需建立另一条检索路径：
 
 ```python
-from llm_d_lens.benchmark_rag.query_contracts import QueryRequest, QueryResponse
+from llm_d_lens.agentic.document_rag.query_contracts import QueryRequest, QueryResponse
 
 request = QueryRequest.model_validate({
     "question": "What published throughput measurements are available?",
@@ -755,7 +755,7 @@ DTO 验证不是授权：请使用已认证 REST 会话，或通过真实调用�
 
 ```bash
 export PYTHONPATH=apps/backend/src
-python -m llm_d_lens.benchmark_rag.admin refresh \
+python -m llm_d_lens.agentic.document_rag.admin refresh \
   --schema public --data-dir /srv/lens-data \
   --plan /secure/rag/approved-plan.json \
   --trigger commit --event-revision "$REVIEWED_COMMIT"
@@ -780,9 +780,9 @@ Prism 使用 SQL `public_benchmark_records`，应通过安全环境配置数据�
 ```python
 from pathlib import Path
 
-from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
-from llm_d_lens.benchmark_rag.publication import RagPublicationService
-from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
+from llm_d_lens.agentic.document_rag.publication import RagPublicationService
+from llm_d_lens.agentic.document_rag.refresh import RagRefreshService, RefreshPlan
 
 # Non-Prism document refresh; Prism uses the structured SQL admin path.
 # LENS_DATA_DIR must name the same persistent archive used by query instances.
@@ -856,10 +856,10 @@ GitHub 快照的 `<ref>` 建议使用完整 commit；这里是受审网页快照
 import json
 from pathlib import Path
 
-from llm_d_lens.benchmark_rag.publication_contracts import (
+from llm_d_lens.agentic.document_rag.publication_contracts import (
     InventoryFile, PinnedInventory, SourceApproval, content_digest,
 )
-from llm_d_lens.benchmark_rag.refresh import RagRefreshService, RefreshPlan
+from llm_d_lens.agentic.document_rag.refresh import RagRefreshService, RefreshPlan
 
 # publication is RagPublicationService backed by the OpenSearch document repository.
 # Load these operator-reviewed files; do not discover or approve URLs here.
@@ -903,7 +903,7 @@ report = RagRefreshService(publication).run(plan, Path("/secure/rag/web-snapshot
 ### 评估固定证据基线 {/* #evaluate-the-fixed-evidence-baseline */}
 
 这是只读验收 API，不是 REST/MCP 工具或 LLM 评委。
-`llm_d_lens.benchmark_rag.evaluation` 提供版本化的 `EvaluationSuite`、
+`llm_d_lens.agentic.document_rag.evaluation` 提供版本化的 `EvaluationSuite`、
 `EvaluationCase`、`EvaluationReport` 及：
 
 ```python
@@ -927,7 +927,7 @@ LENS_RAG_BASELINE_REPORT_DIR=/secure/acceptance/rag-v1 \
 PYTHONPATH=apps/backend/src .venv/bin/python -m pytest \
   apps/backend/tests/unit/db/test_rag_public_baseline.py \
   apps/backend/tests/unit/db/test_rag_internal_baseline.py \
-  apps/backend/tests/unit/benchmark_rag/test_evaluation.py -q
+  apps/backend/tests/unit/agentic/document_rag/test_evaluation.py -q
 ```
 
 公开用例需要另行准备固定三来源输入；内部用例在隔离库创建真实 owner/Evaluate

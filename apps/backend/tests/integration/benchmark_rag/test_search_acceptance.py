@@ -24,14 +24,14 @@ from llm_d_lens.auth.context import AuthContextMiddleware, require_route_permiss
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
 from llm_d_lens.auth.service import AuthService
 from llm_d_lens.auth.settings import AuthSettings, set_settings_for_testing
-from llm_d_lens.benchmark_rag import document_repository as metadata
-from llm_d_lens.benchmark_rag import opensearch_evidence_search as adapter
-from llm_d_lens.benchmark_rag import router as search_routes
-from llm_d_lens.benchmark_rag.document_transfer import MAX_BACKUP_BYTES, DocumentBackupService
-from llm_d_lens.benchmark_rag.evaluation import SearchEvaluationSuite, benchmark_search, evaluate_search
-from llm_d_lens.benchmark_rag.indexing import PublicRagIndexBuilder, passage_document
-from llm_d_lens.benchmark_rag.publication import RagPublicationService
-from llm_d_lens.benchmark_rag.publication_contracts import (
+from llm_d_lens.agentic.document_rag import document_repository as metadata
+from llm_d_lens.agentic.document_rag import opensearch_evidence_search as adapter
+from llm_d_lens.agentic.document_rag import router as search_routes
+from llm_d_lens.agentic.document_rag.document_transfer import MAX_BACKUP_BYTES, DocumentBackupService
+from llm_d_lens.agentic.document_rag.evaluation import SearchEvaluationSuite, benchmark_search, evaluate_search
+from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder, passage_document
+from llm_d_lens.agentic.document_rag.publication import RagPublicationService
+from llm_d_lens.agentic.document_rag.publication_contracts import (
     InventoryFile,
     ParsedFile,
     PinnedInventory,
@@ -39,11 +39,11 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     SourceApproval,
     content_digest,
 )
-from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION
-from llm_d_lens.benchmark_rag.repository_corpus import PARSER_VERSION, parse_markdown
-from llm_d_lens.benchmark_rag.search import PublicRagSearchService
-from llm_d_lens.benchmark_rag.search_contracts import EvidenceSearchError, PublicSearchRequest, PublicSearchResponse
-from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, SourceArchive, allowed_paths
+from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION
+from llm_d_lens.agentic.document_rag.repository_corpus import PARSER_VERSION, parse_markdown
+from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
+from llm_d_lens.agentic.document_rag.search_contracts import EvidenceSearchError, PublicSearchRequest, PublicSearchResponse
+from llm_d_lens.agentic.document_rag.sources import BENCHMARK_ORIGIN, LLM_D_ORIGIN, SourceArchive, allowed_paths
 from llm_d_lens.core.exceptions import ForbiddenError, UnauthenticatedError
 from llm_d_lens.db.base import Base
 from llm_d_lens.db.dao.audit_log import AuditLogDao
@@ -222,7 +222,7 @@ def test_real_model_vector_corpus_cache_replay_and_quality(environment, tmp_path
     bundle = os.environ.get("LENS_RAG_ACCEPTANCE_BUNDLE")
     if not model_path or not bundle:
         pytest.skip("Set approved model path and corpus backup for real S2 acceptance")
-    from llm_d_lens.benchmark_rag.embedding import LocalE5Encoder, passage_input
+    from llm_d_lens.agentic.document_rag.embedding import LocalE5Encoder, passage_input
 
     dao, archive, repository, principal, indexes, auth_factory = environment
     suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance_v2.json")
@@ -459,7 +459,7 @@ def test_ten_thousand_passages_ten_concurrent_five_hundred_queries(environment, 
     async def run():
         encoder = None
         if model_path:
-            from llm_d_lens.benchmark_rag.embedding import LocalE5Encoder
+            from llm_d_lens.agentic.document_rag.embedding import LocalE5Encoder
 
             encoder = LocalE5Encoder(
                 Path(model_path),

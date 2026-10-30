@@ -96,7 +96,7 @@ def project_planning_snapshot(
     tenant_id: str,
     acl: tuple[str, ...],
 ) -> DiagnosticEvidenceProjection:
-    """Produce a metadata-only diagnostic projection from a batch-5 JSON snapshot."""
+    """Produce a metadata-only diagnostic projection from a planning audit snapshot."""
     raw = Path(path).read_bytes()
     try:
         snapshot = json.loads(raw)

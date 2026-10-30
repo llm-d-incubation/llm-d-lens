@@ -217,7 +217,7 @@ migrate-and-rebuild plan. Run the implemented cutover from the configured
 backend environment:
 
 ```bash
-python -m llm_d_lens.benchmark_rag.cutover --execute --writers-quiesced \
+python -m llm_d_lens.agentic.document_rag.cutover --execute --writers-quiesced \
   --backup-dir <persistent-backup-dir>
 ```
 

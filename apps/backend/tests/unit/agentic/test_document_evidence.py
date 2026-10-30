@@ -15,6 +15,14 @@ from llm_d_lens.agentic.document_evidence import (
     document_context,
     resolve_document_evidence,
 )
+from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION, Citation
+from llm_d_lens.agentic.document_rag.runtime import RuntimePolicy
+from llm_d_lens.agentic.document_rag.search_contracts import (
+    EmbeddingContract,
+    EvidenceSearchError,
+    PublicSearchResponse,
+    PublicSearchResult,
+)
 from llm_d_lens.agentic.facts import PlanningEvidence, ResolvedPlanningFacts, with_document_evidence
 from llm_d_lens.agentic.generator import (
     AICandidateGenerator,
@@ -30,19 +38,11 @@ from llm_d_lens.agentic.planner import (
     PlanningFacts,
 )
 from llm_d_lens.agentic.planning_snapshot import PlanningSnapshotStore
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import compact_reference
 from llm_d_lens.agentic.router import _require_plan_evidence_access
 from llm_d_lens.agentic.service import AgenticDeploymentService
 from llm_d_lens.ai_providers.client import AIProviderClientError
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
-from llm_d_lens.benchmark_rag.case_retrieval import compact_reference
-from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION, Citation
-from llm_d_lens.benchmark_rag.runtime import RuntimePolicy
-from llm_d_lens.benchmark_rag.search_contracts import (
-    EmbeddingContract,
-    EvidenceSearchError,
-    PublicSearchResponse,
-    PublicSearchResult,
-)
 from llm_d_lens.core.exceptions import ForbiddenError, PasswordChangeRequiredError, UnauthenticatedError
 
 
@@ -566,7 +566,7 @@ def test_source_clues_assist_actual_configuration_and_constraint_bodies(techniqu
 
 
 def test_policy_revocation_during_supplement_discards_previously_enabled_packets(monkeypatch):
-    from llm_d_lens.benchmark_rag.case_retrieval import CaseEvidenceBundle, InternalCaseOutcome
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import CaseEvidenceBundle, InternalCaseOutcome
 
     async def resolve(question, _principal):
         if "pd-disaggregation" in question:
@@ -794,7 +794,7 @@ def test_generator_prompt_only_contains_enabled_packets(monkeypatch, enabled):
 
 @pytest.fixture
 def orchestration(monkeypatch, tmp_path, search):
-    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome
 
     captured = []
 
@@ -904,7 +904,7 @@ def test_saved_document_plan_reads_require_query_access(orchestration):
 
 
 def test_case_supplement_is_bounded_and_failures_survive_create_refine(orchestration, monkeypatch):
-    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome
 
     service, request, captured, _root = orchestration
     queries = []

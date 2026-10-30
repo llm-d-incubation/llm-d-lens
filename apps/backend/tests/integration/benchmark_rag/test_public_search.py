@@ -9,16 +9,16 @@ import pytest
 from starlette.requests import Request
 
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
-from llm_d_lens.benchmark_rag import document_repository as metadata
-from llm_d_lens.benchmark_rag import indexing
-from llm_d_lens.benchmark_rag import opensearch_evidence_search as adapter
-from llm_d_lens.benchmark_rag import router as query_routes
-from llm_d_lens.benchmark_rag.document_lifecycle import DocumentLifecycle
-from llm_d_lens.benchmark_rag.document_transfer import DocumentBackupService
-from llm_d_lens.benchmark_rag.indexing import PublicRagIndexBuilder, passage_document
-from llm_d_lens.benchmark_rag.opensearch_evidence_search import OpenSearchEvidenceProjectionWriter
-from llm_d_lens.benchmark_rag.publication import RagPublicationService
-from llm_d_lens.benchmark_rag.publication_contracts import (
+from llm_d_lens.agentic.document_rag import document_repository as metadata
+from llm_d_lens.agentic.document_rag import indexing
+from llm_d_lens.agentic.document_rag import opensearch_evidence_search as adapter
+from llm_d_lens.agentic.document_rag import router as query_routes
+from llm_d_lens.agentic.document_rag.document_lifecycle import DocumentLifecycle
+from llm_d_lens.agentic.document_rag.document_transfer import DocumentBackupService
+from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder, passage_document
+from llm_d_lens.agentic.document_rag.opensearch_evidence_search import OpenSearchEvidenceProjectionWriter
+from llm_d_lens.agentic.document_rag.publication import RagPublicationService
+from llm_d_lens.agentic.document_rag.publication_contracts import (
     InventoryFile,
     ParsedFile,
     PinnedInventory,
@@ -26,18 +26,18 @@ from llm_d_lens.benchmark_rag.publication_contracts import (
     SourceApproval,
     registry_id,
 )
-from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
-from llm_d_lens.benchmark_rag.repository_corpus import PARSER_VERSION, parse_markdown
-from llm_d_lens.benchmark_rag.runtime import (
+from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
+from llm_d_lens.agentic.document_rag.repository_corpus import PARSER_VERSION, parse_markdown
+from llm_d_lens.agentic.document_rag.runtime import (
     RuntimePolicy,
     RuntimeUpdate,
     load_runtime_policy,
     update_runtime_policy,
 )
-from llm_d_lens.benchmark_rag.search import PublicRagSearchService
-from llm_d_lens.benchmark_rag.search_contracts import EvidenceSearchError, PublicSearchBuild, PublicSearchRequest
-from llm_d_lens.benchmark_rag.service import EvidenceUnavailableError, PublicRagQueryService
-from llm_d_lens.benchmark_rag.sources import BENCHMARK_ORIGIN, SourceArchive, allowed_paths
+from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
+from llm_d_lens.agentic.document_rag.search_contracts import EvidenceSearchError, PublicSearchBuild, PublicSearchRequest
+from llm_d_lens.agentic.document_rag.service import EvidenceUnavailableError, PublicRagQueryService
+from llm_d_lens.agentic.document_rag.sources import BENCHMARK_ORIGIN, SourceArchive, allowed_paths
 from llm_d_lens.core.exceptions import ConflictError
 from llm_d_lens.db.dao.rag_query import QuerySlice, RagQueryDao
 

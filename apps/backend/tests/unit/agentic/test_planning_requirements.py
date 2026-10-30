@@ -48,6 +48,18 @@ def test_latency_units_and_operators(text, operator):
     assert PlanningRequirements.model_validate_json(requirements.model_dump_json()) == requirements
 
 
+@pytest.mark.parametrize("unit,value", [("ms/token", "20"), ("s/token", "0.02"), ("ms/tokens", "20")])
+def test_tpot_per_token_units_preserve_threshold_and_provenance(unit, value):
+    text = f"TPOT <= {value} {unit}"
+    requirements = normalize_requirements(text).require_valid()
+    (target,) = requirements.performance_targets
+    assert (target.field, target.value, target.unit, target.operator) == ("tpot", 20, "ms", "<=")
+    assert target.provenance.raw == text
+    assert text[target.provenance.start : target.provenance.end] == text
+    facts = AICandidateGenerator._apply_preference_constraints(PlanningFacts(8, 80, 4), text)
+    assert facts.tpot_slo_ms == 20
+
+
 @pytest.mark.parametrize(
     "text,form_field,field",
     [
@@ -94,6 +106,12 @@ def test_default_mean_latency_does_not_accept_percentile_predictions():
         "TTFT -2 s",
         "QPS 10 tokens",
         "TTFT 2 ms/tokens",
+        "E2E 2 s/token",
+        "ISL 2 ms/token",
+        "TPOT 2 tokens/s",
+        "TPOT 2 ms/request",
+        "TPOT 2 ms/token/second",
+        "TPOT 2 ms/tokenish",
         "TTFT 2 squirrels",
         "ISL 1024 bananas OSL 256",
     ],
@@ -200,6 +218,58 @@ def test_strict_latency_boundary_and_shared_contract():
     assert facts.ttft_slo_ms == 2000
     assert latency_target_passes(facts, "ttft", 1999)
     assert not latency_target_passes(facts, "ttft", 2000)
+
+
+def test_end_to_end_latency_keeps_its_operator_and_cannot_be_proven_by_ttft():
+    facts = AICandidateGenerator._apply_preference_constraints(
+        PlanningFacts(
+            16,
+            80,
+            2,
+            aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=1, ttft_ms=100),),
+        ),
+        "TTFT < 2s; E2E < 1s",
+    )
+    assert latency_target_passes(facts, "e2e", 999)
+    assert not latency_target_passes(facts, "e2e", 1000)
+    planner = DeterministicPlanner()
+    candidates = planner.candidates(facts)
+    assert planner.decide(facts, candidates).slo_status == "unknown"
+    assert all(candidate.slo_status == "unknown" for candidate in planner.score(facts, candidates))
+
+
+def test_missing_aic_latency_is_unknown_instead_of_satisfying_a_requested_target():
+    facts = AICandidateGenerator._apply_preference_constraints(
+        PlanningFacts(
+            16,
+            80,
+            2,
+            aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=1, ttft_ms=100),),
+        ),
+        "TTFT < 2s; TPOT < 50ms",
+    )
+    planner = DeterministicPlanner()
+    assert not planner._aic_slo_passes(facts, facts.aic_predictions[0])
+    assert planner.decide(facts, planner.candidates(facts)).slo_status == "unknown"
+
+
+@pytest.mark.parametrize("text", ["TTFT >= 2s", "TTFT = 2s", "TTFT < 100ms"])
+def test_unmet_latency_ranking_honors_all_operators_without_empty_violations(text):
+    facts = AICandidateGenerator._apply_preference_constraints(
+        PlanningFacts(
+            16,
+            80,
+            1,
+            aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=1, ttft_ms=100),),
+        ),
+        text,
+    )
+    planner = DeterministicPlanner()
+    candidates = planner.candidates(facts)
+    candidate = next(item for item in candidates if item.id == "optimized-baseline-tp1-r1")
+    assert planner._slo_assessment(facts, candidate)[0] == "not_satisfied"
+    assert planner._unmet_slo_priority(facts, candidate)[0] == 1
+    assert planner.decide(facts, [candidate]).slo_status == "not_satisfied"
 
 
 def test_shared_retrieval_public_context_and_generator_normalization_are_idempotent():
@@ -397,7 +467,8 @@ def test_discovery_reports_conflicting_user_identity_instead_of_overwriting():
     assert facts.requirements.hardware.form_factor == "PCIE"
 
 
-def test_generator_enriches_verified_homogeneous_mcp_hardware_and_model():
+@pytest.mark.parametrize("available_gpus", [2, 4])
+def test_generator_enriches_verified_homogeneous_mcp_hardware_and_model(available_gpus):
     facts = PlanningFacts(
         16,
         80,
@@ -413,7 +484,7 @@ def test_generator_enriches_verified_homogeneous_mcp_hardware_and_model():
                 {
                     "hardware": {
                         "gpuCount": 4,
-                        "availableGpuCount": 4,
+                        "availableGpuCount": available_gpus,
                         "vramBytes": 4 * 80 * 1024**3,
                         "accelerators": [{"id": "nvidia", "gpuCount": 4, "models": ["H100 80GB SXM"]}],
                     },
@@ -422,7 +493,7 @@ def test_generator_enriches_verified_homogeneous_mcp_hardware_and_model():
         },
     )
     assert resolved.facts.requirements.hardware.form_factor == "SXM"
-    assert resolved.facts.requirements.hardware.device_count == 4
+    assert resolved.facts.requirements.hardware.device_count == available_gpus
     assert resolved.facts.requirements.model.architecture == "dense"
     assert resolved.facts.requirements.model.quantization == "awq"
     assert resolved.facts.requirements.runtime.backend is None

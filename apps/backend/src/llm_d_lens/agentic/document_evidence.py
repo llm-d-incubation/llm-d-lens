@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -11,20 +12,20 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
 
-from llm_d_lens.auth.contracts import Principal
-from llm_d_lens.benchmark_rag.access import require_query_access
-from llm_d_lens.benchmark_rag.contracts import model_identity_aliases
-from llm_d_lens.benchmark_rag.document_repository import DocumentRepository
-from llm_d_lens.benchmark_rag.query_contracts import Citation
-from llm_d_lens.benchmark_rag.runtime import load_runtime_policy
-from llm_d_lens.benchmark_rag.search import PublicRagSearchService, configured_repository
-from llm_d_lens.benchmark_rag.search_contracts import (
+from llm_d_lens.agentic.document_rag.access import require_query_access
+from llm_d_lens.agentic.document_rag.contracts import model_identity_aliases
+from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
+from llm_d_lens.agentic.document_rag.query_contracts import Citation
+from llm_d_lens.agentic.document_rag.runtime import load_runtime_policy
+from llm_d_lens.agentic.document_rag.search import PublicRagSearchService, configured_repository
+from llm_d_lens.agentic.document_rag.search_contracts import (
     EmbeddingContract,
     EvidenceSearchError,
     PublicSearchRequest,
     SearchBranchStatus,
 )
-from llm_d_lens.benchmark_rag.service import EvidenceUnavailableError
+from llm_d_lens.agentic.document_rag.service import EvidenceUnavailableError
+from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.core.exceptions import ForbiddenError, PasswordChangeRequiredError, UnauthenticatedError
 from llm_d_lens.hardware.registry import all_profiles
 
@@ -317,6 +318,16 @@ def document_context(
     }
 
 
+def document_reference_map(packets: tuple[DocumentEvidencePacket, ...]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for packet in packets:
+        alias = "d:" + hashlib.sha256(packet.citation_id.encode()).hexdigest()[:10]
+        if alias in result and result[alias] != packet.citation_id:
+            raise ValueError("Compact document reference collision")
+        result[alias] = packet.citation_id
+    return result
+
+
 def validate_document_citations(references: list[str], packets: tuple[DocumentEvidencePacket, ...]) -> None:
     if not set(references) <= {packet.citation_id for packet in packets}:
         raise ValueError("unknown document citation ID")
@@ -359,7 +370,7 @@ async def resolve_document_evidence(question: str, principal: Principal | None) 
         return DocumentEvidenceOutcome(
             status="forbidden", mode=mode, generation=policy.generation, reason="query_forbidden"
         )
-    if not policy.search_enabled or not policy.advanced_search_enabled:
+    if not policy.search_enabled or (policy.agentic_search_mode != "lexical" and not policy.advanced_search_enabled):
         logger.info(
             "event=agentic_document_evidence status=disabled mode=%s generation=%d reason=search_disabled",
             mode,

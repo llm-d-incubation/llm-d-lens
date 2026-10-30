@@ -9,11 +9,12 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import CandidateEvidenceResult
 from llm_d_lens.ai_providers.client import AIRequestRecord
-from llm_d_lens.benchmark_rag.case_retrieval import CandidateEvidenceResult
 from llm_d_lens.configuration.models import ModelSecretConfiguration
 from llm_d_lens.deploy.standard_kubernetes_service import StandardKubernetesServiceRequest
 
+from .configuration import AGENTIC_RUNTIME_BACKEND
 from .facts import PlanningEvidence
 from .planner import PlannedCandidate, PlannerDecision, PlanningFacts
 
@@ -52,7 +53,7 @@ class AgenticCandidateRefinementRequest(BaseModel):
 
 class AgenticCandidate(BaseModel):
     id: str = "candidate-1"
-    backend: str = "vllm"
+    backend: str = AGENTIC_RUNTIME_BACKEND
     provider_ref: str = "baseline-vllm"
     replicas: int
     tensor_parallel_size: int

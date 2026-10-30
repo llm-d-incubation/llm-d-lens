@@ -5,13 +5,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { RetrievalEvidenceSources } from '../ui/AgenticDeploymentWorkspace.jsx';
 import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, planningEvidenceLabel, publicRagMatchSummary, relaxedAicCandidates, retrievalBranchSummaries } from './agenticPresentation.js';
 
-test('retrieval summaries distinguish zero SQL observations from five document results and empty internal experiments', () => {
+test('retrieval summaries distinguish public observations from internal experiments', () => {
     const summaries = retrievalBranchSummaries({ planning_evidence: [
         { id: 'public-rag:query', status: 'no_matches', details: {
             retrieval: { returned_observations: 0, matched_observations: 0 }, response: { evidence: [] },
-        } },
-        { source: 'public-document-rag', status: 'available', details: {
-            retrieved_count: 5, document_evidence: [{}, {}, {}, {}, {}],
         } },
         { source: 'configuration-cases', details: { branch_status: {
             internal_sql: { status: 'empty', returned_count: 0, candidate_total: 0 },
@@ -19,27 +16,23 @@ test('retrieval summaries distinguish zero SQL observations from five document r
     ] });
     assert.deepEqual(summaries.map(({ label, status }) => ({ label, status })), [
         { label: 'Public SQL measured observations', status: 'no_matches' },
-        { label: 'Document RAG passages', status: 'available' },
         { label: 'Internal SQL experiments', status: 'empty' },
     ]);
     assert.match(summaries[0].summary, /Retrieved 0 of 0 matching observations; 0 retained/);
-    assert.match(summaries[1].summary, /Retrieved 5 passages; 5 retained/);
-    assert.match(summaries[1].summary, /not measured performance/);
-    assert.match(summaries[2].summary, /Retrieved 0 of 0 matching experiments/);
+    assert.match(summaries[1].summary, /Retrieved 0 of 0 matching experiments/);
 });
 
-test('unavailable, disabled and absent branches are not presented as zero matches', () => {
+test('unavailable, forbidden and absent branches are not presented as zero matches', () => {
     assert.deepEqual(retrievalBranchSummaries({}), []);
     const summaries = retrievalBranchSummaries({ planning_evidence: [
         { id: 'public-rag:query', status: 'unavailable', details: { code: 'TimeoutError' } },
-        { source: 'public-document-rag', status: 'disabled', details: { retrieved_count: 0 } },
         { source: 'configuration-cases', details: { branch_status: {
             internal_sql: { status: 'forbidden', returned_count: 0, candidate_total: 0, reason: 'query_forbidden' },
         } } },
     ] });
     for (const row of summaries) assert.doesNotMatch(row.summary, /Retrieved 0/);
     assert.match(summaries[0].summary, /TimeoutError/);
-    assert.match(summaries[2].summary, /query forbidden/);
+    assert.match(summaries[1].summary, /query forbidden/);
 });
 
 test('retrieval summaries keep retrieved and budget-retained evidence counts separate', () => {
@@ -47,24 +40,8 @@ test('retrieval summaries keep retrieved and budget-retained evidence counts sep
         { id: 'public-rag:query', status: 'available', details: {
             retrieval: { returned_observations: 50, matched_observations: 504 }, response: { evidence: [{}] },
         } },
-        { source: 'public-document-rag', status: 'empty', details: {
-            retrieved_count: 5, document_evidence: [], reason: 'evidence_budget_exhausted',
-        } },
     ] });
     assert.match(summaries[0].summary, /Retrieved 50 of 504 matching observations; 1 retained/);
-    assert.match(summaries[1].summary, /Retrieved 5 passages; 0 retained/);
-    assert.match(summaries[1].summary, /evidence budget exhausted/);
-});
-
-test('disabled document retrieval is visible even when no document evidence packet was emitted', () => {
-    const summaries = retrievalBranchSummaries({ planning_evidence: [
-        { source: 'configuration-cases', details: { branch_status: {
-            documents: { status: 'disabled', mode: 'disabled', retrieved_count: 0 },
-        } } },
-    ] });
-    assert.deepEqual(summaries.map(({ label, status, summary }) => ({ label, status, summary })), [{
-        label: 'Document RAG passages', status: 'disabled', summary: 'disabled.',
-    }]);
 });
 
 test('public RAG match presentation preserves differences, unknowns, statistics and configuration basis', () => {
@@ -117,7 +94,7 @@ test('fallback references are explicitly labeled without a low-latency claim', (
     assert.match(summaries[0].warning, /not low-latency evidence/);
 });
 
-test('source evidence is grouped once, collapsed by default, with counts, passages and measured citations', () => {
+test('source evidence is grouped once, collapsed by default, with counts and measured citations', () => {
     const publicEvidence = {
         id: 'public-rag:query', source: 'public-benchmark-rag', status: 'available',
         details: {
@@ -131,23 +108,11 @@ test('source evidence is grouped once, collapsed by default, with counts, passag
             },
         },
     };
-    const documentEvidence = {
-        id: 'document-rag:query', source: 'public-document-rag', status: 'available',
-        details: {
-            retrieved_count: 5,
-            document_evidence: [{
-                citation_id: 'document:chunk-one', title: 'Cache guide', text: 'Configure cache only after checking prerequisites.',
-                retrieval_mode: 'opensearch_lexical', retrieval_build_id: 'build-one',
-                citation: { source_path: 'guide.md', source_revision: 'rev-doc', sha256: 'doc-hash' },
-            }],
-        },
-    };
     const caseEvidence = {
         id: 'configuration-cases:query', source: 'configuration-cases',
         details: {
             branch_status: {
                 public_sql: { status: 'available' },
-                documents: { status: 'available' },
                 internal_sql: { status: 'available', returned_count: 4, candidate_total: 12 },
             },
             cases: [{
@@ -161,23 +126,18 @@ test('source evidence is grouped once, collapsed by default, with counts, passag
         },
     };
     const run = {
-        planning_evidence: [publicEvidence, documentEvidence, caseEvidence],
-        decision_evidence_ids: ['public-rag:query', 'public-rag:one', 'document:chunk-one', 'benchmark:bench-one'],
+        planning_evidence: [publicEvidence, caseEvidence],
+        decision_evidence_ids: ['public-rag:query', 'public-rag:one', 'benchmark:bench-one'],
     };
     const html = renderToStaticMarkup(React.createElement(RetrievalEvidenceSources, { run }));
-    assert.equal((html.match(/<details\b/g) || []).length, 3);
-    assert.equal((html.match(/<summary\b/g) || []).length, 3);
+    assert.equal((html.match(/<details\b/g) || []).length, 2);
+    assert.equal((html.match(/<summary\b/g) || []).length, 2);
     assert.doesNotMatch(html, /<details[^>]*\bopen(?:=|\s|>)/);
-    for (const label of ['Public SQL measured observations', 'Document RAG passages', 'Internal SQL experiments']) {
+    for (const label of ['Public SQL measured observations', 'Internal SQL experiments']) {
         assert.equal(html.split(label).length - 1, 1);
     }
     assert.match(html, /Retrieved 2 of 9 matching observations; 2 retained/);
-    assert.match(html, /Retrieved 5 passages; 1 retained/);
     assert.match(html, /Retrieved 4 of 12 matching experiments; 1 retained/);
-    assert.match(html, /Cache guide/);
-    assert.match(html, /Configure cache only after checking prerequisites/);
-    assert.match(html, /guide.md.*rev-doc/);
-    assert.match(html, /doc-hash/);
     assert.match(html, /one.json.*rev-public/);
     assert.match(html, /public-hash/);
     assert.match(html, /More observations matched/);
@@ -186,27 +146,25 @@ test('source evidence is grouped once, collapsed by default, with counts, passag
     assert.match(html, /Validation required: runtime compatibility/);
     assert.match(html, /1 of 1 retained cases.*not low-latency evidence/);
     assert.match(html, /Compare model, hardware, runtime and workload/);
-    assert.equal((html.match(/used for selection/g) || []).length, 6);
+    assert.equal((html.match(/used for selection/g) || []).length, 4);
     assert.equal((html.match(/context only/g) || []).length, 1);
-    assert.doesNotMatch(html, /configuration-cases|priority over AIC|Document RAG \(qualitative context\)/);
+    assert.doesNotMatch(html, /configuration-cases|priority over AIC|Document RAG/);
     for (const item of run.planning_evidence) assert.equal(planningEvidenceLabel(item, false), null);
     assert.equal(planningEvidenceLabel({ id: 'aic:search', source: 'aic' }, true), 'AIC performance prediction');
     assert.equal(planningEvidenceLabel({ id: 'cluster-overview:one', source: 'cluster' }, true), 'Live cluster capacity');
 });
 
-test('source grouping preserves unavailable and disabled diagnostics without fabricated zero counts', () => {
+test('source grouping preserves unavailable and forbidden diagnostics without fabricated zero counts', () => {
     const html = renderToStaticMarkup(React.createElement(RetrievalEvidenceSources, { run: {
         planning_evidence: [
             { id: 'public-rag:query', status: 'unavailable', details: { code: 'TimeoutError' } },
             { source: 'configuration-cases', details: { branch_status: {
-                documents: { status: 'disabled', retrieved_count: 0 },
                 internal_sql: { status: 'forbidden', reason: 'query_forbidden' },
             } } },
         ],
     } }));
-    assert.equal((html.match(/<details\b/g) || []).length, 3);
+    assert.equal((html.match(/<details\b/g) || []).length, 2);
     assert.match(html, /TimeoutError/);
-    assert.match(html, /disabled/);
     assert.match(html, /query forbidden/);
     assert.doesNotMatch(html, /Retrieved 0|undefined|configuration-cases/);
 });

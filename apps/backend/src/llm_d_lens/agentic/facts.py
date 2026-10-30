@@ -16,12 +16,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
-from llm_d_lens.aic.service import AICError, check_support, search
-from llm_d_lens.auth.contracts import Principal
-from llm_d_lens.benchmark_rag.access import require_query_access
-from llm_d_lens.benchmark_rag.case_retrieval import model_reference_map
-from llm_d_lens.benchmark_rag.contracts import (
+from llm_d_lens.agentic.public_benchmark_record.access import require_query_access
+from llm_d_lens.agentic.public_benchmark_record.contracts import (
     WORKLOAD_ALIASES,
     effective_statistic,
     experiment_rank_key,
@@ -31,9 +27,12 @@ from llm_d_lens.benchmark_rag.contracts import (
     model_identity_aliases,
     planning_latency_axes,
 )
-from llm_d_lens.benchmark_rag.publication_contracts import PublicationError
-from llm_d_lens.benchmark_rag.query_contracts import QueryFilters, QueryRequest
-from llm_d_lens.benchmark_rag.service import PublicRagQueryService
+from llm_d_lens.agentic.public_benchmark_record.publication_contracts import PublicationError
+from llm_d_lens.agentic.public_benchmark_record.query_contracts import QueryFilters, QueryRequest
+from llm_d_lens.agentic.public_benchmark_record.service import PublicBenchmarkRecordQueryService
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
+from llm_d_lens.aic.service import AICError, check_support, search
+from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.capacity import load_model_config
 from llm_d_lens.cluster import registry
 from llm_d_lens.cluster.errors import ClusterOverviewError
@@ -45,14 +44,13 @@ from llm_d_lens.core.exceptions import (
     PasswordChangeRequiredError,
     UnauthenticatedError,
 )
-from llm_d_lens.db.dao.rag_query import RagQueryDao
-from llm_d_lens.deploy.application import deployment_run_manager
+from llm_d_lens.db.dao.public_benchmark_record_query import PublicBenchmarkRecordQueryDao
 from llm_d_lens.hardware.models import HardwareProfile
 from llm_d_lens.hardware.registry import all_profiles
 
-from .document_evidence import DOCUMENT_PREFIX, DOCUMENT_USAGE, DocumentEvidenceOutcome
+from .document_evidence import DOCUMENT_USAGE, DocumentEvidenceOutcome, document_reference_map
 from .planner import AICCandidatePrediction, PlanningFacts, public_rag_workload, resolve_workload_signals
-from .planning_requirements import enrich_planning_requirements
+from .planning_requirements import NumericRequirement, enrich_planning_requirements
 
 _GIB = 1024**3
 logger = logging.getLogger(__name__)
@@ -73,7 +71,6 @@ class ResolvedPlanningFacts(BaseModel):
 
 
 def with_document_evidence(resolved: ResolvedPlanningFacts, outcome: DocumentEvidenceOutcome) -> ResolvedPlanningFacts:
-    """Replace document packets without adding them to deterministic evidence or scores."""
     evidence = [item for item in resolved.evidence if item.source != "public-document-rag"]
     trace = [item for item in resolved.trace if item.get("phase") != "document_rag"]
     if outcome.status != "disabled" or outcome.reason is not None:
@@ -88,9 +85,7 @@ def with_document_evidence(resolved: ResolvedPlanningFacts, outcome: DocumentEvi
                         {
                             "document_evidence_usage": DOCUMENT_USAGE,
                             "document_evidence": [packet.model_dump(mode="json") for packet in outcome.packets],
-                            "model_reference_map": model_reference_map(
-                                (), document_ids=[packet.citation_id for packet in outcome.packets]
-                            ),
+                            "model_reference_map": document_reference_map(outcome.packets),
                         }
                         if outcome.packets
                         else {}
@@ -101,19 +96,28 @@ def with_document_evidence(resolved: ResolvedPlanningFacts, outcome: DocumentEvi
         trace.append({"phase": "document_rag", **outcome.metadata()})
     return resolved.model_copy(
         update={
-            "facts": replace(
-                resolved.facts,
-                document_evidence=outcome.packets,
-                evidence_ids=tuple(
-                    reference
-                    for reference in resolved.facts.evidence_ids
-                    if not reference.startswith((DOCUMENT_PREFIX, "document-rag:"))
-                ),
-            ),
+            "facts": replace(resolved.facts, document_evidence=outcome.packets),
             "evidence": evidence,
             "trace": trace,
         }
     )
+
+
+class PlanningHardwareSnapshot:
+    """One discovery attempt shared only by a single create/refine operation."""
+
+    def __init__(self, cluster_id: str) -> None:
+        self.cluster_id = cluster_id
+        self._task: asyncio.Task[dict[str, Any]] | None = None
+
+    async def get(self, cluster_id: str) -> dict[str, Any]:
+        if cluster_id != self.cluster_id:
+            raise ValueError("Planning hardware snapshot belongs to a different cluster")
+        if self._task is None:
+            self._task = asyncio.create_task(build_overview(registry.require_cluster(cluster_id)))
+        if self._task.cancelled():
+            raise TimeoutError("Planning hardware discovery was cancelled; no snapshot is available")
+        return deepcopy(await self._task)
 
 
 def _hardware_model_key(model: str, profile: HardwareProfile) -> tuple[str, ...]:
@@ -304,14 +308,12 @@ def rank_public_rag_evidence(
         )
         if target is not None
     }
-    typed_targets = (
-        {
-            "latency" if target.field == "e2e" else target.field: target
-            for target in facts.requirements.performance_targets
-        }
-        if facts and facts.requirements
-        else {}
-    )
+    typed_targets: dict[str, list[NumericRequirement]] = {}
+    if facts and facts.requirements:
+        for requirement in facts.requirements.performance_targets:
+            metric = "latency" if requirement.field == "e2e" else requirement.field
+            typed_targets.setdefault(metric, []).append(requirement)
+            targets.setdefault(metric, requirement.value)
     groups: dict[str, list[dict[str, Any]]] = {}
     scopes = {}
     for item in observations:
@@ -355,52 +357,61 @@ def rank_public_rag_evidence(
         configuration = experiment.get("configuration") or {}
         latency_fields = {}
         for metric, target in targets.items():
-            requirement = typed_targets.get(metric)
-            statistic = effective_statistic(requirement.statistic if requirement is not None else None)
-            values = [
-                {
-                    "evidence_id": f"public-rag:{peer['item_id']}",
-                    "statistic": effective_statistic(peer.get("statistic")),
-                    **(
-                        {"statistic_original": None, "statistic_basis": "default_mean"}
-                        if peer.get("statistic") is None
-                        else {}
-                    ),
-                    "value_ms": value,
-                }
-                for peer in groups[scopes[item["item_id"]]]
-                if ("latency" if peer.get("metric") == "e2e" else peer.get("metric")) == metric
-                and effective_statistic(peer.get("statistic")) == statistic
-                and (value := _public_latency_value(peer)) is not None
-            ]
-            for value in values:
-                value["relative_deviation"] = value["value_ms"] / target - 1
-                operator = requirement.operator if requirement is not None else "<="
-                value["target_satisfied"] = {
-                    "<": value["value_ms"] < target,
-                    "<=": value["value_ms"] <= target,
-                    ">": value["value_ms"] > target,
-                    ">=": value["value_ms"] >= target,
-                    "=": value["value_ms"] == target,
-                    "==": value["value_ms"] == target,
-                }[operator]
+            constraints = list(
+                dict.fromkeys(
+                    (effective_statistic(requirement.statistic), requirement.value, requirement.operator)
+                    for requirement in typed_targets.get(metric, ())
+                )
+            ) or [(effective_statistic(None), target, "<=")]
+            assessments = []
+            for statistic, bound, operator in constraints:
+                values = [
+                    {
+                        "evidence_id": f"public-rag:{peer['item_id']}",
+                        "statistic": effective_statistic(peer.get("statistic")),
+                        **(
+                            {"statistic_original": None, "statistic_basis": "default_mean"}
+                            if peer.get("statistic") is None
+                            else {}
+                        ),
+                        "value_ms": value,
+                    }
+                    for peer in groups[scopes[item["item_id"]]]
+                    if ("latency" if peer.get("metric") == "e2e" else peer.get("metric")) == metric
+                    and effective_statistic(peer.get("statistic")) == statistic
+                    and (value := _public_latency_value(peer)) is not None
+                ]
+                for value in values:
+                    deviation = value["value_ms"] / bound - 1
+                    value["relative_deviation"] = (
+                        -deviation if operator in {">", ">="} else abs(deviation) if operator == "=" else deviation
+                    )
+                    value["target_satisfied"] = {
+                        "<": value["value_ms"] < bound,
+                        "<=": value["value_ms"] <= bound,
+                        ">": value["value_ms"] > bound,
+                        ">=": value["value_ms"] >= bound,
+                        "=": value["value_ms"] == bound,
+                    }[operator]
+                assessments.append(
+                    {"target_ms": bound, "operator": operator, "statistic": statistic, "observations": values}
+                )
             latency_fields[metric] = {
-                "target_ms": target,
-                "operator": requirement.operator if requirement is not None else "<=",
-                "statistic": statistic,
-                "observations": values,
+                **assessments[-1],
+                **({"targets": assessments} if len(assessments) > 1 else {}),
             }
-        deviations = [
-            value["relative_deviation"] for field in latency_fields.values() for value in field["observations"]
+        assessments = [assessment for field in latency_fields.values() for assessment in field.get("targets", [field])]
+        deviations = [value["relative_deviation"] for assessment in assessments for value in assessment["observations"]]
+        unknown_metrics = [
+            metric
+            for metric, field in latency_fields.items()
+            if any(not assessment["observations"] for assessment in field.get("targets", [field]))
         ]
-        unknown_metrics = [metric for metric, field in latency_fields.items() if not field["observations"]]
         status = (
             "not_requested"
             if not targets
             else "not_satisfied"
-            if any(
-                not value["target_satisfied"] for field in latency_fields.values() for value in field["observations"]
-            )
+            if any(not value["target_satisfied"] for assessment in assessments for value in assessment["observations"])
             else "unknown"
             if unknown_metrics
             else "satisfied"
@@ -438,13 +449,22 @@ def rank_public_rag_evidence(
 
 
 async def resolve_retrieval_hardware(
-    cluster_server_id: str, model: str, facts: PlanningFacts, principal: Principal | None
+    cluster_server_id: str,
+    model: str,
+    facts: PlanningFacts,
+    principal: Principal | None,
+    *,
+    hardware_snapshot: PlanningHardwareSnapshot | None = None,
 ) -> tuple[PlanningFacts, dict[str, Any]]:
     """Share verified target identity before parallel SQL retrieval, without AIC or history reads."""
     try:
         require_query_access(principal)
         async with asyncio.timeout(15):
-            overview = await build_overview(registry.require_cluster(cluster_server_id))
+            overview = (
+                await hardware_snapshot.get(cluster_server_id)
+                if hardware_snapshot is not None
+                else await build_overview(registry.require_cluster(cluster_server_id))
+            )
         observed_target = _public_rag_hardware(overview)
         simulated_model = _test_cluster_hardware(cluster_server_id)
         effective_model = simulated_model or facts.planning_hardware_model
@@ -489,6 +509,7 @@ async def resolve_public_rag_evidence(
     *,
     cluster_server_id: str,
     planning_facts: PlanningFacts | None = None,
+    hardware_snapshot: PlanningHardwareSnapshot | None = None,
 ) -> PlanningEvidence:
     """Read only published public evidence under the actual caller's global grant."""
     query = QueryRequest(
@@ -502,7 +523,11 @@ async def resolve_public_rag_evidence(
     try:
         require_query_access(principal)
         async with asyncio.timeout(15):
-            overview = await build_overview(registry.require_cluster(cluster_server_id))
+            overview = (
+                await hardware_snapshot.get(cluster_server_id)
+                if hardware_snapshot is not None
+                else await build_overview(registry.require_cluster(cluster_server_id))
+            )
             target = _public_rag_hardware(overview)
             if target is None:
                 message = (
@@ -519,7 +544,7 @@ async def resolve_public_rag_evidence(
             profile, hardware_model = target
             target_hardware.update(profile_id=profile.id, model=hardware_model)
             simulated_model = _test_cluster_hardware(cluster_server_id)
-            dao = RagQueryDao()
+            dao = PublicBenchmarkRecordQueryDao()
             dao.planning_facts = planning_facts
             if simulated_model:
                 planning_hardware_overview(overview, simulated_model, cluster_id=cluster_server_id)
@@ -543,7 +568,7 @@ async def resolve_public_rag_evidence(
                 )
             query = query.model_copy(update={"filters": query.filters.model_copy(update={"hardware": hardware_filter})})
             response = await run_in_threadpool(
-                PublicRagQueryService(dao=dao).query,
+                PublicBenchmarkRecordQueryService(dao=dao).query,
                 query,
                 principal,
                 experiment_limit=50 if planning_facts is not None else None,
@@ -605,7 +630,7 @@ async def resolve_public_rag_evidence(
                 f"TEST HARDWARE IDENTITY: treating this cluster as {simulated_model} for RAG and AIC validation. "
                 "This is a simulated target, not a cross-hardware transfer; deployment is disabled. "
                 f"SQL measured observations: retrieved {len(response.evidence)} for the requested model name aliases. "
-                "Document RAG and internal experiments are reported separately."
+                "Internal experiments are reported separately."
             )
     return PlanningEvidence(
         id="public-rag:query",
@@ -662,12 +687,19 @@ async def resolve_planning_facts(
     requested: PlanningFacts,
     *,
     include_supplementary_evidence: bool = True,
+    hardware_snapshot: PlanningHardwareSnapshot | None = None,
 ) -> ResolvedPlanningFacts:
     """Use a live cluster overview for hard constraints and record other evidence."""
     requested = resolve_workload_signals(requested)
     cluster = registry.require_cluster(cluster_server_id)
     overview = planning_hardware_overview(
-        await build_overview(cluster), requested.planning_hardware_model, cluster_id=cluster_server_id
+        (
+            await hardware_snapshot.get(cluster_server_id)
+            if hardware_snapshot is not None
+            else await build_overview(cluster)
+        ),
+        requested.planning_hardware_model,
+        cluster_id=cluster_server_id,
     )
     hardware = overview.get("hardware") or {}
     available_gpus = int(hardware.get("availableGpuCount") or 0)
@@ -752,7 +784,6 @@ async def resolve_planning_facts(
             model_name=model_name or requested.model_name,
             model_config_dict=model_config_dict,
             planning_hardware_model=requested.planning_hardware_model,
-            document_evidence=requested.document_evidence,
             public_rag_evidence=requested.public_rag_evidence,
             configuration_cases=requested.configuration_cases,
             configuration_case_status=requested.configuration_case_status,
@@ -959,125 +990,3 @@ def _positive_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return numeric if numeric > 0 else None
-
-
-def _positive_int(value: Any) -> int | None:
-    try:
-        numeric = int(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if numeric > 0 else None
-
-
-def _historical_topology_by_execution() -> dict[str, dict[str, Any]]:
-    topologies: dict[str, dict[str, Any]] = {}
-    for run in deployment_run_manager.store.list_runs():
-        for case in run.cases:
-            if not case.execution_id:
-                continue
-            configuration = run.source_configurations[case.source_configuration_ordinal]
-            topology = _configuration_topology(configuration)
-            if topology is not None:
-                topologies[case.execution_id] = topology
-    return topologies
-
-
-def _configuration_topology(configuration) -> dict[str, Any] | None:
-    content = configuration.content
-    decode = content.get("decode") if isinstance(content, dict) else None
-    if not isinstance(decode, dict):
-        return None
-    replicas = _positive_int(decode.get("replicaCount"))
-    tensor_parallel_size = _positive_int(decode.get("tensorParallelSize"))
-    if replicas is None or tensor_parallel_size is None:
-        return None
-    prefill = content.get("prefill") if isinstance(content, dict) else None
-    prefill_replicas = _positive_int(prefill.get("replicaCount")) if isinstance(prefill, dict) else None
-    prefill_tensor_parallel_size = (
-        _positive_int(prefill.get("tensorParallelSize")) if isinstance(prefill, dict) else None
-    )
-    required_gpus = replicas * tensor_parallel_size
-    if prefill_replicas and prefill_tensor_parallel_size:
-        required_gpus += prefill_replicas * prefill_tensor_parallel_size
-    return {
-        "candidate_id": configuration.provenance.get("agentic_candidate_id"),
-        "provider_ref": configuration.provider_ref,
-        "replicas": replicas,
-        "tensor_parallel_size": tensor_parallel_size,
-        "prefill_replicas": prefill_replicas,
-        "prefill_tensor_parallel_size": prefill_tensor_parallel_size,
-        "guide_variant": content.get("guideVariant"),
-        "max_model_len": _positive_int(decode.get("maxModelLen")),
-        "gpu_memory_utilization": _positive_float(decode.get("gpuMemoryUtilization")),
-        "required_gpus": required_gpus,
-    }
-
-
-async def _similar_historical_observations(
-    tasks,
-    facts: PlanningFacts,
-    topology_by_execution: dict[str, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    from llm_d_lens.simulation.benchmark_evidence import normalize_simulation_task
-
-    del topology_by_execution
-    observations: list[dict[str, Any]] = []
-    for task in tasks:
-        records, issues = normalize_simulation_task(task)
-        if issues:
-            logger.warning("Simulation %s is not reusable evidence: %s", task.id, issues)
-        for record in records:
-            configuration = record.configuration
-            observations.append(
-                {
-                    "provider_ref": configuration.topology,
-                    "replicas": configuration.decode_replicas,
-                    "tensor_parallel_size": configuration.decode_tp,
-                    "prefill_replicas": configuration.prefill_replicas,
-                    "prefill_tensor_parallel_size": configuration.prefill_tp,
-                    "required_gpus": record.hardware.gpu_count,
-                    "task_id": task.id,
-                    "benchmark_id": record.benchmark_id,
-                    "measured_at": record.timestamp.isoformat(),
-                    "model": record.model.model_dump(),
-                    "hardware": record.hardware.model_dump(),
-                    "runtime": record.runtime.model_dump(),
-                    "scenario": task.scenario,
-                    "similarity": _workload_similarity(
-                        facts, task.scenario, record.workload.mean_input_tokens, record.workload.mean_output_tokens
-                    ),
-                    "ttft_p95_ms": record.metrics.ttft_p95_ms,
-                    "tpot_p95_ms": record.metrics.tpot_p95_ms,
-                    "throughput_tokens_per_sec": record.metrics.throughput_tokens_per_s,
-                }
-            )
-    return sorted(observations, key=lambda item: (-item["similarity"], item["task_id"]))[:3]
-
-
-def _mean(values) -> float | None:
-    positive = [float(value) for value in values if value and value > 0]
-    return sum(positive) / len(positive) if positive else None
-
-
-def _p95(values: list[float]) -> float | None:
-    return values[min(len(values) - 1, int(len(values) * 0.95))] if values else None
-
-
-def _workload_similarity(
-    facts: PlanningFacts,
-    scenario: str,
-    observed_input: float | None,
-    observed_output: float | None,
-) -> float:
-    profile = facts.workload_profile
-    target_input = profile.mean_input_tokens if profile else None
-    target_output = profile.mean_output_tokens if profile else None
-    distances = [0.0 if scenario == _scenario_for_use_case(facts.use_case) else 0.25]
-    for target, observed in ((target_input, observed_input), (target_output, observed_output)):
-        if target and observed:
-            distances.append(min(abs(target - observed) / max(target, observed), 1.0))
-    return round(max(0.0, 1 - sum(distances) / len(distances)), 3)
-
-
-def _scenario_for_use_case(use_case: str) -> str:
-    return "coding" if use_case == "code-generation" else "chat"

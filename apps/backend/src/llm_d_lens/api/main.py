@@ -34,7 +34,7 @@ from llm_d_lens.auth.routes import validate_route_registry
 from llm_d_lens.auth.service import default_service as default_auth_service
 from llm_d_lens.auth.settings import get_settings as get_auth_settings
 from llm_d_lens.auth.settings import settings as auth_settings
-from llm_d_lens.benchmark_rag.router import router as benchmark_rag_router
+from llm_d_lens.agentic.document_rag.router import router as benchmark_rag_router
 from llm_d_lens.capacity.router import router as capacity_router
 from llm_d_lens.cluster.bootstrap.router import router as cluster_bootstrap_router
 from llm_d_lens.cluster.errors import ClusterOverviewError
