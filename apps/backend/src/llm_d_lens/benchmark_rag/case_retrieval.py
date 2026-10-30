@@ -504,14 +504,19 @@ async def resolve_internal_cases(
             if facts is not None
             else dao.search(filters, principal, limit=MAX_BRANCH_CANDIDATES)
         )
+        failures = (
+            dao.planning_failures(model, principal, facts, limit=MAX_BRANCH_CANDIDATES) if facts is not None else None
+        )
+        matches = (*result.matches, *(failures.matches if failures is not None else ()))
+        total = result.total + (failures.total if failures is not None else 0)
         observations = tuple(entry for match in result.matches for entry in agentic_evidence(match, filters))
-        dao.assert_current(result.matches, principal)
+        dao.assert_current(matches, principal)
         return InternalCaseOutcome(
             observations=observations,
-            records=tuple(match.record for match in result.matches),
-            status="available" if observations else "empty",
-            total=result.total,
-            truncated=result.total > len(result.matches),
+            records=tuple(match.record for match in matches),
+            status="available" if matches else "empty",
+            total=total,
+            truncated=total > len(matches),
         )
 
     try:

@@ -271,7 +271,7 @@ def test_postgres_schema_numeric_filters_without_document_search(postgres_engine
     assert columns["value"] == "NUMERIC"
     assert "search_vector" not in columns
     assert columns["workload"] == "JSONB"
-    assert not {"rag_items", "rag_search_builds", "rag_search_pointers"}.intersection(inspector.get_table_names())
+    assert set(columns) == set(RagItemRow.__table__.columns.keys())
     dao = RagItemDao(sessionmaker(bind=postgres_engine, expire_on_commit=False))
     _evidence(dao)
     with postgres_engine.connect() as connection:

@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import importlib
-import json
 import os
 import re
-import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
-from uuid import uuid4
 
-from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
-from sqlalchemy.engine import Engine, make_url
+from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -33,96 +27,6 @@ from llm_d_lens.benchmark_rag.sources import input_format, validate_approval
 from llm_d_lens.benchmark_rag.transfer_contracts import RestoreResult
 from llm_d_lens.db.dao.rag_publication import RagPublicationDao
 from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow as RagItemRow
-
-
-def reset_legacy_rag_storage(
-    backup_dir: Path, *, writers_quiesced: bool = False, engine: Engine | None = None
-) -> dict[str, object]:
-    """Durably back up only the retired SQL tables, then initialize empty Prism storage."""
-    if writers_quiesced is not True:
-        raise PublicationError("legacy SQL cleanup requires quiesced writers")
-    from llm_d_lens.db.engine import get_engine
-
-    migration = importlib.import_module(
-        "llm_d_lens.db.migrations.versions.8bf2a6c1d903_structured_public_benchmark_records"
-    )
-    root = backup_dir.expanduser().absolute()
-    if any(path.is_symlink() for path in (root, *root.parents)):
-        raise PublicationError("SQL cleanup backup directory must not use symlinks")
-    directory = root / (datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex)
-    directory.mkdir(parents=True, mode=0o700)
-    result: dict[str, object]
-    with (engine if engine is not None else get_engine()).begin() as connection:
-        if connection.dialect.name != "postgresql":
-            raise PublicationError("legacy SQL cleanup requires PostgreSQL")
-        connection.execute(text("SET LOCAL lock_timeout = '15s'"))
-        connection.execute(text("SELECT pg_advisory_xact_lock(hashtext('public-benchmark-storage-reset'))"))
-        inspector = inspect(connection)
-        if inspector.has_table("public_benchmark_records"):
-            raise PublicationError("public_benchmark_records already exists; refusing to overwrite it")
-        tables = [
-            Table(name, MetaData(), autoload_with=connection)
-            for name in migration.LEGACY_TABLES
-            if inspector.has_table(name)
-        ]
-        for table in tables:
-            connection.execute(text(f'LOCK TABLE "{table.name}" IN ACCESS EXCLUSIVE MODE'))
-        payloads = {
-            f"{table.name}.json": json.dumps(
-                [dict(row) for row in connection.execute(select(table)).mappings()],
-                default=str,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-            for table in tables
-        }
-        backup = directory / "legacy-sql.zip"
-        checksums = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
-        with zipfile.ZipFile(backup, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
-            for name, payload in payloads.items():
-                bundle.writestr(name, payload)
-            bundle.writestr("checksums.json", json.dumps(checksums, sort_keys=True))
-        with backup.open("rb") as stream:
-            os.fsync(stream.fileno())
-        with zipfile.ZipFile(backup) as bundle:
-            if bundle.testzip() is not None or any(
-                hashlib.sha256(bundle.read(name)).hexdigest() != digest for name, digest in checksums.items()
-            ):
-                raise PublicationError("legacy SQL cleanup backup verification failed")
-        descriptor = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        if inspector.has_table("alembic_version"):
-            from alembic import command
-            from alembic.config import Config
-
-            config = Config()
-            config.set_main_option("script_location", str(Path(__file__).parents[1] / "migrations"))
-            config.set_main_option(
-                "sqlalchemy.url", connection.engine.url.render_as_string(hide_password=False).replace("%", "%%")
-            )
-            config.attributes.update(connection=connection, discard_legacy_rag=True)
-            counts = {table.name: len(json.loads(payloads[f"{table.name}.json"])) for table in tables}
-            command.upgrade(config, migration.revision)
-        else:
-            counts = migration.reset_storage(connection, discard_legacy=True)
-        result = {
-            "status": "committed",
-            "backup_directory": str(directory),
-            "discarded_rows": counts,
-            "public_benchmark_records_count": 0,
-            "prism_imported": False,
-            "opensearch_touched": False,
-            "indexes_rebuilt": False,
-        }
-    with (directory / "committed.json").open("x", encoding="utf-8") as stream:
-        json.dump(result, stream, sort_keys=True, indent=2)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    return result
 
 
 class RagTransferDao(RagPublicationDao):

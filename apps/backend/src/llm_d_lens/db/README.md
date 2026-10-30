@@ -103,10 +103,10 @@ Changing a table's shape:
 ## Public experiment evidence for Agentic planning
 
 Approved public Prism experiments live in `public_benchmark_records`, separately
-from authorized internal `agentic_benchmark_records`. The public record model and
-its existing migrations are retained together. No application database is migrated
-by feature validation; review and apply migrations through the normal installation
-workflow.
+from authorized internal `agentic_benchmark_records`. Its migration creates the
+final public record table directly after revision `42a3e9b47726`. No application
+database is migrated by feature validation; review and apply migrations through
+the normal installation workflow.
 
 The `rag_item`, `rag_publication`, `rag_query`, `rag_agentic_query` and `rag_transfer`
 DAOs own immutable records, publication state, authorized query aggregation and
@@ -114,6 +114,14 @@ portable SQL transfer. Services never bypass these DAOs with raw sessions.
 Agentic aggregates complete experiment/configuration/series groups before ranking
 and limiting cases. Source conditions, units, statistics and provenance must survive
 that boundary; public measurements are not proof of current deployment performance.
+
+Internal planning retrieves positive measurement cases and negative failure history
+under the same authorization and verification filters, with independent bounds of
+50 successes and 50 failures. Failures need no metric to inform deterministic
+guardrails; only successful records become numeric observations, and OOM outcomes
+are never promoted to measured facts. Prompt case budgets do not prune raw
+guardrail records, and AI ranking excludes candidates blocked by deterministic
+failure checks.
 
 The retained operator CLI is SQL-only:
 
@@ -153,8 +161,8 @@ This does not remove the preexisting private diagnostic OpenSearch adapter.
 
 ## Testing
 
-Tests never run Alembic migrations and never talk to a real PostgreSQL
-instance. The root `conftest.py` gives every test an isolated, empty in-memory
+Most tests do not run Alembic migrations or talk to PostgreSQL.
+The root `conftest.py` gives every test an isolated, empty in-memory
 SQLite database (built via `Base.metadata.create_all()`, so it always reflects
 whatever `models/*.py` currently says, regardless of migration history) and
 rebinds the process-wide engine to it for the duration of that test. This means
@@ -162,5 +170,9 @@ DAOs and service code under test always run against a real SQLAlchemy engine,
 just not a persistent/external one.
 
 The public benchmark SQL tests under `tests/unit/db` have a more specific fixture:
-they exercise PostgreSQL behavior using isolated temporary schemas. They do not
-apply application Alembic migrations or certify a production database upgrade.
+they exercise PostgreSQL behavior using an embedded `pgserver` instance and
+isolated temporary schemas, never the application database. The fixture creates
+the other tables from metadata, stamps revision `42a3e9b47726`, and applies
+`8bf2a6c1d903`. Migration tests verify metadata parity (including CHECK expressions)
+and downgrade/reupgrade of the public benchmark table. They do not certify a
+production database upgrade or replay the full migration history.

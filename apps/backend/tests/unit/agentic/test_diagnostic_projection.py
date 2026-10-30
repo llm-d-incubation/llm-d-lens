@@ -13,10 +13,29 @@ from llm_d_lens.agentic.diagnostic_projection import (
     verify_artifact_evidence,
 )
 from llm_d_lens.agentic.evidence_search_repository import DiagnosticEvidenceChunk
+from llm_d_lens.agentic.opensearch_evidence_search import EvidenceSearchError
+from llm_d_lens.agentic.opensearch_evidence_search import verify_artifact_evidence as verify_search_artifact
 from llm_d_lens.infrastructure.artifacts.store import register_artifacts
 
 
-def test_verify_artifact_evidence_rejects_replaced_content(tmp_path):
+@pytest.mark.parametrize(
+    ("verify", "error"),
+    [(verify_artifact_evidence, DiagnosticArtifactError), (verify_search_artifact, EvidenceSearchError)],
+)
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("content", "checksum"),
+        ("manifest", "manifest checksum"),
+        ("missing_manifest", "cannot be resolved"),
+        ("invalid_manifest", "cannot be resolved"),
+        ("retention", "cannot be resolved"),
+        ("missing_references", "missing immutable references"),
+        ("unapproved_root", "not approved"),
+        ("missing_file", "cannot be resolved"),
+    ],
+)
+def test_verify_artifact_evidence_rejects_untrusted_artifacts(tmp_path, verify, error, mutation, message):
     root = tmp_path / "evaluation"
     root.mkdir()
     path = root / "diagnostic.log"
@@ -36,10 +55,26 @@ def test_verify_artifact_evidence_rejects_replaced_content(tmp_path):
         score=1,
         ranking_explanation="test",
     )
-    assert verify_artifact_evidence(root, chunk, approved_roots=(tmp_path,)) == path
-    path.write_text("replaced", encoding="utf-8")
-    with pytest.raises(DiagnosticArtifactError, match="checksum"):
-        verify_artifact_evidence(root, chunk, approved_roots=(tmp_path,))
+    assert verify(root, chunk, approved_roots=(tmp_path,)) == path
+    approved_roots = (tmp_path,)
+    if mutation == "content":
+        path.write_text("replaced", encoding="utf-8")
+    elif mutation == "manifest":
+        (root / "manifest.json").write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    elif mutation == "missing_manifest":
+        (root / "manifest.json").unlink()
+    elif mutation == "invalid_manifest":
+        (root / "manifest.json").write_text("{", encoding="utf-8")
+    elif mutation == "retention":
+        (root / "manifest.json").write_text(json.dumps({**manifest, "retention_class": "temporary"}))
+    elif mutation == "missing_references":
+        chunk = chunk.model_copy(update={"manifest_sha256": None})
+    elif mutation == "unapproved_root":
+        approved_roots = (tmp_path / "elsewhere",)
+    elif mutation == "missing_file":
+        path.unlink()
+    with pytest.raises(error, match=message):
+        verify(root, chunk, approved_roots=approved_roots)
 
 
 def test_projects_logs_traces_and_reference_sources_as_bounded_excerpts():

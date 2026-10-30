@@ -923,6 +923,47 @@ def test_create_records_selected_benchmark_refs_in_decision_snapshot(monkeypatch
     assert snapshot["decision_evidence_ids"] == run.decision_evidence_ids
 
 
+def test_create_and_refine_exclude_failure_blocked_candidates_from_ai_ranking(monkeypatch):
+    service = AgenticDeploymentService()
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.service.require_active_session",
+        lambda session_id: SimpleNamespace(id=session_id, server_id="cluster-a"),
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.service.resolve_planning_facts", _resolve_facts)
+    blocked_id = "optimized-baseline-tp1-r1"
+    ranked = []
+
+    def score_inputs(_self, _model, _facts, candidates, *, records):
+        assert blocked_id in {candidate.id for candidate in candidates}
+        return (
+            PerformanceScoreInput(
+                candidate_id=blocked_id,
+                source="benchmark",
+                status="interpolated",
+                has_blocking_negative_evidence=True,
+                evidence_refs=("benchmark:oom-1", "benchmark:oom-2", "benchmark:oom-3"),
+            ),
+        )
+
+    class Provider:
+        async def recommend(self, facts, candidates, **_kwargs):
+            ids = {candidate.id for candidate in candidates}
+            assert ids and blocked_id not in ids
+            ranked.append(ids)
+            planner = DeterministicPlanner()
+            return planner.decide(facts, candidates), planner.score(facts, candidates)
+
+    monkeypatch.setattr("llm_d_lens.agentic.service.BenchmarkPerformanceEvidence.score_inputs", score_inputs)
+    monkeypatch.setattr("llm_d_lens.agentic.service.OpenAICompatiblePlanner.from_environment", lambda: Provider())
+    run = asyncio.run(service.create(_request()))
+    assert run.planner == "openai-compatible"
+    assert run.selected_candidate.id != blocked_id
+    refined = asyncio.run(service.refine(run.id, AgenticCandidateRefinementRequest(planner_prompt="prefer latency")))
+    assert refined.planner == "openai-compatible"
+    assert refined.selected_candidate.id != blocked_id
+    assert len(ranked) == 2
+
+
 def test_decision_evidence_includes_selected_ai_raw_samples_once():
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=2)
     candidate = (
@@ -1247,7 +1288,7 @@ def test_create_scores_successful_ai_generated_candidates_without_resource_polic
     assert "resource_policy" not in supplied_by_id["optimized-baseline-tp2-r1"]
 
 
-def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatch):
+def test_ai_ranking_omits_aggregate_inputs_but_honors_failure_blocks(monkeypatch):
     service = AgenticDeploymentService()
     monkeypatch.setattr(
         "llm_d_lens.agentic.service.require_active_session",
@@ -1259,9 +1300,7 @@ def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatc
     class Provider:
         async def recommend(self, facts, candidates, **_kwargs):
             captured["performance_score_inputs"] = facts.performance_score_inputs
-            captured["baseline_deployable"] = next(
-                candidate.deployable for candidate in candidates if candidate.id == "optimized-baseline-tp1-r1"
-            )
+            captured["candidate_ids"] = {candidate.id for candidate in candidates}
             planner = DeterministicPlanner()
             return planner.decide(facts, candidates), planner.score(facts, candidates)
 
@@ -1296,7 +1335,7 @@ def test_create_uses_aggregate_inputs_only_for_deterministic_planning(monkeypatc
     assert run.decision_metadata.planner == "openai-compatible"
     assert deterministic_calls[0][0].has_blocking_negative_evidence
     assert captured["performance_score_inputs"] == ()
-    assert captured["baseline_deployable"] is True
+    assert "optimized-baseline-tp1-r1" not in captured["candidate_ids"]
 
 
 def test_relaxed_candidate_gets_exact_estimate_before_scoring(monkeypatch):

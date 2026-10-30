@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -18,9 +19,22 @@ from llm_d_lens.agentic.benchmark_evidence import (
     RuntimeFingerprint,
     WorkloadProfile,
 )
+from llm_d_lens.agentic.document_evidence import DocumentEvidenceOutcome
+from llm_d_lens.agentic.facts import PlanningEvidence
+from llm_d_lens.agentic.performance_evidence import BenchmarkPerformanceEvidence
+from llm_d_lens.agentic.planner import DeterministicPlanner, PlanningFacts
+from llm_d_lens.agentic.planner import WorkloadProfile as PlanningWorkloadProfile
+from llm_d_lens.agentic.planning_requirements import (
+    HardwareIdentity,
+    ModelIdentity,
+    PlanningRequirements,
+    RuntimeIdentity,
+)
+from llm_d_lens.agentic.service import AgenticDeploymentService
 from llm_d_lens.auth.contracts import Principal, ResourceRef, RoleBinding, ScopeType
 from llm_d_lens.auth.policy import authorize
 from llm_d_lens.benchmark_rag.agentic_metrics import AGENTIC_METRICS, measured_values
+from llm_d_lens.benchmark_rag.case_retrieval import build_case_bundle, resolve_internal_cases
 from llm_d_lens.benchmark_rag.query_contracts import QUERY_PERMISSION, QueryFilters
 from llm_d_lens.core.exceptions import (
     ConflictError,
@@ -402,7 +416,7 @@ def test_caller_authentication_query_grant_and_persisted_freshness(store: Store)
 
 
 @pytest.mark.parametrize(
-    "mutation", ["owner", "cluster", "version", "delete", "owner_delete", "json_conflict", "access"]
+    "mutation", ["owner", "cluster", "version", "outcome", "delete", "owner_delete", "json_conflict", "access"]
 )
 def test_revalidation_detects_provenance_and_access_races(store: Store, mutation: str) -> None:
     run_id = store.add(owner=None, extra={"owner_user_id": "bob"})
@@ -419,6 +433,10 @@ def test_revalidation_detects_provenance_and_access_races(store: Store, mutation
             run.cluster_id = "cluster2"
         elif mutation == "version":
             run.status = "failed"
+        elif mutation == "outcome":
+            session.execute(
+                update(BenchmarkRecordRow).where(BenchmarkRecordRow.evaluate_run_id == run_id).values(outcome="failed")
+            )
         elif mutation == "delete":
             session.delete(run)
         elif mutation == "owner_delete":
@@ -444,3 +462,132 @@ def test_read_only_api_and_bounded_limit(store: Store) -> None:
     for limit in (0, 51):
         with pytest.raises(ValueError):
             store.dao.search(QueryFilters(), principal, limit=limit)
+
+
+@pytest.mark.parametrize("token_budget", [0, 8000])
+def test_authorized_failures_block_planning_independently_of_prompt_budget(store, monkeypatch, token_budget):
+    facts = PlanningFacts(
+        16,
+        96,
+        2,
+        requirements=PlanningRequirements(
+            hardware=HardwareIdentity(device_model="Gaudi3", memory_gib=96, form_factor="OAM", device_count=2),
+            model=ModelIdentity(model_id="Qwen/Qwen3-8B", architecture="dense", quantization="bf16"),
+            runtime=RuntimeIdentity(backend="vllm", backend_version="0.10", accelerator_runtime="synapse"),
+        ),
+        workload_profile=PlanningWorkloadProfile(
+            mean_input_tokens=4096,
+            p95_input_tokens=8192,
+            mean_output_tokens=512,
+            concurrency=16,
+            request_rate=4,
+            shared_prefix_ratio=0.5,
+        ),
+    )
+    ids = []
+    for cluster in ("cluster1", "cluster2"):
+        for _ in range(3):
+            run_id = store.add(cluster=cluster)
+            record = _record(run_id).model_copy(
+                update={
+                    "timestamp": datetime.now(UTC),
+                    "outcome": "failed",
+                    "failure_reason": "OOM",
+                    "metrics": BenchmarkMetrics(),
+                    "hardware": HardwareDescriptor(
+                        accelerator="Gaudi3", vram_per_gpu_gib=96, gpu_count=2, form_factor="OAM"
+                    ),
+                    "workload": _record(run_id).workload.model_copy(update={"prefill_fraction": 0}),
+                    "configuration": CandidateConfiguration(
+                        topology="optimized-baseline", decode_tp=1, decode_replicas=1, optimizations=("",)
+                    ),
+                }
+            )
+            with store.factory.begin() as session:
+                session.merge(BenchmarkRecordRow.from_dto(BenchmarkRecord.model_validate(record.model_dump())))
+            if cluster == "cluster1":
+                ids.append(record.benchmark_id)
+    successful_id = "evaluate:" + store.add()
+    ids.append(successful_id)
+    successful_record = BenchmarkRecord.model_validate(
+        {
+            **record.model_dump(),
+            "benchmark_id": successful_id,
+            "outcome": "succeeded",
+            "failure_reason": None,
+            "metrics": _record(successful_id.removeprefix("evaluate:")).metrics.model_dump(),
+        }
+    )
+    with store.factory.begin() as session:
+        session.merge(BenchmarkRecordRow.from_dto(successful_record))
+
+    principal = _principal(RoleBinding("reader", ScopeType.CLUSTER, "cluster1"))
+    monkeypatch.setattr("llm_d_lens.benchmark_rag.case_retrieval.RagAgenticQueryDao", lambda: store.dao)
+    internal = asyncio.run(resolve_internal_cases("Qwen/Qwen3-8B", principal, facts=facts))
+    assert {record.benchmark_id for record in internal.records} == set(ids)
+    assert internal.status == "available" and internal.total == 4
+    assert {item.experiment.item_id for item in internal.observations} == {successful_id}
+    assert store.dao.search(QueryFilters(), principal, limit=50).total == 1
+
+    observations = tuple(
+        {"evidence_id": f"internal:{item.item_id}", **item.model_dump(mode="json")} for item in internal.observations
+    )
+    bundle, kept, packets = build_case_bundle(
+        observations, (), facts, model="Qwen/Qwen3-8B", hardware="Gaudi3", branch_status={}, token_budget=token_budget
+    )
+    *_, retained, _bundle = AgenticDeploymentService._apply_case_selection(
+        facts,
+        PlanningEvidence(id="public", source="public-benchmark-rag", status="empty"),
+        DocumentEvidenceOutcome(status="disabled", mode="disabled"),
+        internal,
+        bundle,
+        kept,
+        packets,
+    )
+    assert retained.records == internal.records
+    candidate = next(
+        item for item in DeterministicPlanner().candidates(facts) if item.id == "optimized-baseline-tp1-r1"
+    )
+    (score,) = BenchmarkPerformanceEvidence().score_inputs(
+        "Qwen/Qwen3-8B", facts, [candidate], records=list(retained.records)
+    )
+    assert score.has_blocking_negative_evidence
+    assert set(score.evidence_refs) == {f"benchmark:{identity}" for identity in ids}
+    scored_facts = replace(facts, performance_score_inputs=(score,))
+    assert not DeterministicPlanner()._attach_performance_evidence(scored_facts, candidate).deployable
+
+    denied = asyncio.run(resolve_internal_cases("Qwen/Qwen3-8B", _principal(), facts=facts))
+    assert not denied.records
+
+
+def test_planning_failures_have_independent_limits_and_revalidate_outcomes(store):
+    principal = _principal(RoleBinding("reader", ScopeType.CLUSTER, "cluster1"))
+    facts = PlanningFacts(8, 96, 4)
+    failed_ids = [store.add() for _ in range(3)]
+    foreign_id = store.add(cluster="cluster2")
+    for _ in range(3):
+        store.add()
+    with store.factory.begin() as session:
+        session.execute(
+            update(BenchmarkRecordRow)
+            .where(BenchmarkRecordRow.evaluate_run_id.in_([*failed_ids, foreign_id]))
+            .values(outcome="failed", failure_reason="OOM")
+        )
+    failures = store.dao.planning_failures("Qwen/Qwen3-8B", principal, facts, limit=1)
+    assert failures.total == 3 and len(failures.matches) == 1
+    assert failures.matches[0].evaluate_run_id in failed_ids
+    assert store.dao.planning_search("Qwen/Qwen3-8B", principal, facts, limit=1).total == 3
+    assert not store.dao.planning_failures("other-model", principal, facts).matches
+    assert not store.dao.planning_failures("Qwen/Qwen3-8B", _principal(), facts).matches
+    store.dao.assert_current(failures.matches, principal)
+    with store.factory.begin() as session:
+        session.execute(
+            update(BenchmarkRecordRow)
+            .where(BenchmarkRecordRow.benchmark_id == failures.matches[0].record.benchmark_id)
+            .values(outcome="succeeded")
+        )
+    with pytest.raises(ConflictError):
+        store.dao.assert_current(failures.matches, principal)
+    for limit in (0, 51):
+        with pytest.raises(ValueError):
+            store.dao.planning_failures("Qwen/Qwen3-8B", principal, facts, limit=limit)

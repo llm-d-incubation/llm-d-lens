@@ -234,6 +234,8 @@ class AgenticDeploymentService:
         deterministic_candidates = [
             deterministic._attach_performance_evidence(deterministic_facts, candidate) for candidate in candidates
         ]
+        deployable_ids = {candidate.id for candidate in deterministic_candidates if candidate.deployable}
+        ai_candidates = [candidate for candidate in ai_candidates if candidate.id in deployable_ids]
         decision = deterministic.decide(deterministic_facts, deterministic_candidates)
         decision_facts = deterministic_facts
         selected_candidates = deterministic_candidates
@@ -1507,15 +1509,7 @@ class AgenticDeploymentService:
             for item in public_kept
         ]
         public = public.model_copy(update={"details": {**public.details, "response": public_response}})
-        selected_experiments = {identity for case in bundle.cases for identity in case.experiment_ids}
-        internal = InternalCaseOutcome(
-            observations=internal.observations,
-            records=tuple(record for record in internal.records if record.benchmark_id in selected_experiments),
-            status=internal.status,
-            total=internal.total,
-            truncated=internal.truncated or bundle.truncated,
-            reason=internal.reason,
-        )
+        # Prompt budgets must not prune authorized history used by deterministic guardrails.
         return facts, public, documents, internal, bundle
 
     def list(self) -> list[AgenticDeploymentRun]:

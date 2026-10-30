@@ -263,7 +263,7 @@ class RagAgenticQueryDao(BaseDao):
             select(BenchmarkRecordRow, EvaluateRunRow, _owner().label("verified_owner"))
             .join(EvaluateRunRow, BenchmarkRecordRow.evaluate_run_id == EvaluateRunRow.id)
             .join(UserRow, UserRow.id == _owner())
-            .where(*_verified(), _authorization(principal), BenchmarkRecordRow.outcome == "succeeded")
+            .where(*_verified(), _authorization(principal))
         )
 
     @staticmethod
@@ -280,7 +280,9 @@ class RagAgenticQueryDao(BaseDao):
             self._caller(session, principal)
             if filters.source_revision is not None or filters.source_path is not None or filters.series:
                 return AgenticSlice((), 0)
-            statement = self._statement(principal).where(*_metric_conditions(filters))
+            statement = self._statement(principal).where(
+                BenchmarkRecordRow.outcome == "succeeded", *_metric_conditions(filters)
+            )
             if filters.record_id is not None:
                 statement = statement.where(
                     or_(
@@ -326,7 +328,9 @@ class RagAgenticQueryDao(BaseDao):
         with self._read_only() as session:
             self._read_transaction(session)
             self._caller(session, principal)
-            eligible = self._statement(principal).where(*_metric_conditions(QueryFilters()), *conditions)
+            eligible = self._statement(principal).where(
+                BenchmarkRecordRow.outcome == "succeeded", *_metric_conditions(QueryFilters()), *conditions
+            )
             axes = planning_latency_axes(facts)
             latency_columns = []
             for index, (metric, statistic) in enumerate(axes):
@@ -387,6 +391,29 @@ class RagAgenticQueryDao(BaseDao):
             )
             return AgenticSlice(matches, selected[0][1])
 
+    def planning_failures(
+        self, model: str, principal: Principal, facts: PlanningFacts, *, limit: int = 50
+    ) -> AgenticSlice:
+        """Retrieve bounded negative evidence without competing with measured-case limits."""
+        if not 1 <= limit <= 50:
+            raise ValueError("Agentic retrieval needs a limit between 1 and 50")
+        conditions, order, workload_score, workload_coverage = _planning_selection(model, facts)
+        with self._read_only() as session:
+            self._read_transaction(session)
+            self._caller(session, principal)
+            rows = session.execute(
+                self._statement(principal)
+                .where(BenchmarkRecordRow.outcome == "failed", *conditions)
+                .add_columns(func.count().over())
+                .order_by(workload_score.desc().nullslast(), workload_coverage.desc().nullslast(), *order)
+                .limit(limit)
+            ).all()
+            matches = tuple(
+                AgenticMatch(record.to_dto(), run.id, run.cluster_id, owner, run.version_id)
+                for record, run, owner, _count in rows
+            )
+            return AgenticSlice(matches, rows[0][3] if rows else 0)
+
     def assert_current(self, matches: Sequence[AgenticMatch], principal: Principal) -> None:
         """Recheck authorization and provenance immediately before emission."""
         with self._read_only() as session:
@@ -400,11 +427,18 @@ class RagAgenticQueryDao(BaseDao):
                 )
             ).all()
             current = {
-                record.benchmark_id: (run.id, run.cluster_id, owner, run.version_id) for record, run, owner in rows
+                record.benchmark_id: (run.id, run.cluster_id, owner, run.version_id, record.outcome)
+                for record, run, owner in rows
             }
             if any(
                 current.get(match.record.benchmark_id)
-                != (match.evaluate_run_id, match.cluster_id, match.owner_user_id, match.version_id)
+                != (
+                    match.evaluate_run_id,
+                    match.cluster_id,
+                    match.owner_user_id,
+                    match.version_id,
+                    match.record.outcome,
+                )
                 for match in matches
             ):
                 raise ConflictError("Agentic evaluation evidence or access changed; retry the query")

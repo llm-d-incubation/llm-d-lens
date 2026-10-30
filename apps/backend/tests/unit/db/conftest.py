@@ -10,6 +10,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
 
+from llm_d_lens.benchmark_rag.transfer_contracts import RAG_SCHEMA_REVISION
 from llm_d_lens.db.base import Base
 
 _BACKEND = Path(__file__).resolve().parents[3]
@@ -44,7 +45,7 @@ def postgres_engine(postgres_url: str) -> Iterator[Engine]:
             engine, tables=[table for table in Base.metadata.sorted_tables if table.name != "public_benchmark_records"]
         )
         command.stamp(_config(engine), "42a3e9b47726")
-        command.upgrade(_config(engine), "8bf2a6c1d903")
+        command.upgrade(_config(engine), RAG_SCHEMA_REVISION)
         yield engine
     finally:
         engine.dispose()
