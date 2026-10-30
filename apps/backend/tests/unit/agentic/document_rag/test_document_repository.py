@@ -13,6 +13,7 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from llm_d_lens.agentic.document_rag.contracts import DocumentRecord
 from llm_d_lens.agentic.document_rag.document_repository import (
@@ -36,6 +37,7 @@ from llm_d_lens.agentic.document_rag.publication_contracts import (
     registry_id,
 )
 from llm_d_lens.agentic.document_rag.query_contracts import QueryFilters
+from llm_d_lens.agentic.document_rag.repository_corpus import PARSER_VERSION, parse_markdown
 from llm_d_lens.agentic.document_rag.sources import LLM_D_ORIGIN, SourceArchive, allowed_paths
 from llm_d_lens.agentic.public_benchmark_record.contracts import PublicBenchmarkRecord
 from llm_d_lens.core.exceptions import ConflictError
@@ -191,7 +193,7 @@ def metadata(
             approved_by="reviewer",
             approval_reference="review/1",
             license_reference="Apache-2.0",
-            parser_version="test-v1",
+            parser_version=PARSER_VERSION,
             allowed_paths=allowed_paths(LLM_D_ORIGIN),
         ),
     )
@@ -239,11 +241,133 @@ def test_default_publication_uses_document_authority_without_sql(metadata, monke
     monkeypatch.setattr(
         rag_publication, "PublicBenchmarkRecordDao", Mock(side_effect=AssertionError("publication opened SQL"))
     )
-    service = RagPublicationService(archive=original.archive)
+    with RagPublicationService(archive=original.archive) as service:
+        manifest = stage(service)
+        assert service.activate(LLM_D_ORIGIN, manifest.item_id).generation == 1
+        assert repository.head(LLM_D_ORIGIN).manifest == manifest
+        assert len(repository.list_published(LLM_D_ORIGIN, kind="passage")) == 1
+
+
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("failure_at", [None, "head", "stage", "activate"])
+def test_publication_closes_only_owned_repository_on_success_and_failure(metadata, monkeypatch, owned, failure_at):
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+
+    repository, _, original = metadata
+    close = Mock(wraps=repository.close)
+    monkeypatch.setattr(repository, "close", close)
+    monkeypatch.setattr(DocumentRepository, "from_environment", Mock(return_value=repository))
+    if failure_at is not None:
+        monkeypatch.setattr(repository, failure_at, Mock(side_effect=PublicationError("injected failure")))
+    service = RagPublicationService(dao=None if owned else repository, archive=original.archive)
+    with pytest.raises(PublicationError, match="injected failure") if failure_at else nullcontext(), service:
+        manifest = stage(service)
+        service.activate(LLM_D_ORIGIN, manifest.item_id)
+    service.close()
+    assert close.call_count == int(owned)
+
+
+@pytest.mark.parametrize("importer_name", ["RepositoryCorpusImporter", "ReviewedWebSnapshotImporter"])
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_importer_closes_only_owned_publication(monkeypatch, importer_name, owned, fail):
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+
+    from llm_d_lens.agentic.document_rag import repository_corpus
+
+    publication = Mock(spec=RagPublicationService)
+    monkeypatch.setattr(repository_corpus, "RagPublicationService", Mock(return_value=publication))
+    importer = getattr(repository_corpus, importer_name)(None if owned else publication)
+    with pytest.raises(PublicationError, match="injected failure") if fail else nullcontext(), importer:
+        assert importer.publication is publication
+        if fail:
+            raise PublicationError("injected failure")
+    importer.close()
+    assert publication.close.call_count == int(owned)
+
+
+def test_repository_validates_storage_before_allocating_owned_client(monkeypatch):
+    from unittest.mock import Mock
+
+    from llm_d_lens.agentic.document_rag import document_repository
+
+    client = Mock()
+    monkeypatch.setattr(document_repository.httpx, "Client", client)
+    monkeypatch.setattr(document_repository, "storage_path", Mock(side_effect=OSError("storage unavailable")))
+    with pytest.raises(OSError, match="storage unavailable"):
+        OpenSearchDocumentRepository("http://metadata.test")
+    client.assert_not_called()
+
+
+@pytest.mark.parametrize("owned", [False, True])
+def test_publication_context_closes_real_owned_http_client_only(monkeypatch, tmp_path, owned):
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("LENS_PUBLIC_RAG_OPENSEARCH_URL", "http://metadata.test")
+    repository = None if owned else DocumentRepository.from_environment()
+    with RagPublicationService(dao=repository) as publication:
+        client = publication.dao.client
+        assert not client.is_closed
+    assert client.is_closed is owned
+    if repository is not None:
+        repository.close()
+        assert client.is_closed
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"source_pointer": {"table_index": 0, "row": 1, "column": 2}},
+        {"source_pointer": {"start_char": True, "end_char": 15}},
+        {"source_pointer": {"start_char": 0, "end_char": 100}},
+        {"passage_text": "Different evidence"},
+    ],
+)
+def test_publication_rejects_invalid_passage_offsets_before_writes(metadata, updates) -> None:
+    repository, server, service = metadata
     manifest = stage(service)
-    assert service.activate(LLM_D_ORIGIN, manifest.item_id).generation == 1
-    assert repository.head(LLM_D_ORIGIN).manifest == manifest
-    assert len(repository.list_published(LLM_D_ORIGIN, kind="passage")) == 1
+    release = ReleaseManifest.model_validate(manifest.source_details)
+    passage = next(
+        item for key in release.member_ids if (item := repository.get(key)) is not None and item.kind == "passage"
+    )
+    before = copy.deepcopy(server.records)
+    server.requests.clear()
+    with pytest.raises(PublicationError, match="pinned original offsets"):
+        service.stage(
+            release.inventory,
+            (ParsedFile(path=passage.source_path, items=(passage.model_copy(update=updates),)),),
+            expected_counts=release.counts,
+        )
+    assert server.records == before
+    assert not any(request.method in ("PUT", "DELETE") for request in server.requests)
+
+
+@pytest.mark.parametrize("operation", ["activate", "explicit_activate", "retain", "rollback"])
+def test_publication_rechecks_legacy_passage_offsets(metadata, monkeypatch, operation) -> None:
+    repository, server, service = metadata
+    with monkeypatch.context() as legacy:
+        legacy.setattr(service, "_verify_passages", lambda items: None, raising=False)
+        manifest = stage(service, text="Evidence: \u00e9".encode())
+        if operation in ("retain", "rollback"):
+            service.activate(LLM_D_ORIGIN, manifest.item_id)
+    if operation == "rollback":
+        replacement = stage(service, "b" * 40, b"Current valid release")
+        service.activate(LLM_D_ORIGIN, replacement.item_id)
+    before = copy.deepcopy(server.records)
+    with pytest.raises(PublicationError, match="pinned original offsets"):
+        if operation == "retain":
+            release = ReleaseManifest.model_validate(manifest.source_details)
+            service.stage(release.inventory, (), expected_counts=release.counts)
+        elif operation == "rollback":
+            service.rollback(LLM_D_ORIGIN, manifest.item_id, expected_generation=2)
+        else:
+            service.activate(
+                LLM_D_ORIGIN,
+                manifest.item_id,
+                **({"expected_generation": 0} if operation == "explicit_activate" else {}),
+            )
+    assert server.records == before
 
 
 def test_stage_activate_resolve_and_revoke(metadata) -> None:
@@ -359,6 +483,29 @@ def test_metadata_batches_are_bounded_deduplicated_and_preserve_missing_records(
     assert [len(json.loads(request.content)["ids"]) for request in batches] == [METADATA_READ_BATCH_SIZE, 1]
 
 
+def test_single_hit_reads_only_its_dependencies_in_a_thousand_passage_release(metadata) -> None:
+    repository, server, service = metadata
+    data = "".join(f"# Section {number}\nPublic evidence {number}.\n" for number in range(1000)).encode()
+    digest = service.archive.put(data)
+    path = "guides/test/README.md"
+    file = InventoryFile(path=path, sha256=digest, format="markdown")
+    inventory = PinnedInventory(origin_id=LLM_D_ORIGIN, revision="a" * 40, complete=True, files=(file,))
+    passages = parse_markdown(file, inventory, data)
+    manifest = service.stage(
+        inventory,
+        (ParsedFile(path=path, items=passages),),
+        expected_counts={"source": 1, "passage": 1000},
+    )
+    service.activate(LLM_D_ORIGIN, manifest.item_id)
+    assert len(manifest.manifest_item_ids) == 1001
+    server.requests.clear()
+    (match,) = repository.resolve_public_passages((LLM_D_ORIGIN,), (passages[500].item_id,))
+    assert match.item == passages[500]
+    batches = [request for request in server.requests if request.url.path.endswith("/_mget")]
+    assert len(batches) == 1
+    assert set(json.loads(batches[0].content)["ids"]) == {match.item.item_id, match.source.item_id}
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["hash", "contract", "id", "index", "sequence", "term", "error", "missing_found", "missing_doc", "extra_doc"],
@@ -403,16 +550,21 @@ def test_batched_resolution_rechecks_current_head_after_member_validation(metada
     manifest = stage(service)
     service.activate(LLM_D_ORIGIN, manifest.item_id)
     passage = repository.list_published(LLM_D_ORIGIN)[0]
-    original = repository._members
+    original = repository._read_records
+    revoked = False
 
-    def members(*args, **kwargs):
-        result = original(*args, **kwargs)
-        repository.set_enabled(LLM_D_ORIGIN, False, expected_generation=1)
+    def members(keys, *args, **kwargs):
+        nonlocal revoked
+        result = original(keys, *args, **kwargs)
+        if passage.item_id in keys and not revoked:
+            revoked = True
+            repository.set_enabled(LLM_D_ORIGIN, False, expected_generation=1)
         return result
 
-    monkeypatch.setattr(repository, "_members", members)
+    monkeypatch.setattr(repository, "_read_records", members)
     with pytest.raises(ConflictError):
         repository.resolve_public_passages((LLM_D_ORIGIN,), (passage.item_id,))
+    assert revoked
 
 
 @pytest.mark.parametrize("corruption", ["item_identity", "item_schema", "parent_membership"])
@@ -644,25 +796,26 @@ def test_definition_adapter_pins_alias_and_revalidates_projection(metadata, lega
         {"value_min": 1, "unit": "ms"},
     ],
 )
-def test_definition_structured_constraints_do_not_match_unlinked_passages(metadata, constraints) -> None:
-    repository, _, _ = metadata
-    result = repository.search(
-        QueryFilters(origins=(LLM_D_ORIGIN,), **constraints),
-        intent="definition",
-        text_query="Public",
-        limit=10,
-    )
-    assert result.matches == ()
-    assert result.total == 0
+def test_document_filters_reject_structured_constraints_before_search(constraints) -> None:
+    with pytest.raises(ValidationError) as error:
+        QueryFilters(origins=(LLM_D_ORIGIN,), **constraints)
+    assert {tuple(issue["loc"]) for issue in error.value.errors()} == {(key,) for key in constraints}
+    assert all(issue["type"] == "extra_forbidden" for issue in error.value.errors())
 
 
-def test_http_fixture_publication_build_alias_search_and_revoke(metadata, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_http_fixture_import_publication_build_alias_search_and_revoke(
+    metadata,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     from unittest.mock import Mock
 
+    from llm_d_lens.agentic.document_rag import sources
     from llm_d_lens.agentic.document_rag.document_lifecycle import DocumentLifecycle
     from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder
     from llm_d_lens.agentic.document_rag.opensearch_evidence_search import OpenSearchEvidenceSearchRepository
     from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION
+    from llm_d_lens.agentic.document_rag.repository_corpus import RepositoryCorpusImporter
     from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
     from llm_d_lens.agentic.document_rag.search_contracts import PublicSearchRequest
     from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
@@ -673,7 +826,32 @@ def test_http_fixture_publication_build_alias_search_and_revoke(metadata, monkey
     monkeypatch.setattr(
         rag_query, "PublicBenchmarkRecordQueryDao", Mock(side_effect=AssertionError("document opened SQL"))
     )
-    manifest = stage(publication)
+    blobs = {
+        "d" * 40: ("guides/test/README.md", b"# Public evidence\n\n| TTFT | Value |\n| --- | --- |\n| ms | 1 |\n"),
+        "e" * 40: ("guides/test/benchmark-results/metrics.json", b'{"throughput": 123}'),
+        "f" * 40: ("guides/test/benchmark-results/plot.png", b"\x89PNG\r\n\x1a\n"),
+    }
+
+    def git(repo, *args):
+        assert repo == tmp_path
+        if args == ("remote", "get-url", "origin"):
+            return LLM_D_ORIGIN
+        if args == ("rev-parse", "--verify", "--end-of-options", "a" * 40 + "^{commit}"):
+            return "a" * 40
+        assert args == ("ls-tree", "-r", "-z", "--full-tree", "a" * 40)
+        return "".join(f"100644 blob {key}\t{path}\x00" for key, (path, _) in blobs.items())
+
+    monkeypatch.setattr(sources, "_git", git)
+    monkeypatch.setattr(sources, "_git_blob", lambda repo, key: blobs[key][1])
+    with RepositoryCorpusImporter(publication) as importer:
+        manifest = importer.stage_repository(
+            tmp_path,
+            LLM_D_ORIGIN,
+            "a" * 40,
+            repository.head(LLM_D_ORIGIN).state.approval,
+            expected_counts={"source": 3, "passage": 1},
+        )
+    assert ReleaseManifest.model_validate(manifest.source_details).counts == {"source": 3, "passage": 1}
     publication.activate(LLM_D_ORIGIN, manifest.item_id)
     principal = Principal(
         user_id="reader",
@@ -801,7 +979,7 @@ def test_document_publication_rejects_mixed_release_before_writes(metadata) -> N
     manifest = stage(service)
     snapshot, experiment, mixed = mixed_snapshot(server, manifest)
     before = copy.deepcopy(server.records)
-    with pytest.raises(PublicationError, match="explicit document split"):
+    with pytest.raises(PublicationError, match="only sources and passages"):
         repository.stage(mixed, tuple(item for item in snapshot if item.kind != "source"))
     with pytest.raises(PublicationError, match="keep them in SQL"):
         repository._create_immutable(experiment)
@@ -830,7 +1008,13 @@ def test_document_admin_transfer_never_opens_sql(
 
     monkeypatch.delenv("LENS_PUBLIC_RAG_DOCUMENT_AUTHORITY", raising=False)
     monkeypatch.delenv("LLM_D_BENCH_DATABASE_URL", raising=False)
-    monkeypatch.setattr(admin, "transfer_database", Mock(side_effect=AssertionError("document command opened SQL")))
+    from llm_d_lens.db.dao import public_benchmark_record_transfer
+
+    monkeypatch.setattr(
+        public_benchmark_record_transfer,
+        "transfer_database",
+        Mock(side_effect=AssertionError("document command opened SQL")),
+    )
     repository = Mock(spec=DocumentRepository)
     monkeypatch.setattr(admin.DocumentRepository, "from_environment", Mock(return_value=repository))
     service = Mock()
@@ -852,18 +1036,16 @@ def test_document_admin_transfer_never_opens_sql(
 
 
 @pytest.mark.parametrize("command", ["backup", "restore"])
-def test_admin_structured_transfer_requires_explicit_flag_and_never_opens_documents(
-    command, tmp_path, monkeypatch
-) -> None:
+def test_structured_admin_transfer_never_opens_documents(command, tmp_path, monkeypatch) -> None:
     from contextlib import nullcontext
     from unittest.mock import Mock
 
-    from llm_d_lens.agentic.document_rag import admin
+    from llm_d_lens.agentic.public_benchmark_record import admin
 
     monkeypatch.delenv("LENS_PUBLIC_RAG_DOCUMENT_AUTHORITY", raising=False)
     monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", "postgresql://structured-fixture")
     monkeypatch.setattr(
-        admin.DocumentRepository,
+        DocumentRepository,
         "from_environment",
         Mock(side_effect=AssertionError("structured transfer opened document authority")),
     )
@@ -875,8 +1057,8 @@ def test_admin_structured_transfer_requires_explicit_flag_and_never_opens_docume
     service.backup.return_value.model_dump.return_value = {"contract": "benchmark-rag.backup.v1"}
     service.restore.return_value.model_dump_json.return_value = "{}"
     factory = Mock(return_value=service)
-    monkeypatch.setattr(admin, "RagBackupService", factory)
-    args = [command, "--structured", "--data-dir", str(tmp_path)]
+    monkeypatch.setattr(admin, "PublicBenchmarkRecordBackupService", factory)
+    args = [command, "--data-dir", str(tmp_path)]
     args += ["--output" if command == "backup" else "--bundle", str(tmp_path / "structured.zip")]
     if command == "restore":
         args += ["--initialize"]
@@ -894,14 +1076,15 @@ def test_admin_verify_is_offline_and_uses_only_selected_bundle_contract(
 ) -> None:
     from unittest.mock import Mock
 
-    from llm_d_lens.agentic.document_rag import admin
+    from llm_d_lens.agentic.document_rag import admin as document_admin
+    from llm_d_lens.agentic.public_benchmark_record import admin as structured_admin
 
     monkeypatch.delenv("LENS_PUBLIC_RAG_DOCUMENT_AUTHORITY", raising=False)
     monkeypatch.delenv("LLM_D_BENCH_DATABASE_URL", raising=False)
     monkeypatch.delenv("LENS_PUBLIC_RAG_OPENSEARCH_URL", raising=False)
-    monkeypatch.setattr(admin, "transfer_database", Mock(side_effect=AssertionError("verify opened SQL")))
+    monkeypatch.setattr(structured_admin, "transfer_database", Mock(side_effect=AssertionError("verify opened SQL")))
     monkeypatch.setattr(
-        admin.DocumentRepository,
+        DocumentRepository,
         "from_environment",
         Mock(side_effect=AssertionError("verify opened OpenSearch")),
     )
@@ -909,9 +1092,10 @@ def test_admin_verify_is_offline_and_uses_only_selected_bundle_contract(
     selected.verify.return_value.backup_id = "fixture"
     selected.verify.return_value.model_dump.return_value = {"contract": "fixture"}
     rejected = Mock(side_effect=AssertionError("wrong backup contract"))
-    monkeypatch.setattr(admin, "DocumentBackupService", rejected if structured else selected)
-    monkeypatch.setattr(admin, "RagBackupService", selected if structured else rejected)
-    assert admin.main(["verify", "--bundle", "fixture.zip", *(["--structured"] if structured else [])]) == 0
+    monkeypatch.setattr(document_admin, "DocumentBackupService", rejected if structured else selected)
+    monkeypatch.setattr(structured_admin, "PublicBenchmarkRecordBackupService", selected if structured else rejected)
+    admin = structured_admin if structured else document_admin
+    assert admin.main(["verify", "--bundle", "fixture.zip"]) == 0
     selected.verify.assert_called_once()
 
 
@@ -927,7 +1111,13 @@ def test_document_admin_source_lifecycle_never_opens_sql(
 
     monkeypatch.delenv("LENS_PUBLIC_RAG_DOCUMENT_AUTHORITY", raising=False)
     monkeypatch.delenv("LLM_D_BENCH_DATABASE_URL", raising=False)
-    monkeypatch.setattr(admin, "transfer_database", Mock(side_effect=AssertionError("document lifecycle opened SQL")))
+    from llm_d_lens.db.dao import public_benchmark_record_transfer
+
+    monkeypatch.setattr(
+        public_benchmark_record_transfer,
+        "transfer_database",
+        Mock(side_effect=AssertionError("document lifecycle opened SQL")),
+    )
     repository = Mock(spec=DocumentRepository)
     repository.head.return_value.model_dump_json.return_value = "{}"
     monkeypatch.setattr(admin.DocumentRepository, "from_environment", Mock(return_value=repository))
@@ -972,12 +1162,12 @@ def test_document_mode_does_not_redirect_prism_rebuild_to_opensearch(
     from contextlib import nullcontext
     from unittest.mock import Mock
 
-    from llm_d_lens.agentic.document_rag import admin
+    from llm_d_lens.agentic.public_benchmark_record import admin
 
     monkeypatch.setenv("LENS_PUBLIC_RAG_DOCUMENT_AUTHORITY", "opensearch")
     monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", "postgresql://fixture")
     monkeypatch.setattr(
-        admin.DocumentRepository,
+        DocumentRepository,
         "from_environment",
         Mock(side_effect=AssertionError("Prism opened OpenSearch")),
     )
@@ -988,6 +1178,13 @@ def test_document_mode_does_not_redirect_prism_rebuild_to_opensearch(
     importer.import_snapshot.return_value.model_dump_json.return_value = "{}"
     monkeypatch.setattr(admin, "PrismSnapshotImporter", Mock(return_value=importer))
     monkeypatch.setattr(admin, "SourceApproval", Mock(model_validate_json=Mock(return_value=Mock())))
+    manifest = Mock()
+    manifest.inventory.origin_id = admin.PRISM_ORIGIN
+    manifest.inventory.revision = "2026-10-13"
+    manifest.inventory.files = ()
+    monkeypatch.setattr(admin, "SnapshotManifest", Mock(model_validate_json=Mock(return_value=manifest)))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("{}")
     approval_path = tmp_path / "approval.json"
     approval_path.write_text("{}")
     assert (
@@ -998,6 +1195,8 @@ def test_document_mode_does_not_redirect_prism_rebuild_to_opensearch(
                 str(tmp_path),
                 "--approval",
                 str(approval_path),
+                "--manifest",
+                str(manifest_path),
                 "--snapshot",
                 str(tmp_path / "prism"),
             ]
@@ -1017,13 +1216,13 @@ def test_prism_source_admin_remains_explicitly_sql_owned(
     from contextlib import nullcontext
     from unittest.mock import Mock
 
-    from llm_d_lens.agentic.document_rag import admin
     from llm_d_lens.agentic.document_rag.sources import PRISM_ORIGIN
+    from llm_d_lens.agentic.public_benchmark_record import admin
 
     monkeypatch.setenv("LENS_PUBLIC_RAG_DOCUMENT_AUTHORITY", "opensearch")
     monkeypatch.setenv("LLM_D_BENCH_DATABASE_URL", "postgresql://prism-fixture")
     monkeypatch.setattr(
-        admin.DocumentRepository,
+        DocumentRepository,
         "from_environment",
         Mock(side_effect=AssertionError("Prism opened document authority")),
     )
@@ -1034,10 +1233,10 @@ def test_prism_source_admin_remains_explicitly_sql_owned(
     publication = Mock()
     publication.rollback.return_value.model_dump_json.return_value = "{}"
     publication_factory = Mock(return_value=publication)
-    monkeypatch.setattr(admin, "RagPublicationService", publication_factory)
+    monkeypatch.setattr(admin, "PublicBenchmarkRecordPublicationService", publication_factory)
     refresh = Mock()
     refresh.run.return_value.model_dump_json.return_value = "{}"
-    monkeypatch.setattr(admin, "RagRefreshService", Mock(return_value=refresh))
+    monkeypatch.setattr(admin, "PublicBenchmarkRecordRefreshService", Mock(return_value=refresh))
     plan = Mock()
     plan.inventory.origin_id = PRISM_ORIGIN
     monkeypatch.setattr(admin, "RefreshPlan", Mock(model_validate_json=Mock(return_value=plan)))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from pathlib import PurePosixPath
 from uuid import uuid4
 
@@ -67,7 +68,7 @@ def passage_projection_matches(
     return document.model_dump(exclude=excluded) == expected.model_dump(exclude=excluded)
 
 
-class PublicRagIndexBuilder:
+class PublicRagIndexBuilder(AbstractContextManager["PublicRagIndexBuilder"]):
     def __init__(
         self,
         repository: OpenSearchEvidenceSearchRepository,
@@ -76,10 +77,19 @@ class PublicRagIndexBuilder:
         archive: SourceArchive | None = None,
         lifecycle: DocumentLifecycle | None = None,
     ) -> None:
-        self.dao = dao if dao is not None else DocumentRepository.from_environment()
         self.archive = archive if archive is not None else SourceArchive()
-        self.lifecycle = lifecycle if lifecycle is not None else DocumentLifecycle(self.dao)
         self.writer = OpenSearchEvidenceProjectionWriter(repository)
+        self._owns_dao = dao is None
+        self.dao = dao if dao is not None else DocumentRepository.from_environment()
+        self.lifecycle = lifecycle if lifecycle is not None else DocumentLifecycle(self.dao)
+
+    def close(self) -> None:
+        if self._owns_dao:
+            self.dao.close()
+            self._owns_dao = False
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     async def build(self, origins: tuple[str, ...], *, encoder: LocalE5Encoder | None = None) -> PublicSearchBuild:
         origins = QueryFilters(origins=origins).origins

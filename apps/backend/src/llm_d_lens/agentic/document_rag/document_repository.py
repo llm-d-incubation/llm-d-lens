@@ -223,10 +223,10 @@ class OpenSearchDocumentRepository:
         if mode != "single-host":
             raise PublicationError("document writers require single-host coordination; multi-host is unsupported")
         self.endpoint = endpoint.rstrip("/")
+        self.lock_path = (lock_path or storage_path("data", "public-rag", "publication.lock")).resolve()
+        self.headers = {"Authorization": f"ApiKey {api_key}"} if api_key else {}
         self._owned_client = client is None
         self.client = client if client is not None else httpx.Client(timeout=30.0)
-        self.headers = {"Authorization": f"ApiKey {api_key}"} if api_key else {}
-        self.lock_path = (lock_path or storage_path("data", "public-rag", "publication.lock")).resolve()
 
     def close(self) -> None:
         if self._owned_client:

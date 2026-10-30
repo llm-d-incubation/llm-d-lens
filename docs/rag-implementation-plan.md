@@ -225,6 +225,208 @@ test inputs. The operator explicitly approved preserving those existing
 contents and committing/pushing this checkpoint with these check failures
 recorded. No English-check rules or test semantics were weakened.
 
+### Document lifecycle and regression follow-up (2026-10-30)
+
+This follow-up completes the first two remaining items from the checkpoint
+above. It does not complete performance or frozen-corpus/vector quality
+acceptance, and does not access actual legacy databases.
+
+- Publication, index-builder and repository/web importers now expose explicit,
+  idempotent `close()` and context-manager ownership. They close dependencies
+  created by default, not injected dependencies. The bilingual Python examples
+  cover the complete operation with context managers or `try/finally`.
+  Archive/storage validation precedes owned HTTP-client allocation.
+- Regressions cover publication success and head/stage/activation errors;
+  builder success, invalid filters, recovery, archive, write, activation and
+  cancellation exits; importer ownership; and real owned versus borrowed HTTP
+  client closure. Existing administrative boundaries retain repository cleanup.
+- Document tests now exercise separate document/public-record administrators,
+  strict document filters versus API compatibility filters, correct relocated
+  fixtures, and rejection of structured backup bodies before any writes. The
+  old SQL backend-selection flag and removed mixed dispatcher are not restored.
+- The HTTP-transport fixture now covers approved Git acquisition (stubbed only
+  at Git transport), passage-only parsing of Markdown/table context alongside
+  JSON/PNG source files, publication, build, alias, search, byte verification
+  and withdrawal. A separate 1,000-passage release resolves one hit with one
+  two-member `_mget`, while the revocation race test hooks the actual targeted
+  read path and proves the final current-head check.
+
+The initial follow-up document run reproduced 40 failures and 403 passes.
+After the fixes, the combined document unit suite plus Agentic
+document-evidence, streaming, planner, generator, service and facts suites
+passed **873 tests in 46.17 seconds** on final Python inputs. Eleven existing
+deprecation warnings remain. Changed Python lint/format checks, publication
+and indexing syntax checks, affected documentation links, both documentation
+production builds and the MCP catalog (207 tools, zero unexpected skips)
+passed. This is not a full-backend test run or a live performance/quality run.
+
+#### Previous subtask timeout investigation
+
+The session events and host log narrow the stall to agent execution after
+source inspection, not a document test or OpenSearch request:
+
+- The implementation handoff was sent at 09:51:40 UTC. A repository-status
+  command completed successfully at 09:51:47.
+- Six source/test reads started at 09:51:54 and all completed successfully by
+  09:51:54.526. No later tool activity or persisted implementation from this
+  document subtask was found before the stop request.
+- At 11:41 the agent still reported running with three completed turns and
+  90 completed tool calls. Follow-up messages did not produce a new completed
+  turn. A delivered message was not evidence that the worker resumed.
+- The session recorded a user-initiated abort at 11:45:25 and routine shutdown
+  at 11:45:41; the old agent was no longer addressable after that reset.
+
+The observable failure is a stalled agent response/state transition after
+completed reads. The available logs do not establish whether an outstanding
+model response or SDK scheduling/state handling caused it. No network error,
+application deadlock or slow-test explanation is established for that stall.
+The parent also failed to impose a progress deadline and allowed downstream
+acceptance to remain gated on that worker.
+
+For this follow-up, implementation ran directly without background agents.
+Test commands used a 600-second timeout and a further 15-second forced-kill
+grace, well below the operator's 30-minute cap. No unkillable agent was
+launched. A stop message alone must not be presented as a hard kill; shared
+host processes and unrelated services must not be killed to cancel a worker.
+
+### Real-service quality acceptance follow-up (2026-10-30)
+
+The requested quality run completed, but **acceptance failed**. This is a new
+execution against the current document authority and production search service,
+not a reuse of the historical scores below. No 10,000-passage performance run
+or actual legacy-database access was performed.
+
+Preflight verified all eight manifest/revision pins against the v2 suite,
+2,142 published parent passages, the active 2,525-chunk vector build, and the
+hash-verified pinned local multilingual E5 model. The backend virtual
+environment lacks the optional `torch` dependency, so the run reused the
+existing root CPU-model environment with the current backend source explicitly
+selected. No dependencies were installed.
+
+All 100 queries were executed in each mode, across all eight origins without
+target-origin filtering. The three-mode request run took **150.19 seconds**:
+
+| Mode | Requests | Successful responses | Rejected requests |
+| --- | ---: | ---: | ---: |
+| Lexical | 100 | 75 | 25 |
+| Vector | 100 | 60 | 40 |
+| Hybrid | 100 | 64 | 36 |
+
+Every rejected request raised `EvidenceUnavailableError` with
+`passage disagrees with its pinned original offsets`. The first lexical
+failure was case `llmd-cross_language-development-005`, whose rank-one
+candidate came from `guides/tiered-prefix-cache/README.md`.
+
+A separate full-corpus audit verified the archived hashes for all 146 source
+paths, but found **480 of 2,142 published passages** without the required
+`start_char`/`end_char` spans. All 480 belong to the llm-d origin; 372 retain
+table-cell pointers. These are authoritative-record locator incompatibilities,
+not missing model files or corrupted archived source hashes. Matching manifest
+and revision pins alone therefore does not establish a valid current document
+corpus.
+
+The run retained all 101 request failures explicitly. It did not weaken source
+verification, skip failing cases, return synthetic empty results, or publish
+partial Recall@10/nDCG@10 scores as complete quality measurements. All 1,990
+returned citation occurrences from the 199 successful responses were checked
+against exact archive hashes, manifests, revisions and parent/chunk offsets.
+HTTP request hooks blocked all writes; the eight publication scopes and both
+active build identities were unchanged after the run.
+
+Machine-readable provenance, the full corpus audit, first-failure evidence,
+all 300 per-query outcomes and the acceptance summary were saved in the session
+artifact directory `rag-quality-20261030T121135Z`. The command deliberately
+returned exit code 2 for failed acceptance, not a timeout. It used a 1,650-second
+internal deadline plus a 1,750-second shell deadline with a 10-second forced-kill
+grace, below the requested 30-minute cap.
+
+Next, produce a byte-verifiable current-parser corpus in isolated resources,
+reconcile its changed passage identities with the evaluation anchors, and rerun
+all three modes. Formal acceptance additionally requires independently reviewed,
+pooled judgments: the existing companion remains `not_frozen`, with zero
+independently human-reviewed cases and 17 blocked cases. Neither numerical
+quality acceptance nor launch approval is established.
+
+### Repaired-corpus baseline versus controlled enhancement (2026-10-30)
+
+The locator repair and requested two-strategy measurement are complete in
+isolated OpenSearch resources. Business publication heads and retrieval aliases
+were not switched. A verified, self-contained `repaired-corpus.zip` and its
+matching `evaluation-suite.json` are retained in the session artifact directory
+`rag-quality-repaired-20261030T122829Z`.
+
+All eight pinned source inventories were reparsed with
+`document-passages-v2`. The repair preserves all 183 archived source hashes and
+produces 1,662 parent passages and 2,033 vector chunks. The 480 incompatible
+legacy passage records are not current-parser outputs; their underlying source
+files were not edited or discarded. All 61 evaluation anchors retain their
+original IDs, text and offsets. Questions, relevance grades, development/holdout
+splits and source revisions are unchanged; only the eight manifest pins change.
+
+Publication now verifies every new and retained passage before staging writes.
+Activation, explicit imported-release approval and rollback also recheck exact
+archived UTF-8 character spans before moving the source head. Eight added
+regressions reproduced the missing checks before the fix. Afterward, the complete
+document unit suite passed **489 tests in 34.37 seconds**; changed Python
+lint/format and syntax checks, affected documentation links and both locale
+production builds passed.
+
+Before committing this follow-up, the combined document suite and affected
+Agentic document-evidence, streaming, planner, generator, service and facts
+suites passed **881 tests in 44.68 seconds**, with 11 existing deprecation
+warnings. The staged English check passed; the full-repository check remains
+blocked by the previously documented untracked non-UTF-8 raw-source cache.
+The cache, local corpus backups and runtime artifacts are not included.
+
+Both strategies used the same repaired physical builds and all eight origins,
+with no target-source filtering or reranker. The only strategy change was
+`query_enhancement=false` versus `true`, explicitly set on every hybrid request.
+Each strategy completed all 100 real service queries without a search error.
+Positive metrics exclude the ten absence cases:
+
+| Positive-query split | Cases | Baseline Recall@10 | Baseline nDCG@10 | Enhanced Recall@10 | Enhanced nDCG@10 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| All | 90 | 81.30% | 0.6782 | 83.52% | 0.7508 |
+| Development | 45 | 79.63% | 0.6555 | 81.85% | 0.7542 |
+| Complete holdout | 45 | 82.96% | 0.7010 | 85.19% | 0.7473 |
+
+| Absence-query split | Cases | Baseline correct-empty | Enhanced correct-empty |
+| --- | ---: | ---: | ---: |
+| All | 10 | 0/10 (0%) | 0/10 (0%) |
+| Development | 5 | 0/5 (0%) | 0/5 (0%) |
+| Complete holdout | 5 | 0/5 (0%) | 0/5 (0%) |
+
+Controlled enhancement increases overall Recall by 2.22 percentage points and
+nDCG by 0.0725; holdout gains are 2.22 percentage points and 0.0463. Neither
+strategy meets Recall >= 0.90 and nDCG >= 0.80 on both all-positive and holdout
+queries. Correct-empty is a retrieval-only metric: these runs do not measure
+generated-answer refusal, correctness or hallucination.
+
+The original command completed all retrieval queries in approximately 510
+seconds, then failed in a final consistency assertion because an async generator
+was passed to `all()`. It was not a retrieval failure or timeout. Finalization
+retained that error record, independently reproduced every per-case and grouped
+metric from all 200 saved result receipts, revalidated every repaired passage
+and all 2,000 returned citations against the verified backup, and rechecked the
+unchanged business scopes/builds and deletion of all three isolated indexes.
+The recovered summary and finalization proof are persisted with the reports.
+No model-query rerun or substitution of failed/empty responses was necessary.
+
+The initial publication delay came from per-record `refresh=wait_for` at the
+test management index's default one-second refresh interval. Only that random
+isolated index was changed to a 100-millisecond interval; it was subsequently
+deleted. This was not a performance acceptance run. The original command had
+a 1,650-second internal deadline and a 1,750-second shell deadline plus ten-second
+forced-kill grace; finalization used a 600-second shell deadline plus ten-second
+grace. No worker exceeded the operator's 30-minute cap.
+
+The annotation companion remains `not_frozen`, with no independent human
+sign-off. These are complete fixed-suite sparse-label diagnostic scores, not
+formal gold-set acceptance or launch approval. Historical scores used a
+different 2,142-parent corpus and must not be presented as a directly comparable
+continuous improvement curve. Operational cutover to the repaired corpus
+remains separate from this isolated measurement.
+
 ## Earlier execution status (2026-10-27)
 
 ### Current S4/D2 delivery decision

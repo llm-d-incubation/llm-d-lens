@@ -264,6 +264,8 @@ RAG 优先交付后端，最终通过 Agentic Deploy 集成。已有独立 Docum
   <TabItem value="python-api" label="Python API">
 
 ```python
+from contextlib import closing
+
 from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder
 from llm_d_lens.agentic.document_rag.embedding import configured_encoder
 from llm_d_lens.agentic.document_rag.opensearch_evidence_search import (
@@ -274,26 +276,26 @@ from llm_d_lens.agentic.document_rag.search_contracts import PublicSearchRequest
 
 repository = OpenSearchEvidenceSearchRepository("http://127.0.0.1:9200")
 # Administrative operation on already approved and published source evidence:
-build = await PublicRagIndexBuilder(repository).build(
-    ("https://github.com/llm-d/llm-d",)
-)
-response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache"), principal
-)
-# Separate administrative S2 build; never switches the lexical alias:
-vector_build = await PublicRagIndexBuilder(repository).build(
-    ("https://github.com/llm-d/llm-d",), encoder=configured_encoder()
-)
-vector_response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache", mode="vector"), principal
-)
-hybrid_response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache", mode="hybrid"), principal
-)
-unenhanced_response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache", mode="hybrid", query_enhancement=False),
-    principal,
-)
+with PublicRagIndexBuilder(repository) as builder:
+    build = await builder.build(("https://github.com/llm-d/llm-d",))
+    with closing(PublicRagSearchService(repository)) as search:
+        response = await search.search(
+            PublicSearchRequest(question="prefix cache"), principal
+        )
+        # Separate administrative S2 build; never switches the lexical alias:
+        vector_build = await builder.build(
+            ("https://github.com/llm-d/llm-d",), encoder=configured_encoder()
+        )
+        vector_response = await search.search(
+            PublicSearchRequest(question="prefix cache", mode="vector"), principal
+        )
+        hybrid_response = await search.search(
+            PublicSearchRequest(question="prefix cache", mode="hybrid"), principal
+        )
+        unenhanced_response = await search.search(
+            PublicSearchRequest(question="prefix cache", mode="hybrid", query_enhancement=False),
+            principal,
+        )
 ```
 
 显式构建文档检索索引时，可复用上面的投影 `repository`，
@@ -305,15 +307,27 @@ from llm_d_lens.agentic.document_rag.document_repository import DocumentReposito
 from llm_d_lens.agentic.document_rag.sources import SourceArchive
 
 metadata = DocumentRepository.from_environment()
-build = await PublicRagIndexBuilder(
-    repository,
-    dao=metadata,
-    archive=SourceArchive(),
-    lifecycle=DocumentLifecycle(metadata),
-).build(("https://github.com/llm-d/llm-d",))
+try:
+    with PublicRagIndexBuilder(
+        repository,
+        dao=metadata,
+        archive=SourceArchive(),
+        lifecycle=DocumentLifecycle(metadata),
+    ) as builder:
+        build = await builder.build(("https://github.com/llm-d/llm-d",))
+finally:
+    metadata.close()
 ```
 
 构建器默认使用 OpenSearch 文档生命周期。
+`RagPublicationService`、`PublicRagIndexBuilder`、`RepositoryCorpusImporter`
+和 `ReviewedWebSnapshotImporter` 支持 `with` 和显式 `close()`。
+整个操作应使用上下文管理器或 `try/finally`，覆盖失败和取消路径。
+它们只关闭自己创建的依赖；外部注入的仓库或发布服务仍由调用者管理。
+重复调用 `close()` 是安全的，关闭后不要复用拥有自建依赖的服务。
+暂存会在写入发布版本前，将所有新增和保留段落与归档 UTF-8 原文的精确字符区间核对。
+激活、显式批准导入版本及回滚会在修改来源 head 前再次核对这些区间。
+仅含表格单元格信息的旧指针不是有效的文档段落定位；应重新解析固定原文，而不是放宽校验。
 来源暂存及发布是独立前置步骤，不由这次检索重建执行。
 既有混合发布通过已验证的外部成员描述符迁移，不复制实验事实正文。
 既有 `admin.py rebuild` 仍是 Prism SQL 导入操作；
@@ -506,14 +520,16 @@ alias 变更结果未知时必须 fail closed：操作员恢复前必须先暂�
 恢复仅导入不可变文档/描述符，跳过所有来源注册状态、alias 和活动构建状态。
 因此，空目标需要登记并审批当前来源，再发布及重建。
 
-管理操作 `backup`、`verify` 和 `restore` 默认使用 OpenSearch 文档备份包；
-结构化 SQL 备份包必须显式指定 `--structured`。文档备份/恢复不需要数据库 URL，也不打开 SQL；
+文档 `backup`、`verify` 和 `restore` 使用
+`llm_d_lens.agentic.document_rag.admin`，结构化 SQL 操作使用独立的
+`llm_d_lens.agentic.public_benchmark_record.admin`。文档命令没有 `--structured`
+后端切换选项。文档备份/恢复不需要数据库 URL，也不打开 SQL；
 文档验证离线执行，不需要 OpenSearch endpoint。
 文档恢复的 `--initialize` 初始化管理索引，不初始化 SQL。
-管理操作 `refresh`、`status` 和来源发布 `rollback` 对非 Prism 来源选择文档仓库，
-不打开 SQL，也不需要数据库 URL。来源回退不等于检索 alias 恢复。
-显式 Prism `refresh`、`status` 和 `rollback` 仍使用 SQL
-（来源由刷新计划或 `--origin` 指定），Prism `rebuild` 也始终使用 SQL。
+文档 `refresh`、`status` 和来源发布 `rollback` 不打开 SQL，也不需要数据库 URL。
+来源回退不等于检索 alias 恢复。
+Prism `refresh`、`status`、`rollback` 和 `rebuild` 属于独立的公共记录命令；
+重建必须提供外部审批的 `--manifest`。
 文档备份包不含 Prism 记录、引用及 blob；结构化备份单独覆盖 SQL 证据。
 恢复在写入前拒绝文档备份包中的 Prism。文档检索重建使用上面的 Python 构建器。
 
@@ -760,7 +776,7 @@ DTO 验证不是授权：请使用已认证 REST 会话，或通过真实调用�
 ```bash
 export PYTHONPATH=apps/backend/src
 python -m llm_d_lens.agentic.document_rag.admin refresh \
-  --schema public --data-dir /srv/lens-data \
+  --data-dir /srv/lens-data \
   --plan /secure/rag/approved-plan.json \
   --trigger commit --event-revision "$REVIEWED_COMMIT"
 ```
@@ -784,24 +800,20 @@ Prism 使用 SQL `public_benchmark_records`，应通过安全环境配置数据�
 ```python
 from pathlib import Path
 
-from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
 from llm_d_lens.agentic.document_rag.publication import RagPublicationService
 from llm_d_lens.agentic.document_rag.refresh import RagRefreshService, RefreshPlan
 
 # Non-Prism document refresh; Prism uses the structured SQL admin path.
 # LENS_DATA_DIR must name the same persistent archive used by query instances.
 plan = RefreshPlan.model_validate_json(Path("/secure/rag/approved-plan.json").read_bytes())
-dao = DocumentRepository.from_environment()
-report = RagRefreshService(RagPublicationService(dao=dao)).run(
-    plan, trigger="periodic"
-)
+with RagPublicationService() as publication:
+    report = RagRefreshService(publication).run(plan, trigger="periodic")
 print(report.model_dump_json())
 ```
 
 `RefreshPlan.model_json_schema()` 提供严格计划契约。需审核来源审批、完整文件清单与
-哈希、逐类型计数、基础 manifest/generation、允许的触发方式以及全部图覆盖。
-新指南数值版本还需通过 `metadata_review_reference` 确认现有适配器的模型、
-硬件和工作负载等假设在该版本仍成立；新增 schema/表布局仍需更新适配器。
+哈希、逐类型计数、基础 manifest/generation 和允许的触发方式。
+文档导入只生成 source/passage，不生成数值实验、测量或图记录。
 空清单必须显式设置 `allow_empty: true`。计划不能扩大来源/路径白名单、
 重新启用来源，或从 simulation ID 猜测归属。
 

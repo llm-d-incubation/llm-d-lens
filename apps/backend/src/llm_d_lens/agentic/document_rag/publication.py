@@ -7,6 +7,8 @@ import json
 import logging
 import zipfile
 from collections import Counter
+from collections.abc import Iterable
+from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
@@ -39,18 +41,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class RagPublicationService:
+class RagPublicationService(AbstractContextManager["RagPublicationService"]):
     def __init__(
         self,
         dao: OpenSearchDocumentRepository | None = None,
         archive: SourceArchive | None = None,
     ) -> None:
+        self.archive = archive if archive is not None else SourceArchive()
+        self._owns_dao = dao is None
         if dao is None:
             from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
 
             dao = DocumentRepository.from_environment()
         self.dao = dao
-        self.archive = archive if archive is not None else SourceArchive()
+
+    def close(self) -> None:
+        if self._owns_dao:
+            self.dao.close()
+            self._owns_dao = False
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def register_source(self, origin_id: str, approval: SourceApproval) -> DocumentRecord:
         """Administrative approval only; never accept this identity from an LLM."""
@@ -73,6 +84,22 @@ class RagPublicationService:
     def _verify_manifest(self, manifest: ReleaseManifest) -> None:
         for file in manifest.inventory.files:
             self._verify_file(file)
+        members = (self.dao.get(key) for key in manifest.member_ids)
+        self._verify_passages(item for item in members if item is not None)
+
+    def _verify_passages(self, items: Iterable[DocumentRecord]) -> None:
+        from llm_d_lens.agentic.document_rag.service import EvidenceUnavailableError, _verify_passage_text
+
+        cache: dict[str, bytes] = {}
+        for item in items:
+            if item.kind != "passage":
+                continue
+            if item.content_sha256 not in cache:
+                cache[item.content_sha256] = self.archive.read(item.content_sha256)
+            try:
+                _verify_passage_text(item, cache[item.content_sha256])
+            except EvidenceUnavailableError as error:
+                raise PublicationError("document passage disagrees with its pinned original offsets") from error
 
     def stage(
         self,
@@ -168,6 +195,7 @@ class RagPublicationService:
                     if retained is None:
                         raise PublicationError("unchanged manifest member is missing")
                     members[member_id] = retained
+        self._verify_passages(members.values())
         counts = dict(Counter(item.kind for item in members.values()))
         if counts != {key: value for key, value in expected_counts.items() if value}:
             raise PublicationError("parsed release does not match expected per-kind counts")

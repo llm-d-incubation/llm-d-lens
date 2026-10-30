@@ -10,7 +10,7 @@ import pytest
 from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
 from llm_d_lens.agentic.document_rag.indexing import passage_document
 from llm_d_lens.agentic.document_rag.publication_contracts import InventoryFile, PinnedInventory, PublicationError
-from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
+from llm_d_lens.agentic.document_rag.query_contracts import QUERY_PERMISSION, CompatibilityFilters, QueryRequest
 from llm_d_lens.agentic.document_rag.repository_corpus import parse_markdown
 from llm_d_lens.agentic.document_rag.retrieval_contracts import DocumentMatch, DocumentSlice
 from llm_d_lens.agentic.document_rag.search import PublicRagSearchService
@@ -122,7 +122,7 @@ def test_existing_query_definition_contract_uses_document_authority(monkeypatch,
         QueryRequest(
             question="What is TTFT?",
             intent="definition",
-            filters=QueryFilters(origins=(BENCHMARK_ORIGIN,)),
+            filters=CompatibilityFilters(origins=(BENCHMARK_ORIGIN,)),
         ),
         principal,
     )
@@ -149,7 +149,7 @@ def test_document_query_failures_keep_the_existing_unavailable_contract(monkeypa
     with pytest.raises(EvidenceUnavailableError):
         service.query(
             QueryRequest(
-                question="What is TTFT?", intent="definition", filters=QueryFilters(origins=(BENCHMARK_ORIGIN,))
+                question="What is TTFT?", intent="definition", filters=CompatibilityFilters(origins=(BENCHMARK_ORIGIN,))
             ),
             principal,
         )

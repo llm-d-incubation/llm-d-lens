@@ -114,7 +114,6 @@ def main(argv: list[str] | None = None) -> int:
         repository = DocumentRepository.from_environment()
         try:
             repository.prepare(initialize=getattr(args, "initialize", False))
-            publication = RagPublicationService(repository)
             if args.command == "backup":
                 result = DocumentBackupService(repository, SourceArchive()).backup(
                     args.output, max_bytes=args.max_bytes
@@ -124,11 +123,13 @@ def main(argv: list[str] | None = None) -> int:
                     args.bundle, max_bytes=args.max_bytes
                 )
             elif args.command == "refresh":
+                publication = RagPublicationService(dao=repository)
                 plan = RefreshPlan.model_validate_json(args.plan.read_bytes())
                 result = RagRefreshService(publication).run(
                     plan, args.source, trigger=args.trigger, event_revision=args.event_revision
                 )
             elif args.command == "rollback":
+                publication = RagPublicationService(dao=repository)
                 result = publication.rollback(
                     args.origin, args.manifest_id, expected_generation=args.expected_generation
                 )

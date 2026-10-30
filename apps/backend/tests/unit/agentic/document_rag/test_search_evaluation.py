@@ -58,7 +58,7 @@ def test_absent_evidence_is_not_included_in_recall_denominator():
 
 
 def test_six_category_dataset_is_frozen_complete_and_split():
-    suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance.json")
+    suite = SearchEvaluationSuite.load(Path(__file__).parents[3] / "fixtures/public_rag/search_acceptance.json")
     assert len(suite.cases) == 60 and len(suite.anchors) == 10
     assert sum(case.split == "holdout" for case in suite.cases) == 24
     with pytest.raises(ValidationError):
@@ -68,7 +68,7 @@ def test_six_category_dataset_is_frozen_complete_and_split():
 
 
 def test_v2_suite_covers_all_pinned_sources_with_balanced_splits():
-    suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance_v2.json")
+    suite = SearchEvaluationSuite.load(Path(__file__).parents[3] / "fixtures/public_rag/search_acceptance_v2.json")
     assert len(suite.cases) == 100
     assert len(suite.manifests) == 8
     assert len([case for case in suite.cases if case.expect_empty]) == 10
@@ -81,7 +81,7 @@ def test_v2_suite_covers_all_pinned_sources_with_balanced_splits():
 
 
 def test_v2_quality_runner_reports_per_source_and_macro_metrics():
-    suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance_v2.json")
+    suite = SearchEvaluationSuite.load(Path(__file__).parents[3] / "fixtures/public_rag/search_acceptance_v2.json")
     cases_by_question = {case.question: case for case in suite.cases}
 
     async def perfect_search(request):
@@ -143,7 +143,7 @@ def empty_response(**updates):
 
 
 def test_quality_runner_propagates_errors_and_refuses_stale_data():
-    suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance.json")
+    suite = SearchEvaluationSuite.load(Path(__file__).parents[3] / "fixtures/public_rag/search_acceptance.json")
     with pytest.raises(RuntimeError, match="failure"):
         asyncio.run(evaluate_search(suite, AsyncMock(side_effect=RuntimeError("failure"))))
     with pytest.raises(ValueError, match="stale"):
@@ -155,7 +155,7 @@ def test_quality_runner_propagates_errors_and_refuses_stale_data():
 
 
 def test_target_attribution_does_not_filter_competitors_or_promote_source_ranks():
-    suite = SearchEvaluationSuite.load(Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance_v2.json")
+    suite = SearchEvaluationSuite.load(Path(__file__).parents[3] / "fixtures/public_rag/search_acceptance_v2.json")
     cases_by_question = {case.question: case for case in suite.cases}
 
     async def competing_search(request):

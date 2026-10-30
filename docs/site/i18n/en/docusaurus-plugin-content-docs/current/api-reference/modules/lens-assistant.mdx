@@ -295,6 +295,8 @@ Development-set gains are not holdout, performance or launch acceptance.
   <TabItem value="python-api" label="Python API">
 
 ```python
+from contextlib import closing
+
 from llm_d_lens.agentic.document_rag.indexing import PublicRagIndexBuilder
 from llm_d_lens.agentic.document_rag.embedding import configured_encoder
 from llm_d_lens.agentic.document_rag.opensearch_evidence_search import (
@@ -305,26 +307,26 @@ from llm_d_lens.agentic.document_rag.search_contracts import PublicSearchRequest
 
 repository = OpenSearchEvidenceSearchRepository("http://127.0.0.1:9200")
 # Administrative operation on already approved and published source evidence:
-build = await PublicRagIndexBuilder(repository).build(
-    ("https://github.com/llm-d/llm-d",)
-)
-response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache"), principal
-)
-# Separate administrative S2 build; never switches the lexical alias:
-vector_build = await PublicRagIndexBuilder(repository).build(
-    ("https://github.com/llm-d/llm-d",), encoder=configured_encoder()
-)
-vector_response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache", mode="vector"), principal
-)
-hybrid_response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache", mode="hybrid"), principal
-)
-unenhanced_response = await PublicRagSearchService(repository).search(
-    PublicSearchRequest(question="prefix cache", mode="hybrid", query_enhancement=False),
-    principal,
-)
+with PublicRagIndexBuilder(repository) as builder:
+    build = await builder.build(("https://github.com/llm-d/llm-d",))
+    with closing(PublicRagSearchService(repository)) as search:
+        response = await search.search(
+            PublicSearchRequest(question="prefix cache"), principal
+        )
+        # Separate administrative S2 build; never switches the lexical alias:
+        vector_build = await builder.build(
+            ("https://github.com/llm-d/llm-d",), encoder=configured_encoder()
+        )
+        vector_response = await search.search(
+            PublicSearchRequest(question="prefix cache", mode="vector"), principal
+        )
+        hybrid_response = await search.search(
+            PublicSearchRequest(question="prefix cache", mode="hybrid"), principal
+        )
+        unenhanced_response = await search.search(
+            PublicSearchRequest(question="prefix cache", mode="hybrid", query_enhancement=False),
+            principal,
+        )
 ```
 
 For explicit document retrieval-build wiring, reuse the
@@ -336,15 +338,30 @@ from llm_d_lens.agentic.document_rag.document_repository import DocumentReposito
 from llm_d_lens.agentic.document_rag.sources import SourceArchive
 
 metadata = DocumentRepository.from_environment()
-build = await PublicRagIndexBuilder(
-    repository,
-    dao=metadata,
-    archive=SourceArchive(),
-    lifecycle=DocumentLifecycle(metadata),
-).build(("https://github.com/llm-d/llm-d",))
+try:
+    with PublicRagIndexBuilder(
+        repository,
+        dao=metadata,
+        archive=SourceArchive(),
+        lifecycle=DocumentLifecycle(metadata),
+    ) as builder:
+        build = await builder.build(("https://github.com/llm-d/llm-d",))
+finally:
+    metadata.close()
 ```
 
 Builder defaults use the OpenSearch document lifecycle.
+`RagPublicationService`, `PublicRagIndexBuilder`, `RepositoryCorpusImporter`
+and `ReviewedWebSnapshotImporter` support `with` and explicit `close()`.
+Use a context manager or `try/finally` for the whole operation, including
+failure/cancellation paths. They close only dependencies they create; injected
+repositories/publication services remain caller-owned. Repeated `close()` is
+safe; do not reuse an owned service after closing it.
+Staging validates every new and retained passage against its exact archived
+UTF-8 character span before writing a release. Activation, explicit imported
+release approval and rollback recheck those spans before changing the source
+head. Legacy table-cell-only pointers are not valid document passage locators;
+reparse the pinned original bytes rather than weakening verification.
 Source staging and publication are separate prerequisites, not performed by this
 retrieval rebuild. Existing mixed releases use verified external membership
 descriptors during migration, not copied experimental facts.
@@ -587,16 +604,17 @@ proofs fail closed. Restore imports immutable documents/descriptors but skips al
 source registries, aliases and active-build state. Empty targets therefore require
 current source registration/approval, republishing and rebuilding.
 
-Administrative `backup`, `verify` and `restore` default to OpenSearch document
-bundles; structured SQL bundles require explicit `--structured`.
+Run document `backup`, `verify` and `restore` through
+`llm_d_lens.agentic.document_rag.admin`; run structured SQL operations through
+`llm_d_lens.agentic.public_benchmark_record.admin`. There is no `--structured`
+backend switch in the document command.
 Document backup/restore does not require a database URL or open SQL;
 document verification is offline and needs no OpenSearch endpoint.
 For document restore, `--initialize` initializes the management index, not SQL.
-Administrative `refresh`, `status` and source-release `rollback` also select the
-document repository for non-Prism sources, without opening SQL or requiring a
-database URL. Source rollback is not retrieval-alias recovery.
-Explicit Prism `refresh`, `status` and `rollback` remain SQL
-(origin comes from the refresh plan or `--origin`), as does Prism `rebuild`.
+Document `refresh`, `status` and source-release `rollback` do not open SQL or
+require a database URL. Source rollback is not retrieval-alias recovery.
+Prism `refresh`, `status`, `rollback` and `rebuild` belong to the separate
+public-record command; rebuilding requires an external reviewed `--manifest`.
 Document bundles exclude Prism records, references and blobs; structured backups
 cover the SQL evidence separately. Restore rejects Prism in a document bundle
 before writes. Use the Python builder above for document retrieval rebuilding.
@@ -897,7 +915,7 @@ No write endpoint is exposed. A trusted operator/job runs:
 ```bash
 export PYTHONPATH=apps/backend/src
 python -m llm_d_lens.agentic.document_rag.admin refresh \
-  --schema public --data-dir /srv/lens-data \
+  --data-dir /srv/lens-data \
   --plan /secure/rag/approved-plan.json \
   --trigger commit --event-revision "$REVIEWED_COMMIT"
 ```
@@ -923,26 +941,21 @@ automatically.
 ```python
 from pathlib import Path
 
-from llm_d_lens.agentic.document_rag.document_repository import DocumentRepository
 from llm_d_lens.agentic.document_rag.publication import RagPublicationService
 from llm_d_lens.agentic.document_rag.refresh import RagRefreshService, RefreshPlan
 
 # Non-Prism document refresh; Prism uses the structured SQL admin path.
 # LENS_DATA_DIR must name the same persistent archive used by query instances.
 plan = RefreshPlan.model_validate_json(Path("/secure/rag/approved-plan.json").read_bytes())
-dao = DocumentRepository.from_environment()
-report = RagRefreshService(RagPublicationService(dao=dao)).run(
-    plan, trigger="periodic"
-)
+with RagPublicationService() as publication:
+    report = RagRefreshService(publication).run(plan, trigger="periodic")
 print(report.model_dump_json())
 ```
 
 `RefreshPlan.model_json_schema()` describes the strict plan contract. Review
 the exact source approval, full inventory/path hashes, per-kind counts,
-base manifest/generation, allowed triggers and all figure coverage. New guide
-numeric revisions also require `metadata_review_reference` confirming that
-the existing adapter's model, hardware and workload assumptions remain valid;
-new schemas/layouts still require an adapter update. Empty inventories need
+base manifest/generation and allowed triggers. Document import emits only
+source/passages, not numeric experiments, measurements or figures. Empty inventories need
 explicit `allow_empty: true`. Plans never expand the source/path allowlist,
 re-enable a source or infer ownership from simulation IDs.
 

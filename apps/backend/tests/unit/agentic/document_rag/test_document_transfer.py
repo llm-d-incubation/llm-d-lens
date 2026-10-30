@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from llm_d_lens.agentic.document_rag.contracts import DocumentRecord
 from llm_d_lens.agentic.document_rag.document_repository import (
@@ -522,7 +523,8 @@ def test_rechecksummed_malformed_metadata_fails_closed(document_case, tmp_path, 
 
 
 @pytest.mark.parametrize("kind", ["experiment", "measurement", "figure", "figure_link"])
-def test_mixed_legacy_bundles_never_import_structured_fact_bodies(document_case, tmp_path, kind):
+@pytest.mark.parametrize("declare_kind", [False, True])
+def test_mixed_legacy_bundles_never_import_structured_fact_bodies(document_case, tmp_path, kind, declare_kind):
     archive, records = document_case
     source = records[1]
     fields = {
@@ -538,7 +540,7 @@ def test_mixed_legacy_bundles_never_import_structured_fact_bodies(document_case,
         "figure_link": {"referenced_item_id": source.item_id},
     }
     key = f"{source.source_path}#legacy-{kind}"
-    structured = DocumentRecord(
+    structured = PublicBenchmarkRecord(
         item_id=item_id(source.origin_id, key, source.source_revision),
         kind=kind,
         origin_id=source.origin_id,
@@ -562,15 +564,18 @@ def test_mixed_legacy_bundles_never_import_structured_fact_bodies(document_case,
         manifest = json.loads(contents["manifest.json"])
         manifest["records_sha256"] = hashlib.sha256(payload).hexdigest()
         manifest["row_count"] += 1
-        manifest["counts"][kind] = 1
+        if declare_kind:
+            manifest["counts"][kind] = 1
         contents["records.jsonl"] = payload
         contents["manifest.json"] = json.dumps(manifest).encode()
         return [(entry, contents[entry.filename]) for entry, _ in entries]
 
     rewrite(path, append_legacy_body)
     target, target_archive = Repository(), Mock()
-    with pytest.raises(PublicationError, match="structured fact"):
+    with pytest.raises(PublicationError, match="invalid document backup metadata") as error:
         DocumentBackupService(target, target_archive).restore(path)
+    assert isinstance(error.value.__cause__, ValidationError)
+    assert any(issue["type"] == "literal_error" for issue in error.value.__cause__.errors())
     assert not target.writes
     target_archive.put.assert_not_called()
 
@@ -632,7 +637,7 @@ def test_mixed_baseline_projects_external_proofs_and_preserves_original_manifest
 def test_prism_only_baseline_and_legacy_prism_restore_fail_clearly(document_case, prism_sql_records, tmp_path):
     archive, records = document_case
     path = tmp_path / "prism-baseline.zip"
-    with pytest.raises(PublicationError, match="no OpenSearch-owned"):
+    with pytest.raises(ValidationError, match="kind"):
         DocumentBackupService(Repository(), archive).backup(path, snapshot=prism_sql_records)
     assert not path.exists()
     DocumentBackupService(Repository(records), archive).backup(path)

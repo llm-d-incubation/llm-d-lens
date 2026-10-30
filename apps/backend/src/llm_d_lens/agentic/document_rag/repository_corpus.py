@@ -6,6 +6,7 @@ import hashlib
 import posixpath
 import re
 from collections import Counter
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -260,9 +261,18 @@ def repository_counts(parsed: tuple[ParsedFile, ...]) -> dict[ItemKind, int]:
     return dict(counts)
 
 
-class ReviewedWebSnapshotImporter:
+class ReviewedWebSnapshotImporter(AbstractContextManager["ReviewedWebSnapshotImporter"]):
     def __init__(self, publication: RagPublicationService | None = None) -> None:
+        self._owns_publication = publication is None
         self.publication = publication if publication is not None else RagPublicationService()
+
+    def close(self) -> None:
+        if self._owns_publication:
+            self.publication.close()
+            self._owns_publication = False
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def stage_snapshot(
         self,
@@ -298,9 +308,18 @@ class ReviewedWebSnapshotImporter:
         return self.publication.stage(collected, parsed, expected_counts=expected_counts)
 
 
-class RepositoryCorpusImporter:
+class RepositoryCorpusImporter(AbstractContextManager["RepositoryCorpusImporter"]):
     def __init__(self, publication: RagPublicationService | None = None) -> None:
+        self._owns_publication = publication is None
         self.publication = publication if publication is not None else RagPublicationService()
+
+    def close(self) -> None:
+        if self._owns_publication:
+            self.publication.close()
+            self._owns_publication = False
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def stage_repository(
         self,
@@ -312,13 +331,10 @@ class RepositoryCorpusImporter:
         expected_counts: dict[ItemKind, int],
         expected_inventory_digest: str | None = None,
     ) -> DocumentRecord:
-        """Stage only reviewed counts, bytes and metadata, without publishing.
+        """Stage reviewed document counts and bytes without publishing.
 
         A None repo fetches the approved GitHub source into the managed cache.
-        ``reviewed_metadata_revision`` is the exact commit whose existing
-        hardcoded model/hardware/workload metadata the operator has reviewed.
-        None preserves the initial numeric revision guard; figure reviews and
-        layout/schema validation remain mandatory.
+        No numeric experiment or figure records are extracted.
         """
         if origin_id not in (LLM_D_ORIGIN, BENCHMARK_ORIGIN) or approval.parser_version != PARSER_VERSION:
             raise PublicationError("repository approval needs the supported origin and parser version")
@@ -345,13 +361,7 @@ class RepositoryCorpusImporter:
         expected_counts: dict[ItemKind, int],
         expected_inventory_digest: str | None = None,
     ) -> PublicationResult:
-        """Stage and activate a complete pinned repository.
-
-        Supply ``reviewed_metadata_revision`` only after operator review of
-        existing hardcoded model/hardware/workload metadata against that exact
-        commit. None preserves the initial numeric revision guard; this does
-        not replace figure reviews or relax layout/schema validation.
-        """
+        """Stage and activate a complete pinned, passage-only repository."""
         manifest = self.stage_repository(
             repo,
             origin_id,

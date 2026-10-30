@@ -352,7 +352,7 @@ def test_coverage_snapshot_hash_must_match_previous_report_before_scoring(tmp_pa
         load_coverage_inputs(
             input_path,
             reference_path,
-            Path(__file__).parents[2] / "fixtures/public_rag/search_acceptance_v2.json",
+            Path(__file__).parents[3] / "fixtures/public_rag/search_acceptance_v2.json",
             tmp_path / "pin.json",
         )
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -90,6 +91,38 @@ def test_failed_bulk_does_not_activate():
         asyncio.run(builder.build((BENCHMARK_ORIGIN,)))
     builder.lifecycle.activate.assert_not_called()
     builder.lifecycle.fail.assert_called_once()
+
+
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("failure_at", [None, "filters", "recover", "archive", "write", "activate", "cancel"])
+def test_builder_closes_only_owned_metadata_on_every_exit(monkeypatch, owned, failure_at):
+    original, _ = builder_case()
+    dao = original.dao
+    monkeypatch.setattr(DocumentRepository, "from_environment", Mock(return_value=dao))
+    builder = PublicRagIndexBuilder(
+        Mock(),
+        dao=None if owned else dao,
+        archive=original.archive,
+        lifecycle=original.lifecycle,
+    )
+    builder.writer = original.writer
+    if failure_at in ("recover", "activate"):
+        getattr(builder.lifecycle, failure_at).side_effect = EvidenceSearchError("injected failure")
+    elif failure_at == "archive":
+        builder.archive.read.side_effect = OSError("injected failure")
+    elif failure_at == "write":
+        builder.writer.write.side_effect = EvidenceSearchError("injected failure")
+    elif failure_at == "cancel":
+        builder.writer.write.side_effect = asyncio.CancelledError()
+
+    async def run():
+        error = asyncio.CancelledError if failure_at == "cancel" else (ValueError, EvidenceSearchError, OSError)
+        with pytest.raises(error) if failure_at else nullcontext(), builder:
+            await builder.build(("not-approved",) if failure_at == "filters" else (BENCHMARK_ORIGIN,))
+
+    asyncio.run(run())
+    builder.close()
+    assert dao.close.call_count == int(owned)
 
 
 def test_empty_corpus_cannot_replace_active_index():
