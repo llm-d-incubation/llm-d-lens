@@ -150,7 +150,7 @@ def _statistics(values: dict[str, object]) -> list[tuple[str, Decimal, tuple[str
     for name, value in values.items():
         if name == "units" or value is None:
             continue
-        if name and name not in ("min", "max", "mean", "avg", "median") and not re.fullmatch(r"p\d+(?:p\d+)?", name):
+        if name and name not in ("min", "max", "mean", "avg", "median") and not re.fullmatch(r"p\d+(?:[p.]\d+)?", name):
             raise PublicationError("unsupported metric statistic requires compatibility review")
         statistic = normalize_statistic(name) or ""
         number = _number(value)
@@ -215,12 +215,15 @@ class PrismSnapshotImporter:
         approval: SourceApproval,
         *,
         expected_experiments: int,
+        allow_empty: bool = False,
     ) -> PublicBenchmarkRecord:
         if approval.parser_version != PARSER_VERSION:
             raise PublicationError("Prism parser version requires compatibility review")
         if type(expected_experiments) is not int or expected_experiments < 0:
             raise PublicationError("expected experiment count must be a nonnegative integer")
-        inventory = collect_snapshot(root, revision, expected_files, approval, self.service.archive)
+        inventory = collect_snapshot(
+            root, revision, expected_files, approval, self.service.archive, allow_empty=allow_empty
+        )
         parser = _SnapshotParser(inventory, self.service)
         parsed = parser.parse()
         counts: dict[ItemKind, int] = dict(Counter(item.kind for file in parsed for item in file.items))
@@ -571,6 +574,8 @@ class _SnapshotParser:
                         )
 
     def parse(self) -> tuple[ParsedFile, ...]:
+        if not self.inventory.files:
+            return ()
         merged = _array(self._read(MERGED_PATH))
         for index, value in enumerate(merged):
             row = _object(value)

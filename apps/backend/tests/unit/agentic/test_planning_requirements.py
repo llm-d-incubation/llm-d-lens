@@ -48,6 +48,18 @@ def test_latency_units_and_operators(text, operator):
     assert PlanningRequirements.model_validate_json(requirements.model_dump_json()) == requirements
 
 
+@pytest.mark.parametrize("unit,value", [("ms/token", "20"), ("s/token", "0.02"), ("ms/tokens", "20")])
+def test_tpot_per_token_units_preserve_threshold_and_provenance(unit, value):
+    text = f"TPOT <= {value} {unit}"
+    requirements = normalize_requirements(text).require_valid()
+    (target,) = requirements.performance_targets
+    assert (target.field, target.value, target.unit, target.operator) == ("tpot", 20, "ms", "<=")
+    assert target.provenance.raw == text
+    assert text[target.provenance.start : target.provenance.end] == text
+    facts = AICandidateGenerator._apply_preference_constraints(PlanningFacts(8, 80, 4), text)
+    assert facts.tpot_slo_ms == 20
+
+
 @pytest.mark.parametrize(
     "text,form_field,field",
     [
@@ -94,6 +106,12 @@ def test_default_mean_latency_does_not_accept_percentile_predictions():
         "TTFT -2 s",
         "QPS 10 tokens",
         "TTFT 2 ms/tokens",
+        "E2E 2 s/token",
+        "ISL 2 ms/token",
+        "TPOT 2 tokens/s",
+        "TPOT 2 ms/request",
+        "TPOT 2 ms/token/second",
+        "TPOT 2 ms/tokenish",
         "TTFT 2 squirrels",
         "ISL 1024 bananas OSL 256",
     ],

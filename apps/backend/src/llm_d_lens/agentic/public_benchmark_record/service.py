@@ -17,6 +17,7 @@ from llm_d_lens.agentic.public_benchmark_record.agentic_answers import (
 )
 from llm_d_lens.agentic.public_benchmark_record.contracts import (
     PublicBenchmarkRecord,
+    effective_runtime,
     model_identities_match,
     normalize_statistic,
 )
@@ -480,7 +481,7 @@ def _context(item: PublicBenchmarkRecord) -> ExperimentContext:
         origin_id=item.origin_id,
         model=item.model,
         hardware=item.hardware,
-        runtime=item.runtime,
+        runtime=effective_runtime(item.runtime),
         workload=item.workload,
         configuration=item.configuration,
         source_pointer=item.source_pointer or {},

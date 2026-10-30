@@ -142,6 +142,7 @@ class PublicBenchmarkRecordRefreshService:
             {file.path: file.sha256 for file in plan.inventory.files},
             plan.approval,
             expected_experiments=plan.expected_counts.get("experiment", 0),
+            allow_empty=plan.allow_empty,
         )
         metadata = ReleaseManifest.model_validate(staged.source_details)
         if metadata.inventory != plan.inventory or metadata.counts != {

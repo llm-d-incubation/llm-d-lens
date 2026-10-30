@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
+from llm_d_lens.agentic.facts import PlanningHardwareSnapshot
 from llm_d_lens.agentic.generator import (
     AgenticMcpClient,
     AICandidateGenerator,
@@ -475,10 +477,24 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
     ],
 )
 @pytest.mark.parametrize("profile", [None, WorkloadProfile(), WorkloadProfile(shared_prefix_ratio=0)])
+@pytest.mark.parametrize("shared_snapshot", [False, True])
 def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
-    monkeypatch, accelerators, simulated, expected_system, profile
+    monkeypatch, accelerators, simulated, expected_system, profile, shared_snapshot
 ):
     captured = {"tool_args": []}
+    discoveries = []
+
+    async def overview(cluster):
+        discoveries.append(cluster.id)
+        result = _cluster_result()
+        if accelerators is not None:
+            result["hardware"]["accelerators"] = accelerators
+        return result
+
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
 
     class Tools:
         async def available_tools(self):
@@ -548,10 +564,20 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
         workload_profile=profile,
     )
 
-    proposals = asyncio.run(generator.generate("cluster-a", "Qwen/Qwen3-8B", facts, "prefer throughput"))
+    async def generate():
+        snapshot = PlanningHardwareSnapshot("cluster-a") if shared_snapshot else None
+        if snapshot is not None:
+            first = await snapshot.get("cluster-a")
+            first["hardware"]["availableGpuCount"] = 0
+        return await generator.generate(
+            "cluster-a", "Qwen/Qwen3-8B", facts, "prefer throughput", hardware_snapshot=snapshot
+        )
 
+    proposals = asyncio.run(generate())
+
+    assert discoveries == (["cluster-a"] if shared_snapshot else [])
     assert captured["tool_args"] == [
-        ("get_cluster_overview", {"clusterId": "cluster-a"}),
+        *([] if shared_snapshot else [("get_cluster_overview", {"clusterId": "cluster-a"})]),
         (
             "search_candidates",
             {**_aic_arguments(), "searchConfig": {"aicSystemName": expected_system, "totalGpus": 4}},

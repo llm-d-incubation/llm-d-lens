@@ -69,6 +69,23 @@ class ResolvedPlanningFacts(BaseModel):
     trace: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class PlanningHardwareSnapshot:
+    """One discovery attempt shared only by a single create/refine operation."""
+
+    def __init__(self, cluster_id: str) -> None:
+        self.cluster_id = cluster_id
+        self._task: asyncio.Task[dict[str, Any]] | None = None
+
+    async def get(self, cluster_id: str) -> dict[str, Any]:
+        if cluster_id != self.cluster_id:
+            raise ValueError("Planning hardware snapshot belongs to a different cluster")
+        if self._task is None:
+            self._task = asyncio.create_task(build_overview(registry.require_cluster(cluster_id)))
+        if self._task.cancelled():
+            raise TimeoutError("Planning hardware discovery was cancelled; no snapshot is available")
+        return deepcopy(await self._task)
+
+
 def _hardware_model_key(model: str, profile: HardwareProfile) -> tuple[str, ...]:
     decoration = {
         token
@@ -398,13 +415,22 @@ def rank_public_rag_evidence(
 
 
 async def resolve_retrieval_hardware(
-    cluster_server_id: str, model: str, facts: PlanningFacts, principal: Principal | None
+    cluster_server_id: str,
+    model: str,
+    facts: PlanningFacts,
+    principal: Principal | None,
+    *,
+    hardware_snapshot: PlanningHardwareSnapshot | None = None,
 ) -> tuple[PlanningFacts, dict[str, Any]]:
     """Share verified target identity before parallel SQL retrieval, without AIC or history reads."""
     try:
         require_query_access(principal)
         async with asyncio.timeout(15):
-            overview = await build_overview(registry.require_cluster(cluster_server_id))
+            overview = (
+                await hardware_snapshot.get(cluster_server_id)
+                if hardware_snapshot is not None
+                else await build_overview(registry.require_cluster(cluster_server_id))
+            )
         observed_target = _public_rag_hardware(overview)
         simulated_model = _test_cluster_hardware(cluster_server_id)
         effective_model = simulated_model or facts.planning_hardware_model
@@ -449,6 +475,7 @@ async def resolve_public_rag_evidence(
     *,
     cluster_server_id: str,
     planning_facts: PlanningFacts | None = None,
+    hardware_snapshot: PlanningHardwareSnapshot | None = None,
 ) -> PlanningEvidence:
     """Read only published public evidence under the actual caller's global grant."""
     query = QueryRequest(
@@ -462,7 +489,11 @@ async def resolve_public_rag_evidence(
     try:
         require_query_access(principal)
         async with asyncio.timeout(15):
-            overview = await build_overview(registry.require_cluster(cluster_server_id))
+            overview = (
+                await hardware_snapshot.get(cluster_server_id)
+                if hardware_snapshot is not None
+                else await build_overview(registry.require_cluster(cluster_server_id))
+            )
             target = _public_rag_hardware(overview)
             if target is None:
                 message = (
@@ -622,12 +653,19 @@ async def resolve_planning_facts(
     requested: PlanningFacts,
     *,
     include_supplementary_evidence: bool = True,
+    hardware_snapshot: PlanningHardwareSnapshot | None = None,
 ) -> ResolvedPlanningFacts:
     """Use a live cluster overview for hard constraints and record other evidence."""
     requested = resolve_workload_signals(requested)
     cluster = registry.require_cluster(cluster_server_id)
     overview = planning_hardware_overview(
-        await build_overview(cluster), requested.planning_hardware_model, cluster_id=cluster_server_id
+        (
+            await hardware_snapshot.get(cluster_server_id)
+            if hardware_snapshot is not None
+            else await build_overview(cluster)
+        ),
+        requested.planning_hardware_model,
+        cluster_id=cluster_server_id,
     )
     hardware = overview.get("hardware") or {}
     available_gpus = int(hardware.get("availableGpuCount") or 0)

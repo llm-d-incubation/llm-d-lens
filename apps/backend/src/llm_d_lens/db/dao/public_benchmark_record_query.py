@@ -5,17 +5,24 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Float, and_, case, cast, func, literal, or_, select, union_all
+from sqlalchemy import Float, Numeric, and_, case, cast, func, literal, or_, select, union_all
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.util import AliasedClass
 from sqlalchemy.sql.elements import ColumnElement
 
 from llm_d_lens.agentic.public_benchmark_record.contracts import (
+    DEFAULT_PUBLIC_RUNTIME,
+    UNKNOWN_RUNTIME_LABELS,
     WORKLOAD_ALIASES,
+    WORKLOAD_NUMBER_PATTERN,
     PublicBenchmarkRecord,
+    effective_runtime,
+    metric_aliases,
     model_identity_aliases,
     planning_latency_axes,
+    statistic_aliases,
+    workload_number,
 )
 from llm_d_lens.agentic.public_benchmark_record.publication_contracts import PublicationError, registry_id
 from llm_d_lens.agentic.public_benchmark_record.query_contracts import QueryFilters
@@ -53,6 +60,15 @@ def model_identity_condition(column: ColumnElement[str], model: str) -> ColumnEl
         func.regexp_replace(name, "^.*/", "").in_(aliases),
         func.replace(name, "/", "-").in_(aliases),
     )
+
+
+def runtime_condition(column: ColumnElement[str], runtime: str) -> ColumnElement[bool]:
+    name = func.lower(func.trim(column))
+    backend = case(
+        (or_(name.is_(None), name.in_(UNKNOWN_RUNTIME_LABELS)), DEFAULT_PUBLIC_RUNTIME),
+        else_=name,
+    )
+    return backend == effective_runtime(runtime).strip().casefold()
 
 
 def latency_dominator_count(profiles, axis_names: tuple[str, ...]):
@@ -100,12 +116,27 @@ class PublicBenchmarkRecordQueryDao(PublicBenchmarkRecordDao):
             conditions.append(experiment.source_pointer["record_id"].as_string() == filters.record_id)
         if filters.model is not None:
             conditions.append(model_identity_condition(experiment.model, filters.model))
-        for field in ("hardware", "runtime"):
-            value = getattr(filters, field)
-            if value is not None:
-                conditions.append(func.lower(getattr(experiment, field)) == value.lower())
-        if filters.workload:
-            conditions.append(experiment.workload.cast(JSONB).contains(filters.workload))
+        if filters.hardware is not None:
+            conditions.append(func.lower(experiment.hardware) == filters.hardware.lower())
+        if filters.runtime is not None:
+            conditions.append(runtime_condition(experiment.runtime, filters.runtime))
+        for field, requested in filters.workload.items():
+            number = workload_number(requested)
+            if number is None:
+                conditions.append(experiment.workload.cast(JSONB).contains({field: requested}))
+                continue
+            raw = experiment.workload.cast(JSONB)[field]
+            numeric = case(
+                (
+                    and_(
+                        func.jsonb_typeof(raw).in_(("number", "string")),
+                        raw.astext.op("~")(WORKLOAD_NUMBER_PATTERN),
+                    ),
+                    cast(raw.astext, Numeric),
+                ),
+                else_=None,
+            )
+            conditions.append(numeric == number)
         return conditions
 
     def _planning_statement(self, statement, item, experiment, source, registry, *, experiment_limit):
@@ -164,8 +195,10 @@ class PublicBenchmarkRecordQueryDao(PublicBenchmarkRecordDao):
                 case(
                     (
                         and_(
-                            item.metric.in_(("latency", "e2e")) if metric == "latency" else item.metric == metric,
-                            func.coalesce(item.statistic, "mean") == statistic,
+                            item.metric.in_(metric_aliases(metric)),
+                            func.coalesce(item.statistic, "mean").in_(statistic_aliases(statistic))
+                            if statistic is not None
+                            else item.statistic.is_(None),
                             number > 0,
                             number < float("inf"),
                         ),
@@ -363,7 +396,8 @@ class PublicBenchmarkRecordQueryDao(PublicBenchmarkRecordDao):
                 value = getattr(filters, field)
                 if value is not None:
                     column = func.coalesce(item.statistic, "mean") if field == "statistic" else item.metric
-                    statement = statement.where(column == value)
+                    aliases = statistic_aliases(value) if field == "statistic" else metric_aliases(value)
+                    statement = statement.where(column.in_(aliases))
             value_column = item.normalized_value if filters.normalized else item.value
             unit_column = item.normalized_unit if filters.normalized else item.unit
             if filters.unit is not None:
@@ -376,7 +410,7 @@ class PublicBenchmarkRecordQueryDao(PublicBenchmarkRecordDao):
             if facts is not None and kind == "measurement":
                 if facts.requirements is not None and facts.requirements.runtime.backend:
                     statement = statement.where(
-                        func.lower(experiment.runtime) == facts.requirements.runtime.backend.casefold()
+                        runtime_condition(experiment.runtime, facts.requirements.runtime.backend)
                     )
                 statement = self._planning_statement(
                     statement, item, experiment, source, registry, experiment_limit=experiment_limit

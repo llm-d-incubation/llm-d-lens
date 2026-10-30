@@ -59,7 +59,7 @@ Kubernetes 加速器资源识别硬件变体；容量和配置校验保持生效
 
 1. 打开模型，填写部署名称，选择集群和缓存存储。
 2. 将 **Mode** 改为 **Agentic**。
-3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**Mean input tokens per request（平均输入长度，ISL）**、**Mean output tokens per request（平均输出长度，OSL）**、**TTFT SLO (ms)** 和 **TPOT SLO (ms)** 初始为空。占位示例 `4000`、`1000`、`2000` 和 `30` 不会作为要求提交，也不会将平均输入长度复制成 P95；不提供端到端延迟输入框。
+3. 选择 **Use case（使用场景）**和 **GPU capacity for planning（规划可用 GPU）**，检查负载及性能目标。**Mean input tokens per request（平均输入长度，ISL）**、**Mean output tokens per request（平均输出长度，OSL）**、**TTFT SLO (ms)** 和 **TPOT SLO (ms)** 初始为空。占位示例 `4000`、`1000`、`2000` 和 `30` 不会作为要求提交，也不会将平均输入长度复制成 P95；不提供端到端延迟输入框。在规划提示词中，TPOT 也支持每 token 单位：`TPOT <= 20 ms/token` 与 `TPOT <= 0.02 s/token` 均表示每 token 20 毫秒。
 4. **AI provider** 可保持 **Default (no external AI provider)（不使用外部 AI）**，也可选择已配置的提供方辅助排序。
 5. 可选：展开 **Preference（偏好）**，用英文填写，例如 `use fewer GPU resources`（少用 GPU）或 `prefer prefix cache`（优先前缀缓存）。
 6. 点击 **Generate recommendation（生成推荐）**。
@@ -93,6 +93,10 @@ AIC 估算；公共证据缺失或不适用时，AIC 作为补充。实时资源
 公共检索还会按目标集群实时探测的加速卡型号过滤，而不是按集群名称判断。
 厂商修饰及分隔符差异可以匹配，但显存大小和 PCIe/SXM 型号仍严格区分。
 未知或混合硬件会明确提示；没有匹配结果时不会回退到其他硬件家族。
+
+公开基准记录的运行时后端缺失、为空或为 `unknown` 时，检索和规划上下文默认按 `vllm` 处理。
+明确标注的其他后端保持原值，不匹配 vLLM 计划。该资料库默认规则不会推断运行时版本，
+也不会改写原始证据。
 
 在 **Decision evidence（决策证据）** 中查看 **Public SQL measured observations**，
 可检查检索状态、原始数值与单位、来源路径、版本和校验和。无匹配、查询失败或缺少已认证的全局

@@ -177,10 +177,15 @@ def collect_snapshot(
     archive: SourceArchive,
     *,
     origin_id: str = PRISM_ORIGIN,
+    allow_empty: bool = False,
 ) -> PinnedInventory:
     validate_approval(origin_id, approval)
     validate_revision(origin_id, revision)
-    if not expected_files or not root.is_dir() or any(path.is_symlink() for path in (root, *root.parents)):
+    if (
+        (not expected_files and not allow_empty)
+        or not root.is_dir()
+        or any(path.is_symlink() for path in (root, *root.parents))
+    ):
         raise PublicationError("snapshot needs a reviewed hash inventory and a non-symlink root")
     actual = {}
     for path in root.rglob("*"):

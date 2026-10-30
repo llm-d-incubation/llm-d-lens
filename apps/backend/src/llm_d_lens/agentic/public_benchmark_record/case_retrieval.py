@@ -746,6 +746,8 @@ def _case(entries: list[dict[str, Any]], facts: PlanningFacts, model: str, hardw
         for field in fields:
             target_value = requested.get(field)
             source_value = reported.get(field)
+            if group == "runtime" and field == "backend" and source_value in (None, "unknown", ""):
+                source_value = context.get("runtime")
             if target_value in (None, "unknown", ""):
                 unknown.append(f"{group}.{field}")
                 continue

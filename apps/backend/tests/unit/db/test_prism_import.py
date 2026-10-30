@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import Engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
+from llm_d_lens.agentic.public_benchmark_record.contracts import normalize_statistic
 from llm_d_lens.agentic.public_benchmark_record.prism import PARSER_VERSION, PrismSnapshotImporter
 from llm_d_lens.agentic.public_benchmark_record.publication import PublicBenchmarkRecordPublicationService
 from llm_d_lens.agentic.public_benchmark_record.publication_contracts import (
@@ -18,8 +19,12 @@ from llm_d_lens.agentic.public_benchmark_record.publication_contracts import (
     SnapshotManifest,
     SourceApproval,
 )
+from llm_d_lens.agentic.public_benchmark_record.query_contracts import QUERY_PERMISSION, QueryFilters, QueryRequest
+from llm_d_lens.agentic.public_benchmark_record.service import PublicBenchmarkRecordQueryService
 from llm_d_lens.agentic.public_benchmark_record.sources import PRISM_ORIGIN, allowed_paths
+from llm_d_lens.auth.contracts import Principal, RoleBinding
 from llm_d_lens.db.dao.public_benchmark_record import PublicBenchmarkRecordDao
+from llm_d_lens.db.dao.public_benchmark_record_query import PublicBenchmarkRecordQueryDao
 from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow
 
 _SNAPSHOT = Path(__file__).resolve().parents[5] / "private/prism-public-2026-10-13"
@@ -183,6 +188,120 @@ def test_snapshot_preserves_exact_values_context_and_timestamp_semantics(
     assert summaries[0].source_pointer["original_zip_member"].endswith("_stage_1_lifecycle_metrics.json.yaml")
     repeat = importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
     assert not repeat.changed and repeat.manifest_id == first.manifest_id and repeat.generation == 1
+
+
+@pytest.mark.parametrize(
+    ("workload", "requested", "matches"),
+    [
+        ({"target_qps": 1.5}, {"target_qps": 1.5}, True),
+        ({"concurrency": 4.0}, {"concurrency": 4}, True),
+        ({"concurrency": 4}, {"concurrency": 4.0}, True),
+        ({"target_qps": "1.5000"}, {"target_qps": 1.5}, True),
+        ({"target_qps": "15e-1"}, {"target_qps": "1.500"}, True),
+        (
+            {"target_qps": "1.50000000000000000000000000001"},
+            {"target_qps": "1.50000000000000000000000000001"},
+            True,
+        ),
+        ({"target_qps": "1.500000000000000000001"}, {"target_qps": 1.5}, False),
+        ({"target_qps": True}, {"target_qps": 1}, False),
+        ({"target_qps": "unknown"}, {"target_qps": 1.5}, False),
+        ({}, {"target_qps": 1.5}, False),
+    ],
+)
+def test_imported_workload_numeric_query_preserves_source(importer, snapshot, workload, requested, matches):
+    archived = _read(snapshot, _ARCHIVE)
+    archived[0]["workload"] = workload
+    merged = _read(snapshot, _MERGED)
+    merged[0] = archived[0]
+    _write(snapshot, _ARCHIVE, archived)
+    _write(snapshot, _MERGED, merged)
+    source_bytes = (snapshot / _ARCHIVE).read_bytes()
+    importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
+    service = PublicBenchmarkRecordQueryService(
+        PublicBenchmarkRecordQueryDao(importer.service.dao._get_session_factory()), importer.service.archive
+    )
+    principal = Principal(
+        user_id="reader",
+        username="reader",
+        bindings=(RoleBinding("reader"),),
+        role_permissions={"reader": frozenset({QUERY_PERMISSION})},
+    )
+    response = service.query(
+        QueryRequest(
+            question="Reported throughput",
+            intent="numeric",
+            filters=QueryFilters(record_id="historical", metric="throughput", workload=requested),
+        ),
+        principal,
+    )
+    assert response.status == ("answered" if matches else "abstained")
+    assert len(response.evidence) == int(matches)
+    if matches:
+        evidence = response.evidence[0]
+        assert evidence.original_value == Decimal("6131.06177725188")
+        assert evidence.experiment.workload == {
+            key: str(value) if isinstance(value, float) else value for key, value in workload.items()
+        }
+        assert importer.service.archive.read(evidence.citation.sha256) == source_bytes
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("label", ["p99p9", "p99.9"])
+def test_imported_fractional_percentile_is_queryable_with_original_provenance(
+    importer, snapshot, monkeypatch, legacy, label
+):
+    archived = _read(snapshot, _ARCHIVE)
+    archived[0]["metrics"]["latency"][label] = 123
+    merged = _read(snapshot, _MERGED)
+    merged[0] = archived[0]
+    _write(snapshot, _ARCHIVE, archived)
+    _write(snapshot, _MERGED, merged)
+    source_bytes = (snapshot / _ARCHIVE).read_bytes()
+    with monkeypatch.context() as legacy_parser:
+        if legacy:
+            legacy_parser.setattr(
+                "llm_d_lens.agentic.public_benchmark_record.prism.normalize_statistic",
+                lambda statistic: "p99p9" if statistic in ("p99p9", "p99.9") else normalize_statistic(statistic),
+            )
+        importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
+    measurement = next(
+        item
+        for item in importer.service.dao.list_published(PRISM_ORIGIN, kind="measurement")
+        if item.source_pointer.get("statistic_original") == label
+    )
+    stored_statistic = "p99p9" if legacy else "p99.9"
+    assert measurement.statistic == stored_statistic
+    assert measurement.logical_key.endswith(f"#metric:latency:{stored_statistic}")
+    service = PublicBenchmarkRecordQueryService(
+        PublicBenchmarkRecordQueryDao(importer.service.dao._get_session_factory()), importer.service.archive
+    )
+    principal = Principal(
+        user_id="reader",
+        username="reader",
+        bindings=(RoleBinding("reader"),),
+        role_permissions={"reader": frozenset({QUERY_PERMISSION})},
+    )
+    for statistic in (None, "p99p9", "p99.9"):
+        response = service.query(
+            QueryRequest(
+                question="99.9th percentile latency",
+                filters=QueryFilters(record_id="historical", statistic=statistic),
+            ),
+            principal,
+        )
+        assert response.status == "answered"
+        assert len(response.evidence) == 1
+        evidence = response.evidence[0]
+        assert evidence.item_id == measurement.item_id
+        assert evidence.statistic == stored_statistic
+        assert evidence.value == 123
+        assert evidence.citation.source_pointer["statistic_original"] == label
+        assert evidence.citation.source_pointer["json_pointer"] == f"/0/metrics/latency/{label}"
+        assert importer.service.archive.read(evidence.citation.sha256) == source_bytes
+    replay = importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
+    assert not replay.changed
+    assert importer.service.dao.get(measurement.item_id) == measurement
 
 
 @pytest.mark.parametrize("dependency", ["merged-metadata", "original-zip"])

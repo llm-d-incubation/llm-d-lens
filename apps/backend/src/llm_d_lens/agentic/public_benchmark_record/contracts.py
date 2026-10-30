@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from decimal import Decimal, localcontext
 from math import isfinite
@@ -23,6 +24,28 @@ WORKLOAD_ALIASES = {
 }
 LATENCY_STATISTICS = ("mean", "p50", "p90", "p95", "p99")
 EXPERIMENT_RANKING_POLICY = "workload-first-lower-latency-v1"
+WORKLOAD_NUMBER_PATTERN = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"
+DEFAULT_PUBLIC_RUNTIME = "vllm"
+UNKNOWN_RUNTIME_LABELS = ("", "unknown")
+
+
+def effective_runtime(runtime: str | None) -> str:
+    """Apply the public corpus's vLLM default without rewriting source evidence."""
+    if runtime is None or runtime.strip().casefold() in UNKNOWN_RUNTIME_LABELS:
+        return DEFAULT_PUBLIC_RUNTIME
+    return runtime
+
+
+def workload_number(value: JsonValue) -> Decimal | None:
+    """Compare numeric JSON scalars and legacy precise strings without rewriting evidence."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    text = str(value)
+    return Decimal(text) if re.fullmatch(WORKLOAD_NUMBER_PATTERN, text) else None
+
+
+def metric_aliases(metric: str) -> tuple[str, ...]:
+    return ("latency", "e2e") if metric in ("latency", "e2e") else (metric,)
 
 
 def latency_axes(targets: tuple[tuple[str, str | None], ...]) -> tuple[tuple[str, str | None], ...]:
@@ -312,9 +335,20 @@ def normalize_unit(value: Decimal, unit: str) -> tuple[Decimal, str, str] | None
 
 def normalize_statistic(statistic: str | None) -> str | None:
     """Map only explicit aliases; missing and unknown statistics remain unchanged."""
+    if statistic is not None and re.fullmatch(r"p[0-9]+p[0-9]+", statistic):
+        return "p" + statistic[1:].replace("p", ".")
     return _STATISTIC_ALIASES.get(statistic, statistic) if statistic is not None else None
+
+
+def statistic_aliases(statistic: str) -> tuple[str, ...]:
+    canonical = normalize_statistic(statistic)
+    assert canonical is not None
+    aliases = [canonical, *(alias for alias, value in _STATISTIC_ALIASES.items() if value == canonical)]
+    if re.fullmatch(r"p[0-9]+\.[0-9]+", canonical):
+        aliases.append(canonical.replace(".", "p"))
+    return tuple(aliases)
 
 
 def effective_statistic(statistic: str | None) -> str:
     """Apply the query/planning default without rewriting the source measurement."""
-    return "mean" if statistic is None else _STATISTIC_ALIASES.get(statistic, statistic)
+    return "mean" if statistic is None else normalize_statistic(statistic) or statistic

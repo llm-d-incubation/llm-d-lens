@@ -33,9 +33,10 @@ from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.infrastructure.kubernetes import list_resources
 
 from .benchmark_evidence import BenchmarkRecord
-from .configuration import build_agentic_configuration
+from .configuration import AGENTIC_RUNTIME_BACKEND, build_agentic_configuration
 from .facts import (
     PlanningEvidence,
+    PlanningHardwareSnapshot,
     ResolvedPlanningFacts,
     resolve_planning_facts,
     resolve_public_rag_evidence,
@@ -60,8 +61,10 @@ from .planner import (
     OpenAIPlannerError,
     PlannedCandidate,
     PlanningFacts,
+    normalize_planning_facts,
     resolve_workload_signals,
 )
+from .planning_requirements import Provenance, RuntimeIdentity
 from .planning_snapshot import PlanningSnapshotStore
 
 logger = logging.getLogger(__name__)
@@ -132,12 +135,14 @@ class AgenticDeploymentService:
             operator_preference=request.planner_prompt or "",
         )
         provider = OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
+        hardware_snapshot = PlanningHardwareSnapshot(session.server_id)
         planning_facts, public_rag, internal, cases = await self._retrieval_context(
             session.server_id,
             request.model,
             planning_facts,
             principal,
             on_progress,
+            hardware_snapshot=hardware_snapshot,
         )
         deterministic = DeterministicPlanner()
         run_id = str(uuid4())
@@ -152,6 +157,7 @@ class AgenticDeploymentService:
                 on_progress=on_progress,
                 principal_id=principal_id,
                 authorized_records=list(internal.records),
+                hardware_snapshot=hardware_snapshot,
             )
             resolved = with_public_rag_evidence(resolved, public_rag)
             resolved = self._with_cases(resolved, planning_facts, cases)
@@ -551,6 +557,7 @@ class AgenticDeploymentService:
         on_progress: ProgressCallback | None = None,
         principal_id: str | None = None,
         authorized_records: list[BenchmarkRecord] | None = None,
+        hardware_snapshot: PlanningHardwareSnapshot | None = None,
     ) -> tuple[list, dict[str, Any], Any]:
         generation: dict[str, Any] = {
             "name": "deterministic",
@@ -563,7 +570,7 @@ class AgenticDeploymentService:
         }
         profile = facts.workload_profile
         if profile and (profile.concurrency is not None or profile.request_rate is not None):
-            resolved = await resolve_planning_facts(cluster_id, model, facts)
+            resolved = await resolve_planning_facts(cluster_id, model, facts, hardware_snapshot=hardware_snapshot)
             proposals = [
                 CandidateProposal(
                     provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "optimized-baseline",
@@ -604,7 +611,7 @@ class AgenticDeploymentService:
                     "message": "Generating candidates with deterministic planning.",
                 },
             )
-            resolved = await resolve_planning_facts(cluster_id, model, facts)
+            resolved = await resolve_planning_facts(cluster_id, model, facts, hardware_snapshot=hardware_snapshot)
             candidates = DeterministicPlanner().candidates(resolved.facts)
             if provider_requested:
                 candidates, resolved.facts = await self._estimate_fallback_topologies(
@@ -645,6 +652,7 @@ class AgenticDeploymentService:
                 facts,
                 operator_prompt,
                 on_progress=on_progress,
+                hardware_snapshot=hardware_snapshot,
             )
             generation["tool_trace"] = result.proposals.tool_trace
             generation["candidate_proposals"] = [proposal.model_dump() for proposal in result.proposals.candidates]
@@ -711,7 +719,7 @@ class AgenticDeploymentService:
                     "message": "AI candidate generation was unavailable; deterministic generation is continuing.",
                 },
             )
-            resolved = await resolve_planning_facts(cluster_id, model, facts)
+            resolved = await resolve_planning_facts(cluster_id, model, facts, hardware_snapshot=hardware_snapshot)
             candidates = DeterministicPlanner().candidates(resolved.facts)
             candidates, resolved.facts = await self._estimate_fallback_topologies(
                 model,
@@ -893,12 +901,14 @@ class AgenticDeploymentService:
             gpu_memory_utilization=run.request.gpu_memory_utilization,
             operator_preference=request.planner_prompt,
         )
+        hardware_snapshot = PlanningHardwareSnapshot(session.server_id)
         planning_facts, public_rag, internal, cases = await self._retrieval_context(
             session.server_id,
             run.request.model,
             planning_facts,
             principal,
             on_progress,
+            hardware_snapshot=hardware_snapshot,
         )
         deterministic = DeterministicPlanner()
         with self._snapshot_store.capture_requests(run.id, "generator") as generator_requests:
@@ -912,6 +922,7 @@ class AgenticDeploymentService:
                 on_progress=on_progress,
                 principal_id=principal_id,
                 authorized_records=list(internal.records),
+                hardware_snapshot=hardware_snapshot,
             )
             refreshed = with_public_rag_evidence(refreshed, public_rag)
             refreshed = self._with_cases(refreshed, planning_facts, cases)
@@ -1102,9 +1113,9 @@ class AgenticDeploymentService:
 
     @staticmethod
     def _planning_only_facts(
-        facts, *, max_model_len: int, gpu_memory_utilization: float, operator_preference: str = ""
-    ):
-        return replace(
+        facts: PlanningFacts, *, max_model_len: int, gpu_memory_utilization: float, operator_preference: str = ""
+    ) -> PlanningFacts:
+        facts = replace(
             facts,
             context_length=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
@@ -1119,6 +1130,24 @@ class AgenticDeploymentService:
                 reference for reference in facts.evidence_ids if not reference.startswith("public-rag:")
             ),
         )
+        facts = normalize_planning_facts(facts, operator_preference)
+        assert facts.requirements is not None
+        return replace(
+            facts,
+            requirements=facts.requirements.model_copy(
+                update={
+                    "runtime": RuntimeIdentity(backend=AGENTIC_RUNTIME_BACKEND),
+                    "provenance": (
+                        *facts.requirements.provenance,
+                        Provenance(
+                            source="verified_discovery",
+                            field="runtime.backend",
+                            raw=f"agentic-deployment.v1:{AGENTIC_RUNTIME_BACKEND}",
+                        ),
+                    ),
+                }
+            ),
+        )
 
     async def _public_rag_context(
         self,
@@ -1127,6 +1156,8 @@ class AgenticDeploymentService:
         facts: PlanningFacts,
         principal: Principal | None,
         on_progress: ProgressCallback | None,
+        *,
+        hardware_snapshot: PlanningHardwareSnapshot | None = None,
     ) -> tuple[PlanningFacts, PlanningEvidence]:
         await self._emit_progress(
             on_progress,
@@ -1138,7 +1169,11 @@ class AgenticDeploymentService:
         )
         facts = AICandidateGenerator._apply_preference_constraints(facts, facts.operator_preference)
         evidence = await resolve_public_rag_evidence(
-            model, principal, cluster_server_id=cluster_server_id, planning_facts=facts
+            model,
+            principal,
+            cluster_server_id=cluster_server_id,
+            planning_facts=facts,
+            hardware_snapshot=hardware_snapshot,
         )
         context = with_public_rag_evidence(ResolvedPlanningFacts(facts=facts, cluster_snapshot={}), evidence)
         await self._emit_progress(
@@ -1186,6 +1221,8 @@ class AgenticDeploymentService:
         facts: PlanningFacts,
         principal: Principal | None,
         on_progress: ProgressCallback | None,
+        *,
+        hardware_snapshot: PlanningHardwareSnapshot | None = None,
     ) -> RetrievalContext:
         facts = AICandidateGenerator._apply_preference_constraints(
             replace(facts, model_name=model), facts.operator_preference
@@ -1198,12 +1235,16 @@ class AgenticDeploymentService:
             )
         deadline = asyncio.get_running_loop().time() + 60
         async with asyncio.timeout_at(deadline):
-            facts, hardware_status = await resolve_retrieval_hardware(cluster_server_id, model, facts, principal)
+            facts, hardware_status = await resolve_retrieval_hardware(
+                cluster_server_id, model, facts, principal, hardware_snapshot=hardware_snapshot
+            )
 
         async def public_branch():
             try:
                 async with asyncio.timeout_at(deadline):
-                    return await self._public_rag_context(cluster_server_id, model, facts, principal, on_progress)
+                    return await self._public_rag_context(
+                        cluster_server_id, model, facts, principal, on_progress, hardware_snapshot=hardware_snapshot
+                    )
             except TimeoutError:
                 logger.warning("event=planning_public_cases reason=total_deadline_exceeded")
                 return facts, PlanningEvidence(

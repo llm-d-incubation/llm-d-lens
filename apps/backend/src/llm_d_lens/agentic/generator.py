@@ -37,6 +37,7 @@ from llm_d_lens.hardware.registry import all_profiles
 
 from .facts import (
     PlanningEvidence,
+    PlanningHardwareSnapshot,
     ResolvedPlanningFacts,
     _aic_predictions,
     _public_rag_hardware,
@@ -275,6 +276,8 @@ class AICandidateGenerator:
         facts: PlanningFacts,
         operator_prompt: str | None,
         on_progress: ProgressCallback | None = None,
+        *,
+        hardware_snapshot: PlanningHardwareSnapshot | None = None,
     ) -> CandidateGenerationResult:
         try:
             operator_prompt = facts.operator_preference if operator_prompt is None else operator_prompt
@@ -589,7 +592,10 @@ class AICandidateGenerator:
                 cluster_executions = await asyncio.gather(
                     *(
                         self._execute_optional_tool(
-                            call, per_call_budget, planning_hardware_model=facts.planning_hardware_model
+                            call,
+                            per_call_budget,
+                            planning_hardware_model=facts.planning_hardware_model,
+                            hardware_snapshot=hardware_snapshot,
                         )
                         for call in cluster_calls
                     )
@@ -700,13 +706,17 @@ class AICandidateGenerator:
         result_budget: int,
         *,
         planning_hardware_model: str | None = None,
+        hardware_snapshot: PlanningHardwareSnapshot | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if call.name not in _ALLOWED_MCP_TOOLS:
             raise CandidateGenerationError(f'MCP tool "{call.name}" is not allowed for AI-directed planning')
         started = time.monotonic()
         arguments_json = json.dumps(call.arguments, sort_keys=True)
         try:
-            result = await self.tools.call(call.name, call.arguments)
+            if call.name == "get_cluster_overview" and hardware_snapshot is not None:
+                result = await hardware_snapshot.get(call.arguments["clusterId"])
+            else:
+                result = await self.tools.call(call.name, call.arguments)
         except CandidateGenerationError as error:
             logger.warning("Agentic generator tool=%s status=error reason=%s", call.name, error)
             context_result = {"tool": call.name, "arguments": call.arguments, "error": str(error)}

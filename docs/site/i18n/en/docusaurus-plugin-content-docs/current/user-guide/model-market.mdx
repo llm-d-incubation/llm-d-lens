@@ -68,7 +68,7 @@ again. A resource or network error during generation must be resolved before dep
 
 1. Open a model and fill in the deployment name, cluster and cache storage.
 2. Set **Mode** to **Agentic**.
-3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **Mean input tokens per request** (ISL), **Mean output tokens per request** (OSL), **TTFT SLO (ms)** and **TPOT SLO (ms)** start blank. Their placeholder examples (`4000`, `1000`, `2000` and `30`) are not submitted as requirements. Mean input length is not copied into P95. There is no end-to-end latency input.
+3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **Mean input tokens per request** (ISL), **Mean output tokens per request** (OSL), **TTFT SLO (ms)** and **TPOT SLO (ms)** start blank. Their placeholder examples (`4000`, `1000`, `2000` and `30`) are not submitted as requirements. Mean input length is not copied into P95. There is no end-to-end latency input. In the planning prompt, TPOT targets can also use per-token units: `TPOT <= 20 ms/token` and `TPOT <= 0.02 s/token` both mean 20 milliseconds per token.
 4. Leave **AI provider** on **Default (no external AI provider)**, or select a configured provider to help rank the options.
 5. Optional: expand **Preference** and enter an English preference, such as `use fewer GPU resources` or `prefer prefix cache`.
 6. Click **Generate recommendation**.
@@ -112,6 +112,11 @@ Public retrieval also filters by the live target cluster's accelerator model, no
 the cluster name. Vendor/separator spelling differences may match, but memory size
 and PCIe/SXM variants remain distinct. Unknown or mixed hardware is reported;
 missing matches never fall back to another hardware family.
+
+Public benchmark records with a missing, blank or `unknown` runtime backend are
+treated as `vllm` for retrieval and planning context. Explicitly reported other
+backends are preserved and do not match a vLLM plan. This corpus default does not
+infer runtime versions or rewrite original evidence.
 
 Under **Decision evidence**, review **Public SQL measured observations** for
 the retrieval outcome, original values and units, source path, revision and checksum.

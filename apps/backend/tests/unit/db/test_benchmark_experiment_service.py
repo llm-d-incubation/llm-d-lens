@@ -133,6 +133,29 @@ def request(*, internal=True, **filters):
     )
 
 
+@pytest.mark.parametrize("metric", [None, "latency", "e2e"])
+def test_p95_latency_selects_and_projects_internal_e2e(branch, metric):
+    service, principal, factory, run_ids, _ = branch
+    with factory.begin() as session:
+        for run_id in run_ids:
+            session.get(BenchmarkRecordRow, f"evaluate:{run_id}").metrics_e2e_p95_ms = 123
+    response = service.query(
+        QueryRequest(
+            question="p95 latency",
+            include_internal=True,
+            filters=QueryFilters(model="Qwen3-0.6B", metric=metric),
+        ),
+        principal,
+    )
+    assert response.status == "answered"
+    assert len(response.evidence) == 1
+    evidence = response.evidence[0]
+    assert evidence.value == Decimal("123")
+    assert evidence.statistic == "p95" and evidence.unit == "ms"
+    assert evidence.citation.metric_field == "e2e_p95_ms"
+    assert evidence.citation.evaluate_run_id == run_ids[0]
+
+
 def publish(service, run_id: str):
     identity = f"evaluate:{run_id}"
     data = json.dumps([{"id": identity, "throughput": 42}]).encode()

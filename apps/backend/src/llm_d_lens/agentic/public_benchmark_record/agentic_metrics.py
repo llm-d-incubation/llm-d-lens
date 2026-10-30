@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from llm_d_lens.agentic.benchmark_evidence import BenchmarkRecord
-from llm_d_lens.agentic.public_benchmark_record.contracts import effective_statistic
+from llm_d_lens.agentic.public_benchmark_record.contracts import effective_statistic, metric_aliases
 from llm_d_lens.agentic.public_benchmark_record.query_contracts import QueryFilters
 
 
@@ -28,8 +28,8 @@ AGENTIC_METRICS = (
 
 def metric_matches(spec: AgenticMetric, filters: QueryFilters) -> bool:
     return (
-        (filters.metric is None or filters.metric == spec.metric)
-        and (filters.statistic is None or filters.statistic == effective_statistic(spec.statistic))
+        (filters.metric is None or spec.metric in metric_aliases(filters.metric))
+        and (filters.statistic is None or effective_statistic(filters.statistic) == effective_statistic(spec.statistic))
         and (filters.unit is None or filters.unit == spec.unit)
         and (not filters.normalized or spec.normalized)
     )

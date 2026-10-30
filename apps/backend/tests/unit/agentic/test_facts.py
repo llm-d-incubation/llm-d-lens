@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from llm_d_lens.agentic.facts import (
+    PlanningHardwareSnapshot,
     ResolvedPlanningFacts,
     rank_public_rag_evidence,
     resolve_planning_facts,
@@ -23,6 +24,59 @@ from llm_d_lens.agentic.public_benchmark_record.query_contracts import (
 )
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
 from llm_d_lens.core.exceptions import DomainError
+
+
+def test_request_hardware_snapshot_shares_concurrent_discovery_and_isolates_mutation(monkeypatch):
+    calls = []
+
+    async def overview(cluster):
+        calls.append(cluster.id)
+        await asyncio.sleep(0)
+        return {"hardware": {"gpuCount": 4}}
+
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
+
+    async def resolve():
+        snapshot = PlanningHardwareSnapshot("cluster-a")
+        first, second = await asyncio.gather(snapshot.get("cluster-a"), snapshot.get("cluster-a"))
+        first["hardware"]["gpuCount"] = 0
+        assert second["hardware"]["gpuCount"] == 4
+        assert (await snapshot.get("cluster-a"))["hardware"]["gpuCount"] == 4
+        with pytest.raises(ValueError, match="different cluster"):
+            await snapshot.get("cluster-b")
+        await PlanningHardwareSnapshot("cluster-a").get("cluster-a")
+
+    asyncio.run(resolve())
+    assert calls == ["cluster-a", "cluster-a"]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_request_hardware_snapshot_does_not_retry_failed_discovery(monkeypatch, cancelled):
+    calls = []
+
+    async def overview(cluster):
+        calls.append(cluster.id)
+        if cancelled:
+            raise asyncio.CancelledError
+        raise OSError("discovery unavailable")
+
+    monkeypatch.setattr(
+        "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
+    )
+    monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
+
+    async def resolve():
+        snapshot = PlanningHardwareSnapshot("cluster-a")
+        with pytest.raises(asyncio.CancelledError if cancelled else OSError):
+            await snapshot.get("cluster-a")
+        with pytest.raises(TimeoutError if cancelled else OSError):
+            await snapshot.get("cluster-a")
+
+    asyncio.run(resolve())
+    assert calls == ["cluster-a"]
 
 
 def _public_response(*, evidence=True):

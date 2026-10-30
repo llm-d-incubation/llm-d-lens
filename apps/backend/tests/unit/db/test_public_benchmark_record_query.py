@@ -390,7 +390,7 @@ def publish_planning_experiments(service, runs):
                 parent_id=item_id(PRISM_ORIGIN, f"file:{_PATH}", revision),
                 model=run.get("model", "Qwen3-0.6B"),
                 hardware="H100",
-                runtime="vllm",
+                runtime=run.get("runtime", "vllm"),
                 workload=run["workload"],
                 configuration={"tp": 1},
                 source_pointer={"record_id": run["id"], "json_pointer": f"/{index}"},
@@ -439,6 +439,70 @@ def publish_planning_experiments(service, runs):
         },
     )
     publication.activate(PRISM_ORIGIN, manifest.item_id)
+
+
+@pytest.mark.parametrize("runtime", [None, "", " ", "unknown", "UNKNOWN", "vllm", "sglang"])
+def test_unknown_public_runtime_defaults_to_vllm_without_rewriting_evidence(query_service, runtime):
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import build_case_bundle
+
+    publish_planning_experiments(
+        query_service,
+        [
+            {
+                "id": "legacy",
+                "runtime": runtime,
+                "workload": {"mean_input_tokens": 2000},
+                "measurements": [{"metric": "latency", "value": 20, "unit": "ms"}],
+            },
+            {
+                "id": "other-runtime",
+                "runtime": "sglang",
+                "workload": {"mean_input_tokens": 2000},
+                "measurements": [{"metric": "latency", "value": 10, "unit": "ms"}],
+            },
+        ],
+    )
+    filters = QueryFilters(model="Qwen/Qwen3-0.6B", hardware="H100", runtime="vllm")
+    request = QueryRequest(question="Reported latency", intent="comparison", filters=filters)
+    expected_count = 0 if runtime == "sglang" else 1
+    response = query_service.query(request, reader())
+    assert response.matched_items == expected_count
+    assert len(response.evidence) == expected_count
+
+    other = query_service.query(
+        request.model_copy(update={"filters": filters.model_copy(update={"runtime": "sglang"})}), reader()
+    )
+    assert other.matched_items == (2 if runtime == "sglang" else 1)
+    assert all(entry.experiment.runtime == "sglang" for entry in other.evidence)
+
+    facts = PlanningFacts(
+        model_weight_gib=1,
+        vram_per_gpu_gib=80,
+        free_gpu_count=8,
+        workload_profile=WorkloadProfile(mean_input_tokens=2000),
+        requirements=PlanningRequirements(runtime=RuntimeIdentity(backend="vllm")),
+    )
+    query_service.dao.planning_facts = facts
+    planning_request = request.model_copy(update={"filters": filters.model_copy(update={"runtime": None})})
+    planned = query_service.query(planning_request, reader(), experiment_limit=50)
+    assert planned.matched_items == expected_count
+    assert len(planned.evidence) == expected_count
+    if not expected_count:
+        return
+    entry = planned.evidence[0]
+    assert entry.experiment.runtime == "vllm"
+    assert entry.experiment.source_pointer["record_id"] == "legacy"
+    assert query_service.dao.get(entry.experiment.item_id).runtime == runtime
+
+    observation = {"evidence_id": f"public-rag:{entry.item_id}", **entry.model_dump(mode="json")}
+    bundle, _ = build_case_bundle(
+        (observation,), facts, model=filters.model, hardware=filters.hardware, branch_status={}
+    )
+    assert len(bundle.cases) == 1
+    assert bundle.cases[0].runtime == "vllm"
+    assert "runtime" not in bundle.cases[0].unknown_fields
+    assert "runtime.backend" not in bundle.cases[0].unknown_fields
+    assert "runtime.backend_version" in bundle.cases[0].unknown_fields
 
 
 @pytest.mark.parametrize("with_workload", [False, True])

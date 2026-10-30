@@ -13,12 +13,14 @@ from sqlalchemy.orm import sessionmaker
 
 from llm_d_lens.agentic.public_benchmark_record.admin import _parser
 from llm_d_lens.agentic.public_benchmark_record.prism import PARSER_VERSION as PRISM_PARSER
+from llm_d_lens.agentic.public_benchmark_record.prism import PrismSnapshotImporter
 from llm_d_lens.agentic.public_benchmark_record.publication import PublicBenchmarkRecordPublicationService
 from llm_d_lens.agentic.public_benchmark_record.publication_contracts import (
     InventoryFile,
     PinnedInventory,
     PublicationConflictError,
     PublicationError,
+    ReleaseManifest,
     SourceApproval,
     content_digest,
 )
@@ -169,6 +171,98 @@ def test_prism_refresh_replay_is_idempotent(publication, tmp_path):
     repeated = runner.run(plan, root)
     assert first.status == "published" and repeated.status == "unchanged"
     assert repeated.publication.generation == first.publication.generation
+
+
+def test_approved_empty_refresh_removes_publication_and_retains_history(publication, tmp_path):
+    root, plan = _snapshot(tmp_path, publication, "2026-10-13")
+    runner = PublicBenchmarkRecordRefreshService(publication)
+    first = runner.run(plan, root)
+    old_items = publication.dao.list_published(PRISM_ORIGIN)
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir()
+    empty = RefreshPlan(
+        review_reference="explicitly reviewed removal of all published files",
+        approval=plan.approval,
+        inventory=PinnedInventory(origin_id=PRISM_ORIGIN, revision="2026-10-20", complete=True, files=()),
+        expected_counts={},
+        base_generation=first.publication.generation,
+        base_manifest_id=first.publication.manifest_id,
+        allow_empty=True,
+    )
+    before = publication.dao.head(PRISM_ORIGIN)
+    with pytest.raises(ValidationError, match="explicit allow_empty approval"):
+        runner.run(empty.model_copy(update={"allow_empty": False}), empty_root)
+    assert publication.dao.head(PRISM_ORIGIN) == before
+    result = runner.run(empty, empty_root)
+    assert result.status == "published" and result.publication.generation == 2
+    assert result.file_count == 0 and result.publication.counts == {}
+    assert publication.dao.count_published(PRISM_ORIGIN) == 0
+    head = publication.dao.head(PRISM_ORIGIN)
+    manifest = ReleaseManifest.model_validate(head.manifest.source_details)
+    assert set(manifest.removed_item_ids) == {item.item_id for item in old_items}
+    for item in old_items:
+        assert publication.dao.get(item.item_id) == item
+        assert publication.archive.read(item.content_sha256)
+    replay = runner.run(empty, empty_root)
+    assert replay.status == "unchanged" and replay.publication.generation == 2
+    publication.rollback(PRISM_ORIGIN, first.publication.manifest_id, expected_generation=2)
+    assert publication.dao.count_published(PRISM_ORIGIN) == len(old_items)
+    with pytest.raises(PublicationConflictError):
+        runner.run(empty, empty_root)
+
+
+@pytest.mark.parametrize("fault", ["approval", "disabled", "stale", "unreviewed", "count", "missing", "race"])
+def test_empty_refresh_preserves_approval_inventory_and_generation_guards(publication, tmp_path, monkeypatch, fault):
+    root, plan = _snapshot(tmp_path, publication, "2026-10-13")
+    runner = PublicBenchmarkRecordRefreshService(publication)
+    first = runner.run(plan, root)
+    empty_root = tmp_path / "empty"
+    empty_root.mkdir()
+    empty = RefreshPlan(
+        review_reference="reviewed removal",
+        approval=plan.approval,
+        inventory=PinnedInventory(origin_id=PRISM_ORIGIN, revision="2026-10-20", complete=True, files=()),
+        expected_counts={},
+        base_generation=first.publication.generation,
+        base_manifest_id=first.publication.manifest_id,
+        allow_empty=True,
+    )
+    if fault == "approval":
+        empty = empty.model_copy(
+            update={"approval": plan.approval.model_copy(update={"approval_reference": "different review"})}
+        )
+    elif fault == "disabled":
+        publication.dao.set_enabled(PRISM_ORIGIN, False, expected_generation=1)
+    elif fault == "stale":
+        publication.dao.set_enabled(PRISM_ORIGIN, False, expected_generation=1)
+        publication.dao.set_enabled(PRISM_ORIGIN, True, expected_generation=2)
+    elif fault == "unreviewed":
+        empty_root = root
+    elif fault == "count":
+        empty = empty.model_copy(update={"expected_counts": {"measurement": 1}})
+    elif fault == "missing":
+        empty_root = tmp_path / "missing"
+    else:
+        stage = publication.stage
+
+        def disable_after_staging(*args, **kwargs):
+            manifest = stage(*args, **kwargs)
+            publication.dao.set_enabled(PRISM_ORIGIN, False, expected_generation=1)
+            return manifest
+
+        monkeypatch.setattr(publication, "stage", disable_after_staging)
+    with pytest.raises(PublicationError):
+        runner.run(empty, empty_root)
+    head = publication.dao.head(PRISM_ORIGIN)
+    assert head.registry.published_manifest_id == first.publication.manifest_id
+    assert head.state.generation == (3 if fault == "stale" else 2 if fault in ("disabled", "race") else 1)
+
+
+def test_empty_import_still_requires_explicit_approval(publication, tmp_path):
+    root = tmp_path / "empty"
+    root.mkdir()
+    with pytest.raises(PublicationError, match="reviewed hash inventory"):
+        PrismSnapshotImporter(publication).stage(root, "2026-10-20", {}, _approval(), expected_experiments=0)
 
 
 def test_prism_new_snapshot_exact_answer_old_citation_and_revocation(publication, tmp_path):

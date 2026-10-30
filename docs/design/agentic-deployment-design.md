@@ -658,6 +658,14 @@ Live hardware determines the public query's exact accelerator model; unknown or
 mixed models are reported rather than replaced with a cross-hardware fallback.
 Model aliases aid retrieval but do not prove unique identity or compatibility.
 
+Each creation or refinement uses one request-local hardware discovery snapshot
+for planning facts and public evidence retrieval. A new refinement discovers
+hardware again; deployment approval performs its own fresh resource validation.
+Historical matching receives the serving backend from the deployment runtime
+configuration, while unverified runtime versions remain unknown.
+TPOT requirements accept per-token units such as `20 ms/token` and `0.02 s/token`;
+these normalize to milliseconds without relaxing unit validation for other metrics.
+
 `ConfigurationCase` retains experiment/configuration/series identity, original
 measurements, units, statistics, configuration, provenance, differences and
 unknowns. Each SQL branch aggregates complete experiments before ranking and
@@ -667,6 +675,12 @@ select metric/statistic axes, not distance from the target. Different statistics
 are not mixed; Pareto comparison requires equal available axes. Missing or
 nonpositive latency is unknown. A case with neither comparable workload nor valid
 latency is a labelled fallback reference, not low-latency evidence.
+
+Import and query comparisons share numeric workload, metric and percentile
+normalization. A numeric filter such as `target_qps=1.5` matches the equivalent
+stored decimal representation; `latency` and `e2e` identify end-to-end latency,
+and `p99p9` and `p99.9` identify the same percentile. These equivalences do not
+merge different statistics or discard original source evidence.
 
 The shared evidence bundle keeps at most 10 complete cases within its
 16,000-byte serialized budget, preserving experiment rank. Historical observations
@@ -701,6 +715,11 @@ date, file list or experiment count is hardcoded in business code. The initial
 batch's manifest remains a test fixture, without raw source data. Subsequent
 snapshots can be imported without code changes; refresh still uses its reviewed
 plan and current publication base.
+
+An explicitly approved refresh with an empty inventory and `allow_empty=True`
+publishes an empty release, removing the previous files from the active
+publication. It retains the normal approval and publication-generation checks;
+an empty inventory without that opt-in is rejected.
 
 The deployment workspace shows internal SQL experiments and public SQL observations
 separately, including retrieval failures and unknowns.

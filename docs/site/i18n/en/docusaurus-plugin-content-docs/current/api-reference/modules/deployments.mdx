@@ -254,6 +254,19 @@ Public Prism observations use exact model/live hardware filters and require glob
 Client-supplied public observations and cases are not trusted.
 Plans containing public observations keep the same read-permission requirement.
 
+Each `create()` or `refine()` call shares one request-local hardware discovery
+snapshot between planning facts and public evidence retrieval. Later calls and
+deployment approval discover resources afresh. Historical matching uses the
+deployment runtime's serving backend. Public records with a missing, blank or
+`unknown` backend default to `vllm` in SQL matching and returned experiment/case
+context; explicit other backends are not reclassified. Stored records and original
+source evidence are unchanged; unknown runtime versions remain unknown.
+TPOT prompt targets accept `ms/token` and `s/token`, normalized to milliseconds.
+
+Benchmark comparisons treat equivalent decimal workload values numerically,
+recognize `latency`/`e2e` as end-to-end latency aliases and normalize fractional
+percentiles such as `p99p9`/`p99.9`. Original source evidence is retained.
+
 The server normalizes explicit workload and latency requirements, aggregates
 experiments by configuration and series before limiting each SQL branch to 50
 cases, then selects at most 10 complete cases within a 16,000-byte evidence budget.
