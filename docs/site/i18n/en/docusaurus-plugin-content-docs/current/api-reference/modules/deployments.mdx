@@ -256,7 +256,11 @@ Plans containing public observations keep the same read-permission requirement.
 
 Each `create()` or `refine()` call shares one request-local hardware discovery
 snapshot between planning facts and public evidence retrieval. Later calls and
-deployment approval discover resources afresh. Historical matching uses the
+deployment approval discover resources afresh. Accelerator identity and usable
+VRAM come only from live automatic discovery; test-only hardware and VRAM
+environment overrides are no longer supported. Missing usable VRAM stops
+planning rather than substituting a simulated capacity. Previously created
+simulation plans remain blocked from deployment. Historical matching uses the
 deployment runtime's serving backend. Public records with a missing, blank or
 `unknown` backend default to `vllm` in SQL matching and returned experiment/case
 context; explicit other backends are not reclassified. Stored records and original
@@ -286,8 +290,15 @@ Candidate explanations and server-side audit retain their evidence boundaries:
 historical measurements are not proof of current performance, and AIC is an estimate.
 
 Planning uses public and internal SQL experiments, without a document retrieval
-branch or document packet contracts. The existing private diagnostic adapter is
-unaffected.
+branch, embedding/vector search or document packet contracts. Model prompts name
+these sources published benchmark evidence and internal benchmark history and
+instruct decision explanations to use those terms. Standalone public observations use the model-context key
+`published_benchmark_evidence`; an empty context means no evidence was supplied for
+that request, not that the databases contain no data.
+The stored `public_rag_evidence` field, `public-rag:query` evidence ID and
+`benchmark-rag:query:read` permission remain legacy compatibility identifiers, not
+claims of document retrieval capability. The existing private diagnostic adapter
+is unaffected.
 
 Creation validates the registered model-cache storage volume without requiring
 downloaded model files. Refinement likewise skips download-readiness checks.

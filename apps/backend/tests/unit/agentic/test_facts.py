@@ -427,12 +427,10 @@ def public_hardware(monkeypatch):
     return hardware
 
 
-@pytest.mark.parametrize("simulated", [False, True])
 @pytest.mark.parametrize("measured_vram_gib", [0, 80])
-def test_retrieval_hardware_applies_server_simulation_before_requirements(
-    monkeypatch, public_hardware, simulated, measured_vram_gib
-):
-    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}' if simulated else "{}")
+def test_retrieval_hardware_uses_discovery_despite_retired_overrides(monkeypatch, public_hardware, measured_vram_gib):
+    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}')
+    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":96}')
     public_hardware.update(gpuCount=4, vramBytes=4 * measured_vram_gib * 1024**3)
     requested = PlanningFacts(8, 32, 2)
     resolved, status = asyncio.run(
@@ -444,19 +442,14 @@ def test_retrieval_hardware_applies_server_simulation_before_requirements(
         )
     )
     assert status["status"] == "available"
-    assert resolved.requirements.hardware.device_model == ("H100" if simulated else "A100")
-    assert resolved.planning_hardware_model == ("H100" if simulated else None)
-    assert status["hardware"] == ("H100" if simulated else "NVIDIA-A100-80GB-PCIe")
+    assert resolved.requirements.hardware.device_model == "A100"
+    assert resolved.requirements.hardware.memory_gib == 80 * 10**9 / 1024**3
+    assert resolved.requirements.hardware.memory_unit == "GB"
+    assert status == {"status": "available", "hardware": "NVIDIA-A100-80GB-PCIe"}
     assert resolved.free_gpu_count == requested.free_gpu_count
     assert resolved.vram_per_gpu_gib == requested.vram_per_gpu_gib
     assert public_hardware["accelerators"][0]["models"] == ["NVIDIA-A100-80GB-PCIe", "ampere"]
     assert public_hardware["vramBytes"] == 4 * measured_vram_gib * 1024**3
-    if simulated:
-        assert status["actual_model"] == "NVIDIA-A100-80GB-PCIe"
-        assert status["simulation"] is True
-        assert resolved.requirements.hardware.memory_gib == (measured_vram_gib or None)
-    else:
-        assert "simulation" not in status
 
 
 @pytest.mark.parametrize(
@@ -487,7 +480,6 @@ def test_public_rag_checks_global_permission_before_constructing_query_service(m
 
 
 @pytest.mark.parametrize("has_evidence", [True, False])
-@pytest.mark.parametrize("simulated", [False, True])
 @pytest.mark.parametrize(
     ("profile", "expected_workload"),
     [
@@ -501,7 +493,7 @@ def test_public_rag_checks_global_permission_before_constructing_query_service(m
     ],
 )
 def test_public_rag_is_public_only_exact_model_and_preserves_citations(
-    monkeypatch, has_evidence, simulated, profile, expected_workload, public_hardware
+    monkeypatch, has_evidence, profile, expected_workload, public_hardware
 ):
     principal = Principal("admin-user", "admin", bindings=(RoleBinding("admin"),))
     calls = []
@@ -517,8 +509,6 @@ def test_public_rag_is_public_only_exact_model_and_preserves_citations(
             return _public_response(evidence=has_evidence)
 
     monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
-    if simulated:
-        monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}')
     result = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",
@@ -530,18 +520,17 @@ def test_public_rag_is_public_only_exact_model_and_preserves_citations(
     query, caller = calls[0]
     assert caller is principal
     assert query.filters.model == "Qwen/Qwen3-8B"
-    assert query.filters.hardware == ("H100" if simulated else "NVIDIA A100 80GB PCIe")
+    assert query.filters.hardware == "NVIDIA A100 80GB PCIe"
     assert query.filters.workload == {}
     assert result.details["retrieval"]["workload"] == expected_workload
     assert result.details["retrieval"]["all_matches"] is False
     assert result.details["retrieval"]["mode"] == ("approximate_workload" if expected_workload else "model_hardware")
-    assert result.details["target_hardware"]["model"] == ("H100" if simulated else "NVIDIA-A100-80GB-PCIe")
+    assert result.details["target_hardware"]["model"] == "NVIDIA-A100-80GB-PCIe"
     assert query.include_internal is False
     assert query.limit == 50
     assert result.status == ("available" if has_evidence else "no_matches")
-    assert "SQL measured observations" in result.details["message"]
-    if simulated:
-        assert "Internal experiments are reported separately" in result.details["message"]
+    assert "Published benchmark SQL observations" in result.details["message"]
+    assert "RAG" not in result.details["message"]
     context = with_public_rag_evidence(
         ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), result
     )
@@ -575,7 +564,8 @@ def test_public_rag_failure_is_explicit_and_non_fatal(monkeypatch, failure, capl
     assert result.status == "unavailable"
     assert "continuing" in result.details["message"]
     assert "response" not in result.details
-    assert "Agentic public RAG retrieval unavailable" in caplog.text
+    assert "Agentic published benchmark retrieval unavailable" in caplog.text
+    assert "RAG" not in result.details["message"]
 
 
 @pytest.mark.parametrize(
@@ -654,16 +644,17 @@ def test_public_rag_unknown_or_mixed_hardware_does_not_query_corpus(monkeypatch,
 
 
 @pytest.mark.parametrize(
-    ("cluster_defaults", "expected", "overridden"),
+    "cluster_defaults",
     [
-        ('{"cluster-a":"H100"}', "H100", True),
-        ('{"different-cluster":"H100"}', "NVIDIA A100 80GB PCIe", False),
-        ("{}", "NVIDIA A100 80GB PCIe", False),
+        '{"cluster-a":"H100"}',
+        '{"different-cluster":"H100"}',
+        "{}",
+        "not-json",
+        "[]",
+        '{"cluster-a":42}',
     ],
 )
-def test_test_hardware_is_cluster_scoped_visible_and_reversible(
-    monkeypatch, public_hardware, cluster_defaults, expected, overridden
-):
+def test_public_rag_ignores_retired_hardware_overrides(monkeypatch, public_hardware, cluster_defaults):
     monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", cluster_defaults)
     calls = []
 
@@ -683,70 +674,19 @@ def test_test_hardware_is_cluster_scoped_visible_and_reversible(
             cluster_server_id="cluster-a",
         )
     )
-    assert calls[0].filters.hardware == expected
+    assert calls[0].filters.hardware == "NVIDIA A100 80GB PCIe"
     assert calls[0].filters.model == "Qwen/Qwen3-8B"
-    assert evidence.details["target_hardware"]["model"] == (expected if overridden else "NVIDIA-A100-80GB-PCIe")
-    assert bool(evidence.details["target_hardware"].get("override")) is overridden
+    assert evidence.details["target_hardware"] == {
+        "cluster_id": "cluster-a",
+        "profile_id": "nvidia",
+        "model": "NVIDIA-A100-80GB-PCIe",
+    }
     context = with_public_rag_evidence(
         ResolvedPlanningFacts(facts=PlanningFacts(8, 32, 4), cluster_snapshot={}), evidence
     )
     observation = context.facts.public_rag_evidence[0]
     assert "hardware_reference_only" not in observation
-    assert context.facts.planning_hardware_model == (expected if overridden else None)
-    if overridden:
-        assert evidence.details["target_hardware"]["actual_model"] == "NVIDIA-A100-80GB-PCIe"
-        assert evidence.details["target_hardware"]["simulation"] is True
-        assert "TEST HARDWARE IDENTITY" in evidence.details["message"]
-        assert "deployment is disabled" in evidence.details["message"]
     assert public_hardware["accelerators"][0]["models"] == ["NVIDIA-A100-80GB-PCIe", "ampere"]
-
-
-@pytest.mark.parametrize("setting", ["not-json", "[]", '{"cluster-a":42}', '{"cluster-a":""}'])
-def test_public_rag_invalid_override_configuration_is_explicit(monkeypatch, public_hardware, setting):
-    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", setting)
-    evidence = asyncio.run(
-        resolve_public_rag_evidence(
-            "Qwen/Qwen3-8B",
-            Principal("admin-user", "admin", bindings=(RoleBinding("admin"),)),
-            cluster_server_id="cluster-a",
-        )
-    )
-    assert evidence.status == "unavailable"
-    assert "response" not in evidence.details
-    assert "code" in evidence.details
-
-
-@pytest.mark.parametrize("nested", [False, True])
-def test_simulated_overview_changes_identity_without_mutating_capacity_or_discovery(public_hardware, nested):
-    from copy import deepcopy
-
-    from llm_d_lens.agentic.facts import planning_hardware_overview
-
-    original = {
-        "hardware": {**public_hardware, "gpuCount": 4, "availableGpuCount": 3, "vramBytes": 4 * 80 * 1024**3},
-        "nodes": [{"gpuModelsByProfile": {"nvidia": ["NVIDIA-A100-80GB-PCIe", "ampere"]}}],
-    }
-    if nested:
-        original = {"kubernetes": original}
-    before = deepcopy(original)
-    assert planning_hardware_overview(original, None) is original
-    effective = planning_hardware_overview(original, "H100")
-    context = effective["kubernetes"] if nested else effective
-    assert context["hardware"]["accelerators"][0]["models"] == ["H100"]
-    assert context["nodes"][0]["gpuModelsByProfile"]["nvidia"] == ["H100"]
-    assert context["hardware"]["gpuCount"] == 4
-    assert context["hardware"]["availableGpuCount"] == 3
-    assert context["hardware"]["vramBytes"] == 4 * 80 * 1024**3
-    assert original == before
-
-
-@pytest.mark.parametrize("model", ["unregistered-device", "Intel B60 XPU"])
-def test_simulated_identity_rejects_unknown_or_different_profile(public_hardware, model):
-    from llm_d_lens.agentic.facts import planning_hardware_overview
-    from llm_d_lens.core.exceptions import DomainValidationError
-
-    with pytest.raises(DomainValidationError, match="one AIC system"):
-        planning_hardware_overview({"hardware": public_hardware}, model)
 
 
 def test_resolver_uses_live_cluster_capacity_and_free_memory(monkeypatch):
@@ -790,50 +730,7 @@ def test_resolver_uses_live_cluster_capacity_and_free_memory(monkeypatch):
     assert resolved.facts.evidence_ids == ("cluster-overview:cluster-a",)
 
 
-@pytest.mark.parametrize("nested", [False, True])
-def test_test_capacity_override_is_scoped_private_and_idempotent(monkeypatch, nested):
-    from llm_d_lens.agentic.facts import planning_hardware_overview
-
-    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":80}')
-    hardware = {"gpuCount": 7, "availableGpuCount": 3, "vramBytes": 0}
-    original = {"kubernetes": {"hardware": hardware}} if nested else {"hardware": hardware}
-    assert planning_hardware_overview(original, None, cluster_id="cluster-b") is original
-    effective = planning_hardware_overview(original, None, cluster_id="cluster-a")
-    repeated = planning_hardware_overview(effective, None, cluster_id="cluster-a")
-    effective_hardware = (repeated["kubernetes"] if nested else repeated)["hardware"]
-    assert hardware["vramBytes"] == 0
-    assert effective_hardware["gpuCount"] == 7
-    assert effective_hardware["availableGpuCount"] == 3
-    assert effective_hardware["vramBytes"] == 7 * 80 * 1024**3
-    assert effective_hardware["planningCapacitySimulation"]["observed_vram_bytes"] == 0
-    assert effective_hardware["planningCapacitySimulation"]["simulation"] is True
-    monkeypatch.delenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES")
-    assert planning_hardware_overview(original, None, cluster_id="cluster-a") is original
-
-
-@pytest.mark.parametrize(
-    "configured",
-    [
-        "[]",
-        "{",
-        '{"cluster-a":true}',
-        '{"cluster-a":0}',
-        '{"cluster-a":"80"}',
-        '{"cluster-a":-1}',
-        '{"cluster-a":NaN}',
-        '{"cluster-a":Infinity}',
-    ],
-)
-def test_test_capacity_override_rejects_invalid_configuration(monkeypatch, configured):
-    from llm_d_lens.agentic.facts import planning_hardware_overview
-    from llm_d_lens.core.exceptions import DomainValidationError
-
-    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", configured)
-    with pytest.raises(DomainValidationError, match="Test cluster VRAM overrides"):
-        planning_hardware_overview({"hardware": {"gpuCount": 7}}, None, cluster_id="cluster-a")
-
-
-def test_resolver_marks_test_capacity_and_keeps_real_count(monkeypatch):
+def test_resolver_rejects_missing_live_vram_despite_retired_overrides(monkeypatch):
     monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":80}')
     monkeypatch.setattr(
         "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
@@ -843,14 +740,6 @@ def test_resolver_marks_test_capacity_and_keeps_real_count(monkeypatch):
         return {"hardware": {"gpuCount": 7, "availableGpuCount": 3, "vramBytes": 0}}
 
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
-    resolved = asyncio.run(
-        resolve_planning_facts("cluster-a", "", PlanningFacts(8, 1, 0), include_supplementary_evidence=False)
-    )
-    assert resolved.facts.vram_per_gpu_gib == 80
-    assert resolved.facts.free_gpu_count == 3
-    assert resolved.evidence[0].details["simulation"] is True
-    assert resolved.evidence[0].details["observed_vram_bytes"] == 0
-    monkeypatch.delenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES")
     with pytest.raises(ValueError, match="usable accelerator VRAM"):
         asyncio.run(
             resolve_planning_facts("cluster-a", "", PlanningFacts(8, 1, 0), include_supplementary_evidence=False)
@@ -961,8 +850,9 @@ def test_resolver_retains_hard_cluster_facts_when_supplementary_sources_fail(mon
 
 
 @pytest.mark.parametrize("target", [None, "concurrency", "request_rate"])
-@pytest.mark.parametrize("simulated", [None, "H100"])
-def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monkeypatch, target, simulated):
+def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monkeypatch, target):
+    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}')
+    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":80}')
     monkeypatch.setattr(
         "llm_d_lens.agentic.facts.registry.require_cluster", lambda cluster_id: SimpleNamespace(id=cluster_id)
     )
@@ -1013,13 +903,12 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
                 workload_profile=WorkloadProfile(
                     mean_input_tokens=4096, mean_output_tokens=512, **({target: 10} if target else {})
                 ),
-                planning_hardware_model=simulated,
             ),
         )
     )
 
-    assert captured["request"].aic_system_name == ("h100_sxm" if simulated else "a100_sxm")
-    assert resolved.facts.planning_hardware_model == simulated
+    assert captured["request"].aic_system_name == "a100_sxm"
+    assert resolved.facts.requirements.hardware.device_model == "A100"
     assert resolved.facts.free_gpu_count == 4
     assert resolved.facts.vram_per_gpu_gib == 32
     assert captured["request"].mean_input_tokens == 4096

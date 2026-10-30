@@ -320,7 +320,7 @@ def test_legacy_observation_context_also_extracts_technique_hints():
     entry["experiment"]["configuration"]["source_info"] = {"file_identifier": path}
     original = deepcopy(entry)
     context = public_rag_context(PlanningFacts(8, 80, 8, public_rag_evidence=(entry,)))
-    (hint,) = context["public_rag_evidence"][0]["experiment"]["configuration"]["technique_hints"]
+    (hint,) = context["published_benchmark_evidence"][0]["experiment"]["configuration"]["technique_hints"]
     assert hint["related_provider_ref"] == "precise-prefix-cache-routing"
     assert hint["technique_description"] == "Precise prefix-cache routing"
     assert hint["mapping_basis"] == "source_label"
@@ -433,15 +433,15 @@ def test_model_context_deduplicates_measurements_without_losing_audit_evidence()
         public_rag_evidence=kept,
     )
     context = public_rag_context(facts)
-    assert not context.get("public_rag_evidence")
+    assert not context.get("published_benchmark_evidence")
     assert "evidence_id" not in context["configuration_cases"][0]["measurements"][0]
     assert "provenance" not in context["configuration_cases"][0]
     assert facts.public_rag_evidence[0]["experiment"] == entry["experiment"]
     assert facts.public_rag_evidence[0]["unit"] == "s"
     standalone = observation("public-rag:standalone", experiment="other")
     mixed = public_rag_context(replace(facts, public_rag_evidence=(*kept, standalone)))
-    assert len(mixed["public_rag_evidence"]) == 1
-    assert "evidence_id" not in mixed["public_rag_evidence"][0]
+    assert len(mixed["published_benchmark_evidence"]) == 1
+    assert "evidence_id" not in mixed["published_benchmark_evidence"][0]
 
 
 def test_sql_budget_does_not_load_audit_exclusion_lists():

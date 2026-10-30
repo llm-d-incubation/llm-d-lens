@@ -240,7 +240,12 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
     principal = Principal("admin-user", "admin", bindings=(RoleBinding("admin"),))
 
     async def hardware(_cluster, _model, facts, _principal, *, hardware_snapshot=None):
-        return facts, {"status": "unavailable"}
+        from llm_d_lens.agentic.planning_requirements import enrich_planning_requirements
+
+        return enrich_planning_requirements(facts, model_name=_model, hardware_model="H100", profile_id="nvidia"), {
+            "status": "available",
+            "hardware": "H100",
+        }
 
     for module in ("generator", "planner", "facts"):
         monkeypatch.setattr(f"llm_d_lens.agentic.{module}.load_model_config", lambda _model: None)
@@ -282,13 +287,13 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
             details={
                 "response": {"evidence": [observation]},
                 "message": "Public evidence precedes AIC.",
-                "target_hardware": {"model": "H100", "actual_model": "A100", "simulation": True, "override": True},
+                "target_hardware": {"model": "H100", "profile_id": "nvidia"},
             },
         )
 
     async def generate(_self, _cluster, _model, facts, _prompt, **kwargs):
         calls.append("generation")
-        assert facts.planning_hardware_model == "H100"
+        assert facts.requirements.hardware.device_model == "H100"
         assert facts.public_rag_evidence[0]["item_id"] == observations[-1]["item_id"]
         assert facts.configuration_cases[0]["experiment_id"] == f"experiment-{observations[-1]['item_id']}"
         assert facts.configuration_cases[0]["ranking"]["queue"] == ("fallback" if fallback else "ranked")
@@ -311,7 +316,7 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
 
         async def recommend(self, facts, candidates, **kwargs):
             calls.append("ranking")
-            assert facts.planning_hardware_model == "H100"
+            assert facts.requirements.hardware.device_model == "H100"
             reference = f"public-rag:{observations[-1]['item_id']}"
             assert facts.public_rag_evidence[0]["evidence_id"] == reference
             return PlannerDecision(
@@ -540,15 +545,6 @@ def test_simulated_plan_cannot_enter_deployment(monkeypatch, capacity_simulation
         asyncio.run(service.approve(run.id))
     assert run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
     assert run.deployment_run_id is None
-
-
-def test_client_cannot_inject_a_planning_hardware_identity():
-    facts = AgenticDeploymentService._planning_only_facts(
-        PlanningFacts(8, 80, 4, planning_hardware_model="H100"),
-        max_model_len=4096,
-        gpu_memory_utilization=0.9,
-    )
-    assert facts.planning_hardware_model is None
 
 
 def test_select_candidate_only_allows_a_validated_alternative(monkeypatch):

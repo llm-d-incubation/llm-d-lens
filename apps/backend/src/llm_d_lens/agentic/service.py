@@ -1125,7 +1125,6 @@ class AgenticDeploymentService:
             configuration_cases=(),
             configuration_case_status=None,
             requirements=None,
-            planning_hardware_model=None,
             evidence_ids=tuple(
                 reference for reference in facts.evidence_ids if not reference.startswith("public-rag:")
             ),
@@ -1164,7 +1163,10 @@ class AgenticDeploymentService:
             {
                 "phase": "generation",
                 "status": "running",
-                "message": "Resolving target cluster hardware and querying matching public RAG before AIC planning.",
+                "message": (
+                    "Resolving target cluster hardware and querying matching published benchmark SQL records "
+                    "before AIC planning."
+                ),
             },
         )
         facts = AICandidateGenerator._apply_preference_constraints(facts, facts.operator_preference)

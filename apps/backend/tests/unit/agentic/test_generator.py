@@ -439,18 +439,17 @@ def _mcp_cluster_result():
     }
 
 
-def test_resolve_mcp_facts_marks_test_capacity(monkeypatch):
+@pytest.mark.parametrize("nested", [False, True])
+def test_resolve_mcp_facts_rejects_missing_live_vram_despite_retired_overrides(monkeypatch, nested):
     monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":80}')
     overview = _mcp_cluster_result()
     overview["kubernetes"]["hardware"]["vramBytes"] = 0
-    resolved = AICandidateGenerator._resolve_mcp_facts(
-        "cluster-a",
-        PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=1, free_gpu_count=0),
-        {"get_cluster_overview": [overview]},
-    )
-    assert resolved.facts.vram_per_gpu_gib == 80
-    assert resolved.facts.free_gpu_count == 6
-    assert resolved.evidence[0].details["simulation"] is True
+    with pytest.raises(CandidateGenerationError, match="no usable accelerator VRAM"):
+        AICandidateGenerator._resolve_mcp_facts(
+            "cluster-a",
+            PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=1, free_gpu_count=0),
+            {"get_cluster_overview": [overview if nested else overview["kubernetes"]]},
+        )
     assert overview["kubernetes"]["hardware"]["vramBytes"] == 0
 
 
@@ -468,19 +467,21 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
 
 
 @pytest.mark.parametrize(
-    "accelerators,simulated,expected_system",
+    "accelerators,expected_system",
     [
-        (None, None, "a100"),
-        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], None, "a100_sxm"),
-        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], None, "a100"),
-        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "H100", "h100_sxm"),
+        (None, "a100"),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "a100_sxm"),
+        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], "a100"),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["H100"]}], "h100_sxm"),
     ],
 )
 @pytest.mark.parametrize("profile", [None, WorkloadProfile(), WorkloadProfile(shared_prefix_ratio=0)])
 @pytest.mark.parametrize("shared_snapshot", [False, True])
 def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
-    monkeypatch, accelerators, simulated, expected_system, profile, shared_snapshot
+    monkeypatch, accelerators, expected_system, profile, shared_snapshot
 ):
+    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H200"}')
+    monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":96}')
     captured = {"tool_args": []}
     discoveries = []
 
@@ -560,7 +561,6 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
         free_gpu_count=4,
         evidence_ids=("aic:search",),
         public_rag_evidence=({"evidence_id": "public-rag:published-1", "citation": {"source_revision": "rev-1"}},),
-        planning_hardware_model=simulated,
         workload_profile=profile,
     )
 
@@ -591,17 +591,19 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
     user_context = json.loads(user_content.split("Planning context (JSON):\n", 1)[1])
     assert next(iter(user_context)) == "operator_preference"
     assert user_context["operator_preference"] == "prefer throughput"
-    assert "evidence_id" not in user_context["public_rag_evidence"][0]
-    assert "citation" not in user_context["public_rag_evidence"][0]
+    assert "evidence_id" not in user_context["published_benchmark_evidence"][0]
+    assert "citation" not in user_context["published_benchmark_evidence"][0]
+    assert "public_rag_evidence" not in user_context
+    assert "RAG" not in captured["system_prompt"]
+    assert "structured SQL database" in captured["system_prompt"]
+    assert "missing evidence for this request" in captured["system_prompt"]
     assert user_context["explicit_workload"] == (
         {"shared_prefix_ratio": 0} if profile and profile.shared_prefix_ratio == 0 else {}
     )
     assert "takes precedence over AIC estimates" in captured["system_prompt"]
-    assert "hardware identity simulation" in captured["system_prompt"]
-    assert proposals.resolved.facts.planning_hardware_model == simulated
-    if simulated:
-        assert proposals.resolved.cluster_snapshot["hardware"]["accelerators"][0]["models"] == ["H100"]
-        assert "NVIDIA-A100" not in json.dumps(captured["messages"])
+    assert proposals.resolved.cluster_snapshot["hardware"].get("accelerators") == (
+        accelerators if accelerators is not None else _cluster_result()["hardware"].get("accelerators")
+    )
     assert proposals.resolved.facts.public_rag_evidence == facts.public_rag_evidence
     assert "validated_planning_facts" not in user_context
     assert proposals.proposals.candidates[0].provider_ref == "optimized-baseline"
@@ -609,8 +611,8 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
     assert proposals.resolved.facts.free_gpu_count == 4
 
 
-@pytest.mark.parametrize("simulated", [None, "H100"])
-def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_targets(monkeypatch, simulated):
+@pytest.mark.parametrize("discovered", [False, True])
+def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_targets(monkeypatch, discovered):
     calls = []
 
     class Tools:
@@ -621,7 +623,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
             calls.append((name, arguments))
             if name == "get_cluster_overview":
                 cluster = _cluster_result()
-                if simulated:
+                if discovered:
                     cluster["hardware"]["accelerators"] = [
                         {"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}
                     ]
@@ -694,7 +696,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         ).generate(
             "cluster-a",
             "model",
-            PlanningFacts(8, 32, 4, ttft_slo_ms=500, planning_hardware_model=simulated),
+            PlanningFacts(8, 32, 4, ttft_slo_ms=500),
             None,
         )
     )
@@ -703,7 +705,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         "search_candidates",
         _aic_arguments()
         | {
-            "searchConfig": {"totalGpus": 4, **({"aicSystemName": "h100_sxm"} if simulated else {})},
+            "searchConfig": {"totalGpus": 4, **({"aicSystemName": "a100_sxm"} if discovered else {})},
             "workload": {
                 "model": "model",
                 "isl": 4000,
@@ -720,7 +722,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
             "searchConfig": {
                 "capacityMode": "free",
                 "customGpuCount": None,
-                **({"aicSystemName": "h100_sxm"} if simulated else {}),
+                **({"aicSystemName": "a100_sxm"} if discovered else {}),
             },
         },
     )

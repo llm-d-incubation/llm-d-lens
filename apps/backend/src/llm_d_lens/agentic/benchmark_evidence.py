@@ -144,7 +144,7 @@ def historical_query_context(model_name: str, facts: PlanningFacts) -> dict[str,
     requirements = facts.requirements
     if requirements is not None:
         requirements.require_valid()
-    identity = requirements.hardware if requirements else normalize_hardware(facts.planning_hardware_model)
+    identity = requirements.hardware if requirements else normalize_hardware(None)
     model = requirements.model if requirements else None
     runtime = requirements.runtime if requirements else None
     profile = facts.workload_profile

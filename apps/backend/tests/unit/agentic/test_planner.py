@@ -57,10 +57,11 @@ def test_public_context_keeps_observations_without_audit_reports_or_hashes():
         ),
     )
     context = public_rag_context(facts)
-    assert len(context["public_rag_evidence"]) == 75
+    assert len(context["published_benchmark_evidence"]) == 75
+    assert "public_rag_evidence" not in context
     assert "public_rag_reports" not in context
     assert report not in json.dumps(context) and "a" * 64 not in json.dumps(context)
-    for item in context["public_rag_evidence"]:
+    for item in context["published_benchmark_evidence"]:
         assert item["experiment"]["configuration"] == {"tp": 2}
         assert item["planning_match"]["workload"]["unknown_fields"] == ["p95_input_tokens"]
     assert facts.public_rag_evidence[0]["experiment"]["configuration"]["published_report"] == report
@@ -100,7 +101,7 @@ def test_public_context_keeps_configuration_cases_separate_from_slo_observations
     assert "configuration_case_status" not in context
     assert facts.configuration_case_status == status
     assert "not proof" in context["configuration_case_usage"]
-    assert not context.get("public_rag_evidence")
+    assert not context.get("published_benchmark_evidence")
     assert "public_rag_reports" not in context
     assert facts.configuration_cases == (case,)
 
@@ -474,7 +475,7 @@ def test_planner_records_only_reference_material_in_actual_budgeted_request(monk
         == configuration_case_context(facts.configuration_cases[:1], {})["configuration_cases"]
         for context in requests
     )
-    assert all(not context.get("public_rag_evidence") for context in requests)
+    assert all(not context.get("published_benchmark_evidence") for context in requests)
     assert all("evidence_id" not in context["configuration_cases"][0]["measurements"][0] for context in requests)
     assert len(facts.public_rag_evidence) == 2
     assert facts.configuration_cases[1]["case_id"] == "case:dropped"
@@ -547,11 +548,8 @@ def test_planner_keeps_reference_material_separate_from_used_evidence_and_slo_pr
 
 
 @pytest.mark.parametrize("usable", [False, True])
-@pytest.mark.parametrize("simulated", [False, True])
 @pytest.mark.parametrize("profile", [None, WorkloadProfile(), WorkloadProfile(shared_prefix_ratio=0)])
-def test_public_rag_precedes_aic_ordering_only_with_supplied_usable_measurements(
-    monkeypatch, usable, simulated, profile
-):
+def test_public_rag_precedes_aic_ordering_only_with_supplied_usable_measurements(monkeypatch, usable, profile):
     captured = {}
     facts = PlanningFacts(
         8,
@@ -574,7 +572,6 @@ def test_public_rag_precedes_aic_ordering_only_with_supplied_usable_measurements
                 "experiment": {"configuration": {"tensor_parallel_size": 2}},
             },
         ),
-        planning_hardware_model="H100" if simulated else None,
     )
     candidates = [
         PlannedCandidate(
@@ -614,8 +611,12 @@ def test_public_rag_precedes_aic_ordering_only_with_supplied_usable_measurements
     assert not decision.evidence_ids
     assert decision.slo_status == ranked[0].slo_status == "not_satisfied"
     context = json.loads(captured["user_content"].split("Planning context (JSON):\n", 1)[1].partition("\n\n")[0])
-    assert "citation" not in context["public_rag_evidence"][0]
-    assert "evidence_id" not in context["public_rag_evidence"][0]
+    assert "citation" not in context["published_benchmark_evidence"][0]
+    assert "evidence_id" not in context["published_benchmark_evidence"][0]
+    assert "public_rag_evidence" not in context
+    assert "RAG" not in captured["system_prompt"]
+    assert "structured SQL records" in captured["system_prompt"]
+    assert "missing evidence for this request" in captured["system_prompt"]
     assert context["explicit_workload"] == (
         {"shared_prefix_ratio": 0} if profile and profile.shared_prefix_ratio == 0 else {}
     )
@@ -628,7 +629,6 @@ def test_public_rag_precedes_aic_ordering_only_with_supplied_usable_measurements
         "Missing workload alone must not make resource minimization override published latency evidence"
         in captured["system_prompt"]
     )
-    assert context["planning_facts"]["planning_hardware_model"] == ("H100" if simulated else None)
 
 
 def test_planner_selects_the_smallest_feasible_standard_vllm_topology():
