@@ -46,6 +46,7 @@ from llm_d_lens.db.dao.public_benchmark_record_query import PublicBenchmarkRecor
 from llm_d_lens.hardware.models import HardwareProfile
 from llm_d_lens.hardware.registry import all_profiles
 
+from .document_evidence import DOCUMENT_USAGE, DocumentEvidenceOutcome, document_reference_map
 from .planner import AICCandidatePrediction, PlanningFacts, public_rag_workload, resolve_workload_signals
 from .planning_requirements import NumericRequirement, enrich_planning_requirements
 
@@ -65,6 +66,39 @@ class ResolvedPlanningFacts(BaseModel):
     cluster_snapshot: dict[str, Any]
     evidence: list[PlanningEvidence] = Field(default_factory=list)
     trace: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def with_document_evidence(resolved: ResolvedPlanningFacts, outcome: DocumentEvidenceOutcome) -> ResolvedPlanningFacts:
+    evidence = [item for item in resolved.evidence if item.source != "public-document-rag"]
+    trace = [item for item in resolved.trace if item.get("phase") != "document_rag"]
+    if outcome.status != "disabled" or outcome.reason is not None:
+        evidence.append(
+            PlanningEvidence(
+                id="document-rag:query",
+                source="public-document-rag",
+                status=outcome.status,
+                details={
+                    **outcome.metadata(),
+                    **(
+                        {
+                            "document_evidence_usage": DOCUMENT_USAGE,
+                            "document_evidence": [packet.model_dump(mode="json") for packet in outcome.packets],
+                            "model_reference_map": document_reference_map(outcome.packets),
+                        }
+                        if outcome.packets
+                        else {}
+                    ),
+                },
+            )
+        )
+        trace.append({"phase": "document_rag", **outcome.metadata()})
+    return resolved.model_copy(
+        update={
+            "facts": replace(resolved.facts, document_evidence=outcome.packets),
+            "evidence": evidence,
+            "trace": trace,
+        }
+    )
 
 
 class PlanningHardwareSnapshot:

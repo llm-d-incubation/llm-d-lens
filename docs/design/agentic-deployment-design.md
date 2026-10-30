@@ -102,8 +102,10 @@ flowchart TD
    SLO, workload profile, and preference are optional inputs.
 2. When creating a plan, the backend validates the active cluster session, and verifies that the
    selected storage is ready for the current cluster, has purpose `model-cache`, is not a
-   dynamic-PVC volume. Planning and refinement do not require downloaded model files;
-   approval checks model-cache readiness and resolves the current credential policy.
+   dynamic-PVC volume.
+   Planning and refinement do not require the target model to be
+   downloaded. Approval checks the ready cache entry and resolves its current
+   credential policy before starting deployment.
 3. When external AI is configured, AI Generator starts from deployment intent and uses native tool
    calling to query cluster and AIC in parallel first; only after that may it query allowlisted
    historical evidence. Before submission it must obtain cluster overview and attempt at least one
@@ -633,14 +635,23 @@ Structured data consists of `BenchmarkRecord`: model, hardware, runtime, workloa
 
 Live cluster overview is also structured evidence, with the highest authority: it determines whether candidates satisfy current VRAM, GPU, CPU-buffer, and other hard constraints. Historical benchmarks, AIC, and AI cannot override live-resource conclusions.
 
-#### Multi-source experiment planning
+#### Public benchmark RAG in recommendations
 
-Creation and refinement share server-resolved evidence from authorized internal
-experiments and approved public Prism experiments. Public experiments remain in
-PostgreSQL `public_benchmark_records`; they are not document search results.
-The actual authenticated principal needs global `benchmark-rag:query:read` to
-retrieve public observations or access plans containing them. Internal experiments
-retain their existing resource authorization.
+Create and refinement automatically query `PublicRagQueryService` before candidate
+generation, with exact model/hardware filters and `include_internal=false`,
+selecting at most 50 ranked published experiment/configuration-and-series cases
+per SQL branch, with complete selected measurements.
+After permission checks, the live target-cluster overview
+supplies the hardware profile and concrete accelerator model. Profile-declared
+family labels are not device models. Published hardware labels are matched by
+model tokens, ignoring only profile-declared vendor/accelerator decoration and
+separator/case differences; memory size and PCIe/SXM distinctions are retained.
+The selected published hardware label is an exact query filter, applied before
+the experiment limit. Unknown or mixed models produce `rag_hardware_unresolved`;
+no matching hardware produces `no_matches`, never an unfiltered or cross-hardware
+fallback. `planning_evidence.details.target_hardware` records the target cluster,
+profile and detected model; `details.query.filters.hardware` records the queried
+label. Refinement resolves live hardware again.
 
 Public benchmark contracts and services live in `llm_d_lens.agentic.public_benchmark_record`.
 This is an Agentic subpackage, with no top-level compatibility package. Its DAOs
@@ -729,7 +740,14 @@ explicit user approval; retrieval never authorizes deployment.
 
 #### Unstructured data
 
-Unstructured data includes deployment logs, profiling traces, artifact summaries, Guides, GitHub content, papers, planning-snapshot summaries, and planned raw benchmark reports from cloud storage. Searchable projections reside in OpenSearch; original artifacts remain in controlled filesystems, and cloud reports remain in their authorized storage locations.
+Unstructured data includes deployment logs, profiling traces, artifact summaries,
+Guides, GitHub content, papers, planning-snapshot summaries, and planned raw
+benchmark reports from cloud storage. Original artifacts remain in controlled
+filesystems, and cloud reports remain in their authorized storage locations. The
+concrete OpenSearch adapter has moved to the public `benchmark_rag` domain and no
+longer indexes diagnostics. Diagnostic projection and artifact-integrity helpers
+remain separate; their OpenSearch integration is not provided by that public
+adapter.
 
 Cloud benchmark report integration is not yet implemented. The plan is to index ACL-controlled summaries and object versions for discovery, then fetch the pinned source version under tenant/ACL controls and validate its content hash before use. Extract model, hardware, runtime, workload, topology, measured metrics, outcome, and provenance; validate units and required fields; normalize into request-local `BenchmarkRecord` objects. Reports with missing fields, unverifiable sources, or only estimates cannot become measured records. Unextracted or unvalidated report text is diagnostic only and cannot affect numeric prediction, failure blocking, or deterministic ranking. Qualified records still undergo structured benchmark compatibility filtering and similarity computation; retrieval alone does not establish performance.
 
@@ -748,7 +766,11 @@ The server first applies coarse database filters for accelerator, backend, quant
 
 `match_similarity` expresses only the relevance of a historical record to the current target. It is not deployment success probability or a promise of current performance. Aggregate `confidence` and effective sample size belong only to the deterministic path.
 
-The current request does not require direct workload input. Versioned `resolve_workload_signals()` maps use case to query profile $q$, including token lengths, concurrency, request rate, shared-prefix and prefill signals. Explicit workload overrides only corresponding fields and records provenance. If the mapping is unknown or cannot provide comparison fields, do not fabricate workload; related history cannot become high-similarity performance evidence.
+Workload input is optional. Historical query profile $q$ uses only explicitly
+normalized workload and verified identities. Use-case defaults remain topology
+heuristics, not measured traffic: missing input P95, output length, concurrency,
+request rate, architecture, quantization and runtime are not synthesized.
+Incomplete identities cannot establish exact compatibility or qualified seeds.
 
 For historical record $r$ passing database hard filters and current candidate query $q$, the retriever computes configuration/workload and performance-target similarity $S$:
 
@@ -772,7 +794,11 @@ $$
 S_{hardware} = 0.7 + 0.3e^{-|\ln(g_r/g_q)|}
 $$
 
-$S_{workload}$ averages five log-ratio scores for mean input, P95 input, mean output, concurrency, and request rate, plus two $1-|x_r-x_q|$ scores for shared-prefix and prefill fractions. Values in $q$ come from the use-case mapping or explicit overrides above. Candidate-configuration similarity is:
+$S_{workload}$ compares mean input, P95 input, mean output, concurrency and request
+rate using log-ratio scores, and shared-prefix/prefill fractions using
+$1-|x_r-x_q|$. Values in $q$ come only from explicit normalized fields; missing
+dimensions are not matches and cannot establish exact measured applicability.
+Candidate-configuration similarity is:
 
 $$
 S_{configuration} = 0.4e^{-|\ln(TP_r/TP_q)|} + 0.4e^{-|\ln(R_r/R_q)|} + 0.2J_{optimization}
@@ -812,7 +838,49 @@ $W$ is **match similarity** in this document. It adds time/runtime effects to ba
 
 Logs, traces, artifacts, and external materials become bounded `DiagnosticEvidenceProjection` objects with fixed `evidence_id`, content hash, source revision, tenant, ACL, and necessary runtime metadata. Before use, artifacts must pass source validation against their manifest and file SHA-256.
 
-OpenSearch queries must apply tenant/ACL filters first. Use BM25 by default and kNN only when the caller explicitly supplies a vector. Projections are rebuildable. Unavailable OpenSearch, stale indexes, or no results yield empty features/diagnostics without affecting deterministic planning.
+Any future private diagnostic search must enforce tenant/ACL filters and cannot
+reuse the public RAG index. The public OpenSearch adapter provides default lexical
+search, explicitly selected vector search and controlled hybrid fusion over
+approved published passages, with publication and original-byte rechecks. The
+vector alias does not replace the lexical alias; each request pins its build/model
+and hybrid uses that fixed vector build for both branches. Hybrid engineering
+support does not certify S3 quality or performance. Public search outages are
+explicit failures, not empty diagnostic features or a PostgreSQL fallback.
+Document text never enters deterministic performance planning.
+
+#### Controlled public document integration
+
+S4 backend controls and D2 integration proceed together without an independent
+RAG frontend or standalone product launch. Both Agentic creation and refinement
+resolve the server-owned runtime policy and actual caller afresh. Public document
+retrieval remains separate from public SQL observations and authorized internal
+benchmark records; changing document controls does not grant access to either.
+
+The default document mode is disabled. Shadow mode runs bounded verified
+retrieval and records safe diagnostics but supplies no document text, IDs or
+citations to generator/scorer prompts or candidate decisions. Enabled mode is
+restricted to explicitly allowlisted stable user IDs with a separate GLOBAL
+query grant; there is no implicit admin bypass. Lexical is the default, with
+hybrid explicitly selected by runtime policy. Outstanding quality gates remain;
+S3 performance acceptance is deferred until the end.
+
+Enabled evidence is bounded, version-pinned public document context, distinct
+from measured observations. Its canonical source citations and document-reference
+IDs are produced by the server, not by an LLM. Generator and AI scorer references
+must resolve against the exact document packets supplied to that stage.
+Treat passage text as untrusted source data, never tool/system instructions.
+Documents may explain prerequisites, stated version requirements or preferences;
+they are not proof of actual compatibility or measured performance.
+They cannot supply TTFT, TPOT, throughput, SLO compliance or deterministic
+confidence. Existing benchmark/AIC validation and hard constraints remain authoritative.
+
+Refinement replaces document context and cited-document references rather than
+accumulating the previous retrieval. Disabling rollout stops new consumption;
+revoked permissions also block saved-plan document exposure. Sanitized disabled,
+forbidden, unavailable, stale, degraded and no-match outcomes are observable,
+not fabricated evidence or silently successful retrieval. Cancellation still
+propagates through planning. Recovery requires reviewing the target's local
+rollout policy; portable document restore does not copy or enable that policy.
 
 #### Two-stage retrieval of cloud benchmark reports
 
@@ -845,7 +913,17 @@ AI generation and scoring are separate stages. The generator first retrieves his
 
 For each feasible provider, AI Generator must first propose the minimum-resource topology: the lowest TP satisfying memory constraints and one replica per serving role. Explicit provider preference selects a method; it cannot independently increase TP or replicas. Additional resources require explicit SLOs or complete AIC predictions. Scaling from a relaxed-search anchor remains an estimate requiring validation.
 
-AI scoring first shortlists at most ten hard-valid candidates: retain the best candidate per provider in deterministic order, then fill remaining places by rank. Only shortlisted candidates reach AI, each with at most five real historical benchmarks ordered by similarity. Raw benchmarks describe measured historical behavior: AI may compare TTFT, TPOT, throughput, outcome, and failure reason, for example avoiding candidates that previously caused OOM under similar workloads. ACL-filtered, bounded, version-pinned Guide/GitHub/paper feature packets are not yet integrated into AI scoring. Future packets may inform method prerequisites, version compatibility, and operator preference only; they are not measurements and cannot establish TTFT, TPOT, throughput, SLOs, or confidence.
+AI scoring first shortlists at most ten hard-valid candidates: retain the best
+candidate per provider in deterministic order, then fill remaining places by
+rank. Only shortlisted candidates reach AI, each with at most five real historical
+benchmarks ordered by similarity. Raw benchmarks describe measured historical
+behavior: AI may compare TTFT, TPOT, throughput, outcome, and failure reason, for
+example avoiding candidates that previously caused OOM under similar workloads.
+When explicitly enabled by the controlled document policy, separately validated
+public document packets may inform method prerequisites, stated version
+conditions and operator preference. They are not measurements or verified
+hardware compatibility, and cannot establish TTFT, TPOT, throughput, SLOs or
+deterministic confidence. Shadow packets never enter this stage.
 
 AI cannot generate new candidates or interpret unstructured features as performance measurements. Responses may select only server-provided candidate IDs. Invalid, timed-out, or unavailable responses fall back to the deterministic path.
 
@@ -939,6 +1017,14 @@ Example candidate in scoring context: historical values are measurements. The cu
 }
 ```
 
+`rationale` is user-facing prose. Historical techniques are supplied with readable
+descriptions, without raw imported source labels, paths or internal citation
+markers. Candidate IDs remain allowed for shortlist comparisons. The server does
+not reject, strip or regenerate a response merely because of marker-like text in
+the rationale; the normal JSON, candidate, score and SLO validation still applies.
+Source fidelity is preserved in backend reference material rather than
+model-declared historical citations.
+
 Minimal valid response example: `rationale` explains decisive differences without repeating every parameter or fabricating performance facts:
 
 ```json
@@ -999,7 +1085,12 @@ Logs, traces, artifacts, and snapshots remain diagnostic. All unstructured evide
   cannot reconstruct exchanges that were not recorded.
 - Historical candidate seeds default off. Enabling `AGENTIC_BENCHMARK_SEEDS_ENABLED` defaults to `shadow`: record qualifying seed counts without merging. Only `AGENTIC_HISTORICAL_SEEDS_MODE=apply` admits seeds after `CandidateValidator`. Nullable prefill parameters can participate in ranking without comparing `None` against integers and interrupting planning.
 - Snapshots separately save the selected candidate and its `evidence`, planning evidence, and `decision_evidence_ids`. The latter deduplicates cluster overview, applicable AIC refs, selected-candidate evidence refs, and historical sample IDs; it excludes unselected candidates. AI scoring scope is not the entire hard-valid catalog.
-- Diagnostic RAG foundations support searchable logs/traces/artifacts with access controls and artifact-integrity checks. This RAG is not yet integrated into deployment planning or AI scoring and cannot affect candidate generation, selection, or performance decisions.
+- Diagnostic RAG foundations retain bounded projection contracts and
+  artifact-integrity checks, but the concrete OpenSearch adapter is now
+  public-RAG-only. The public lexical/vector search backend is not yet integrated
+  into deployment planning or AI scoring and cannot affect candidate generation,
+  selection, or performance decisions. RAG delivery is backend-first; eventual
+  integration belongs to Agentic Deploy, not a separately maintained RAG frontend.
 
 #### Incomplete work and next steps
 

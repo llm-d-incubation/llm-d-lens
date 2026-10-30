@@ -35,6 +35,7 @@ from llm_d_lens.capacity import (
 )
 from llm_d_lens.hardware.registry import all_profiles
 
+from .document_evidence import document_context
 from .facts import (
     PlanningEvidence,
     PlanningHardwareSnapshot,
@@ -303,6 +304,7 @@ class AICandidateGenerator:
                     intent["requirements"] = selected.requirements.model_dump(mode="json")
                 for field in (
                     "public_rag_evidence",
+                    "document_evidence",
                     "configuration_cases",
                     "configuration_case_status",
                     "vram_per_gpu_gib",
@@ -316,6 +318,9 @@ class AICandidateGenerator:
                 context = {
                     "operator_preference": operator_prompt,
                     **public_rag_context(selected),
+                    **document_context(
+                        selected.document_evidence, model=selected.model_name, hardware=selected.planning_hardware_model
+                    ),
                     "explicit_workload": public_rag_workload(selected),
                     "cluster_id": cluster_id,
                     "model": model,

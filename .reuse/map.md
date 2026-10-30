@@ -256,10 +256,10 @@ Entry: [apps/backend/src/llm_d_lens/agentic/planner.py](../apps/backend/src/llm_
 Coordinate Agentic candidate generation, hard-constraint validation, dual evidence views, optional AI scoring, approval plans, and snapshots.
 Entry: [apps/backend/src/llm_d_lens/agentic/service.py](../apps/backend/src/llm_d_lens/agentic/service.py) — `AgenticDeploymentService`
 
-## agentic-opensearch-evidence-search
+## public-rag-opensearch-evidence-search
 
-Search rebuildable log, trace, and reference-material projections in OpenSearch, validating manifests and content checksums before using local artifact hits.
-Entry: [apps/backend/src/llm_d_lens/agentic/opensearch_evidence_search.py](../apps/backend/src/llm_d_lens/agentic/opensearch_evidence_search.py) — `OpenSearchEvidenceSearchRepository`, `verify_artifact_evidence`
+Build and search versioned OpenSearch lexical projections of published public RAG passages.
+Entry: [apps/backend/src/llm_d_lens/benchmark_rag/opensearch_evidence_search.py](../apps/backend/src/llm_d_lens/benchmark_rag/opensearch_evidence_search.py) — `OpenSearchEvidenceSearchRepository`, `OpenSearchEvidenceProjectionWriter`
 
 ## artifact-inventory
 

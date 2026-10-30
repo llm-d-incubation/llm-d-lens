@@ -185,6 +185,11 @@ Guide planning and cluster sessions use the same Python storage helpers.
 
 ### Content Kept Under Separate Management
 
+Public RAG rollout policy: `DATA/public-rag/runtime.json`, mode 0600; shared
+single-host lock/CAS, atomic writes. Operational control, not a document artifact:
+excluded from portable document bundles so clean restore does not enable Agentic
+consumption.
+
 | Content | Location |
 | --- | --- |
 | Raw KV records inside Pods | Inference environment `/tmp/prism-kv-trace/`, supports `PRISM_KV_TRACE_DIR`; aggregated results are saved with evaluation results |

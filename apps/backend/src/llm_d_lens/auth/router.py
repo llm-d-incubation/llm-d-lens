@@ -8,7 +8,7 @@ filtering and cookie/session mechanics.
 from __future__ import annotations
 
 import secrets
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from llm_d_lens.auth import master_key
 from llm_d_lens.auth.bootstrap import clear_initial_admin_credentials
 from llm_d_lens.auth.context import CSRF_COOKIE, SESSION_COOKIE
-from llm_d_lens.auth.contracts import Principal
+from llm_d_lens.auth.contracts import Principal, ScopeType
 from llm_d_lens.auth.permissions import ALL_PERMISSIONS
 from llm_d_lens.auth.policy import accessible_cluster_ids, authorize, principal_permissions
 from llm_d_lens.auth.providers.registry import get_provider
@@ -114,10 +114,14 @@ def _set_session_cookies(response: Response, token: str, *, remember: bool = Fal
 
 def _principal_view(principal: Principal) -> dict[str, Any]:
     clusters = accessible_cluster_ids(principal)
+    global_principal = replace(
+        principal, bindings=tuple(binding for binding in principal.bindings if binding.scope_type is ScopeType.GLOBAL)
+    )
     return {
         "userId": principal.user_id,
         "username": principal.username,
         "permissions": sorted(principal_permissions(principal)),
+        "globalPermissions": sorted(principal_permissions(global_principal)),
         "reachableClusters": None if clusters is None else sorted(clusters),
         "mustChangePassword": principal.must_change_password,
         "authzVersion": principal.authz_version,

@@ -29,6 +29,59 @@ to set the auth and gateway groups explicitly.
 | `LLM_D_BENCH_EMBEDDED_DB_DIR` / `LLM_D_BENCH_EMBEDDED_DB_PASSWORD` | Data directory and password for the embedded database. | `LLM_D_BENCH_EMBEDDED_DB_DIR`: `~/.llm-d-lens/db/data`<br />`LLM_D_BENCH_EMBEDDED_DB_PASSWORD`: — (required, no default) |
 | `LLM_D_BENCH_DB_BOOTSTRAP_FILE` | Optional SQL/seed file applied on first bootstrap. | `~/.llm-d-lens/db-bootstrap.json` |
 
+## Public RAG document search
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `LENS_PUBLIC_RAG_WRITER_MODE` | Document repository writer coordination mode. Only `single-host` is supported; `multi-host` and all other unsupported values are rejected at construction. All writer processes must share `LENS_DATA_DIR/public-rag/publication.lock`. | `single-host` |
+| `LENS_PUBLIC_RAG_OPENSEARCH_URL` | Explicit OpenSearch service URL for public document search. Missing configuration returns 503. Do not embed credentials in the URL. | unset |
+| `LENS_PUBLIC_RAG_OPENSEARCH_API_KEY` | Optional service-provided API key sent as an authorization header; never returned to clients. | unset |
+| `LENS_PUBLIC_RAG_MODEL_PATH` | Local pinned multilingual-e5-small snapshot directory for explicit vector mode. Offline safetensors loading with pinned file hashes; never downloads on a request. | Lens cache root + `models/multilingual-e5-small/614241f622f53c4eeff9890bdc4f31cfecc418b3` |
+
+Public documents are OpenSearch-only. Public search uses
+`public-rag-active` for default lexical mode and `public-rag-vector-shadow` for
+explicit vector mode, pinning the physical build/model for each request.
+The selected alias is the sole active retrieval authority,
+with public document/source approval/manifests/build history/rebuild requests in
+`public-rag-management-v1`; immutable source bytes remain in the approved local archive.
+Only source/passage fact bodies may enter OpenSearch, never experiment,
+measurement, figure or link bodies. Mixed releases preserve exact shared
+manifests using external identity/dependency descriptors and hashes, not copied
+experimental facts. Cutover must validate a fresh baseline with service writers
+frozen, preserve current approvals and revocations, and verify aliases before
+retiring SQL document storage. Future document publication uses OpenSearch,
+not continuing synchronization from a SQL document authority.
+Direct document staging still rejects raw structured facts.
+Document backup/restore carries checksummed external descriptors;
+mixed bundles without complete valid proofs fail closed. Admin backup/verify/restore
+default to OpenSearch document operations; SQL structured transfers require
+explicit `--structured`. Source refresh/status/rollback use OpenSearch for
+non-Prism sources and SQL for Prism. Prism rebuild remains SQL.
+Prism records/references stay out of the OpenSearch document projection and
+document transfers. Retrieval rebuilding uses the Python builder.
+Coordination uses persistent single-host shared `flock` at
+`LENS_DATA_DIR/public-rag/publication.lock`, not a runtime-directory lock, expiring
+lease or multi-host HA. Unknown alias-mutation outcomes fail closed; operator recovery
+requires quiescing outstanding requests, with no automatic alias restore.
+
+The old document-authority selector is removed; legacy `postgres` settings are
+rejected. There is no SQL document fallback or flag-only rollback.
+SQL `public_benchmark_records` is Prism-only and never feeds OpenSearch RAG.
+The approved cleanup backs up and drops all three legacy SQL RAG tables and
+creates this table empty, with no legacy data migration or Prism import.
+It refuses to discard existing Prism data or overwrite a preexisting target.
+OpenSearch indexes/aliases and original source snapshots remain unchanged;
+the cleanup performs no index rebuild or document-authority population.
+Freeze service writers throughout cleanup, use existing database settings and retain verified backups in
+a persistent directory. See the linked cutover instructions for the implemented
+command and explicit writer-quiescence requirement; the command does not stop
+services itself.
+Restore must not resurrect approvals; an empty target requires explicit
+current source reapproval, publication and rebuilding. Architecture tests do
+not establish S3 quality or live acceptance; no completed local cutover or
+quality acceptance is claimed here. See
+[document authority and rollout](./api-reference/modules/lens-assistant#d1-document-authority-and-rollout).
+
 ## Model Service gateway (shared llm-d Gateway)
 
 Gateway Mode: the cluster installs one shared Gateway (provider-selectable at cluster creation); model services publish HTTPRoute/IPP resources against it. Lens keeps no Edge proxy or tunnel.
@@ -63,6 +116,14 @@ and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
 | `HF_TOKEN` | Hugging Face token used to download gated models. | — (required, no default) |
 
 ## Evaluation, simulation and agentic planning
+
+For temporary backend-only cluster validation, `AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES`
+accepts a JSON map from cluster registration IDs to exact published hardware
+models (default: `{}`). Only mapped clusters
+inherit a simulated target for RAG, the private planning overview, AIC and ranking.
+Measured capacity and physical hardware are unchanged; simulated plans cannot deploy.
+This is test configuration, not a product form or request option. Remove a map
+entry and restart the backend to undo the temporary override.
 
 | Variable | Description | Default |
 | --- | --- | --- |

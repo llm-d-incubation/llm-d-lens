@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,16 @@ from llm_d_lens.infrastructure.kubernetes import list_resources
 
 from .benchmark_evidence import BenchmarkRecord
 from .configuration import AGENTIC_RUNTIME_BACKEND, build_agentic_configuration
+from .document_evidence import (
+    DOCUMENT_TECHNIQUES,
+    DocumentEvidenceOutcome,
+    DocumentEvidencePacket,
+    assert_document_sources_current,
+    document_context,
+    planning_document_query,
+    rank_document_evidence,
+    resolve_document_evidence,
+)
 from .facts import (
     PlanningEvidence,
     PlanningHardwareSnapshot,
@@ -41,6 +52,7 @@ from .facts import (
     resolve_planning_facts,
     resolve_public_rag_evidence,
     resolve_retrieval_hardware,
+    with_document_evidence,
     with_public_rag_evidence,
 )
 from .generator import AICandidateGenerator, CandidateGenerationError, CandidateProposal, CandidateValidator
@@ -70,6 +82,16 @@ from .planning_snapshot import PlanningSnapshotStore
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 RetrievalContext = tuple[PlanningFacts, PlanningEvidence, InternalCaseOutcome, CaseEvidenceBundle]
+
+
+def assert_plan_document_sources_current(run: AgenticDeploymentRun) -> None:
+    packets = tuple(
+        DocumentEvidencePacket.model_validate(packet)
+        for item in run.planning_evidence
+        if item.source == "public-document-rag"
+        for packet in item.details.get("document_evidence", ())
+    )
+    assert_document_sources_current(packets)
 
 
 class AgenticDeploymentService:
@@ -160,6 +182,9 @@ class AgenticDeploymentService:
                 hardware_snapshot=hardware_snapshot,
             )
             resolved = with_public_rag_evidence(resolved, public_rag)
+            planning_facts, public_rag, internal, cases = await self._candidate_document_context(
+                candidates, planning_facts, public_rag, internal, cases, request.model, principal
+            )
             resolved = self._with_cases(resolved, planning_facts, cases)
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
@@ -310,6 +335,7 @@ class AgenticDeploymentService:
             planner_fallback_reason=planner_fallback_reason,
         )
         assert_case_access(planning_facts.configuration_cases, principal, check_public_sources=True)
+        assert_document_sources_current(planning_facts.document_evidence)
         snapshot = self._snapshot_store.save(run, decision_facts, event="created")
         run.planning_snapshot_id = snapshot.snapshot_id
         run.planning_snapshot_path = snapshot.relative_path
@@ -925,6 +951,9 @@ class AgenticDeploymentService:
                 hardware_snapshot=hardware_snapshot,
             )
             refreshed = with_public_rag_evidence(refreshed, public_rag)
+            planning_facts, public_rag, internal, cases = await self._candidate_document_context(
+                candidates, planning_facts, public_rag, internal, cases, run.request.model, principal
+            )
             refreshed = self._with_cases(refreshed, planning_facts, cases)
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
@@ -1052,6 +1081,7 @@ class AgenticDeploymentService:
         ):
             raise ValueError("Agentic plan changed during recalculation; reload the current plan")
         assert_case_access(planning_facts.configuration_cases, principal, check_public_sources=True)
+        assert_document_sources_current(planning_facts.document_evidence)
         snapshot = self._snapshot_store.save(run, decision_facts, event="refined")
         run.planning_snapshot_id = snapshot.snapshot_id
         run.planning_snapshot_path = snapshot.relative_path
@@ -1192,6 +1222,13 @@ class AgenticDeploymentService:
     def _with_cases(
         resolved: ResolvedPlanningFacts, facts: PlanningFacts, bundle: CaseEvidenceBundle
     ) -> ResolvedPlanningFacts:
+        outcome = DocumentEvidenceOutcome.model_validate(
+            {
+                **bundle.branch_status.get("documents", {"status": "disabled"}),
+                "packets": facts.document_evidence,
+            }
+        )
+        resolved = with_document_evidence(resolved, outcome)
         return resolved.model_copy(
             update={
                 "facts": replace(
@@ -1267,9 +1304,18 @@ class AgenticDeploymentService:
                 logger.warning("event=planning_internal_cases reason=total_deadline_exceeded")
                 return InternalCaseOutcome(status="unavailable", reason="total_deadline_exceeded")
 
-        (facts, public), internal = await asyncio.gather(
+        async def document_branch():
+            try:
+                async with asyncio.timeout_at(deadline):
+                    return await resolve_document_evidence(planning_document_query(model, facts), principal)
+            except TimeoutError:
+                logger.warning("event=planning_documents reason=total_deadline_exceeded")
+                return DocumentEvidenceOutcome(status="unavailable", reason="retrieval_unavailable")
+
+        (facts, public), internal, documents = await asyncio.gather(
             public_branch(),
             internal_branch(),
+            document_branch(),
         )
         observations = (
             *facts.public_rag_evidence,
@@ -1282,6 +1328,7 @@ class AgenticDeploymentService:
             "target_hardware": hardware_status,
             "public_sql": {"status": public.status, **public.details.get("retrieval", {})},
             "internal_sql": internal.metadata(),
+            "documents": documents.metadata(),
         }
         hardware = public.details.get("target_hardware", {}).get("model")
         bundle, kept = build_case_bundle(
@@ -1292,7 +1339,118 @@ class AgenticDeploymentService:
             branch_status=branches,
             deadline=deadline,
         )
+        if documents.packets:
+            reserved = min(
+                4_000,
+                len(json.dumps(document_context(documents.packets[:1]), ensure_ascii=True).encode()),
+            )
+            smaller, smaller_kept = build_case_bundle(
+                observations,
+                facts,
+                model=model,
+                hardware=hardware,
+                branch_status=branches,
+                token_budget=16_000 - reserved,
+                deadline=deadline,
+            )
+            if smaller.cases or not bundle.cases:
+                bundle, kept = smaller, smaller_kept
+        facts, bundle = self._select_documents(facts, documents, bundle)
         return self._apply_case_selection(facts, public, internal, bundle, kept)
+
+    @staticmethod
+    def _select_documents(
+        facts: PlanningFacts, documents: DocumentEvidenceOutcome, bundle: CaseEvidenceBundle
+    ) -> tuple[PlanningFacts, CaseEvidenceBundle]:
+        ranked = rank_document_evidence(
+            documents.packets, model=facts.model_name, hardware=facts.planning_hardware_model
+        )
+        packets = []
+        excluded = dict(bundle.excluded)
+        size = bundle.token_count_upper_bound
+        for packet in ranked:
+            proposal = (*packets, packet)
+            document_size = len(json.dumps(document_context(proposal), ensure_ascii=True).encode())
+            if len(packets) < 20 and size + document_size <= 16_000:
+                packets.append(packet)
+            else:
+                excluded[packet.citation_id] = "evidence_budget_exhausted"
+        outcome = documents.model_copy(
+            update={
+                "packets": tuple(packets),
+                "status": "empty" if documents.packets and not packets else documents.status,
+                "reason": "evidence_budget_exhausted" if documents.packets and not packets else documents.reason,
+            }
+        )
+        branches = {**bundle.branch_status, "documents": outcome.metadata()}
+        return replace(facts, document_evidence=tuple(packets)), bundle.model_copy(
+            update={
+                "branch_status": branches,
+                "excluded": excluded,
+                "truncated": bundle.truncated or len(packets) < len(documents.packets),
+                "token_count_upper_bound": size
+                + (len(json.dumps(document_context(tuple(packets)), ensure_ascii=True).encode()) if packets else 0),
+            }
+        )
+
+    async def _candidate_document_context(
+        self,
+        candidates: list[PlannedCandidate],
+        facts: PlanningFacts,
+        public: PlanningEvidence,
+        internal: InternalCaseOutcome,
+        bundle: CaseEvidenceBundle,
+        model: str,
+        principal: Principal | None,
+    ) -> RetrievalContext:
+        outcome = DocumentEvidenceOutcome.model_validate(
+            {**bundle.branch_status.get("documents", {"status": "disabled"}), "packets": facts.document_evidence}
+        )
+        terms = sorted(
+            {candidate.provider_ref for candidate in candidates if candidate.deployable} & DOCUMENT_TECHNIQUES.keys()
+        )[:5]
+        if outcome.mode != "enabled" or outcome.status not in ("available", "empty") or not terms:
+            return facts, public, internal, bundle
+        deadline = asyncio.get_running_loop().time() + 10
+
+        async def supplement(term: str) -> DocumentEvidenceOutcome:
+            try:
+                async with asyncio.timeout_at(deadline):
+                    return await resolve_document_evidence(planning_document_query(model, facts, term), principal)
+            except TimeoutError:
+                logger.warning("event=planning_document_supplement reason=timeout technique=%s", term)
+                return DocumentEvidenceOutcome(status="unavailable", mode="enabled", reason="retrieval_unavailable")
+
+        outcomes = await asyncio.gather(*(supplement(term) for term in terms))
+        revoked = next((item for item in outcomes if item.status in ("disabled", "shadow", "forbidden")), None)
+        packets = {packet.citation_id: packet for packet in outcome.packets}
+        for item in outcomes:
+            packets.update({packet.citation_id: packet for packet in item.packets})
+        if revoked is not None:
+            outcome = revoked
+        elif packets:
+            outcome = outcome.model_copy(update={"status": "available", "packets": tuple(packets.values())[:20]})
+        branches = {
+            **bundle.branch_status,
+            "document_supplement": {
+                "terms": terms,
+                "budget_seconds": 10,
+                "outcomes": [item.metadata() for item in outcomes],
+            },
+        }
+        initial_size = (
+            len(json.dumps(document_context(facts.document_evidence), ensure_ascii=True).encode())
+            if facts.document_evidence
+            else 0
+        )
+        bundle = bundle.model_copy(
+            update={
+                "branch_status": branches,
+                "token_count_upper_bound": max(0, bundle.token_count_upper_bound - initial_size),
+            }
+        )
+        facts, bundle = self._select_documents(facts, outcome, bundle)
+        return facts, public, internal, bundle
 
     @staticmethod
     def _apply_case_selection(
@@ -1332,6 +1490,7 @@ class AgenticDeploymentService:
             raise KeyError("agentic deployment run not found")
         if run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
             raise ValueError("only an awaiting approval Agentic deployment can change candidate")
+        assert_plan_document_sources_current(run)
         selected = next((candidate for candidate in run.candidates if candidate.id == candidate_id), None)
         if selected is None or not selected.deployable:
             raise ValueError("candidate is not a validated alternative for this Agentic deployment")
@@ -1367,6 +1526,7 @@ class AgenticDeploymentService:
             raise KeyError("agentic deployment run not found")
         if run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
             raise ValueError("only an awaiting approval Agentic deployment can be approved")
+        assert_plan_document_sources_current(run)
         previous_updated_at = run.updated_at
         if any(
             item.details.get("simulation") or item.details.get("target_hardware", {}).get("simulation")

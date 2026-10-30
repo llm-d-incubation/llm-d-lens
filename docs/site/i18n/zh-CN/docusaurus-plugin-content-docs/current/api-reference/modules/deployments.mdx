@@ -271,6 +271,159 @@ REST 与流式调用均保留该身份。公开 Prism 观测按精确模型和�
 校准和模型发现共享惰性的 modelserver 调用遍历逻辑，同时各自保留了
 自己的"取最后一个值"和"取第一个模型"选择规则。
 
+### Agentic 计划中的公共 RAG 证据
+
+检索前从目标会话对应集群的实时概览获取加速卡型号，并传入与其匹配的已发布
+`filters.hardware` 精确名称；不会丢弃显存大小或 PCIe/SXM 差异。
+未知或混合硬件记录为 `unavailable`，代码为 `rag_hardware_unresolved`；
+没有硬件匹配时记录 `no_matches`，不会跨硬件回退。
+证据详情包含 `target_hardware`（集群 ID、profile ID、型号）和实际查询条件。
+
+临时的后端集群测试配置可为 RAG、私有规划概览、AIC 搜索/估算与排序提供仅供验证的目标身份，
+包括回退和细化。模拟型号须唯一匹配所发现硬件 profile 中的 AIC 系统。
+服务端设置 `PlanningFacts.planning_hardware_model`，忽略客户端传入的值；不提供请求级硬件覆盖参数。
+`target_hardware.model` 为有效身份，`actual_model` 为真实观测型号，`simulation=true` 标记模拟计划。
+无匹配时也会持久保存这些信息；观测不再仅作跨硬件参考。
+模型精确匹配、显式负载约束和配置不确定性检查仍保留，资源容量实测值及真实集群状态不变。
+批准接口会在产生部署副作用前拒绝模拟计划。
+
+`AgenticDeploymentService.create()` 和 `.refine()` 除 MCP 的 `principal_id` 外，还接受实际请求
+`principal`，普通 REST 和流式路由均显式传入。在生成候选前，服务端执行已授权公共查询，
+设置 `filters.model=request.model`、精确硬件、`intent="comparison"` 和
+`include_internal=false`。内部规划查询先将全部合格测量按实验/配置与 series 聚合，
+排序后每路 SQL 应用 `experiment_limit=50`，返回所选案例的完整测量。
+通用公共 REST/MCP `limit` 仍限制 1–50 个 measurement/证据封装，不是实验数量。
+客户端不能通过 `planning_facts` 注入可信公共证据，
+每次规划都会清空并由服务端重新检索。
+
+规划保持 `filters.workload={}`，排序模型和硬件精确匹配的合格实验参考。
+显式提供 `planning_facts.workload_profile` 非空字段时，按近似负载相似度和已知字段覆盖率
+排序，再比较较低的有效延迟；显式零值参与比较。目标只限定精确 metric/statistic 轴，
+不按 SLO 接近程度、偏差或状态排序。无负载时比较较低有效延迟且不施加负载惩罚；
+无目标时比较可用的精确指标/统计口径。Pareto 支配只用于可用轴相同的案例，保留互有优劣，
+不累加延迟或混合统计口径。缺失、非正、非有限或单位不兼容的延迟保持未知。
+来源统计量 null 默认按 mean 比较，审计保留原始 null，模型上下文显式标注默认值；
+显式百分位保持独立。配置 run ID 和来源文件路径保留为待核验技术线索，不等于已验证 serving 参数。
+现有偏好解析器识别的
+负载和延迟数值要求在创建、细化检索前生效；用例启发式值和 AIC 默认值不算显式负载。
+表单负载及延迟初始值为空，不再将平均输入长度复制成 P95。
+
+排序元数据包含 `queue="ranked"|"fallback"` 和 `fallback_reason`。
+当且仅当没有可比较的实测负载字段（相似度为 null，包括未请求负载），
+且请求/可比指标轴上没有有效延迟时才进入 fallback，原因为
+`no_comparable_workload_or_valid_latency`；ranked 案例的原因为 null。
+实测相似度为零仍是有效比较，不会仅因缺少延迟而进入 fallback。
+SQL 与 Python 对未知负载分数均保留 null。案例模型上下文、审计和 UI 明确标注 fallback 参考，
+不能称为低延迟；查询摘要使用中性描述。预算先保留负载/延迟排序，再使用质量/新鲜度细化，
+最多保留 10 个完整案例、20 个段落和 16,000 字节序列化证据。
+实验参考排序与确定性候选评分和服务端 SLO 评估分离。
+当前约束见[证据契约](/architecture/agentic-planning-evidence)。
+历史有限范围测试与模拟不证明物理硬件或当前 SLO 合规。
+部署批准和 S3/S4 门槛仍需分别验收。
+
+`details.retrieval` 记录模式、输入、匹配数、返回数及截断状态；
+`details.matches` 按证据 ID 记录已知差异、未知字段、相似度、覆盖率、配置依据及源实验延迟状态
+（`satisfied`、`not_satisfied`、`unknown`、`not_requested`），保留原始统计口径和目标偏差。
+相似度为已知字段 min/max 比值的平均数，不是性能置信度。报告中的名义长度明确标注为代理，
+不是实测均值或 P95；不会跨实验或 series 拼接延迟，不会将 ITL/NTPOT 当成 TPOT，
+空直方图的零值仍视为未知。这些标注既不证明当前部署满足 SLO，也不剔除观测。
+普通公共查询接口的精确负载匹配语义保持不变。
+
+两个 AI 阶段通过 `explicit_workload` 接收这些字段。该对象为空时，不以负载作为 RAG
+适用性门槛，不能因为默认 `shared_prefix_ratio=0`、`general-chat` 或缺少 QPS/自动扩缩容
+信号排除证据。公开 TTFT/TPOT 及其对应配置用于在实时资源约束内，围绕延迟目标反向生成和
+排序候选。公开拓扑无需先匹配初始最小资源方案，而是待考虑的配置；调整后的性能仍未验证，
+不能直接迁移精确延迟值或覆盖服务端计算的 SLO 状态。
+
+`AgenticDeploymentService.create()` 校验所选模型缓存存储卷，但不检查模型文件是否存在或下载是否就绪；
+`.refine()` 同样不要求模型已下载。`.approve()` 在开始部署前要求模型已在该卷中就绪，
+并解析当前凭据策略。已注册存储卷的要求和非 Agentic 检查保持不变。
+
+计划的 `planning_evidence` 包含 `id="public-rag:query"`，状态为 `available`、
+`no_matches`、`forbidden` 或 `unavailable`；`details` 保存查询、明确提示及成功查询的原始
+`QueryResponse`。相同结果会通过进度事件返回并保存到规划快照。无权限和查询失败不会中断推荐。
+包含已检索公共观测的计划，其读取和修改响应要求现有的已认证全局
+`benchmark-rag:query:read` 权限；无权限调用者的列表响应不包含此类计划。
+
+`PlanningFacts.public_rag_evidence` 将全部已检索、带引用的观测及 `planning_match` 标注提供给两个 AI 阶段。
+相关公共证据优先于 AIC；排序器通过 `public_rag_evidence_ids` 返回实际使用的已检索观测，
+未知 ID 会被拒绝。使用时，相关引用和 `public-rag:query` 会进入 `decision_evidence_ids`。
+引用公共证据的排序不会仅因 AIC 的延迟排序而被否决，但资源校验及计算出的 SLO 状态不变。
+检索本身不会产生确定性性能聚合；没有 AI 时观测仅为上下文。负载目标候选生成仍校验
+AIC 原生精确拓扑，不会从条件缺失或不同的公共观测推断容量。
+
+模型侧 configuration 会为 `run_id`、`source_path` 和 `source_info.file_identifier`
+中已识别的技术标签增加 `technique_hints`。每条保留 `provider_ref`、匹配的 `technique`、
+`source_field`、`source_value` 和 `verification="unverified_source_hint"`，
+不代表已核验的历史 provider、guide 或 serving 配置。排序 prompt 要求说明相关已提供候选的
+采纳或排除理由并引用案例/测量，包括未进入前三名的候选；不改变确定性排名，不保证模型必然遵守，
+也不新增前端展示字段。
+
+#### 受控公开文档上下文 {/* #controlled-public-document-context */}
+
+创建和 refine 共用独立的 OpenSearch 文档分支，默认**关闭**，与已存在的公开 SQL 观测分支分别控制。
+通过 [RAG 运行 API](./lens-assistant.mdx#controlled-runtime-and-operations) 配置用户白名单和
+`disabled|shadow|enabled` 模式。只有实际已认证、位于白名单且具有 GLOBAL
+`benchmark-rag:query:read` 权限的用户才能检索文档；管理员不绕过白名单。
+Agentic 默认 lexical；hybrid 必须由服务端策略显式选择。
+本轮是后端接入，不交付独立文档前端，也不宣称生产质量或性能验收通过。
+
+`PlanningFacts.document_evidence` 仅包含服务端生成的启用态文档上下文；
+每轮规划都会清除客户端提供的文档包。每次文档查询从最多二十个候选中重排，
+保留最多五个完整段落；最终共享证据包最多保留二十段。每段不超过 4,000 字符；
+超长段落拒绝，不静默截断。文档包包含 `citation_id`（`document:` 引用）、
+原始 `evidence_id` 和 `chunk_id`、固定 `retrieval_build_id`、实际
+`retrieval_mode`、`embedding_contract`、`matched_branches`、`title`、`text`、规范 `citation`、可选
+`chunk_start`/`chunk_end`，以及
+`source_trust="untrusted_source_data"`、
+`evidence_kind="document_context_not_measurement"`。
+提供偏移时必须与保留正文精确一致。
+两个 AI 阶段均将文档与实测证据分离：可解释方法前提和文中声明的版本条件，
+但不能证明硬件兼容、提供实测延迟/吞吐量或改变确定性性能置信度/SLO 校验。
+
+初查显式表达配置决策意图（设置、适用条件、前提、限制与权衡），并携带负载及 SLO 上下文，
+而不再只查询模型和聊天关键词。候选生成并通过校验后，补查覆盖所有不同的可部署
+provider 技术（最多五种），不再让 `vllm` 等通用 guide variant 占用名额。
+初始证据阶段仍使用 60 秒截止时间；补查在生成结束后独立计时，共享 10 秒预算，
+不会被较慢的候选生成耗尽。超时明确记录，成功分支仍可保留。
+文档处于关闭、影子、禁止访问或不可用状态时不启动补查。
+
+段落级可解释启发式优先选择包含方法配置与限制线索的正文，再按新增技术覆盖度排序，
+最终以原始检索顺序打破平局。来源路径或标题仅在正文也有配置/限制线索时辅助识别方法；
+仅有标题或 API 支持说明不能充当配置依据。该启发式不等于验证适用性，
+也不保证引用支持模型的具体主张。明确属于其他模型的示例、其他已注册硬件 profile
+在关键词覆盖度之前降权；未知硬件保持中性，同 profile 不代表精确设备或运行时兼容。
+两个模型上下文均附带 `decision_relevance`，
+要求仅引用真正支持结论的正文，否则不引用。预算先保留排序最优的完整测量案例，
+再为不同方法的配置指导保留空间。首段选出后优先补齐尚未覆盖的方法，
+再保留重复上下文；其他模型示例仍可作为带限定条件的参考。实际请求预算优先淘汰尾部文档，
+而非有信息量的测量案例。保留完整段落、限制条件、引用和偏移，不改变 SQL 案例排序。
+`configuration-cases` 分支诊断记录 `document_selection` 策略、排序/保留 ID 和相关性线索，
+以及补查技术、各分支结果、超时技术和实际/预算秒数。
+
+生成器和 AI 排序接受独立的 `document_evidence_ids`（最多五条）。
+未知文档引用明确拒绝；引用从服务端文档包解析，不接受模型自行生成的 URL。
+已校验且实际使用的引用进入推荐的 `evidence_ids` 和运行的 `decision_evidence_ids`。
+refine 重新检索并移除旧文档包及引用，关闭灰度后也不会继续累积旧上下文。
+
+影子模式只保存安全的状态/数量信息；正文、文档包、引用 ID 不进入两个 AI 提示词、排序或已选证据。
+普通关闭/不在白名单的调用保持既有输出，不添加文档项。
+记录时，`planning_evidence` 使用 `id="document-rag:query"`、
+`source="public-document-rag"`，trace 阶段为 `document_rag`；
+元数据保存到最终方案/快照，不新增专用流式进度事件。
+启用后的文档上下文与 `public-rag:query` 及公开数值观测分开保存。
+details/trace 包含 `status`、配置的 `mode`、策略 `generation`、脱敏 `reason`、
+`retrieved_count`、`rejected_count`、`degraded`、`requested_mode`、
+`retrieval_build_id`、实际 `retrieval_mode`、`embedding_contract`、
+`branch_status`、`degraded_reason`、`index_stale` 和 `rebuild_required`。
+状态区分 `disabled`、`shadow`、`available`、`empty`、`forbidden`、`unavailable`；
+原因码区分 `query_forbidden`、`no_match`、`retrieval_stale`、`retrieval_degraded` 等受控失败。
+在白名单但没有独立查询权限的调用者会在检索前得到明确无权诊断。
+混合降级保留实际 lexical 响应模式，滞后和降级标记可以同时出现；
+分支错误和降级原因均脱敏，不暴露原始依赖异常。
+包含文档上下文的已保存方案仍要求独立全局查询权限；
+灰度回退影响后续规划，不会追溯删除仍获授权的历史。紧急切换时需排空在途工作。
+
 Agentic 候选提交接受 `optimized-baseline`、`pd-disaggregation`、`tiered-prefix-cache`
 和 `precise-prefix-cache-routing`；生成器 schema 拒绝 `baseline-vllm`，规划器排序也会
 排除它。AIC 聚合推荐映射到 `optimized-baseline`，包括负载目标和宽松锚点路径。

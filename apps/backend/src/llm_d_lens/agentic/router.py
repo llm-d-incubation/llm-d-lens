@@ -17,7 +17,7 @@ from .models import (
     AgenticDeploymentCreateRequest,
     AgenticDeploymentRun,
 )
-from .service import service
+from .service import assert_plan_document_sources_current, service
 from .streaming import planning_stream_response
 
 logger = logging.getLogger(__name__)
@@ -25,11 +25,15 @@ router = APIRouter(prefix="/api/agentic-deployments", tags=["agentic-deployments
 
 
 def _require_plan_evidence_access(run: AgenticDeploymentRun, principal: Principal | None) -> None:
-    if any(item.source == "public-benchmark-rag" and item.status == "available" for item in run.planning_evidence):
+    if any(
+        item.source in {"public-benchmark-rag", "public-document-rag"} and item.status == "available"
+        for item in run.planning_evidence
+    ):
         require_query_access(principal)
     for item in run.planning_evidence:
         if item.source == "configuration-cases":
             assert_case_access(tuple(item.details.get("cases", ())), principal)
+    assert_plan_document_sources_current(run)
 
 
 @router.post(
