@@ -154,7 +154,7 @@ def test_planner_sends_semantic_technique_hints_without_source_or_case_markers(m
                 "candidate_ids": [candidates[0].id],
                 "scores": {candidates[0].id: 1},
                 "confidence": 0.5,
-                "rationale": "Precise routing is excluded: its source hint is unverified and needs current validation.",
+                "rationale": "Precise routing has an established technique mapping, but current TTFT is unknown.",
             }
         )
 
@@ -168,7 +168,7 @@ def test_planner_sends_semantic_technique_hints_without_source_or_case_markers(m
     assert hint == {
         "related_provider_ref": "precise-prefix-cache-routing",
         "technique_description": "Precise prefix-cache routing",
-        "verification": "unverified_source_hint",
+        "mapping_basis": "source_label",
     }
     assert any(candidate["provider_ref"] == hint["related_provider_ref"] for candidate in context["valid_candidates"])
     serialized = json.dumps(request)
@@ -187,6 +187,9 @@ def test_planner_sends_semantic_technique_hints_without_source_or_case_markers(m
     assert "not among the top three" in request["system_prompt"]
     assert "never relabel" in request["system_prompt"]
     assert "inapplicable AIC estimate" in request["system_prompt"]
+    assert "Do not describe the technique mapping as unverified" in request["system_prompt"]
+    assert "Configuration equivalence and performance transfer still require validation" in request["system_prompt"]
+    assert "unverified_source_hint" not in request["system_prompt"]
     assert decision.reference_material_ids == ["case:precise", "public-rag:tpot"]
     assert not decision.evidence_ids
     assert decision.candidate_id == candidates[0].id

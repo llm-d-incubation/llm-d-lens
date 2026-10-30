@@ -257,13 +257,14 @@ def test_model_projection_replaces_configuration_source_clues_with_semantic_hint
                 if expected_provider == "optimized-baseline"
                 else "Precise prefix-cache routing"
             ),
-            "verification": "unverified_source_hint",
+            "mapping_basis": "source_label",
         }
     ]
     assert path not in json.dumps(configuration) and technique not in json.dumps(configuration)
     assert result.cases[0].configuration == original["experiment"]["configuration"]
     assert entry == original
     assert "not model-verified usage" in result.usage
+    assert "establish technique-to-provider mappings" in result.usage
 
 
 @pytest.mark.parametrize(
@@ -279,15 +280,21 @@ def test_model_projection_replaces_configuration_source_clues_with_semantic_hint
         ("baseline-vllm", "baseline-vllm"),
     ],
 )
-def test_technique_hints_preserve_source_and_do_not_assert_a_verified_provider(label, provider):
+@pytest.mark.parametrize("source_field", ["run_id", "source_path", "source_info.file_identifier"])
+def test_technique_hints_establish_mapping_without_asserting_configuration_equivalence(label, provider, source_field):
     source = f"experiment/{label}/results.json"
-    configuration = {"run_id": source, "provider_ref": "reported-provider", "guide_variant": "reported-guide"}
+    configuration = {"provider_ref": "reported-provider", "guide_variant": "reported-guide"}
+    if source_field == "source_info.file_identifier":
+        configuration["source_info"] = {"file_identifier": source}
+    else:
+        configuration[source_field] = source
     original = deepcopy(configuration)
     (hint,) = configuration_technique_hints(configuration)
     assert hint["provider_ref"] == provider
-    assert hint["source_field"] == "run_id" and hint["source_value"] == source
+    assert hint["source_field"] == source_field and hint["source_value"] == source
     assert hint["technique"] in source
-    assert hint["verification"] == "unverified_source_hint"
+    assert hint["mapping_basis"] == "source_label"
+    assert "verification" not in hint
     assert configuration == original
 
 
@@ -316,6 +323,8 @@ def test_legacy_observation_context_also_extracts_technique_hints():
     (hint,) = context["public_rag_evidence"][0]["experiment"]["configuration"]["technique_hints"]
     assert hint["related_provider_ref"] == "precise-prefix-cache-routing"
     assert hint["technique_description"] == "Precise prefix-cache routing"
+    assert hint["mapping_basis"] == "source_label"
+    assert "verification" not in hint
     assert path not in json.dumps(context)
     assert entry == original
 

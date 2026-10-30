@@ -1981,6 +1981,10 @@ def test_ai_generator_prompt_encodes_candidate_priorities_and_tool_policy():
     assert "code-generation or a high shared_prefix_ratio" not in prompt
     assert "prefill_heavy workloads, prefer pd-disaggregation" not in prompt
     assert "historical configuration references, not current deployment SLO proof" in prompt
+    assert "mapping_basis=source_label" in prompt
+    assert "Do not describe the technique mapping as unverified" in prompt
+    assert "Configuration equivalence and performance transfer still require validation" in prompt
+    assert "unverified_source_hint" not in prompt
     assert "never combine different cases or series into synthetic measurements" in prompt
     assert "materially diverse candidates" in prompt
     assert "each feasible provider_ref" in prompt

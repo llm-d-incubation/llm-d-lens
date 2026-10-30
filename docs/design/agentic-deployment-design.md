@@ -666,6 +666,18 @@ or override live-resource validation. AIC estimates remain a distinct evidence t
 Source references stay in the server audit; model-facing aliases and explanations
 must not be presented as independently verified source usage.
 
+The server recognizes explicit technique labels in `run_id`, `source_path` and
+`source_info.file_identifier`, deduplicating them by provider into model-facing
+`related_provider_ref`, `technique_description` and `mapping_basis=source_label`.
+A recognized source label establishes the technique-to-provider mapping; the
+generator and selector must not describe that relationship as unverified or
+require additional proof of it. Configuration equivalence and performance
+transfer still require validation: the mapping alone does not prove identical
+serving settings, a performance advantage or current SLO compliance. Missing
+TTFT remains unknown, and an inapplicable AIC estimate is neutral, not a reason
+to penalize the technique. Raw source paths and matching evidence stay in the
+server audit rather than being forwarded to the model.
+
 Planning consumes SQL experiments only. Public document ingestion, retrieval,
 packet contracts and search UI are outside this capability. The existing private
 diagnostic search adapter remains separate and unchanged.

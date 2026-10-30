@@ -40,6 +40,14 @@ displayed_sidebar: docsSidebar
 AIC 估算仍为独立证据类型。真实来源保留在服务端审计中；
 模型侧别名和解释不能冒充已独立验证的来源使用情况。
 
+服务端从 `run_id`、`source_path`、`source_info.file_identifier` 识别明确的技术标签，
+按 provider 去重后向模型提供 `related_provider_ref`、`technique_description` 和
+`mapping_basis=source_label`。名称命中即建立技术到 provider 的映射，生成器和评分器
+不应再将这层关系描述为“未验证”或要求额外证明。配置等价性与性能可迁移性仍需单独验证：
+技术映射不能证明部署参数相同、性能更优或当前 SLO 达标。缺少 TTFT 仍表示未知；
+AIC 不适用属于中性信息，不能因此惩罚该技术。原始来源路径和匹配依据保留在服务端审计中，
+不直接发送给模型。
+
 规划仅消费 SQL 实验。公开文档采集、检索、文档包契约和搜索页面不属于此能力。
 原有私有诊断搜索适配器保持独立，不受影响。
 
