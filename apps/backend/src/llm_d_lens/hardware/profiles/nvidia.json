@@ -111,6 +111,11 @@
     ],
     "model_label_keys": ["nvidia.com/gpu.product", "nvidia.com/gpu.family"],
     "model_family_names": ["ampere"],
+    "node_memory": {
+      "per_device_label": "nvidia.com/gpu.memory",
+      "count_label": "nvidia.com/gpu.count",
+      "unit": "Mi"
+    },
     "default_backend": "vllm",
     "device_class_allow_pattern": "^(gpu\\.nvidia\\.com|nvidia\\.com)",
     "discovery": {
