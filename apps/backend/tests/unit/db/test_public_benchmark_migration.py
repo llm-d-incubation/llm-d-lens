@@ -10,7 +10,10 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy.exc import IntegrityError
 
-from llm_d_lens.benchmark_rag.transfer_contracts import RAG_SCHEMA_REVISION, BackupManifest
+from llm_d_lens.agentic.public_benchmark_record.transfer_contracts import (
+    PUBLIC_BENCHMARK_RECORD_SCHEMA_REVISION,
+    BackupManifest,
+)
 from llm_d_lens.db.base import Base
 
 migration = importlib.import_module(
@@ -47,7 +50,7 @@ def assert_empty_benchmark_storage(engine):
 def test_revision_chain_and_backup_stamp(postgres_config):
     script = ScriptDirectory.from_config(postgres_config)
     assert script.get_revision(migration.revision).down_revision == "42a3e9b47726"
-    assert migration.revision == RAG_SCHEMA_REVISION
+    assert migration.revision == PUBLIC_BENCHMARK_RECORD_SCHEMA_REVISION
     assert BackupManifest.model_fields["schema_revision"].default == migration.revision
 
 

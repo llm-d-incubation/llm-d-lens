@@ -14,9 +14,14 @@ from llm_d_lens.agentic.facts import (
     with_public_rag_evidence,
 )
 from llm_d_lens.agentic.planner import PlanningFacts, WorkloadProfile, normalize_planning_facts
+from llm_d_lens.agentic.public_benchmark_record.publication_contracts import PublicationError
+from llm_d_lens.agentic.public_benchmark_record.query_contracts import (
+    Citation,
+    QueryEvidence,
+    QueryFilters,
+    QueryResponse,
+)
 from llm_d_lens.auth.contracts import Principal, RoleBinding, ScopeType
-from llm_d_lens.benchmark_rag.publication_contracts import PublicationError
-from llm_d_lens.benchmark_rag.query_contracts import Citation, QueryEvidence, QueryFilters, QueryResponse
 from llm_d_lens.core.exceptions import DomainError
 
 
@@ -362,7 +367,7 @@ def public_hardware(monkeypatch):
     )
     monkeypatch.setattr("llm_d_lens.agentic.facts.build_overview", overview)
     monkeypatch.setattr(
-        "llm_d_lens.agentic.facts.RagQueryDao",
+        "llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao",
         lambda: SimpleNamespace(hardware_options=lambda _filters: ("Intel B60 XPU", "NVIDIA A100 80GB PCIe")),
     )
     return hardware
@@ -418,8 +423,8 @@ def test_public_rag_checks_global_permission_before_constructing_query_service(m
     def forbidden_service():
         pytest.fail("Unauthorized recommendations must not access the public corpus")
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", forbidden_service)
-    monkeypatch.setattr("llm_d_lens.agentic.facts.RagQueryDao", forbidden_service)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", forbidden_service)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao", forbidden_service)
     monkeypatch.setattr("llm_d_lens.agentic.facts.registry.require_cluster", lambda _id: forbidden_service())
     result = asyncio.run(resolve_public_rag_evidence("Qwen/Qwen3-8B", principal, cluster_server_id="cluster-a"))
     assert result.status == "forbidden"
@@ -457,7 +462,7 @@ def test_public_rag_is_public_only_exact_model_and_preserves_citations(
             calls.append((request, caller))
             return _public_response(evidence=has_evidence)
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     if simulated:
         monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}')
     result = asyncio.run(
@@ -511,7 +516,7 @@ def test_public_rag_failure_is_explicit_and_non_fatal(monkeypatch, failure, capl
         def query(self, request, caller, *, all_matches=False, experiment_limit=None):
             raise failure
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     result = asyncio.run(resolve_public_rag_evidence("Qwen/Qwen3-8B", principal, cluster_server_id="cluster-a"))
     assert result.status == "unavailable"
     assert "continuing" in result.details["message"]
@@ -531,7 +536,7 @@ def test_public_rag_never_broadens_to_other_hardware(monkeypatch, public_hardwar
     public_hardware["accelerators"] = [{"id": profile_id, "gpuCount": 4, "models": models}]
     calls = []
     monkeypatch.setattr(
-        "llm_d_lens.agentic.facts.RagQueryDao",
+        "llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao",
         lambda: SimpleNamespace(
             hardware_options=lambda _filters: ("Intel B60 XPU", "NVIDIA A100 40GB PCIe", "NVIDIA A100 SXM4 40GB")
         ),
@@ -545,7 +550,7 @@ def test_public_rag_never_broadens_to_other_hardware(monkeypatch, public_hardwar
             calls.append(request)
             return _public_response(evidence=profile_id == "intel-xpu")
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     result = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",
@@ -582,7 +587,7 @@ def test_public_rag_unknown_or_mixed_hardware_does_not_query_corpus(monkeypatch,
     def forbidden_dao():
         pytest.fail("Unknown or mixed hardware must not cause an unfiltered corpus query")
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.RagQueryDao", forbidden_dao)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryDao", forbidden_dao)
     result = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",
@@ -616,7 +621,7 @@ def test_test_hardware_is_cluster_scoped_visible_and_reversible(
             calls.append(request)
             return _public_response()
 
-    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicRagQueryService", QueryService)
+    monkeypatch.setattr("llm_d_lens.agentic.facts.PublicBenchmarkRecordQueryService", QueryService)
     evidence = asyncio.run(
         resolve_public_rag_evidence(
             "Qwen/Qwen3-8B",

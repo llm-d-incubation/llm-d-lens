@@ -325,7 +325,7 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
         return candidates, facts
 
     monkeypatch.setattr("llm_d_lens.agentic.service.resolve_public_rag_evidence", query)
-    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome
 
     async def internal_query(*_args, **_kwargs):
         return InternalCaseOutcome(status="empty")
@@ -395,7 +395,7 @@ def test_public_rag_is_queried_before_generation_and_requeried_on_refinement(mon
 
 
 def test_case_selection_preserves_authorized_internal_history():
-    from llm_d_lens.benchmark_rag.case_retrieval import InternalCaseOutcome, build_case_bundle
+    from llm_d_lens.agentic.public_benchmark_record.case_retrieval import InternalCaseOutcome, build_case_bundle
 
     facts = PlanningFacts(8, 32, 4)
     observation = {

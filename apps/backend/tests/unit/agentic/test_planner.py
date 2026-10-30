@@ -25,7 +25,11 @@ from llm_d_lens.agentic.planner import (
     select_request_evidence,
     validate_request_context_budget,
 )
-from llm_d_lens.benchmark_rag.case_retrieval import compact_reference, configuration_case_context, model_reference_map
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import (
+    compact_reference,
+    configuration_case_context,
+    model_reference_map,
+)
 
 
 @pytest.fixture(autouse=True)

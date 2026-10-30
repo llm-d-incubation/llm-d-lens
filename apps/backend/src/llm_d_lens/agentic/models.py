@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import CandidateEvidenceResult
 from llm_d_lens.ai_providers.client import AIRequestRecord
-from llm_d_lens.benchmark_rag.case_retrieval import CandidateEvidenceResult
 from llm_d_lens.configuration.models import ModelSecretConfiguration
 from llm_d_lens.deploy.standard_kubernetes_service import StandardKubernetesServiceRequest
 

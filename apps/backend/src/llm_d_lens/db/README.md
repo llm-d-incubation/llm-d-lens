@@ -108,9 +108,22 @@ final public record table directly after revision `42a3e9b47726`. No application
 database is migrated by feature validation; review and apply migrations through
 the normal installation workflow.
 
-The `rag_item`, `rag_publication`, `rag_query`, `rag_agentic_query` and `rag_transfer`
-DAOs own immutable records, publication state, authorized query aggregation and
-portable SQL transfer. Services never bypass these DAOs with raw sessions.
+The `public_benchmark_record` DAO owns both immutable records and their publication
+lifecycle, directly reusing `BaseDao`. The `public_benchmark_record_query` and
+`public_benchmark_record_transfer` DAOs extend it for authorized public queries and
+portable SQL transfer. The `benchmark_experiment_query` DAO retrieves authorized
+internal experiments alongside published public experiments. Services never bypass
+these DAOs with raw sessions. Business contracts and services live in
+`llm_d_lens.agentic.public_benchmark_record`: public experiments are an Agentic
+planning capability, not a separate top-level feature. DAOs and ORM models remain
+in the shared database layer, alongside `agentic_benchmark_record`. Unit tests
+follow the business boundary under `tests/unit/agentic/public_benchmark_record`.
+
+This Python naming consolidation does not change stored data: existing
+`benchmark-rag.*` manifest/backup contracts, the `benchmark-rag:query:read`
+permission, the `artifacts/benchmark-rag` archive namespace, schema revision and
+database constraint names remain compatible. No compatibility wrapper modules or
+data migrations are required; operators use the renamed CLI module below.
 Agentic aggregates complete experiment/configuration/series groups before ranking
 and limiting cases. Source conditions, units, statistics and provenance must survive
 that boundary; public measurements are not proof of current deployment performance.
@@ -132,12 +145,12 @@ ACLs. Internal-only access does not require the global public-corpus query grant
 The retained operator CLI is SQL-only:
 
 ```bash
-.venv/bin/python -m llm_d_lens.benchmark_rag.admin --help
+.venv/bin/python -m llm_d_lens.agentic.public_benchmark_record.admin --help
 ```
 
 | Command | Purpose |
 | --- | --- |
-| `rebuild` | Import and publish the reviewed initial Prism snapshot. |
+| `rebuild` | Import and publish a reviewed Prism snapshot using an external manifest. |
 | `refresh` | Apply an approved manual Prism refresh. |
 | `status` | Inspect source publication state. |
 | `rollback` | Activate a retained manifest. |
@@ -145,7 +158,7 @@ The retained operator CLI is SQL-only:
 | `restore` | Restore a verified SQL bundle. |
 | `verify` | Verify a bundle without connecting to a database. |
 
-`rebuild` requires `--snapshot` and `--approval`; `refresh` requires `--plan`
+`rebuild` requires `--snapshot`, `--manifest` and `--approval`; `refresh` requires `--plan`
 and an explicit local `--source`. `status` accepts
 `--origin prism:public-snapshot`. `rollback` requires `--origin`,
 `--manifest-id` and `--expected-generation`. `backup` requires `--output`;
@@ -161,11 +174,31 @@ manual-only and accepts no commit-event or periodic-trigger options.
 For example, after configuring the database URL:
 
 ```bash
-.venv/bin/python -m llm_d_lens.benchmark_rag.admin refresh \
+.venv/bin/python -m llm_d_lens.agentic.public_benchmark_record.admin rebuild \
+  --data-dir /srv/lens-data \
+  --snapshot /srv/prism-snapshot \
+  --manifest /secure/snapshot-manifest.json \
+  --approval /secure/source-approval.json
+
+.venv/bin/python -m llm_d_lens.agentic.public_benchmark_record.admin refresh \
   --data-dir /srv/lens-data \
   --plan /secure/approved-plan.json \
   --source /srv/prism-snapshot
 ```
+
+The rebuild manifest uses `contract: "benchmark-rag.snapshot.v1"`, an `inventory`
+matching the shared `PinnedInventory` contract, and an explicit nonnegative integer
+`expected_experiments`. The inventory pins the source origin, ISO snapshot date,
+`complete: true`, and every approved file's relative `path`, SHA-256 `sha256` and
+`format`, sorted by path. Approval remains a separate explicit input; a manifest
+cannot expand the approved source/path allowlist. File hashes, complete inventory,
+and experiment count must match before publication.
+
+There is no built-in snapshot date, file list or experiment total. The retained
+[initial snapshot manifest](../../../tests/fixtures/public_benchmark_record/prism_initial_manifest.json)
+is test metadata only, not bundled raw benchmark data or an automatic import
+default. Later snapshots supply their own reviewed manifest without changing
+business code.
 
 The plan must pin the complete reviewed inventory and current publication base.
 Refresh, rollback and portable transfer retain source approvals, publication

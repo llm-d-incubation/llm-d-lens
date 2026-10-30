@@ -23,6 +23,13 @@ displayed_sidebar: docsSidebar
 实际已认证主体需要全局 `benchmark-rag:query:read` 才能读取公开观测及包含这些观测的计划；
 内部实验保留原有资源授权。
 
+公开 benchmark 的契约和服务统一位于 `llm_d_lens.agentic.public_benchmark_record`。
+它作为 Agentic 子包维护，不再保留顶层兼容包；DAO 和 ORM 模型仍位于统一数据库层。
+`PublicBenchmarkRecordDao` 直接继承 `BaseDao`，同时管理不可变记录与发布生命周期；
+查询与备份恢复 DAO 复用这一实现，不再保留独立的 item DAO 或旧模块包装层。
+Python 命名与内部 `agentic_benchmark_record` 对齐，但不改写已有记录、数据库版本、
+`benchmark-rag.*` 格式契约、查询权限或原始文件归档路径。
+
 `PlanningRequirements` 保留显式负载、延迟目标、来源和未知字段。
 表单字段初始为空，占位示例和 AIC/场景默认值不是显式要求，平均输入长度不会复制成 P95。
 公开查询使用实时硬件确定的具体加速卡型号；未知或混合型号明确报告，不跨硬件回退。
@@ -50,6 +57,14 @@ AIC 不适用属于中性信息，不能因此惩罚该技术。原始来源路�
 
 规划仅消费 SQL 实验。公开文档采集、检索、文档包契约和搜索页面不属于此能力。
 原有私有诊断搜索适配器保持独立，不受影响。
+
+管理命令 `rebuild` 必须显式提供本地 `--snapshot`、`--manifest` 和 `--approval`。
+外部 `benchmark-rag.snapshot.v1` manifest 包含完整且按路径排序的 `PinnedInventory`
+（来源、快照日期、文件路径、SHA-256 和格式），以及非负整数 `expected_experiments`。
+来源和路径审批仍是独立输入；激活前必须核对完整清单、文件哈希和实验数量。
+业务代码不再硬编码初始快照日期、文件列表或实验总数。初始批次清单仅作为测试 fixture
+保留，不包含原始数据；后续快照无需修改代码即可导入。`refresh` 仍使用审核后的 plan
+以及当前发布基线。
 
 部署工作区分别呈现内部 SQL 实验和公开 SQL 观测，保留失败和未知信息。
 无权限、无匹配和不可用不是同一状态。批准仍需重新校验资源和模型缓存就绪状态，

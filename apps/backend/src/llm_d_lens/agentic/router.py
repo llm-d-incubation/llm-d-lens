@@ -5,10 +5,10 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from llm_d_lens.agentic.public_benchmark_record.access import require_query_access
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import assert_case_access
 from llm_d_lens.auth.access import current_principal, owner_for_create
 from llm_d_lens.auth.contracts import Principal
-from llm_d_lens.benchmark_rag.access import require_query_access
-from llm_d_lens.benchmark_rag.case_retrieval import assert_case_access
 from llm_d_lens.core.exceptions import ForbiddenError, UnauthenticatedError
 
 from .models import (

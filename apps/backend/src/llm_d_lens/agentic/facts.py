@@ -16,11 +16,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
-from llm_d_lens.aic.service import AICError, check_support, search
-from llm_d_lens.auth.contracts import Principal
-from llm_d_lens.benchmark_rag.access import require_query_access
-from llm_d_lens.benchmark_rag.contracts import (
+from llm_d_lens.agentic.public_benchmark_record.access import require_query_access
+from llm_d_lens.agentic.public_benchmark_record.contracts import (
     WORKLOAD_ALIASES,
     effective_statistic,
     experiment_rank_key,
@@ -30,9 +27,12 @@ from llm_d_lens.benchmark_rag.contracts import (
     model_identity_aliases,
     planning_latency_axes,
 )
-from llm_d_lens.benchmark_rag.publication_contracts import PublicationError
-from llm_d_lens.benchmark_rag.query_contracts import QueryFilters, QueryRequest
-from llm_d_lens.benchmark_rag.service import PublicRagQueryService
+from llm_d_lens.agentic.public_benchmark_record.publication_contracts import PublicationError
+from llm_d_lens.agentic.public_benchmark_record.query_contracts import QueryFilters, QueryRequest
+from llm_d_lens.agentic.public_benchmark_record.service import PublicBenchmarkRecordQueryService
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
+from llm_d_lens.aic.service import AICError, check_support, search
+from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.capacity import load_model_config
 from llm_d_lens.cluster import registry
 from llm_d_lens.cluster.errors import ClusterOverviewError
@@ -44,7 +44,7 @@ from llm_d_lens.core.exceptions import (
     PasswordChangeRequiredError,
     UnauthenticatedError,
 )
-from llm_d_lens.db.dao.rag_query import RagQueryDao
+from llm_d_lens.db.dao.public_benchmark_record_query import PublicBenchmarkRecordQueryDao
 from llm_d_lens.hardware.models import HardwareProfile
 from llm_d_lens.hardware.registry import all_profiles
 
@@ -479,7 +479,7 @@ async def resolve_public_rag_evidence(
             profile, hardware_model = target
             target_hardware.update(profile_id=profile.id, model=hardware_model)
             simulated_model = _test_cluster_hardware(cluster_server_id)
-            dao = RagQueryDao()
+            dao = PublicBenchmarkRecordQueryDao()
             dao.planning_facts = planning_facts
             if simulated_model:
                 planning_hardware_overview(overview, simulated_model, cluster_id=cluster_server_id)
@@ -503,7 +503,7 @@ async def resolve_public_rag_evidence(
                 )
             query = query.model_copy(update={"filters": query.filters.model_copy(update={"hardware": hardware_filter})})
             response = await run_in_threadpool(
-                PublicRagQueryService(dao=dao).query,
+                PublicBenchmarkRecordQueryService(dao=dao).query,
                 query,
                 principal,
                 experiment_limit=50 if planning_facts is not None else None,

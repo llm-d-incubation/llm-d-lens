@@ -13,8 +13,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, JsonValue
 
-from llm_d_lens.ai_providers.client import AIProviderClientError, client_for
-from llm_d_lens.benchmark_rag.case_retrieval import (
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import (
     configuration_case_context,
     configuration_case_quality,
     measurement_quality,
@@ -22,7 +21,8 @@ from llm_d_lens.benchmark_rag.case_retrieval import (
     model_measurement,
     model_reference_map,
 )
-from llm_d_lens.benchmark_rag.contracts import EXPERIMENT_RANKING_POLICY
+from llm_d_lens.agentic.public_benchmark_record.contracts import EXPERIMENT_RANKING_POLICY
+from llm_d_lens.ai_providers.client import AIProviderClientError, client_for
 from llm_d_lens.capacity import (
     KVCacheDetail,
     allocatable_kv_cache_memory,

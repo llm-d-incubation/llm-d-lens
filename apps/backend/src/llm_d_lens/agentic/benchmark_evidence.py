@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from llm_d_lens.benchmark_rag.contracts import model_identities_match
+from llm_d_lens.agentic.public_benchmark_record.contracts import model_identities_match
 
 from .planning_requirements import normalize_hardware
 

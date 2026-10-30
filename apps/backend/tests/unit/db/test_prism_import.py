@@ -11,13 +11,16 @@ import pytest
 from sqlalchemy import Engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
-from llm_d_lens.benchmark_rag.prism import PARSER_VERSION, PrismSnapshotImporter
-from llm_d_lens.benchmark_rag.prism_initial import INITIAL_EXPERIMENTS, INITIAL_FILES, INITIAL_REVISION
-from llm_d_lens.benchmark_rag.publication import RagPublicationService
-from llm_d_lens.benchmark_rag.publication_contracts import PublicationError, SourceApproval
-from llm_d_lens.benchmark_rag.sources import PRISM_ORIGIN, allowed_paths
-from llm_d_lens.db.dao.rag_publication import RagPublicationDao
-from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow as RagItemRow
+from llm_d_lens.agentic.public_benchmark_record.prism import PARSER_VERSION, PrismSnapshotImporter
+from llm_d_lens.agentic.public_benchmark_record.publication import PublicBenchmarkRecordPublicationService
+from llm_d_lens.agentic.public_benchmark_record.publication_contracts import (
+    PublicationError,
+    SnapshotManifest,
+    SourceApproval,
+)
+from llm_d_lens.agentic.public_benchmark_record.sources import PRISM_ORIGIN, allowed_paths
+from llm_d_lens.db.dao.public_benchmark_record import PublicBenchmarkRecordDao
+from llm_d_lens.db.models.public_benchmark_record import PublicBenchmarkRecordRow
 
 _SNAPSHOT = Path(__file__).resolve().parents[5] / "private/prism-public-2026-10-13"
 _ARCHIVE = "archives/archived_drive_data.json"
@@ -25,6 +28,7 @@ _MERGED = "historical-merged-deduplicated.json"
 _BUNDLE = "results/json/test-run.json"
 _STAGE_NAME = "reports/benchmark_report_v0.2,_stage_0_lifecycle_metrics.json.yaml"
 _SUMMARY_NAME = "reports/report_v0.2.json"
+_REVISION = "2026-10-13"
 
 
 def _approval() -> SourceApproval:
@@ -41,8 +45,8 @@ def _approval() -> SourceApproval:
 @pytest.fixture
 def importer(postgres_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PrismSnapshotImporter:
     monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path / "retained-evidence"))
-    dao = RagPublicationDao(sessionmaker(bind=postgres_engine, expire_on_commit=False))
-    return PrismSnapshotImporter(RagPublicationService(dao=dao))
+    dao = PublicBenchmarkRecordDao(sessionmaker(bind=postgres_engine, expire_on_commit=False))
+    return PrismSnapshotImporter(PublicBenchmarkRecordPublicationService(dao=dao))
 
 
 def _write(root: Path, path: str, value: object) -> None:
@@ -151,7 +155,7 @@ def test_snapshot_preserves_exact_values_context_and_timestamp_semantics(
     importer: PrismSnapshotImporter,
     snapshot: Path,
 ):
-    first = importer.import_snapshot(snapshot, INITIAL_REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
+    first = importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
     assert first.counts == {"source": 8, "experiment": 2, "measurement": 9, "passage": 1}
     experiments = importer.service.dao.list_published(PRISM_ORIGIN, kind="experiment")
     historical = next(item for item in experiments if item.source_path == _ARCHIVE)
@@ -177,9 +181,7 @@ def test_snapshot_preserves_exact_values_context_and_timestamp_semantics(
     summaries = importer.service.dao.list_published(PRISM_ORIGIN, kind="passage")
     assert summaries[0].source_pointer["original_report"] == _SUMMARY_NAME
     assert summaries[0].source_pointer["original_zip_member"].endswith("_stage_1_lifecycle_metrics.json.yaml")
-    repeat = importer.import_snapshot(
-        snapshot, INITIAL_REVISION, _hashes(snapshot), _approval(), expected_experiments=2
-    )
+    repeat = importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
     assert not repeat.changed and repeat.manifest_id == first.manifest_id and repeat.generation == 1
 
 
@@ -188,7 +190,7 @@ def test_snapshot_refresh_reparses_unchanged_payload_dependencies(
     importer: PrismSnapshotImporter, snapshot: Path, postgres_engine: Engine, dependency: str
 ):
     original_hashes = _hashes(snapshot)
-    first = importer.import_snapshot(snapshot, INITIAL_REVISION, original_hashes, _approval(), expected_experiments=2)
+    first = importer.import_snapshot(snapshot, _REVISION, original_hashes, _approval(), expected_experiments=2)
     old_items = importer.service.dao.list_published(PRISM_ORIGIN)
     old_experiment = next(item for item in old_items if item.kind == "experiment" and item.source_path == _BUNDLE)
     old_measurement = next(
@@ -239,12 +241,12 @@ def test_snapshot_refresh_reparses_unchanged_payload_dependencies(
         retained = importer.service.archive.read(original_hashes[path])
         assert hashlib.sha256(retained).hexdigest() == original_hashes[path]
     with postgres_engine.connect() as connection:
-        count = connection.scalar(select(func.count()).select_from(RagItemRow))
+        count = connection.scalar(select(func.count()).select_from(PublicBenchmarkRecordRow))
     repeated = importer.import_snapshot(snapshot, "2026-10-14", hashes, _approval(), expected_experiments=2)
     assert not repeated.changed
     assert repeated.manifest_id == refreshed.manifest_id and repeated.generation == refreshed.generation
     with postgres_engine.connect() as connection:
-        assert connection.scalar(select(func.count()).select_from(RagItemRow)) == count
+        assert connection.scalar(select(func.count()).select_from(PublicBenchmarkRecordRow)) == count
     importer.import_snapshot(snapshot, "2026-10-15", hashes, _approval(), expected_experiments=2)
     assert importer.service.dao.list_published(PRISM_ORIGIN) == current
 
@@ -274,7 +276,7 @@ def test_invalid_refresh_preserves_old_release(
     snapshot: Path,
     failure: str,
 ):
-    old = importer.import_snapshot(snapshot, INITIAL_REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
+    old = importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
     if failure == "pagination":
         _write(snapshot, "results/public-index.json", {"items": [], "nextPageToken": "unfinished"})
     elif failure in ("duplicate-id", "missing-stage", "wrong-workload"):
@@ -340,7 +342,7 @@ def test_unknown_or_missing_raw_units_are_not_inferred(importer: PrismSnapshotIm
     del performance["latency"]["request_latency"]["units"]
     _write(snapshot, _BUNDLE, bundle)
     _zip(snapshot)
-    importer.import_snapshot(snapshot, INITIAL_REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
+    importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
     measurements = importer.service.dao.list_published(PRISM_ORIGIN, kind="measurement")
     throughput = next(item for item in measurements if item.source_path == _BUNDLE and item.metric == "throughput")
     assert throughput.unit == "widgets/hour" and throughput.normalized_value is None
@@ -369,9 +371,7 @@ def test_statistic_aliases_do_not_duplicate_measurements(
     latency["avg"] = latency["mean"]
     _write(snapshot, _BUNDLE, bundle)
     _zip(snapshot)
-    result = importer.import_snapshot(
-        snapshot, INITIAL_REVISION, _hashes(snapshot), _approval(), expected_experiments=2
-    )
+    result = importer.import_snapshot(snapshot, _REVISION, _hashes(snapshot), _approval(), expected_experiments=2)
     assert result.counts["measurement"] == 9
     measurements = [
         item
@@ -387,7 +387,10 @@ def test_statistic_aliases_do_not_duplicate_measurements(
 def test_initial_snapshot_publishes_249_experiments_and_round_trips_every_measurement(
     importer: PrismSnapshotImporter,
     postgres_engine: Engine,
+    prism_initial_manifest: SnapshotManifest,
 ):
+    inventory = prism_initial_manifest.inventory
+    expected_files = {file.path: file.sha256 for file in inventory.files}
     statements: list[str] = []
 
     def capture(_connection, _cursor, statement, _parameters, _context, _executemany):
@@ -397,7 +400,11 @@ def test_initial_snapshot_publishes_249_experiments_and_round_trips_every_measur
     event.listen(postgres_engine, "before_cursor_execute", capture)
     try:
         result = importer.import_snapshot(
-            _SNAPSHOT, INITIAL_REVISION, INITIAL_FILES, _approval(), expected_experiments=INITIAL_EXPERIMENTS
+            _SNAPSHOT,
+            inventory.revision,
+            expected_files,
+            _approval(),
+            expected_experiments=prism_initial_manifest.expected_experiments,
         )
         assert result.counts == {"source": 22, "experiment": 249, "measurement": 9060, "passage": 4}
         experiments = importer.service.dao.list_published(PRISM_ORIGIN, kind="experiment")
@@ -408,7 +415,7 @@ def test_initial_snapshot_publishes_249_experiments_and_round_trips_every_measur
         assert result.counts["source"] == 22 and result.counts["passage"] == 4
         documents = {
             path: json.loads((_SNAPSHOT / path).read_bytes(), parse_float=Decimal)
-            for path in INITIAL_FILES
+            for path in expected_files
             if path.endswith(".json")
         }
         measurements = importer.service.dao.list_published(PRISM_ORIGIN, kind="measurement")
@@ -418,7 +425,7 @@ def test_initial_snapshot_publishes_249_experiments_and_round_trips_every_measur
                 component = component.replace("~1", "/").replace("~0", "~")
                 value = value[int(component)] if isinstance(value, list) else value[component]
             assert measurement.value == Decimal(value) == measurement.original_value
-            assert measurement.content_sha256 == INITIAL_FILES[measurement.source_path]
+            assert measurement.content_sha256 == expected_files[measurement.source_path]
         target = next(
             item for item in experiments if item.source_pointer["record_id"] == "02c8f038-1cad-4ee8-a72e-724affa923f4"
         )
@@ -428,15 +435,19 @@ def test_initial_snapshot_publishes_249_experiments_and_round_trips_every_measur
         assert len(target_values) == 1 and target_values[0].value == Decimal("6131.06177725188")
         assert target_values[0].unit == "output tokens/s"
         with postgres_engine.connect() as connection:
-            before = connection.execute(select(func.count()).select_from(RagItemRow)).scalar_one()
+            before = connection.execute(select(func.count()).select_from(PublicBenchmarkRecordRow)).scalar_one()
         repeat = importer.import_snapshot(
-            _SNAPSHOT, INITIAL_REVISION, INITIAL_FILES, _approval(), expected_experiments=INITIAL_EXPERIMENTS
+            _SNAPSHOT,
+            inventory.revision,
+            expected_files,
+            _approval(),
+            expected_experiments=prism_initial_manifest.expected_experiments,
         )
         assert (
             not repeat.changed and repeat.manifest_id == result.manifest_id and repeat.generation == result.generation
         )
         with postgres_engine.connect() as connection:
-            assert connection.execute(select(func.count()).select_from(RagItemRow)).scalar_one() == before
+            assert connection.execute(select(func.count()).select_from(PublicBenchmarkRecordRow)).scalar_one() == before
     finally:
         event.remove(postgres_engine, "before_cursor_execute", capture)
     assert statements == []

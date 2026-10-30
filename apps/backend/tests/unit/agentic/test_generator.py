@@ -19,9 +19,9 @@ from llm_d_lens.agentic.planner import (
     WorkloadProfile,
     validate_request_context_budget,
 )
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import configuration_case_context
 from llm_d_lens.ai_providers.client import AIProviderClientError, AIToolCall, AIToolTurn
 from llm_d_lens.auth.security import verify_internal
-from llm_d_lens.benchmark_rag.case_retrieval import configuration_case_context
 
 
 def test_generator_schema_excludes_direct_vllm_and_accepts_optimized_baseline():

@@ -11,11 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from llm_d_lens.ai_providers.client import AIProviderClientError, AIRequestRecord
-from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
-from llm_d_lens.aic.service import AICError, estimate
-from llm_d_lens.auth.contracts import Principal
-from llm_d_lens.benchmark_rag.case_retrieval import (
+from llm_d_lens.agentic.public_benchmark_record.case_retrieval import (
     CaseEvidenceBundle,
     InternalCaseOutcome,
     assert_case_access,
@@ -23,6 +19,10 @@ from llm_d_lens.benchmark_rag.case_retrieval import (
     candidate_evidence_results,
     resolve_internal_cases,
 )
+from llm_d_lens.ai_providers.client import AIProviderClientError, AIRequestRecord
+from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
+from llm_d_lens.aic.service import AICError, estimate
+from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.capacity import ValidationParams, evaluate_capacity
 from llm_d_lens.cluster.sessions import require_active_session
 from llm_d_lens.configuration.models import ModelSecretConfiguration

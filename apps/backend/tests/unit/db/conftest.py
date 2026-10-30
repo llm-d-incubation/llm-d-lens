@@ -10,10 +10,17 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from llm_d_lens.benchmark_rag.transfer_contracts import RAG_SCHEMA_REVISION
+from llm_d_lens.agentic.public_benchmark_record.publication_contracts import SnapshotManifest
+from llm_d_lens.agentic.public_benchmark_record.transfer_contracts import PUBLIC_BENCHMARK_RECORD_SCHEMA_REVISION
 from llm_d_lens.db.base import Base
 
 _BACKEND = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(scope="session")
+def prism_initial_manifest() -> SnapshotManifest:
+    path = _BACKEND / "tests/fixtures/public_benchmark_record/prism_initial_manifest.json"
+    return SnapshotManifest.model_validate_json(path.read_bytes())
 
 
 def _config(engine: Engine) -> Config:
@@ -45,7 +52,7 @@ def postgres_engine(postgres_url: str) -> Iterator[Engine]:
             engine, tables=[table for table in Base.metadata.sorted_tables if table.name != "public_benchmark_records"]
         )
         command.stamp(_config(engine), "42a3e9b47726")
-        command.upgrade(_config(engine), RAG_SCHEMA_REVISION)
+        command.upgrade(_config(engine), PUBLIC_BENCHMARK_RECORD_SCHEMA_REVISION)
         yield engine
     finally:
         engine.dispose()

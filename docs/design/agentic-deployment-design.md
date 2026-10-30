@@ -642,6 +642,15 @@ The actual authenticated principal needs global `benchmark-rag:query:read` to
 retrieve public observations or access plans containing them. Internal experiments
 retain their existing resource authorization.
 
+Public benchmark contracts and services live in `llm_d_lens.agentic.public_benchmark_record`.
+This is an Agentic subpackage, with no top-level compatibility package. Its DAOs
+and ORM models stay in the shared database layer.
+`PublicBenchmarkRecordDao` directly extends `BaseDao` and owns immutable writes and
+the publication lifecycle; query and transfer DAOs reuse that implementation.
+Python names are aligned with the internal `agentic_benchmark_record` domain,
+without changing stored records, schema revisions, existing `benchmark-rag.*`
+contracts, the query permission or the source archive namespace.
+
 `PlanningRequirements` preserves explicit workload, latency targets, provenance
 and unknown fields. Form fields start blank: examples and AIC/use-case defaults
 are not explicit requirements, and mean input length is not copied into P95.
@@ -681,6 +690,17 @@ server audit rather than being forwarded to the model.
 Planning consumes SQL experiments only. Public document ingestion, retrieval,
 packet contracts and search UI are outside this capability. The existing private
 diagnostic search adapter remains separate and unchanged.
+
+The operator `rebuild` command requires an explicit local `--snapshot`,
+`--manifest` and `--approval`. The external `benchmark-rag.snapshot.v1` manifest
+contains a complete, canonically sorted `PinnedInventory` (origin, snapshot date,
+file paths, SHA-256 hashes and formats) and a nonnegative integer
+`expected_experiments`. Source/path approval remains separate; exact inventory,
+hashes and experiment count are checked before activation. No initial snapshot
+date, file list or experiment count is hardcoded in business code. The initial
+batch's manifest remains a test fixture, without raw source data. Subsequent
+snapshots can be imported without code changes; refresh still uses its reviewed
+plan and current publication base.
 
 The deployment workspace shows internal SQL experiments and public SQL observations
 separately, including retrieval failures and unknowns.

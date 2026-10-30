@@ -1,4 +1,4 @@
-"""Prism benchmark facts and their immutable provenance; never a RAG index."""
+"""Public benchmark facts and their immutable provenance."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import Mapped, mapped_column
 
-from llm_d_lens.benchmark_rag.contracts import KIND_FIELDS, REQUIRED_FIELDS, RagItem
+from llm_d_lens.agentic.public_benchmark_record.contracts import KIND_FIELDS, REQUIRED_FIELDS, PublicBenchmarkRecord
 from llm_d_lens.db.base import Base, DeclarativeDtoMixin, UTCDateTime
 
 _NULLABLE_JSON = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -50,8 +50,8 @@ def _shape_checks() -> list[CheckConstraint]:
 
 class PublicBenchmarkRecordRow(Base, DeclarativeDtoMixin):
     __tablename__ = "public_benchmark_records"
-    dto_type = RagItem
-    column_map = {name: name for name in RagItem.model_fields}
+    dto_type = PublicBenchmarkRecord
+    column_map = {name: name for name in PublicBenchmarkRecord.model_fields}
 
     item_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
