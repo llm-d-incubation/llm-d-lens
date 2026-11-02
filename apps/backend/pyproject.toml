@@ -31,6 +31,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+rag-embedding = [
+    "torch>=2.6,<3",
+    "transformers>=4.48,<5",
+    "safetensors>=0.5,<1",
+]
 embedded-db = [
     # Only needed when running with LLM_D_BENCH_DB_MODE=embedded (the default);
     # not required for users who connect to their own externally managed

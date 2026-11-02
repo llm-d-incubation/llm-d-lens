@@ -1,0 +1,1175 @@
+{
+  "candidate_catalog": [
+    {
+      "allocatable_kv_cache_gib": 60.462,
+      "deployable": true,
+      "evidence_ids": [
+        "cluster-overview:e9bcbc21",
+        "aic:search"
+      ],
+      "gpu_memory_utilization": 0.9,
+      "guide_variant": "vllm",
+      "historical_benchmarks": [],
+      "id": "pd-disaggregation-p4-tp1-d1-tp4",
+      "max_concurrent_requests": 60,
+      "max_model_len": 4096,
+      "per_request_kv_cache_gib": 1.0,
+      "performance_estimate": null,
+      "performance_estimate_source": null,
+      "prefill_replicas": 4,
+      "prefill_tensor_parallel_size": 1,
+      "provider_ref": "pd-disaggregation",
+      "rejection_reasons": [],
+      "replicas": 1,
+      "required_gpus": 8,
+      "score": 1.0,
+      "score_source": "openai-compatible",
+      "slo_confidence": 0.0,
+      "slo_status": "unknown",
+      "tensor_parallel_size": 4,
+      "vllm_arguments": []
+    },
+    {
+      "allocatable_kv_cache_gib": 138.125,
+      "deployable": true,
+      "evidence_ids": [
+        "cluster-overview:e9bcbc21",
+        "aic:search"
+      ],
+      "gpu_memory_utilization": 0.9,
+      "guide_variant": null,
+      "historical_benchmarks": [],
+      "id": "optimized-baseline-tp8-r1",
+      "max_concurrent_requests": 138,
+      "max_model_len": 4096,
+      "per_request_kv_cache_gib": 1.0,
+      "performance_estimate": null,
+      "performance_estimate_source": null,
+      "prefill_replicas": null,
+      "prefill_tensor_parallel_size": null,
+      "provider_ref": "optimized-baseline",
+      "rejection_reasons": [],
+      "replicas": 1,
+      "required_gpus": 8,
+      "score": 0.9052631578947369,
+      "score_source": "openai-compatible",
+      "slo_confidence": 0.0,
+      "slo_status": "unknown",
+      "tensor_parallel_size": 8,
+      "vllm_arguments": []
+    },
+    {
+      "allocatable_kv_cache_gib": 21.631,
+      "deployable": true,
+      "evidence_ids": [
+        "cluster-overview:e9bcbc21",
+        "aic:search"
+      ],
+      "gpu_memory_utilization": 0.9,
+      "guide_variant": "vllm",
+      "historical_benchmarks": [],
+      "id": "pd-disaggregation-p2-tp1-d3-tp2",
+      "max_concurrent_requests": 21,
+      "max_model_len": 4096,
+      "per_request_kv_cache_gib": 1.0,
+      "performance_estimate": null,
+      "performance_estimate_source": null,
+      "prefill_replicas": 2,
+      "prefill_tensor_parallel_size": 1,
+      "provider_ref": "pd-disaggregation",
+      "rejection_reasons": [],
+      "replicas": 3,
+      "required_gpus": 8,
+      "score": 0.8421052631578948,
+      "score_source": "openai-compatible",
+      "slo_confidence": 0.0,
+      "slo_status": "unknown",
+      "tensor_parallel_size": 2,
+      "vllm_arguments": []
+    }
+  ],
+  "cluster_snapshot": {
+    "cluster": {
+      "benchmarkSource": {
+        "ref": "main",
+        "resolved_from": "cluster-registry",
+        "resolved_repository": "/root/.cache/lens/repos/llm-d-benchmark/main"
+      },
+      "createdAt": "2026-09-21T02:53:27.139675+00:00",
+      "deploymentSource": {
+        "ref": "main",
+        "resolved_from": "cluster-registry",
+        "resolved_repository": "/root/.cache/lens/repos/llm-d/main"
+      },
+      "description": "",
+      "draft": false,
+      "gatewayAuthzHost": null,
+      "gatewayName": null,
+      "gatewayNamespace": "lens-gateway-e9bcbc21",
+      "gatewayPort": null,
+      "gatewayProvider": null,
+      "gatewayPublicUrl": null,
+      "gieVersion": null,
+      "hfTokenSecret": {
+        "name": "llm-d-hf-token",
+        "namespace": "llm-d-bench-storage"
+      },
+      "id": "e9bcbc21",
+      "inotifyMaxUserInstances": 8192,
+      "ippVersion": null,
+      "llmDBenchmarkRef": "main",
+      "llmDBenchmarkRepoPath": "/root/.cache/lens/repos/llm-d-benchmark/main",
+      "llmDRef": "main",
+      "llmDRepoPath": "/root/.cache/lens/repos/llm-d/main",
+      "name": "wenxin-cluster",
+      "proxy": {
+        "httpProxy": null,
+        "httpsProxy": null,
+        "mode": "auto",
+        "noProxy": null
+      },
+      "ready": true,
+      "routerVersion": null
+    },
+    "fetchedAt": "2026-10-20T03:38:44.149624+00:00",
+    "kubernetes": {
+      "components": {
+        "acceleratorDevicePlugins": {
+          "intel-xpu": {
+            "dashboardOnly": false,
+            "dashboardsReady": null,
+            "desired": 2,
+            "installed": true,
+            "message": null,
+            "ready": 2,
+            "status": "ready"
+          },
+          "nvidia": {
+            "dashboardOnly": false,
+            "dashboardsReady": null,
+            "desired": 0,
+            "installed": false,
+            "message": null,
+            "ready": 0,
+            "status": "missing"
+          }
+        },
+        "intelDevicePlugin": {
+          "dashboardOnly": false,
+          "dashboardsReady": null,
+          "desired": 2,
+          "installed": true,
+          "message": null,
+          "ready": 2,
+          "status": "ready"
+        },
+        "monitoring": {
+          "dashboardOnly": false,
+          "dashboardsReady": true,
+          "desired": 8,
+          "installed": true,
+          "message": "Monitoring stack is ready",
+          "ready": 8,
+          "status": "ready"
+        }
+      },
+      "hardware": {
+        "accelerators": [
+          {
+            "gpuCount": 8,
+            "id": "intel-xpu",
+            "models": [
+              "B60"
+            ]
+          }
+        ],
+        "allocatedGpuCount": 0,
+        "availableGpuCount": 8,
+        "configuredGpuLimit": null,
+        "cpuCores": 192,
+        "cpuUsagePercent": 0.9,
+        "deviceMetrics": [
+          "computeUsagePercent",
+          "vramBandwidthPercent",
+          "vramReadThroughputBytes",
+          "vramTotalBytes",
+          "vramUsedBytes",
+          "vramWriteThroughputBytes"
+        ],
+        "diskAvailableBytes": 281249656832,
+        "diskBytes": 3779301961728,
+        "diskUsagePercent": 92.6,
+        "diskUsedBytes": 3498052304896,
+        "gpuCount": 8,
+        "gpuNodes": 1,
+        "gpuUsagePercent": 0,
+        "memoryAvailableBytes": 921910713885,
+        "memoryBytes": 946520240128,
+        "memoryUsagePercent": 2.6,
+        "nodes": 1,
+        "totalGpuCount": 8,
+        "usableGpuCount": 8,
+        "vramBytes": 205353123840,
+        "vramUsagePercent": 0.2
+      },
+      "namespaces": [
+        {
+          "deployments": [],
+          "name": "llm-d-bench-storage",
+          "ready": 0
+        },
+        {
+          "deployments": [],
+          "name": "llm-d-bench-storage-8f1bc57d",
+          "ready": 0
+        },
+        {
+          "deployments": [],
+          "name": "llm-d-bench-storage-f46132da",
+          "ready": 0
+        }
+      ],
+      "nodes": [
+        {
+          "cachedImages": [
+            "docker.io/envoyproxy/gateway:v1.8.1",
+            "docker.io/envoyproxy/gateway@sha256:497df13b71f4e544c7e80414873041e291776c28cd788bcbee0d18421fa5db98",
+            "docker.io/gpustack/gpustack-operator:v0.5.4",
+            "docker.io/gpustack/gpustack-operator@sha256:32d44d819869a11d94df0dfd7043e6cbda0b1487347c1fb4165cf0de09881da4",
+            "docker.io/gpustack/gpustack:v2.2.3",
+            "docker.io/gpustack/gpustack@sha256:55ecc762950a32641b6a4d96195c0662ef72998eaeeda31bba0e8e218d41afef",
+            "docker.io/gpustack/mirrored-csi-s3-driver:v0.43.7",
+            "docker.io/gpustack/mirrored-csi-s3-driver@sha256:e5bca33cdba0726786971bde708552b031e0aac9aaac62602b9f12da32bc4825",
+            "docker.io/gpustack/mirrored-node-feature-discovery:v0.18.3",
+            "docker.io/gpustack/mirrored-node-feature-discovery@sha256:84e6616d3995b518b657b1739ee176647de9bcb5192c82b8574bfd8dcd945d17",
+            "docker.io/grafana/grafana:13.1.1",
+            "docker.io/grafana/grafana:13.1.3",
+            "docker.io/grafana/grafana:13.2.1-distroless",
+            "docker.io/grafana/grafana@sha256:3600073f45a9895d2e2c4042da0e745819f5b78bf781266952a400c40dcd8d69",
+            "docker.io/grafana/grafana@sha256:7cb8c64c4d57a57e734073f3cc94620adb24a0acb929bd80ba9f14017e3a975b",
+            "docker.io/grafana/grafana@sha256:ab5cb380e3ff3172d6c8bd2e7cfd31cce977d2881b260e1f5bc089bf0b759b43",
+            "docker.io/istio/pilot:1.29.4",
+            "docker.io/istio/pilot:1.31.1",
+            "docker.io/istio/pilot@sha256:212ca088ada22f48be1576e6b688972b8aa7495710abb7c5f1febca856a15577",
+            "docker.io/istio/pilot@sha256:b93740f69b0b67abb9e56abf8b28bf53e4f2a410ef93bab25ebed4b05a721bdd",
+            "docker.io/istio/proxyv2:1.29.4",
+            "docker.io/istio/proxyv2:1.31.1",
+            "docker.io/istio/proxyv2@sha256:3c279352793d0c53e0a3561f0329db15dbed63a4dae5c46c391fae7220a31ddf",
+            "docker.io/istio/proxyv2@sha256:d86cba0dd1eb15c00b6901c69ce5ae3d2d5f8427a47751098cf8c3ab2a4a62e9",
+            "docker.io/library/c3ce713c4444:latest",
+            "docker.io/library/import-2026-06-02@sha256:3fb749e08554fac4cde5dc53397de761b92939d34ead7e3c89248a8bf5b621e4",
+            "docker.io/library/import-2026-06-02@sha256:48e12aa71c24cf624334ae6f0373f1e1b85825254085475eda149111a926e33c",
+            "docker.io/library/import-2026-06-02@sha256:834d6b8414308aed626e67979c4665f21b3651e5d8d04ae68d960a4f844b4e81",
+            "docker.io/library/import-2026-08-09@sha256:44a5ba3dcb982d0ddcb84614f374badf2bfd77cd5354d870065d663c18b2fbbd",
+            "docker.io/library/llm-d-router-endpoint-picker-dev:lmetric-xpu",
+            "docker.io/vllm/vllm-openai-cpu:v0.19.1",
+            "docker.io/vllm/vllm-openai-cpu:v0.23.0",
+            "docker.io/vllm/vllm-openai-cpu:v0.26.0",
+            "docker.io/vllm/vllm-openai-cpu@sha256:89e1fbe829038b1a560601990c8ec89625c622a969fcbc8f10ce48b6139795be",
+            "docker.io/vllm/vllm-openai-cpu@sha256:b1044e3fbe00b33f456708bbb471c02c9a69df98bf494814e637fb15411c2a24",
+            "docker.io/vllm/vllm-openai-cpu@sha256:da36fc7267676e061270b3e8718cd723ddc47f7002fa02ede735aa779b2b94fc",
+            "docker.io/vllm/vllm-openai-xpu:v0.26.0",
+            "docker.io/vllm/vllm-openai-xpu@sha256:e2ab50957fc309d3fb110e6331ab8bfb7dd4f0074df41cbbf0bc3c64c8bc0e52",
+            "docker.io/vllm/vllm-openai:latest",
+            "docker.io/vllm/vllm-openai@sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14",
+            "ghcr.io/intel/xpumanager/xpumd:v2.1.0",
+            "ghcr.io/intel/xpumanager/xpumd:v2.x",
+            "ghcr.io/intel/xpumanager/xpumd@sha256:0fcbe798cbc785c0378713c0872318a3c5770e88fb6b36456f2dc01e1867b088",
+            "ghcr.io/intel/xpumanager/xpumd@sha256:1cb70d9d1c4dc2435402a1aca2ef313eab74803c118d4ca9b5421872b069f51b",
+            "ghcr.io/intel/xpumanager/xpumd@sha256:67b492e40dd3c99a05abac67d45f480261b4521ed4415ff49f660f2db2691263",
+            "ghcr.io/llm-d/llm-d-benchmark:nightly",
+            "ghcr.io/llm-d/llm-d-benchmark:v0.7.0",
+            "ghcr.io/llm-d/llm-d-benchmark:v0.7.9",
+            "ghcr.io/llm-d/llm-d-benchmark@sha256:037c2fa1edd08517db797310b79c8761fce62f893463cc37d075fa78f46cb47a",
+            "ghcr.io/llm-d/llm-d-benchmark@sha256:a4d663a83db56fa31fcf841307203ddf826ba5cbede5c56e22a6bdb7fa7dd5ae",
+            "ghcr.io/llm-d/llm-d-benchmark@sha256:b906336c6f2987677bff8e97f64557100d1dc7ded0a500d2b7af8a24099755e2",
+            "ghcr.io/llm-d/llm-d-benchmark@sha256:bc2550478bd8e2a76142ca445aa7264483a6d822653118b33e9a85f30f7d175b",
+            "ghcr.io/llm-d/llm-d-benchmark@sha256:dc02e09b51d91b1be0f2ada895f688e6c82799a7ca041fd2fd0344caf4650c22",
+            "ghcr.io/llm-d/llm-d-benchmark@sha256:edd3761cf3c96c4571a2c448b0783c633aab40e6959f88c8562cc723bdda576e",
+            "ghcr.io/llm-d/llm-d-xpu-dev:pr-1230",
+            "ghcr.io/llm-d/llm-d-xpu-dev:pr-1731",
+            "ghcr.io/llm-d/llm-d-xpu-dev@sha256:749d567921b9efd44e27dd99f0fc1dcfb390d4852b3b0d8ecb7782804dc3a8a0",
+            "ghcr.io/llm-d/llm-d-xpu-dev@sha256:b7a744c5492c60f8df331b66ee355887a1ddc0190479a2d2f8280fc7750f5e26",
+            "ghcr.io/llm-d/llm-d-xpu:v0.10.0",
+            "ghcr.io/llm-d/llm-d-xpu:v0.7.0",
+            "ghcr.io/llm-d/llm-d-xpu:v0.8.0",
+            "ghcr.io/llm-d/llm-d-xpu:v0.9.0",
+            "ghcr.io/llm-d/llm-d-xpu@sha256:15156bdeea9d868f5bbbf3a9a1c4d874de32bf85008a79349e6b90bc8ef35443",
+            "ghcr.io/llm-d/llm-d-xpu@sha256:19aa0d962a9c064191a883c041bcdbc36a93c3e80015dd1beb45677a1ec3c254",
+            "ghcr.io/llm-d/llm-d-xpu@sha256:396e751c5f1b1a008e5c098e9015c42df9e0c76c9cbf28687605fcdd454b2a9f",
+            "ghcr.io/llm-d/llm-d-xpu@sha256:90d1a76a1ccbe69175ebe47e03d8f0dcaa460f11c7dea4ac3c02e06979eeff6b",
+            "localhost/llm-d-router-endpoint-picker-dev:lmetric-xpu",
+            "nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0",
+            "nvcr.io/nvidia/ai-dynamo/aiperf@sha256:d22eb02bccadcd2acbbd905a1742f1e642f2bdd7bc3a0377cebda685a233902d",
+            "quay.io/fedora/fedora:latest",
+            "quay.io/fedora/fedora@sha256:46b4b85a7b9e26989edea5e893d9df0027a18d0278aa31995b1a3ad46c1a50e4",
+            "quay.io/fedora/fedora@sha256:62f199d1eb34170a7bb2277485676d89c0e91aae4086151c4043062cce51c77c",
+            "quay.io/fedora/fedora@sha256:80d49c6c7c4303efb5eebc0317e343588d5d482146ca2be48eb82494d2a83060",
+            "quay.io/fedora/fedora@sha256:91de50d5e86946a31db8b210009b11fb35d34125689568c5c24f6bdfbf64228a",
+            "quay.io/fedora/fedora@sha256:9c2c477db931e075f334132360b2fd35d8c0b0ec9324a62d2dbf8ec6493cdab5",
+            "quay.io/fedora/fedora@sha256:b013b98e4f4c43b46fb59b71b9d3d1f4f33df503ff84b1ea3415cafc32ead87c",
+            "quay.io/fedora/fedora@sha256:df52038ff64ee61affa188d78beb85cf6eecfe4e9f6042238269ccdc8e944392",
+            "quay.io/fedora/fedora@sha256:e1af42f90ba464667c4efa9de8d6b32ac106260f91175340b4ddbba6efb15da9",
+            "quay.io/fedora/fedora@sha256:f7bf5bc0ffeb620e36d960285d6e7f3d358d7c93a91db1d8d1cdd4759e172770",
+            "quay.io/prometheus/prometheus:v3.13.1-distroless",
+            "quay.io/prometheus/prometheus:v3.13.2-distroless",
+            "quay.io/prometheus/prometheus:v3.14.0-distroless",
+            "quay.io/prometheus/prometheus@sha256:214f8427c8fba80c327bb94a75feb802ae12f2d6ca30812aa6e7d22f09bbea80",
+            "quay.io/prometheus/prometheus@sha256:50c707e96da5ade383cb1707790576480485e93de06aa60ad8802cb5f744bd0a",
+            "quay.io/prometheus/prometheus@sha256:64f71bb84e03c855948418b0fc5dea53e9543d8e3fc9931598f583805507f05e",
+            "registry.k8s.io/kube-apiserver-amd64:v1.36.1",
+            "registry.k8s.io/kube-apiserver:v1.36.1",
+            "registry.k8s.io/kube-controller-manager-amd64:v1.36.1",
+            "registry.k8s.io/kube-controller-manager:v1.36.1",
+            "registry.k8s.io/kube-proxy-amd64:v1.36.1",
+            "registry.k8s.io/kube-proxy:v1.36.1",
+            "registry.k8s.io/nfd/node-feature-discovery:v0.17.1",
+            "registry.k8s.io/nfd/node-feature-discovery@sha256:9371e7fca68d5ed82a36abd9514d88b07e3812e0d2962eb431fba2521ef378f7"
+          ],
+          "cpu": 192,
+          "cpuUsagePercent": 0.9,
+          "diskBytes": 3779301961728,
+          "diskUsagePercent": 92.6,
+          "diskUsedBytes": 3498052304896,
+          "gpu": true,
+          "gpuByProfile": {
+            "intel-xpu": 8
+          },
+          "gpuCount": 8,
+          "gpuModelsByProfile": {
+            "intel-xpu": [
+              "B60"
+            ]
+          },
+          "gpuUsagePercent": 0,
+          "gpus": [
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-0",
+              "index": 0,
+              "name": "GPU #0",
+              "pciAddress": "0000:2b:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-1",
+              "index": 1,
+              "name": "GPU #1",
+              "pciAddress": "0000:2f:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-2",
+              "index": 2,
+              "name": "GPU #2",
+              "pciAddress": "0000:3c:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-3",
+              "index": 3,
+              "name": "GPU #3",
+              "pciAddress": "0000:40:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-4",
+              "index": 4,
+              "name": "GPU #4",
+              "pciAddress": "0000:ac:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-5",
+              "index": 5,
+              "name": "GPU #5",
+              "pciAddress": "0000:b0:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-6",
+              "index": 6,
+              "name": "GPU #6",
+              "pciAddress": "0000:bd:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            },
+            {
+              "computeUsagePercent": 0,
+              "id": "gpu-7",
+              "index": 7,
+              "name": "GPU #7",
+              "pciAddress": "0000:c1:00.0",
+              "vramBandwidthPercent": 0,
+              "vramReadThroughputBytes": 0,
+              "vramTotalBytes": 25669140480,
+              "vramTotalThroughputBytes": 0,
+              "vramUsagePercent": 0.2,
+              "vramUsedBytes": 41742336,
+              "vramWriteThroughputBytes": 0
+            }
+          ],
+          "memoryBytes": 946520240128,
+          "memoryUsagePercent": 2.6,
+          "name": "optimalbench-control-plane",
+          "osImage": "Debian GNU/Linux 13 (trixie)",
+          "ready": true,
+          "role": "worker",
+          "schedulingDisabled": false,
+          "version": "v1.36.1",
+          "vramBytes": 205353123840,
+          "vramUsagePercent": 0.2
+        }
+      ]
+    }
+  },
+  "created_at": "2026-10-20T03:39:41.121022+00:00",
+  "decision": {
+    "action": "select_candidate",
+    "candidate_id": "pd-disaggregation-p4-tp1-d1-tp4",
+    "confidence": 0.84,
+    "evidence_ids": [
+      "cluster-overview:e9bcbc21",
+      "aic:search"
+    ],
+    "fallback_candidate_ids": [
+      "optimized-baseline-tp8-r1",
+      "pd-disaggregation-p2-tp1-d3-tp2"
+    ],
+    "rationale": "Top candidate uses all 8 GPUs with disaggregated distributed inference and has the strongest throughput estimate, directly matching the operator preference for more GPU/distributed inference and the long-inputs use case. optimized-baseline-tp8-r1 also uses 8 GPUs and has lower TTFT/TPOT estimates, but it is an aggregated topology with lower throughput, so it ranks below the top under the stated preference. pd-disaggregation-p2-tp1-d3-tp2 also provides 8-GPU disaggregated inference, but its throughput estimate is lower than the top candidate's, making it the weakest of the three.",
+    "slo_confidence": 0.0,
+    "slo_status": "unknown",
+    "unmet_constraints": []
+  },
+  "decision_evidence_ids": [
+    "cluster-overview:e9bcbc21",
+    "aic:search"
+  ],
+  "decision_metadata": {
+    "planner": "openai-compatible",
+    "planner_model": "deepseek-flash",
+    "score_method": "Relative model rank normalized so the selected candidate is 100%; it is not confidence or a benchmark measurement.",
+    "selection_method": "The configured model selected and scored 3 Prism-validated candidate(s); the highest score is selected and deterministic rank breaks ties."
+  },
+  "event": "created",
+  "generator": {
+    "candidate_proposals": [
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21"
+        ],
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "provider_ref": "baseline-vllm",
+        "rationale": "Minimum-resource reference topology: plain vLLM, no llm-d routing. Capacity check on live B60 cards (23.9 GiB VRAM, 0.9 util = 21.5 GiB/card) shows Qwen3-8B (15.2 GiB weights) fits at tp1 with 3.83 GiB allocatable KV and 6 concurrent requests at 4096 context. Uses 1 of 8 available GPUs. No explicit TTFT/TPOT/e2e SLO to justify more resources; included as the un-routed comparison point.",
+        "replicas": 1,
+        "tensor_parallel_size": 1
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21"
+        ],
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "provider_ref": "optimized-baseline",
+        "rationale": "Minimum-resource topology for llm-d prefix-affinity + load-aware routing: 1 replica at tp1, 1 of 8 GPUs. Fits per capacity estimate (3.83 GiB KV, 6 concurrent at 4096 ctx). Note shared_prefix_ratio is 0, so routing benefit here is load-awareness rather than prefix reuse; no SLO/complete AIC prediction supports raising TP, so the lowest valid TP is proposed.",
+        "replicas": 1,
+        "tensor_parallel_size": 1
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21",
+          "aic:search"
+        ],
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "provider_ref": "optimized-baseline",
+        "rationale": "AIC-grounded distributed topology matching operator preference for more GPUs with distributed inference: AIC rank #1 agg-tp4-rep1 (candidate aic-agg-tp4-rep1-0) predicts TTFT 217.994 ms, TPOT 28.402 ms, 820.309 tok/s on 4 B60 GPUs, all within the 8-GPU budget. AIC topologies are verified at SILICON/b60/vllm for ISL 1024/OSL 256.",
+        "replicas": 1,
+        "tensor_parallel_size": 4
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21",
+          "aic:search"
+        ],
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "provider_ref": "optimized-baseline",
+        "rationale": "Largest AIC-grounded aggregated spread: AIC rank #2 agg-tp8-rep1 (aic-agg-tp8-rep1-1) predicts the best agg numbers in the search \u2014 TTFT 213.103 ms, TPOT 28.009 ms, 1109.388 tok/s \u2014 using exactly the 8 usable B60 GPUs (8 x 23.9 GiB). Directly reflects 'more GPU with distributed inference'; occupancy leaves no headroom for additional replicas.",
+        "replicas": 1,
+        "tensor_parallel_size": 8
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21"
+        ],
+        "prefill_replicas": 1,
+        "prefill_tensor_parallel_size": 1,
+        "provider_ref": "pd-disaggregation",
+        "rationale": "Minimum-resource PD topology: 1 prefill replica at tp1 plus 1 decode replica at tp1 = 2 GPUs of 8. Both roles pass the capacity check at tp1 (3.83 GiB KV, 6 concurrent, 4096 ctx). Split roles suit the long-inputs use case by isolating prefill from decode. No AIC anchor exists for this 2-GPU shape, so this is a resource-bounded proposal, not an AIC prediction or SLO guarantee.",
+        "replicas": 1,
+        "tensor_parallel_size": 1
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21",
+          "aic:search"
+        ],
+        "prefill_replicas": 4,
+        "prefill_tensor_parallel_size": 1,
+        "provider_ref": "pd-disaggregation",
+        "rationale": "AIC-grounded wide-prefill PD: AIC #4 disagg-p1x4-d4x1 (aic-disagg-p1x4-d4x1-3) predicts TTFT 386.424 ms, TPOT 29.737 ms and the highest throughput in the search at 2360.381 tok/s on 4 prefill x tp1 + 1 decode x tp4 = 8 GPUs, fitting the 8-card budget. Strongest match for long-inputs plus operator preference for distributed inference.",
+        "replicas": 1,
+        "tensor_parallel_size": 4
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21",
+          "aic:search"
+        ],
+        "prefill_replicas": 2,
+        "prefill_tensor_parallel_size": 1,
+        "provider_ref": "pd-disaggregation",
+        "rationale": "AIC-grounded decode-heavy PD alternative: AIC #5 disagg-p1x2-d2x3 (aic-disagg-p1x2-d2x3-4) predicts TTFT 386.424 ms, TPOT 29.889 ms, 1019.566 tok/s on 2 prefill replicas at tp1 + 3 decode replicas at tp2 = 8 GPUs within the cluster budget. Offered as a materially different PD shape (more decode replicas, lower per-role TP) versus the wide-prefill option.",
+        "replicas": 3,
+        "tensor_parallel_size": 2
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21"
+        ],
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "provider_ref": "tiered-prefix-cache",
+        "rationale": "Minimum-resource tiered-prefix-cache topology: 1 replica at tp1, 1 GPU. Hard constraint satisfied \u2014 required_cpu_buffer_gib is 0 GiB and the node reports ~858.6 GiB memory available (192 cores, 2.6% used). Relevant to long-inputs because tp1 on a 23.9 GiB B60 leaves only 3.83 GiB allocatable KV at 4096 ctx; the CPU tier relieves GPU VRAM pressure. No AIC prediction applies to this guide type, so none is cited.",
+        "replicas": 1,
+        "tensor_parallel_size": 1
+      },
+      {
+        "evidence_ids": [
+          "cluster-overview:e9bcbc21"
+        ],
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "provider_ref": "precise-prefix-cache-routing",
+        "rationale": "Minimum-resource precise prefix-cache routing topology: 1 replica at tp1, 1 GPU, capacity-verified at 4096 ctx (3.83 GiB KV, 6 concurrent). Feasible and deployable; shared_prefix_ratio is 0 in the intent, so routing accuracy gains are expected to be limited and a larger TP is not justified by any SLO or complete AIC prediction. No AIC prediction applies to this guide type, so none is cited.",
+        "replicas": 1,
+        "tensor_parallel_size": 1
+      }
+    ],
+    "fallback_detail": null,
+    "fallback_reason": null,
+    "model": "deepseek-flash",
+    "name": "ai-mcp",
+    "rejected_candidates": [],
+    "tool_trace": [
+      {
+        "arguments_digest": "9037f600c0ec4fcd9f71f11d6b0d469b7980fc4a455f966bd9a17e48ed0e709a",
+        "duration_ms": 2125,
+        "result_digest": "a2fd752d43e61ed44d13b60f0d7d9141a5e2f231cc746c95999a5859f45245d4",
+        "status": "success",
+        "tool": "get_cluster_overview"
+      },
+      {
+        "arguments": {
+          "searchConfig": {
+            "totalGpus": 8
+          },
+          "sourceIds": [
+            "aic"
+          ],
+          "workload": {
+            "isl": 1024,
+            "model": "Qwen/Qwen3-8B",
+            "osl": 256
+          }
+        },
+        "arguments_digest": "bfe847598010f009b42a7769ca35b4835d4a3950806eb5600e1dfa0650d15ca2",
+        "duration_ms": 373,
+        "result": {
+          "detail": {
+            "error": "AIC system is required for Predictive search"
+          },
+          "error": "upstream request failed (status 400)"
+        },
+        "result_digest": "13a44d5bcf33503048fed5c58ba7100a78a16fc968b8160f72b6ea29bafb0fe6",
+        "status": "success",
+        "tool": "search_candidates"
+      },
+      {
+        "arguments": {
+          "searchConfig": {
+            "aicBackendName": "vllm",
+            "aicDatabaseMode": "SILICON",
+            "aicSystemName": "b60",
+            "totalGpus": 8
+          },
+          "sourceIds": [
+            "aic"
+          ],
+          "workload": {
+            "isl": 1024,
+            "model": "Qwen/Qwen3-8B",
+            "osl": 256
+          }
+        },
+        "arguments_digest": "f1fda76196da6404f5788e673c1b253ddcdf494f16a94e81953782b2991d4f9a",
+        "duration_ms": 9989,
+        "result": {
+          "backend": "local-aic",
+          "candidates": [
+            {
+              "aicRank": 1,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 4,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-agg-tp4-rep1-0",
+              "name": "AIC #1 \u00b7 agg-tp4-rep1",
+              "predicted": {
+                "throughputTps": 820.309,
+                "tpotMs": 28.402,
+                "ttftMs": 217.994
+              },
+              "prefillReplicas": 0,
+              "prefillTp": 0,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "agg",
+              "totalGpus": 4
+            },
+            {
+              "aicRank": 2,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 8,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-agg-tp8-rep1-1",
+              "name": "AIC #2 \u00b7 agg-tp8-rep1",
+              "predicted": {
+                "throughputTps": 1109.388,
+                "tpotMs": 28.009,
+                "ttftMs": 213.103
+              },
+              "prefillReplicas": 0,
+              "prefillTp": 0,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "agg",
+              "totalGpus": 8
+            },
+            {
+              "aicRank": 3,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 2,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-agg-tp2-rep1-2",
+              "name": "AIC #3 \u00b7 agg-tp2-rep1",
+              "predicted": {
+                "throughputTps": 194.798,
+                "tpotMs": 29.934,
+                "ttftMs": 221.151
+              },
+              "prefillReplicas": 0,
+              "prefillTp": 0,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "agg",
+              "totalGpus": 2
+            },
+            {
+              "aicRank": 4,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 4,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-disagg-p1x4-d4x1-3",
+              "name": "AIC #4 \u00b7 disagg-p1x4-d4x1",
+              "predicted": {
+                "throughputTps": 2360.381,
+                "tpotMs": 29.737,
+                "ttftMs": 386.424
+              },
+              "prefillReplicas": 4,
+              "prefillTp": 1,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "disagg",
+              "totalGpus": 8
+            },
+            {
+              "aicRank": 5,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 3,
+              "decodeTp": 2,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-disagg-p1x2-d2x3-4",
+              "name": "AIC #5 \u00b7 disagg-p1x2-d2x3",
+              "predicted": {
+                "throughputTps": 1019.566,
+                "tpotMs": 29.889,
+                "ttftMs": 386.424
+              },
+              "prefillReplicas": 2,
+              "prefillTp": 1,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "disagg",
+              "totalGpus": 8
+            }
+          ]
+        },
+        "result_digest": "97bbb729788a8acf88b46d6eea01a8c68c2063108de34ad1ddc5bcbf5eefecc8",
+        "status": "success",
+        "tool": "search_candidates"
+      },
+      {
+        "arguments_digest": "67cf09723262027464273ee3df970f23cf3f2a9d68d3d27117868a6ae15e7cc7",
+        "duration_ms": 1421,
+        "result_digest": "c34e7e5e5bc05507ca956d550ef09435949233c890d6247a5a681ba6fd510dc5",
+        "status": "success",
+        "tool": "estimate_vllm_capacity"
+      },
+      {
+        "arguments_digest": "abf80b9b7b21a56a2e36d2b8fba41564a99cc751df044c6477e9086a4e21598b",
+        "duration_ms": 1410,
+        "result_digest": "17aee991523983e5cf02b6419437a2aab19706ed52f541ed42829b8f2b20d052",
+        "status": "success",
+        "tool": "estimate_vllm_capacity"
+      }
+    ]
+  },
+  "planner": {
+    "fallback_reason": null,
+    "name": "openai-compatible"
+  },
+  "planning_evidence": [
+    {
+      "details": {
+        "available_gpu_count": 8,
+        "cluster_id": "e9bcbc21"
+      },
+      "id": "cluster-overview:e9bcbc21",
+      "source": "cluster-overview",
+      "status": "available"
+    },
+    {
+      "details": {
+        "candidates": {
+          "backend": "local-aic",
+          "candidates": [
+            {
+              "aicRank": 1,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 4,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-agg-tp4-rep1-0",
+              "name": "AIC #1 \u00b7 agg-tp4-rep1",
+              "predicted": {
+                "throughputTps": 820.309,
+                "tpotMs": 28.402,
+                "ttftMs": 217.994
+              },
+              "prefillReplicas": 0,
+              "prefillTp": 0,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "agg",
+              "totalGpus": 4
+            },
+            {
+              "aicRank": 2,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 8,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-agg-tp8-rep1-1",
+              "name": "AIC #2 \u00b7 agg-tp8-rep1",
+              "predicted": {
+                "throughputTps": 1109.388,
+                "tpotMs": 28.009,
+                "ttftMs": 213.103
+              },
+              "prefillReplicas": 0,
+              "prefillTp": 0,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "agg",
+              "totalGpus": 8
+            },
+            {
+              "aicRank": 3,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 2,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-agg-tp2-rep1-2",
+              "name": "AIC #3 \u00b7 agg-tp2-rep1",
+              "predicted": {
+                "throughputTps": 194.798,
+                "tpotMs": 29.934,
+                "ttftMs": 221.151
+              },
+              "prefillReplicas": 0,
+              "prefillTp": 0,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "agg",
+              "totalGpus": 2
+            },
+            {
+              "aicRank": 4,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 1,
+              "decodeTp": 4,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-disagg-p1x4-d4x1-3",
+              "name": "AIC #4 \u00b7 disagg-p1x4-d4x1",
+              "predicted": {
+                "throughputTps": 2360.381,
+                "tpotMs": 29.737,
+                "ttftMs": 386.424
+              },
+              "prefillReplicas": 4,
+              "prefillTp": 1,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "disagg",
+              "totalGpus": 8
+            },
+            {
+              "aicRank": 5,
+              "backend": "AIConfigurator",
+              "confidence": null,
+              "decodeReplicas": 3,
+              "decodeTp": 2,
+              "deployable": true,
+              "deploymentNote": null,
+              "encodeReplicas": null,
+              "encodeTp": null,
+              "family": "Predictive",
+              "id": "aic-disagg-p1x2-d2x3-4",
+              "name": "AIC #5 \u00b7 disagg-p1x2-d2x3",
+              "predicted": {
+                "throughputTps": 1019.566,
+                "tpotMs": 29.889,
+                "ttftMs": 386.424
+              },
+              "prefillReplicas": 2,
+              "prefillTp": 1,
+              "source": "aic",
+              "sourceLabel": "AIC Prediction",
+              "topologyMode": "disagg",
+              "totalGpus": 8
+            }
+          ]
+        }
+      },
+      "id": "aic:search",
+      "source": "aic",
+      "status": "available"
+    }
+  ],
+  "request": {
+    "ai_provider_id": "ai-provider-4ac23357",
+    "cluster_session_id": "9d806c88-e269-43a1-bed3-44a972270cd5",
+    "deployment_name": "qwen-qwen3-8b-202610191541",
+    "description": "",
+    "enable_prefix_caching": true,
+    "enforce_eager": false,
+    "execution_policy": {
+      "max_benchmark_runs": 0,
+      "max_optimization_iterations": 0,
+      "max_total_duration_minutes": 60,
+      "mode": "approval_required"
+    },
+    "gpu_memory_utilization": 0.9,
+    "http_proxy": "",
+    "https_proxy": "",
+    "max_model_len": 4096,
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 256,
+    "model": "Qwen/Qwen3-8B",
+    "model_cache_path": "/root/.cache",
+    "no_proxy": "",
+    "placement_node_label": null,
+    "placement_replicas": "prefer-same-node",
+    "planner_prompt_present": true,
+    "planning_facts": {
+      "aic_predictions": [],
+      "context_length": 4096,
+      "cpu_buffer_gib": 0.0,
+      "custom_gpu_count": null,
+      "end_to_end_latency_slo_ms": null,
+      "evidence_ids": [],
+      "free_gpu_count": 0,
+      "gpu_memory_utilization": 0.9,
+      "hardware_capacity_mode": "free",
+      "model_config_dict": null,
+      "model_name": null,
+      "model_weight_gib": 15.2,
+      "operator_preference": "",
+      "performance_score_inputs": [],
+      "prefill_heavy": false,
+      "required_cpu_buffer_gib": 0.0,
+      "shared_prefix_ratio": 0.0,
+      "tpot_slo_ms": null,
+      "ttft_slo_ms": null,
+      "use_case": "long-inputs",
+      "vllm_arguments": [],
+      "vram_per_gpu_gib": 1.0,
+      "workload_profile": {
+        "concurrency": null,
+        "decode_p95_ms": null,
+        "mean_input_tokens": null,
+        "mean_output_tokens": null,
+        "p95_input_tokens": null,
+        "prefill_p95_ms": null,
+        "request_rate": null,
+        "shared_prefix_ratio": null
+      }
+    },
+    "pvc_name": "",
+    "replicas": 1,
+    "storage_type": "model-cache",
+    "storage_volume_id": "storage-5765ac29",
+    "tensor_parallel_size": 1,
+    "use_cluster_proxy": true,
+    "vllm_arguments": []
+  },
+  "resolved_planning_facts": {
+    "aic_predictions": [
+      {
+        "mode": "agg",
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "replicas": 1,
+        "tensor_parallel_size": 4,
+        "throughput_tokens_per_sec": 820.309,
+        "tpot_ms": 28.402,
+        "ttft_ms": 217.994
+      },
+      {
+        "mode": "agg",
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "replicas": 1,
+        "tensor_parallel_size": 8,
+        "throughput_tokens_per_sec": 1109.388,
+        "tpot_ms": 28.009,
+        "ttft_ms": 213.103
+      },
+      {
+        "mode": "agg",
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "replicas": 1,
+        "tensor_parallel_size": 2,
+        "throughput_tokens_per_sec": 194.798,
+        "tpot_ms": 29.934,
+        "ttft_ms": 221.151
+      },
+      {
+        "mode": "disagg",
+        "prefill_replicas": 4,
+        "prefill_tensor_parallel_size": 1,
+        "replicas": 1,
+        "tensor_parallel_size": 4,
+        "throughput_tokens_per_sec": 2360.381,
+        "tpot_ms": 29.737,
+        "ttft_ms": 386.424
+      },
+      {
+        "mode": "disagg",
+        "prefill_replicas": 2,
+        "prefill_tensor_parallel_size": 1,
+        "replicas": 3,
+        "tensor_parallel_size": 2,
+        "throughput_tokens_per_sec": 1019.566,
+        "tpot_ms": 29.889,
+        "ttft_ms": 386.424
+      },
+      {
+        "mode": "agg",
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "replicas": 1,
+        "tensor_parallel_size": 1,
+        "throughput_tokens_per_sec": 25.566412907014247,
+        "tpot_ms": 38.23552734744428,
+        "ttft_ms": 223.96390337844932
+      },
+      {
+        "mode": "agg",
+        "prefill_replicas": null,
+        "prefill_tensor_parallel_size": null,
+        "replicas": 1,
+        "tensor_parallel_size": 1,
+        "throughput_tokens_per_sec": 25.566412907014247,
+        "tpot_ms": 38.23552734744428,
+        "ttft_ms": 223.96390337844932
+      },
+      {
+        "mode": "disagg",
+        "prefill_replicas": 1,
+        "prefill_tensor_parallel_size": 1,
+        "replicas": 1,
+        "tensor_parallel_size": 1,
+        "throughput_tokens_per_sec": 22.374,
+        "tpot_ms": 41.275,
+        "ttft_ms": 386.424
+      }
+    ],
+    "context_length": 4096,
+    "cpu_buffer_gib": 858.5962596206665,
+    "custom_gpu_count": null,
+    "end_to_end_latency_slo_ms": null,
+    "evidence_ids": [
+      "cluster-overview:e9bcbc21",
+      "aic:search"
+    ],
+    "free_gpu_count": 8,
+    "gpu_memory_utilization": 0.9,
+    "hardware_capacity_mode": "free",
+    "model_config_dict": null,
+    "model_name": null,
+    "model_weight_gib": 15.2,
+    "operator_preference": "more GPU with distributed inference",
+    "performance_score_inputs": [],
+    "prefill_heavy": false,
+    "required_cpu_buffer_gib": 0,
+    "shared_prefix_ratio": 0,
+    "tpot_slo_ms": null,
+    "ttft_slo_ms": null,
+    "use_case": "long-inputs",
+    "vllm_arguments": [],
+    "vram_per_gpu_gib": 23.90625,
+    "workload_profile": {
+      "concurrency": null,
+      "decode_p95_ms": null,
+      "mean_input_tokens": null,
+      "mean_output_tokens": null,
+      "p95_input_tokens": null,
+      "prefill_p95_ms": null,
+      "request_rate": null,
+      "shared_prefix_ratio": null
+    }
+  },
+  "run_id": "053bdaae-6549-4c20-92f8-79b64b1d95bf",
+  "schema_version": 1,
+  "selected_candidate": {
+    "allocatable_kv_cache_gib": null,
+    "backend": "vllm",
+    "evidence": [
+      "cluster-overview:e9bcbc21",
+      "aic:search"
+    ],
+    "gpu_memory_utilization": 0.9,
+    "guide_variant": "vllm",
+    "id": "pd-disaggregation-p4-tp1-d1-tp4",
+    "max_concurrent_requests": null,
+    "max_model_len": 4096,
+    "per_request_kv_cache_gib": null,
+    "prefill_replicas": 4,
+    "prefill_tensor_parallel_size": 1,
+    "provider_ref": "pd-disaggregation",
+    "replicas": 1,
+    "tensor_parallel_size": 4
+  },
+  "snapshot_id": "d708a8b6-97d0-4892-bfcc-7d694c43b3c4"
+}

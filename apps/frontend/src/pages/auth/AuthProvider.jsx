@@ -58,7 +58,7 @@ export function AuthProvider({ children }) {
             principal,
             permissions,
             can: (permission) => hasPermission(permissions, permission),
-            canView: (view) => canAccessView(permissions, view),
+            canView: (view) => canAccessView(permissions, view, principal?.globalPermissions ?? []),
             login,
             logout,
             refresh,

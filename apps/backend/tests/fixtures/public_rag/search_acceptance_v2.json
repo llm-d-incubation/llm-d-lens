@@ -1,0 +1,1629 @@
+{
+  "contract": "benchmark-rag.search-evaluation.v2",
+  "annotation_method": "Redesigned against archived originals under section 7.2; AI-reviewed sparse seed judgments only. NOT FROZEN: parent-level split collisions, independent human review and pooled alternative-evidence review remain unresolved. Detailed annotations and blockers are in search_acceptance_v2_annotations.json. No complete-corpus golden recall or acceptance claim.",
+  "scope_note": "100 proposed cases: 80 source-assigned positives (10 per scope), 10 real cross-source contrasts and 10 absence proposals. 50 development / 50 within-snapshot holdout; not blind or unseen-document evaluation. Target origins are attribution ONLY; main evaluation MUST search all eight scopes and preserve global parent ranks. The current legacy evaluator still source-filters and is not acceptance-compliant.",
+  "manifests": {
+    "https://aws.amazon.com": "735874209d0a6f15b6f1721034de6427219adc89e0da505dc81932e5fe3bc0b9",
+    "https://cloud.google.com": "183a55334f3e23c0c92f39d7550bb180e6be263d0a04ce2d5fbd08c2f7387a83",
+    "https://github.com": "0f58395755871e0a8b60d55be315bf9aca2f82a4109516895efdc3dd2a4aeba7",
+    "https://github.com/llm-d/llm-d": "86c185d4d808047c08cacbe35cde2c638d2cf54bfa060121d9af34638af46f94",
+    "https://github.com/llm-d/llm-d-benchmark.git": "5be6e8c1e3ad2b4d378ddc7accf920ee8ca177bb895c48701f62e5909bfe8340",
+    "https://llm-d.ai": "220b6ec66a8fc5686bede5277fd6c3b7b63b1dec11ba72ac634ae8eb41e7936d",
+    "https://research.ibm.com": "30e8078f2f6e77ad89bea43b9cc5f73612980e0ffd20f6e008189b96848f2880",
+    "https://www.amd.com": "729cce6d30e7729dfeef8b0fe101faacd31da5382a68575504e0f27b0b0ccc46"
+  },
+  "revisions": {
+    "https://aws.amazon.com": "c2df25a574c3779bfcbe49c6a5751eb4fe95284d30db7a45bac32892239fa3e7",
+    "https://cloud.google.com": "c25e3926f790dc1c95843fd2a9e8f329aa6df06828640e7ddc460918b079e878",
+    "https://github.com": "8bb662a02696ac3ffa7b4cc47cdbd47f1bc3bafc5a371f56555d842a044d022b",
+    "https://github.com/llm-d/llm-d": "080c14d957755da4cc363745638619fc748558f1",
+    "https://github.com/llm-d/llm-d-benchmark.git": "6e081de16d2debc7b29436ad53f2c62e8d475f2e",
+    "https://llm-d.ai": "409bcd6d83720bb7227b66413eb92fcd2af017f179c4c65e7ad680c20ea57867",
+    "https://research.ibm.com": "4141efbb7ee3c52ffd0271da7eb8c4efcede3418558ba3be42636b184858f8d0",
+    "https://www.amd.com": "bbd6b81a8e6c25c8b5a9cdff014096fe90cf02e484c9024752d937ae06faf452"
+  },
+  "anchors": {
+    "a55f4eeec802a853a306d2853de86722abd5f3f4d3f99a2c524ca526be7407f6": "guides/flow-control/tuning.md",
+    "9b8b5599e7ed1efe2385970f8eb0a3ad43f8ff901e3756c49152f68939e880f1": "guides/pd-disaggregation/README.md",
+    "ccc4f187170fe7575bc706ac9bd09d613d4fc6ccc4268009ca4fe01dfb5bcb30": "guides/precise-prefix-cache-routing/README.md",
+    "ef33542edcd93dd0da6eaa4dd9361be8742d6266ecb8b8020d4bea5228b6c940": "guides/no-kubernetes-deployment/README.md",
+    "b4d4b69f4b9de3f57d5e0c91947fc4ed564c9e0716f6a0be1ce6ae4ef52def70": "guides/tiered-prefix-cache/README.md",
+    "6215d78a71dfc6b27e093e4b407c3cbc650687ba5b4e1985db0d29d4d7fcfd58": "guides/workload-autoscaling/keda-epp-queue/README.md",
+    "543e2f6b85731835f5815432aa8e915cb6f7b76e973007fcca85e57402642bca": "guides/multimodal-serving/aggregation/README.md",
+    "3c65699c105cd1e017b4dec56658cef909f26651b37d26d01f889f0c50813c12": "guides/fast-model-actuation/README.md",
+    "33adbf36bf4785a9bcd25354de255709af66c68b08a61def47684b9bf65b3eb4": "guides/multi-model-routing/README.md",
+    "c85aaca921878614de6f6b9393bdeb93cabdc84a7e18c8c1bb8b29c242b70a55": "guides/rollouts/adapter-rollout.md",
+    "dbf798e2676d2085c94b6e24cb20d83ccaf0ad4050705f648297543da2b3843c": "docs/metrics_collection.md",
+    "461d8eb779e91f6340bee48e0ac7ad746043eacc52a5161f83065eb46f5e2e88": "docs/run.md",
+    "a37d8891750be2bc0c6d50ee0b28cc075999fc3434f2198ae4cb645aae1cc263": "docs/developer-guide.md",
+    "f4be09b46ea8af18827a9dd48e8968e74bd84a806490d64b95de8865c90f2c56": "docs/analysis.md",
+    "54ecf4f7bba694ced64e3dcdd0f61b2bf05a2dd7313ac01eb80db0304ecb845c": "docs/doe.md",
+    "ebd14dc71a8e316da8903dad0c024a186ddc262e8bf1cb00d52423825ba43920": "docs/reproducibility.md",
+    "6bd53144c1378a3b2a86d247bccae69c0b74ef6a772e4480624cf6f08eb78e8f": "docs/kustomize.md",
+    "8485cd84ae93be7c69f8c993ab4393d6de4e763a90dc16cce765e9273b2c3a8a": "docs/kustomize.md",
+    "5ca0f11ed29ded1b8492399f347dd3b82c2c97f09f2e4b7849d885904207c7df": "docs/kustomize.md",
+    "74c4698298939dcb01c9647effac7f14b9f3690f2c5f71a8ce874b86c5987122": "docs/resource_requirements.md",
+    "c5337048960746204068df9442951001f02bb0c540de925327d1fc72878ca274": "benchmark-report/README.md",
+    "9d233ffad130d9449fc69697a4479866f941f153e94d941c2c3f6b07b2a9b92d": "benchmark-report/README.md",
+    "5bf01e965e9f38e7690e49b4eb22ab35cc40bfc6bdaf8accb6f8ffd936e8b37a": "docs/observability.md",
+    "fab8db4a7ba6364931da920e6a1a280ac02f13a34cf5b17c4c03b29ebb277642": "blog/sticky-until-saturated-token-aware-routing.md",
+    "b77b3e631a0d72cd54ed12fd1862e5b4e908f8572925e0285f01ba02e32eb5a6": "blog/predicted-latency-based-scheduling-for-llms.md",
+    "d0cb3a90f563e74c9b0214b3a5446918314954a2a355a9d149f8510d806c250d": "blog/predicted-latency-based-scheduling-for-llms.md",
+    "286a47392a90aa485870dd824dc5422d2ce3b061b53a554bb488816c08b7c7b5": "blog/llm-d-v0.4-achieve-sota-inference-across-accelerators.md",
+    "9246668b70633bc62059270d6ba57daa1f896029a05d88b86cd92e538a920e0f": "blog/native-kv-cache-offloading-to-any-file-system-with-llm-d.md",
+    "46e2086bdff0f23d1b7a541cdd2fa1c366a936f54cbe0dd8328f487c59717f8b": "blog/llm-d-v0.5-sustaining-performance-at-scale.md",
+    "2f890b4b17e6e16c7eb27ee77e26d48112ed558785b33ecee56f21991774b1f6": "blog/serving-glm-5-2-agentic-workloads-on-llm-d.md",
+    "6cef59fce89f98cfaae8f103844da0c9243b28d9ecd7bb3d49598badccc9be99": "blog/kvcache-wins-you-can-see.md",
+    "97b822a6e733c635baca030dcd3c8828333b55142c4e5917fad43d79827be5cb": "blog/llm-d-v1.0-state-of-the-art-inference-ready-for-day-2.md",
+    "b01d43c055d9ee1c0be51904a4cf759c92e2ffa691a5aae3ccf4d1a037359aa6": "blog/scaling-vision-heavy-kimi-vl-with-heterogeneous-epd.md",
+    "1d765159fafa4a0a282b2ae285e2cd9a3e3c5550163a27cbc4a33474bc409bcd": "blog/p2p-kv-cache-sharing-llm-d.md",
+    "e85070b8d55d4be823950898183a4765ea1f1464230133eb6b81ef65d0349b64": "llm-d/llm-d-kv-cache/blob/main/benchmarking/73-capacity/README.md",
+    "705f81706882dcefc45795f990bc3779510be265d929f436aa5ec5ae93acd002": "kserve/website/blob/main/blog/2026-04-21-production-grade-llm-inference-kserve-llm-d-vllm.md",
+    "c68f38c72346ad60dacbf369191a43d6f5c2909d03e3f49651f124542b85e6f8": "kserve/website/blob/main/blog/2026-04-21-production-grade-llm-inference-kserve-llm-d-vllm.md",
+    "570da3d7a7d56790b28061eff3a8252cf196e8811eb30fd0c16fe54891d72ac8": "llm-d/llm-d-kv-cache/blob/main/benchmarking/73-capacity/README.md",
+    "21e20d29f563285ed342d5e9d07598f425bba9386fdbdeb055b46bc72113138c": "llm-d/llm-d-kv-cache/blob/main/benchmarking/73-capacity/README.md",
+    "ebb866c75b2a9726e13e742990e57b0aa48843e3ee1bc3866634beeafdf3c3e9": "kserve/website/blob/main/blog/2026-04-21-production-grade-llm-inference-kserve-llm-d-vllm.md",
+    "288cee2fa220aab6345c033893c041c8754bd0b81e2eec7620a960e52a13becc": "kserve/website/blob/main/blog/2026-04-21-production-grade-llm-inference-kserve-llm-d-vllm.md",
+    "a5791537949262030a8f2520c5499eca426139e95db882cfe19252a91d68023f": "llm-d/llm-d-kv-cache/blob/main/benchmarking/73-capacity/README.md",
+    "e70dd0d5ab0468971e1523266a02d2be06e0dafcfd540fc74f3ca0e353a5c37d": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "e4f458b4bcb69a21aeeb89013319b42eeb3e95515803664f5c7fe5081e21aa06": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "12f0373eda6b8ee40c37d340e5f05bddac81118bf106077bf6523d9248fe31dc": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "bf6a8f91e2429548f09182a11ff529126d3380be4ff4cf351f6737b3898d2234": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "3eff91e0000aacbbc74bf0021400d8bc67503d199329940b9e8dc3233eb5260d": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "e15c2beb7b5de2e31e15a0ee1b2f4fa68b4edc71178a08e4fa9e7619dac7d528": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "f67d6b9b64355a01432bedec8b310b73d562814fee5783ea286ecec88ebb0843": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "55cb0e4c6c16a16e667763042cce761057a325ceb1ee89f049dddbce62642513": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "c87e2e631a2666d58c99f93b370ba43d07d7be75d9e1337d9443d33cad1eb741": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "e12760bf15923a316a31959e8e5e0b180004c9b5e7e6b264e3dac19ab5cccf81": "blogs/machine-learning/introducing-disaggregated-inference-on-aws-powered-by-llm-d.md",
+    "a4ab80aa9ef124c2fea40a75137a8355f9a8c785674e9972dfa4a4aba44bba0f": "en/developer/resources/technical-articles/2026/llm-d-serving-for-amd-instinct-gpus-on-oci.html.md",
+    "aaf763aa3962d6fd4428eba845a09e34f1603208215c95e1d910435276972698": "en/developer/resources/technical-articles/2026/llm-d-serving-for-amd-instinct-gpus-on-oci.html.md",
+    "79ce252a3ed1baad66daa344b8594c5c276af3d892221ba5b3aa8058b8df6627": "en/developer/resources/technical-articles/2026/llm-d-serving-for-amd-instinct-gpus-on-oci.html.md",
+    "9c36b4545facc91cd07d7c7578282822fbb6e1c92288f040369e7147d8eb5ea7": "en/developer/resources/technical-articles/2026/llm-d-serving-for-amd-instinct-gpus-on-oci.html.md",
+    "c77dd20a51222985fff0eaa1e74b78a5c53019ae11da2f23b5f97fcf2999fbfa": "en/developer/resources/technical-articles/2026/llm-d-serving-for-amd-instinct-gpus-on-oci.html.md",
+    "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": "blog/running-open-models-on-h100-gpus-with-llmd.md",
+    "1b1c4077c6dc0e34ddf9026299e4ba83b0417432ab69c23738649c3da662e7e4": "blog/running-open-models-on-h100-gpus-with-llmd.md",
+    "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": "blog/running-open-models-on-h100-gpus-with-llmd.md",
+    "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": "blog/products/ai-machine-learning/enhancing-vllm-for-distributed-inference-with-llm-d.md"
+  },
+  "anchor_origins": {
+    "a55f4eeec802a853a306d2853de86722abd5f3f4d3f99a2c524ca526be7407f6": "https://github.com/llm-d/llm-d",
+    "9b8b5599e7ed1efe2385970f8eb0a3ad43f8ff901e3756c49152f68939e880f1": "https://github.com/llm-d/llm-d",
+    "ccc4f187170fe7575bc706ac9bd09d613d4fc6ccc4268009ca4fe01dfb5bcb30": "https://github.com/llm-d/llm-d",
+    "ef33542edcd93dd0da6eaa4dd9361be8742d6266ecb8b8020d4bea5228b6c940": "https://github.com/llm-d/llm-d",
+    "b4d4b69f4b9de3f57d5e0c91947fc4ed564c9e0716f6a0be1ce6ae4ef52def70": "https://github.com/llm-d/llm-d",
+    "6215d78a71dfc6b27e093e4b407c3cbc650687ba5b4e1985db0d29d4d7fcfd58": "https://github.com/llm-d/llm-d",
+    "543e2f6b85731835f5815432aa8e915cb6f7b76e973007fcca85e57402642bca": "https://github.com/llm-d/llm-d",
+    "3c65699c105cd1e017b4dec56658cef909f26651b37d26d01f889f0c50813c12": "https://github.com/llm-d/llm-d",
+    "33adbf36bf4785a9bcd25354de255709af66c68b08a61def47684b9bf65b3eb4": "https://github.com/llm-d/llm-d",
+    "c85aaca921878614de6f6b9393bdeb93cabdc84a7e18c8c1bb8b29c242b70a55": "https://github.com/llm-d/llm-d",
+    "dbf798e2676d2085c94b6e24cb20d83ccaf0ad4050705f648297543da2b3843c": "https://github.com/llm-d/llm-d-benchmark.git",
+    "461d8eb779e91f6340bee48e0ac7ad746043eacc52a5161f83065eb46f5e2e88": "https://github.com/llm-d/llm-d-benchmark.git",
+    "a37d8891750be2bc0c6d50ee0b28cc075999fc3434f2198ae4cb645aae1cc263": "https://github.com/llm-d/llm-d-benchmark.git",
+    "f4be09b46ea8af18827a9dd48e8968e74bd84a806490d64b95de8865c90f2c56": "https://github.com/llm-d/llm-d-benchmark.git",
+    "54ecf4f7bba694ced64e3dcdd0f61b2bf05a2dd7313ac01eb80db0304ecb845c": "https://github.com/llm-d/llm-d-benchmark.git",
+    "ebd14dc71a8e316da8903dad0c024a186ddc262e8bf1cb00d52423825ba43920": "https://github.com/llm-d/llm-d-benchmark.git",
+    "6bd53144c1378a3b2a86d247bccae69c0b74ef6a772e4480624cf6f08eb78e8f": "https://github.com/llm-d/llm-d-benchmark.git",
+    "8485cd84ae93be7c69f8c993ab4393d6de4e763a90dc16cce765e9273b2c3a8a": "https://github.com/llm-d/llm-d-benchmark.git",
+    "5ca0f11ed29ded1b8492399f347dd3b82c2c97f09f2e4b7849d885904207c7df": "https://github.com/llm-d/llm-d-benchmark.git",
+    "74c4698298939dcb01c9647effac7f14b9f3690f2c5f71a8ce874b86c5987122": "https://github.com/llm-d/llm-d-benchmark.git",
+    "c5337048960746204068df9442951001f02bb0c540de925327d1fc72878ca274": "https://github.com/llm-d/llm-d-benchmark.git",
+    "9d233ffad130d9449fc69697a4479866f941f153e94d941c2c3f6b07b2a9b92d": "https://github.com/llm-d/llm-d-benchmark.git",
+    "5bf01e965e9f38e7690e49b4eb22ab35cc40bfc6bdaf8accb6f8ffd936e8b37a": "https://github.com/llm-d/llm-d-benchmark.git",
+    "fab8db4a7ba6364931da920e6a1a280ac02f13a34cf5b17c4c03b29ebb277642": "https://llm-d.ai",
+    "b77b3e631a0d72cd54ed12fd1862e5b4e908f8572925e0285f01ba02e32eb5a6": "https://llm-d.ai",
+    "d0cb3a90f563e74c9b0214b3a5446918314954a2a355a9d149f8510d806c250d": "https://llm-d.ai",
+    "286a47392a90aa485870dd824dc5422d2ce3b061b53a554bb488816c08b7c7b5": "https://llm-d.ai",
+    "9246668b70633bc62059270d6ba57daa1f896029a05d88b86cd92e538a920e0f": "https://llm-d.ai",
+    "46e2086bdff0f23d1b7a541cdd2fa1c366a936f54cbe0dd8328f487c59717f8b": "https://llm-d.ai",
+    "2f890b4b17e6e16c7eb27ee77e26d48112ed558785b33ecee56f21991774b1f6": "https://llm-d.ai",
+    "6cef59fce89f98cfaae8f103844da0c9243b28d9ecd7bb3d49598badccc9be99": "https://llm-d.ai",
+    "97b822a6e733c635baca030dcd3c8828333b55142c4e5917fad43d79827be5cb": "https://llm-d.ai",
+    "b01d43c055d9ee1c0be51904a4cf759c92e2ffa691a5aae3ccf4d1a037359aa6": "https://llm-d.ai",
+    "1d765159fafa4a0a282b2ae285e2cd9a3e3c5550163a27cbc4a33474bc409bcd": "https://llm-d.ai",
+    "e85070b8d55d4be823950898183a4765ea1f1464230133eb6b81ef65d0349b64": "https://github.com",
+    "705f81706882dcefc45795f990bc3779510be265d929f436aa5ec5ae93acd002": "https://github.com",
+    "c68f38c72346ad60dacbf369191a43d6f5c2909d03e3f49651f124542b85e6f8": "https://github.com",
+    "570da3d7a7d56790b28061eff3a8252cf196e8811eb30fd0c16fe54891d72ac8": "https://github.com",
+    "21e20d29f563285ed342d5e9d07598f425bba9386fdbdeb055b46bc72113138c": "https://github.com",
+    "ebb866c75b2a9726e13e742990e57b0aa48843e3ee1bc3866634beeafdf3c3e9": "https://github.com",
+    "288cee2fa220aab6345c033893c041c8754bd0b81e2eec7620a960e52a13becc": "https://github.com",
+    "a5791537949262030a8f2520c5499eca426139e95db882cfe19252a91d68023f": "https://github.com",
+    "e70dd0d5ab0468971e1523266a02d2be06e0dafcfd540fc74f3ca0e353a5c37d": "https://aws.amazon.com",
+    "e4f458b4bcb69a21aeeb89013319b42eeb3e95515803664f5c7fe5081e21aa06": "https://aws.amazon.com",
+    "12f0373eda6b8ee40c37d340e5f05bddac81118bf106077bf6523d9248fe31dc": "https://aws.amazon.com",
+    "bf6a8f91e2429548f09182a11ff529126d3380be4ff4cf351f6737b3898d2234": "https://aws.amazon.com",
+    "3eff91e0000aacbbc74bf0021400d8bc67503d199329940b9e8dc3233eb5260d": "https://aws.amazon.com",
+    "e15c2beb7b5de2e31e15a0ee1b2f4fa68b4edc71178a08e4fa9e7619dac7d528": "https://aws.amazon.com",
+    "f67d6b9b64355a01432bedec8b310b73d562814fee5783ea286ecec88ebb0843": "https://aws.amazon.com",
+    "55cb0e4c6c16a16e667763042cce761057a325ceb1ee89f049dddbce62642513": "https://aws.amazon.com",
+    "c87e2e631a2666d58c99f93b370ba43d07d7be75d9e1337d9443d33cad1eb741": "https://aws.amazon.com",
+    "e12760bf15923a316a31959e8e5e0b180004c9b5e7e6b264e3dac19ab5cccf81": "https://aws.amazon.com",
+    "a4ab80aa9ef124c2fea40a75137a8355f9a8c785674e9972dfa4a4aba44bba0f": "https://www.amd.com",
+    "aaf763aa3962d6fd4428eba845a09e34f1603208215c95e1d910435276972698": "https://www.amd.com",
+    "79ce252a3ed1baad66daa344b8594c5c276af3d892221ba5b3aa8058b8df6627": "https://www.amd.com",
+    "9c36b4545facc91cd07d7c7578282822fbb6e1c92288f040369e7147d8eb5ea7": "https://www.amd.com",
+    "c77dd20a51222985fff0eaa1e74b78a5c53019ae11da2f23b5f97fcf2999fbfa": "https://www.amd.com",
+    "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": "https://research.ibm.com",
+    "1b1c4077c6dc0e34ddf9026299e4ba83b0417432ab69c23738649c3da662e7e4": "https://research.ibm.com",
+    "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": "https://research.ibm.com",
+    "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": "https://cloud.google.com"
+  },
+  "cases": [
+    {
+      "case_id": "llmd-technical-development-001",
+      "category": "technical",
+      "split": "development",
+      "question": "In llm-d flow control, when should I choose utilization-detector rather than concurrency-detector, and which detector is intended to react immediately to sudden traffic bursts?",
+      "relevant": {
+        "a55f4eeec802a853a306d2853de86722abd5f3f4d3f99a2c524ca526be7407f6": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-technical-holdout-002",
+      "category": "technical",
+      "split": "holdout",
+      "question": "For the vLLM cks-mooncake P/D overlay, what must match between prefill and decode tensor-parallel-size, and what image and in-pod RDMA prerequisites must be checked before deployment?",
+      "relevant": {
+        "9b8b5599e7ed1efe2385970f8eb0a3ad43f8ff901e3756c49152f68939e880f1": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-navigation-development-003",
+      "category": "navigation",
+      "split": "development",
+      "question": "Which section of the precise-prefix-cache-routing guide explains how per-pod KV events build the router's index, how prompts are tokenized, and what happens when cache-warm endpoints are saturated?",
+      "relevant": {
+        "ccc4f187170fe7575bc706ac9bd09d613d4fc6ccc4268009ca4fe01dfb5bcb30": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-navigation-holdout-004",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Where does the No-Kubernetes Deployment guide explain changing the worker endpoints file without restarting EPP, including the recommended update method and the reload confirmation?",
+      "relevant": {
+        "ef33542edcd93dd0da6eaa4dd9361be8742d6266ecb8b8020d4bea5228b6c940": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-cross_language-development-005",
+      "category": "cross_language",
+      "split": "development",
+      "question": "在 llm-d 的分层前缀缓存部署中，为什么通常先选 vLLM 原生 OffloadingConnector 或 SGLang HiCache？什么情况下才应考虑 LMCache 等非原生连接器？",
+      "relevant": {
+        "b4d4b69f4b9de3f57d5e0c91947fc4ed564c9e0716f6a0be1ce6ae4ef52def70": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-cross_language-holdout-006",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "使用 KEDA 和 EPP 队列指标缩容到零时，设置 minReplicaCount: 0 前要先验证什么？零副本时靠什么触发扩容，cooldownPeriod 与 HPA 缩容分别管哪一段，还要注意哪些请求可用性风险？",
+      "relevant": {
+        "6215d78a71dfc6b27e093e4b407c3cbc650687ba5b4e1985db0d29d4d7fcfd58": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-paraphrase-development-007",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "For an image-and-text request in the multimodal optimized baseline, why is counting text characters alone insufficient for load-aware routing, and how does the router account for the image before choosing among candidate servers?",
+      "relevant": {
+        "543e2f6b85731835f5815432aa8e915cb6f7b76e973007fcca85e57402642bca": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-paraphrase-holdout-008",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "With Fast Model Actuation, why might a replacement requesting pod fail to reuse a sleeping model process, and what is the difference between waking an existing instance and starting a new instance through an already-running launcher?",
+      "relevant": {
+        "3c65699c105cd1e017b4dec56658cef909f26651b37d26d01f889f0c50813c12": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-disambiguation-development-009",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "For several base models behind one Gateway, should I attribute reading the request-body model name to IPP or to HTTPRoutes, and which of them uses routing headers to direct traffic to an InferencePool?",
+      "relevant": {
+        "33adbf36bf4785a9bcd25354de255709af66c68b08a61def47684b9bf65b3eb4": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmd-disambiguation-holdout-010",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "If only a LoRA adapter version is changing, should I follow a blue-green replacement of the base-model infrastructure, or use the within-InferencePool adapter-rollout mechanism; what resource does that mechanism use and what remains unchanged?",
+      "relevant": {
+        "c85aaca921878614de6f6b9393bdeb93cabdc84a7e18c8c1bb8b29c242b70a55": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-technical-development-011",
+      "category": "technical",
+      "split": "development",
+      "question": "In llm-d-benchmark, how does llmdbenchmark run --monitoring interact with the scenario's scrape default, and where should I list a custom vLLM time-series metric so processing and later report analysis retain the same selection?",
+      "relevant": {
+        "dbf798e2676d2085c94b6e24cb20d83ccaf0ad4050705f648297543da2b3843c": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-technical-holdout-012",
+      "category": "technical",
+      "split": "holdout",
+      "question": "For the inference-perf synthetic workload profile shown in run.md, which YAML blocks control input and output length distributions, and which environment variable allows profile-parameter overrides without editing the template?",
+      "relevant": {
+        "461d8eb779e91f6340bee48e0ac7ad746043eacc52a5161f83065eb46f5e2e88": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-navigation-development-013",
+      "category": "navigation",
+      "split": "development",
+      "question": "Which developer-guide section explains how a custom execution step should behave in dry-run mode, including whether the executor automatically prevents the step's side effects?",
+      "relevant": {
+        "a37d8891750be2bc0c6d50ee0b28cc075999fc3434f2198ae4cb645aae1cc263": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-navigation-holdout-014",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "After running multiple treatments with --experiments, where does the analysis guide explain the module and output CSV used to compare treatments, and what does one CSV row represent?",
+      "relevant": {
+        "f4be09b46ea8af18827a9dd48e8968e74bd84a806490d64b95de8865c90f2c56": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-cross_language-development-015",
+      "category": "cross_language",
+      "split": "development",
+      "question": "在 llm-d-benchmark 中同时扫描基础设施配置和负载配置时，每个 setup treatment 内怎样执行 run treatments？服务栈在什么时候部署和拆除，而不是每换一个负载就重新部署？",
+      "relevant": {
+        "54ecf4f7bba694ced64e3dcdd0f61b2bf05a2dd7313ac01eb80db0304ecb845c": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-cross_language-holdout-016",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "为了按原参数复现一次 llm-d-benchmark 实验，应保存哪个工作目录？其中实际应用到 llm-d 或 vLLM 服务栈的环境变量参数在哪里找，为什么不能只保留最终性能图？",
+      "relevant": {
+        "ebd14dc71a8e316da8903dad0c024a186ddc262e8bf1cb00d52423825ba43920": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-paraphrase-development-017",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "My benchmark uses the kustomize deploy method, but changing the usual model and replica settings has no effect. Why, and how should changes to modelserver manifests be separated from changes to the router's Helm installation?",
+      "relevant": {
+        "6bd53144c1378a3b2a86d247bccae69c0b74ef6a772e4480624cf6f08eb78e8f": 3,
+        "8485cd84ae93be7c69f8c993ab4393d6de4e763a90dc16cce765e9273b2c3a8a": 3,
+        "5ca0f11ed29ded1b8492399f347dd3b82c2c97f09f2e4b7849d885904207c7df": 2
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-paraphrase-holdout-018",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "If the load generator is struggling to drive enough concurrent requests, why might adding CPU cores help inference-perf while CPU clock speed matters more for a single-process vllm-benchmark harness?",
+      "relevant": {
+        "74c4698298939dcb01c9647effac7f14b9f3690f2c5f71a8ce874b86c5987122": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-disambiguation-development-019",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "In an inference-perf multi-turn benchmark report, how should I distinguish results.session_performance.sessions.total_events and session_duration from the standard request_performance statistics, and when is a session report emitted alongside a request report?",
+      "relevant": {
+        "c5337048960746204068df9442951001f02bb0c540de925327d1fc72878ca274": 3,
+        "9d233ffad130d9449fc69697a4479866f941f153e94d941c2c3f6b07b2a9b92d": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "benchmark-disambiguation-holdout-020",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "If I add tracing: to a benchmark scenario, does the benchmark also install an OTel Collector or Jaeger and collect traces into its results, or does it only configure tracing on the deployed modelservice pods?",
+      "relevant": {
+        "5bf01e965e9f38e7690e49b4eb22ab35cc40bfc6bdaf8accb6f8ffd936e8b37a": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-technical-development-021",
+      "category": "technical",
+      "split": "development",
+      "question": "In the token-aware routing article, how does affinityThreshold restrict the downstream scorer's candidates, and what happens if no endpoint qualifies?",
+      "relevant": {
+        "fab8db4a7ba6364931da920e6a1a280ac02f13a34cf5b17c4c03b29ebb277642": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-technical-holdout-022",
+      "category": "technical",
+      "split": "holdout",
+      "question": "Which regression model predicts TTFT and TPOT in the predicted-latency scheduler, what inputs does it use, and what serving-pool assumption limits its applicability?",
+      "relevant": {
+        "b77b3e631a0d72cd54ed12fd1862e5b4e908f8572925e0285f01ba02e32eb5a6": 3,
+        "d0cb3a90f563e74c9b0214b3a5446918314954a2a355a9d149f8510d806c250d": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-navigation-development-023",
+      "category": "navigation",
+      "split": "development",
+      "question": "Where in the llm-d v0.4 article is the experimental autoscaler explained in terms of saturated replicas, spare capacity, and an anti-oscillation safety margin?",
+      "relevant": {
+        "286a47392a90aa485870dd824dc5422d2ce3b061b53a554bb488816c08b7c7b5": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-navigation-holdout-024",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Which section of the native filesystem-offloading article explains the connector integration and how stored KV blocks are indexed and shared?",
+      "relevant": {
+        "9246668b70633bc62059270d6ba57daa1f896029a05d88b86cd92e538a920e0f": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-cross_language-development-025",
+      "category": "cross_language",
+      "split": "development",
+      "question": "llm-d v0.5 的 NIXL–UCCL 后端为什么把点对点传输逻辑放在 CPU 上？它支持哪两种传输方式？",
+      "relevant": {
+        "46e2086bdff0f23d1b7a541cdd2fa1c366a936f54cbe0dd8328f487c59717f8b": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-cross_language-holdout-026",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "GLM-5.2 长上下文让 decode batch 容量受限时，多 token 预测（MTP）如何在不增加请求数的情况下增加每一步的有效工作？",
+      "relevant": {
+        "2f890b4b17e6e16c7eb27ee77e26d48112ed558785b33ecee56f21991774b1f6": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-paraphrase-development-027",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "How does the KV-cache wins article measure work the GPUs did not have to redo, rather than newly generated output?",
+      "relevant": {
+        "6cef59fce89f98cfaae8f103844da0c9243b28d9ecd7bb3d49598badccc9be99": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-paraphrase-holdout-028",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "How does v1.0 avoid sending a request to an incompatible prefill/decode pair during an in-place upgrade?",
+      "relevant": {
+        "97b822a6e733c635baca030dcd3c8828333b55142c4e5917fad43d79827be5cb": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-disambiguation-development-029",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Does llm-d choose the encode endpoint in the Kimi-VL SGLang E/PD integration, as it does in the vLLM E-disaggregation integration?",
+      "relevant": {
+        "b01d43c055d9ee1c0be51904a4cf759c92e2ffa691a5aae3ccf4d1a037359aa6": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "llmdai-disambiguation-holdout-030",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Should the P2P KV-sharing transfer-versus-recompute crossover be treated as a fixed threshold portable to every model and network?",
+      "relevant": {
+        "1d765159fafa4a0a282b2ae285e2cd9a3e3c5550163a27cbc4a33474bc409bcd": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-technical-development-031",
+      "category": "technical",
+      "split": "development",
+      "question": "In the KV-cache capacity report's estimated-scheduling configuration, which prefix-cache-scorer limits are set and how are its three scorers weighted?",
+      "relevant": {
+        "e85070b8d55d4be823950898183a4765ea1f1464230133eb6b81ef65d0349b64": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-technical-holdout-032",
+      "category": "technical",
+      "split": "holdout",
+      "question": "What runtime-customization capability did the KServe operator evaluation require for specialized hardware and rapid vLLM iteration?",
+      "relevant": {
+        "705f81706882dcefc45795f990bc3779510be265d929f436aa5ec5ae93acd002": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-navigation-development-033",
+      "category": "navigation",
+      "split": "development",
+      "question": "Where does the KServe integration article explain the change that lets RunAI Model Streamer replace the default model storage initializer?",
+      "relevant": {
+        "c68f38c72346ad60dacbf369191a43d6f5c2909d03e3f49651f124542b85e6f8": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-navigation-holdout-034",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Which part of the KV-cache capacity report explains how TTFT differs from ITL and which direction is better for each?",
+      "relevant": {
+        "570da3d7a7d56790b28061eff3a8252cf196e8811eb30fd0c16fe54891d72ac8": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-cross_language-development-035",
+      "category": "cross_language",
+      "split": "development",
+      "question": "KV-cache 容量基准怎样用共享系统提示词、每组用户提示词和组数估算常驻 token 总量？",
+      "relevant": {
+        "21e20d29f563285ed342d5e9d07598f425bba9386fdbdeb055b46bc72113138c": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-cross_language-holdout-036",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "KServe 文章中，从 NFS 改为本地 LVM 持久卷后，为什么单个硬件故障仍会带来人工运维负担？",
+      "relevant": {
+        "ebb866c75b2a9726e13e742990e57b0aa48843e3ee1bc3866634beeafdf3c3e9": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-paraphrase-development-037",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "How does the KServe, llm-d, and vLLM combination try to reuse work already cached on a GPU instead of distributing requests round-robin?",
+      "relevant": {
+        "288cee2fa220aab6345c033893c041c8754bd0b81e2eec7620a960e52a13becc": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-paraphrase-holdout-038",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "In the capacity report's EPP summary, are wait-queue behavior and KV-cache occupancy represented only by averages, or are tail and peak values also included?",
+      "relevant": {
+        "a5791537949262030a8f2520c5499eca426139e95db882cfe19252a91d68023f": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-disambiguation-development-039",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Does the capacity report's precise-scheduling arm simply reuse estimated-scheduling's approximate prefix settings, or does it enable explicit cache tracking?",
+      "relevant": {
+        "e85070b8d55d4be823950898183a4765ea1f1464230133eb6b81ef65d0349b64": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "github_articles-disambiguation-holdout-040",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Did the KServe article's operator requirements call for one fixed prefill/decode architecture, or for adapting deployment patterns as serving topologies evolved?",
+      "relevant": {
+        "705f81706882dcefc45795f990bc3779510be265d929f436aa5ec5ae93acd002": 3
+      },
+      "target_origins": [
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-technical-development-041",
+      "category": "technical",
+      "split": "development",
+      "question": "According to the AWS llm-d Setup section, what must be installed for the Gateway Inference API Extension, and which implementation is given as an example?",
+      "relevant": {
+        "e70dd0d5ab0468971e1523266a02d2be06e0dafcfd540fc74f3ca0e353a5c37d": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-technical-holdout-042",
+      "category": "technical",
+      "split": "holdout",
+      "question": "For the AWS prefill/decode deployment, which NIXL transport backend is used and how should EFA interface allocation relate to GPUs and instance capacity?",
+      "relevant": {
+        "e4f458b4bcb69a21aeeb89013319b42eeb3e95515803664f5c7fe5081e21aa06": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-navigation-development-043",
+      "category": "navigation",
+      "split": "development",
+      "question": "Where does the AWS article list the local tools, HuggingFace access, and cluster access needed before deploying either pattern?",
+      "relevant": {
+        "12f0373eda6b8ee40c37d340e5f05bddac81118bf106077bf6523d9248fe31dc": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-navigation-holdout-044",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Where in the AWS article can I find the model, instance, parallelism, pod layout, and transport used for its disaggregated-inference comparison?",
+      "relevant": {
+        "bf6a8f91e2429548f09182a11ff529126d3380be4ff4cf351f6737b3898d2234": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-cross_language-development-045",
+      "category": "cross_language",
+      "split": "development",
+      "question": "AWS 文章为什么强调多副本服务中的 KV-cache 感知路由？对于多轮对话或 agent 工作流，它怎样避免把请求送到缺少相关上下文的副本？",
+      "relevant": {
+        "3eff91e0000aacbbc74bf0021400d8bc67503d199329940b9e8dc3233eb5260d": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-cross_language-holdout-046",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "AWS 文章中，为什么 vLLM 原生前缀缓存仍会受到容量限制，llm-d 的分层缓存通过哪些存储层扩展它？",
+      "relevant": {
+        "e15c2beb7b5de2e31e15a0ee1b2f4fa68b4edc71178a08e4fa9e7619dac7d528": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-paraphrase-development-047",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "What does SageMaker HyperPod do when underlying hardware becomes unhealthy, according to the AWS article's infrastructure discussion?",
+      "relevant": {
+        "f67d6b9b64355a01432bedec8b310b73d562814fee5783ea286ecec88ebb0843": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-paraphrase-holdout-048",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "After prefill and decode are separated in the AWS article's llm-d design, how does the decode server obtain the prompt's cached state?",
+      "relevant": {
+        "55cb0e4c6c16a16e667763042cce761057a325ceb1ee89f049dddbce62642513": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-disambiguation-development-049",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Does the AWS article present wide expert parallelism as automatic scaling for any model, or as an MoE deployment pattern with additional tuning requirements?",
+      "relevant": {
+        "c87e2e631a2666d58c99f93b370ba43d07d7be75d9e1337d9443d33cad1eb741": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "aws-disambiguation-holdout-050",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Does the AWS Best Practices section recommend disaggregated inference for every workload, or identify particular workload shapes worth trying?",
+      "relevant": {
+        "e12760bf15923a316a31959e8e5e0b180004c9b5e7e6b264e3dac19ab5cccf81": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-technical-development-051",
+      "category": "technical",
+      "split": "development",
+      "question": "In AMD's isolated P/D configuration measurements, how are OSL and synthetic inputs used to decouple the phases, and is an RDMA-enabled setup required for those independent measurements?",
+      "relevant": {
+        "a4ab80aa9ef124c2fea40a75137a8355f9a8c785674e9972dfa4a4aba44bba0f": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-technical-holdout-052",
+      "category": "technical",
+      "split": "holdout",
+      "question": "How many Kubernetes nodes and MI300X GPUs formed the cluster in AMD's Experimental Setup, and how many GPUs were on each node?",
+      "relevant": {
+        "aaf763aa3962d6fd4428eba845a09e34f1603208215c95e1d910435276972698": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-navigation-development-053",
+      "category": "navigation",
+      "split": "development",
+      "question": "Which section of AMD's OCI article should I open for end-to-end tests with real request flows, rather than measurements of prefill and decode in isolation?",
+      "relevant": {
+        "79ce252a3ed1baad66daa344b8594c5c276af3d892221ba5b3aa8058b8df6627": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-navigation-holdout-054",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Where in AMD's article is the multi-node gpt-oss-120b topology specified, including the prefill/decode replica counts, tensor parallel sizes, and QPS sweep?",
+      "relevant": {
+        "9c36b4545facc91cd07d7c7578282822fbb6e1c92288f040369e7147d8eb5ea7": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-cross_language-development-055",
+      "category": "cross_language",
+      "split": "development",
+      "question": "AMD 的 P/D 配置分析中，TPSU 和 TPSG 分别衡量什么？比较两种部署时，固定哪个指标才能比较 GPU 效率？",
+      "relevant": {
+        "a4ab80aa9ef124c2fea40a75137a8355f9a8c785674e9972dfa4a4aba44bba0f": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-cross_language-holdout-056",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "AMD 的 OCI 实验分别选择了哪个 MoE 模型和哪个稠密模型？请给出文中使用的完整模型标识。",
+      "relevant": {
+        "aaf763aa3962d6fd4428eba845a09e34f1603208215c95e1d910435276972698": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-paraphrase-development-057",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "According to AMD, why can assigning separate resources to prompt processing and token generation be useful instead of configuring both phases identically?",
+      "relevant": {
+        "a4ab80aa9ef124c2fea40a75137a8355f9a8c785674e9972dfa4a4aba44bba0f": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-paraphrase-holdout-058",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "Why does AMD's scale-out discussion say mixing chunked prefill with decode can produce uneven token generation, while a separated deployment can produce a smoother stream?",
+      "relevant": {
+        "9c36b4545facc91cd07d7c7578282822fbb6e1c92288f040369e7147d8eb5ea7": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-disambiguation-development-059",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Does AMD's gpt-oss-120b end-to-end frontier say disaggregated serving is more GPU-efficient at every interactivity level, or does it distinguish a middle range from the extremes?",
+      "relevant": {
+        "79ce252a3ed1baad66daa344b8594c5c276af3d892221ba5b3aa8058b8df6627": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "amd-disambiguation-holdout-060",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "In AMD's tested software stack, which version belongs to llm-d and which to vLLM? Does the vLLM label describe an unmodified release or a release with a patch?",
+      "relevant": {
+        "c77dd20a51222985fff0eaa1e74b78a5c53019ae11da2f23b5f97fcf2999fbfa": 3
+      },
+      "target_origins": [
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-technical-development-061",
+      "category": "technical",
+      "split": "development",
+      "question": "In IBM Research's H100 deployment, why use wide expert parallelism with data-parallel attention instead of tensor parallelism for GLM-5.2's multi-head latent attention?",
+      "relevant": {
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-technical-holdout-062",
+      "category": "technical",
+      "split": "holdout",
+      "question": "Which open-weight model did IBM Research deploy on its H100 fleet, how many total and active parameters are reported, and how many H100 GPUs were used?",
+      "relevant": {
+        "1b1c4077c6dc0e34ddf9026299e4ba83b0417432ab69c23738649c3da662e7e4": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-navigation-development-063",
+      "category": "navigation",
+      "split": "development",
+      "question": "Where in IBM Research's H100 article can I find the CyberGym result for replacing approximate routing with precise prefix matching, and what throughput and TTFT changes does it report?",
+      "relevant": {
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-navigation-holdout-064",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Which section of IBM Research's article explains how structured benchmark runs avoided being influenced by cache contents left over from earlier runs?",
+      "relevant": {
+        "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-cross_language-development-065",
+      "category": "cross_language",
+      "split": "development",
+      "question": "IBM 的实现中，prefill 与 decode 两个池之间通过哪个库通信？文中把该库的传输方式称为什么？",
+      "relevant": {
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-cross_language-holdout-066",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "IBM 的分离式数据平面测试中，NIXL 完成了多少次 KV 缓存传输？平均传输量、集群 p90 带宽和失败次数分别是多少？",
+      "relevant": {
+        "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-paraphrase-development-067",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "How does IBM's llm-d stack let operators increase context-processing capacity separately from token-generation capacity as demand changes?",
+      "relevant": {
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-paraphrase-holdout-068",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "How does IBM Research qualify its claim that self-hosting GLM-5.2 on H100s is cheaper per token than a commercial API?",
+      "relevant": {
+        "1b1c4077c6dc0e34ddf9026299e4ba83b0417432ab69c23738649c3da662e7e4": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-disambiguation-development-069",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "When IBM's best reusable prefix is cached on another server, does llm-d recompute it locally or retrieve it from that peer, and what mechanism is named?",
+      "relevant": {
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "ibm-disambiguation-holdout-070",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Which IBM benchmark used 400 agents with 376K-character contexts over 10 turns, and which used 128 agents with roughly 195K-token contexts? Keep the context units distinct.",
+      "relevant": {
+        "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-technical-development-071",
+      "category": "technical",
+      "split": "development",
+      "question": "In Google Cloud's llm-d introduction, how does disaggregated serving place the prefill and decode stages, and what request pattern is it intended to help?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-technical-holdout-072",
+      "category": "technical",
+      "split": "holdout",
+      "question": "Which frameworks and accelerator types does Google Cloud's llm-d introduction describe, and which framework is only presented as planned rather than already supported?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-navigation-development-073",
+      "category": "navigation",
+      "split": "development",
+      "question": "Where in Google Cloud's llm-d introduction can I find the list of Google services on which vLLM support for Cloud TPUs was announced?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-navigation-holdout-074",
+      "category": "navigation",
+      "split": "holdout",
+      "question": "Where does Google Cloud's llm-d introduction report its early code-completion latency result, and which latency metric improved by the stated factor?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-cross_language-development-075",
+      "category": "cross_language",
+      "split": "development",
+      "question": "Google Cloud 文中，面向推理模型的 Ironwood TPU 单个 pod 最多计划扩展到多少块芯片？芯片之间用什么互连？",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-cross_language-holdout-076",
+      "category": "cross_language",
+      "split": "holdout",
+      "question": "Google Cloud 的介绍把云上部署 llm-d 的低延迟和高性能归因于哪些网络、GKE 和软硬件集成能力？",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-paraphrase-development-077",
+      "category": "paraphrase",
+      "split": "development",
+      "question": "Why does Google Cloud's introduction argue that supporting larger models alone is no longer enough for inference infrastructure as reasoning and agent workflows grow?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-paraphrase-holdout-078",
+      "category": "paraphrase",
+      "split": "holdout",
+      "question": "What does Google Cloud say llm-d stores across multiple cache tiers, and what response-time and storage-cost goals motivate doing so?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-disambiguation-development-079",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Does Google Cloud describe llm-d's request scheduler as round-robin balancing, or as choosing vLLM instances using different signals? Which signals and efficiency objective are named?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "gcloud-disambiguation-holdout-080",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "In Google Cloud's llm-d introduction, is llm-d the name of the Kubernetes extension project that adds AI-native routing, or is a different project named? Through which GKE component was that extension made available?",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-development-081",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Do the token-aware routing article's affinityThreshold and the KV-cache capacity benchmark's resident-token sizing describe the same utilization control? Explain what each represents and why the benchmark percentage is not a routing-threshold recommendation.",
+      "relevant": {
+        "fab8db4a7ba6364931da920e6a1a280ac02f13a34cf5b17c4c03b29ebb277642": 3,
+        "21e20d29f563285ed342d5e9d07598f425bba9386fdbdeb055b46bc72113138c": 3
+      },
+      "target_origins": [
+        "https://llm-d.ai",
+        "https://github.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-development-082",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Can IBM's CyberGym routing improvements be quoted as measured gains for the cache-and-load-aware scheduler in Google Cloud's introduction? Separate each source's routing claim, baseline and level of quantitative evidence.",
+      "relevant": {
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3,
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-development-083",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Do AWS's wide-expert-parallelism guidance and IBM's GLM-5.2 deployment justify treating wide EP as automatic scaling for any model? Contrast the MoE tuning boundary with the specific attention/KV-cache reason for IBM's sharding choice.",
+      "relevant": {
+        "c87e2e631a2666d58c99f93b370ba43d07d7be75d9e1337d9443d33cad1eb741": 3,
+        "fd5f23faea96e84e2972753557caaddee0a5b63924eb639c957e37e9e909f4e7": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com",
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-development-084",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "Can AMD's TPSU/TPSG efficiency frontier be compared directly with a benchmark report's session_duration or session event count? Distinguish the metric denominators, whole-session units and per-request report level before drawing a performance conclusion.",
+      "relevant": {
+        "a4ab80aa9ef124c2fea40a75137a8355f9a8c785674e9972dfa4a4aba44bba0f": 3,
+        "c5337048960746204068df9442951001f02bb0c540de925327d1fc72878ca274": 3,
+        "9d233ffad130d9449fc69697a4479866f941f153e94d941c2c3f6b07b2a9b92d": 3
+      },
+      "target_origins": [
+        "https://www.amd.com",
+        "https://github.com/llm-d/llm-d-benchmark.git"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-development-085",
+      "category": "disambiguation",
+      "split": "development",
+      "question": "What does AWS's Gateway Inference API Extension installation guidance establish, and what additional cache-state and request-processing dataflow does llm-d's precise-prefix-cache-routing guide describe? Do not confuse installed CRDs and an implementation with evidence that the full routing pipeline is operating.",
+      "relevant": {
+        "e70dd0d5ab0468971e1523266a02d2be06e0dafcfd540fc74f3ca0e353a5c37d": 3,
+        "ccc4f187170fe7575bc706ac9bd09d613d4fc6ccc4268009ca4fe01dfb5bcb30": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com",
+        "https://github.com/llm-d/llm-d"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-holdout-086",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Does IBM's fleet p90 NIXL transfer bandwidth describe output-token throughput or the mechanism that makes AWS prefill/decode handoff work? Distinguish IBM's measured transfer statistic from AWS's sidecar-directed KV-state handoff.",
+      "relevant": {
+        "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": 3,
+        "55cb0e4c6c16a16e667763042cce761057a325ceb1ee89f049dddbce62642513": 3
+      },
+      "target_origins": [
+        "https://research.ibm.com",
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-holdout-087",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Are the AWS GPT-OSS disaggregation comparison and AMD's gpt-oss-120b scale-out run the same hardware/topology experiment? Contrast their reported accelerator settings and TP/replica layouts, keeping AMD's full cluster inventory separate from its tested deployment.",
+      "relevant": {
+        "bf6a8f91e2429548f09182a11ff529126d3380be4ff4cf351f6737b3898d2234": 3,
+        "9c36b4545facc91cd07d7c7578282822fbb6e1c92288f040369e7147d8eb5ea7": 3,
+        "aaf763aa3962d6fd4428eba845a09e34f1603208215c95e1d910435276972698": 3
+      },
+      "target_origins": [
+        "https://aws.amazon.com",
+        "https://www.amd.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-holdout-088",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Should the cks-mooncake overlay's equal prefill/decode TP requirement be imposed on every disaggregated deployment? Contrast its image and in-pod RDMA prerequisites with the TP1-prefill/TP4-decode NIXL/libfabric layout actually benchmarked in the AWS article.",
+      "relevant": {
+        "9b8b5599e7ed1efe2385970f8eb0a3ad43f8ff901e3756c49152f68939e880f1": 3,
+        "bf6a8f91e2429548f09182a11ff529126d3380be4ff4cf351f6737b3898d2234": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://aws.amazon.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-holdout-089",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "For reproducing a cache-sensitive serving experiment, are final performance plots or retained launch parameters alone enough? Contrast the benchmark guide's applied-configuration artifacts with IBM's fresh-prefix and seed controls that avoid inherited KV-cache state.",
+      "relevant": {
+        "ebd14dc71a8e316da8903dad0c024a186ddc262e8bf1cb00d52423825ba43920": 3,
+        "8b8daa77061e2748bebaabae94fc7dfab4aec9d4d82d59a7663ccb5b8a32beee": 3
+      },
+      "target_origins": [
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://research.ibm.com"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "cross-disambiguation-holdout-090",
+      "category": "disambiguation",
+      "split": "holdout",
+      "question": "Does Google Cloud's multi-tier KV-cache description specify the same concrete storage implementation as llm-d's filesystem-offloading article? Contrast the stated cache-tier goals with the connector, storage representation and sharing condition actually documented by the filesystem backend.",
+      "relevant": {
+        "7b2d0fb7167cbbd473882ae3ae15671923574acc891b61532b6553d49366ee2e": 3,
+        "9246668b70633bc62059270d6ba57daa1f896029a05d88b86cd92e538a920e0f": 3
+      },
+      "target_origins": [
+        "https://cloud.google.com",
+        "https://llm-d.ai"
+      ],
+      "forbidden": [],
+      "expect_empty": false
+    },
+    {
+      "case_id": "all-absence-development-091",
+      "category": "absence",
+      "split": "development",
+      "question": "What feeding ratio and temperature should I use to maintain a sourdough starter?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-holdout-092",
+      "category": "absence",
+      "split": "holdout",
+      "question": "How long should a vegetable lasagna bake, and at what oven temperature?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-development-093",
+      "category": "absence",
+      "split": "development",
+      "question": "Which compositional techniques distinguish Mozart's late symphonies?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-holdout-094",
+      "category": "absence",
+      "split": "holdout",
+      "question": "How is the monthly payment of a fixed-rate mortgage calculated?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-development-095",
+      "category": "absence",
+      "split": "development",
+      "question": "What chemical steps make up the Calvin cycle in plant photosynthesis?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-development-096",
+      "category": "absence",
+      "split": "development",
+      "question": "What measured P99 TTFT does llm-d achieve for Llama-3.1-70B on eight AMD MI325X GPUs at concurrency 64?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-holdout-097",
+      "category": "absence",
+      "split": "holdout",
+      "question": "What measured output-token throughput is reported for llm-d serving Qwen3-8B on a Jetson AGX Orin at concurrency 16?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-holdout-098",
+      "category": "absence",
+      "split": "holdout",
+      "question": "What is the measured P95 inter-token latency for llm-d running Llama-3.1-8B on an RTX 5090 at concurrency 32?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-development-099",
+      "category": "absence",
+      "split": "development",
+      "question": "How many kilograms of CO2-equivalent per million output tokens were measured in the AWS disaggregated-inference experiment?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    },
+    {
+      "case_id": "all-absence-holdout-100",
+      "category": "absence",
+      "split": "holdout",
+      "question": "What itemized monthly Google Cloud bill in USD is reported for a 30-day llm-d deployment of Llama-3.1-70B on eight H100 GPUs?",
+      "relevant": {},
+      "target_origins": [
+        "https://github.com/llm-d/llm-d",
+        "https://github.com/llm-d/llm-d-benchmark.git",
+        "https://llm-d.ai",
+        "https://github.com",
+        "https://aws.amazon.com",
+        "https://www.amd.com",
+        "https://research.ibm.com",
+        "https://cloud.google.com"
+      ],
+      "forbidden": [],
+      "expect_empty": true
+    }
+  ]
+}

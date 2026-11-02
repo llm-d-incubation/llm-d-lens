@@ -58,6 +58,24 @@ def input_schema(schema: dict, components: dict, seen=frozenset()) -> dict:
     return {"anyOf": [result, {"type": "null"}]} if schema.get("nullable") else result
 
 
+def strict_schema(schema: dict, components: dict, seen=frozenset()) -> dict:
+    if "$ref" in schema:
+        name = schema["$ref"].rsplit("/", 1)[-1]
+        if name in seen:
+            return {}
+        return strict_schema(resolve(schema, components), components, seen | {name})
+    return {
+        key: (
+            strict_schema(value, components, seen)
+            if isinstance(value, dict)
+            else [strict_schema(item, components, seen) if isinstance(item, dict) else item for item in value]
+            if isinstance(value, list)
+            else value
+        )
+        for key, value in schema.items()
+    }
+
+
 def generate_catalog(spec: dict) -> list[dict]:
     config = definitions()
     tools = deepcopy(config["specialTools"])
@@ -112,6 +130,23 @@ def generate_catalog(spec: dict) -> list[dict]:
             schema = {"type": "object", "properties": properties}
             if required:
                 schema["required"] = required
+            strict = name == "query_public_benchmark_rag"
+            response_schema = None
+            if strict:
+                if method != "post" or path != "/api/v1/benchmark-rag/query":
+                    raise ValueError("query_public_benchmark_rag must be POST /api/v1/benchmark-rag/query")
+                response_schema = (
+                    operation.get("responses", {})
+                    .get("200", {})
+                    .get("content", {})
+                    .get("application/json", {})
+                    .get("schema")
+                )
+                if not response_schema:
+                    raise ValueError("query_public_benchmark_rag requires a JSON 200 response schema")
+                if not body:
+                    raise ValueError("query_public_benchmark_rag requires a JSON request schema")
+                schema = strict_schema(body, components)
             tools.append(
                 {
                     "name": name,
@@ -122,6 +157,7 @@ def generate_catalog(spec: dict) -> list[dict]:
                     "method": method.upper(),
                     "bodyFields": body_fields,
                     "queryFields": [parameter["name"] for parameter in parameters if parameter["in"] == "query"],
+                    **({"responseSchema": strict_schema(response_schema, components)} if strict else {}),
                 }
             )
     if skipped:

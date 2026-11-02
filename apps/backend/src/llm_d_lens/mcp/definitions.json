@@ -1891,6 +1891,7 @@
     }
   ],
   "intentionalSkips": [
+    "PUT /api/v1/benchmark-rag/runtime",
     "DELETE /api/cluster/port-forwards/{forward_id}",
     "DELETE /api/cluster/sessions/{session_id}/port-forwards",
     "DELETE /api/v1/clusters/{cluster_id}/access/{binding_id}",
@@ -1981,6 +1982,8 @@
   },
   "riskTierOverrides": {
     "approve_agentic_plan": "approve",
+    "query_public_benchmark_rag": "read",
+    "search_public_rag_documents": "read",
     "probe_model_gateway": "read",
     "preflight_model_gateway": "read"
   }

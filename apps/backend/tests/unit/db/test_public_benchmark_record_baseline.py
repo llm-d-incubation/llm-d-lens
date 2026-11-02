@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import Engine
 from sqlalchemy.orm import sessionmaker
 
-from llm_d_lens.agentic.public_benchmark_record.contracts import PublicBenchmarkRecord
+from llm_d_lens.agentic.public_benchmark_record.contracts import PublicBenchmarkRecord, effective_runtime
 from llm_d_lens.agentic.public_benchmark_record.evaluation import EvaluationCase, EvaluationSuite, run_evaluation
 from llm_d_lens.agentic.public_benchmark_record.prism import PARSER_VERSION as PRISM_PARSER_VERSION
 from llm_d_lens.agentic.public_benchmark_record.prism import PrismSnapshotImporter
@@ -133,7 +133,7 @@ class _PublicCitationVerifier:
         trusted_context = {
             name: getattr(item, name)
             for name in ("item_id", "origin_id", "model", "hardware", "runtime", "workload", "configuration")
-        } | {"source_pointer": item.source_pointer or {}}
+        } | {"runtime": effective_runtime(item.runtime), "source_pointer": item.source_pointer or {}}
         assert context.model_dump() == trusted_context
         data = self._bytes(item)
         pointer = item.source_pointer or {}
@@ -330,3 +330,14 @@ def test_real_prism_structured_baseline(
     false_pointer = evidence.citation.model_copy(update={"source_pointer": {"fabricated": True}})
     assert verify(case, evidence.model_copy(update={"citation": false_pointer}))
     assert verify(case, evidence.model_copy(update={"text": "fabricated source excerpt"}))
+    assert evidence.experiment is not None
+    for name, value in (
+        ("model", "fabricated-model"),
+        ("hardware", "fabricated-hardware"),
+        ("runtime", "fabricated-runtime"),
+        ("workload", {"fabricated": True}),
+        ("configuration", {"fabricated": True}),
+        ("source_pointer", {"fabricated": True}),
+    ):
+        false_context = evidence.experiment.model_copy(update={name: value})
+        assert verify(case, evidence.model_copy(update={"experiment": false_context})), name

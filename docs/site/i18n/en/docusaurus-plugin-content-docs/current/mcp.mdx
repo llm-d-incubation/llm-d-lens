@@ -63,6 +63,85 @@ evolve). All tools return JSON; a failing call comes back as an MCP error result
 
 ## Connect a client
 
+### Public benchmark evidence
+
+`query_public_benchmark_rag` is a generated **read** tool wrapping
+`POST /api/v1/benchmark-rag/query`. Its arguments are the REST request body, and
+its text result contains the same JSON evidence response, including Decimal
+strings, citations and abstentions. It is available in Lens Assistant read-only
+mode, but is **not** part of the Agentic Deployment planner's tool allowlist.
+
+The MCP invocation permission above is necessary but not sufficient:
+`benchmark-rag:query:read` must also be granted at **GLOBAL** scope. Only GLOBAL
+admins receive it by default; other roles need an explicit GLOBAL grant. Cluster
+grants, anonymous callers and the disabled-auth `system` sentinel cannot query.
+The Python adapter signs the actual authenticated caller through an in-process
+ASGI request using the existing internal HMAC transport; tool arguments cannot
+supply an identity. Strict input and response validation preserve Decimal strings
+and return tool errors without upstream evidence on failure. No separate Node
+server or generated TypeScript catalog is required.
+
+By default, only published public sources are searched: the approved Prism public snapshot,
+`llm-d/llm-d`, `llm-d/llm-d-benchmark`, and explicitly reviewed/published
+[blog Markdown snapshots](/api-reference/modules/lens-assistant#approved-blog-sources-and-reviewed-web-snapshots).
+Blog snapshots are context-only and never auto-crawled or promoted to verified
+measurements. The deployment must have the
+published corpus **and its immutable source archive** restored; a database-only
+copy is insufficient. `include_internal` is a boolean defaulting to `false`;
+without opt-in, there is no internal data, count or identity access.
+With `include_internal: true`, authorized stored Agentic evaluation measurements
+may also be returned. The GLOBAL RAG grant is still required, together with the
+existing `evaluate:run:read` policy in each record's verifiable owning context;
+missing/deleted/unverifiable owners are excluded even for admins.
+`internal_branch_enabled` reflects opt-in, not permission to every internal record.
+The endpoint, operation ID, read tier and planner exclusion remain unchanged.
+Answers use `generation_mode: "deterministic"`, not an LLM generation path.
+Question planning uses bounded deterministic keyword rules,
+not general NLP or LLM inference; explicit structured filters are authoritative.
+Recognized model/statistic conditions in the question must agree with those
+filters; conflicts fail validation. Ambiguous model subjects or multiple
+models/statistics abstain before retrieval instead of broadening the search.
+Metric definitions such as `What is TTFT?` search prose, while scoped
+TTFT/TPOT questions search measurements. Explicit `intent` still takes precedence.
+Automatic keyword rules are English-only. For questions in other languages,
+provide explicit `intent` and structured `filters`; language is not inferred.
+Figure evidence can include `related_experiments` for explicitly linked
+published scenarios; the adapter never guesses experiment identities.
+Evidence origins are `public`, `agentic` or `public_and_agentic`. Internal
+`agentic_measurement` citations preserve owning-evaluation provenance and declare
+`numeric_precision: "stored_float"`: Decimal strings reflect stored Float values,
+not exact source tokens. Public raw-byte precision is unchanged.
+Only canonical `evaluate:<UUID>` identity in pinned public raw JSON plus matching
+metric/statistic/unit/value permits a merge; the public citation and internal
+`corroborating_citations` are retained with
+`identity_verification: "canonical_evaluate_run_and_metric"`. Unknown overlaps
+stay separate, and unauthorized overlaps do not leak. Legacy eight-character
+simulation task IDs cannot establish evaluation ownership and are omitted.
+`limit` (1–50) bounds total returned envelopes after merges;
+`returned_observations` counts those envelopes, while `matched_items` counts
+candidate public index items plus authorized internal benchmark records, not
+independent experiments or exact distinct runs. `truncated` explicitly reports
+omitted results.
+Denied, unavailable or malformed upstream results produce
+explicit tool errors, not empty successful answers.
+
+See the [request, filters and response contract](/api-reference/modules/lens-assistant#query-public-benchmark-evidence).
+This integration has focused local automated coverage; a real deployment has
+**not yet been verified**.
+
+Evidence refresh is deliberately **not** an MCP write tool. Trusted
+administrators can use the shared target-local `admin refresh` command for
+manual Prism snapshots and reviewed commit/periodic repository jobs.
+Plans pin full inventories, hashes, counts and publication generations; failures
+preserve the current release, and old periodic plans cannot undo rollback or
+revocation. See [refresh administration](/api-reference/modules/lens-assistant#administer-reviewed-benchmark-refreshes).
+The [fixed evidence baseline](/api-reference/modules/lens-assistant#evaluate-the-fixed-evidence-baseline)
+replays known questions, exact values, refusals and authorized internal cases
+with independent citation checks. A passing baseline never auto-approves a new
+origin, external URL or paper.
+The optional internal branch and its owning-Evaluate permissions are unchanged;
+simulation/benchmark ingestion improvements are deferred.
+
 ### MCP Inspector
 
 1. Start the Lens dev stack (`scripts/lens-local.sh start`).

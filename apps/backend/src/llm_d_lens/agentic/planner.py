@@ -33,6 +33,7 @@ from llm_d_lens.capacity import (
     wrap_config,
 )
 
+from .document_evidence import DocumentEvidencePacket, document_context, document_reference_map
 from .planning_requirements import PlanningRequirements, normalize_requirements
 
 # Reasoning-capable providers (e.g. DeepSeek) spend part of the completion
@@ -287,6 +288,11 @@ class PlanningFacts:
     requirements: PlanningRequirements | None = None
     configuration_cases: tuple[dict[str, Any], ...] = ()
     configuration_case_status: dict[str, Any] | None = None
+    document_evidence: tuple[DocumentEvidencePacket, ...] = ()
+
+    @property
+    def planning_hardware_model(self) -> str | None:
+        return self.requirements.hardware.device_model if self.requirements is not None else None
 
 
 def select_request_evidence(
@@ -303,8 +309,20 @@ def select_request_evidence(
             validate_request_context_budget(settings, request, completion_tokens=completion_tokens)
             return facts, request
         except ValueError:
-            if not (facts.configuration_cases or facts.public_rag_evidence):
+            if not (facts.configuration_cases or facts.public_rag_evidence or facts.document_evidence):
                 raise
+        if facts.document_evidence:
+            removed_id = facts.document_evidence[-1].citation_id
+            status = dict(facts.configuration_case_status or {})
+            excluded = dict(status.get("excluded") or {})
+            excluded[removed_id] = "request_context_budget"
+            status.update(truncated=True, excluded=excluded)
+            facts = replace(
+                facts,
+                document_evidence=facts.document_evidence[:-1],
+                configuration_case_status=status,
+            )
+            continue
         removed: set[str] = set()
         cases = facts.configuration_cases
         public = facts.public_rag_evidence
@@ -479,10 +497,13 @@ def planning_reference_map(facts: PlanningFacts) -> dict[str, str]:
         for case in facts.configuration_cases
         for measurement in case.get("measurements", ())
     }
-    return model_reference_map(
-        () if (facts.configuration_case_status or {}).get("model_context_omitted") else facts.configuration_cases,
-        tuple(item for item in facts.public_rag_evidence if item["evidence_id"] not in covered),
-    )
+    return {
+        **model_reference_map(
+            () if (facts.configuration_case_status or {}).get("model_context_omitted") else facts.configuration_cases,
+            tuple(item for item in facts.public_rag_evidence if item["evidence_id"] not in covered),
+        ),
+        **document_reference_map(facts.document_evidence),
+    }
 
 
 def configuration_case_reference_ids(facts: PlanningFacts) -> set[str]:
@@ -1393,6 +1414,7 @@ class OpenAICompatiblePlanner:
                 planning_facts["requirements"] = selected.requirements.model_dump(mode="json")
             for field in (
                 "performance_score_inputs",
+                "document_evidence",
                 "public_rag_evidence",
                 "configuration_cases",
                 "configuration_case_status",
@@ -1402,6 +1424,9 @@ class OpenAICompatiblePlanner:
             context = {
                 "operator_preference": operator_prompt,
                 **public_rag_context(selected),
+                **document_context(
+                    selected.document_evidence, model=selected.model_name, hardware=selected.planning_hardware_model
+                ),
                 "explicit_workload": public_rag_workload(selected),
                 "planning_facts": planning_facts,
                 "valid_candidates": [self._candidate_context(selected, candidate) for candidate in valid_candidates],

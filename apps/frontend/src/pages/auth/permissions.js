@@ -33,6 +33,7 @@ export const VIEW_PERMISSIONS = {
     'optimization-evaluation-details': ['evaluate:run:read'],
     'optimization-simulate': ['simulation:task:read'],
     playground: ['playground:chat:use'],
+    'public-rag': ['benchmark-rag:query:read'],
     clusters: ['cluster:cluster:read'],
     'storage-management': ['storage:volume:read'],
     'model-cache': ['model-cache:entry:read'],
@@ -52,8 +53,9 @@ export const VIEW_PERMISSIONS = {
     'admin/usage': ['usage:report:read'],
 };
 
-export function canAccessView(permissions, view) {
+export function canAccessView(permissions, view, globalPermissions = []) {
     const requiredAny = VIEW_PERMISSIONS[view];
     if (!requiredAny) return true;
-    return requiredAny.some((permission) => hasPermission(permissions, permission));
+    const grants = view === 'public-rag' ? globalPermissions : permissions;
+    return requiredAny.some((permission) => hasPermission(grants, permission));
 }
