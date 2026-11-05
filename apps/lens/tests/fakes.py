@@ -62,6 +62,10 @@ def _merge(base, patch):
     return merged
 
 
+#: On each pod the fake controllers make: which workload's pods it is (their name prefix).
+OWNER = "fake.llmd.test/owner"
+
+
 class FakeCluster:
     def __init__(self, *, namespaces=("team-a",), user="alice", server="https://api.fake.example.invalid:6443"):
         self.namespaces = set(namespaces)
@@ -289,8 +293,15 @@ class FakeCluster:
                 del self.objects[key]
 
     def _pods(self, namespace: str, prefix: str, want: int, labels: dict, size: int = 1) -> None:
+        # The workload's own pods: by name prefix, and by owner, since another workload's name can
+        # start with this one's (``model`` and ``model-epp``).
         have = sorted(
-            key for key in self.objects if key[0] == namespace and key[1] == "pods" and key[2].startswith(prefix)
+            key
+            for key, pod in self.objects.items()
+            if key[0] == namespace
+            and key[1] == "pods"
+            and key[2].startswith(prefix)
+            and (pod["metadata"].get("annotations") or {}).get(OWNER, prefix) == prefix
         )
         for key in have[want:]:
             del self.objects[key]
@@ -299,7 +310,7 @@ class FakeCluster:
             pod = {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {"name": f"{prefix}{index}", "labels": pod_labels},
+                "metadata": {"name": f"{prefix}{index}", "labels": pod_labels, "annotations": {OWNER: prefix}},
                 "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
             }
             self.put(namespace, pod)
@@ -488,3 +499,18 @@ class FakeCluster:
         if self.controllers and removed:
             self._orphans(namespace, removed)
         return _ok(f'{resource} "{args[2]}" deleted\n' if removed else "")
+
+
+class FakeClusters:
+    """Several clusters, each a :class:`FakeCluster`, picked by the ``--context`` of each kubectl call
+    (the one named ``default`` without one). Other tools run as for one cluster."""
+
+    def __init__(self, **clusters: FakeCluster) -> None:
+        self.clusters = clusters
+
+    def __call__(self, argv, **options) -> Result:
+        argv = [str(item) for item in argv]
+        context = "default"
+        if argv and argv[0] in ("kubectl", "oc") and "--context" in argv:
+            context = argv[argv.index("--context") + 1]
+        return self.clusters[context](argv, **options)
