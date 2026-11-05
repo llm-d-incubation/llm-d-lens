@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 from .. import catalog, yamlio
 from ..errors import PolicyError, UsageError
-from ..model import validate_namespace
+from ..kube import Kube
 from ..plan import Options, Plan, make_plan
-from . import Context, Handler, add_source_arguments, parse_variables
+from ..policy import fallback_scope
+from ..preflight import preflight
+from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables
 
 
 def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -21,12 +22,7 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         "manifest files of the source (see `llmd stacks`)",
     )
     add_source_arguments(parser)
-    parser.add_argument(
-        "-n",
-        "--namespace",
-        default=os.environ.get("LLMD_NAMESPACE", ""),
-        help="target namespace (default: $LLMD_NAMESPACE)",
-    )
+    add_target_arguments(parser)
     parser.add_argument("--name", default="", help="instance name (default: from the stack's path)")
     parser.add_argument(
         "--var",
@@ -61,21 +57,23 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
     parser = commands.add_parser("plan", help="render, check, and show what standup would do (no changes)")
     add_plan_arguments(parser)
-    parser.add_argument("--offline", action="store_true", help="do not contact the cluster (required for now)")
+    parser.add_argument("--offline", action="store_true", help="do not contact the cluster")
     parser.add_argument("--manifest", default="", metavar="FILE", help="also write the planned objects here")
     parser.add_argument("--admin-yaml", default="", metavar="FILE", help="write the administrator parts here")
     return {"plan": command_plan}
 
 
-def plan_from_args(ctx: Context) -> Plan:
-    """The plan the command line asks for, offline."""
+def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Plan:
+    """The plan the command line asks for. With ``kube``, API discovery says which kinds are
+    cluster-scoped and the namespace may come from the kube context; without, the plan is offline."""
     args = ctx.args
     stack = catalog.find_stack(ctx.source(), args.stack)
     options = Options(
-        namespace=validate_namespace(args.namespace),
+        namespace=ctx.namespace(kube),
         instance=args.name or catalog.default_name(stack),
         allow_privileged=args.allow_privileged,
         skip_admin_parts=args.skip_admin_parts,
+        switch_stack=getattr(args, "switch_stack", False),
         variables=parse_variables(args.var),
         sets=list(args.sets),
     )
@@ -84,13 +82,23 @@ def plan_from_args(ctx: Context) -> Plan:
             f"--var and --set are for guides; {stack.id} is a {stack.kind} stack",
             hint="Render a kustomize directory as it is, or name the guide it belongs to.",
         )
-    return make_plan(stack, options, runner=ctx.runner)
+    scope = fallback_scope if kube is None else _discovered_scope(kube)
+    return make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)
+
+
+def _discovered_scope(kube: Kube):
+    def scope(api_version: str, kind: str) -> bool | None:
+        served = kube.scope(api_version, kind)
+        return fallback_scope(api_version, kind) if served is None else served
+
+    return scope
 
 
 def command_plan(ctx: Context) -> int:
-    if not ctx.args.offline:
-        raise UsageError("llmd plan checks a cluster in a later version; pass --offline")
-    plan = plan_from_args(ctx)
+    kube = None if ctx.args.offline else ctx.kube()
+    plan = plan_from_args(ctx, kube)
+    if kube is not None:
+        preflight(kube, plan)
     if ctx.args.manifest:
         yamlio.write_text_atomic(Path(ctx.args.manifest), yamlio.dump_documents(plan.documents))
     if ctx.args.admin_yaml:
