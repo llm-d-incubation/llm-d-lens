@@ -1,4 +1,6 @@
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -31,3 +33,20 @@ def isolated_dirs(tmp_path, monkeypatch):
     monkeypatch.delenv("LLMD_STATE_DIR", raising=False)
     monkeypatch.delenv("LLMD_NAMESPACE", raising=False)
     monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+
+
+DATA = Path(__file__).parent / "data"
+
+
+def committed_copy(target):
+    """A copy of the test repository (llm-d's layout), committed so listing reads Git."""
+    shutil.copytree(DATA / "llmd", target)
+    git(target, "init", "-q", "-b", "main")
+    git(target, "add", "-A")
+    git(target, "commit", "-q", "-m", "stacks")
+    return target
+
+
+@pytest.fixture
+def llmrepo(tmp_path):
+    return committed_copy(tmp_path / "llmrepo")
