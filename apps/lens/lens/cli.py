@@ -13,6 +13,7 @@ import sys
 
 from . import __version__
 from .commands import Context, Handler
+from .commands import importing as import_command
 from .commands import plan as plan_command
 from .commands import render as render_command
 from .commands import sources as sources_command
@@ -29,6 +30,7 @@ COMMAND_MODULES = [
     render_command,
     plan_command,
     standup_command,
+    import_command,
     status_command,
     teardown_command,
 ]
