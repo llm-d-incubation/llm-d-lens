@@ -1,5 +1,6 @@
 """Following an llm-d guide's ``guide.yaml`` steps without a shell."""
 
+import json
 import shutil
 
 import pytest
@@ -17,7 +18,6 @@ needs_tools = pytest.mark.skipif(
     shutil.which("helm") is None or (shutil.which("kustomize") is None and shutil.which("kubectl") is None),
     reason="needs helm and kustomize",
 )
-
 GUIDE = "guides/demo-baseline"
 
 
@@ -117,6 +117,23 @@ def test_a_guide_renders_what_its_readme_would_apply(llmrepo):
 
 
 @needs_tools
+def test_the_router_metrics_rbac_is_an_administrator_part_unless_turned_off(llmrepo):
+    stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
+    plan = make_plan(stack, Options(namespace="team-a", instance="demo"), runner=subprocess_runner)
+    assert [part["document"]["kind"] for part in plan.policy.admin_parts] == ["ClusterRole", "ClusterRoleBinding"]
+    [hint] = {finding.hint for finding in plan.blocking}
+    assert "--set router.monitoring.prometheus.auth.enabled=false" in hint
+    off = Options(namespace="team-a", instance="demo", sets=["router.monitoring.prometheus.auth.enabled=false"])
+    plan = make_plan(stack, off, runner=subprocess_runner)
+    assert not plan.blocking and not plan.policy.admin_parts
+    epp = next(
+        doc for doc in plan.documents if doc["metadata"]["name"] == "demo-baseline-epp" and doc["kind"] == "Deployment"
+    )
+    assert "--metrics-endpoint-auth=false" in epp["spec"]["template"]["spec"]["containers"][0]["args"]
+    assert plan.summary()["choices"] == {"sets": ["router.monitoring.prometheus.auth.enabled=false"]}
+
+
+@needs_tools
 def test_stacks_and_render_commands_for_a_guide(llmrepo, tmp_path, capsys):
     state = ["--state-dir", str(tmp_path)]
     assert main([*state, "stacks", "demo-baseline", "--source", str(llmrepo)]) == 0
@@ -133,17 +150,32 @@ def test_stacks_and_render_commands_for_a_guide(llmrepo, tmp_path, capsys):
 
 
 @needs_tools
-def test_the_router_metrics_rbac_is_an_administrator_part_unless_turned_off(llmrepo):
-    stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
-    plan = make_plan(stack, Options(namespace="team-a", instance="demo"), runner=subprocess_runner)
-    assert [part["document"]["kind"] for part in plan.policy.admin_parts] == ["ClusterRole", "ClusterRoleBinding"]
-    [hint] = {finding.hint for finding in plan.blocking}
-    assert "--set router.monitoring.prometheus.auth.enabled=false" in hint
-    off = Options(namespace="team-a", instance="demo", sets=["router.monitoring.prometheus.auth.enabled=false"])
-    plan = make_plan(stack, off, runner=subprocess_runner)
-    assert not plan.blocking and not plan.policy.admin_parts
-    epp = next(
-        doc for doc in plan.documents if doc["metadata"]["name"] == "demo-baseline-epp" and doc["kind"] == "Deployment"
-    )
-    assert "--metrics-endpoint-auth=false" in epp["spec"]["template"]["spec"]["containers"][0]["args"]
-    assert plan.summary()["choices"] == {"sets": ["router.monitoring.prometheus.auth.enabled=false"]}
+def test_a_guide_stands_up_and_is_torn_down_in_one_namespace(llmrepo, tmp_path, capsys, monkeypatch):
+    from .fakes import FakeCluster
+
+    cluster = FakeCluster()
+    cluster.put("team-a", {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "llm-d-hf-token"}})
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    state = ["--state-dir", str(tmp_path)]
+    target = ["demo-baseline", "--source", str(llmrepo), "-n", "team-a"]
+    off = ["--set", "router.monitoring.prometheus.auth.enabled=false"]
+    assert main([*state, "plan", *target]) == 3  # the metrics ClusterRole needs an administrator
+    assert "--set router.monitoring.prometheus.auth.enabled=false" in capsys.readouterr().out
+    assert main([*state, "-o", "json", "plan", *target, *off]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["cluster"]["dryRun"] == "passed" and summary["cluster"]["objects"]["create"] == 8
+    # The RoleBinding to the router's own Role is checked by permission; the dry run stores no Role.
+    assert [f["object"] for f in summary["findings"] if f["code"] == "dry-run-deferred"] == [
+        "RoleBinding/demo-baseline-epp"
+    ]
+    assert main([*state, "standup", *target, *off, "--expected-digest", summary["digest"][:16]]) == 0
+    assert "Stood up demo-baseline in team-a (8 objects" in capsys.readouterr().out
+    record = json.loads(cluster.get("team-a", "configmaps", "lens-instance-demo-baseline")["data"]["inventory.json"])
+    assert record["stack"]["id"] == "guides/demo-baseline"
+    assert record["stack"]["sets"] == ["router.monitoring.prometheus.auth.enabled=false"]
+    assert main([*state, "status", "demo-baseline", "-n", "team-a"]) == 0
+    assert "demo-baseline in team-a:" in capsys.readouterr().out
+    assert main([*state, "teardown", "demo-baseline", "-n", "team-a", "-y"]) == 0
+    assert "Removed 8 object(s) of demo-baseline" in capsys.readouterr().out
+    assert cluster.names("team-a", "deployments.apps") == []
+    assert cluster.get("team-a", "secrets", "llm-d-hf-token") is not None  # the user's Secret stays

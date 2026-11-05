@@ -19,6 +19,7 @@ from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .commands import standup as standup_command
 from .commands import status as status_command
+from .commands import teardown as teardown_command
 from .errors import LlmdError
 
 #: Modules that add subcommands, in the order ``--help`` lists them.
@@ -29,6 +30,7 @@ COMMAND_MODULES = [
     plan_command,
     standup_command,
     status_command,
+    teardown_command,
 ]
 
 
