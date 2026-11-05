@@ -8,6 +8,7 @@ from lens.catalog import find_stack
 from lens.cli import main
 from lens.errors import UsageError
 from lens.guides import Environment, follow, load_guide
+from lens.plan import Options, make_plan
 from lens.process import subprocess_runner
 from lens.render import render
 from lens.sources import resolve_source
@@ -129,3 +130,20 @@ def test_stacks_and_render_commands_for_a_guide(llmrepo, tmp_path, capsys):
     assert main([*state, "render", "demo-baseline", "--source", str(llmrepo), "--var", "INFRA_PROVIDER=aws"]) == 2
     overlay = "guides/demo-baseline/modelserver/gpu/vllm/base"
     assert main([*state, "render", overlay, "--source", str(llmrepo), "--var", "A=b"]) == 2
+
+
+@needs_tools
+def test_the_router_metrics_rbac_is_an_administrator_part_unless_turned_off(llmrepo):
+    stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
+    plan = make_plan(stack, Options(namespace="team-a", instance="demo"), runner=subprocess_runner)
+    assert [part["document"]["kind"] for part in plan.policy.admin_parts] == ["ClusterRole", "ClusterRoleBinding"]
+    [hint] = {finding.hint for finding in plan.blocking}
+    assert "--set router.monitoring.prometheus.auth.enabled=false" in hint
+    off = Options(namespace="team-a", instance="demo", sets=["router.monitoring.prometheus.auth.enabled=false"])
+    plan = make_plan(stack, off, runner=subprocess_runner)
+    assert not plan.blocking and not plan.policy.admin_parts
+    epp = next(
+        doc for doc in plan.documents if doc["metadata"]["name"] == "demo-baseline-epp" and doc["kind"] == "Deployment"
+    )
+    assert "--metrics-endpoint-auth=false" in epp["spec"]["template"]["spec"]["containers"][0]["args"]
+    assert plan.summary()["choices"] == {"sets": ["router.monitoring.prometheus.auth.enabled=false"]}
