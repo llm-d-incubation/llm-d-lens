@@ -168,6 +168,33 @@ pods drain as they stop. A stack that admits the lowering only from its own drai
 count once it exits 0. Scaling to 0 asks first (`-y` skips). `--dry-run` sends the change as a server dry run.
 A rollout in progress refuses a scale.
 
+## Moving an instance to another namespace or cluster
+
+```sh
+llmd migrate plan   <instance> --from <namespace-a> --to <namespace-b>     # read-only
+llmd migrate start  <instance> --from <namespace-a> --to <namespace-b>     # the target with the workload at 1
+llmd migrate step   <instance> --from <namespace-a> --to <namespace-b>     # repeat until the source is at 0
+llmd migrate status <instance> --from <namespace-a> --to <namespace-b>
+llmd migrate finish <instance> --from <namespace-a> --to <namespace-b>     # tears the source down
+```
+
+`migrate` moves one workload (by default the stack's only scalable one that asks for accelerators; else
+`--workload`) a replica at a time, so capacity does not drop:
+
+- `plan` checks both sides, read-only: the source is settled and not rolling, the target's plan (with its
+  companions), and that the target has no other instance of that name.
+- `start` stands the stack up in the target with the workload at 1 (a `scale` count; `--with-companions` first)
+  and marks the migration in both records. The target is rendered with the source's guide variables (`--var`,
+  `--set`), and `--stack` gives it another stack path.
+- `step` raises the target by one, waits until its new replica is Ready (`--timeout`), and only then lowers the
+  source by one, through `--no-drain` or `--drain` for a DisaggregatedSet role, as for `scale`. A step that
+  times out leaves the source as it was.
+- `finish` tears the source down once it is at 0, keeping its claims.
+
+Traffic is moved by hand between steps (a gateway's route weights, or the like); `llmd` does not change it. Each
+side has its own `--from-context`/`--to-context`, `--from-kubeconfig`/`--to-kubeconfig` and
+`--from-source`/`--to-source`, so the same steps move an instance to another cluster.
+
 ## Rollouts
 
 A rollout moves an instance to what another ref of the same stack renders, in place. In a guide whose model
