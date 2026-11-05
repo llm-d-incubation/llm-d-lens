@@ -92,6 +92,7 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
         "unreadable": unreadable,
+        "overrides": dict(record.get("overrides") or {}),
     }
 
 

@@ -125,6 +125,26 @@ ownership, so the team's own `kubectl apply -k` and `helm upgrade` keep working.
 running objects with the guide's render first. `llmd teardown <instance> --forget` stops managing the instance
 and leaves every object running.
 
+## Scaling
+
+```sh
+llmd scale <instance> -n <namespace> optimized-baseline-nvidia-gpu-vllm-decode=1
+llmd scale <instance> -n <namespace> pd-disagg-vllm/decode=2 --no-drain     # a DisaggregatedSet role
+llmd scale <instance> -n <namespace> optimized-baseline-nvidia-gpu-vllm-decode=--   # back to the files
+```
+
+`llmd scale` sets the replicas of a Deployment, StatefulSet or LeaderWorkerSet, or of a DisaggregatedSet role
+(`SET/ROLE`). It applies only that object and keeps the count in the instance's record, so a later `standup` or
+`rollouts` keeps it rather than setting it back to what the guide says, which a plain `kubectl scale` would not
+survive. `plan` and `status` list each kept count. `WORKLOAD=--`, or the count the files say, clears it. A guide
+is rendered with the `--var` and `--set` values the instance was stood up with.
+
+Lowering a DisaggregatedSet role removes its highest groups. `--no-drain` lowers it directly: the guides' vLLM
+pods drain as they stop. A stack that admits the lowering only from its own drain tool passes it with
+`--drain COMMAND` (`{role}`, `{set}`, `{count}`, `{namespace}`, `{source}`); llmd runs it, waits, and records the
+count once it exits 0. Scaling to 0 asks first (`-y` skips). `--dry-run` sends the change as a server dry run.
+A rollout in progress refuses a scale.
+
 ## Rollouts
 
 A rollout moves an instance to what another ref of the same stack renders, in place. In a guide whose model

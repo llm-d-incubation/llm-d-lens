@@ -17,6 +17,7 @@ from .commands import importing as import_command
 from .commands import plan as plan_command
 from .commands import render as render_command
 from .commands import rollouts as rollouts_command
+from .commands import scale as scale_command
 from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .commands import standup as standup_command
@@ -53,6 +54,7 @@ COMMAND_MODULES = [
     standup_command,
     import_command,
     rollouts_command,
+    scale_command,
     status_command,
     teardown_command,
 ]

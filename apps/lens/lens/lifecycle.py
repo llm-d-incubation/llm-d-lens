@@ -62,6 +62,7 @@ def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "
         "stack": plan.stack_record(),
         **({"previousStack": previous["stack"]} if switched else _kept_previous_stack(previous)),
         "planDigest": plan.digest,
+        **({"overrides": dict(plan.options.overrides)} if plan.options.overrides else {}),
         # Recorded before applying, with what may still be there from the last standup.
         "objects": planned + stale,
         "createdAt": (previous or {}).get("createdAt") or inventory.now(),
