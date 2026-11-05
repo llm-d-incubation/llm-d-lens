@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,6 +206,7 @@ def resolve_source(
         destination = _checkout_dir(location, ref)
         with _lock(str(destination)):
             if refresh or not (destination / ".git").exists():
+                print(f"[llmd] fetching {location}#{ref or 'HEAD'}", file=sys.stderr, flush=True)
                 _fetch(runner, location, ref, destination)
         revision, dirty = _git_state(runner, destination)
         return Source(

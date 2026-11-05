@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,10 @@ class Kube:
         self.target = target or Target()
         self._runner = runner
         self._discovery: dict[str, dict[str, ApiResource] | None] = {}
+        #: What ``prefetch`` read, (namespace, resource, name) -> object or None, until ``forget``.
+        self._objects: dict[tuple[str, str, str], dict[str, Any] | None] = {}
+        #: Called with a short line before each slow step (the CLI prints it on stderr).
+        self.progress: Callable[[str], None] = lambda line: None
 
     # -- plumbing ------------------------------------------------------------------------------------
     def base(self) -> list[str]:
@@ -207,8 +212,36 @@ class Kube:
         return result.stdout if result.ok else None
 
     def get(self, resource: str, name: str, namespace: str) -> dict[str, Any] | None:
+        key = (namespace, resource, name)
+        if key in self._objects:
+            return self._objects[key]
         found = self.get_json(resource, namespace, names=[name])
         return found[0] if found else None
+
+    def prefetch(self, items: list[tuple[str, str]], namespace: str) -> None:
+        """Read many objects with one ``kubectl get`` per resource, so the ``get`` calls that follow
+        for them are answered from that read. ``items`` are (resource, name). A resource whose read
+        fails is left to ``get``, which raises the error for the object that needs it. ``forget``,
+        and any apply or delete, drops what was read, so nothing reads an object from before a write."""
+        wanted: dict[str, list[str]] = {}
+        for resource, name in items:
+            names = wanted.setdefault(resource, [])
+            if (namespace, resource, name) not in self._objects and name not in names:
+                names.append(name)
+        for resource, names in wanted.items():
+            for start in range(0, len(names), _NAMES_PER_GET):
+                chunk = names[start : start + _NAMES_PER_GET]
+                try:
+                    found = self.get_json(resource, namespace, names=chunk)
+                except CommandError:
+                    continue
+                by_name = {(item.get("metadata") or {}).get("name"): item for item in found}
+                for name in chunk:
+                    self._objects[(namespace, resource, name)] = by_name.get(name)
+
+    def forget(self) -> None:
+        """Drop what ``prefetch`` read, so the next ``get`` reads the cluster again."""
+        self._objects.clear()
 
     # -- writes --------------------------------------------------------------------------------------
     def apply(
@@ -225,6 +258,8 @@ class Kube:
         ``kubectl apply`` as a team applies its YAML (the last-applied annotation is kept)."""
         for document in documents:
             self._require_in(namespace, document)
+        if not dry_run:
+            self._objects.clear()
         args = ["apply", "-n", namespace, "-o", "json", "-f", "-"]
         if server_side:
             args[1:1] = ["--server-side", f"--field-manager={FIELD_MANAGER}"]
@@ -243,6 +278,7 @@ class Kube:
     def delete(self, resource: str, name: str, namespace: str, *, wait: bool = False) -> bool:
         if not self._namespaced_resource(resource):
             raise PolicyError(f"refusing to delete {resource}/{name}: it is not a namespaced resource")
+        self._objects.clear()
         result = self.run(
             "delete",
             resource,
@@ -285,6 +321,9 @@ class Kube:
             raise NotFoundError(f"{resource}/{name} not found in {namespace}")
         return found
 
+
+#: Names per ``kubectl get`` in a prefetch: well inside any command-line length limit.
+_NAMES_PER_GET = 100
 
 #: Resources kubectl would delete cluster-wide whatever ``-n`` says, when discovery has not run.
 _CLUSTER_SCOPED_PLURALS = {
