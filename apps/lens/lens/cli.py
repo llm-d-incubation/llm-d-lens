@@ -24,6 +24,26 @@ from .commands import status as status_command
 from .commands import teardown as teardown_command
 from .errors import LlmdError
 
+EXAMPLES = """\
+examples:
+  llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
+  llmd sources add llm-d-local /path/to/llm-d
+  llmd sources list
+  llmd stacks                                                  # the guides of the source
+  llmd stacks optimized-baseline                               # a guide's variables and steps
+  llmd render optimized-baseline --var INFRA_PROVIDER=ocp      # the objects its steps apply
+  llmd plan optimized-baseline -n <namespace> --offline
+  llmd plan optimized-baseline --var INFRA_PROVIDER=ocp        # namespace from the kube context
+  llmd standup optimized-baseline --var INFRA_PROVIDER=ocp --expected-digest <digest from plan> --wait
+  llmd import optimized-baseline --dry-run       # a guide deployed with its README's commands
+  llmd import optimized-baseline                 # record it; nothing on it changes
+  llmd rollouts plan pd-disaggregation --name <instance> \\
+      --source https://github.com/llm-d/llm-d.git#refs/pull/<N>/head
+  llmd list
+  llmd status <instance>
+  llmd teardown <instance>
+"""
+
 #: Modules that add subcommands, in the order ``--help`` lists them.
 COMMAND_MODULES = [
     sources_command,
@@ -42,6 +62,7 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Handler]]:
     parser = argparse.ArgumentParser(
         prog="llmd",
         description=__doc__,
+        epilog=EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"llmd {__version__}")
