@@ -150,8 +150,13 @@ scales, the steps, and the groups each role keeps serving during a step. It refu
 The llm-d guides' vLLM overlays drain each pod as it stops: a `preStop` sleep, then vLLM's
 `--shutdown-timeout`. `--no-drain` relies on that. A stack that holds the controller's scale-down until a drain
 tool takes a group out of the pool passes that tool with `--drain`. `llmd` runs it once per role, filling in
-`{role}`, `{source}`, `{namespace}`, `{set}`, `{old_revision}` and `{max_unavailable}`, and `--pool-label`
-names the label it sets. Each drainer's output is under `$LENS_DATA_DIR/llmd/rollouts/<namespace>/<instance>/`.
+`{role}`, `{source}`, `{namespace}`, `{set}`, `{old_revision}` and `{max_unavailable}`. Each drainer's output is
+under `$LENS_DATA_DIR/llmd/rollouts/<namespace>/<instance>/`.
+
+`--pool-label LABEL` names the pod label such a tool sets to `false` when it takes a group out of the pool; a
+group then counts as serving only while that label is `true`. Register it once with
+`llmd sources add NAME PATH --pool-label LABEL`. `rollouts start` records the label it used, so `status`,
+`--watch`, `abort` and `finish` judge groups the same way without the flag.
 
 ```sh
 llmd rollouts status <instance> -n <namespace> [--watch]   # per role and revision; the drainers

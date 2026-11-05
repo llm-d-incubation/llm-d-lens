@@ -224,3 +224,35 @@ def test_a_rollout_never_records_a_secret(rollrepo, cluster, tmp_path):  # noqa:
     with pytest.raises(PolicyError, match="Secret/token"):
         engine.start(Kube(runner=cluster), rollout(rollrepo, cluster), drain="-", state=tmp_path)
     assert "rollout" not in inventory.require(Kube(runner=cluster), NS, "pd")
+
+
+def test_the_pool_label_stays_with_the_rollout(rollrepo, cluster, tmp_path, capsys, monkeypatch):  # noqa: F811
+    """A group out of the pool is not serving. The label is the source's, recorded by `start`, so
+    `status` and `finish` judge groups the same way without --pool-label or --source."""
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    state = ["--state-dir", str(tmp_path)]
+    assert main([*state, "sources", "add", "demo", str(rollrepo), "--pool-label", POOL]) == 0
+    assert f"pool label {POOL}" in capsys.readouterr().out
+    pod = next(item for key, item in cluster.objects.items() if key[1] == "pods" and "-decode-" in key[2])
+    pod["metadata"]["labels"][POOL] = "false"
+    new_image(rollrepo)
+    target = [STACK, "-n", NS, "--name", "pd"]
+    assert main([*state, "rollouts", "plan", *target]) == 3
+    assert "decode: 2 of 3 group(s) are serving" in capsys.readouterr().out
+    assert main([*state, "rollouts", "plan", *target, "--pool-label", ""]) == 0  # the flag wins
+    capsys.readouterr()
+    pod["metadata"]["labels"][POOL] = "true"
+    assert main([*state, "rollouts", "start", *target, "--drain", DRAIN]) == 0
+    record = inventory.require(Kube(runner=cluster), NS, "pd")
+    assert record["rollout"]["poolLabel"] == POOL
+    assert main([*state, "sources", "remove", "demo"]) == 0
+    capsys.readouterr()
+    while cluster.roll_step(NS, "model-p"):
+        pass
+    for key, item in cluster.objects.items():
+        if key[1] == "pods" and "-decode-" in key[2]:
+            item["metadata"]["labels"][POOL] = "false"  # the new groups are not in the pool yet
+            break
+    assert main([*state, "-o", "json", "rollouts", "status", "pd", "-n", NS]) == 0
+    assert json.loads(capsys.readouterr().out)["done"] is False
+    assert main([*state, "rollouts", "finish", "pd", "-n", NS]) == 7
