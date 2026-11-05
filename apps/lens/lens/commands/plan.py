@@ -73,7 +73,7 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
     """The plan the command line asks for. With ``kube``, API discovery says which kinds are
     cluster-scoped and the namespace may come from the kube context; without, the plan is offline."""
     args = ctx.args
-    stack = catalog.find_stack(ctx.source(), args.stack)
+    stack = catalog.find_stack(ctx.source(), args.stack, runner=ctx.runner)
     options = Options(
         namespace=ctx.namespace(kube),
         instance=args.name or catalog.default_name(stack),

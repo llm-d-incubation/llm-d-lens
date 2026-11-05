@@ -1,0 +1,5 @@
+# The same overlay in a second tree, so a name by the end of a path can be ambiguous.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../model-a/base

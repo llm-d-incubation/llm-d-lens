@@ -1,6 +1,8 @@
 """Stack sources: a local checkout, or a Git URL pinned to a ref.
 
 ``--source`` takes a registered name (``llmd sources add``), a local path, or ``URL#REF``.
+A registered source can also say how its checkout is laid out (``layout``): which kustomize
+directories are stacks, the pod label a rollout's pool uses, and where a stack's companions live.
 REF is a branch, a tag, a commit, or any ref the remote serves (``refs/pull/350/head``),
 so a stack can be planned straight from upstream without a local checkout. Remote
 checkouts are cached under ``$LENS_CACHE_DIR/repos``.
@@ -27,6 +29,39 @@ _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
+#: Settings a registered source may carry about its checkout's layout; each is a list but the pool label.
+LAYOUT_KEYS = ("stacks", "exclude", "companions", "poolLabel")
+
+
+@dataclass(frozen=True)
+class Layout:
+    """How a source's checkout is laid out. Nothing here names a repository: the user says it."""
+
+    #: Globs of the kustomize directories that are stacks (none: every top-level one).
+    stacks: tuple[str, ...] = ()
+    #: Globs of kustomize directories that are not.
+    exclude: tuple[str, ...] = ()
+    #: Path templates of what a stack needs in its namespace besides itself (``lens.companions``).
+    companions: tuple[str, ...] = ()
+    #: The pod label a rollout's pool selects groups by (``rollouts --pool-label``).
+    pool_label: str = ""
+
+    @classmethod
+    def from_entry(cls, entry: dict[str, Any] | None) -> Layout:
+        entry = entry or {}
+        return cls(
+            stacks=tuple(entry.get("stacks") or ()),
+            exclude=tuple(entry.get("exclude") or ()),
+            companions=tuple(entry.get("companions") or ()),
+            pool_label=str(entry.get("poolLabel") or ""),
+        )
+
+    def describe(self) -> dict[str, Any]:
+        found = {"stacks": list(self.stacks), "exclude": list(self.exclude), "companions": list(self.companions)}
+        found = {key: value for key, value in found.items() if value}
+        return {**found, **({"poolLabel": self.pool_label} if self.pool_label else {})}
+
+
 @dataclass(frozen=True)
 class Source:
     name: str
@@ -36,6 +71,7 @@ class Source:
     ref: str = ""
     revision: str = ""
     dirty: bool = False
+    layout: Layout = Layout()
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -73,7 +109,7 @@ class SourceRegistry:
     def get(self, name: str) -> dict[str, Any] | None:
         return next((item for item in self.entries() if item["name"] == name), None)
 
-    def add(self, name: str, location: str, *, ref: str = "") -> dict[str, Any]:
+    def add(self, name: str, location: str, *, ref: str = "", layout: Layout | None = None) -> dict[str, Any]:
         if not _NAME.match(name):
             raise UsageError(f"invalid source name {name!r}", hint="Use lowercase letters, digits, '.', '_', '-'.")
         location, inline_ref = split_ref(location)
@@ -83,7 +119,7 @@ class SourceRegistry:
             if not resolved.is_dir():
                 raise UsageError(f"source path does not exist: {location}")
             location = str(resolved)
-        entry = {"name": name, "location": location, **({"ref": ref} if ref else {})}
+        entry = {"name": name, "location": location, **({"ref": ref} if ref else {}), **(layout or Layout()).describe()}
         self._save([*(item for item in self.entries() if item["name"] != name), entry])
         return entry
 
@@ -159,6 +195,7 @@ def resolve_source(
             hint="Pass --source PATH|URL#REF|NAME, or register one with `llmd sources add`.",
         )
     entry = registry.get(spec) if registry else None
+    layout = Layout.from_entry(entry)
     if entry:
         name, location, ref = spec, entry["location"], entry.get("ref", "")
     else:
@@ -178,6 +215,7 @@ def resolve_source(
             ref=ref,
             revision=revision,
             dirty=dirty,
+            layout=layout,
         )
     root = Path(location).expanduser().resolve()
     if not root.is_dir():
@@ -196,4 +234,5 @@ def resolve_source(
         ref=ref,
         revision=revision,
         dirty=dirty,
+        layout=layout,
     )
