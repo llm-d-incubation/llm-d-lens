@@ -1,4 +1,26 @@
+import subprocess
+
 import pytest
+
+
+def git(repo, *args):
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 @pytest.fixture(autouse=True)
