@@ -1,9 +1,21 @@
 """Following an llm-d guide's ``guide.yaml`` steps without a shell."""
 
+import shutil
+
 import pytest
 
+from lens.catalog import find_stack
+from lens.cli import main
 from lens.errors import UsageError
 from lens.guides import Environment, follow, load_guide
+from lens.process import subprocess_runner
+from lens.render import render
+from lens.sources import resolve_source
+
+needs_tools = pytest.mark.skipif(
+    shutil.which("helm") is None or (shutil.which("kustomize") is None and shutil.which("kubectl") is None),
+    reason="needs helm and kustomize",
+)
 
 GUIDE = "guides/demo-baseline"
 
@@ -81,3 +93,39 @@ def test_expansion_follows_the_shell():
     assert env.expand("x${A}y$A ${B:-two} '${C}'") == "x1y1 two '${C}'"
     env.assign("D", "$(date)")
     assert env.get("D") is None and "command's output" in env.unknown["D"]
+
+
+@needs_tools
+def test_a_guide_renders_what_its_readme_would_apply(llmrepo):
+    stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
+    rendered = render(stack, runner=subprocess_runner, namespace="team-a")
+    kinds = sorted(f"{doc['kind']}/{doc['metadata']['name']}" for doc in rendered.documents)
+    assert kinds == [
+        "ClusterRole/demo-baseline-team-a-epp",
+        "ClusterRoleBinding/demo-baseline-team-a-epp",
+        "Deployment/demo-baseline-decode",
+        "Deployment/demo-baseline-epp",
+        "InferencePool/demo-baseline",
+        "Role/demo-baseline-epp",
+        "RoleBinding/demo-baseline-epp",
+        "Service/demo-baseline-epp",
+        "ServiceAccount/demo-baseline-epp",
+        "ServiceAccount/demo-baseline-sa",
+    ]
+    assert rendered.command.startswith("helm template demo-baseline charts/router --version 0.1.0")
+
+
+@needs_tools
+def test_stacks_and_render_commands_for_a_guide(llmrepo, tmp_path, capsys):
+    state = ["--state-dir", str(tmp_path)]
+    assert main([*state, "stacks", "demo-baseline", "--source", str(llmrepo)]) == 0
+    out = capsys.readouterr().out
+    assert "INFRA_PROVIDER" in out and "one of: base, ocp" in out and "HF_TOKEN               (sensitive)" in out
+    assert "kustomize build guides/demo-baseline/modelserver/gpu/vllm/base" in out
+    argv = [*state, "render", "demo-baseline", "--source", str(llmrepo), "-n", "team-a", "--var", "INFRA_PROVIDER=ocp"]
+    assert main(argv) == 0
+    captured = capsys.readouterr()
+    assert "hostPath" in captured.out and "10 object(s)" in captured.err
+    assert main([*state, "render", "demo-baseline", "--source", str(llmrepo), "--var", "INFRA_PROVIDER=aws"]) == 2
+    overlay = "guides/demo-baseline/modelserver/gpu/vllm/base"
+    assert main([*state, "render", overlay, "--source", str(llmrepo), "--var", "A=b"]) == 2

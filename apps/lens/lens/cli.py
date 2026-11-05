@@ -13,6 +13,7 @@ import sys
 
 from . import __version__
 from .commands import Context, Handler
+from .commands import render as render_command
 from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .errors import LlmdError
@@ -21,6 +22,7 @@ from .errors import LlmdError
 COMMAND_MODULES = [
     sources_command,
     stacks_command,
+    render_command,
 ]
 
 

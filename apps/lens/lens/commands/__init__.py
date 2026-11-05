@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths, yamlio
+from ..errors import UsageError
 from ..process import Runner, subprocess_runner
 from ..sources import Source, SourceRegistry, resolve_source
 
@@ -57,6 +58,17 @@ def emit_value(value: Any, output: str) -> None:
         print(json.dumps(value, indent=2, sort_keys=True, default=str))
     else:
         print(yamlio.dump(value), end="")
+
+
+def parse_variables(items: list[str]) -> dict[str, str]:
+    """``--var NAME=VALUE`` items as a mapping (a later item wins)."""
+    variables = {}
+    for item in items or []:
+        name, separator, value = item.partition("=")
+        if not separator or not name.isidentifier():
+            raise UsageError(f"--var expects NAME=VALUE, got {item!r}")
+        variables[name] = value
+    return variables
 
 
 def add_source_arguments(parser: argparse.ArgumentParser) -> None:
