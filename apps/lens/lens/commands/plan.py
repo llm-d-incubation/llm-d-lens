@@ -52,6 +52,12 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="leave out cluster-scoped objects and SCC bindings; an administrator applies them",
     )
+    parser.add_argument(
+        "--switch-stack",
+        action="store_true",
+        help="let an instance that runs another stack path move to this one, in place: objects it shares "
+        "are updated, objects it no longer renders are deleted",
+    )
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:

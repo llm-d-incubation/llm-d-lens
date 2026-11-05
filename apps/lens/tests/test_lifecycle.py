@@ -116,3 +116,87 @@ def test_standup_takes_the_digest_plan_prints(llmrepo, cluster):
         lifecycle.standup(Kube(runner=cluster), plan, expected_digest=plan.digest[:8])
     result = lifecycle.standup(Kube(runner=cluster), plan, expected_digest=plan.digest[:16].upper())
     assert result["digest"] == plan.digest
+
+
+def copy_of_the_stack(llmrepo, *, without_service=False):
+    """A second overlay of the same base, with the same object names."""
+    target = llmrepo / "examples/model-a/copy"
+    target.mkdir(parents=True)
+    (target / "kustomization.yaml").write_text(
+        "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n"
+        "resources:\n  - ../base\n"
+        "replicas:\n  - name: model-a\n    count: 1\n"
+        + (
+            "patches:\n  - patch: |-\n      $patch: delete\n      apiVersion: v1\n      kind: Service\n"
+            "      metadata:\n        name: model-a\n"
+            if without_service
+            else ""
+        )
+    )
+    return "examples/model-a/copy"
+
+
+def switch_plan(llmrepo, cluster, stack):
+    planned = make_plan(
+        find_stack(resolve_source(str(llmrepo)), stack),
+        Options(namespace="team-a", instance="r1", switch_stack=True),
+        runner=cluster,
+    )
+    preflight(Kube(runner=cluster), planned)
+    return planned
+
+
+def test_switch_stack_moves_an_instance_in_place(llmrepo, cluster):
+    lifecycle.standup(Kube(runner=cluster), plan_for(llmrepo, cluster))
+    before = cluster.get("team-a", "deployments.apps", "model-a")
+    uid, version = before["metadata"]["uid"], before["metadata"]["resourceVersion"]
+    other = copy_of_the_stack(llmrepo, without_service=True)
+    planned = switch_plan(llmrepo, cluster, other)
+    assert not planned.blocking
+    assert planned.cluster["switchStack"] == {"from": STACK, "to": other}
+    assert planned.cluster["prune"] == ["Service/model-a"]
+    assert {f.code for f in planned.findings} >= {"stack-switched", "prune"}
+    result = lifecycle.standup(Kube(runner=cluster), planned)
+    assert result["switchedFrom"] == STACK and result["pruned"] == ["Service/model-a"]
+    after = cluster.get("team-a", "deployments.apps", "model-a")
+    assert after["metadata"]["uid"] == uid and after["spec"] == before["spec"]
+    assert int(after["metadata"]["resourceVersion"]) > int(version)
+    record = inventory.require(Kube(runner=cluster), "team-a", "r1")
+    assert record["stack"]["id"] == other and record["previousStack"]["id"] == STACK
+    # A later standup of the new stack needs no flag and keeps where the instance came from.
+    again = plan_for(llmrepo, cluster, stack=other)
+    assert not again.blocking and "switchStack" not in again.cluster
+    lifecycle.standup(Kube(runner=cluster), again)
+    assert inventory.require(Kube(runner=cluster), "team-a", "r1")["previousStack"]["id"] == STACK
+    # And the old path is now the other one.
+    back = plan_for(llmrepo, cluster)
+    assert [f.code for f in back.blocking] == ["stack-differs"]
+
+
+def test_switch_stack_is_refused_during_a_rollout_and_for_an_imported_instance(llmrepo, cluster):
+    lifecycle.standup(Kube(runner=cluster), plan_for(llmrepo, cluster))
+    other = copy_of_the_stack(llmrepo)
+    record = inventory.require(Kube(runner=cluster), "team-a", "r1")
+    inventory.write(Kube(runner=cluster), {**record, "rollout": {"phase": "Rolling"}})
+    with pytest.raises(ConflictError, match="rollout in progress"):
+        lifecycle.standup(Kube(runner=cluster), switch_plan(llmrepo, cluster, other))
+    inventory.write(Kube(runner=cluster), {**record, "management": {"mode": "imported", "manager": "kubectl"}})
+    planned = switch_plan(llmrepo, cluster, other)
+    assert "instance-imported" in {f.code for f in planned.blocking}
+    with pytest.raises(PolicyError):
+        lifecycle.standup(Kube(runner=cluster), planned)
+
+
+def test_switch_stack_command(llmrepo, cluster, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    state = ["--state-dir", str(tmp_path)]
+    assert main([*state, "standup", STACK, "--source", str(llmrepo), "--name", "r1"]) == 0
+    other = copy_of_the_stack(llmrepo)
+    capsys.readouterr()
+    assert main([*state, "plan", other, "--source", str(llmrepo), "--name", "r1"]) == 3
+    assert "Pass --switch-stack to move it to this stack in place" in capsys.readouterr().out
+    assert main([*state, "standup", other, "--source", str(llmrepo), "--name", "r1", "--switch-stack"]) == 0
+    out = capsys.readouterr().out
+    assert f"  moved from stack {STACK}" in out and "pruned" not in out
+    assert main([*state, "status", "r1"]) == 0
+    assert f"  stack {other} (moved from {STACK})" in capsys.readouterr().out
