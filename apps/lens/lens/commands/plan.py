@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .. import catalog, yamlio
+from .. import catalog, inventory, yamlio
 from ..errors import PolicyError, UsageError
 from ..kube import Kube
-from ..plan import Options, Plan, make_plan
+from ..plan import Options, Plan, discovered_scope, make_plan
 from ..policy import fallback_scope
 from ..preflight import preflight
 from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables, progress
@@ -75,14 +75,18 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
     args = ctx.args
     stack = catalog.find_stack(ctx.source(), args.stack, runner=ctx.runner)
     progress(f"rendering {stack.id}")
+    namespace, instance = ctx.namespace(kube), args.name or catalog.default_name(stack)
+    record = inventory.read(kube, namespace, instance) if kube is not None else None
     options = Options(
-        namespace=ctx.namespace(kube),
-        instance=args.name or catalog.default_name(stack),
+        namespace=namespace,
+        instance=instance,
         allow_privileged=args.allow_privileged,
         skip_admin_parts=args.skip_admin_parts,
         switch_stack=getattr(args, "switch_stack", False),
         variables=parse_variables(args.var),
         sets=list(args.sets),
+        # Counts set with `llmd scale` stay until cleared, so an update does not set them back.
+        overrides=dict((record or {}).get("overrides") or {}),
     )
     if stack.kind != "guide" and (options.variables or options.sets):
         raise UsageError(
@@ -97,11 +101,7 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
 
 
 def _discovered_scope(kube: Kube):
-    def scope(api_version: str, kind: str) -> bool | None:
-        served = kube.scope(api_version, kind)
-        return fallback_scope(api_version, kind) if served is None else served
-
-    return scope
+    return discovered_scope(kube)
 
 
 def command_plan(ctx: Context) -> int:
