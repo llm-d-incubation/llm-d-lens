@@ -113,6 +113,29 @@ that check off. The metrics are then served without authentication inside the cl
 records the `--var` and `--set` values with the instance. `teardown` deletes exactly the recorded objects whose
 UID still matches. Claims are kept unless you pass `--delete-volumes`.
 
+## Companions
+
+Some teams keep parts of a namespace apart from the model stack on purpose, so that tearing the model down
+leaves them: NetworkPolicies for the namespace, or a model-cache claim whose volume an administrator binds once.
+`llmd` calls each such part a *companion*. Say where a source keeps them when you register it, as path templates
+relative to the checkout:
+
+```sh
+llmd sources add team ~/src/team-stacks \
+  --companion 'deploy/namespaces/{name}/policies/{namespace}' \
+  --companion '{stack}/../base/model-cache-pvc.yaml'
+llmd stacks deploy/model-a/cluster-a --companions <namespace>   # what the templates find
+```
+
+`{stack}` is the stack's path, `{name}` its last segment and `{namespace}` the target namespace; `..` steps up a
+directory and `*` matches within one segment. A template that matches nothing is skipped, and one that matches
+several paths is reported with all of them. Each match is a kustomize directory or a manifest file.
+
+`plan` reports each companion the namespace lacks. `standup --with-companions` stands those up first, in the
+order the templates were given, each as its own instance (`<last segment>-companion`). A teardown of the stack
+keeps them. For a claim that is missing or Pending, `plan` also names the file in the source that defines its
+PersistentVolume, for an administrator to apply; `llmd` neither reads nor writes PersistentVolumes.
+
 ## A guide already deployed with its README's commands
 
 ```sh

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from .. import catalog, guides
+from .. import catalog, companions, guides
 from ..errors import NotFoundError
 from . import Context, Handler, add_source_arguments, parse_variables
 
@@ -27,6 +27,13 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
         metavar="NAME=VALUE",
         help="with a guide: the variables to follow its steps with (repeatable)",
     )
+    parser.add_argument(
+        "--companions",
+        default="",
+        metavar="NAMESPACE",
+        help="instead, list what the source's companion templates (`llmd sources add --companion`) name for "
+        "the stack given as PREFIX in NAMESPACE",
+    )
     add_source_arguments(parser)
     return {"stacks": command_stacks}
 
@@ -35,6 +42,8 @@ def command_stacks(ctx: Context) -> int:
     source = ctx.source()
     prefix = ctx.args.prefix.strip("/")
     stacks = catalog.source_stacks(source, ctx.runner)
+    if ctx.args.companions:
+        return _show_companions(ctx, catalog.find_stack(source, prefix, listed=stacks), ctx.args.companions)
     stack = None
     if prefix:
         try:
@@ -101,4 +110,28 @@ def _show_guide(ctx: Context, stack: catalog.Stack, variables: dict[str, str]) -
         print(f"  {finding.severity.upper():<8} {finding.message}")
     chosen = "".join(f" --var {name}={value}" for name, value in variables.items())
     print(f"\nPlan it: llmd plan {stack.id} -n NAMESPACE{chosen}")
+    return 0
+
+
+def _show_companions(ctx: Context, stack: catalog.Stack, namespace: str) -> int:
+    found = companions.for_stack(stack, ctx.runner, namespace)
+    if ctx.args.output != "text":
+        ctx.emit(
+            {
+                "stack": stack.id,
+                "namespace": namespace,
+                "companions": [item.describe() for item in found.chosen],
+                "ambiguous": [[item.describe() for item in tied] for tied in found.ambiguous],
+            }
+        )
+        return 0
+    templates = stack.source.layout.companions
+    if not templates:
+        print(f"Source {stack.source.name} has no companion templates (`llmd sources add --companion`).")
+        return 0
+    print(f"Companions of {stack.id} in {namespace} ({len(found.chosen)})")
+    for item in found.chosen:
+        print(f"  {item.path:<56} instance name {item.instance()}")
+    for tied in found.ambiguous:
+        print(f"  {tied[0].template} matches several paths: {', '.join(item.path for item in tied)}")
     return 0

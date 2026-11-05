@@ -53,3 +53,9 @@ def test_checked_raises_on_failure():
     result = subprocess_runner(["git", "--no-such-flag"])
     with pytest.raises(CommandError):
         checked(result, "git")
+
+
+def test_a_template_is_refused_as_yaml_not_crashed_on():
+    """A Helm template line (`replicas: {{ .Values.x }}`) parses to a mapping used as a key."""
+    with pytest.raises(UsageError, match="unsupported YAML key"):
+        yamlio.load_documents("spec:\n  replicas: {{ .Values.x }}\n")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .. import catalog, inventory, yamlio
+from .. import catalog, companions, inventory, yamlio
 from ..errors import PolicyError, UsageError
 from ..kube import Kube
 from ..plan import Options, Plan, discovered_scope, make_plan
@@ -109,6 +109,7 @@ def command_plan(ctx: Context) -> int:
     plan = plan_from_args(ctx, kube)
     if kube is not None:
         preflight(kube, plan)
+        companions.check(kube, plan, ctx.runner)
     if ctx.args.manifest:
         yamlio.write_text_atomic(Path(ctx.args.manifest), yamlio.dump_documents(plan.documents))
     if ctx.args.admin_yaml:

@@ -23,6 +23,10 @@ def _construct_mapping(loader, node, deep=False):
     mapping = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
+        try:
+            hash(key)
+        except TypeError as exc:  # a mapping or list as a key: a template (`{{ ... }}`), not a manifest
+            raise UsageError(f"unsupported YAML key (line {key_node.start_mark.line + 1})") from exc
         if key in mapping:
             raise UsageError(f"duplicate YAML key {key!r} (line {key_node.start_mark.line + 1})")
         mapping[key] = loader.construct_object(value_node, deep=deep)

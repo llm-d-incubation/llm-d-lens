@@ -34,6 +34,17 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
         "--exclude", action="append", default=[], metavar="GLOB", help="a kustomize directory that is not a stack"
     )
     layout.add_argument(
+        "--companion",
+        action="append",
+        default=[],
+        dest="companions",
+        metavar="TEMPLATE",
+        help="where a stack's companions are (what its namespace needs besides the stack, such as its "
+        "network policies or a claim file), as a path relative to the source with {stack}, {name} (the "
+        "stack's last segment) and {namespace}, `..`, and `*` within a segment; repeatable. Stood up "
+        "before the stack with `standup --with-companions`, and kept by its teardown",
+    )
+    layout.add_argument(
         "--pool-label",
         default="",
         metavar="LABEL",
@@ -49,7 +60,12 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
 def command_sources(ctx: Context) -> int:
     args = ctx.args
     if args.action == "add":
-        layout = Layout(stacks=tuple(args.stacks), exclude=tuple(args.exclude), pool_label=args.pool_label)
+        layout = Layout(
+            stacks=tuple(args.stacks),
+            exclude=tuple(args.exclude),
+            companions=tuple(args.companions),
+            pool_label=args.pool_label,
+        )
         entry = ctx.registry.add(args.name, args.location, ref=args.ref, layout=layout)
         ref = f"#{entry['ref']}" if entry.get("ref") else ""
         print(f"Registered source {entry['name']} -> {entry['location']}{ref}")
