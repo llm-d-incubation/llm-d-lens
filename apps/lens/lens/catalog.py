@@ -151,7 +151,7 @@ def _tracked_files(source: Source, runner: Runner) -> list[str] | None:
     return listed.stdout.splitlines() if listed.ok else None
 
 
-def _source_files(source: Source, runner: Runner) -> list[str]:
+def source_files(source: Source, runner: Runner) -> list[str]:
     """The checkout's files, from Git when it is a work tree, without hidden directories."""
     files = _tracked_files(source, runner)
     if files is None:
@@ -206,7 +206,7 @@ def list_stacks(
     ``include`` and ``exclude`` are the source's stack patterns (``llmd sources add --stacks``,
     ``--exclude``): with ``include``, only the kustomize directories it matches are listed; guides
     are always listed. ``prefix`` keeps the stacks below one path."""
-    files = _source_files(source, runner)
+    files = source_files(source, runner)
     guides = {
         Path(line).parent.as_posix()
         for line in files

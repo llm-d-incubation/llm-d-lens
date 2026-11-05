@@ -1,0 +1,14 @@
+# The volume behind the model-cache claim. Cluster-scoped: an administrator applies it.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: model-a-cache-pv
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes: [ReadOnlyMany]
+  claimRef:
+    name: model-a-cache
+    namespace: model-a-serving
+  hostPath:
+    path: /var/model-cache/model-a

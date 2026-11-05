@@ -1,0 +1,12 @@
+# The model-cache claim, applied on its own: deleting it with the stack would release its volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-a-cache
+  namespace: model-a-serving
+spec:
+  accessModes: [ReadOnlyMany]
+  resources:
+    requests:
+      storage: 100Gi
+  volumeName: model-a-cache-pv

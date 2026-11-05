@@ -11,7 +11,12 @@ from lens.sources import resolve_source
 GUIDES = ["guides/demo-baseline", "guides/demo-pd"]
 #: Kustomize directories no other one includes, outside the guides. The recipe base is included by a
 #: guide's overlay and the Component is never applied on its own, so neither is listed.
-KUSTOMIZE = ["examples/model-a/cluster-a", "examples/staged/model-a/cluster-a"]
+KUSTOMIZE = [
+    "examples/model-a/cluster-a",
+    "examples/namespaces/cluster-a/policies/model-a-serving",
+    "examples/namespaces/cluster-b/policies/model-a-serving",
+    "examples/staged/model-a/cluster-a",
+]
 
 
 def ids(stacks):
@@ -22,7 +27,7 @@ def test_guides_then_the_other_kustomize_directories(llmrepo):
     source = resolve_source(str(llmrepo))
     stacks = list_stacks(source, subprocess_runner)
     assert ids(stacks) == GUIDES + KUSTOMIZE
-    assert [stack.kind for stack in stacks] == ["guide"] * 2 + ["kustomize"] * 2
+    assert [stack.kind for stack in stacks] == ["guide"] * 2 + ["kustomize"] * 4
 
 
 def test_listing_by_prefix_and_by_pattern(llmrepo):
@@ -88,7 +93,7 @@ def test_stacks_command_lists_guides_and_kustomize_directories_apart(llmrepo, tm
     state = ["--state-dir", str(tmp_path / "s")]
     assert main([*state, "stacks", "--source", str(llmrepo)]) == 0
     out = capsys.readouterr().out
-    assert "Guides (2)" in out and "Kustomize directories (2)" in out
+    assert "Guides (2)" in out and "Kustomize directories (4)" in out
     assert out.index("guides/demo-pd") < out.index("Kustomize directories") < out.index("examples/model-a/cluster-a")
     assert main([*state, "-o", "json", "stacks", "--source", str(llmrepo)]) == 0
     listed = json.loads(capsys.readouterr().out)
@@ -98,6 +103,7 @@ def test_stacks_command_lists_guides_and_kustomize_directories_apart(llmrepo, tm
 def test_a_registered_layout_narrows_the_listing(llmrepo, tmp_path, capsys):
     state = ["--state-dir", str(tmp_path / "s")]
     add = ["sources", "add", "demo", str(llmrepo), "--stacks", "examples/**", "--exclude", "**/staged/**"]
+    add += ["--exclude", "examples/namespaces/**"]
     assert main([*state, *add]) == 0
     assert "stacks     examples/**" in capsys.readouterr().out
     assert main([*state, "-o", "json", "stacks"]) == 0
