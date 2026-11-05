@@ -11,13 +11,14 @@ from . import Context, Handler, add_source_arguments, parse_variables
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
     parser = commands.add_parser(
-        "stacks", help="list the guides of a source, or show one guide's variables (no cluster access)"
+        "stacks", help="list the guides and kustomize stacks of a source, or show a guide (no cluster access)"
     )
     parser.add_argument(
         "prefix",
         nargs="?",
         default="",
-        help="a guide (guides/optimized-baseline) to show its variables, or a path to list the guides below",
+        help="a guide (guides/optimized-baseline, or the end of its path) to show its variables, or a path to "
+        "list the stacks below",
     )
     parser.add_argument(
         "--var",
@@ -33,23 +34,33 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
 def command_stacks(ctx: Context) -> int:
     source = ctx.source()
     prefix = ctx.args.prefix.strip("/")
+    stacks = catalog.source_stacks(source, ctx.runner)
     stack = None
     if prefix:
         try:
-            found = catalog.find_stack(source, prefix)
+            found = catalog.find_stack(source, prefix, listed=stacks)
             stack = found if found.kind == "guide" else None
         except NotFoundError:
             stack = None
     if stack is not None:
         return _show_guide(ctx, stack, parse_variables(ctx.args.var))
-    stacks = catalog.list_stacks(source, ctx.runner, prefix)
+    stacks = [item for item in stacks if not prefix or item.id == prefix or item.id.startswith(prefix + "/")]
+    listed = {kind: [item for item in stacks if item.kind == kind] for kind in ("guide", "kustomize")}
     if ctx.args.output != "text":
-        ctx.emit({"source": source.describe(), "stacks": [stack.id for stack in stacks]})
+        ctx.emit(
+            {
+                "source": source.describe(),
+                "guides": [item.id for item in listed["guide"]],
+                "kustomize": [item.id for item in listed["kustomize"]],
+            }
+        )
         return 0
     revision = f" @ {source.revision[:12]}" if source.revision else ""
-    print(f"{source.name}{revision}{' (dirty)' if source.dirty else ''}: {len(stacks)} guide(s)")
-    for item in stacks:
-        print(f"  {item.id:<56} instance name {catalog.default_name(item)}")
+    print(f"{source.name}{revision}{' (dirty)' if source.dirty else ''}")
+    for kind, title in (("guide", "Guides"), ("kustomize", "Kustomize directories")):
+        print(f"\n{title} ({len(listed[kind])})")
+        for item in listed[kind]:
+            print(f"  {item.id:<56} instance name {catalog.default_name(item)}")
     print("\nA guide's variables and steps: llmd stacks GUIDE")
     return 0
 

@@ -40,9 +40,24 @@ A guide comes from an llm-d checkout, or from upstream directly:
 
 ```sh
 llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
-llmd stacks                           # the guides of the source
+llmd stacks                           # the guides, then the other kustomize directories
 llmd stacks optimized-baseline        # one guide's variables, support matrix and steps
 ```
+
+`llmd stacks` lists two groups: the guides (directories with a `guide.yaml`), and the kustomize directories that
+no other directory includes, outside the guides, Helm charts and kustomize Components. A stack is named by its
+path, or by the end of its path when only one listed stack ends that way: `optimized-baseline` and
+`models/deepseek-v4` are enough for `guides/optimized-baseline` and `guides/models/deepseek-v4`.
+
+A checkout of your own team's stacks is a source too. Say which of its kustomize directories are stacks when you
+register it, so the listing and the short names cover those only:
+
+```sh
+llmd sources add team ~/src/team-stacks --stacks 'deploy/*/*' --exclude 'deploy/**/base'
+```
+
+`*` and `?` match within one path segment, and `**` matches any number of segments. The patterns are kept with
+the source in `sources.yaml`. Guides are always listed.
 
 `--source` takes a registered name, a local path, or `URL#REF`. REF can be a branch, a tag, a commit, or any
 ref the remote serves, so a pull request can be planned before it merges:
