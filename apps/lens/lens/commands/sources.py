@@ -33,6 +33,13 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
     layout.add_argument(
         "--exclude", action="append", default=[], metavar="GLOB", help="a kustomize directory that is not a stack"
     )
+    layout.add_argument(
+        "--pool-label",
+        default="",
+        metavar="LABEL",
+        help="the pod label that is 'true' while a group is in the router's pool, for stacks whose drain "
+        "tool takes groups out by that label; `llmd rollouts` uses it unless given --pool-label",
+    )
     actions.add_parser("list", help="list registered sources")
     remove = actions.add_parser("remove", help="forget a source (the checkout is left alone)")
     remove.add_argument("name")
@@ -42,7 +49,7 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
 def command_sources(ctx: Context) -> int:
     args = ctx.args
     if args.action == "add":
-        layout = Layout(stacks=tuple(args.stacks), exclude=tuple(args.exclude))
+        layout = Layout(stacks=tuple(args.stacks), exclude=tuple(args.exclude), pool_label=args.pool_label)
         entry = ctx.registry.add(args.name, args.location, ref=args.ref, layout=layout)
         ref = f"#{entry['ref']}" if entry.get("ref") else ""
         print(f"Registered source {entry['name']} -> {entry['location']}{ref}")

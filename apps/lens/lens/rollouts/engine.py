@@ -75,7 +75,10 @@ def start(
     expected_digest: str = "",
     env: dict[str, str] | None = None,
     actor: str = "",
+    pool_label: str = "",
 ) -> dict[str, Any]:
+    """Start the rollout. ``pool_label`` is recorded with it, so ``status``, ``finish`` and ``--watch``
+    judge serving groups the same way without the flag."""
     plan, record = rollout.plan, rollout.record
     if rollout.blocking:
         raise PolicyError(
@@ -126,6 +129,7 @@ def start(
             "objects": [object_ref(doc) for doc in changed],
             "previous": previous,
             "drain": drain if drain != "-" else "",
+            **({"poolLabel": pool_label} if pool_label else {}),
             "steps": [],
         },
     }
