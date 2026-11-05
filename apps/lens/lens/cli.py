@@ -18,6 +18,7 @@ from .commands import render as render_command
 from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .commands import standup as standup_command
+from .commands import status as status_command
 from .errors import LlmdError
 
 #: Modules that add subcommands, in the order ``--help`` lists them.
@@ -27,6 +28,7 @@ COMMAND_MODULES = [
     render_command,
     plan_command,
     standup_command,
+    status_command,
 ]
 
 
