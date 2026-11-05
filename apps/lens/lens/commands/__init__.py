@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,7 +57,9 @@ class Context:
             context=getattr(args, "context", ""),
             cli=getattr(args, "kube_cli", "kubectl"),
         )
-        return Kube(target, runner=self.runner)
+        kube = Kube(target, runner=self.runner)
+        kube.progress = progress
+        return kube
 
     def namespace(self, kube: Kube | None = None) -> str:
         """``-n``, else ``LLMD_NAMESPACE`` (the flag's default), else the kube context's namespace."""
@@ -68,6 +71,11 @@ class Context:
 
 
 Handler = Callable[[Context], int]
+
+
+def progress(line: str) -> None:
+    """What a command is doing, on stderr, so a slow step is visible and ``-o json`` stays clean."""
+    print(f"[llmd] {line}", file=sys.stderr, flush=True)
 
 
 def emit_value(value: Any, output: str) -> None:

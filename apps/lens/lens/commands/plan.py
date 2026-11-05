@@ -11,7 +11,7 @@ from ..kube import Kube
 from ..plan import Options, Plan, make_plan
 from ..policy import fallback_scope
 from ..preflight import preflight
-from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables
+from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables, progress
 
 
 def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -74,6 +74,7 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
     cluster-scoped and the namespace may come from the kube context; without, the plan is offline."""
     args = ctx.args
     stack = catalog.find_stack(ctx.source(), args.stack, runner=ctx.runner)
+    progress(f"rendering {stack.id}")
     options = Options(
         namespace=ctx.namespace(kube),
         instance=args.name or catalog.default_name(stack),
@@ -89,7 +90,10 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
             hint="Render a kustomize directory as it is, or name the guide it belongs to.",
         )
     scope = fallback_scope if kube is None else _discovered_scope(kube)
-    return make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)
+    plan = make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)
+    if kube is not None:
+        progress(f"checking {len(plan.documents)} object(s) against {plan.namespace}")
+    return plan
 
 
 def _discovered_scope(kube: Kube):

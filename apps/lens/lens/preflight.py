@@ -71,9 +71,11 @@ def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
         return
     if existing == "import":
         _observe_only(plan)
+    record = inventory.read(kube, plan.namespace, plan.instance)
+    _prefetch(kube, plan, record)
     _check_permissions(kube, plan, write=existing != "import")
     _check_prerequisites(kube, plan)
-    _check_existing(kube, plan, existing)
+    _check_existing(kube, plan, existing, record)
     if plan.blocking or existing in ("import", "rollout"):
         plan.cluster["dryRun"] = "skipped"
         return
@@ -95,6 +97,22 @@ def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
     except CommandError as error:
         plan.cluster["dryRun"] = "failed"
         findings.append(Finding("error", "dry-run-failed", error.message, hint=error.hint or ""))
+
+
+def _prefetch(kube: Kube, plan: Plan, record: dict[str, Any] | None) -> None:
+    """Read the stack's objects, its prerequisites and the instance's recorded objects with one
+    ``kubectl get`` per kind. The checks below, and what the command does next (an import's
+    comparison, a rollout's plan), then read them from that one read; the first write drops it."""
+    names = (doc["metadata"]["name"] for doc in plan.documents)
+    items = list(zip(resources(kube, plan), names, strict=True))
+    for item in plan.policy.prerequisites:
+        api_version, resource = PREREQUISITES.get(item["kind"], ("", ""))
+        if resource and kube.resource(api_version, item["kind"]) is not None:
+            items.append((resource, item["name"]))
+    items += [(item["resource"], item["name"]) for item in (record or {}).get("objects") or []]
+    items = list(dict.fromkeys(items))
+    kube.progress(f"reading {len(items)} object(s) in {plan.namespace}")
+    kube.prefetch(items, plan.namespace)
 
 
 def _bindings_to_planned_roles(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -213,9 +231,8 @@ def _only_monitors(item: dict[str, Any]) -> bool:
     return all(user.split("/", 1)[0] in MONITOR_KINDS for user in item["usedBy"])
 
 
-def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:
+def _check_existing(kube: Kube, plan: Plan, existing: str, record: dict[str, Any] | None) -> None:
     """Who owns each planned object today."""
-    record = inventory.read(kube, plan.namespace, plan.instance)
     if record and inventory.management(record) == inventory.IMPORTED and existing != "import":
         plan.findings.append(
             Finding(

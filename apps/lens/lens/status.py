@@ -38,6 +38,8 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
     record = inventory.require(kube, namespace, instance)
     objects, problems, endpoints, seen, unreadable = [], [], [], [], []
     pods_ready = pods_total = 0
+    kube.progress(f"reading {len(record.get('objects') or [])} object(s) of {instance}")
+    kube.prefetch([(item["resource"], item["name"]) for item in record.get("objects") or []], namespace)
     for item in record.get("objects") or []:
         ref = f"{item['kind']}/{item['name']}"
         try:
@@ -77,6 +79,7 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
             for port in (live.get("spec") or {}).get("ports") or []:
                 endpoints.append(f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}")
     problems += _pending_warnings(kube, namespace, seen, problems)
+    kube.forget()
     return {
         "instance": instance,
         "namespace": namespace,
@@ -190,6 +193,7 @@ def list_instances(kube: Kube, namespace: str) -> list[dict[str, Any]]:
         ready = total = 0
         accelerators: dict[str, int] = {}
         unreadable = []
+        kube.prefetch([(item["resource"], item["name"]) for item in record.get("objects") or []], namespace)
         for item in record.get("objects") or []:
             try:
                 live = kube.get(item["resource"], item["name"], namespace)
@@ -216,4 +220,5 @@ def list_instances(kube: Kube, namespace: str) -> list[dict[str, Any]]:
                 "unreadable": unreadable,
             }
         )
+    kube.forget()
     return listed
