@@ -28,6 +28,7 @@ dependencies = [
     "PyYAML>=6",
     "sqlalchemy>=2.0",
     "uvicorn>=0.30",
+    "zstandard>=0.25",
 ]
 
 [project.optional-dependencies]

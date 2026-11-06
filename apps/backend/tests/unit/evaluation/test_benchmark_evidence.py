@@ -4,7 +4,6 @@ import asyncio
 import importlib
 import io
 import json
-import subprocess
 import sys
 import tarfile
 from copy import deepcopy
@@ -14,6 +13,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+import zstandard
 
 from llm_d_lens.agentic import benchmark_context
 from llm_d_lens.db.dao.agentic_benchmark_record import BenchmarkRecordDao, BenchmarkRecordDaoError
@@ -631,6 +631,22 @@ def test_public_metadata_failure_does_not_block_archival(run, monkeypatch):
     assert evidence.normalize_evaluate_run(run)[0]
 
 
+def _write_workspace_archive(tmp_path, members):
+    """Compress already-built tar members into tmp_path/workspace.tar.zst."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name, payload, kind in members:
+            member = tarfile.TarInfo(name)
+            if kind == "symlink":
+                member.type = tarfile.SYMTYPE
+                member.linkname = "target.json"
+                archive.addfile(member)
+            else:
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+    (tmp_path / "workspace.tar.zst").write_bytes(zstandard.ZstdCompressor().compress(buffer.getvalue()))
+
+
 def test_native_archive_recovers_measured_tokens_and_stage_concurrency(run, tmp_path):
     run.pop("matrix")
     run.pop("matrix_results")
@@ -656,14 +672,7 @@ def test_native_archive_recovers_measured_tokens_and_stage_concurrency(run, tmp_
         },
         "failures": {"count": 0},
     }
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        data = json.dumps(native).encode()
-        member = tarfile.TarInfo("./stage_0_lifecycle_metrics.json")
-        member.size = len(data)
-        archive.addfile(member, io.BytesIO(data))
-    result = subprocess.run(["zstd", "-q", "-c"], input=buffer.getvalue(), capture_output=True, check=True)
-    (tmp_path / "workspace.tar.zst").write_bytes(result.stdout)
+    _write_workspace_archive(tmp_path, [("./stage_0_lifecycle_metrics.json", json.dumps(native).encode(), "file")])
     records, issues = evidence.normalize_evaluate_run(run)
     assert not issues
     (record,) = records
@@ -676,3 +685,64 @@ def test_native_archive_recovers_measured_tokens_and_stage_concurrency(run, tmp_
     assert metrics["token_distributions"]["input"]["mean"] == 0  # Original result remains unchanged.
     metrics["request_count"] = 3
     assert "counts disagree" in evidence.normalize_evaluate_run(run)[1][0]["reason"]
+
+
+def test_read_lifecycle_artifact_reads_archived_member(tmp_path):
+    _write_workspace_archive(tmp_path, [("./config.yaml", b"data:\n  type: random\n", "file")])
+    assert evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml") == b"data:\n  type: random\n"
+
+
+def test_read_lifecycle_artifact_rejects_missing_member(tmp_path):
+    _write_workspace_archive(tmp_path, [("./other.yaml", b"unrelated", "file")])
+    with pytest.raises(ValueError, match="Unable to read config.yaml from its lifecycle archive"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")
+
+
+def test_read_lifecycle_artifact_rejects_duplicate_member(tmp_path):
+    _write_workspace_archive(tmp_path, [("./config.yaml", b"first", "file"), ("./config.yaml", b"second", "file")])
+    with pytest.raises(ValueError, match="duplicate"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")
+
+
+def test_read_lifecycle_artifact_rejects_non_regular_member(tmp_path):
+    _write_workspace_archive(tmp_path, [("./config.yaml", b"", "symlink")])
+    with pytest.raises(ValueError, match="not a regular file"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")
+
+
+def test_read_lifecycle_artifact_rejects_member_over_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(evidence, "_LIFECYCLE_ARTIFACT_LIMIT", 4)
+    _write_workspace_archive(tmp_path, [("./config.yaml", b"12345", "file")])
+    with pytest.raises(ValueError, match="exceeds the 64 MiB limit"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "truncated-stream"])
+def test_read_lifecycle_artifact_rejects_corrupt_or_truncated_stream(tmp_path, damage):
+    _write_workspace_archive(tmp_path, [("./config.yaml", b"data: {}\n", "file")])
+    archive = tmp_path / "workspace.tar.zst"
+    data = archive.read_bytes()
+    archive.write_bytes(b"not a zstd stream" if damage == "corrupt" else data[: len(data) // 2])
+    with pytest.raises(ValueError, match="Unable to read config.yaml from its lifecycle archive"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")
+
+
+def test_read_lifecycle_artifact_rejects_archive_truncated_mid_member(tmp_path):
+    payload = bytes(range(256)) * 256  # 64 KiB, larger than one tar block
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        member = tarfile.TarInfo("./config.yaml")
+        member.size = len(payload)
+        archive.addfile(member, io.BytesIO(payload))
+    raw = buffer.getvalue()
+    (tmp_path / "workspace.tar.zst").write_bytes(zstandard.ZstdCompressor().compress(raw[: 512 + len(payload) // 2]))
+    with pytest.raises(ValueError, match="Unable to read config.yaml from its lifecycle archive"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")
+
+
+def test_read_lifecycle_artifact_enforces_deadline(tmp_path, monkeypatch):
+    _write_workspace_archive(tmp_path, [("./config.yaml", b"data: {}\n", "file")])
+    clock = iter([0.0, 16.0])
+    monkeypatch.setattr(evidence.time, "monotonic", lambda: next(clock, 16.0))
+    with pytest.raises(ValueError, match="Lifecycle archive read timed out"):
+        evidence.read_lifecycle_artifact(tmp_path / "summary.json", "config.yaml")

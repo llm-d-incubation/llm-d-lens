@@ -11,10 +11,8 @@ import asyncio
 import json
 import logging
 import math
-import os
 import re
-import selectors
-import subprocess
+import tarfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +20,7 @@ from typing import Any
 from uuid import UUID
 
 import yaml
+import zstandard
 
 from llm_d_lens.agentic.benchmark_context import (
     capture_benchmark_context as capture_serving_context,
@@ -47,6 +46,21 @@ from llm_d_lens.agentic.benchmark_evidence import (
 from llm_d_lens.db.dao.evaluate_run import EvaluateRunDao
 
 logger = logging.getLogger(__name__)
+
+_LIFECYCLE_ARTIFACT_LIMIT = 64 * 1024 * 1024
+
+
+class _DeadlineReader:
+    """Decompressed archive stream that enforces the remaining read budget."""
+
+    def __init__(self, stream: Any, deadline: float) -> None:
+        self._stream = stream
+        self._deadline = deadline
+
+    def read(self, size: int = -1) -> bytes:
+        if time.monotonic() >= self._deadline:
+            raise ValueError("Lifecycle archive read timed out")
+        return self._stream.read(size)
 
 
 def declare_historical_hardware(run: dict, accelerator: str, vram_per_gpu_gib: float) -> None:
@@ -112,52 +126,48 @@ def read_lifecycle_artifact(summary_path: str | Path, name: str) -> bytes | None
     """Read one bounded sibling artifact, loose or in its own workspace archive.
 
     No archive member is extracted to disk. Only lifecycle/config members are
-    accepted, and ambiguous duplicate members are rejected by tar.
+    accepted, and ambiguous duplicate members are rejected.
     """
     if not re.fullmatch(r"(?:config\.yaml|(?:summary|stage_\d+|per_request)_lifecycle_metrics\.json)", name):
         raise ValueError("Unsupported lifecycle artifact name")
     root = Path(summary_path).parent
-    limit = 64 * 1024 * 1024
     path = root / name
     if path.is_file():
-        if path.stat().st_size > limit:
+        if path.stat().st_size > _LIFECYCLE_ARTIFACT_LIMIT:
             raise ValueError("Lifecycle artifact exceeds the 64 MiB limit")
         return path.read_bytes()
     archive = root / "workspace.tar.zst"
     if not archive.is_file():
         return None
-    # Captured workspaces use ./ members; tar does not follow stored links when
-    # streaming a member to stdout.
-    with subprocess.Popen(
-        ["tar", "--zstd", "-xOf", str(archive), f"./{name}"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    ) as process:
-        stdout = bytearray()
-        deadline = time.monotonic() + 15
-        try:
-            if process.stdout is None:
-                raise ValueError("Lifecycle archive output is unavailable")
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0 or not selector.select(remaining):
-                        raise ValueError("Lifecycle archive read timed out")
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    if not chunk:
-                        break
-                    stdout.extend(chunk)
-                    if len(stdout) > limit:
-                        raise ValueError("Lifecycle artifact exceeds the 64 MiB limit")
-            process.wait(timeout=max(0.001, deadline - time.monotonic()))
-        except (subprocess.TimeoutExpired, ValueError) as error:
-            process.kill()
-            process.wait()
-            raise ValueError(str(error)) from error
-        if process.returncode:
-            raise ValueError(f"Unable to read {name} from its lifecycle archive")
-    return bytes(stdout)
+    # Captured workspaces name members "./<name>"; stream mode never extracts a
+    # member to disk and does not follow stored links.
+    deadline = time.monotonic() + 15
+    member_name = f"./{name}"
+    payload: bytes | None = None
+    try:
+        with (
+            archive.open("rb") as raw,
+            zstandard.ZstdDecompressor().stream_reader(raw, read_across_frames=True) as decompressed,
+            tarfile.open(fileobj=_DeadlineReader(decompressed, deadline), mode="r|") as tar,
+        ):
+            for member in tar:
+                if member.name != member_name:
+                    continue
+                if payload is not None:
+                    raise ValueError(f"Lifecycle archive contains duplicate {member.name} members")
+                if not member.isreg():
+                    raise ValueError(f"Lifecycle archive member {member.name} is not a regular file")
+                if member.size > _LIFECYCLE_ARTIFACT_LIMIT:
+                    raise ValueError("Lifecycle artifact exceeds the 64 MiB limit")
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    raise ValueError(f"Unable to read {name} from its lifecycle archive")
+                payload = extracted.read()
+    except (zstandard.ZstdError, tarfile.TarError, EOFError) as error:
+        raise ValueError(f"Unable to read {name} from its lifecycle archive") from error
+    if payload is None:
+        raise ValueError(f"Unable to read {name} from its lifecycle archive")
+    return payload
 
 
 def summarize_lifecycle(payload: dict, summary_path: str | Path) -> dict:
