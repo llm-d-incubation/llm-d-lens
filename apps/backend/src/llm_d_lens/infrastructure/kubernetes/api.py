@@ -108,7 +108,13 @@ async def request(api, path: str, *, query: list | None = None, timeout: float =
 
 
 async def resolve_resource(api, resource: str) -> Resource:
-    """Discover CRDs using the cluster's served preferred version, never guess it."""
+    """Discover CRDs from the cluster's served versions, never guess them.
+
+    Every group's preferred version is searched first, so a resource served
+    there always resolves to it. Other served versions follow, as in kubectl,
+    because a preferred version can omit a resource (for example a CRD served
+    only at v1alpha2 once a sibling CRD in the same group serves v1).
+    """
     name, _, group = resource.partition(".")
     builtin = _BUILTINS.get(_ALIASES.get(name, name))
     if builtin:
@@ -116,12 +122,20 @@ async def resolve_resource(api, resource: str) -> Resource:
         if not group or group == builtin_group:
             return builtin
     groups = (await request(api, "/apis")).get("groups", [])
+    preferred_versions: list[str] = []
+    other_versions: list[str] = []
     for entry in groups:
         if group and entry.get("name") != group:
             continue
-        version = (entry.get("preferredVersion") or {}).get("groupVersion")
-        if not version:
-            continue
+        preferred = (entry.get("preferredVersion") or {}).get("groupVersion")
+        if preferred:
+            preferred_versions.append(preferred)
+        other_versions.extend(
+            served
+            for item in entry.get("versions") or []
+            if (served := (item or {}).get("groupVersion")) and served != preferred
+        )
+    for version in [*preferred_versions, *other_versions]:
         prefix = f"/apis/{version}"
         resources = (await request(api, prefix)).get("resources", [])
         for item in resources:

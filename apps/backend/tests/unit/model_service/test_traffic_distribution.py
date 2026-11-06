@@ -148,6 +148,12 @@ async def test_remove_model_confirms_cleanup_before_deleting_record(monkeypatch,
     response = await router.admin_delete_group(group.id, SimpleNamespace())
     assert response.status_code == (502 if failure else 204)
     assert (service.groups.get(group.id) is not None) == failure
+    if failure:
+        # The fixed recovery message reaches the user; the raw cluster error stays in logs.
+        body = json.loads(response.body)
+        assert body["code"] == "model_removal_failed"
+        assert body["detail"].startswith("Route cleanup could not be confirmed.")
+        assert "finalizer" not in response.body.decode()
 
 
 @pytest.mark.asyncio

@@ -23,12 +23,20 @@ def problem(
     code: str,
     extra: dict | None = None,
     headers: dict | None = None,
+    *,
+    expose_detail: bool = False,
 ) -> JSONResponse:
+    """Build a Problem Details response.
+
+    Server-error details are hidden by default because they may carry hosts,
+    paths or upstream output. Set ``expose_detail`` only for a fixed message
+    written in code that tells the user what happened and how to recover.
+    """
     content: dict[str, object] = {
         "type": "about:blank",
         "status": status,
         "title": title,
-        "detail": "An unexpected error occurred." if status >= 500 else detail,
+        "detail": detail if status < 500 or expose_detail else "An unexpected error occurred.",
         "code": code,
     }
     if extra:

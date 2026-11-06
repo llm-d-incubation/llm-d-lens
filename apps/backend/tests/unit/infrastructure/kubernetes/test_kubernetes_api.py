@@ -26,6 +26,45 @@ async def test_custom_resource_discovery_uses_served_preferred_version(cluster_a
 
 
 @pytest.mark.asyncio
+async def test_custom_resource_missing_from_preferred_version_uses_other_served_version(cluster_api):
+    """A sibling CRD serving v1 makes v1 preferred; v1alpha2-only CRDs must still resolve."""
+    from llm_d_lens.infrastructure.kubernetes.api import query_resource
+
+    responses = {
+        "/apis": {
+            "groups": [
+                {
+                    "name": "llm-d.ai",
+                    "preferredVersion": {"groupVersion": "llm-d.ai/v1"},
+                    "versions": [{"groupVersion": "llm-d.ai/v1"}, {"groupVersion": "llm-d.ai/v1alpha2"}],
+                }
+            ]
+        },
+        "/apis/llm-d.ai/v1": {
+            "resources": [{"name": "inferenceobjectives", "kind": "InferenceObjective", "namespaced": True}]
+        },
+        "/apis/llm-d.ai/v1alpha2": {
+            "resources": [
+                {"name": "inferenceobjectives", "kind": "InferenceObjective", "namespaced": True},
+                {
+                    "name": "inferencemodelrewrites",
+                    "singularName": "inferencemodelrewrite",
+                    "kind": "InferenceModelRewrite",
+                    "namespaced": True,
+                },
+            ]
+        },
+        "/apis/llm-d.ai/v1/inferenceobjectives": {"items": []},
+        "/apis/llm-d.ai/v1alpha2/inferencemodelrewrites": {"items": [{"metadata": {"name": "alias"}}]},
+    }
+    cluster_api.response = lambda req: responses[req.path]
+    result = await query_resource("inferencemodelrewrite", all_namespaces=True, kubeconfig=str(cluster_api.config))
+    assert result["items"] == [{"metadata": {"name": "alias"}}]
+    await query_resource("inferenceobjective", all_namespaces=True, kubeconfig=str(cluster_api.config))
+    assert cluster_api.calls[-1][0] == "/apis/llm-d.ai/v1/inferenceobjectives"
+
+
+@pytest.mark.asyncio
 async def test_named_get_retains_fields_and_selector_list_retains_resource_version(cluster_api):
     from llm_d_lens.infrastructure.kubernetes.api import query_resource
 

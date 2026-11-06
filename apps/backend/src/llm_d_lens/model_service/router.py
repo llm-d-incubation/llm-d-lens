@@ -625,6 +625,7 @@ async def admin_delete_group(group_id: str, request: Request) -> Response:
             "Model removal failed",
             "Route cleanup could not be confirmed. The model record was retained; retry Remove model.",
             "model_removal_failed",
+            expose_detail=True,
         )
     return Response(status_code=204)
 

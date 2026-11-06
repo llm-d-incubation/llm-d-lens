@@ -33,3 +33,9 @@ def test_unhandled_error_hides_detail_and_returns_request_id():
 def test_problem_hides_server_details_but_preserves_client_validation():
     assert b"private host" not in problem(502, "Upstream failed", "private host", "upstream_failed").body
     assert b"invalid field" in problem(422, "Invalid request", "invalid field", "invalid_request").body
+
+
+def test_problem_exposes_fixed_server_message_only_on_request():
+    body = problem(502, "Removal failed", "Retry Remove model.", "removal_failed", expose_detail=True).body
+    assert b"Retry Remove model." in body
+    assert b"An unexpected error occurred." not in body
