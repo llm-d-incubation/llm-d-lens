@@ -62,12 +62,14 @@ def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "
         "stack": plan.stack_record(),
         **({"previousStack": previous["stack"]} if switched else _kept_previous_stack(previous)),
         "planDigest": plan.digest,
+        **({"overrides": dict(plan.options.overrides)} if plan.options.overrides else {}),
         # Recorded before applying, with what may still be there from the last standup.
         "objects": planned + stale,
         "createdAt": (previous or {}).get("createdAt") or inventory.now(),
         "updatedBy": actor,
     }
     inventory.write(kube, record)
+    kube.progress(f"applying {len(plan.documents)} object(s) to {plan.namespace}")
     applied = kube.apply(plan.documents, plan.namespace)
     uids = {(item["kind"], item["metadata"]["name"]): item["metadata"].get("uid", "") for item in applied}
     pruned = _prune(kube, plan.namespace, plan.instance, stale)
@@ -141,9 +143,16 @@ def teardown(
         )
     inventory.write(kube, {**record, "phase": "Deleting"})
     deleted, skipped = [], []
+    kube.progress(f"reading {len(targets)} object(s) of {instance}")
+    kube.prefetch([(item["resource"], item["name"]) for item in targets], namespace)
+    # Read before the first delete, which drops what the prefetch read.
+    live_objects = {
+        (item["resource"], item["name"]): kube.get(item["resource"], item["name"], namespace) for item in targets
+    }
+    kube.progress(f"deleting what {instance} owns")
     for item in reversed(targets):
         ref = f"{item['kind']}/{item['name']}"
-        live = kube.get(item["resource"], item["name"], namespace)
+        live = live_objects[(item["resource"], item["name"])]
         if live is None:
             continue
         same = not item.get("uid") or live["metadata"].get("uid") == item["uid"]

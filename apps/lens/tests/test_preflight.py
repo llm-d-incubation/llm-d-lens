@@ -131,3 +131,51 @@ def test_plan_command_against_a_cluster(llmrepo, cluster, tmp_path, capsys, monk
     summary = json.loads(capsys.readouterr().out)
     assert summary["namespace"] == "team-a" and summary["cluster"]["dryRun"] == "passed"
     assert summary["cluster"]["user"] == "alice"
+
+
+def test_a_plan_reads_each_kind_once_and_finds_the_same(llmrepo, cluster, capsys):
+    prerequisites(cluster)
+    service = llmrepo / "examples/model-a/base/model-server/service.yaml"
+    service.write_text(
+        service.read_text() + "---\n" + service.read_text().replace("name: model-a\n", "name: model-a-metrics\n", 1)
+    )
+    plan = checked(llmrepo, cluster)
+    # One read per kind for the stack's objects and its prerequisites (the Service and the
+    # Deployment, the Secret, the ServiceAccount, the claim), not one read per object.
+    gets = [call for call in cluster.calls if call[0] == "get" and call[1] not in ("--raw", "namespace")]
+    reads = [call[1] for call in gets if call[1] != "configmaps"]
+    assert sorted(reads) == sorted(set(reads))
+    names = {call[1]: [arg for arg in call[2:] if not arg.startswith("-")][0] for call in gets}
+    assert len(gets) == 6 and names["configmaps"] == "lens-instance-r1"
+    assert not plan.blocking and plan.cluster["objects"] == {"create": 3, "update": 0, "foreign": 0}
+    assert {item["state"] for item in plan.policy.prerequisites} == {"present"}
+
+
+def test_the_command_line_says_what_it_does_on_stderr(llmrepo, cluster, capsys, monkeypatch):
+    from lens import commands
+
+    prerequisites(cluster)
+    monkeypatch.setattr(commands, "RUNNER", cluster)
+    assert main(["-o", "json", "plan", STACK, "--source", str(llmrepo), "-n", "team-a", "--name", "r1"]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out)["digest"]
+    assert "[llmd] rendering " + STACK in out.err
+    assert "[llmd] reading " in out.err and "[llmd] checking 2 object(s) against team-a" in out.err
+
+
+def test_status_and_teardown_read_each_kind_once(llmrepo, cluster):
+    from lens import lifecycle
+    from lens.status import instance_status
+
+    prerequisites(cluster)
+    kube = Kube(runner=cluster)
+    lifecycle.standup(kube, checked(llmrepo, cluster))
+    cluster.calls.clear()
+    instance_status(kube, "team-a", "r1")
+    single = [call for call in cluster.calls if call[0] == "get" and call[1] in ("deployments.apps", "services")]
+    assert len(single) == 2  # one read per kind, not one per object
+    cluster.calls.clear()
+    result = lifecycle.teardown(kube, "team-a", "r1")
+    assert result["deleted"] == ["Deployment/model-a", "Service/model-a"]
+    reads = [call for call in cluster.calls if call[0] == "get" and call[1] in ("deployments.apps", "services")]
+    assert len(reads) == 2

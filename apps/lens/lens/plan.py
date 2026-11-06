@@ -7,10 +7,11 @@ findings to it (``preflight``). Its digest covers what would be applied, so ``st
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import yamlio
+from . import overrides, yamlio
 from .catalog import Stack
 from .model import Finding, object_ref, validate_instance_name, validate_namespace
 from .policy import PolicyContext, PolicyResult, ScopeResolver, apply_policy, fallback_scope
@@ -33,6 +34,8 @@ class Options:
     variables: dict[str, str] = field(default_factory=dict)
     #: ``--set KEY=VALUE`` for every Helm chart the guide installs (the router chart).
     sets: list[str] = field(default_factory=list)
+    #: Replica counts set with ``llmd scale`` (workload -> replicas), applied over the files.
+    overrides: dict[str, int] = field(default_factory=dict)
 
     def choices(self) -> dict[str, Any]:
         """What the user chose about the render, kept with the instance."""
@@ -112,6 +115,16 @@ class Plan:
         }
 
 
+def discovered_scope(kube) -> ScopeResolver:
+    """Each kind's scope by the cluster's API discovery, the built-in table where it is silent."""
+
+    def scope(api_version: str, kind: str) -> bool | None:
+        served = kube.scope(api_version, kind)
+        return fallback_scope(api_version, kind) if served is None else served
+
+    return scope
+
+
 def make_plan(
     stack: Stack,
     options: Options,
@@ -140,8 +153,11 @@ def make_plan(
         label=label,
         scope=scope,
     )
-    policy = apply_policy(rendered.documents, context)
+    documents = copy.deepcopy(rendered.documents)
+    scaled = overrides.apply(documents, options.overrides)
+    policy = apply_policy(documents, context)
     policy.findings[:0] = rendered.findings
+    policy.findings.extend(scaled)
     return Plan(
         stack=stack,
         options=options,

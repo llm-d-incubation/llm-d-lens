@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .. import catalog, yamlio
+from .. import catalog, companions, inventory, yamlio
 from ..errors import PolicyError, UsageError
 from ..kube import Kube
-from ..plan import Options, Plan, make_plan
+from ..plan import Options, Plan, discovered_scope, make_plan
 from ..policy import fallback_scope
 from ..preflight import preflight
-from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables
+from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables, progress
 
 
 def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -73,15 +73,20 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
     """The plan the command line asks for. With ``kube``, API discovery says which kinds are
     cluster-scoped and the namespace may come from the kube context; without, the plan is offline."""
     args = ctx.args
-    stack = catalog.find_stack(ctx.source(), args.stack)
+    stack = catalog.find_stack(ctx.source(), args.stack, runner=ctx.runner)
+    progress(f"rendering {stack.id}")
+    namespace, instance = ctx.namespace(kube), args.name or catalog.default_name(stack)
+    record = inventory.read(kube, namespace, instance) if kube is not None else None
     options = Options(
-        namespace=ctx.namespace(kube),
-        instance=args.name or catalog.default_name(stack),
+        namespace=namespace,
+        instance=instance,
         allow_privileged=args.allow_privileged,
         skip_admin_parts=args.skip_admin_parts,
         switch_stack=getattr(args, "switch_stack", False),
         variables=parse_variables(args.var),
         sets=list(args.sets),
+        # Counts set with `llmd scale` stay until cleared, so an update does not set them back.
+        overrides=dict((record or {}).get("overrides") or {}),
     )
     if stack.kind != "guide" and (options.variables or options.sets):
         raise UsageError(
@@ -89,15 +94,14 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
             hint="Render a kustomize directory as it is, or name the guide it belongs to.",
         )
     scope = fallback_scope if kube is None else _discovered_scope(kube)
-    return make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)
+    plan = make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)
+    if kube is not None:
+        progress(f"checking {len(plan.documents)} object(s) against {plan.namespace}")
+    return plan
 
 
 def _discovered_scope(kube: Kube):
-    def scope(api_version: str, kind: str) -> bool | None:
-        served = kube.scope(api_version, kind)
-        return fallback_scope(api_version, kind) if served is None else served
-
-    return scope
+    return discovered_scope(kube)
 
 
 def command_plan(ctx: Context) -> int:
@@ -105,6 +109,7 @@ def command_plan(ctx: Context) -> int:
     plan = plan_from_args(ctx, kube)
     if kube is not None:
         preflight(kube, plan)
+        companions.check(kube, plan, ctx.runner)
     if ctx.args.manifest:
         yamlio.write_text_atomic(Path(ctx.args.manifest), yamlio.dump_documents(plan.documents))
     if ctx.args.admin_yaml:

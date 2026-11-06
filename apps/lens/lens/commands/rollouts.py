@@ -7,16 +7,36 @@ import sys
 import time
 
 from .. import inventory, yamlio
-from ..errors import PolicyError, UsageError
+from ..errors import LlmdError, PolicyError, UsageError
 from ..preflight import preflight
 from ..rollouts import engine
 from ..rollouts.plan import RolloutPlan, plan_rollout
 from . import Context, Handler, add_target_arguments
 from .plan import add_plan_arguments, plan_from_args
 
-#: llm-d's InferencePool selects pods by their labels, so by default a group serves once its pods
-#: are Ready. A stack whose drain tool takes groups out of the pool names that label here.
-POOL_LABEL = ""
+#: Help for --pool-label. llm-d's InferencePool selects pods by their labels, so with no label a group
+#: serves once its pods are Ready; a stack whose drain tool takes groups out of the pool names that label.
+POOL_HELP = (
+    "pod label that is 'true' while a group is in the router's pool, for a stack whose drain command takes "
+    "groups out of the pool by that label (default: the one the rollout recorded, else the source's "
+    "`llmd sources add --pool-label`, else none: a group serves once its pods are Ready)"
+)
+
+
+def pool_label(ctx: Context, record: dict | None = None) -> str:
+    """--pool-label, else the label the instance's rollout recorded, else the source's, else none."""
+    given = getattr(ctx.args, "pool_label", None)
+    if given is not None:
+        return given
+    recorded = ((record or {}).get("rollout") or {}).get("poolLabel")
+    if recorded is not None:
+        return str(recorded)
+    if getattr(ctx.args, "source", "") or len(ctx.registry.entries()) == 1:
+        try:
+            return ctx.source().layout.pool_label
+        except LlmdError:
+            return ""
+    return ""
 
 
 def _floors(items: list[str]) -> dict[str, int]:
@@ -43,18 +63,11 @@ def add_rollout_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="accept a step that leaves a role with no group serving (a role of one group, maxSurge 0)",
     )
-    parser.add_argument(
-        "--pool-label",
-        default=POOL_LABEL,
-        metavar="LABEL",
-        help="pod label that is 'true' while a group is in the router's pool, for a stack whose drain "
-        "command takes groups out of the pool by that label (default: none; a group serves once its "
-        "pods are Ready)",
-    )
+    parser.add_argument("--pool-label", default=None, metavar="LABEL", help=POOL_HELP)
 
 
 def _pool_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--pool-label", default=POOL_LABEL, metavar="LABEL", help=argparse.SUPPRESS)
+    parser.add_argument("--pool-label", default=None, metavar="LABEL", help=POOL_HELP)
 
 
 def _watch_arguments(parser: argparse.ArgumentParser) -> None:
@@ -122,7 +135,7 @@ def rollout_plan(ctx: Context) -> RolloutPlan:
         kube,
         plan,
         floors=_floors(ctx.args.floor),
-        pool_label=ctx.args.pool_label,
+        pool_label=pool_label(ctx, record),
         allow_outage=ctx.args.allow_outage,
     )
 
@@ -141,7 +154,7 @@ def command_rollouts(ctx: Context) -> int:
     kube = ctx.kube()
     namespace = ctx.namespace(kube)
     instance = ctx.args.instance
-    state, pool = ctx.state_dir, ctx.args.pool_label
+    state, pool = ctx.state_dir, pool_label(ctx, inventory.require(kube, namespace, instance))
     if action == "status":
         while True:
             current = engine.status(kube, namespace, instance, state=state, pool_label=pool)
@@ -199,6 +212,7 @@ def command_start(ctx: Context) -> int:
         expected_digest=args.expected_digest,
         actor=rollout.plan.cluster.get("user", ""),
         env=_kube_env(ctx),
+        pool_label=pool_label(ctx, rollout.record),
     )
     if args.output != "text":
         ctx.emit(result)
@@ -220,7 +234,7 @@ def _follow(ctx: Context, kube, namespace: str, instance: str) -> int:
         namespace,
         instance,
         state=ctx.state_dir,
-        pool_label=ctx.args.pool_label,
+        pool_label=pool_label(ctx, inventory.require(kube, namespace, instance)),
         timeout=ctx.args.timeout,
         interval=ctx.args.interval,
         emit=lambda line: print(f"[roll] {line}", file=sys.stderr, flush=True),

@@ -23,7 +23,7 @@ from typing import Any
 from ..errors import UsageError
 from ..yamlio import read_json, write_json_atomic
 
-FIELDS = ("role", "source", "namespace", "set", "old_revision", "max_unavailable")
+FIELDS = ("role", "source", "namespace", "set", "old_revision", "max_unavailable", "count")
 
 
 @dataclass

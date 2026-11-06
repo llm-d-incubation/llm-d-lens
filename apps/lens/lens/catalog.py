@@ -10,11 +10,15 @@ A stack is what a team deploys into one namespace:
   (``guides/<guide>/modelserver/gpu/vllm/base``), applied as ``kubectl apply -k`` would;
 * any other directory or YAML file named explicitly, whose manifests are read as they are.
 
-``llmd stacks`` lists the guides; a kustomize directory or a manifest file is named directly.
+``llmd stacks`` lists the guides, then the other kustomize directories that no other directory
+includes (a guide's own overlays and kustomize Components are left out, and so are Helm charts).
+A stack is named by its path, or by the end of its path when only one listed stack ends that way
+(``optimized-baseline``, ``models/deepseek-v4``).
 """
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import re
 from dataclasses import dataclass
@@ -147,40 +151,113 @@ def _tracked_files(source: Source, runner: Runner) -> list[str] | None:
     return listed.stdout.splitlines() if listed.ok else None
 
 
-def _guides(source: Source, runner: Runner) -> list[str]:
+def source_files(source: Source, runner: Runner) -> list[str]:
+    """The checkout's files, from Git when it is a work tree, without hidden directories."""
     files = _tracked_files(source, runner)
     if files is None:
-        files = [path.relative_to(source.root).as_posix() for path in source.root.rglob(GUIDE_FILE)]
-    found = set()
-    for line in files:
-        path = Path(line)
-        hidden = any(part.startswith(".") for part in path.parts[:-1])
-        if path.name == GUIDE_FILE and not hidden and path.parent.as_posix() != "." and (source.root / path).is_file():
-            found.add(path.parent.as_posix())
-    return sorted(found)
+        files = [path.relative_to(source.root).as_posix() for path in source.root.rglob("*") if path.is_file()]
+    return [line for line in files if not any(part.startswith(".") for part in Path(line).parts[:-1])]
 
 
-def list_stacks(source: Source, runner: Runner, prefix: str = "") -> list[Stack]:
-    """Every guide of the source (a directory with a ``guide.yaml``), below ``prefix`` when given."""
+def _is_component(directory: Path) -> bool:
+    """A kustomize Component is included by others, never applied on its own."""
+    kustomization = kustomization_file(directory)
+    try:
+        data = yamlio.load_file(kustomization) if kustomization else None
+    except (OSError, UsageError):
+        return False
+    return isinstance(data, dict) and data.get("kind") == "Component"
+
+
+def _in_chart(root: Path, unit: str) -> bool:
+    path = root / unit
+    return any((parent / "Chart.yaml").is_file() for parent in [path, *path.parents] if parent != root)
+
+
+def _inside_any(path: str, directories: set[str]) -> bool:
+    return any(path == directory or path.startswith(directory + "/") for directory in directories)
+
+
+def matches(path: str, pattern: str) -> bool:
+    """Whether a stack path matches a glob: ``*`` and ``?`` stay within one path segment, ``**``
+    matches any number of segments."""
+    return _match(path.split("/"), pattern.strip("/").split("/"))
+
+
+def _match(parts: list[str], pattern: list[str]) -> bool:
+    if not pattern:
+        return not parts
+    if pattern[0] == "**":
+        return any(_match(parts[index:], pattern[1:]) for index in range(len(parts) + 1))
+    return bool(parts) and fnmatch.fnmatchcase(parts[0], pattern[0]) and _match(parts[1:], pattern[1:])
+
+
+def list_stacks(
+    source: Source,
+    runner: Runner,
+    prefix: str = "",
+    *,
+    include: tuple[str, ...] = (),
+    exclude: tuple[str, ...] = (),
+) -> list[Stack]:
+    """The source's stacks: its guides (directories with a ``guide.yaml``), then every kustomize
+    directory no other one includes, outside the guides, Helm charts and kustomize Components.
+
+    ``include`` and ``exclude`` are the source's stack patterns (``llmd sources add --stacks``,
+    ``--exclude``): with ``include``, only the kustomize directories it matches are listed; guides
+    are always listed. ``prefix`` keeps the stacks below one path."""
+    files = source_files(source, runner)
+    guides = {
+        Path(line).parent.as_posix()
+        for line in files
+        if Path(line).name == GUIDE_FILE and Path(line).parent.as_posix() != "."
+    }
+    units = {
+        Path(line).parent.as_posix()
+        for line in files
+        if Path(line).name in KUSTOMIZATION_FILES and Path(line).parent.as_posix() != "."
+    }
+    paths = {(source.root / unit).resolve(): unit for unit in units}
+    included = {paths[target] for path in paths for target in local_includes(path) if target in paths}
+    kustomize = sorted(
+        unit
+        for unit in units - included
+        if not _inside_any(unit, guides) and not _in_chart(source.root, unit) and not _is_component(source.root / unit)
+    )
+    if include:
+        kustomize = [unit for unit in kustomize if any(matches(unit, pattern) for pattern in include)]
+    kustomize = [unit for unit in kustomize if not any(matches(unit, pattern) for pattern in exclude)]
     prefix = prefix.strip("/")
-    return [
-        Stack(id=guide, kind="guide", source=source)
-        for guide in _guides(source, runner)
-        if not prefix or guide == prefix or guide.startswith(prefix + "/")
-    ]
+    stacks = [Stack(id=guide, kind="guide", source=source) for guide in sorted(guides)]
+    stacks += [Stack(id=unit, kind="kustomize", source=source) for unit in kustomize]
+    return [stack for stack in stacks if not prefix or stack.id == prefix or stack.id.startswith(prefix + "/")]
 
 
-def find_stack(source: Source, reference: str) -> Stack:
+def source_stacks(source: Source, runner: Runner, prefix: str = "") -> list[Stack]:
+    """:func:`list_stacks` with the source's own layout (``llmd sources add --stacks/--exclude``)."""
+    return list_stacks(source, runner, prefix, include=source.layout.stacks, exclude=source.layout.exclude)
+
+
+def find_stack(source: Source, reference: str, *, runner: Runner | None = None, listed=None) -> Stack:
     """A stack by its path in the source: a guide, a kustomize unit, a directory of manifests, or one
-    file. A guide's name alone (``optimized-baseline``) finds ``guides/<name>``."""
+    file. A path the source does not have is looked up among the listed stacks (``listed``, or
+    :func:`list_stacks` with ``runner``) by the end of their path: ``optimized-baseline`` finds
+    ``guides/optimized-baseline`` when no other listed stack ends the same way."""
     reference = reference.strip().strip("/")
     if not reference:
-        raise UsageError("no stack selected", hint="Run `llmd stacks` to list the guides of the source.")
+        raise UsageError("no stack selected", hint="Run `llmd stacks` to list the stacks of the source.")
     path = inside(source.root, reference)
-    if not path.exists() and "/" not in reference:
-        for candidate in (f"guides/{reference}", f"guides/models/{reference}"):
-            if (source.root / candidate / GUIDE_FILE).is_file():
-                return find_stack(source, candidate)
+    if not path.exists() and (listed is not None or runner is not None):
+        stacks = listed if listed is not None else source_stacks(source, runner)
+        found = [stack for stack in stacks if stack.id == reference or stack.id.endswith("/" + reference)]
+        if len(found) == 1:
+            return find_stack(source, found[0].id)
+        if found:
+            raise UsageError(
+                f"{reference!r} names {len(found)} stacks of source {source.name}: "
+                + ", ".join(stack.id for stack in found),
+                hint="Name one by more of its path.",
+            )
     identifier = path.relative_to(source.root.resolve()).as_posix()
     if path.is_dir() and (path / GUIDE_FILE).is_file():
         return Stack(id=identifier, kind="guide", source=source)
@@ -192,7 +269,7 @@ def find_stack(source: Source, reference: str) -> Stack:
         raise UsageError(f"{reference} holds no Kubernetes manifests and no {GUIDE_FILE}")
     raise NotFoundError(
         f"stack {reference!r} not found in source {source.name}",
-        hint="Run `llmd stacks` to list the guides of the source.",
+        hint="Run `llmd stacks` to list the stacks of the source.",
     )
 
 

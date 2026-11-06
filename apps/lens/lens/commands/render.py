@@ -31,7 +31,7 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
 
 def command_render(ctx: Context) -> int:
     args = ctx.args
-    stack = catalog.find_stack(ctx.source(), args.stack)
+    stack = catalog.find_stack(ctx.source(), args.stack, runner=ctx.runner)
     variables = parse_variables(args.var)
     if stack.kind != "guide" and (variables or args.sets):
         raise UsageError(f"--var and --set are for guides; {stack.id} is a {stack.kind} stack")

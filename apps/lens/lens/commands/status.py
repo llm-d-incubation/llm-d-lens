@@ -56,6 +56,8 @@ def print_status(status: dict) -> None:
             print("    last lines before it exited:")
             for text in problem["log"].splitlines():
                 print(f"      {text}")
+    for workload, count in sorted((status.get("overrides") or {}).items()):
+        print(f"  scaled       {workload} to {count} with `llmd scale` (record it in the stack's repository)")
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
     if status.get("unreadable"):

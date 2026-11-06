@@ -286,7 +286,9 @@ Stored as JSON under key `inventory.json` in ConfigMap
 | `objects` | `list[ObjectEntry]` | standup, import, rollout | Written before the first apply; teardown deletes newest first |
 | `rollout` | `RolloutRecord` | rollout ops | At most one; see below |
 | `createdAt`, `updatedAt` | ISO 8601 UTC (`Z`) | all writers | `updatedAt` set on every write |
-| `updatedBy` | `str` | standup, import | The kube user from `kubectl auth whoami` during the plan's cluster check |
+| `updatedBy` | `str` | standup, import, scale | The kube user from `kubectl auth whoami` during the plan's cluster check |
+| `overrides` | `{workload: int}` | scale, migrate | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files |
+| `migration` | `MigrationRecord` | migrate | On both the source and the target record while a migration runs; see below |
 
 `ObjectEntry` = `{apiVersion, kind, name, resource, uid?}`. `resource` is
 `plural.group`; `uid` is set after apply and checked before any delete.
@@ -335,7 +337,19 @@ Example, after a `standup`:
 | `objects` | `list[str]` (`Kind/name`) | What the rollout changes |
 | `previous` | `list[{resource, document}]` | Bodies before the change; what `abort` re-applies. Never Secrets: a rollout that would change one is refused |
 | `drain` | `str` | The `--drain` command template, or empty |
+| `poolLabel` | `str` | The pod label a group must carry as `true` to count as serving; recorded so later rollout commands judge groups the same way. Absent when none |
 | `steps` | `list` | Written as an empty list and never filled; see [Proposed changes](#11-proposed-changes) |
+
+### `MigrationRecord` fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `role` | `source\|target` | Which side this record is |
+| `workload` | `str` | The workload that moves a replica at a time (`NAME` or `SET/ROLE`) |
+| `replicas` | `int` | The count the source had at `start` |
+| `from`, `to` | `{namespace, instance, context}` | Both sides |
+| `startedAt` | ISO 8601 | Audit time |
+| `steps` | `list[{at, to, from}]` | Each step's counts after it: target `to`, source `from` |
 
 ## 7. Instance lifecycle
 
@@ -390,7 +404,7 @@ drainer logs, never the knowledge of what an instance owns.
 | Store | Path / object | Format | Written by | Needed for correctness |
 | --- | --- | --- | --- | --- |
 | Instance record | ConfigMap `lens-instance-<name>`, key `inventory.json`, labels `app.kubernetes.io/managed-by=llm-d-lens`, `lens.llm-d.ai/instance`, `lens.llm-d.ai/role=inventory` | JSON, sorted keys | `inventory.write` (server-side apply) | Yes |
-| Source registry | `$LLMD_STATE_DIR` or `$LENS_DATA_DIR/llmd/sources.yaml` | YAML, atomic write | `SourceRegistry` | No |
+| Source registry | `$LLMD_STATE_DIR` or `$LENS_DATA_DIR/llmd/sources.yaml`, with each source's layout (`stacks`, `exclude`, `companions`, `poolLabel`) | YAML, atomic write | `SourceRegistry` | No |
 | Drainer logs | `$LENS_DATA_DIR/llmd/rollouts/<ns>/<instance>/drain-<role>.log` | text | `rollouts.drainers` | No |
 | Repo cache | `$LENS_CACHE_DIR/repos` | Git checkouts | `sources.resolve_source` | No |
 
@@ -424,7 +438,7 @@ and the ownership checks depend on them.
 | Command | Reads | Writes | Refuses when |
 | --- | --- | --- | --- |
 | `sources add/list/remove` | `sources.yaml` | `sources.yaml` | the name or path is invalid |
-| `stacks`, `render` | the source | nothing | the stack is not found |
+| `stacks`, `render` | the source and its layout | nothing | the stack is not found; a short name that ends several listed stacks |
 | `plan` | source, cluster (unless `--offline`) | nothing; `--admin-yaml` file | — (reports findings and the digest) |
 | `standup` | plan, record | record, then objects | blocking findings; digest mismatch; objects owned by another tool |
 | `import` | plan, live objects | record only | the instance is already recorded; an object of the stack is missing (`--dry-run` also shows drift) |
@@ -432,6 +446,9 @@ and the ownership checks depend on them.
 | `rollouts plan` | record, plan of the new ref, live sets | nothing | — (reports refusals) |
 | `rollouts start` | rollout plan | record, objects, drainer processes | blocking findings; digest mismatch; a rollout in progress; a Secret would change |
 | `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll completes |
+| `scale` | record, plan, live workload | the scaled object, record (`overrides`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain` or `--no-drain`; a failed drain command |
+| `migrate plan` | both records, both plans | nothing | — (reports refusals) |
+| `migrate start/step/finish` | both records, both plans, live workloads | target objects, both records, scaled objects; `finish` tears the source down | an unsettled source; another instance of that name in the target; a target not Ready before a step lowers the source; `finish` before the source is at 0 |
 | `teardown` | record, live objects | deletes objects and record | a delete permission is missing (nothing is removed) |
 
 **One JSON contract.** Every operation returns a JSON-serializable `dict`;
@@ -577,6 +594,10 @@ under another command.
 | Later | Gateway mode, blue-green updates | Not started |
 | Later | `benchmark`, BLIS in `plan`, in-cluster Job | Not started |
 
-`sources`, `import`, PR-ref rollouts and `--switch-stack` go beyond the
-roadmap's operation list. They serve teams that already deploy guides by hand
-and want to test llm-d changes before they merge.
+`sources`, `import`, PR-ref rollouts, `--switch-stack`, `scale`, `migrate` and
+companions go beyond the roadmap's operation list. They serve teams that already
+deploy guides or their own kustomize stacks by hand and want to test llm-d
+changes before they merge, size a stack to the accelerators they get, or move it
+without an outage. A source's layout (`llmd sources add --stacks`, `--exclude`,
+`--companion`, `--pool-label`) lets the same commands serve a checkout laid out
+differently from llm-d, with no layout built into the code.

@@ -40,9 +40,24 @@ A guide comes from an llm-d checkout, or from upstream directly:
 
 ```sh
 llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
-llmd stacks                           # the guides of the source
+llmd stacks                           # the guides, then the other kustomize directories
 llmd stacks optimized-baseline        # one guide's variables, support matrix and steps
 ```
+
+`llmd stacks` lists two groups: the guides (directories with a `guide.yaml`), and the kustomize directories that
+no other directory includes, outside the guides, Helm charts and kustomize Components. A stack is named by its
+path, or by the end of its path when only one listed stack ends that way: `optimized-baseline` and
+`models/deepseek-v4` are enough for `guides/optimized-baseline` and `guides/models/deepseek-v4`.
+
+A checkout of your own team's stacks is a source too. Say which of its kustomize directories are stacks when you
+register it, so the listing and the short names cover those only:
+
+```sh
+llmd sources add team ~/src/team-stacks --stacks 'deploy/*/*' --exclude 'deploy/**/base'
+```
+
+`*` and `?` match within one path segment, and `**` matches any number of segments. The patterns are kept with
+the source in `sources.yaml`. Guides are always listed.
 
 `--source` takes a registered name, a local path, or `URL#REF`. REF can be a branch, a tag, a commit, or any
 ref the remote serves, so a pull request can be planned before it merges:
@@ -98,6 +113,29 @@ that check off. The metrics are then served without authentication inside the cl
 records the `--var` and `--set` values with the instance. `teardown` deletes exactly the recorded objects whose
 UID still matches. Claims are kept unless you pass `--delete-volumes`.
 
+## Companions
+
+Some teams keep parts of a namespace apart from the model stack on purpose, so that tearing the model down
+leaves them: NetworkPolicies for the namespace, or a model-cache claim whose volume an administrator binds once.
+`llmd` calls each such part a *companion*. Say where a source keeps them when you register it, as path templates
+relative to the checkout:
+
+```sh
+llmd sources add team ~/src/team-stacks \
+  --companion 'deploy/namespaces/{name}/policies/{namespace}' \
+  --companion '{stack}/../base/model-cache-pvc.yaml'
+llmd stacks deploy/model-a/cluster-a --companions <namespace>   # what the templates find
+```
+
+`{stack}` is the stack's path, `{name}` its last segment and `{namespace}` the target namespace; `..` steps up a
+directory and `*` matches within one segment. A template that matches nothing is skipped, and one that matches
+several paths is reported with all of them. Each match is a kustomize directory or a manifest file.
+
+`plan` reports each companion the namespace lacks. `standup --with-companions` stands those up first, in the
+order the templates were given, each as its own instance (`<last segment>-companion`). A teardown of the stack
+keeps them. For a claim that is missing or Pending, `plan` also names the file in the source that defines its
+PersistentVolume, for an administrator to apply; `llmd` neither reads nor writes PersistentVolumes.
+
 ## A guide already deployed with its README's commands
 
 ```sh
@@ -109,6 +147,53 @@ llmd import optimized-baseline -n <namespace> --name <instance>
 ownership, so the team's own `kubectl apply -k` and `helm upgrade` keep working. `--dry-run` compares the
 running objects with the guide's render first. `llmd teardown <instance> --forget` stops managing the instance
 and leaves every object running.
+
+## Scaling
+
+```sh
+llmd scale <instance> -n <namespace> optimized-baseline-nvidia-gpu-vllm-decode=1
+llmd scale <instance> -n <namespace> pd-disagg-vllm/decode=2 --no-drain     # a DisaggregatedSet role
+llmd scale <instance> -n <namespace> optimized-baseline-nvidia-gpu-vllm-decode=--   # back to the files
+```
+
+`llmd scale` sets the replicas of a Deployment, StatefulSet or LeaderWorkerSet, or of a DisaggregatedSet role
+(`SET/ROLE`). It applies only that object and keeps the count in the instance's record, so a later `standup` or
+`rollouts` keeps it rather than setting it back to what the guide says, which a plain `kubectl scale` would not
+survive. `plan` and `status` list each kept count. `WORKLOAD=--`, or the count the files say, clears it. A guide
+is rendered with the `--var` and `--set` values the instance was stood up with.
+
+Lowering a DisaggregatedSet role removes its highest groups. `--no-drain` lowers it directly: the guides' vLLM
+pods drain as they stop. A stack that admits the lowering only from its own drain tool passes it with
+`--drain COMMAND` (`{role}`, `{set}`, `{count}`, `{namespace}`, `{source}`); llmd runs it, waits, and records the
+count once it exits 0. Scaling to 0 asks first (`-y` skips). `--dry-run` sends the change as a server dry run.
+A rollout in progress refuses a scale.
+
+## Moving an instance to another namespace or cluster
+
+```sh
+llmd migrate plan   <instance> --from <namespace-a> --to <namespace-b>     # read-only
+llmd migrate start  <instance> --from <namespace-a> --to <namespace-b>     # the target with the workload at 1
+llmd migrate step   <instance> --from <namespace-a> --to <namespace-b>     # repeat until the source is at 0
+llmd migrate status <instance> --from <namespace-a> --to <namespace-b>
+llmd migrate finish <instance> --from <namespace-a> --to <namespace-b>     # tears the source down
+```
+
+`migrate` moves one workload (by default the stack's only scalable one that asks for accelerators; else
+`--workload`) a replica at a time, so capacity does not drop:
+
+- `plan` checks both sides, read-only: the source is settled and not rolling, the target's plan (with its
+  companions), and that the target has no other instance of that name.
+- `start` stands the stack up in the target with the workload at 1 (a `scale` count; `--with-companions` first)
+  and marks the migration in both records. The target is rendered with the source's guide variables (`--var`,
+  `--set`), and `--stack` gives it another stack path.
+- `step` raises the target by one, waits until its new replica is Ready (`--timeout`), and only then lowers the
+  source by one, through `--no-drain` or `--drain` for a DisaggregatedSet role, as for `scale`. A step that
+  times out leaves the source as it was.
+- `finish` tears the source down once it is at 0, keeping its claims.
+
+Traffic is moved by hand between steps (a gateway's route weights, or the like); `llmd` does not change it. Each
+side has its own `--from-context`/`--to-context`, `--from-kubeconfig`/`--to-kubeconfig` and
+`--from-source`/`--to-source`, so the same steps move an instance to another cluster.
 
 ## Rollouts
 
@@ -135,8 +220,13 @@ scales, the steps, and the groups each role keeps serving during a step. It refu
 The llm-d guides' vLLM overlays drain each pod as it stops: a `preStop` sleep, then vLLM's
 `--shutdown-timeout`. `--no-drain` relies on that. A stack that holds the controller's scale-down until a drain
 tool takes a group out of the pool passes that tool with `--drain`. `llmd` runs it once per role, filling in
-`{role}`, `{source}`, `{namespace}`, `{set}`, `{old_revision}` and `{max_unavailable}`, and `--pool-label`
-names the label it sets. Each drainer's output is under `$LENS_DATA_DIR/llmd/rollouts/<namespace>/<instance>/`.
+`{role}`, `{source}`, `{namespace}`, `{set}`, `{old_revision}` and `{max_unavailable}`. Each drainer's output is
+under `$LENS_DATA_DIR/llmd/rollouts/<namespace>/<instance>/`.
+
+`--pool-label LABEL` names the pod label such a tool sets to `false` when it takes a group out of the pool; a
+group then counts as serving only while that label is `true`. Register it once with
+`llmd sources add NAME PATH --pool-label LABEL`. `rollouts start` records the label it used, so `status`,
+`--watch`, `abort` and `finish` judge groups the same way without the flag.
 
 ```sh
 llmd rollouts status <instance> -n <namespace> [--watch]   # per role and revision; the drainers
