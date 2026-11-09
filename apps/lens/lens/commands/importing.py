@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 
 from ..errors import PolicyError
 from ..importing import compare, import_stack
@@ -34,6 +35,12 @@ def command_import(ctx: Context) -> int:
     # Imported objects are never labelled, so they are planned without llmd's labels.
     plan = plan_from_args(ctx, kube, label=False)
     preflight(kube, plan, existing="import")
+    # An import creates no pod, so a claim no new pod can mount does not stop it; a rollout or scale it
+    # leads to still refuses.
+    plan.policy.findings[:] = [
+        replace(finding, severity="warning") if finding.code == "claim-unusable" else finding
+        for finding in plan.findings
+    ]
     report = compare(kube, plan)
     missing = [item for item in report if item["state"] == "missing"]
     drifted = [item for item in report if item["state"] == "drifted"]

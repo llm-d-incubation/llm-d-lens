@@ -199,10 +199,13 @@ def _check_prerequisites(kube: Kube, plan: Plan) -> None:
             item["state"] = "unknown"
             continue
         try:
-            item["state"] = "present" if kube.get(resource, item["name"], plan.namespace) else "missing"
+            live = kube.get(resource, item["name"], plan.namespace)
         except CommandError:
             item["state"] = "unverified"
             continue
+        item["state"] = "present" if live else "missing"
+        if live and item["kind"] == "PersistentVolumeClaim":
+            _check_claim_usable(plan, item, live)
         if item["state"] == "missing" and _only_monitors(item):
             # Only a scrape needs it: the stack serves without it, but its metrics stay empty.
             plan.findings.append(
@@ -225,6 +228,38 @@ def _check_prerequisites(kube: Kube, plan: Plan) -> None:
                     hint=f"Used by {', '.join(item['usedBy'])}. Create it first, or ask the namespace's administrator.",
                 )
             )
+
+
+def _check_claim_usable(plan: Plan, item: dict[str, Any], live: dict[str, Any]) -> None:
+    """A claim that exists but cannot be mounted by a new pod: deleted (a finalizer holds it while
+    running pods use it) or Lost. Pods that already run keep it, so the stack serves; every pod a
+    standup, scale or rollout creates stays Pending. A roll then removes old pods (up to its
+    maxUnavailable) that no new pod replaces, and waits."""
+    ref = f"{item['kind']}/{item['name']}"
+    deleted = (live.get("metadata") or {}).get("deletionTimestamp")
+    phase = (live.get("status") or {}).get("phase")
+    if deleted:
+        item["state"] = "deleting"
+        message = f"{ref} is being deleted (since {deleted}); a new pod cannot mount it"
+        hint = (
+            "Pods that already mount it keep running, so do not restart them. Kubernetes does not undo a "
+            "deletion: give the stack a claim under another name, then plan again."
+        )
+    elif phase == "Lost":
+        item["state"] = "lost"
+        message = f"{ref} is Lost: its PersistentVolume is gone, so a new pod cannot mount it"
+        hint = "Ask the namespace's administrator to restore the volume, then plan again."
+    else:
+        return
+    plan.findings.append(
+        Finding(
+            "error",
+            "claim-unusable",
+            message,
+            object=ref,
+            hint=f"Used by {', '.join(item['usedBy'])}. {hint}",
+        )
+    )
 
 
 def _only_monitors(item: dict[str, Any]) -> bool:

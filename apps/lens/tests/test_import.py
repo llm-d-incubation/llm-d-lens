@@ -167,3 +167,17 @@ def test_import_command(llmrepo, cluster, tmp_path, capsys, monkeypatch):
     assert inventory.read(Kube(runner=cluster), "model-a-serving", "team-model") is None
     assert main(["-o", "json", *base, "--name", "team-model"]) == 0
     assert json.loads(capsys.readouterr().out)["imported"] == 2
+
+
+def test_a_claim_being_deleted_does_not_stop_an_import(llmrepo, cluster, tmp_path, capsys, monkeypatch):
+    """An import creates no pod: the running ones keep the claim. A rollout of the instance still refuses."""
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    deployed_with_kubectl_apply(llmrepo, cluster)
+    claim = cluster.get("model-a-serving", "persistentvolumeclaims", "model-a-cache")
+    claim["metadata"]["deletionTimestamp"] = "2026-01-02T03:04:05Z"
+    base = ["--state-dir", str(tmp_path), "import", STACK, "--source", str(llmrepo), "-n", "model-a-serving"]
+    assert main([*base, "--name", "team-model", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "WARNING  PersistentVolumeClaim/model-a-cache is being deleted" in out and "BLOCKED" not in out
+    assert main([*base, "--name", "team-model"]) == 0
+    assert inventory.read(Kube(runner=cluster), "model-a-serving", "team-model")["phase"] == "Imported"

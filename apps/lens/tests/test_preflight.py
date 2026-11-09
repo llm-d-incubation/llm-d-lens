@@ -86,6 +86,26 @@ def test_a_missing_scrape_secret_warns_and_does_not_block(llmrepo, cluster):
     assert codes(plan) == ["prerequisite-missing"]  # the pods need hf-token too
 
 
+def test_a_claim_being_deleted_or_lost_blocks(llmrepo, cluster):
+    """It exists, and running pods keep it, but no new pod can mount it."""
+    prerequisites(cluster)
+    claim = cluster.get("team-a", "persistentvolumeclaims", "model-a-cache")
+    claim["metadata"]["deletionTimestamp"] = "2026-01-02T03:04:05Z"
+    claim["status"] = {"phase": "Bound"}
+    plan = checked(llmrepo, cluster)
+    assert codes(plan) == ["claim-unusable"]
+    [finding] = plan.blocking
+    assert "being deleted (since 2026-01-02T03:04:05Z)" in finding.message
+    assert finding.hint.startswith("Used by Deployment/model-a.")
+    states = {item["name"]: item["state"] for item in plan.policy.prerequisites}
+    assert states["model-a-cache"] == "deleting"
+    del claim["metadata"]["deletionTimestamp"]
+    claim["status"] = {"phase": "Lost"}
+    assert codes(checked(llmrepo, cluster)) == ["claim-unusable"]
+    claim["status"] = {"phase": "Bound"}
+    assert not checked(llmrepo, cluster).blocking
+
+
 def test_a_missing_namespace_or_api_blocks(llmrepo, cluster):
     assert codes(checked(llmrepo, cluster, namespace="not-there")) == ["namespace-missing"]
     del cluster.served["apps/v1"]

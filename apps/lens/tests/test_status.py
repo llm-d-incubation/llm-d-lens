@@ -126,6 +126,16 @@ def test_a_disaggregated_set_is_judged_by_its_pods():
     assert health.evaluate(item, [pod])[0] == "progressing"
 
 
+def test_a_bound_claim_being_deleted_fails():
+    claim = {"kind": "PersistentVolumeClaim", "metadata": {"name": "c"}, "status": {"phase": "Bound"}}
+    assert health.evaluate(claim, []) == ("ready", "bound")
+    claim["metadata"]["deletionTimestamp"] = "2026-01-02T03:04:05Z"
+    assert health.evaluate(claim, []) == (
+        "failed",
+        "being deleted since 2026-01-02T03:04:05Z; new pods cannot mount it",
+    )
+
+
 def test_stood_up_with_a_leader_elected_endpoint_picker_the_instance_is_ready(llmrepo, cluster):
     """The instance is Ready although the EPP's standby pod never is."""
     kube = stood_up(llmrepo, cluster)

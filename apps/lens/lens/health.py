@@ -177,6 +177,10 @@ def evaluate(item: dict[str, Any] | None, pods: list[dict[str, Any]]) -> tuple[s
             return "failed", conditions["Failed"].get("message") or "failed"
         return "progressing", f"{status.get('active', 0)} active"
     if kind == "PersistentVolumeClaim":
+        deleted = (item.get("metadata") or {}).get("deletionTimestamp")
+        if deleted:
+            # Still Bound for the pods that mount it, but a new pod cannot mount it.
+            return "failed", f"being deleted since {deleted}; new pods cannot mount it"
         phase = status.get("phase", "Pending")
         return {"Bound": ("ready", "bound"), "Lost": ("failed", "lost")}.get(phase, ("progressing", "pending"))
     if kind == "Route":
