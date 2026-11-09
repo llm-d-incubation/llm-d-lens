@@ -56,7 +56,7 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         "--switch-stack",
         action="store_true",
         help="let an instance that runs another stack path move to this one, in place: objects it shares "
-        "are updated, objects it no longer renders are deleted",
+        "are updated; a standup deletes the objects it no longer renders, a rollout keeps them",
     )
 
 

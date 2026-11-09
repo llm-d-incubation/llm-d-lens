@@ -3,6 +3,7 @@
 The plan renders the stack at the new ref, compares it with the objects the instance runs,
 and refuses what is not one safe in-place rollout:
 
+* the stack path differs from the one the instance runs, unless ``--switch-stack``;
 * the instance is not settled: a roll is already running, or a group is not serving;
 * more than one DisaggregatedSet would roll at once;
 * a role would be added or removed (that is not an in-place roll);
@@ -92,10 +93,12 @@ def plan_rollout(
             f"instance {plan.instance} already has a rollout in progress ({phase})",
             hint=f"Follow it with `llmd rollouts status {plan.instance}`; finish or abort it first.",
         )
-    if record["stack"]["id"] != plan.stack.id:
+    running = record["stack"]["id"]
+    if running != plan.stack.id and not plan.options.switch_stack:
         raise PolicyError(
-            f"instance {plan.instance} runs stack {record['stack']['id']}, not {plan.stack.id}",
-            hint="A rollout moves an instance to another ref of the same stack.",
+            f"instance {plan.instance} runs stack {running}, not {plan.stack.id}",
+            hint="A rollout moves an instance to another ref of the same stack. Pass --switch-stack to roll it "
+            "to this stack path instead (another overlay of the same objects, say).",
         )
     recorded = [f"{item['kind']}/{item['name']}" for item in record["objects"]]
     live = {}
@@ -103,6 +106,15 @@ def plan_rollout(
         live[object_ref(document)] = kube.get(resource, document["metadata"]["name"], plan.namespace)
     change = compare_objects(live, plan.documents, recorded)
     findings = [finding for finding in plan.findings if finding.code not in _OBSERVED]
+    if running != plan.stack.id:
+        findings.append(
+            Finding(
+                "warning",
+                "stack-switched",
+                f"instance {plan.instance} moves from stack {running} to {plan.stack.id}; later standups, "
+                f"scales and rollouts follow {plan.stack.id}",
+            )
+        )
     rolling = [item for item in change.sets if item.kind == "roll"]
     if len(rolling) > 1:
         findings.append(

@@ -138,6 +138,8 @@ def start(
     imported = inventory.management(record) == inventory.IMPORTED
     kube.apply(changed, plan.namespace, server_side=not imported)
     record = _record(kube, plan.namespace, plan.instance)
+    if record["stack"]["id"] != plan.stack.id:  # --switch-stack
+        record["previousStack"] = record["stack"]
     record["stack"] = plan.stack_record()
     record["planDigest"] = plan.digest
     new = [

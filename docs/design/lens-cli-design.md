@@ -281,7 +281,7 @@ Stored as JSON under key `inventory.json` in ConfigMap
 | `management` | `{mode: "llmd"\|"imported", manager?: str}` | standup, import | `imported` instances are never stood up or labelled |
 | `phase` | `Applying\|Applied\|Imported\|Deleting\|Removed` | lifecycle ops | See [Instance lifecycle](#7-instance-lifecycle) |
 | `stack` | `{id, source: Source.describe(), variables?, sets?}` | standup, import, rollout start | Changes only with `--switch-stack` or a rollout |
-| `previousStack` | same shape as `stack` | standup with `--switch-stack` | Kept across later standups |
+| `previousStack` | same shape as `stack` | standup or rollout start with `--switch-stack` | Kept across later standups |
 | `planDigest` | `str` (hex) | standup, rollout start | Digest of namespace + instance + rendered objects |
 | `objects` | `list[ObjectEntry]` | standup, import, rollout | Written before the first apply; teardown deletes newest first |
 | `rollout` | `RolloutRecord` | rollout ops | At most one; see below |
@@ -444,7 +444,7 @@ and the ownership checks depend on them.
 | `import` | plan, live objects | record only | the instance is already recorded; an object of the stack is missing (`--dry-run` also shows drift) |
 | `status`, `list` | record, live objects | nothing | the instance is not found |
 | `rollouts plan` | record, plan of the new ref, live sets | nothing | — (reports refusals) |
-| `rollouts start` | rollout plan | record, objects, drainer processes | blocking findings; digest mismatch; a rollout in progress; a Secret would change |
+| `rollouts start` | rollout plan | record, objects, drainer processes | blocking findings (a claim being deleted is one); digest mismatch; a rollout in progress; a Secret would change; another stack path without `--switch-stack` |
 | `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll completes |
 | `scale` | record, plan, live workload | the scaled object, record (`overrides`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain` or `--no-drain`; a failed drain command |
 | `migrate plan` | both records, both plans | nothing | — (reports refusals) |

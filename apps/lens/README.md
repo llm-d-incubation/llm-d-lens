@@ -217,7 +217,10 @@ scales, the steps, and the groups each role keeps serving during a step. It refu
 - several DisaggregatedSets would roll at once;
 - roles are added or removed;
 - a step would leave a role below its `--floor`;
-- a step would leave a role with no group serving. `--allow-outage` accepts that outage.
+- a step would leave a role with no group serving. `--allow-outage` accepts that outage;
+- the stack path differs from the one the instance runs. `--switch-stack` rolls it to that path instead,
+  for example from the overlay a team runs to the copy it prepared a change in. The record then follows
+  the new path, and keeps the old one as `previousStack`.
 
 The llm-d guides' vLLM overlays drain each pod as it stops: a `preStop` sleep, then vLLM's
 `--shutdown-timeout`. `--no-drain` relies on that. A stack that holds the controller's scale-down until a drain
