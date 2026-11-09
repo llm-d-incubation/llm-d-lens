@@ -82,6 +82,11 @@ def drift(desired: Any, live: Any, path: str = "") -> list[str]:
             found += drift(want, have, f"{path}[{index}]")
         return found
     if desired != live and not (desired in (None, "", {}, []) and live in (None, "", {}, [])):
+        # The API server stores a number written for a string field (a resource quantity such as
+        # `nvidia.com/gpu: 4`) as its string, "4": that is the same value.
+        number = isinstance(desired, int | float) and not isinstance(desired, bool)
+        if number and isinstance(live, str) and str(desired) == live:
+            return []
         return [path]
     return []
 

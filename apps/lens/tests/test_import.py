@@ -110,6 +110,10 @@ def test_drift_ignores_server_defaults_and_finds_real_changes(llmrepo, cluster):
     report = {item["object"]: item for item in compare(Kube(runner=cluster), plan)}
     assert report["Deployment/model-a"]["differences"] == ["spec.replicas"]
     assert drift({"a": [1, {"b": 2}]}, {"a": [1, {"b": 3}], "c": 1}) == ["a[1].b"]
+    # A quantity written as a number comes back from the server as its string.
+    assert drift({"limits": {"nvidia.com/gpu": 4}}, {"limits": {"nvidia.com/gpu": "4"}}) == []
+    assert drift({"limits": {"nvidia.com/gpu": 4}}, {"limits": {"nvidia.com/gpu": "8"}}) == ["limits.nvidia.com/gpu"]
+    assert drift({"enabled": True}, {"enabled": "True"}) == ["enabled"]
 
 
 def test_the_pull_secret_openshift_adds_to_a_service_account_is_not_drift(llmrepo, cluster):
