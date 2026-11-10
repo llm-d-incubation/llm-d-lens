@@ -625,3 +625,50 @@ def test_abort_of_an_argocd_rollout_restores_the_application(pushed, cluster, tm
     stored = cluster.get("argocd", "applications.argoproj.io", "cluster-a-r1")
     assert stored["spec"]["source"]["targetRevision"] == first_revision
     assert inventory.require(kube, HOME, "r1")["delivery"]["revision"] == first_revision
+
+
+def test_admin_check_reads_the_install_and_writes_the_project_change(pushed, cluster, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    cluster.put("argocd", {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "argocd-cm"}, "data": {}})
+    template = tmp_path / "application.yaml"
+    template.write_text(yaml.safe_dump(TEMPLATE))
+    base = ["--state-dir", str(tmp_path), "admin", "argocd", "check"]
+    assert main([*base, "-n", "argocd"]) == 0
+    out = capsys.readouterr().out
+    assert "kustomize build options: (none)" in out and "tracking method: annotation" in out
+
+    # The project lists another repository and no destination for this namespace.
+    cluster.project("team", {"sourceRepos": ["https://git.example.invalid/other/*"], "destinations": []})
+    change = tmp_path / "project.yaml"
+    stack = [STACK, "--source", str(pushed), "--target", HOME, "--argocd-app", str(template)]
+    assert main([*base, *stack, "--project-yaml", str(change)]) == 3
+    out = capsys.readouterr().out
+    assert "does not list https://git.example.invalid/team/stacks.git" in out and "llmd does not apply it" in out
+    project = yaml.safe_load(change.read_text())
+    assert project["metadata"] == {"name": "team", "namespace": "argocd"}
+    assert project["spec"]["sourceRepos"] == ["https://git.example.invalid/other/*", REMOTE]
+    assert project["spec"]["destinations"] == [{"name": "cluster-a", "namespace": HOME}]
+    # The change, once applied, admits the Application.
+    cluster.project("team", project["spec"])
+    assert main([*base, *stack]) == 0
+    assert "Result ready" in capsys.readouterr().out
+
+
+def test_admin_check_flags_a_kustomization_with_charts_when_helm_is_off(pushed, cluster, monkeypatch):
+    cluster.put(
+        "argocd",
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "argocd-cm"},
+            "data": {"kustomize.buildOptions": ""},
+        },
+    )
+    plan = plan_of(pushed)
+    application = attach(plan)
+    _, findings, _ = checks.check_install(Kube(runner=cluster), "argocd", plan, application)
+    assert [finding.severity for finding in findings if finding.code == "argocd-kustomize-helm-off"] == ["info"]
+    # A kustomization that renders a chart cannot render in Argo CD without --enable-helm.
+    monkeypatch.setattr(checks, "uses_helm", lambda path: True)
+    _, findings, _ = checks.check_install(Kube(runner=cluster), "argocd", plan, application)
+    assert [finding.severity for finding in findings if finding.code == "argocd-kustomize-helm-off"] == ["error"]

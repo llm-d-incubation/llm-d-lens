@@ -23,6 +23,7 @@ import fnmatch
 import re
 from typing import Any
 
+from ..catalog import uses_helm
 from ..errors import CommandError
 from ..kube import Kube
 from ..model import INSTANCE_LABEL, Finding, api_group, object_ref
@@ -383,3 +384,129 @@ def _check_owners(kube: Kube, plan: Plan, application: dict[str, Any]) -> None:
                     "`llmd import --backend argocd`.",
                 )
             )
+
+
+# -- the Argo CD install (`llmd admin argocd check`) --------------------------------------------------------
+#: Argo CD's settings ConfigMaps, in the namespace it runs in.
+SETTINGS_CONFIGMAP = "argocd-cm"
+PARAMS_CONFIGMAP = "argocd-cmd-params-cm"
+
+
+def check_install(kube: Kube, namespace: str, plan: Plan | None = None, application: dict[str, Any] | None = None):
+    """Read-only checks of an Argo CD install, and (with a plan and its Application) the AppProject change an
+    administrator would make so it admits the stack. Returns ``(report, findings, project_change)``."""
+    findings: list[Finding] = []
+    report: dict[str, Any] = {"namespace": namespace}
+    if kube.resource(app.API_VERSION, "Application") is None:
+        findings.append(
+            Finding("error", "argocd-missing", f"the cluster does not serve {app.API_VERSION} Applications")
+        )
+        return report, findings, None
+    settings, problem = _configmap(kube, SETTINGS_CONFIGMAP, namespace)
+    params, _ = _configmap(kube, PARAMS_CONFIGMAP, namespace)
+    if settings is None:
+        report["settings"] = problem
+        findings.append(
+            Finding(
+                "warning",
+                "argocd-settings-unread",
+                f"ConfigMap {namespace}/{SETTINGS_CONFIGMAP}: {problem}; Argo CD's build options are not checked",
+                hint="Pass -n with the namespace Argo CD runs in, or run this as a user who may read it.",
+            )
+        )
+    else:
+        options = str(settings.get("kustomize.buildOptions") or "")
+        tracking = str(settings.get("application.resourceTrackingMethod") or "annotation")
+        report.update({"kustomizeBuildOptions": options, "trackingMethod": tracking})
+        renders_charts = plan is not None and any(
+            unit.kind == "kustomize" and unit.path is not None and uses_helm(unit.path) for unit in plan.units
+        )
+        if "--enable-helm" not in options.split():
+            severity = "error" if renders_charts else "info"
+            findings.append(
+                Finding(
+                    severity,
+                    "argocd-kustomize-helm-off",
+                    "Argo CD's kustomize.buildOptions lack --enable-helm; a kustomization with helmCharts fails to "
+                    "render" + (" (this stack has one)" if renders_charts else ""),
+                    hint=f"An administrator adds --enable-helm to kustomize.buildOptions in {SETTINGS_CONFIGMAP}.",
+                )
+            )
+        if tracking == "label":
+            findings.append(
+                Finding(
+                    "warning",
+                    "argocd-tracking-label",
+                    "Argo CD tracks objects by label; llmd reads the tracking annotation, so it cannot tell which "
+                    "Application owns an object",
+                    hint="Annotation tracking (Argo CD's default) or annotation+label lets llmd check owners.",
+                )
+            )
+    namespaces = [item.strip() for item in str((params or {}).get("application.namespaces") or "").split(",") if item]
+    report["applicationNamespaces"] = namespaces
+    if application is not None and plan is not None:
+        where = application["metadata"]["namespace"]
+        if where != namespace and not any(_glob(item, where) for item in namespaces):
+            findings.append(
+                Finding(
+                    "error",
+                    "argocd-app-namespace-off",
+                    f"Argo CD reconciles no Applications in {where}: {PARAMS_CONFIGMAP} application.namespaces "
+                    "does not list it",
+                    hint=f"Keep the Application in {namespace}, or have an administrator list {where} there and in "
+                    "the project's sourceNamespaces.",
+                )
+            )
+        project, problem = _project(kube, application["spec"]["project"], namespace)
+        report["project"] = application["spec"]["project"]
+        if project is None:
+            findings.append(
+                Finding("warning", "argocd-project-unread", f"AppProject {namespace}/{report['project']}: {problem}")
+            )
+            return report, findings, None
+        found = check_project(plan, application, project, argocd_namespace=namespace)
+        findings.extend(found)
+        if any(finding.severity == "error" for finding in found):
+            return report, findings, project_change(plan, application, project, argocd_namespace=namespace)
+    return report, findings, None
+
+
+def _configmap(kube: Kube, name: str, namespace: str) -> tuple[dict[str, Any] | None, str]:
+    try:
+        found = kube.get("configmaps", name, namespace)
+    except CommandError as error:
+        return None, "not allowed to read it" if "orbidden" in error.message else error.message.splitlines()[0]
+    return ((found or {}).get("data") or {}) if found else None, "" if found else "not found"
+
+
+def project_change(
+    plan: Plan, application: dict[str, Any], project: dict[str, Any], *, argocd_namespace: str
+) -> dict[str, Any]:
+    """The AppProject with what it lacks to admit the Application: its repositories, the destination, the
+    Application's namespace, and the kinds the stack renders. For an administrator to review and apply;
+    llmd never applies it."""
+    spec = dict(project.get("spec") or {})
+    repos = list(spec.get("sourceRepos") or [])
+    for source in app.application_sources(application):
+        if not source_permitted(repos, source["repoURL"]):
+            repos.append(source["repoURL"])
+    destinations = list(spec.get("destinations") or [])
+    destination = application["spec"]["destination"]
+    if destination_permitted(destinations, destination) is False:
+        entry = {key: destination[key] for key in ("name", "server") if destination.get(key)}
+        destinations.append({**entry, "namespace": destination["namespace"]})
+    changed = {**spec, "sourceRepos": repos, "destinations": destinations}
+    where = application["metadata"]["namespace"]
+    if not app_namespace_permitted(spec, where, argocd_namespace):
+        changed["sourceNamespaces"] = [*(spec.get("sourceNamespaces") or []), where]
+    for document, namespaced in _rendered_by_argocd(plan):
+        group, kind, name = api_group(document["apiVersion"]), document["kind"], document["metadata"]["name"]
+        if kind_permitted(changed, group, kind, name, namespaced=namespaced):
+            continue
+        key = "namespaceResourceWhitelist" if namespaced else "clusterResourceWhitelist"
+        if key == "namespaceResourceWhitelist" and changed.get(key) is None:
+            continue  # every namespaced kind is admitted; a blacklist refuses it, which is the project's choice
+        entry = {"group": group, "kind": kind}
+        changed[key] = [*(changed.get(key) or []), entry]
+    metadata = {key: value for key, value in (project.get("metadata") or {}).items() if key in ("name", "namespace")}
+    return {"apiVersion": app.API_VERSION, "kind": "AppProject", "metadata": metadata, "spec": changed}
