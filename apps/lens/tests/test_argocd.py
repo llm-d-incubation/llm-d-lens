@@ -18,7 +18,7 @@ from lens.commands.rollouts import _restore_application
 from lens.errors import PolicyError, UsageError
 from lens.kube import Kube
 from lens.plan import Options, make_plan
-from lens.process import subprocess_runner
+from lens.process import Result, subprocess_runner
 from lens.render import render
 from lens.sources import resolve_source
 from lens.status import instance_status
@@ -145,23 +145,31 @@ def test_a_guide_becomes_its_charts_and_overlays_with_values_from_the_checkout(p
     assert "argocd-applies-admin-part" in codes(plan, "warning")
 
 
-def test_an_oci_chart_is_a_helm_source_pinned_to_the_version_it_resolves_to(pushed, monkeypatch):
-    unit = app.Unit("helm", "deploy.standalone", chart="oci://registry.example.invalid/charts/router", version="v0")
+def test_an_oci_chart_is_a_helm_source_pinned_to_the_version_a_constraint_resolves_to(pushed):
     asked = []
 
     def runner(argv, **options):
         asked.append(argv)
-        from lens.process import Result
-
         return Result(tuple(argv), 0, "apiVersion: v2\nname: router\nversion: v0.11.2\n", "")
 
     plan = plan_of(pushed)
     found = app.GitOrigin(REMOTE, "a" * 40, "a" * 40)
+    chart = "oci://registry.example.invalid/charts/router"
+    unit = app.Unit("helm", "deploy.standalone", chart=chart, version="^0.11")
     source, values, findings = app._helm_source(plan, found, unit, [], runner)
     assert source["repoURL"] == "registry.example.invalid/charts" and source["chart"] == "router"
     assert source["targetRevision"] == "v0.11.2" and not values
-    assert asked == [["helm", "show", "chart", unit.chart, "--version", "v0"]]
+    assert asked == [["helm", "show", "chart", chart, "--version", "^0.11"]]
     assert [finding.code for finding in findings] == ["argocd-chart-pinned"]
+    # A version is a tag to Helm and Argo CD alike: kept as it is; one short of a release can move.
+    asked.clear()
+    source, _, findings = app._helm_source(plan, found, app.Unit("helm", "s", chart=chart, version="v0"), [], runner)
+    assert source["targetRevision"] == "v0" and asked == []
+    assert [finding.code for finding in findings] == ["argocd-chart-tag"]
+    source, _, findings = app._helm_source(
+        plan, found, app.Unit("helm", "s", chart=chart, version="v0.11.2"), [], runner
+    )
+    assert source["targetRevision"] == "v0.11.2" and findings == []
 
 
 def test_manifest_files_are_one_directory_source_that_includes_them(pushed):

@@ -50,7 +50,10 @@ NAMESPACE_ANNOTATION = "lens.llm-d.ai/namespace"
 VALUES_REF = "values"
 NAME_FIELDS = ("instance", "namespace", "name", "destination")
 
-_EXACT_VERSION = re.compile(r"^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$")
+#: What Argo CD and Helm read as one version (a tag), not a constraint: ``v0``, ``0.11``, ``v0.11.2``.
+_VERSION = re.compile(r"^v?\d+(\.\d+){0,2}([-+][0-9A-Za-z.+-]+)?$")
+#: A release version, which a registry is not expected to move.
+_RELEASE = re.compile(r"^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$")
 _GLOB_CHARACTERS = set("*?[]{},\\!")
 _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
@@ -189,9 +192,10 @@ def helm_parameters(sets: list[tuple[str, str]]) -> tuple[list[dict[str, Any]], 
 
 
 def resolve_chart_version(chart: str, version: str, runner: Runner, helm: str = "helm") -> str:
-    """The exact chart version a constraint (``v0``, ``^1.2``) resolves to now, so the Application pins
-    what the plan rendered; the constraint itself when it is exact or Helm cannot answer."""
-    if not version or _EXACT_VERSION.match(version):
+    """The chart version a constraint (``^0.11``, ``~1.2``) resolves to now, so the Application pins what
+    the plan rendered. A version (``v0``, ``v0.11.2``) is a tag to Helm and Argo CD alike, and is kept;
+    so is a constraint Helm cannot resolve."""
+    if not version or _VERSION.match(version):
         return version
     try:
         result = runner([helm, "show", "chart", chart, "--version", version], timeout=300)
@@ -225,6 +229,17 @@ def _helm_source(
                     "info",
                     "argocd-chart-pinned",
                     f"{name} version {unit.version} is {version} now; the Application pins {version}",
+                )
+            )
+        if version and not _RELEASE.match(version):
+            findings.append(
+                Finding(
+                    "warning",
+                    "argocd-chart-tag",
+                    f"{name} version {version} is a tag the registry can point at a newer build; Argo CD pulls it "
+                    "again when it refreshes, so the chart can change with no new commit",
+                    hint="Pin the chart to a release version (for a guide, the variable that sets its version, "
+                    "with --var).",
                 )
             )
         # Argo CD reads a repository URL without a scheme as an OCI Helm registry.
