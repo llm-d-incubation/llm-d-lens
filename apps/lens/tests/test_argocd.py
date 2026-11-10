@@ -533,3 +533,39 @@ def test_plan_standup_status_teardown_commands(pushed, cluster, tmp_path, capsys
     assert "Deleted Argo CD Application argocd/cluster-a-r1" in capsys.readouterr().out
     assert main([*base, "plan", *target, "--backend", "argocd"]) == 2
     assert "--argocd-app" in capsys.readouterr().err
+
+
+def test_scale_keeps_the_count_on_the_application(pushed, cluster, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    kube, plan, _ = stood_up(pushed, cluster)
+    deployment = cluster.get(HOME, "deployments.apps", "model-a")
+    deployment["metadata"]["labels"] = {}  # Argo CD's objects carry no llmd labels
+    base = ["--state-dir", str(tmp_path), "-o", "json"]
+    target = ["r1", "-n", HOME, "--source", str(pushed)]
+    assert main([*base, "scale", *target, "model-a=3", "--no-drain"]) == 2
+    assert "Argo CD applies the new count" in capsys.readouterr().err
+    assert main([*base, "scale", *target, "model-a=3"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["overrides"] == {"model-a": 3} and result["application"] == "argocd/cluster-a-r1"
+    stored = cluster.get("argocd", "applications.argoproj.io", "cluster-a-r1")
+    assert stored["spec"]["source"]["kustomize"] == {"replicas": [{"name": "model-a", "count": 3}]}
+    assert stored["spec"]["source"]["targetRevision"] == plan.stack.source.revision
+    assert stored["spec"]["project"] == "team"  # rebuilt from the live Application, no --argocd-app
+    record = inventory.require(kube, HOME, "r1")
+    assert record["overrides"] == {"model-a": 3}
+    # Back to the files' count: the override is cleared.
+    assert main([*base, "scale", *target, "model-a=--"]) == 0
+    stored = cluster.get("argocd", "applications.argoproj.io", "cluster-a-r1")
+    assert "kustomize" not in stored["spec"]["source"]
+    assert "overrides" not in inventory.require(kube, HOME, "r1")
+
+
+def test_scale_refuses_a_source_at_another_commit(pushed, cluster, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    stood_up(pushed, cluster)
+    (pushed / "README.md").write_text("moved on\n")
+    git(pushed, "add", "README.md")
+    git(pushed, "commit", "-qm", "another commit")
+    argv = ["--state-dir", str(tmp_path), "scale", "r1", "-n", HOME, "--source", str(pushed), "model-a=3"]
+    assert main(argv) == 4
+    assert "a scale would move it to the new commit" in capsys.readouterr().err

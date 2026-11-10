@@ -253,6 +253,25 @@ def _record(plan: Plan, application: dict[str, Any], previous: dict[str, Any] | 
     }
 
 
+def template_of(application: dict[str, Any]) -> dict[str, Any]:
+    """The Application a later command builds from again: the live one, without what llmd sets (its
+    sources, status, operation, and what the server fills in). ``scale`` and ``rollouts`` start from it,
+    so they need no ``--argocd-app`` and keep any change an administrator made to its project or policy."""
+    metadata = {
+        key: value
+        for key, value in (application.get("metadata") or {}).items()
+        if key in ("name", "namespace", "labels", "annotations", "finalizers")
+    }
+    spec = {key: value for key, value in (application.get("spec") or {}).items() if key not in ("source", "sources")}
+    return {"apiVersion": app.API_VERSION, "kind": "Application", "metadata": metadata, "spec": spec}
+
+
+def settings_for(kube: Kube, record: dict[str, Any], **changes: Any) -> Settings:
+    """Settings that rebuild an instance's Application from the live one (``template_of``)."""
+    live = require_application(kube, record)
+    return Settings(template=template_of(live), **changes)
+
+
 def submit(kube: Kube, record: dict[str, Any], application: dict[str, Any], *, actor: str) -> dict[str, Any]:
     """Apply the Application and, without automated sync, start one sync of it."""
     body = dict(application)
@@ -470,3 +489,32 @@ def import_application(
         "imported": len(record["objects"]),
         "differences": differences,
     }
+
+
+def update(kube: Kube, plan: Plan, record: dict[str, Any], *, actor: str, expected_digest: str = "") -> dict[str, Any]:
+    """Point the instance's Application at what ``plan`` renders (another revision or stack path, or other
+    kept counts), start its sync, and keep the record in step. The objects themselves are Argo CD's to
+    change; the record lists them again once the Application is synced (``refresh_objects``)."""
+    _refuse(plan, expected_digest)
+    if (record.get("delivery") or {}).get("createdBy") == OBSERVED:
+        raise PolicyError(
+            f"instance {record['instance']} records an Application someone else made; llmd does not change it",
+            hint="Change it where it is kept (its repository, or the app-of-apps that makes it).",
+        )
+    switched = (record.get("stack") or {}).get("id") != plan.stack.id
+    updated = {
+        **record,
+        "delivery": {**record["delivery"], "revision": plan.stack.source.revision},
+        "stack": plan.stack_record(),
+        **({"previousStack": record["stack"]} if switched else {}),
+        "planDigest": plan.digest,
+        "phase": "Applying",
+        "updatedBy": actor,
+    }
+    if plan.options.overrides:
+        updated["overrides"] = dict(plan.options.overrides)
+    else:
+        updated.pop("overrides", None)
+    inventory.write(kube, updated)
+    submit(kube, updated, plan.delivery, actor=actor)
+    return updated

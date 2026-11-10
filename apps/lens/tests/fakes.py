@@ -505,6 +505,10 @@ class FakeCluster:
                 )
             current = self.objects.get(key)
             merged = _merge(current or {}, document)
+            if server_side and resource == "applications.argoproj.io" and current:
+                # Server-side apply drops a field its manager no longer sends. llmd's field manager is the
+                # only one that sets an Application's spec, so its spec is what llmd sent.
+                merged["spec"] = copy.deepcopy(document.get("spec") or {})
             merged["metadata"]["namespace"] = key[0] or None
             merged["metadata"]["uid"] = (current or {}).get("metadata", {}).get("uid") or uuid.uuid4().hex
             if not server_side:
