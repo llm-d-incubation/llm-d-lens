@@ -81,10 +81,14 @@ class Plan:
     #: What was rendered, in order, and which of them rendered each object (``Rendered.units``).
     units: list[Unit] = field(default_factory=list)
     unit_of: dict[str, int] = field(default_factory=dict)
+    #: What another tool is given to deliver the stack (Argo CD: the Application), when one delivers it.
+    #: The digest covers it, so a reviewed plan also pins how the stack is delivered.
+    delivery: dict[str, Any] = field(default_factory=dict)
 
     @property
     def digest(self) -> str:
-        return yamlio.digest({"namespace": self.namespace, "instance": self.instance, "documents": self.documents})
+        reviewed = {"namespace": self.namespace, "instance": self.instance, "documents": self.documents}
+        return yamlio.digest({**reviewed, **({"delivery": self.delivery} if self.delivery else {})})
 
     def stack_record(self) -> dict[str, Any]:
         """The stack as the instance's record keeps it: its path, source, and the user's choices."""
@@ -113,6 +117,7 @@ class Plan:
                 {"object": object_ref(part["document"]), "reason": part["reason"]} for part in self.policy.admin_parts
             ],
             "findings": [finding.as_dict() for finding in self.findings],
+            **({"application": self.delivery} if self.delivery else {}),
             "cluster": self.cluster,
             "digest": self.digest,
             "blocking": len(self.blocking),
