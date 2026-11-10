@@ -18,6 +18,7 @@ from lens.plan import Options, make_plan
 from lens.process import subprocess_runner
 from lens.render import render
 from lens.sources import resolve_source
+from lens.status import instance_status
 
 from .conftest import git
 from .fakes import FakeCluster
@@ -375,8 +376,6 @@ def test_status_adds_the_applications_sync_and_health(pushed, cluster):
     kube, plan, _ = stood_up(pushed, cluster)
     deployment = cluster.get(HOME, "deployments.apps", "model-a")
     deployment["status"] = {"replicas": 1, "readyReplicas": 1, "updatedReplicas": 1}
-    from lens.status import instance_status
-
     status = instance_status(kube, HOME, "r1")
     assert status["health"] == "Ready"
     assert status["argocd"]["state"] == "Synced" and status["argocd"]["application"] == "argocd/cluster-a-r1"
@@ -435,6 +434,60 @@ def test_a_second_standup_moves_the_application_to_the_new_commit(pushed, cluste
     record = inventory.require(kube, HOME, "r1")
     assert record["delivery"]["revision"] == plan.stack.source.revision != first.stack.source.revision
     assert [item["kind"] for item in record["objects"]] == ["Deployment"]
+
+
+def test_an_application_someone_else_made_is_only_read(pushed, cluster):
+    kube = Kube(runner=cluster)
+    plan = plan_of(pushed)
+    attach(plan)
+    made = {**plan.delivery, "metadata": {**plan.delivery["metadata"], "name": "team-made", "labels": {}}}
+    renders_for(cluster, pushed, made)
+    cluster.put("argocd", {**made, "operation": {"sync": {}}})
+    cluster._sync(cluster.get("argocd", "applications.argoproj.io", "team-made"))
+    before = {key: dict(value) for key, value in cluster.objects.items() if key[0] == HOME}
+    result = delivery.import_application(kube, plan, cluster.get("argocd", "applications.argoproj.io", "team-made"))
+    assert result["imported"] == 2 and result["differences"] == []
+    record = inventory.require(kube, HOME, "r1")
+    assert record["phase"] == "Imported" and record["delivery"]["createdBy"] == "observed"
+    after = {key: value for key, value in cluster.objects.items() if key[0] == HOME}
+    assert {key for key in after if after[key] != before.get(key)} == {(HOME, "configmaps", "lens-instance-r1")}
+    assert instance_status(kube, HOME, "r1")["argocd"]["createdBy"] == "observed"
+    with pytest.raises(PolicyError, match="does not delete it"):
+        delivery.teardown(kube, record)
+    delivery.teardown(kube, record, forget=True)
+    assert cluster.get("argocd", "applications.argoproj.io", "team-made") is not None
+
+
+def test_an_application_for_another_path_or_namespace_is_not_imported_unless_allowed(pushed, cluster):
+    kube = Kube(runner=cluster)
+    plan = plan_of(pushed)
+    attach(plan)
+    made = json.loads(json.dumps(plan.delivery))
+    made["metadata"]["name"] = "elsewhere"
+    made["spec"]["source"]["path"] = "examples/model-b"
+    with pytest.raises(PolicyError, match="does not deliver examples/model-a/cluster-a"):
+        delivery.import_application(kube, plan, made)
+    result = delivery.import_application(kube, plan, made, allow_drift=True)
+    assert any("examples/model-b" in item for item in result["differences"])
+
+
+def test_import_command_records_an_existing_application(pushed, cluster, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    template = tmp_path / "application.yaml"
+    template.write_text(yaml.safe_dump(TEMPLATE))
+    plan = plan_of(pushed)
+    attach(plan)
+    made = {**plan.delivery, "metadata": {**plan.delivery["metadata"], "name": "team-made", "labels": {}}}
+    renders_for(cluster, pushed, made)
+    cluster.put("argocd", {**made, "operation": {"sync": {}}})
+    cluster._sync(cluster.get("argocd", "applications.argoproj.io", "team-made"))
+    argv = ["--state-dir", str(tmp_path), "import", STACK, "--source", str(pushed), "-n", HOME, "--name", "r1"]
+    argv += ["--backend", "argocd", "--argocd-app", str(template), "--argocd-application", "argocd/team-made"]
+    assert main([*argv, "--dry-run"]) == 0
+    assert "delivers the stack as llmd would" in capsys.readouterr().out
+    assert inventory.read(Kube(runner=cluster), HOME, "r1") is None
+    assert main(argv) == 0
+    assert "Application argocd/team-made and 2 object(s)" in capsys.readouterr().out
 
 
 def test_an_object_another_application_tracks_blocks(pushed, cluster):

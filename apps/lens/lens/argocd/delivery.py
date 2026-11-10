@@ -403,3 +403,70 @@ def _kept_by_argocd(kube: Kube, item: dict[str, Any], namespace: str) -> bool:
     live = kube.get(item["resource"], item["name"], namespace)
     options = str(((live or {}).get("metadata") or {}).get("annotations", {}).get(app.SYNC_OPTIONS_ANNOTATION) or "")
     return "Delete=false" in options.replace(" ", "")
+
+
+def compare_application(planned: dict[str, Any], live: dict[str, Any]) -> list[str]:
+    """Where an Application someone else made differs from the one llmd would build for the stack: its
+    destination namespace, and each source's repository, path, chart and (for a commit) revision."""
+    found = []
+    want, have = planned["spec"]["destination"], (live.get("spec") or {}).get("destination") or {}
+    if want.get("namespace") != have.get("namespace"):
+        found.append(f"destination namespace {have.get('namespace')} (the stack's is {want.get('namespace')})")
+
+    def key(source: dict[str, Any]) -> tuple[str, str, str]:
+        url = checks.normalize_url(str(source.get("repoURL") or ""))
+        return url, str(source.get("path") or ""), str(source.get("chart") or "")
+
+    wanted = {key(source): source for source in app.application_sources(planned) if not source.get("ref")}
+    held = {key(source): source for source in app.application_sources(live) if not source.get("ref")}
+    for missing in sorted(set(wanted) - set(held)):
+        found.append(f"no source {missing[0]} {missing[1] or missing[2]}")
+    for extra in sorted(set(held) - set(wanted)):
+        found.append(f"another source {extra[0]} {extra[1] or extra[2]}")
+    for shared in sorted(set(wanted) & set(held)):
+        target = str(held[shared].get("targetRevision") or "")
+        if app.is_commit(target) and target != wanted[shared].get("targetRevision"):
+            found.append(
+                f"{shared[1] or shared[2]} at {target[:12]}, not the planned {wanted[shared]['targetRevision'][:12]}"
+            )
+    return found
+
+
+def import_application(
+    kube: Kube, plan: Plan, application: dict[str, Any], *, actor: str = "", allow_drift: bool = False
+) -> dict[str, Any]:
+    """Record an Application someone else made (by hand, or an app-of-apps) as the instance; nothing in the
+    cluster changes but the record, and llmd then only reads the Application. It must deliver the plan's
+    stack: the same sources and destination namespace as the Application llmd would build, unless
+    ``allow_drift``."""
+    if inventory.read(kube, plan.namespace, plan.instance):
+        raise ConflictError(
+            f"instance {plan.instance} is already recorded in {plan.namespace}",
+            hint=f"See `llmd status {plan.instance}`.",
+        )
+    differences = compare_application(plan.delivery, application) if plan.delivery else []
+    if differences and not allow_drift:
+        raise PolicyError(
+            f"Application {application['metadata']['name']} does not deliver {plan.stack.id} to {plan.namespace}",
+            details=[{"message": item} for item in differences],
+            hint="Name the stack and source the Application points at, or pass --allow-drift to record it anyway.",
+        )
+    observed = {
+        "apiVersion": app.API_VERSION,
+        "kind": "Application",
+        "metadata": dict(application["metadata"]),
+        "spec": application.get("spec") or {},
+    }
+    record = _record(plan, observed, None, actor=actor, mode=OBSERVED)
+    record["delivery"]["revision"] = ""
+    record["objects"] = managed_objects(kube, application, plan.namespace)
+    record["phase"] = "Imported"
+    inventory.write(kube, record)
+    return {
+        "instance": plan.instance,
+        "namespace": plan.namespace,
+        "backend": BACKEND,
+        "application": f"{application['metadata']['namespace']}/{application['metadata']['name']}",
+        "imported": len(record["objects"]),
+        "differences": differences,
+    }
