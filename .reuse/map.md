@@ -354,17 +354,17 @@ Entry: [apps/backend/src/llm_d_lens/infrastructure/kubernetes/watch.py](../apps/
 ## aic-exact-topology-estimate
 
 Estimate TTFT and TPOT for a specified AIC aggregated or P/D deployment topology.
-Entry: [apps/backend/src/llm_d_lens/aic/service.py](../apps/backend/src/llm_d_lens/aic/service.py) — `estimate`, `estimate_sync`
+Entry: [apps/backend/src/llm_d_lens/estimate_tools/aic/service.py](../apps/backend/src/llm_d_lens/estimate_tools/aic/service.py) — `estimate`, `estimate_sync`
 
 ## aic-exact-topology-estimate-request
 
 Validate the explicit workload and topology inputs for an AIC estimate.
-Entry: [apps/backend/src/llm_d_lens/aic/models.py](../apps/backend/src/llm_d_lens/aic/models.py) — `AICEstimateRequest`
+Entry: [apps/backend/src/llm_d_lens/estimate_tools/aic/models.py](../apps/backend/src/llm_d_lens/estimate_tools/aic/models.py) — `AICEstimateRequest`
 
 ## aic-exact-topology-estimate-api
 
 Expose exact-topology AIC estimation through the HTTP and generated MCP contracts.
-Entry: [apps/backend/src/llm_d_lens/aic/router.py](../apps/backend/src/llm_d_lens/aic/router.py) — `estimate_endpoint`
+Entry: [apps/backend/src/llm_d_lens/estimate_tools/aic/router.py](../apps/backend/src/llm_d_lens/estimate_tools/aic/router.py) — `estimate_endpoint`
 
 ## agentic-candidate-generation
 

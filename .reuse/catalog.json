@@ -1257,7 +1257,7 @@
     },
     {
       "id": "aic-exact-topology-estimate",
-      "path": "apps/backend/src/llm_d_lens/aic/service.py",
+      "path": "apps/backend/src/llm_d_lens/estimate_tools/aic/service.py",
       "symbols": [
         "estimate",
         "estimate_sync"
@@ -1275,14 +1275,14 @@
     },
     {
       "id": "aic-exact-topology-estimate-request",
-      "path": "apps/backend/src/llm_d_lens/aic/models.py",
+      "path": "apps/backend/src/llm_d_lens/estimate_tools/aic/models.py",
       "symbols": [
         "AICEstimateRequest"
       ],
       "purpose": "Validate the explicit workload and topology inputs for an AIC estimate.",
       "boundaries": "The typed FastAPI request defines the OpenAPI schema used to generate MCP estimate_aic_configuration inputs; service-level validation checks the topology against SDK output.",
       "examples": [
-        "apps/backend/src/llm_d_lens/aic/router.py"
+        "apps/backend/src/llm_d_lens/estimate_tools/aic/router.py"
       ],
       "tests": [
         "apps/backend/tests/unit/aic/test_service.py"
@@ -1290,7 +1290,7 @@
     },
     {
       "id": "aic-exact-topology-estimate-api",
-      "path": "apps/backend/src/llm_d_lens/aic/router.py",
+      "path": "apps/backend/src/llm_d_lens/estimate_tools/aic/router.py",
       "symbols": [
         "estimate_endpoint"
       ],

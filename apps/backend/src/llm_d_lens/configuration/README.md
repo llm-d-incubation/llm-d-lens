@@ -109,7 +109,7 @@ For an upgrade:
 2. Install from the repository root with
    `.venv/bin/python -m pip install -e '.[embedded-db,ldap]'`.
 3. Run `.venv/bin/python -m pip check` and
-   `.venv/bin/python -m pytest llm_d_lens/aic llm_d_lens/configuration -q`.
+   `.venv/bin/python -m pytest apps/backend/tests/unit/aic apps/backend/tests/unit/configuration -q`.
 4. Check both support flags and an actual candidate search for the target model,
    system, backend, GPU budget and workload. A support flag is not a deployment
    test and does not guarantee candidates for every budget or latency target.
