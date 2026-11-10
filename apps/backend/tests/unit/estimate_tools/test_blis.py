@@ -1,5 +1,6 @@
 """Profiles are trusted server configuration, not a file-presence support probe."""
 
+import csv
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ from llm_d_lens.estimate_tools.aic import adapter
 from llm_d_lens.estimate_tools.blis.service import (
     RuntimeProfile,
     _compile_bundle,
+    _compile_workload,
     _deployment_documents,
     availability,
     baseline_profile,
@@ -23,7 +25,7 @@ from llm_d_lens.estimate_tools.blis.service import (
     support,
     tree_digest,
 )
-from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest, Problem
+from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest, Problem, RunControls, Workload
 
 
 def test_deployment_documents_use_native_fields_and_preserve_layout(profile):
@@ -130,6 +132,93 @@ def test_deployment_documents_refuse_unpriced_pp_dp_combination(profile):
 def test_deployment_documents_refuse_unmapped_or_unrepresentable_configuration(bundle_profile, changes, code):
     request = EstimateRequest.model_validate({**bundle_profile.verified_request.model_dump(), **changes})
     result = _deployment_documents(request, bundle_profile)
+    assert isinstance(result, Problem)
+    assert result.code == code
+
+
+@pytest.mark.parametrize("load", [{"request_rate": 2.5}, {"request_rate": 4}])
+@pytest.mark.parametrize("includes_prefix,input_tokens", [(True, 128), (False, 96)])
+def test_compile_workload_preserves_load_tokens_prefix_and_units(load, includes_prefix, input_tokens):
+    workload = Workload(
+        distribution="constant",
+        input_tokens=input_tokens,
+        output_tokens=32,
+        prefix_tokens=32,
+        input_includes_prefix=includes_prefix,
+        **load,
+    )
+    run = RunControls(seed=42, num_requests=8, horizon_s=1.25, request_deadline_s=0.125, wall_timeout_s=3)
+    original = workload.model_dump(), run.model_dump()
+    spec = _compile_workload(workload, run)
+    assert not isinstance(spec, Problem)
+    assert spec["version"] == "2"
+    assert (spec["seed"], spec["num_requests"], spec["horizon"]) == (42, 8, 1_250_000)
+    client = spec["clients"][0]
+    assert client["input_distribution"]["params"] == {"mean": 96, "std_dev": 0, "min": 96, "max": 96}
+    assert client["output_distribution"]["params"] == {"mean": 32, "std_dev": 0, "min": 32, "max": 32}
+    assert client["prefix_length"] == 32
+    assert client["prefix_group"] == "lens-shared"
+    assert client["timeout"] == 125_000
+    assert spec["aggregate_rate"] == load["request_rate"]
+    assert client["rate_fraction"] == 1
+    assert "concurrency" not in client
+    assert original == (workload.model_dump(), run.model_dump())
+    assert spec == _compile_workload(workload, run)
+
+
+def test_compile_workload_no_prefix_or_deadline_has_no_hidden_defaults():
+    spec = _compile_workload(
+        Workload(distribution="constant", request_rate=2),
+        RunControls(seed=0, num_requests=1, horizon_s=0.000001),
+    )
+    assert not isinstance(spec, Problem)
+    client = spec["clients"][0]
+    assert "prefix_group" not in client
+    assert "prefix_length" not in client
+    assert client["timeout"] == 0
+    assert spec["seed"] == 0
+    assert spec["horizon"] == 1
+
+
+def test_compile_native_concurrency_has_no_rate_conversion():
+    spec = _compile_workload(
+        Workload(distribution="constant", concurrency=3),
+        RunControls(seed=42, num_requests=8, horizon_s=60),
+    )
+    assert not isinstance(spec, Problem)
+    assert spec["aggregate_rate"] == 0
+    client = spec["clients"][0]
+    assert client["concurrency"] == 3
+    assert client["think_time_us"] == 0
+    assert "rate_fraction" not in client
+
+
+@pytest.mark.parametrize(
+    "workload_changes,run_changes,code",
+    [
+        ({"request_rate": None, "concurrency": 3, "prefix_tokens": 32}, {}, "concurrency_prefix_not_supported"),
+        ({"distribution": "native_mean"}, {}, "distribution_not_supported"),
+        (
+            {"distribution": "trace", "trace_artifact": "owner-trace", "request_rate": None},
+            {},
+            "distribution_not_supported",
+        ),
+        ({}, {"seed": None}, "run_controls_required"),
+        ({}, {"num_requests": None}, "run_controls_required"),
+        ({}, {"horizon_s": None}, "run_controls_required"),
+        ({}, {"horizon_s": 0.0000001}, "time_not_representable"),
+        ({}, {"request_deadline_s": 0.0000001}, "time_not_representable"),
+        ({}, {"horizon_s": 1e20}, "time_not_representable"),
+        ({}, {"seed": 2**63}, "run_controls_out_of_range"),
+        ({}, {"num_requests": 2**63}, "run_controls_out_of_range"),
+        ({"input_tokens": 2**53}, {}, "tokens_out_of_range"),
+        ({"request_rate": None, "concurrency": 2**63}, {}, "concurrency_out_of_range"),
+    ],
+)
+def test_compile_workload_rejects_unrepresentable_semantics(workload_changes, run_changes, code):
+    workload = Workload.model_validate({"distribution": "constant", "request_rate": 2, **workload_changes})
+    run = RunControls.model_validate({"seed": 42, "num_requests": 8, "horizon_s": 60, **run_changes})
+    result = _compile_workload(workload, run)
     assert isinstance(result, Problem)
     assert result.code == code
 
@@ -378,6 +467,83 @@ def test_generated_bundle_with_locked_runtime(tmp_path, tp, pp, dp, nodes, devic
     assert result["requests"]["completed"] == 8
     assert bundle.arguments[-2:] == ["--num-instances", str(replicas)]
     assert bundle.input_digest == tree_digest(moved / "inputs")
+
+
+@pytest.mark.parametrize("load", [{"request_rate": 2}, {"request_rate": 4}, {"concurrency": 3}])
+@pytest.mark.parametrize("includes_prefix,input_tokens", [(True, 128), (False, 96)])
+def test_compiled_workload_with_locked_runtime(tmp_path, load, includes_prefix, input_tokens):
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).resolve(), inputs=Path(inputs).resolve())
+    assert availability(profile).available
+    shutil.copytree(profile.inputs, tmp_path / "inputs")
+    spec = _compile_workload(
+        Workload(
+            distribution="constant",
+            input_tokens=input_tokens if "request_rate" in load else 128,
+            output_tokens=32,
+            prefix_tokens=32 if "request_rate" in load else 0,
+            input_includes_prefix=includes_prefix,
+            **load,
+        ),
+        RunControls(seed=42, num_requests=8, horizon_s=60, request_deadline_s=30),
+    )
+    assert not isinstance(spec, Problem)
+    (tmp_path / "workload.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+    completed = subprocess.run(
+        [
+            str(profile.binary),
+            "run",
+            "--scenarios",
+            "inputs/scenarios",
+            "--scenario",
+            "muse-h100-roce-armB.yaml",
+            "--catalog",
+            "inputs/catalog",
+            "--registry",
+            "inputs/registry",
+            "--num-instances",
+            "1",
+            "--workload-spec",
+            "workload.yaml",
+            "--trace-output",
+            "generated",
+            "--format",
+            "json",
+            "--log",
+            "warn",
+        ],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "GOMAXPROCS": "1"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.JSONDecoder().raw_decode(completed.stdout.lstrip())[0]
+    assert result["kind"] == "Result"
+    assert result["schema_version"] == 1
+    assert result["input"]["run"]["load"] == load
+    assert result["input"]["run"]["num_requests"] == 8
+    assert result["input"]["run"]["seed"] == 42
+    assert result["input"]["run"]["horizon_s"] == 60
+    assert result["requests"]["generated"] == 8
+    assert result["requests"]["completed"] == 8
+    with (tmp_path / "generated.csv").open(encoding="utf-8", newline="") as stream:
+        records = list(csv.DictReader(stream))
+    assert len(records) == 8
+    assert {int(record["input_tokens"]) + int(record["prefix_length"]) for record in records} == {128}
+    assert {int(record["output_tokens"]) for record in records} == {32}
+    assert {int(record["prefix_length"]) for record in records} == {32 if "request_rate" in load else 0}
+    assert {record["prefix_group"] for record in records} == {"lens-shared" if "request_rate" in load else ""}
+    assert {int(record["deadline_us"]) - int(record["arrival_time_us"]) for record in records} == {30_000_000}
+    if "request_rate" in load:
+        arrivals = [int(record["arrival_time_us"]) for record in records]
+        assert {after - before for before, after in zip(arrivals, arrivals[1:], strict=False)} == {
+            1_000_000 / load["request_rate"]
+        }
 
 
 @pytest.fixture

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
@@ -22,8 +23,78 @@ from ..models import (
     OptimizeRequest,
     Problem,
     Request,
+    RunControls,
     ToolSupport,
+    Workload,
 )
+
+
+def _compile_workload(workload: Workload, run: RunControls) -> dict[str, JsonValue] | Problem:
+    """Compile a v2 workload fragment; this neither provisions nor enables execution."""
+    if workload.distribution != "constant":
+        return Problem(code="distribution_not_supported", message="BLIS compilation requires constant token lengths")
+    if workload.concurrency is not None and workload.prefix_tokens:
+        return Problem(
+            code="concurrency_prefix_not_supported",
+            message="The locked BLIS runtime does not preserve shared prefix metadata on concurrency follow-ups",
+        )
+    if run.seed is None or run.num_requests is None or run.horizon_s is None:
+        return Problem(
+            code="run_controls_required", message="BLIS compilation requires seed, num_requests and horizon_s"
+        )
+    if run.seed > 2**63 - 1 or run.num_requests > 2**63 - 1:
+        return Problem(code="run_controls_out_of_range", message="BLIS seed and request count must fit signed int64")
+
+    times: dict[str, int] = {}
+    for name, seconds in (("horizon", run.horizon_s), ("timeout", run.request_deadline_s)):
+        micros = Decimal(str(seconds)) * 1_000_000 if seconds is not None else Decimal(0)
+        if micros != micros.to_integral_value() or micros > 2**63 - 1:
+            return Problem(code="time_not_representable", message="BLIS times must be exact signed int64 microseconds")
+        times[name] = int(micros)
+
+    prompt_tokens = (
+        workload.input_tokens - workload.prefix_tokens if workload.input_includes_prefix else workload.input_tokens
+    )
+    if max(prompt_tokens, workload.output_tokens, workload.prefix_tokens) > 2**53 - 1:
+        return Problem(code="tokens_out_of_range", message="BLIS token counts must be exactly representable in float64")
+    if workload.concurrency is not None and workload.concurrency > 2**63 - 1:
+        return Problem(code="concurrency_out_of_range", message="BLIS concurrency must fit signed int64")
+
+    client: dict[str, JsonValue] = {
+        "id": "lens",
+        "arrival": {"process": "constant"},
+        "input_distribution": {
+            "type": "gaussian",
+            "params": {"mean": prompt_tokens, "std_dev": 0, "min": prompt_tokens, "max": prompt_tokens},
+        },
+        "output_distribution": {
+            "type": "gaussian",
+            "params": {
+                "mean": workload.output_tokens,
+                "std_dev": 0,
+                "min": workload.output_tokens,
+                "max": workload.output_tokens,
+            },
+        },
+        "timeout": times["timeout"],
+    }
+    if workload.concurrency is not None:
+        client["concurrency"] = workload.concurrency
+        client["think_time_us"] = 0
+    else:
+        client["rate_fraction"] = 1
+    if workload.prefix_tokens:
+        client["prefix_group"] = "lens-shared"
+        client["prefix_length"] = workload.prefix_tokens
+    return {
+        "version": "2",
+        "category": "language",
+        "seed": run.seed,
+        "num_requests": run.num_requests,
+        "horizon": times["horizon"],
+        "aggregate_rate": workload.request_rate if workload.request_rate is not None else 0,
+        "clients": [client],
+    }
 
 
 class RuntimeProfile(Contract):
