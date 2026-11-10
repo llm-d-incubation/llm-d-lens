@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import shutil
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+import yaml
+from pydantic import Field, JsonValue, ValidationError
 
 from ..models import (
     Capability,
@@ -35,6 +38,8 @@ class RuntimeProfile(Contract):
     inputs_digest: Digest
     catalog_model: NonemptyString
     catalog_hardware: NonemptyString
+    catalog_fabric: NonemptyString | None = None
+    coefficient_ids: list[NonemptyString] = Field(default_factory=list)
     verified_request: EstimateRequest
     kernel_construction: Literal["unknown", "refused", "confirmed"] = "unknown"
     result_digest: Digest | None = None
@@ -54,6 +59,16 @@ def baseline_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
         inputs_digest="28cc378251abb2bd6be3035bee5ac2c29c1cf42ee2e45afd57a297cfee88ee3a",
         catalog_model="muse-spark-open-816b-a42b-nvfp4",
         catalog_hardware="h100",
+        catalog_fabric="roce-200g",
+        coefficient_ids=[
+            "cost-model-primitives",
+            "cost-model-collectives",
+            "cost-model-host-overheads",
+            "cost-model-attention",
+            "cost-model-recurrent",
+            "cost-model-memory",
+            "cost-model-fabric",
+        ],
         kernel_construction="confirmed",
         result_digest="4acea46d9d443059dcecb00602f978e9a3e2cd53db68a49e27d5c4770f732b62",
         revisions={
@@ -109,6 +124,268 @@ def baseline_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
             }
         ),
     )
+
+
+def _deployment_documents(
+    request: EstimateRequest,
+    profile: RuntimeProfile,
+) -> tuple[dict[str, JsonValue], dict[str, JsonValue]] | Problem:
+    try:
+        request = EstimateRequest.model_validate(request.model_dump())
+    except ValidationError:
+        return Problem(
+            code="invalid_configuration", message="Request exceeds capacity or violates the estimate contract"
+        )
+    expected = profile.verified_request
+    if request.configuration.mode != "agg":
+        return Problem(code="mode_not_supported", message="Bundle compilation supports aggregated deployments only")
+    if request.model != expected.model:
+        return Problem(
+            code="model_mapping_missing", message="Model precision/quantization needs an approved catalog mapping"
+        )
+    if (request.hardware.profile_id, request.hardware.model, request.hardware.fabric) != (
+        expected.hardware.profile_id,
+        expected.hardware.model,
+        expected.hardware.fabric,
+    ):
+        return Problem(code="hardware_mapping_missing", message="Hardware and fabric need approved catalog mappings")
+    if not profile.coefficient_ids or (request.hardware.fabric is not None and profile.catalog_fabric is None):
+        return Problem(code="bundle_mapping_missing", message="Managed profile needs coefficient and fabric mappings")
+    if (request.configuration.engine, request.configuration.engine_version) != (
+        expected.configuration.engine,
+        expected.configuration.engine_version,
+    ) or request.configuration.engine_version is None:
+        return Problem(code="engine_not_supported", message="Engine kind/version is outside the managed profile")
+    if request.runtime_profiles.get("blis", profile.id) != profile.id:
+        return Problem(code="runtime_profile_mismatch", message="Request selected a different managed BLIS runtime")
+    settings = request.configuration.engine_settings
+    approved_settings = expected.configuration.engine_settings
+    if any(
+        key not in approved_settings or type(value) is not type(approved_settings[key])
+        for key, value in settings.items()
+    ):
+        return Problem(
+            code="engine_settings_not_supported", message="Engine settings need approved names and value types"
+        )
+
+    role = request.configuration.roles[0]
+    hardware = request.hardware
+    if (
+        max(hardware.nodes, hardware.devices_per_node, role.tp, role.pp, role.dp, role.replicas, role.device_count)
+        > 2**63 - 1
+    ):
+        return Problem(code="placement_out_of_range", message="BLIS placement counts must fit signed int64")
+    if role.pp > 1 and role.dp > 1:
+        return Problem(
+            code="parallelism_not_supported", message="The locked BLIS runtime cannot price combined PP and DP"
+        )
+    groups = role.pp * role.dp * role.replicas
+    if role.tp <= hardware.devices_per_node:
+        fits = groups <= hardware.nodes * (hardware.devices_per_node // role.tp)
+    else:
+        if role.tp % hardware.devices_per_node:
+            return Problem(code="placement_not_supported", message="Cross-node TP must occupy whole nodes")
+        fits = groups * (role.tp // hardware.devices_per_node) <= hardware.nodes
+    if not fits:
+        return Problem(code="placement_impossible", message="TP groups cannot be placed within the available nodes")
+
+    name = f"lens-{EffectiveConfiguration.from_request(request).fingerprint[:16]}"
+    cluster: dict[str, JsonValue] = {
+        "hardware": profile.catalog_hardware,
+        "nodes": hardware.nodes,
+        "gpus_per_node": hardware.devices_per_node,
+    }
+    if profile.catalog_fabric is not None:
+        cluster["fabric"] = profile.catalog_fabric
+    scenario: dict[str, JsonValue] = {
+        "kind": "Scenario",
+        "name": name,
+        "model": profile.catalog_model,
+        "engine_version": request.configuration.engine_version,
+        "coefficients": list(profile.coefficient_ids),
+        "cluster": cluster,
+    }
+    deployment: dict[str, JsonValue] = {
+        "kind": "Deployment",
+        "name": name,
+        "pools": [
+            {
+                "role": "colocated",
+                "nodes": hardware.nodes,
+                "parallel": {
+                    "tp": role.tp,
+                    "pp": role.pp,
+                    "dp": role.dp,
+                    "enable_expert_parallel": role.expert_parallel,
+                },
+                "engine": dict(settings),
+            }
+        ],
+    }
+    return scenario, deployment
+
+
+class _DeploymentBundle(Contract):
+    runtime_profile: str
+    configuration_fingerprint: Digest
+    binary_digest: Digest
+    runtime_inputs_digest: Digest
+    input_digest: Digest
+    file_digests: dict[str, Digest]
+    revisions: dict[str, str]
+    arguments: list[str]
+
+
+class _RouterSettings(Contract):
+    epp_flags: list[NonemptyString] = Field(default_factory=list)
+    endpoint_picker_config: NonemptyString | None = None
+    manifests: list[NonemptyString] = Field(default_factory=list)
+
+
+def _contained_input(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    if path.is_absolute() or not path.parts or ".." in path.parts or "\\" in relative:
+        raise ValueError("Input references must be contained relative paths")
+    source = root / path
+    if any((root / Path(*path.parts[:index])).is_symlink() for index in range(1, len(path.parts) + 1)):
+        raise ValueError("Input references must not traverse symlinks")
+    if not source.resolve().is_relative_to(root.resolve()) or not source.is_file():
+        raise ValueError("Input reference is missing or outside the managed root")
+    return source
+
+
+def _bundle_router(settings: dict[str, JsonValue], inputs: Path, scenarios: Path) -> dict[str, JsonValue]:
+    router = _RouterSettings.model_validate(settings)
+
+    def copy_reference(relative: str) -> str:
+        source = _contained_input(inputs, relative)
+        digest = file_digest(source)
+        target = scenarios / "router" / f"{digest}.yaml"
+        target.parent.mkdir(exist_ok=True)
+        shutil.copyfile(source, target)
+        return f"router/{digest}.yaml"
+
+    flags: list[JsonValue] = []
+    config_count = int(router.endpoint_picker_config is not None)
+    iterator = iter(router.epp_flags)
+    for flag in iterator:
+        if flag == "--config-file":
+            path = next(iterator, "")
+            if not path or path.startswith("--"):
+                raise ValueError("--config-file needs a managed relative path")
+            flags.append(f"--config-file={copy_reference(path)}")
+            config_count += 1
+        elif flag.startswith("--config-file="):
+            flags.append(f"--config-file={copy_reference(flag.split('=', 1)[1])}")
+            config_count += 1
+        else:
+            if not flag.startswith("--") or "=" not in flag:
+                raise ValueError("Router flags must use --name=value form")
+            config_count += int(flag.startswith("--config-text="))
+            flags.append(flag)
+    if config_count > 1:
+        raise ValueError("Router configuration must be specified exactly once")
+    result: dict[str, JsonValue] = {}
+    if flags:
+        result["epp_flags"] = flags
+    if router.endpoint_picker_config is not None:
+        result["endpoint_picker_config"] = copy_reference(router.endpoint_picker_config)
+    if router.manifests:
+        result["manifests"] = [copy_reference(path) for path in router.manifests]
+    return result
+
+
+def _compile_bundle(
+    request: EstimateRequest, profile: RuntimeProfile, destination: Path
+) -> _DeploymentBundle | Problem:
+    """Write into a new caller-owned task directory; never spawn or enable BLIS."""
+    documents = _deployment_documents(request, profile)
+    if isinstance(documents, Problem):
+        return documents
+    runtime = availability(profile)
+    if not runtime.available:
+        return runtime.reason or Problem(code="runtime_unavailable", message="Managed BLIS runtime is unavailable")
+    if profile.kernel_construction == "refused":
+        return Problem(code="kernel_construction_refused", message="Managed runtime refuses kernel construction")
+    destination = destination.absolute()
+    if any(path.is_symlink() for path in (destination, *destination.parents)):
+        return Problem(code="bundle_destination_unsafe", message="Bundle destination must not traverse symlinks")
+    destination = destination.resolve()
+    if destination.exists() or destination.is_relative_to(profile.inputs.resolve()):
+        return Problem(code="bundle_destination_unsafe", message="Bundle needs a new directory outside managed inputs")
+
+    created = False
+    try:
+        references = [
+            f"catalog/models/{profile.catalog_model}/graph.yaml",
+            f"catalog/hardware/{profile.catalog_hardware}.yaml",
+            *(f"registry/coefficients/{name}.yaml" for name in profile.coefficient_ids),
+        ]
+        if profile.catalog_fabric is not None:
+            references.append(f"catalog/networks/{profile.catalog_fabric}.yaml")
+        for reference in references:
+            _contained_input(profile.inputs, reference)
+        destination.mkdir(mode=0o700)
+        created = True
+        inputs = destination / "inputs"
+        for directory in ("catalog", "registry"):
+            shutil.copytree(profile.inputs / directory, inputs / directory)
+            if tree_digest(inputs / directory) != getattr(profile, f"{directory}_digest"):
+                raise ValueError("Copied runtime inputs differ from their lock")
+        scenarios = inputs / "scenarios"
+        scenarios.mkdir()
+        scenario, deployment = documents
+        router = _bundle_router(request.configuration.router_settings, profile.inputs, scenarios)
+        if router:
+            deployment["router"] = router
+        if tree_digest(profile.inputs) != profile.inputs_digest:
+            raise ValueError("Managed inputs changed during bundle compilation")
+        (scenarios / "deployment.yaml").write_text(
+            yaml.safe_dump_all((scenario, deployment), sort_keys=False),
+            encoding="utf-8",
+        )
+        snapshot = {
+            "request": request.model_dump(mode="json"),
+            "effective_configuration": EffectiveConfiguration.from_request(request).model_dump(mode="json"),
+            "num_instances": request.configuration.roles[0].replicas,
+        }
+        (destination / "effective-input.json").write_text(
+            json.dumps(snapshot, sort_keys=True, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        bundle = _DeploymentBundle(
+            runtime_profile=profile.id,
+            configuration_fingerprint=EffectiveConfiguration.from_request(request).fingerprint,
+            binary_digest=profile.binary_digest,
+            runtime_inputs_digest=profile.inputs_digest,
+            input_digest=tree_digest(inputs),
+            file_digests={
+                path.relative_to(destination).as_posix(): file_digest(path)
+                for path in sorted(destination.rglob("*"))
+                if path.is_file()
+            },
+            revisions=dict(profile.revisions),
+            arguments=[
+                "--scenarios",
+                "inputs/scenarios",
+                "--scenario",
+                "deployment.yaml",
+                "--catalog",
+                "inputs/catalog",
+                "--registry",
+                "inputs/registry",
+                "--num-instances",
+                str(request.configuration.roles[0].replicas),
+            ],
+        )
+        (destination / "manifest.json").write_text(bundle.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError, yaml.YAMLError):
+        if created:
+            shutil.rmtree(destination)
+        return Problem(
+            code="bundle_compilation_failed", message="Bundle inputs, router references or output are invalid"
+        )
+    return bundle
 
 
 def capabilities() -> list[Capability]:
