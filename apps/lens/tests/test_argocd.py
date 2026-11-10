@@ -1,6 +1,7 @@
 """The Argo CD backend: an Application built from the stack's plan, checked against its project, and
 delivered, followed and torn down through the in-memory cluster acting as the Argo CD controller."""
 
+import argparse
 import json
 import re
 
@@ -12,6 +13,8 @@ from lens.argocd import application as app
 from lens.argocd import checks, delivery, origin
 from lens.catalog import find_stack
 from lens.cli import main
+from lens.commands import Context
+from lens.commands.rollouts import _restore_application
 from lens.errors import PolicyError, UsageError
 from lens.kube import Kube
 from lens.plan import Options, make_plan
@@ -569,3 +572,56 @@ def test_scale_refuses_a_source_at_another_commit(pushed, cluster, tmp_path, cap
     argv = ["--state-dir", str(tmp_path), "scale", "r1", "-n", HOME, "--source", str(pushed), "model-a=3"]
     assert main(argv) == 4
     assert "a scale would move it to the new commit" in capsys.readouterr().err
+
+
+def next_commit(repo, image="v2"):
+    """A pushed commit that changes the stack's model server image."""
+    deployment = repo / "examples/model-a/base/model-server/deployment.yaml"
+    text = deployment.read_text()
+    deployment.write_text(text.replace("vllm@sha256:" + "0" * 64, f"vllm:{image}"))
+    git(repo, "commit", "-qam", f"model server {image}")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    return subprocess_runner(["git", "-C", str(repo), "rev-parse", "HEAD"]).stdout.strip()
+
+
+def test_a_rollout_moves_the_application_to_the_new_commit_and_abort_moves_it_back(
+    pushed, cluster, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    kube, first, _ = stood_up(pushed, cluster)
+    first_revision = first.stack.source.revision
+    cluster.get(HOME, "deployments.apps", "model-a")["metadata"]["labels"] = {}
+    revision = next_commit(pushed)
+    renders_for(cluster, pushed, first.delivery)
+    base = ["--state-dir", str(tmp_path)]
+    target = [STACK, "--source", str(pushed), "-n", HOME, "--name", "r1"]
+    assert main([*base, "-o", "json", "rollouts", "plan", *target]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["objects"] == {"Deployment/model-a": "changed"}
+    assert main([*base, "rollouts", "start", *target, "--no-drain"]) == 0
+    stored = cluster.get("argocd", "applications.argoproj.io", "cluster-a-r1")
+    assert stored["spec"]["source"]["targetRevision"] == revision
+    assert stored["status"]["operationState"]["operation"]["sync"]["revision"] == revision
+    record = inventory.require(kube, HOME, "r1")
+    assert record["delivery"]["revision"] == revision
+    assert record["rollout"]["phase"] == "Finished"  # no DisaggregatedSet rolls
+    assert record["rollout"]["from"]["revision"] == first_revision
+    # Applied by Argo CD from the Application, never by llmd.
+    assert not [call for call in cluster.calls if call[0] == "apply" and "deployments" in " ".join(call)]
+
+
+def test_abort_of_an_argocd_rollout_restores_the_application(pushed, cluster, tmp_path, monkeypatch):
+
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    kube, first, _ = stood_up(pushed, cluster)
+    first_revision = first.stack.source.revision
+    next_commit(pushed)
+    record = inventory.require(kube, HOME, "r1")
+    record["rollout"] = {"phase": "Rolling", "from": first.stack.source.describe(), "objects": ["Deployment/model-a"]}
+    inventory.write(kube, record)
+    git(pushed, "checkout", "-q", first_revision)
+    ctx = Context(argparse.Namespace(state_dir=str(tmp_path), output="text"))
+    _restore_application(ctx, kube, inventory.require(kube, HOME, "r1"))
+    stored = cluster.get("argocd", "applications.argoproj.io", "cluster-a-r1")
+    assert stored["spec"]["source"]["targetRevision"] == first_revision
+    assert inventory.require(kube, HOME, "r1")["delivery"]["revision"] == first_revision
