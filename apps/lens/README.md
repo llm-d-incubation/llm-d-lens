@@ -236,6 +236,107 @@ llmd rollouts abort <instance> -n <namespace> [--watch]     # re-apply what ran 
 llmd rollouts finish <instance> -n <namespace>              # end it once the old revision is gone
 ```
 
+## Delivering through Argo CD
+
+On a cluster where Argo CD deploys what teams keep in Git, `--backend argocd` hands a stack to Argo CD instead
+of applying its objects. `llmd` renders and checks the stack as before, then submits one Argo CD Application that
+points at the stack's own files; Argo CD renders them with its own Helm and kustomize and applies them.
+
+Start from the Application you would write by hand for one stack. `llmd` keeps its project, destination cluster,
+sync policy and namespace, and fills in the rest:
+
+```yaml
+# application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: "{destination}-{instance}"   # also {namespace} and {name}, the stack's last segment
+  namespace: argocd                  # where Argo CD reads Applications
+spec:
+  project: <project>
+  destination:
+    name: <cluster>                  # or server:; the namespace is -n
+  syncPolicy:                        # without `automated`, standup starts one sync
+    syncOptions:
+      - ServerSideApply=true
+```
+
+```sh
+llmd plan <stack> -n <namespace> --backend argocd --argocd-app application.yaml        # read-only
+llmd standup <stack> -n <namespace> --backend argocd --argocd-app application.yaml --expected-digest <digest>
+llmd status <instance> -n <namespace>
+llmd teardown <instance> -n <namespace>
+```
+
+The Application's sources follow what the plan rendered, so no layout is written into `llmd`:
+
+- a kustomize stack, or a kustomize directory a guide applies: a Git source at that directory;
+- manifest files: a Git source of their directory that includes those files;
+- a Helm chart a guide installs: the same `oci://` chart and version, or the chart's directory in the checkout.
+  Its values files come from the checkout, and `--set` values become Helm parameters.
+
+Every Git source names the commit the plan rendered (`--argocd-revision BRANCH` follows a branch instead), from
+the source's remote URL (`--argocd-remote`, default `origin`, for a local checkout). The plan's digest covers the
+Application.
+
+`plan` checks what Argo CD would see and allow:
+
+- the stack's files (and the bases they include) are committed, and the commit is on a remote branch;
+- the cluster serves Applications, and you may read, create and patch them where the template puts them;
+- the Application's AppProject, read where Argo CD runs (`--argocd-namespace`, default the Application's
+  namespace): its repositories, destinations, source namespaces and the kinds the stack renders. A project you
+  may not read is not checked;
+- an object another Application already owns.
+
+Argo CD applies the files as they are, so a plan also reports what it would do differently from `llmd`:
+
+- objects written for another namespace block. `llmd` moves them; Argo CD applies them where they say. Point the
+  stack at an overlay written for the target namespace;
+- cluster-scoped objects and SCC bindings are reported, because the Application applies them too; the project
+  decides whether it may;
+- a chart version that is a tag rather than a release (`v0`) can move to a newer build without a new commit.
+
+`standup` records the instance first, applies the Application and waits for Argo CD to sync it, then records the
+objects Argo CD reports it manages. `status` adds the Application's sync status, health and revision; the instance
+is Ready only once the Application is synced to the planned revision. `list` shows each instance's backend.
+
+`teardown` deletes the Application, and its resources finalizer makes Argo CD delete what it deployed. A claim
+without `argocd.argoproj.io/sync-options: Delete=false` would be deleted too, so `teardown` refuses unless you pass
+`--delete-volumes`. `--forget` takes the finalizer off first, so every object is left running.
+
+Changes go through the Application too, since Argo CD's next sync would undo a change made beside it:
+
+- `llmd scale` keeps the count on the Application (kustomize `replicas` for a Deployment or StatefulSet, a
+  kustomize patch for a LeaderWorkerSet) and syncs it. `llmd` has no way to keep the count of a DisaggregatedSet
+  role, or of a workload a chart or plain files render, on the Application; commit the count instead;
+- `llmd rollouts start` points the Application at the new commit and syncs it; `abort` points it back. Drainers,
+  floors and `--watch` work as for the direct backend.
+
+Both rebuild the Application from the live one, so they need no `--argocd-app`, and they keep any change an
+administrator made to its project or policy.
+
+An Application someone else made (by hand, or an app-of-apps) can be recorded without changing it:
+
+```sh
+llmd import <stack> -n <namespace> --backend argocd --argocd-app application.yaml \
+  --argocd-application <argocd-namespace>/<application> --dry-run
+```
+
+It is recorded only when it delivers that stack to that namespace (`--allow-drift` records it anyway). `llmd` then only reads it:
+`status` shows it, and `teardown --forget` drops the record.
+
+An administrator can check the Argo CD install itself, read-only:
+
+```sh
+llmd admin argocd check -n <argocd-namespace>
+llmd admin argocd check <stack> --target <namespace> --argocd-app application.yaml --project-yaml project.yaml
+```
+
+The first reads `argocd-cm` (a kustomization with `helmCharts` needs `--enable-helm` in `kustomize.buildOptions`;
+label tracking hides which Application owns an object) and the namespaces Argo CD reconciles Applications in. The
+second also checks the stack's Application against its project, and writes the AppProject as it would admit it, for
+the administrator to review and apply. `llmd` does not apply it.
+
 ## Development
 
 ```sh
@@ -248,5 +349,5 @@ python3 -m venv .venv
 ```
 
 The tests use an in-memory cluster (`tests/fakes.py`). It answers the kubectl calls `llmd` makes and acts as
-the Deployment and lws controllers. Git, kustomize and Helm run for real, against a small checkout in llm-d's
+the Deployment and lws controllers, and as the Argo CD controller for an Application's sync and deletion. Git, kustomize and Helm run for real, against a small checkout in llm-d's
 layout (`tests/data/llmd`).
