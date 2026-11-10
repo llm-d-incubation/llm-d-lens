@@ -6,12 +6,22 @@ import argparse
 from pathlib import Path
 
 from .. import catalog, companions, inventory, yamlio
+from ..argocd import delivery
 from ..errors import PolicyError, UsageError
 from ..kube import Kube
 from ..plan import Options, Plan, discovered_scope, make_plan
 from ..policy import fallback_scope
 from ..preflight import preflight
-from . import Context, Handler, add_source_arguments, add_target_arguments, parse_variables, progress
+from . import (
+    Context,
+    Handler,
+    add_backend_arguments,
+    add_source_arguments,
+    add_target_arguments,
+    argocd_settings,
+    parse_variables,
+    progress,
+)
 
 
 def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
@@ -58,6 +68,7 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         help="let an instance that runs another stack path move to this one, in place: objects it shares "
         "are updated, objects it no longer renders are deleted",
     )
+    add_backend_arguments(parser)
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -100,6 +111,16 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
     return plan
 
 
+def check_plan(ctx: Context, kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
+    """The plan's cluster checks for its backend: llmd applies the objects, or Argo CD applies them from
+    the Application, which is checked instead of a dry run."""
+    settings = argocd_settings(ctx.args)
+    if settings is None:
+        preflight(kube, plan, existing=existing)
+    else:
+        delivery.check(kube, plan, settings, ctx.runner, existing=existing)
+
+
 def _discovered_scope(kube: Kube):
     return discovered_scope(kube)
 
@@ -108,8 +129,10 @@ def command_plan(ctx: Context) -> int:
     kube = None if ctx.args.offline else ctx.kube()
     plan = plan_from_args(ctx, kube)
     if kube is not None:
-        preflight(kube, plan)
+        check_plan(ctx, kube, plan)
         companions.check(kube, plan, ctx.runner)
+    elif argocd_settings(ctx.args) is not None:
+        delivery.attach(plan, argocd_settings(ctx.args), ctx.runner)
     if ctx.args.manifest:
         yamlio.write_text_atomic(Path(ctx.args.manifest), yamlio.dump_documents(plan.documents))
     if ctx.args.admin_yaml:
@@ -120,6 +143,20 @@ def command_plan(ctx: Context) -> int:
     else:
         print_plan(plan)
     return PolicyError.exit_code if plan.blocking else 0
+
+
+def print_delivery(plan: Plan) -> None:
+    """The Application a plan for Argo CD submits."""
+    application = plan.delivery
+    metadata, spec = application["metadata"], application["spec"]
+    print(f"\nArgo CD Application {metadata['namespace']}/{metadata['name']} (project {spec['project']})")
+    destination = spec["destination"]
+    print(f"  destination {destination.get('name') or destination.get('server')}, namespace {destination['namespace']}")
+    for source in spec.get("sources") or [spec["source"]]:
+        where = source.get("path") or source.get("chart") or f"ref {source.get('ref')}"
+        print(f"  source {source['repoURL']} {where} @ {source.get('targetRevision', '')}")
+    automated = ((spec.get("syncPolicy") or {}).get("automated")) is not None
+    print("  sync: " + ("automated by Argo CD" if automated else "started once by standup"))
 
 
 def print_plan(plan: Plan) -> None:
@@ -175,5 +212,7 @@ def print_plan(plan: Plan) -> None:
             print(f"  {finding['severity'].upper():<8} {finding['message']}")
             if finding.get("hint"):
                 print(f"           hint: {finding['hint']}")
+    if plan.delivery:
+        print_delivery(plan)
     print(f"\nDigest {summary['digest'][: yamlio.SHORT_DIGEST]}")
     print("Result " + (f"BLOCKED by {summary['blocking']} finding(s)" if summary["blocking"] else "ready to stand up"))

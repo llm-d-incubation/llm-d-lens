@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from .. import inventory, lifecycle
+from ..argocd import delivery
 from . import Context, Handler, add_target_arguments
 
 
@@ -29,6 +30,8 @@ def command_teardown(ctx: Context) -> int:
     namespace = ctx.namespace(kube)
     record = inventory.require(kube, namespace, args.instance)
     imported = inventory.management(record) == inventory.IMPORTED
+    if delivery.is_argocd(record):
+        return _teardown_argocd(ctx, record)
     if args.forget:
         question = f"Stop managing {args.instance} in {namespace}? Its objects are left running. [y/N] "
     else:
@@ -54,4 +57,36 @@ def command_teardown(ctx: Context) -> int:
         print(f"  kept {item} (--delete-volumes removes it)")
     for item in result["skipped"]:
         print(f"  skipped {item}: it was replaced or taken over since standup")
+    return 0
+
+
+def _teardown_argocd(ctx: Context, record: dict) -> int:
+    """Delete the instance's Argo CD Application, so Argo CD deletes what it deployed."""
+    args = ctx.args
+    where, name = delivery.application_ref(record)
+    if args.forget:
+        question = f"Stop managing {args.instance}? Application {where}/{name} and its objects stay. [y/N] "
+    else:
+        question = (
+            f"Delete Argo CD Application {where}/{name}? Argo CD deletes the {len(record['objects'])} objects it "
+            f"deployed in {record['namespace']}. [y/N] "
+        )
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("error: refusing to tear down without a terminal to confirm; pass -y", file=sys.stderr)
+            return 2
+        if input(question).strip().lower() not in ("y", "yes"):
+            print("Nothing changed.")
+            return 1
+    kube = ctx.kube()
+    result = delivery.teardown(kube, record, delete_volumes=args.delete_volumes, forget=args.forget)
+    if args.output != "text":
+        ctx.emit(result)
+        return 0
+    if result.get("forgot"):
+        print(f"Stopped managing {args.instance}; Application {result['application']} and its objects are left")
+        return 0
+    print(f"Deleted Argo CD Application {result['application']}; Argo CD deletes what it deployed")
+    for item in result["kept"]:
+        print(f"  kept {item} (marked Delete=false)")
     return 0

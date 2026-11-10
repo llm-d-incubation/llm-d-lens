@@ -41,6 +41,8 @@ DEFAULT_SERVED = {
     "disaggregatedset.x-k8s.io/v1": {"DisaggregatedSet": ("disaggregatedsets", True)},
     "k8s.cni.cncf.io/v1": {"NetworkAttachmentDefinition": ("network-attachment-definitions", True)},
 }
+#: Served once a test calls :meth:`FakeCluster.argocd`.
+ARGOCD_SERVED = {"Application": ("applications", True), "AppProject": ("appprojects", True)}
 
 
 def _fail(message: str) -> Result:
@@ -88,6 +90,10 @@ class FakeCluster:
         self.escalation_check = True
         #: (pod, container) -> what ``kubectl logs --previous`` prints for it.
         self.previous_logs: dict[tuple[str, str], str] = {}
+        #: Act as the Argo CD controller (see :meth:`argocd`): the namespace it runs in, else None.
+        self.argocd_namespace: str | None = None
+        #: (namespace, Application name) -> the objects its sources render, as Argo CD would.
+        self.argocd_renders: dict[tuple[str, str], list[dict]] = {}
 
     # -- helpers for tests ---------------------------------------------------------------------------
     def serve(self, api_version: str, kind: str, plural: str, namespaced: bool = True) -> None:
@@ -117,6 +123,87 @@ class FakeCluster:
 
     def get(self, namespace: str, resource: str, name: str) -> dict | None:
         return self.objects.get((namespace, self._canonical(resource), name))
+
+    # -- the Argo CD controller ----------------------------------------------------------------------
+    def argocd(self, namespace: str = "argocd") -> None:
+        """Serve Argo CD's API and act as its controller in ``namespace``: an Application's ``operation``
+        applies what :attr:`argocd_renders` holds for it, with a tracking annotation, and records the
+        result in its status; deleting an Application with the resources finalizer deletes them."""
+        self.argocd_namespace = namespace
+        self.namespaces.add(namespace)
+        self.served["argoproj.io/v1alpha1"] = dict(ARGOCD_SERVED)
+
+    def project(self, name: str, spec: dict) -> dict:
+        document = {"apiVersion": "argoproj.io/v1alpha1", "kind": "AppProject", "metadata": {"name": name}}
+        return self.put(self.argocd_namespace or "argocd", {**document, "spec": spec})
+
+    def _tracking(self, application: dict) -> str:
+        metadata = application["metadata"]
+        if metadata.get("namespace") == self.argocd_namespace:
+            return metadata["name"]
+        return f"{metadata.get('namespace')}_{metadata['name']}"
+
+    def _sync(self, application: dict) -> None:
+        metadata = application["metadata"]
+        destination = application["spec"]["destination"]["namespace"]
+        operation = application.pop("operation", None) or {}
+        revisions = [source.get("targetRevision", "") for source in _sources(application)]
+        owned = []
+        for document in self.argocd_renders.get((metadata.get("namespace"), metadata["name"]), []):
+            document = copy.deepcopy(document)
+            resource = self.resource_of(document["apiVersion"], document["kind"])
+            name = document["metadata"]["name"]
+            namespaced = self._namespaced(resource)
+            key = (destination if namespaced else "", resource, name)
+            annotations = document["metadata"].setdefault("annotations", {})
+            group = document["apiVersion"].split("/", 1)[0] if "/" in document["apiVersion"] else ""
+            annotations["argocd.argoproj.io/tracking-id"] = (
+                f"{self._tracking(application)}:{group}/{document['kind']}:{key[0]}/{name}"
+            )
+            current = self.objects.get(key)
+            merged = _merge(current or {}, document)
+            merged["metadata"]["namespace"] = key[0] or None
+            merged["metadata"]["uid"] = (current or {}).get("metadata", {}).get("uid") or uuid.uuid4().hex
+            if current and "status" in current:
+                merged["status"] = current["status"]
+            self._bump(merged)
+            self.objects[key] = merged
+            owned.append(
+                {
+                    "group": group,
+                    "version": document["apiVersion"].split("/")[-1],
+                    "kind": document["kind"],
+                    "namespace": key[0],
+                    "name": name,
+                    "status": "Synced",
+                    "health": {"status": "Healthy"},
+                }
+            )
+        revision = revisions[0] if len(revisions) == 1 else ""
+        application["status"] = {
+            "sync": {"status": "Synced", "revision": revision, "revisions": revisions if len(revisions) > 1 else None},
+            "health": {"status": "Healthy"},
+            "resources": owned,
+            "operationState": {"phase": "Succeeded", "operation": operation, "message": "successfully synced"},
+            "reconciledAt": "2026-11-09T00:00:00Z",
+        }
+        if self.controllers:
+            self.settle()
+
+    def _delete_application(self, application: dict) -> None:
+        if "resources-finalizer.argocd.argoproj.io" not in (application["metadata"].get("finalizers") or []):
+            return
+        for item in (application.get("status") or {}).get("resources") or []:
+            api_version = f"{item['group']}/{item['version']}" if item["group"] else item["version"]
+            resource = self.resource_of(api_version, item["kind"])
+            live = self.objects.get((item["namespace"], resource, item["name"]))
+            options = ((live or {}).get("metadata", {}).get("annotations") or {}).get(
+                "argocd.argoproj.io/sync-options", ""
+            )
+            if live is not None and "Delete=false" not in options:
+                removed = self.objects.pop((item["namespace"], resource, item["name"]))
+                if self.controllers:
+                    self._orphans(item["namespace"], removed)
 
     def names(self, namespace: str, resource: str) -> list[str]:
         canonical = self._canonical(resource)
@@ -428,6 +515,9 @@ class FakeCluster:
             if not dry_run:
                 self._bump(merged)
                 self.objects[key] = merged
+                argocd = resource == "applications.argoproj.io" and self.argocd_namespace is not None
+                if argocd and (merged.get("operation") or _automated(merged)):
+                    self._sync(merged)
             out.append(merged)
         if self.controllers and not dry_run:
             self.settle()
@@ -505,6 +595,9 @@ class FakeCluster:
         merged = merge(current, json.loads(self._option(args, "-p")))
         self._bump(merged)
         self.objects[(namespace, resource, args[2])] = merged
+        argocd = resource == "applications.argoproj.io" and self.argocd_namespace is not None
+        if argocd and merged.get("operation"):
+            self._sync(merged)
         return _ok(json.dumps(merged))
 
     def _logs(self, args: list[str], stdin: str) -> Result:
@@ -523,9 +616,21 @@ class FakeCluster:
         if ("delete", resource) in self.denied:
             return _fail(f'Error from server (Forbidden): {resource} is forbidden: User "{self.user}"')
         removed = self.objects.pop((namespace, resource, args[2]), None)
+        if removed and resource == "applications.argoproj.io" and self.argocd_namespace is not None:
+            self._delete_application(removed)
         if self.controllers and removed:
             self._orphans(namespace, removed)
         return _ok(f'{resource} "{args[2]}" deleted\n' if removed else "")
+
+
+def _sources(application: dict) -> list[dict]:
+    spec = application.get("spec") or {}
+    return list(spec.get("sources") or ([spec["source"]] if spec.get("source") else []))
+
+
+def _automated(application: dict) -> bool:
+    automated = ((application.get("spec") or {}).get("syncPolicy") or {}).get("automated")
+    return isinstance(automated, dict) and automated.get("enabled", True) is not False
 
 
 class FakeClusters:
