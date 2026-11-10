@@ -295,6 +295,31 @@ class Kube:
             raise CommandError(f"deleting {resource}/{name} failed: {result.message}")
         return bool(result.stdout.strip())
 
+    def patch(self, resource: str, name: str, namespace: str, body: dict[str, Any]) -> dict[str, Any]:
+        """A JSON merge patch of one namespaced object (``null`` removes a field)."""
+        if not self._namespaced_resource(resource):
+            raise PolicyError(f"refusing to patch {resource}/{name}: it is not a namespaced resource")
+        self._objects.clear()
+        result = self.run(
+            "patch",
+            resource,
+            name,
+            "-n",
+            namespace,
+            "--type",
+            "merge",
+            f"--field-manager={FIELD_MANAGER}",
+            "-p",
+            json.dumps(body, sort_keys=True),
+            "-o",
+            "json",
+            timeout=120,
+        )
+        if not result.ok:
+            raise CommandError(f"patching {resource}/{name} failed: {result.message}")
+        found = yamlio.kubectl_objects(result.stdout)
+        return found[0] if found else {}
+
     def _require_in(self, namespace: str, document: dict[str, Any]) -> None:
         """Refuse an object that would land outside ``namespace``."""
         metadata = document.get("metadata") or {}

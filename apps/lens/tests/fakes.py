@@ -375,6 +375,7 @@ class FakeCluster:
             "get": self._get,
             "delete": self._delete,
             "logs": self._logs,
+            "patch": self._patch,
         }.get(args[0])
         return handler(args, stdin) if handler else _fail(f"fake kubectl does not support {args}")
 
@@ -479,6 +480,32 @@ class FakeCluster:
             and (not fields or self._field_selected(document, fields))
         ]
         return _ok(json.dumps({"kind": "List", "items": items}))
+
+    def _patch(self, args: list[str], stdin: str) -> Result:
+        """``kubectl patch --type merge``: maps merge, ``null`` removes a field, lists are replaced."""
+        resource = self._canonical(args[1])
+        namespace = self._option(args, "-n") if self._namespaced(resource) else ""
+        if ("patch", resource) in self.denied:
+            return _fail(f'Error from server (Forbidden): {resource} is forbidden: User "{self.user}"')
+        current = self.objects.get((namespace, resource, args[2]))
+        if current is None:
+            return _fail(f'Error from server (NotFound): {resource} "{args[2]}" not found')
+
+        def merge(base, patch):
+            if not isinstance(patch, dict):
+                return copy.deepcopy(patch)
+            merged = dict(base) if isinstance(base, dict) else {}
+            for key, value in patch.items():
+                if value is None:
+                    merged.pop(key, None)
+                else:
+                    merged[key] = merge(merged.get(key), value)
+            return merged
+
+        merged = merge(current, json.loads(self._option(args, "-p")))
+        self._bump(merged)
+        self.objects[(namespace, resource, args[2])] = merged
+        return _ok(json.dumps(merged))
 
     def _logs(self, args: list[str], stdin: str) -> Result:
         if ("get", "pods/log") in self.denied:
