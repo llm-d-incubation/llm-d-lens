@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from llm_d_lens.aic.models import AICExperimentResponse, AICSearchResponse, AICSupportResponse
 from llm_d_lens.api.main import app
+from llm_d_lens.estimate_tools.aic.models import AICExperimentResponse, AICSearchResponse, AICSupportResponse
 from llm_d_lens.simulation import candidate_search as candidates
 
 

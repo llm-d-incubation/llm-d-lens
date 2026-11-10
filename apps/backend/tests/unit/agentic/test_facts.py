@@ -826,7 +826,7 @@ def test_resolver_retains_hard_cluster_facts_when_supplementary_sources_fail(mon
         return {"hardware": {"gpuCount": 1, "availableGpuCount": 1, "vramBytes": 32 * 1024**3}}
 
     async def unavailable_aic(_request):
-        from llm_d_lens.aic.service import AICError
+        from llm_d_lens.estimate_tools.aic.service import AICError
 
         raise AICError("offline")
 
@@ -923,7 +923,7 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
 
 def test_load_prediction_failure_is_not_silently_discarded(monkeypatch):
     from llm_d_lens.agentic.facts import _supplementary_evidence
-    from llm_d_lens.aic.service import AICError
+    from llm_d_lens.estimate_tools.aic.service import AICError
 
     async def support(request):
         return SimpleNamespace(supported=True, model_dump=lambda: {"supported": True})
@@ -953,7 +953,7 @@ def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkey
         return {"hardware": {"gpuCount": 4, "availableGpuCount": 4, "vramBytes": 4 * 32 * 1024**3}}
 
     async def unavailable_aic(_request):
-        from llm_d_lens.aic.service import AICError
+        from llm_d_lens.estimate_tools.aic.service import AICError
 
         raise AICError("offline")
 

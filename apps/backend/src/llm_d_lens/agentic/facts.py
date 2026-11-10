@@ -29,8 +29,6 @@ from llm_d_lens.agentic.public_benchmark_record.contracts import (
 from llm_d_lens.agentic.public_benchmark_record.publication_contracts import PublicationError
 from llm_d_lens.agentic.public_benchmark_record.query_contracts import QueryFilters, QueryRequest
 from llm_d_lens.agentic.public_benchmark_record.service import PublicBenchmarkRecordQueryService
-from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
-from llm_d_lens.aic.service import AICError, check_support, search
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.capacity import load_model_config
 from llm_d_lens.cluster import registry
@@ -43,6 +41,8 @@ from llm_d_lens.core.exceptions import (
     UnauthenticatedError,
 )
 from llm_d_lens.db.dao.public_benchmark_record_query import PublicBenchmarkRecordQueryDao
+from llm_d_lens.estimate_tools.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICRequest
+from llm_d_lens.estimate_tools.aic.service import AICError, check_support, search
 from llm_d_lens.hardware.models import HardwareProfile
 from llm_d_lens.hardware.registry import all_profiles
 

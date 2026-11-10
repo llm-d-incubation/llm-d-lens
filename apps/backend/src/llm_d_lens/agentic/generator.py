@@ -23,7 +23,6 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from llm_d_lens.ai_providers.client import AIProviderClientError, AIToolCall, client_for
-from llm_d_lens.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS
 from llm_d_lens.auth.security import sign_internal
 from llm_d_lens.capacity import (
     KVCacheDetail,
@@ -33,6 +32,7 @@ from llm_d_lens.capacity import (
     max_concurrent_requests,
     wrap_config,
 )
+from llm_d_lens.estimate_tools.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS
 from llm_d_lens.hardware.registry import all_profiles
 
 from .facts import (

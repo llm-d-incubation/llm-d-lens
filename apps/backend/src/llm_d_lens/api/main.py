@@ -20,7 +20,6 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from llm_d_lens.agentic.router import router as agentic_deployment_router
 from llm_d_lens.ai_providers.router import router as ai_providers_router
-from llm_d_lens.aic import router as aic_router
 from llm_d_lens.api.problems import install_problem_handlers
 from llm_d_lens.api.speech_models import router as speech_models_router
 from llm_d_lens.api.web import WebEntryMiddleware
@@ -47,6 +46,7 @@ from llm_d_lens.db.system_router import router as system_database_router
 from llm_d_lens.deploy.guide_planning import router as guide_planning_router
 from llm_d_lens.deploy.remote_deploy import router as remote_deploy_router
 from llm_d_lens.deploy.router import router as deploy_router
+from llm_d_lens.estimate_tools.aic import router as aic_router
 from llm_d_lens.evaluation import router as evaluate_router
 from llm_d_lens.hardware.router import router as hardware_router
 from llm_d_lens.infrastructure.kubernetes import router as cluster_router

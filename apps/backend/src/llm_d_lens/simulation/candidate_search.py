@@ -14,9 +14,9 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
-from llm_d_lens.aic import service as aic_service
-from llm_d_lens.aic.models import AICEstimateRequest, AICExperimentRequest, AICRequest
 from llm_d_lens.auth.context import require_route_permission
+from llm_d_lens.estimate_tools.aic import service as aic_service
+from llm_d_lens.estimate_tools.aic.models import AICEstimateRequest, AICExperimentRequest, AICRequest
 
 router = APIRouter(include_in_schema=False)
 logger = logging.getLogger(__name__)

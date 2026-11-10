@@ -1551,7 +1551,7 @@ def test_missing_aic_predictions_estimate_each_supported_candidate_for_ai_scorin
 
 
 def test_relaxed_candidate_keeps_unknown_performance_when_estimate_fails(monkeypatch):
-    from llm_d_lens.aic.service import AICError
+    from llm_d_lens.estimate_tools.aic.service import AICError
 
     async def unavailable(_request):
         raise AICError("no matching topology")

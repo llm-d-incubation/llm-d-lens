@@ -479,7 +479,7 @@ def test_real_saved_backend_artifact_shapes_are_normalized(task, backend):
 async def test_supplementary_evidence_never_reads_unscoped_simulation_history(task, monkeypatch):
     from llm_d_lens.agentic import facts
     from llm_d_lens.agentic.planner import PlanningFacts
-    from llm_d_lens.aic.service import AICError
+    from llm_d_lens.estimate_tools.aic.service import AICError
 
     async def offline(_):
         raise AICError("offline")

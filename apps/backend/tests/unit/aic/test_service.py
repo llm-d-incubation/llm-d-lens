@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from llm_d_lens.aic import service
+from llm_d_lens.estimate_tools.aic import service
 
 
 def estimate_request(**kwargs):

@@ -46,7 +46,7 @@ root with `LENS_DATA_DIR`; configuration payloads use `artifacts/configurations`
 beneath it (default `~/.local/share/lens/artifacts/configurations`). The logical
 file path returned to Deploy is `/configs/<artifact-id>/<file>`.
 
-Resolve uses the in-process capability adapter in `llm_d_lens.aic` after
+Resolve uses the in-process capability adapter in `llm_d_lens.estimate_tools.aic` after
 normalization and before validation. The adapter uses the pinned `aisimulate`
 dependency through its legacy AIC-compatible Python API and does not require a
 separate prediction service.
@@ -120,8 +120,8 @@ Example smoke check (requires access to the model configuration, or a cached cop
 
 ```python
 from importlib.metadata import version
-from llm_d_lens.aic.models import AICRequest
-from llm_d_lens.aic.service import check_support_sync, search_sync
+from llm_d_lens.estimate_tools.aic.models import AICRequest
+from llm_d_lens.estimate_tools.aic.service import check_support_sync, search_sync
 
 print({"aisimulate": version("aisimulate")})
 request = AICRequest(

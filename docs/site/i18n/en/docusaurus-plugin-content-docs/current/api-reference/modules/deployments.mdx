@@ -416,8 +416,8 @@ AISimulate recommendations, including replica counts outside the ordinary candid
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
-    from llm_d_lens.aic.models import AICRequest
-    from llm_d_lens.aic.service import search
+    from llm_d_lens.estimate_tools.aic.models import AICRequest
+    from llm_d_lens.estimate_tools.aic.service import search
 
     result = await search(AICRequest(
         model_name="Qwen/Qwen3-8B", aic_system_name="a100_sxm",
@@ -462,8 +462,8 @@ AISimulate recommendations, including replica counts outside the ordinary candid
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
-    from llm_d_lens.aic.models import AICEstimateRequest
-    from llm_d_lens.aic.service import estimate
+    from llm_d_lens.estimate_tools.aic.models import AICEstimateRequest
+    from llm_d_lens.estimate_tools.aic.service import estimate
 
     result = await estimate(AICEstimateRequest(
         model_name="Qwen/Qwen3-0.6B", scenario="inference_scheduling",

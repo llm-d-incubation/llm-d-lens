@@ -10,8 +10,8 @@
 
 from typing import Any
 
-from llm_d_lens.aic.models import AICRequest
-from llm_d_lens.aic.service import AICError, check_support
+from llm_d_lens.estimate_tools.aic.models import AICRequest
+from llm_d_lens.estimate_tools.aic.service import AICError, check_support
 
 from .models import CandidateConfig
 
