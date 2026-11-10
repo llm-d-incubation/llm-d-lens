@@ -72,6 +72,8 @@ def test_objects_move_into_the_target_namespace_and_references_follow():
     assert rolebinding["subjects"][0]["namespace"] == "team-a"
     assert "host" not in next(doc for doc in result.documents if doc["kind"] == "Route")["spec"]
     assert result.source_namespaces == ["written-for"]
+    assert result.moved == dict.fromkeys(("Deployment/model", "RoleBinding/epp", "Route/api"), "written-for")
+    assert result.rewrites == 3
     assert {"namespace-rewritten", "route-host-dropped"} <= set(codes(result, "info"))
     assert "moved-from-other-namespace" not in codes(result, "warning")
 
@@ -147,6 +149,7 @@ def test_cluster_scoped_objects_and_scc_bindings_are_for_an_administrator():
     result = apply_policy([volume, namespace, scc], context)
     assert result.documents == []
     assert [part["reason"] for part in result.admin_parts] == ["cluster-scoped", "scc-binding"]
+    assert [part["reason"] for part in result.left_out] == ["cluster-scoped", "namespace", "scc-binding"]
     assert codes(result) == ["cluster-scoped", "scc-binding"]
     assert "namespace-dropped" in codes(result, "info")
 
@@ -155,6 +158,7 @@ def test_cluster_scoped_objects_and_scc_bindings_are_for_an_administrator():
 
     allowed = apply_policy([scc], PolicyContext(namespace="team-a", instance="r1", allow_privileged=True))
     assert [doc["kind"] for doc in allowed.documents] == ["RoleBinding"] and not codes(allowed)
+    assert allowed.left_out == []
 
     # An administrator applied the binding; the team acknowledges the privileged pods it admits.
     both = apply_policy(

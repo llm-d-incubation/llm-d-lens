@@ -23,6 +23,8 @@ def test_an_overlay_renders_like_oc_apply_k(llmrepo):
     deployment = next(doc for doc in rendered.documents if doc["kind"] == "Deployment")
     assert deployment["spec"]["replicas"] == 1  # the overlay's own replicas
     assert "examples/model-a/cluster-a" in rendered.command
+    assert [(unit.kind, unit.path) for unit in rendered.units] == [("kustomize", stack.path)]
+    assert rendered.unit_of == {"Service/model-a": 0, "Deployment/model-a": 0}
 
 
 def test_a_manifest_directory_is_read_as_it_is(llmrepo):

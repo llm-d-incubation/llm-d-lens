@@ -19,7 +19,7 @@ from typing import Any
 from . import guides, yamlio
 from .catalog import Stack, manifest_files, uses_helm
 from .errors import CommandError
-from .model import Finding
+from .model import Finding, object_ref
 from .process import Runner, available, display
 
 
@@ -44,6 +44,11 @@ class Rendered:
     steps: list[dict[str, str]] = field(default_factory=list)
     variables: dict[str, str] = field(default_factory=dict)
     findings: list[Finding] = field(default_factory=list)
+    #: What was rendered, in order: a guide's Helm charts, kustomize directories and manifest files, or
+    #: the stack itself. A delivery that renders the stack again elsewhere (Argo CD) starts from these.
+    units: list[guides.Unit] = field(default_factory=list)
+    #: ``Kind/name`` -> the index in ``units`` of the unit that rendered the object.
+    unit_of: dict[str, int] = field(default_factory=dict)
 
 
 def _short(message: str, limit: int = 1200) -> str:
@@ -102,25 +107,31 @@ def render(
     """``namespace``, ``variables`` (``--var``) and ``sets`` (``--set``, for every Helm chart the guide
     installs) matter for a guide only."""
     tools = tools or Tools()
-    if stack.kind == "manifests":
-        return Rendered(*_manifests(stack.path, stack.id))
-    if stack.kind == "kustomize":
-        return Rendered(*_kustomize(stack.path, stack.id, runner, tools))
+    if stack.kind in ("manifests", "kustomize"):
+        if stack.kind == "manifests":
+            documents, command = _manifests(stack.path, stack.id)
+        else:
+            documents, command = _kustomize(stack.path, stack.id, runner, tools)
+        unit = guides.Unit(stack.kind, stack.id, path=stack.path)
+        return Rendered(documents, command, units=[unit], unit_of=dict.fromkeys(map(object_ref, documents), 0))
     root = stack.source.root
     guide = guides.load_guide(stack.path, stack.id)
     followed = guides.follow(guide, root, namespace=namespace, overrides=dict(variables or {}))
     documents: list[dict[str, Any]] = []
     commands = []
+    unit_of: dict[str, int] = {}
     if not any(finding.severity == "error" for finding in followed.findings):
-        for unit in followed.units:
+        for index, unit in enumerate(followed.units):
             if unit.kind == "helm":
-                documents.extend(_helm(unit, namespace, root, runner, tools, list(sets or [])))
+                found = _helm(unit, namespace, root, runner, tools, list(sets or []))
             elif unit.kind == "kustomize":
                 label = unit.path.resolve().relative_to(root.resolve()).as_posix()
-                documents.extend(_kustomize(unit.path, label, runner, tools)[0])
+                found = _kustomize(unit.path, label, runner, tools)[0]
             else:
                 label = unit.path.resolve().relative_to(root.resolve()).as_posix()
-                documents.extend(_manifests(unit.path, label)[0])
+                found = _manifests(unit.path, label)[0]
+            documents.extend(found)
+            unit_of.update(dict.fromkeys(map(object_ref, found), index))
             extra = "".join(f" --set {value}" for value in sets or []) if unit.kind == "helm" else ""
             commands.append(guides.describe_unit(unit, root) + extra)
     return Rendered(
@@ -129,4 +140,6 @@ def render(
         steps=followed.steps,
         variables=followed.variables,
         findings=followed.findings,
+        units=list(followed.units),
+        unit_of=unit_of,
     )

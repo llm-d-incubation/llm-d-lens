@@ -13,6 +13,7 @@ from typing import Any
 
 from . import overrides, yamlio
 from .catalog import Stack
+from .guides import Unit
 from .model import Finding, object_ref, validate_instance_name, validate_namespace
 from .policy import PolicyContext, PolicyResult, ScopeResolver, apply_policy, fallback_scope
 from .process import Runner
@@ -77,6 +78,9 @@ class Plan:
     #: For a guide: how each of its steps was followed, and the variables they saw.
     steps: list[dict[str, str]] = field(default_factory=list)
     variables: dict[str, str] = field(default_factory=dict)
+    #: What was rendered, in order, and which of them rendered each object (``Rendered.units``).
+    units: list[Unit] = field(default_factory=list)
+    unit_of: dict[str, int] = field(default_factory=dict)
 
     @property
     def digest(self) -> str:
@@ -165,4 +169,6 @@ def make_plan(
         policy=policy,
         steps=rendered.steps,
         variables=rendered.variables,
+        units=rendered.units,
+        unit_of=rendered.unit_of,
     )
