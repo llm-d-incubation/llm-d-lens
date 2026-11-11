@@ -850,7 +850,17 @@ def test_resolver_retains_hard_cluster_facts_when_supplementary_sources_fail(mon
 
 
 @pytest.mark.parametrize("target", [None, "concurrency", "request_rate"])
-def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monkeypatch, target):
+@pytest.mark.parametrize(
+    "models,system",
+    [
+        (["NVIDIA A100"], "a100_sxm"),
+        (["NVIDIA A100", "ampere"], "a100_sxm"),
+        (["NVIDIA-A100-80GB-PCIe", "ampere"], "a100_pcie"),
+        (["NVIDIA H100 PCIe"], "h100_pcie"),
+        (["NVIDIA H100 SXM"], "h100_sxm"),
+    ],
+)
+def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monkeypatch, target, models, system):
     monkeypatch.setenv("AGENTIC_TEST_CLUSTER_HARDWARE_OVERRIDES", '{"cluster-a":"H100"}')
     monkeypatch.setenv("AGENTIC_TEST_CLUSTER_VRAM_GIB_OVERRIDES", '{"cluster-a":80}')
     monkeypatch.setattr(
@@ -863,7 +873,7 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
                 "gpuCount": 4,
                 "availableGpuCount": 4,
                 "vramBytes": 4 * 32 * 1024**3,
-                "accelerators": [{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA A100"]}],
+                "accelerators": [{"id": "nvidia", "gpuCount": 4, "models": models}],
             }
         }
 
@@ -907,8 +917,9 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
         )
     )
 
-    assert captured["request"].aic_system_name == "a100_sxm"
-    assert resolved.facts.requirements.hardware.device_model == "A100"
+    assert captured["request"].aic_system_name == system
+    assert captured["request"].aic_database_mode == "SILICON"
+    assert resolved.facts.requirements.hardware.device_model == ("H100" if "h100" in system else "A100")
     assert resolved.facts.free_gpu_count == 4
     assert resolved.facts.vram_per_gpu_gib == 32
     assert captured["request"].mean_input_tokens == 4096
@@ -921,7 +932,9 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
     assert resolved.facts.aic_predictions[0].ttft_ms == 300
 
 
-def test_load_prediction_failure_is_not_silently_discarded(monkeypatch):
+@pytest.mark.parametrize("load_target", [True, False])
+@pytest.mark.parametrize("empty", [True, False])
+def test_load_prediction_failure_is_not_silently_discarded(monkeypatch, load_target, empty):
     from llm_d_lens.agentic.facts import _supplementary_evidence
     from llm_d_lens.estimate_tools.aic.service import AICError
 
@@ -929,19 +942,54 @@ def test_load_prediction_failure_is_not_silently_discarded(monkeypatch):
         return SimpleNamespace(supported=True, model_dump=lambda: {"supported": True})
 
     async def search(request):
+        assert request.aic_system_name == "a100_pcie"
+        assert request.aic_database_mode == "SILICON"
+        if empty:
+            return SimpleNamespace(model_dump=lambda: {"configs": []})
         raise AICError("Minimum recommended GPUs: 8; selected GPU budget: 4")
 
     monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", support)
     monkeypatch.setattr("llm_d_lens.agentic.facts.search", search)
-    with pytest.raises(ValueError, match="AIC load-target prediction failed: Minimum recommended GPUs: 8"):
-        asyncio.run(
-            _supplementary_evidence(
-                "model",
-                PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(request_rate=10)),
-                4,
-                {"accelerators": [{"id": "nvidia", "models": ["NVIDIA A100"]}]},
-            )
+
+    async def resolve():
+        return await _supplementary_evidence(
+            "model",
+            PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(request_rate=10 if load_target else None)),
+            4,
+            {"accelerators": [{"id": "nvidia", "models": ["NVIDIA A100 PCIe", "ampere"]}]},
         )
+
+    if load_target:
+        with pytest.raises(ValueError, match="AIC load-target prediction failed"):
+            asyncio.run(resolve())
+    else:
+        evidence = asyncio.run(resolve())
+        assert next(item for item in evidence if item.id == "aic:support").status == "available"
+        failure = next(item for item in evidence if item.id == "aic:search")
+        assert failure.status == "unavailable"
+        assert failure.details == {
+            "reason": "aic_prediction_unavailable",
+            "system": "a100_pcie",
+            "database_mode": "SILICON",
+        }
+
+
+@pytest.mark.parametrize("models", [["ampere"], ["A100 PCIe", "unknown"], ["A100 PCIe", "A100 SXM"]])
+def test_aic_mapping_refuses_unknown_and_mixed_models(monkeypatch, models):
+    from llm_d_lens.agentic.facts import _supplementary_evidence
+
+    async def support(request):
+        pytest.fail("Ambiguous hardware must not reach AISimulate")
+
+    monkeypatch.setattr("llm_d_lens.agentic.facts.check_support", support)
+    evidence = asyncio.run(
+        _supplementary_evidence(
+            "model", PlanningFacts(8, 32, 4), 4, {"accelerators": [{"id": "nvidia", "models": models}]}
+        )
+    )
+    failure = next(item for item in evidence if item.id == "aic:support")
+    assert failure.status == "unavailable"
+    assert failure.details["reason"] == "hardware_mapping_unavailable"
 
 
 def test_resolver_does_not_persist_simulation_with_current_planning_facts(monkeypatch):

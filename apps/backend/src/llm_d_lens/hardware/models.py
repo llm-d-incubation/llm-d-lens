@@ -7,7 +7,8 @@ dataclasses for typed internal use, and provides the API response contract.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -320,6 +321,22 @@ class PlanningContribution:
     node_memory: Mapping[str, str] = field(default_factory=dict)
     default_backend: str = "vllm"
     device_class_allow_pattern: str = ""
+
+    def aic_system_for_models(self, models: Iterable[str]) -> str | None:
+        families = {name.lower() for name in self.model_family_names}
+        systems = set()
+        for model in models:
+            if model.strip().lower() in families:
+                continue
+            matches = {
+                row["system"]
+                for row in self.aic_system_models
+                if row.get("pattern") and re.search(row["pattern"], model, re.IGNORECASE)
+            }
+            if len(matches) != 1:
+                return None
+            systems.update(matches)
+        return next(iter(systems)) if len(systems) == 1 else None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> PlanningContribution:

@@ -731,18 +731,13 @@ async def _supplementary_evidence(
     hardware: dict[str, Any],
 ) -> list[PlanningEvidence]:
     evidence: list[PlanningEvidence] = []
+    aic_details: dict[str, Any] = {"reason": "hardware_mapping_unavailable"}
     try:
         profiles = {profile.id: profile for profile in all_profiles()}
         systems = []
         for accelerator in hardware.get("accelerators", []):
             profile = profiles.get(accelerator.get("id"))
-            for model in accelerator.get("models") or [""]:
-                matches = {
-                    row["system"]
-                    for row in (profile.planning.aic_system_models if profile else ())
-                    if row.get("pattern") and re.search(row["pattern"], model, re.IGNORECASE)
-                }
-                systems.append(next(iter(matches)) if len(matches) == 1 else None)
+            systems.append(profile.planning.aic_system_for_models(accelerator.get("models") or []) if profile else None)
         if not systems or None in systems or len(set(systems)) != 1:
             raise ValueError("Cluster hardware does not identify a single supported AIC system")
         request = AICRequest(
@@ -761,6 +756,11 @@ async def _supplementary_evidence(
             tpot_target_ms=facts.tpot_slo_ms,
             max_candidates=3,
         )
+        aic_details = {
+            "reason": "aic_support_unavailable",
+            "system": request.aic_system_name,
+            "database_mode": request.aic_database_mode,
+        }
         support = await check_support(request)
         evidence.append(
             PlanningEvidence(
@@ -771,13 +771,17 @@ async def _supplementary_evidence(
             )
         )
         if support.supported:
+            aic_details["reason"] = "aic_prediction_unavailable"
             prediction = await search(request)
+            prediction_data = prediction.model_dump()
+            if not prediction_data.get("configs"):
+                raise AICError("AISimulate returned no predictions for the requested system and database mode")
             evidence.append(
                 PlanningEvidence(
                     id="aic:search",
                     source="aic",
                     status="available",
-                    details=prediction.model_dump(),
+                    details=prediction_data,
                 )
             )
         elif facts.workload_profile and (
@@ -791,7 +795,14 @@ async def _supplementary_evidence(
             facts.workload_profile.concurrency is not None or facts.workload_profile.request_rate is not None
         ):
             raise ValueError(f"AIC load-target prediction failed: {error}") from error
-        evidence.append(PlanningEvidence(id="aic:support", source="aic", status="unavailable"))
+        evidence.append(
+            PlanningEvidence(
+                id="aic:search" if aic_details["reason"] == "aic_prediction_unavailable" else "aic:support",
+                source="aic",
+                status="unavailable",
+                details=aic_details,
+            )
+        )
     evidence.extend(
         PlanningEvidence(
             id=identity,

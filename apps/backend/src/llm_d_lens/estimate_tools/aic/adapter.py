@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import math
-import re
 from importlib.metadata import PackageNotFoundError, version
 
 from llm_d_lens.hardware.errors import HardwareProfileNotFoundError
@@ -52,10 +51,7 @@ def system_name(request: Request) -> str | None:
         profile = get_profile(request.hardware.profile_id)
     except HardwareProfileNotFoundError:
         return None
-    for mapping in profile.planning.aic_system_models:
-        if re.search(mapping["pattern"], request.hardware.model, re.IGNORECASE):
-            return mapping["system"]
-    return None
+    return profile.planning.aic_system_for_models([request.hardware.model])
 
 
 def representation_problem(request: Request) -> Problem | None:
