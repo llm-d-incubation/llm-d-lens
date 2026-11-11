@@ -44,7 +44,19 @@ test('picks the per-vendor runtime image from the cluster hardware', () => {
   assert.notEqual(runtimeImageForHardware(gpu), DEFAULT_RUNTIME_IMAGES.xpu);
   assert.equal(runtimeImageForHardware({ accelerators: [] }), null);
   assert.equal(runtimeImageForHardware(null), null);
-  assert.equal(aicSystemNameForHardware(gpu), 'a100_sxm');
+  assert.equal(aicSystemNameForHardware(gpu), 'a100_pcie');
   assert.equal(aicSystemNameForHardware(xpu), 'b60');
   assert.equal(aicSystemNameForHardware({ accelerators: [{ id: 'nvidia', model: 'Unknown GPU' }] }), null);
+});
+
+test('preserves PCIe and SXM hardware identities for AIC', () => {
+  for (const [model, system] of [
+    ['NVIDIA-A100-80GB-PCIe', 'a100_pcie'],
+    ['NVIDIA-A100-80GB-SXM', 'a100_sxm'],
+    ['NVIDIA-H100-80GB-PCIe', 'h100_pcie'],
+    ['NVIDIA-H100-80GB-SXM', 'h100_sxm'],
+  ]) {
+    const hardware = { accelerators: [{ id: 'nvidia', models: [model] }] };
+    assert.equal(aicSystemNameForHardware(hardware), system);
+  }
 });
