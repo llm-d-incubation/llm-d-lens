@@ -373,6 +373,9 @@ def _compile_bundle(
     documents = _deployment_documents(request, profile)
     if isinstance(documents, Problem):
         return documents
+    workload = _compile_workload(request.workload, request.run)
+    if isinstance(workload, Problem):
+        return workload
     runtime = availability(profile)
     if not runtime.available:
         return runtime.reason or Problem(code="runtime_unavailable", message="Managed BLIS runtime is unavailable")
@@ -415,6 +418,7 @@ def _compile_bundle(
             yaml.safe_dump_all((scenario, deployment), sort_keys=False),
             encoding="utf-8",
         )
+        (inputs / "workload.yaml").write_text(yaml.safe_dump(workload, sort_keys=False), encoding="utf-8")
         snapshot = {
             "request": request.model_dump(mode="json"),
             "effective_configuration": EffectiveConfiguration.from_request(request).model_dump(mode="json"),
@@ -445,6 +449,10 @@ def _compile_bundle(
                 "inputs/catalog",
                 "--registry",
                 "inputs/registry",
+                "--workload-spec",
+                "inputs/workload.yaml",
+                "--seed",
+                str(request.run.seed),
                 "--num-instances",
                 str(request.configuration.roles[0].replicas),
             ],
