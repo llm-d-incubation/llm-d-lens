@@ -215,12 +215,19 @@ def test_compile_native_concurrency_has_no_rate_conversion():
         ({"request_rate": None, "concurrency": 2**63}, {}, "concurrency_out_of_range"),
     ],
 )
-def test_compile_workload_rejects_unrepresentable_semantics(workload_changes, run_changes, code):
+def test_compile_workload_rejects_unrepresentable_semantics(
+    bundle_profile, tmp_path, workload_changes, run_changes, code
+):
     workload = Workload.model_validate({"distribution": "constant", "request_rate": 2, **workload_changes})
     run = RunControls.model_validate({"seed": 42, "num_requests": 8, "horizon_s": 60, **run_changes})
     result = _compile_workload(workload, run)
     assert isinstance(result, Problem)
     assert result.code == code
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    request.workload, request.run = workload, run
+    destination = tmp_path / "bundle"
+    assert _compile_bundle(request, bundle_profile, destination) == result
+    assert not destination.exists()
 
 
 def test_bundle_does_not_prune_using_an_unverified_memory_estimate(bundle_profile, tmp_path):
@@ -237,6 +244,7 @@ def bundle_profile(profile):
     profile.verified_request.hardware.fabric = "public-fabric"
     profile.verified_request.configuration.engine_version = "0.32.0"
     profile.verified_request.configuration.engine_settings = {"max_num_seqs": 64}
+    profile.verified_request.run = RunControls(seed=42, num_requests=8, horizon_s=60, request_deadline_s=30)
     for relative in (
         "catalog/models/fixture-model/graph.yaml",
         "catalog/hardware/fixture-hardware.yaml",
@@ -278,6 +286,11 @@ def test_bundle_is_relocatable_and_records_exact_inputs(bundle_profile, tmp_path
     snapshot = json.loads((destination / "effective-input.json").read_text())
     assert snapshot["request"] == request.model_dump(mode="json")
     assert snapshot["num_instances"] == 2
+    assert bundle.arguments[bundle.arguments.index("--workload-spec") + 1] == "inputs/workload.yaml"
+    assert yaml.safe_load((destination / "inputs/workload.yaml").read_text()) == _compile_workload(
+        request.workload, request.run
+    )
+    assert "inputs/workload.yaml" in bundle.file_digests
     assert bundle.input_digest == tree_digest(destination / "inputs")
     assert json.loads((destination / "manifest.json").read_text()) == bundle.model_dump(mode="json")
     assert all(file_digest(destination / name) == digest for name, digest in bundle.file_digests.items())
@@ -370,6 +383,33 @@ def test_bundle_digests_are_deterministic_and_configuration_sensitive(bundle_pro
     assert changed.input_digest != first.input_digest
 
 
+@pytest.mark.parametrize(
+    "workload_changes,run_changes",
+    [
+        ({"request_rate": 2.5}, {}),
+        ({"request_rate": None, "concurrency": 3}, {}),
+        ({"prefix_tokens": 32}, {}),
+        ({"output_tokens": 32}, {}),
+        ({}, {"seed": 0}),
+        ({}, {"num_requests": 5}),
+        ({}, {"horizon_s": 60.25}),
+        ({}, {"request_deadline_s": 30.125}),
+    ],
+)
+def test_bundle_digests_include_workload_and_run_controls(bundle_profile, tmp_path, workload_changes, run_changes):
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    first = _compile_bundle(request, bundle_profile, tmp_path / "first")
+    assert not isinstance(first, Problem)
+    request.workload = Workload.model_validate({**request.workload.model_dump(), **workload_changes})
+    request.run = RunControls.model_validate({**request.run.model_dump(), **run_changes})
+    changed = _compile_bundle(request, bundle_profile, tmp_path / "changed")
+    assert not isinstance(changed, Problem)
+    assert changed.configuration_fingerprint == first.configuration_fingerprint
+    assert changed.input_digest != first.input_digest
+    assert changed.file_digests["inputs/workload.yaml"] != first.file_digests["inputs/workload.yaml"]
+    assert changed.arguments[changed.arguments.index("--seed") + 1] == str(request.run.seed)
+
+
 def test_bundle_refuses_existing_destination_without_overwriting(bundle_profile, tmp_path):
     destination = tmp_path / "bundle"
     destination.mkdir()
@@ -418,32 +458,6 @@ def test_generated_bundle_with_locked_runtime(tmp_path, tp, pp, dp, nodes, devic
             str(profile.binary),
             "run",
             *bundle.arguments,
-            "--num-requests",
-            "8",
-            "--seed",
-            "42",
-            "--horizon",
-            "60000000",
-            "--rate",
-            "2",
-            "--prompt-tokens",
-            "128",
-            "--prompt-tokens-stdev",
-            "0",
-            "--prompt-tokens-min",
-            "128",
-            "--prompt-tokens-max",
-            "128",
-            "--output-tokens",
-            "32",
-            "--output-tokens-stdev",
-            "0",
-            "--output-tokens-min",
-            "32",
-            "--output-tokens-max",
-            "32",
-            "--timeout",
-            "30",
             "--format",
             "json",
             "--log",
@@ -469,44 +483,38 @@ def test_generated_bundle_with_locked_runtime(tmp_path, tp, pp, dp, nodes, devic
     assert bundle.input_digest == tree_digest(moved / "inputs")
 
 
-@pytest.mark.parametrize("load", [{"request_rate": 2}, {"request_rate": 4}, {"concurrency": 3}])
-@pytest.mark.parametrize("includes_prefix,input_tokens", [(True, 128), (False, 96)])
-def test_compiled_workload_with_locked_runtime(tmp_path, load, includes_prefix, input_tokens):
+@pytest.mark.parametrize("load", [{"request_rate": 2.5}, {"request_rate": 4}, {"concurrency": 3}])
+@pytest.mark.parametrize(
+    "includes_prefix,input_tokens,prefix_tokens", [(True, 128, 32), (False, 96, 32), (True, 128, 0)]
+)
+@pytest.mark.parametrize("seed,num_requests,horizon_s,deadline_s", [(42, 8, 60, 30), (0, 5, 60.25, 30.125)])
+def test_compiled_workload_with_locked_runtime(
+    tmp_path, load, includes_prefix, input_tokens, prefix_tokens, seed, num_requests, horizon_s, deadline_s
+):
     binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
     if not binary or not inputs:
         pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
     profile = baseline_profile(binary=Path(binary).resolve(), inputs=Path(inputs).resolve())
-    assert availability(profile).available
-    shutil.copytree(profile.inputs, tmp_path / "inputs")
-    spec = _compile_workload(
-        Workload(
-            distribution="constant",
-            input_tokens=input_tokens if "request_rate" in load else 128,
-            output_tokens=32,
-            prefix_tokens=32 if "request_rate" in load else 0,
-            input_includes_prefix=includes_prefix,
-            **load,
-        ),
-        RunControls(seed=42, num_requests=8, horizon_s=60, request_deadline_s=30),
+    request = profile.verified_request.model_copy(deep=True)
+    request.workload = Workload(
+        distribution="constant",
+        input_tokens=input_tokens if prefix_tokens and "request_rate" in load else 128,
+        output_tokens=32,
+        prefix_tokens=prefix_tokens if "request_rate" in load else 0,
+        input_includes_prefix=includes_prefix,
+        **load,
     )
-    assert not isinstance(spec, Problem)
-    (tmp_path / "workload.yaml").write_text(yaml.safe_dump(spec), encoding="utf-8")
+    request.run = RunControls(seed=seed, num_requests=num_requests, horizon_s=horizon_s, request_deadline_s=deadline_s)
+    source = tmp_path / "bundle"
+    bundle = _compile_bundle(request, profile, source)
+    assert not isinstance(bundle, Problem), bundle
+    moved = tmp_path / "relocated"
+    shutil.move(source, moved)
     completed = subprocess.run(
         [
             str(profile.binary),
             "run",
-            "--scenarios",
-            "inputs/scenarios",
-            "--scenario",
-            "muse-h100-roce-armB.yaml",
-            "--catalog",
-            "inputs/catalog",
-            "--registry",
-            "inputs/registry",
-            "--num-instances",
-            "1",
-            "--workload-spec",
-            "workload.yaml",
+            *bundle.arguments,
             "--trace-output",
             "generated",
             "--format",
@@ -514,7 +522,7 @@ def test_compiled_workload_with_locked_runtime(tmp_path, load, includes_prefix, 
             "--log",
             "warn",
         ],
-        cwd=tmp_path,
+        cwd=moved,
         env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "GOMAXPROCS": "1"},
         capture_output=True,
         text=True,
@@ -525,25 +533,34 @@ def test_compiled_workload_with_locked_runtime(tmp_path, load, includes_prefix, 
     result = json.JSONDecoder().raw_decode(completed.stdout.lstrip())[0]
     assert result["kind"] == "Result"
     assert result["schema_version"] == 1
+    documents = list(yaml.safe_load_all((moved / "inputs/scenarios/deployment.yaml").read_text()))
+    assert result["input"]["scenario"] == documents[0]
+    assert result["input"]["deployment"] == documents[1]
     assert result["input"]["run"]["load"] == load
-    assert result["input"]["run"]["num_requests"] == 8
-    assert result["input"]["run"]["seed"] == 42
-    assert result["input"]["run"]["horizon_s"] == 60
-    assert result["requests"]["generated"] == 8
-    assert result["requests"]["completed"] == 8
-    with (tmp_path / "generated.csv").open(encoding="utf-8", newline="") as stream:
+    assert result["input"]["run"]["num_requests"] == num_requests
+    assert result["input"]["run"]["seed"] == seed
+    assert result["input"]["run"]["horizon_s"] == horizon_s
+    assert result["requests"]["generated"] == num_requests
+    assert result["requests"]["completed"] == num_requests
+    assert bundle.input_digest == tree_digest(moved / "inputs")
+    with (moved / "generated.csv").open(encoding="utf-8", newline="") as stream:
         records = list(csv.DictReader(stream))
-    assert len(records) == 8
+    assert len(records) == num_requests
     assert {int(record["input_tokens"]) + int(record["prefix_length"]) for record in records} == {128}
     assert {int(record["output_tokens"]) for record in records} == {32}
-    assert {int(record["prefix_length"]) for record in records} == {32 if "request_rate" in load else 0}
-    assert {record["prefix_group"] for record in records} == {"lens-shared" if "request_rate" in load else ""}
-    assert {int(record["deadline_us"]) - int(record["arrival_time_us"]) for record in records} == {30_000_000}
+    assert {int(record["prefix_length"]) for record in records} == {request.workload.prefix_tokens}
+    assert {record["prefix_group"] for record in records} == {"lens-shared" if request.workload.prefix_tokens else ""}
+    assert {int(record["deadline_us"]) - int(record["arrival_time_us"]) for record in records} == {
+        int(deadline_s * 1_000_000)
+    }
+    arrivals = [int(record["arrival_time_us"]) for record in records]
     if "request_rate" in load:
-        arrivals = [int(record["arrival_time_us"]) for record in records]
         assert {after - before for before, after in zip(arrivals, arrivals[1:], strict=False)} == {
-            1_000_000 / load["request_rate"]
+            max(1, int(1.0 / (load["request_rate"] / 1_000_000)))
         }
+    else:
+        assert arrivals[: load["concurrency"]] == [0] * load["concurrency"]
+        assert all(arrival > 0 for arrival in arrivals[load["concurrency"] :])
 
 
 @pytest.fixture
