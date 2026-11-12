@@ -12,6 +12,10 @@ admission policy admits the lowering only from its own drain tool: with ``drain`
 command, which drains the groups and lowers the count itself, and records the count once it
 succeeds. Lowering a Deployment, StatefulSet or LeaderWorkerSet is applied directly unless a
 ``drain`` command is given, which then lowers it the same way. Raising is applied directly.
+
+With ``drain_idle`` llmd drains the pods itself before it lowers the count (:mod:`lens.draining`):
+out of the router's pool by the pool label, idle, then removed, a batch at a time. The record
+keeps each count reached, so a drain that stops part way leaves the record true to the cluster.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ import copy
 import sys
 from typing import Any
 
-from . import inventory, overrides
+from . import draining, inventory, overrides
 from .errors import CommandError, ConflictError, PolicyError, UsageError
 from .kube import Kube
 from .model import object_ref
@@ -54,6 +58,7 @@ def scale(
     files: dict[str, int] | None = None,
     drain: str = "",
     no_drain: bool = False,
+    drain_idle: draining.Settings | None = None,
     dry_run: bool = False,
     actor: str = "",
 ) -> dict[str, Any]:
@@ -87,17 +92,18 @@ def scale(
                 "resource": names[object_ref(document)],
                 "from": before,
                 "to": after,
-                "drain": lowers and bool(drain),
+                "drain": lowers and bool(drain or drain_idle),
             }
         )
     for step in steps:
         lowers_role = "/" in step["workload"] and step["from"] is not None and step["to"] < step["from"]
-        if lowers_role and not drain and not no_drain:
+        if lowers_role and not drain and not no_drain and not drain_idle:
             raise UsageError(
                 f"lowering {step['workload']} from {step['from']} to {step['to']} removes serving groups",
-                hint="Pass --no-drain when each pod drains as it stops (the llm-d guides' vLLM overlays do), "
-                "or --drain 'COMMAND' with the stack's drain tool, which lowers the count once the groups "
-                "are out of the pool; fields: {role} {set} {namespace} {source} {count}.",
+                hint="Pass --drain-idle to drain them first, --no-drain when each pod drains as it stops (the "
+                "llm-d guides' vLLM overlays do), or --drain 'COMMAND' with the stack's drain tool, which "
+                "lowers the count once the groups are out of the pool; fields: {workload} {role} {set} "
+                "{namespace} {source} {count}.",
             )
     documents = {object_ref(doc): doc for doc in plan.documents}
     changed = [documents[step["object"]] for step in steps if step["from"] != step["to"] and not step["drain"]]
@@ -107,15 +113,43 @@ def scale(
             kube.apply(unique, plan.namespace, dry_run=True, server_side=not imported)
         return {"instance": plan.instance, "namespace": plan.namespace, "steps": steps, "dryRun": True}
     for step in steps:
-        if step["drain"] and step["from"] != step["to"]:
-            kube.progress(f"draining {step['workload']}: {step['from']} -> {step['to']}")
+        if not step["drain"] or step["from"] == step["to"]:
+            continue
+        kube.progress(f"draining {step['workload']}: {step['from']} -> {step['to']}")
+        if drain_idle is None:
             _run_drain(plan, step, drain, runner)
+            continue
+
+        def reached(count: int, workload: str = step["workload"]) -> None:
+            nonlocal record
+            record = _keep(kube, record, {workload: count}, files, actor)
+
+        draining.lower(
+            kube,
+            plan.namespace,
+            documents[step["object"]],
+            step["resource"],
+            step["workload"],
+            step["from"],
+            step["to"],
+            drain_idle,
+            server_side=not imported,
+            on_lowered=reached,
+        )
     if unique:
         kube.progress(f"applying {', '.join(object_ref(doc) for doc in unique)}")
         kube.apply(unique, plan.namespace, server_side=not imported)
+    record = _keep(kube, record, changes, files, actor)
+    kept = dict(record.get("overrides") or {})
+    return {"instance": plan.instance, "namespace": plan.namespace, "steps": steps, "overrides": kept}
+
+
+def _keep(
+    kube: Kube, record: dict[str, Any], changes: dict[str, int | None], files: dict[str, int], actor: str
+) -> dict[str, Any]:
+    """Write ``changes`` into the record's overrides; a count the stack's files already say needs none."""
     kept = dict(record.get("overrides") or {})
     for workload, count in changes.items():
-        # A count the stack's files already say needs no override.
         if count is None or count == files.get(workload):
             kept.pop(workload, None)
         else:
@@ -126,7 +160,7 @@ def scale(
     else:
         updated.pop("overrides", None)
     inventory.write(kube, updated)
-    return {"instance": plan.instance, "namespace": plan.namespace, "steps": steps, "overrides": kept}
+    return updated
 
 
 def _run_drain(plan: Plan, step: dict[str, Any], template: str, runner: Runner) -> None:

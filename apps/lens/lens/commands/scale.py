@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .. import catalog, inventory, overrides, scaling
+from .. import catalog, draining, inventory, overrides, scaling
 from ..errors import UsageError
 from ..plan import Options, discovered_scope, make_plan
 from ..preflight import preflight
-from . import Context, Handler, add_source_arguments, add_target_arguments, progress
+from . import Context, Handler, add_source_arguments, add_target_arguments, progress, rollouts
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -39,6 +39,37 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
         action="store_true",
         help="lower a DisaggregatedSet role directly: each removed pod drains as it stops",
     )
+    drain.add_argument(
+        "--drain-idle",
+        action="store_true",
+        help="llmd drains the pods it removes: out of the router's pool by --pool-label, then removed once "
+        "their vLLM engines are idle (read through the pod proxy); a pod that does not go idle in "
+        "--drain-timeout goes back in the pool",
+    )
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=1,
+        metavar="N",
+        help="with --drain-idle: pods (or groups of a role) drained together (default 1)",
+    )
+    parser.add_argument(
+        "--drain-timeout",
+        type=float,
+        default=1800,
+        metavar="SECONDS",
+        help="with --drain-idle: how long a batch may take to go idle (default 1800)",
+    )
+    parser.add_argument(
+        "--metrics-port",
+        type=int,
+        action="append",
+        default=[],
+        metavar="PORT",
+        help="with --drain-idle: a port serving vLLM's /metrics (repeatable; default: every container port)",
+    )
+    parser.add_argument("--drain-interval", type=float, default=10, help=argparse.SUPPRESS)
+    parser.add_argument("--pool-label", default=None, metavar="LABEL", help=rollouts.POOL_HELP)
     parser.add_argument("--dry-run", action="store_true", help="show the change; the server checks it")
     parser.add_argument("-y", "--yes", action="store_true", help="do not ask before scaling a workload to 0")
     parser.add_argument(
@@ -75,6 +106,21 @@ def file_counts(ctx: Context, stack, record: dict, namespace: str, instance: str
             continue
         counts[workload] = overrides.replicas(holder)
     return counts
+
+
+def _drain_settings(ctx: Context, record: dict) -> draining.Settings:
+    args = ctx.args
+    if args.batch < 1:
+        raise UsageError("--batch takes 1 or more")
+    return draining.Settings(
+        pool_label=rollouts.pool_label(ctx, record),
+        batch=args.batch,
+        timeout=args.drain_timeout,
+        ports=tuple(args.metrics_port),
+        interval=args.drain_interval,
+        grace=3 * args.drain_interval,
+        emit=progress,
+    )
 
 
 def command_scale(ctx: Context) -> int:
@@ -125,6 +171,7 @@ def command_scale(ctx: Context) -> int:
         files=file_counts(ctx, stack, record, namespace, args.instance, changes),
         drain=args.drain,
         no_drain=args.no_drain,
+        drain_idle=_drain_settings(ctx, record) if args.drain_idle else None,
         dry_run=args.dry_run,
         actor=plan.cluster.get("user", ""),
     )

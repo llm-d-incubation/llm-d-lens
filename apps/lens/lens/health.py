@@ -99,6 +99,16 @@ def _generation_observed(item: dict[str, Any]) -> bool:
     return generation is None or observed is None or observed >= generation
 
 
+def rolling(item: dict[str, Any]) -> bool:
+    """Whether a Deployment or StatefulSet is replacing pods for a new template: fewer pods run it than
+    the workload asks for. A scale-down in progress is not a rollout."""
+    spec, status = item.get("spec") or {}, item.get("status") or {}
+    if not status:
+        return False
+    desired = int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)
+    return _generation_observed(item) and int(status.get("updatedReplicas") or 0) < desired
+
+
 def role_shape(item: dict[str, Any]) -> dict[str, dict[str, int]]:
     """``{role: {"replicas": groups, "size": pods per group}}`` from a DisaggregatedSet's spec."""
     shape = {}
