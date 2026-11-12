@@ -211,6 +211,13 @@ class Kube:
         result = self.run("logs", pod, "-c", container, "-n", namespace, "--previous", f"--tail={lines}", timeout=30)
         return result.stdout if result.ok else None
 
+    def pod_metrics(self, pod: str, port: int | str, namespace: str, *, path: str = "/metrics") -> str | None:
+        """What a pod serves over HTTP on ``port`` at ``path``, read through the API server's pod
+        proxy (the ``pods/proxy`` permission, no exec into the pod). None when it cannot be read."""
+        url = f"/api/v1/namespaces/{namespace}/pods/{pod}:{port}/proxy{path}"
+        result = self.run("get", "--raw", url, timeout=30)
+        return result.stdout if result.ok else None
+
     def get(self, resource: str, name: str, namespace: str) -> dict[str, Any] | None:
         key = (namespace, resource, name)
         if key in self._objects:
@@ -274,6 +281,30 @@ class Kube:
                 hint="Missing permissions, a quota, or an admission policy can cause this.",
             )
         return yamlio.kubectl_objects(result.stdout)
+
+    def patch_metadata(
+        self,
+        resource: str,
+        name: str,
+        namespace: str,
+        *,
+        labels: dict[str, str | None] | None = None,
+        annotations: dict[str, str | None] | None = None,
+    ) -> dict[str, Any]:
+        """Change only an object's labels and annotations, with a merge patch (a ``None`` value removes
+        the key). A pod's labels are not part of what its controller compares, so it keeps running."""
+        self._objects.clear()
+        metadata: dict[str, Any] = {}
+        if labels:
+            metadata["labels"] = labels
+        if annotations:
+            metadata["annotations"] = annotations
+        patch = json.dumps({"metadata": metadata})
+        result = self.run("patch", resource, name, "-n", namespace, "--type", "merge", "-p", patch, "-o", "json")
+        if not result.ok:
+            raise CommandError(f"labelling {resource}/{name} failed: {result.message}")
+        found = yamlio.kubectl_objects(result.stdout)
+        return found[0] if found else {}
 
     def delete(self, resource: str, name: str, namespace: str, *, wait: bool = False) -> bool:
         if not self._namespaced_resource(resource):

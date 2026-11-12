@@ -62,8 +62,23 @@ def _merge(base, patch):
     return merged
 
 
+def _merge_patch(base, patch):
+    """A JSON merge patch (RFC 7386): maps merge, ``None`` removes a key, anything else is replaced."""
+    if not isinstance(patch, dict):
+        return copy.deepcopy(patch)
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    for key, value in patch.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = _merge_patch(merged.get(key), value)
+    return merged
+
+
 #: On each pod the fake controllers make: which workload's pods it is (their name prefix).
 OWNER = "fake.llmd.test/owner"
+#: The pod annotation a ReplicaSet reads to choose which pods a scale-down removes.
+DELETION_COST = "controller.kubernetes.io/pod-deletion-cost"
 
 
 class FakeCluster:
@@ -88,6 +103,9 @@ class FakeCluster:
         self.escalation_check = True
         #: (pod, container) -> what ``kubectl logs --previous`` prints for it.
         self.previous_logs: dict[tuple[str, str], str] = {}
+        #: (pod, port) -> what the pod serves at ``/metrics`` through the pod proxy: text, or a
+        #: callable that returns it (read at each call, so a test can make an engine go idle).
+        self.metrics: dict[tuple[str, int], object] = {}
 
     # -- helpers for tests ---------------------------------------------------------------------------
     def serve(self, api_version: str, kind: str, plural: str, namespaced: bool = True) -> None:
@@ -130,7 +148,7 @@ class FakeCluster:
             if resource == "deployments.apps":
                 labels = dict(((spec.get("template") or {}).get("metadata") or {}).get("labels") or {})
                 replicas = int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)
-                self._pods(namespace, f"{name}-", replicas, labels)
+                self._pods(namespace, f"{name}-", replicas, labels, ranked=True)
             elif resource.startswith("disaggregatedsets."):
                 self._reconcile_set(namespace, document)
 
@@ -292,7 +310,11 @@ class FakeCluster:
             if key[2].startswith(f"{name}-"):
                 del self.objects[key]
 
-    def _pods(self, namespace: str, prefix: str, want: int, labels: dict, size: int = 1) -> None:
+    def _pods(
+        self, namespace: str, prefix: str, want: int, labels: dict, size: int = 1, *, ranked: bool = False
+    ) -> None:
+        """``ranked``: a Deployment's ReplicaSet, which removes pods that are not Ready first, then the
+        lowest ``pod-deletion-cost``; a LeaderWorkerSet removes its highest groups."""
         # The workload's own pods: by name prefix, and by owner, since another workload's name can
         # start with this one's (``model`` and ``model-epp``).
         have = sorted(
@@ -303,6 +325,9 @@ class FakeCluster:
             and key[2].startswith(prefix)
             and (pod["metadata"].get("annotations") or {}).get(OWNER, prefix) == prefix
         )
+        if ranked:
+            self._replica_set_pods(namespace, prefix, want, labels, have)
+            return
         for key in have[want:]:
             del self.objects[key]
         for index in range(len(have), want):
@@ -311,6 +336,28 @@ class FakeCluster:
                 "apiVersion": "v1",
                 "kind": "Pod",
                 "metadata": {"name": f"{prefix}{index}", "labels": pod_labels, "annotations": {OWNER: prefix}},
+                "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+            }
+            self.put(namespace, pod)
+
+    def _replica_set_pods(self, namespace: str, prefix: str, want: int, labels: dict, have: list) -> None:
+        def rank(key):
+            pod = self.objects[key]
+            cost = int((pod["metadata"].get("annotations") or {}).get(DELETION_COST, 0))
+            return (_ready(pod), cost, -have.index(key))
+
+        for key in sorted(have, key=rank)[: max(len(have) - want, 0)]:
+            del self.objects[key]
+        taken = {key[2] for key in have if key in self.objects}
+        index = 0
+        for _ in range(len(taken), want):
+            while f"{prefix}{index}" in taken:
+                index += 1
+            taken.add(f"{prefix}{index}")
+            pod = {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": f"{prefix}{index}", "labels": dict(labels), "annotations": {OWNER: prefix}},
                 "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
             }
             self.put(namespace, pod)
@@ -364,6 +411,8 @@ class FakeCluster:
             return _ok(self.server if any("cluster.server" in arg for arg in args) else "team-a")
         if args[:2] == ["auth", "whoami"]:
             return _ok(json.dumps({"status": {"userInfo": {"username": self.user}}}))
+        if args[:2] == ["get", "--raw"] and "/proxy" in args[2]:
+            return self._proxy(args[2])
         if args[:2] == ["get", "--raw"]:
             return self._discovery(args[2])
         if args[:2] == ["get", "namespace"]:
@@ -375,8 +424,35 @@ class FakeCluster:
             "get": self._get,
             "delete": self._delete,
             "logs": self._logs,
+            "patch": self._patch,
         }.get(args[0])
         return handler(args, stdin) if handler else _fail(f"fake kubectl does not support {args}")
+
+    def _proxy(self, path: str) -> Result:
+        """``/api/v1/namespaces/NS/pods/POD:PORT/proxy/metrics``, answered from :attr:`metrics`."""
+        parts = path.split("/")
+        namespace, (pod, _, port) = parts[4], parts[6].partition(":")
+        if ("get", "pods/proxy") in self.denied:
+            return _fail(f'Error from server (Forbidden): pods "{pod}" is forbidden: User "{self.user}"')
+        if (namespace, "pods", pod) not in self.objects:
+            return _fail(f'Error from server (NotFound): pods "{pod}" not found')
+        served = self.metrics.get((pod, int(port)))
+        if served is None:
+            return _fail("Error from server (ServiceUnavailable): the server is currently unable to handle the request")
+        return _ok(served() if callable(served) else str(served))
+
+    def _patch(self, args: list[str], stdin: str) -> Result:
+        resource = self._canonical(args[1])
+        namespace = self._option(args, "-n") if self._namespaced(resource) else ""
+        if ("patch", resource) in self.denied:
+            return _fail(f'Error from server (Forbidden): {resource} is forbidden: User "{self.user}"')
+        current = self.objects.get((namespace, resource, args[2]))
+        if current is None:
+            return _fail(f'Error from server (NotFound): {resource} "{args[2]}" not found')
+        merged = _merge_patch(current, json.loads(self._option(args, "-p")))
+        self._bump(merged)
+        self.objects[(namespace, resource, args[2])] = merged
+        return _ok(json.dumps(merged))
 
     def _discovery(self, path: str) -> Result:
         api_version = path.removeprefix("/apis/").removeprefix("/api/")
@@ -499,6 +575,11 @@ class FakeCluster:
         if self.controllers and removed:
             self._orphans(namespace, removed)
         return _ok(f'{resource} "{args[2]}" deleted\n' if removed else "")
+
+
+def _ready(pod: dict) -> bool:
+    conditions = (pod.get("status") or {}).get("conditions") or []
+    return any(item.get("type") == "Ready" and item.get("status") == "True" for item in conditions)
 
 
 class FakeClusters:

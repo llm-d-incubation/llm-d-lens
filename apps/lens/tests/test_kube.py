@@ -97,3 +97,26 @@ def test_identity(kube):
     assert kube.whoami() == "alice"
     assert kube.current_context() == "ctx"
     assert kube.namespace_state("team-a") == "exists" and kube.namespace_state("other") == "missing"
+
+
+def test_patch_metadata_changes_only_labels_and_annotations(kube, cluster):
+    pod = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "p", "labels": {"app": "a", "x": "1"}}}
+    pod["spec"] = {"containers": [{"name": "c", "image": "i"}]}
+    cluster.put("team-a", pod)
+    found = kube.patch_metadata("pods", "p", "team-a", labels={"x": None, "y": "2"}, annotations={"note": "n"})
+    assert found["metadata"]["labels"] == {"app": "a", "y": "2"}
+    assert found["metadata"]["annotations"] == {"note": "n"}
+    assert found["spec"] == pod["spec"]
+    assert cluster.calls[-1][:2] == ["patch", "pods"] and "merge" in cluster.calls[-1]
+    with pytest.raises(CommandError, match="labelling pods/q failed"):
+        kube.patch_metadata("pods", "q", "team-a", labels={"y": "2"})
+
+
+def test_pod_metrics_reads_through_the_pod_proxy(kube, cluster):
+    cluster.put("team-a", {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "p"}})
+    cluster.metrics[("p", 8000)] = "vllm:num_requests_running 0\n"
+    assert kube.pod_metrics("p", 8000, "team-a") == "vllm:num_requests_running 0\n"
+    assert cluster.calls[-1][:3] == ["get", "--raw", "/api/v1/namespaces/team-a/pods/p:8000/proxy/metrics"]
+    assert kube.pod_metrics("p", 9000, "team-a") is None  # nothing serves there
+    cluster.denied.add(("get", "pods/proxy"))
+    assert kube.pod_metrics("p", 8000, "team-a") is None
