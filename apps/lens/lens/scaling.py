@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import copy
 import sys
+import time
+from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
-from . import draining, inventory, overrides
-from .errors import CommandError, ConflictError, PolicyError, UsageError
+from . import draining, health, inventory, overrides
+from .errors import CommandError, ConflictError, NotReadyError, PolicyError, UsageError
 from .kube import Kube
 from .model import object_ref
 from .plan import Plan
@@ -142,6 +145,66 @@ def scale(
     record = _keep(kube, record, changes, files, actor)
     kept = dict(record.get("overrides") or {})
     return {"instance": plan.instance, "namespace": plan.namespace, "steps": steps, "overrides": kept}
+
+
+def serving(kube: Kube, plan: Plan, workload: str, *, pool_label: str = "") -> int:
+    """Replicas of ``workload`` (groups, for a role or a LeaderWorkerSet) whose pods are all Ready, not
+    terminating and, with a pool label, in the router's pool."""
+    document, _ = overrides.find(copy.deepcopy(plan.documents), workload)
+    live = kube.get(kube.resource_name(document), document["metadata"]["name"], plan.namespace)
+    selector = health.pod_selector(live) if live else ""
+    if not selector:
+        return 0
+    pods = kube.get_json("pods", plan.namespace, selector=selector)
+    _, holder = overrides.find([live], workload)
+    role = workload.partition("/")[2]
+    if role:
+        pods = [pod for pod in pods if health.labels(pod).get(health.DS_ROLE_LABEL) == role]
+    size = int((holder.get("leaderWorkerTemplate") or {}).get("size", 1) or 1) if role else 1
+    if live["kind"] == "LeaderWorkerSet":
+        size = int(((live.get("spec") or {}).get("leaderWorkerTemplate") or {}).get("size", 1) or 1)
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for pod in pods:
+        labels = health.labels(pod)
+        key = (labels.get(health.DS_REVISION_LABEL, ""), labels.get(health.GROUP_INDEX_LABEL, ""))
+        groups[key if size > 1 else (key[0], pod["metadata"]["name"])].append(pod)
+    return sum(
+        1
+        for members in groups.values()
+        if len(members) == size
+        and all(health.pod_ready(pod) for pod in members)
+        and (not pool_label or all(health.labels(pod).get(pool_label) == "true" for pod in members))
+    )
+
+
+def wait_serving(
+    kube: Kube,
+    plan: Plan,
+    counts: dict[str, int],
+    *,
+    pool_label: str = "",
+    timeout: float,
+    interval: float = 15,
+    emit: Callable[[str], None] | None = None,
+) -> None:
+    """Wait until each workload in ``counts`` has that many replicas serving (see :func:`serving`)."""
+    deadline = time.monotonic() + timeout
+    last = ""
+    while True:
+        kube.forget()
+        have = {workload: serving(kube, plan, workload, pool_label=pool_label) for workload in counts}
+        line = ", ".join(f"{workload} {have[workload]}/{count}" for workload, count in sorted(counts.items()))
+        if emit and line != last:
+            emit(f"serving: {line}")
+            last = line
+        if all(have[workload] >= count for workload, count in counts.items()):
+            return
+        if time.monotonic() >= deadline:
+            raise NotReadyError(
+                f"not serving after {timeout:.0f}s: {line}",
+                hint=f"The count is applied and recorded; follow it with `llmd status {plan.instance}`.",
+            )
+        time.sleep(interval)
 
 
 def _keep(

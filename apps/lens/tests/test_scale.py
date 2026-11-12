@@ -6,14 +6,14 @@ import sys
 
 import pytest
 
-from lens import commands, inventory, lifecycle
+from lens import commands, inventory, lifecycle, scaling
 from lens.cli import main
 from lens.kube import Kube
 
 from .fakes import FakeCluster
 from .test_lifecycle import plan_for
 from .test_preflight import STACK, prerequisites
-from .test_rollout_plan import DS, NS, cluster, rollrepo  # noqa: F401
+from .test_rollout_plan import DS, NS, POOL, cluster, rollrepo  # noqa: F401
 from .test_rollout_plan import STACK as PD_STACK
 
 DEPLOYMENTS = "deployments.apps"
@@ -187,3 +187,32 @@ def test_a_rollout_keeps_the_count(rollrepo, cluster, monkeypatch, capsys):  # n
     summary = json.loads(capsys.readouterr().out)
     assert summary["objects"] == {}  # the files say 3, the instance runs 4: nothing to roll back
     assert any(finding["code"] == "scale-override" for finding in summary["findings"])
+
+
+def test_wait_returns_once_the_new_pods_serve(llmrepo, team, monkeypatch, capsys):
+    """With a pool label, a pod serves once it is Ready and in the pool."""
+
+    def sleep(seconds):
+        for (_, kind, name), pod in team.objects.items():
+            if kind == "pods" and name.startswith("model-a-"):
+                pod["metadata"]["labels"][POOL] = "true"
+
+    monkeypatch.setattr(scaling.time, "sleep", sleep)
+    wait = ["--wait", "--pool-label", POOL, "--interval", "0"]
+    assert llmd("scale", "r1", "model-a=2", "-n", "team-a", *wait, source=llmrepo) == 0
+    err = capsys.readouterr().err
+    assert "serving: model-a 0/2" in err and "serving: model-a 2/2" in err
+
+
+def test_wait_gives_up_after_its_timeout_and_keeps_the_count(llmrepo, team, capsys):
+    wait = ["--wait", "--pool-label", POOL, "--timeout", "0"]
+    assert llmd("scale", "r1", "model-a=2", "-n", "team-a", *wait, source=llmrepo) == 7
+    assert "not serving after 0s: model-a 0/2" in capsys.readouterr().err
+    assert inventory.require(Kube(runner=team), "team-a", "r1")["overrides"] == {"model-a": 2}
+
+
+def test_wait_counts_a_role_in_groups(rollrepo, cluster, monkeypatch, capsys):  # noqa: F811
+    monkeypatch.setattr(commands, "RUNNER", cluster)
+    argv = ["scale", "pd", "model-p/decode=4", "--wait", "--pool-label", POOL, "-n", NS, "--source", str(rollrepo)]
+    assert main(argv) == 0
+    assert "serving: model-p/decode 4/4" in capsys.readouterr().err

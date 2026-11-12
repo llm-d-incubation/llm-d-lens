@@ -69,6 +69,13 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
         help="with --drain-idle: a port serving vLLM's /metrics (repeatable; default: every container port)",
     )
     parser.add_argument("--drain-interval", type=float, default=10, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait until each raised workload serves: its pods Ready and, with a pool label, in the pool",
+    )
+    parser.add_argument("--timeout", type=float, default=7200, help="--wait timeout in seconds (default 7200)")
+    parser.add_argument("--interval", type=float, default=15, help=argparse.SUPPRESS)
     parser.add_argument("--pool-label", default=None, metavar="LABEL", help=rollouts.POOL_HELP)
     parser.add_argument("--dry-run", action="store_true", help="show the change; the server checks it")
     parser.add_argument("-y", "--yes", action="store_true", help="do not ask before scaling a workload to 0")
@@ -175,6 +182,17 @@ def command_scale(ctx: Context) -> int:
         dry_run=args.dry_run,
         actor=plan.cluster.get("user", ""),
     )
+    raised = {step["workload"]: step["to"] for step in result["steps"] if (step["from"] or 0) < step["to"]}
+    if args.wait and raised and not result.get("dryRun"):
+        scaling.wait_serving(
+            kube,
+            plan,
+            raised,
+            pool_label=rollouts.pool_label(ctx, record),
+            timeout=args.timeout,
+            interval=args.interval,
+            emit=progress,
+        )
     if args.output != "text":
         ctx.emit(result)
         return 0
