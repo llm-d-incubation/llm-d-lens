@@ -330,3 +330,15 @@ def test_a_change_that_replaces_no_pods_finishes_at_once(llmrepo, router, tmp_pa
     argv = ["--state-dir", str(tmp_path), "rollouts", "start", "examples/model-a/cluster-a", "--name", "r1"]
     assert main([*argv, "-n", "team-a", "--source", str(llmrepo)]) == 0
     assert inventory.require(Kube(runner=router), "team-a", "r1")["rollout"]["phase"] == "Finished"
+
+
+def test_the_plan_says_which_pods_a_template_change_replaces(llmrepo, router, tmp_path, capsys):
+    new_template(llmrepo)
+    argv = ["-o", "json", "rollouts", "plan", "examples/model-a/cluster-a", "--name", "r1", "-n", "team-a"]
+    assert main([*argv, "--source", str(llmrepo)]) == 0
+    [finding] = [item for item in json.loads(capsys.readouterr().out)["findings"] if item["code"] == "pods-restart"]
+    assert finding["message"] == (
+        "Deployment/model-a: the pod template changes, so its 1 pod(s) are replaced, 1 extra pod(s) at a time; "
+        "the surge needs 1 nvidia.com/gpu more"
+    )
+    assert finding["severity"] == "warning"

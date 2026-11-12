@@ -10,6 +10,9 @@ and refuses what is not one safe in-place rollout:
 * ``--floor`` says a role must keep N groups serving and a step would go below it;
 * a step would leave a role with no group serving (``--allow-outage`` accepts it);
 * the stack renders an object the namespace policy refuses (the same checks as a standup).
+
+It warns when a Deployment's or StatefulSet's pod template changes: every pod is replaced, and
+starts again without what it had cached, and a surge needs room for the extra pods.
 """
 
 from __future__ import annotations
@@ -22,8 +25,9 @@ from ..errors import ConflictError, PolicyError
 from ..kube import Kube
 from ..model import Finding, object_ref
 from ..plan import Plan
+from ..policy import template_accelerators
 from ..preflight import resources
-from .change import Change, compare_objects
+from .change import Change, compare_objects, int_or_percent
 from .progress import Progress, read_progress
 
 
@@ -167,6 +171,8 @@ def plan_rollout(
                         hint="Raise the role's replicas or maxSurge in the stack, or pass --allow-outage.",
                     )
                 )
+    rendered = {object_ref(document): document for document in plan.documents}
+    findings += [_restart(rendered[ref]) for ref in change.restarts]
     if not any(state != "same" for state in change.objects.values()):
         findings.append(Finding("info", "nothing-to-do", "the instance already runs what this ref renders"))
     return RolloutPlan(plan=plan, record=record, change=change, before=before, findings=findings)
@@ -175,6 +181,33 @@ def plan_rollout(
 #: Plan findings about the objects the instance already runs: an imported stack was checked
 #: (and acknowledged) when it was deployed, so they describe it rather than block a rollout.
 _OBSERVED = {"instance-imported", "object-exists"}
+
+
+def _restart(document: dict[str, Any]) -> Finding:
+    """What a pod template change to a Deployment or StatefulSet does to its pods."""
+    ref = object_ref(document)
+    spec = document.get("spec") or {}
+    replicas = int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)
+    surge = 0
+    if document["kind"] != "Deployment":
+        how = "one at a time, the highest ordinal first"
+    elif (spec.get("strategy") or {}).get("type") == "Recreate":
+        how = "all at once (Recreate), so it serves nothing until the new pods are Ready"
+    else:
+        rolling = (spec.get("strategy") or {}).get("rollingUpdate") or {}
+        surge = int_or_percent(rolling.get("maxSurge", "25%"), replicas, round_up=True)
+        how = f"{surge} extra pod(s) at a time" if surge else "one fewer at a time (maxSurge 0)"
+    per_pod = template_accelerators(spec.get("template") or {})
+    room = ", ".join(f"{amount * surge} {resource}" for resource, amount in sorted(per_pod.items()))
+    return Finding(
+        "warning",
+        "pods-restart",
+        f"{ref}: the pod template changes, so its {replicas} pod(s) are replaced, {how}"
+        + (f"; the surge needs {room} more" if surge and room else ""),
+        object=ref,
+        hint="New pods start empty: their caches and what the router knows of them start over. To give "
+        "running pods labels without replacing them, use `llmd label`.",
+    )
 
 
 def _settled(progress: Progress) -> list[Finding]:

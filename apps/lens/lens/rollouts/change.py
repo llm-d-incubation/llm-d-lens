@@ -97,7 +97,7 @@ def revision_part(role: dict[str, Any], hash_version: str) -> dict[str, Any]:
     return {key: comparable_part(value) for key, value in part.items()}
 
 
-def _int_or_percent(value: Any, of: int, *, round_up: bool) -> int:
+def int_or_percent(value: Any, of: int, *, round_up: bool) -> int:
     if isinstance(value, str) and value.endswith("%"):
         share = of * int(value[:-1]) / 100
         return math.ceil(share) if round_up else math.floor(share)
@@ -124,8 +124,8 @@ def set_change(live: dict[str, Any], desired: dict[str, Any]) -> SetChange:
                 replicas=(int(old.get("replicas") or 0), replicas),
                 size=int((spec.get("leaderWorkerTemplate") or {}).get("size") or 1),
                 # lws defaults: maxUnavailable 1, maxSurge 0 (as for LeaderWorkerSet).
-                max_unavailable=max(_int_or_percent(strategy.get("maxUnavailable", 1), replicas, round_up=False), 1),
-                max_surge=_int_or_percent(strategy.get("maxSurge", 0), replicas, round_up=True),
+                max_unavailable=max(int_or_percent(strategy.get("maxUnavailable", 1), replicas, round_up=False), 1),
+                max_surge=int_or_percent(strategy.get("maxSurge", 0), replicas, round_up=True),
                 template_changed=changed or name not in before,
             )
         )
