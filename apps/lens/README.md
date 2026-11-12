@@ -166,9 +166,43 @@ is rendered with the `--var` and `--set` values the instance was stood up with.
 
 Lowering a DisaggregatedSet role removes its highest groups. `--no-drain` lowers it directly: the guides' vLLM
 pods drain as they stop. A stack that admits the lowering only from its own drain tool passes it with
-`--drain COMMAND` (`{role}`, `{set}`, `{count}`, `{namespace}`, `{source}`); llmd runs it, waits, and records the
-count once it exits 0. Scaling to 0 asks first (`-y` skips). `--dry-run` sends the change as a server dry run.
-A rollout in progress refuses a scale.
+`--drain COMMAND` (`{workload}`, `{role}`, `{set}`, `{count}`, `{namespace}`, `{source}`); llmd runs it, waits,
+and records the count once it exits 0. `--drain` works for a Deployment too; without it a Deployment is lowered
+directly. Scaling to 0 asks first (`-y` skips). `--dry-run` sends the change as a server dry run. A rollout in
+progress refuses a scale.
+
+`--drain-idle` drains the pods without a tool of the stack's own, for a stack whose InferencePool selects
+serving pods by a label (`--pool-label`, "true" while a pod serves):
+
+```sh
+llmd scale <instance> -n <namespace> my-model=12 --drain-idle --batch 2 --pool-label <label>
+```
+
+llmd picks the pods (a Deployment's Ready pods with the fewest requests; a role's highest groups), sets the pool
+label to `false`, and waits until every vLLM engine on them is idle: no running or waiting request and no KV
+cache in use on several reads, then no finished request during a grace period. It reads `/metrics` through the
+API server's pod proxy (`get` on `pods/proxy`; `--metrics-port` when the containers do not declare the port).
+For a Deployment it then sets the lowest `controller.kubernetes.io/pod-deletion-cost` on those pods, lowers the
+count, and checks that the controller removed them and no others. `--batch N` drains N at a time;
+`--drain-timeout` (default 1800 s) puts a batch back in the pool when it does not go idle. It refuses when an
+InferencePool selects the pods without the pool label, when another pod of a Deployment is not Ready (its
+ReplicaSet would remove that one first), and during a rollout. The record keeps each count reached.
+
+`--wait` waits until each raised workload serves: every pod of a replica Ready and, with a pool label, in the
+pool (`--timeout`, default 7200 s).
+
+## Labels on running pods
+
+```sh
+llmd label <instance> -n <namespace> my-model example.com/router=pd example.com/role=both
+llmd label <instance> -n <namespace> my-model example.com/role-       # remove one
+```
+
+`llmd label` patches the running pods of a workload (`NAME` or `SET/ROLE`) without a restart, and keeps the
+labels in the record. A router that takes over can then select pods that already run, with their caches. Pods
+created later start without them: `llmd scale --wait` labels a raised workload's new pods, and `llmd status`
+names running pods that lack them. Keys the controller selects pods by, the labels lws keeps, and the pool label
+are refused.
 
 ## Moving an instance to another namespace or cluster
 
@@ -240,6 +274,23 @@ llmd rollouts resume <instance> -n <namespace> [--watch]    # start them again, 
 llmd rollouts abort <instance> -n <namespace> [--watch]     # re-apply what ran before; it rolls back the same way
 llmd rollouts finish <instance> -n <namespace>              # end it once the old revision is gone
 ```
+
+A change to a Deployment's or StatefulSet's pod template (a router's endpoint picker, say) replaces its pods.
+`rollouts plan` warns about each one (`pods-restart`: how many pods, and what a surge needs), and the rollout
+stays `Rolling` until the new pods are Ready and no old pod is left, so `status --watch`, `abort` and `finish`
+follow it like a DisaggregatedSet roll. A change that replaces no pods finishes at once.
+
+A rollout never deletes. What the instance's stack no longer renders keeps running until pruned:
+
+```sh
+llmd rollouts prune <instance> -n <namespace> --dry-run      # what would go, and why the rest stays
+llmd rollouts prune <instance> -n <namespace>                # asks first; -y skips
+```
+
+`prune` renders the stack at the revision the instance runs and deletes a recorded object it no longer renders
+once nothing uses it: a workload at 0 replicas with no pod left; a ConfigMap, Secret or ServiceAccount no pod
+refers to. Claims stay unless `--delete-volumes`. A ref that only drops objects is recorded by `rollouts start`
+(nothing to apply), so `prune` can follow it.
 
 ## Development
 

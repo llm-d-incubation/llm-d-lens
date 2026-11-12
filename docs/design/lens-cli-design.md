@@ -287,7 +287,8 @@ Stored as JSON under key `inventory.json` in ConfigMap
 | `rollout` | `RolloutRecord` | rollout ops | At most one; see below |
 | `createdAt`, `updatedAt` | ISO 8601 UTC (`Z`) | all writers | `updatedAt` set on every write |
 | `updatedBy` | `str` | standup, import, scale | The kube user from `kubectl auth whoami` during the plan's cluster check |
-| `overrides` | `{workload: int}` | scale, migrate | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files |
+| `overrides` | `{workload: int}` | scale, migrate | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files. `scale --drain-idle` writes each count it reaches |
+| `podLabels` | `{workload: {key: value}}` | label, rollouts prune | Labels `llmd label` put on a workload's running pods; `scale --wait` gives them to its new pods, `status` names pods that lack them. Absent when none |
 | `migration` | `MigrationRecord` | migrate | On both the source and the target record while a migration runs; see below |
 
 `ObjectEntry` = `{apiVersion, kind, name, resource, uid?}`. `resource` is
@@ -338,6 +339,7 @@ Example, after a `standup`:
 | `previous` | `list[{resource, document}]` | Bodies before the change; what `abort` re-applies. Never Secrets: a rollout that would change one is refused |
 | `drain` | `str` | The `--drain` command template, or empty |
 | `poolLabel` | `str` | The pod label a group must carry as `true` to count as serving; recorded so later rollout commands judge groups the same way. Absent when none |
+| `workloads` | `list[{kind, name, resource}]` | Deployments and StatefulSets whose pod template the rollout changes; it stays in progress until each has the new template Ready and no pod terminating. Absent when none |
 | `steps` | `list` | Written as an empty list and never filled; see [Proposed changes](#11-proposed-changes) |
 
 ### `MigrationRecord` fields
@@ -380,13 +382,13 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> Rolling : rollouts start
-    Rolling --> Finished : start, when no DisaggregatedSet rolls
+    Rolling --> Finished : start, when no DisaggregatedSet rolls and no pods are replaced
     Rolling --> Paused : pause (drainers stopped)
     Paused --> Rolling : resume
     Rolling --> Aborting : abort (previous objects re-applied)
     Paused --> Aborting : abort
     Aborting --> Aborting : resume
-    Rolling --> Finished : finish (old revision gone)
+    Rolling --> Finished : finish (old revision and old pods gone)
     Aborting --> Aborted : finish
 ```
 
@@ -445,8 +447,10 @@ and the ownership checks depend on them.
 | `status`, `list` | record, live objects | nothing | the instance is not found |
 | `rollouts plan` | record, plan of the new ref, live sets | nothing | — (reports refusals) |
 | `rollouts start` | rollout plan | record, objects, drainer processes | blocking findings (a claim being deleted is one); digest mismatch; a rollout in progress; a Secret would change; another stack path without `--switch-stack` |
-| `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll completes |
-| `scale` | record, plan, live workload | the scaled object, record (`overrides`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain` or `--no-drain`; a failed drain command |
+| `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll and the replaced pods complete |
+| `rollouts prune` | record, plan at the recorded revision, live objects and pods | deletes objects, record | a rollout in progress; the source at another revision; a delete permission is missing. Objects still in use are kept and reported |
+| `scale` | record, plan, live workload; pod metrics through the pod proxy (`--drain-idle`) | the scaled object, record (`overrides`); pod labels and deletion cost (`--drain-idle`), recorded pod labels (`--wait`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain`, `--drain-idle` or `--no-drain`; a failed drain command; `--drain-idle` without a pool label, with a pool that ignores it, with a pod not Ready, or during a rollout; a batch that does not go idle; `--wait` past its timeout |
+| `label` | record, live workload and pods | pod labels, record (`podLabels`) | a key the controller selects pods by, an lws label, or the pool label |
 | `migrate plan` | both records, both plans | nothing | — (reports refusals) |
 | `migrate start/step/finish` | both records, both plans, live workloads | target objects, both records, scaled objects; `finish` tears the source down | an unsettled source; another instance of that name in the target; a target not Ready before a step lowers the source; `finish` before the source is at 0 |
 | `teardown` | record, live objects | deletes objects and record | a delete permission is missing (nothing is removed) |
@@ -589,7 +593,7 @@ under another command.
 | v0.1.4 | `validate` (smoke test through the router) | Not started: `status` reports workload health, not request success |
 | v0.2.0 | `prepare`, admin and non-admin | Partial: `--admin-yaml` writes what an administrator must apply |
 | v0.2.0 | `serve`, the dashboard on the CLI backend | Not started: `apps/backend` still reads guides itself (`deploy/guide_bundle.py`, `configuration/guide_settings.py`) |
-| v0.3.0 | `update` with rolling updates and snapshots | Partial: `rollouts` rolls DisaggregatedSets in place and `abort` restores `rollout.previous` |
+| v0.3.0 | `update` with rolling updates and snapshots | Partial: `rollouts` rolls DisaggregatedSets in place, follows Deployment rollouts, `abort` restores `rollout.previous`, and `prune` deletes what a rollout left; `scale --drain-idle`/`--wait` and `label` step a workload over to another by hand |
 | v0.3.0 | More well-lit paths and accelerators | Partial: 18 of 28 guides follow; the rest block on unsupported steps |
 | Later | Gateway mode, blue-green updates | Not started |
 | Later | `benchmark`, BLIS in `plan`, in-cluster Job | Not started |
