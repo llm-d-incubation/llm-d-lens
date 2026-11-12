@@ -468,7 +468,7 @@ def prune(kube: Kube, plan: Plan, *, delete_volumes: bool = False, dry_run: bool
             **record,
             "objects": [item for item in record["objects"] if f"{item['kind']}/{item['name']}" not in removed],
         }
-        for key in ("overrides", "podLabels"):
+        for key in ("overrides", "podLabels", "podAnnotations"):
             remaining = {
                 workload: value
                 for workload, value in (record.get(key) or {}).items()

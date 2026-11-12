@@ -61,7 +61,8 @@ def print_status(status: dict) -> None:
     for workload, count in sorted((status.get("overrides") or {}).items()):
         print(f"  scaled       {workload} to {count} with `llmd scale` (record it in the stack's repository)")
     for item in status.get("lackingLabels") or []:
-        labels = ", ".join(f"{key}={value}" for key, value in sorted(item["labels"].items()))
+        kept = {**item["labels"], **item.get("annotations", {})}
+        labels = ", ".join(f"{key}={value}" for key, value in sorted(kept.items()))
         print(
             f"  unlabelled   {len(item['pods'])} pod(s) of {item['workload']} lack {labels} (kept by `llmd label`): "
             + ", ".join(item["pods"])

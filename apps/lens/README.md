@@ -194,15 +194,18 @@ pool (`--timeout`, default 7200 s).
 ## Labels on running pods
 
 ```sh
-llmd label <instance> -n <namespace> my-model example.com/router=pd example.com/role=both
+llmd label <instance> -n <namespace> my-model example.com/router=pd example.com/role=both \
+  --annotate llm-d.ai/active-ports=8000
 llmd label <instance> -n <namespace> my-model example.com/role-       # remove one
 ```
 
 `llmd label` patches the running pods of a workload (`NAME` or `SET/ROLE`) without a restart, and keeps the
-labels in the record. A router that takes over can then select pods that already run, with their caches. Pods
-created later start without them: `llmd scale --wait` labels a raised workload's new pods, and `llmd status`
-names running pods that lack them. Keys the controller selects pods by, the labels lws keeps, and the pool label
-are refused.
+labels in the record. A router that takes over can then select pods that already run, with their caches.
+`--annotate` sets annotations the router reads (such as `llm-d.ai/active-ports`, the pool target ports a pod
+serves) in the same patch, so a pod never joins a pool without them. Pods created later start without either:
+`llmd scale --wait` gives them to a raised workload's new pods, and `llmd status` names running pods that lack
+them. Keys the controller selects pods by, the labels lws keeps, the pool label and the pod deletion cost are
+refused.
 
 ## Moving an instance to another namespace or cluster
 

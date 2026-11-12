@@ -288,7 +288,7 @@ Stored as JSON under key `inventory.json` in ConfigMap
 | `createdAt`, `updatedAt` | ISO 8601 UTC (`Z`) | all writers | `updatedAt` set on every write |
 | `updatedBy` | `str` | standup, import, scale | The kube user from `kubectl auth whoami` during the plan's cluster check |
 | `overrides` | `{workload: int}` | scale, migrate | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files. `scale --drain-idle` writes each count it reaches |
-| `podLabels` | `{workload: {key: value}}` | label, rollouts prune | Labels `llmd label` put on a workload's running pods; `scale --wait` gives them to its new pods, `status` names pods that lack them. Absent when none |
+| `podLabels`, `podAnnotations` | `{workload: {key: value}}` | label, rollouts prune | Labels and annotations (`--annotate`) `llmd label` put on a workload's running pods, in one patch per pod; `scale --wait` gives them to its new pods, `status` names pods that lack them. Absent when none |
 | `migration` | `MigrationRecord` | migrate | On both the source and the target record while a migration runs; see below |
 
 `ObjectEntry` = `{apiVersion, kind, name, resource, uid?}`. `resource` is
@@ -450,7 +450,7 @@ and the ownership checks depend on them.
 | `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll and the replaced pods complete |
 | `rollouts prune` | record, plan at the recorded revision, live objects and pods | deletes objects, record | a rollout in progress; the source at another revision; a delete permission is missing. Objects still in use are kept and reported |
 | `scale` | record, plan, live workload; pod metrics through the pod proxy (`--drain-idle`) | the scaled object, record (`overrides`); pod labels and deletion cost (`--drain-idle`), recorded pod labels (`--wait`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain`, `--drain-idle` or `--no-drain`; a failed drain command; `--drain-idle` without a pool label, with a pool that ignores it, with a pod not Ready, or during a rollout; a batch that does not go idle; `--wait` past its timeout |
-| `label` | record, live workload and pods | pod labels, record (`podLabels`) | a key the controller selects pods by, an lws label, or the pool label |
+| `label` | record, live workload and pods | pod labels and annotations, record (`podLabels`, `podAnnotations`) | a key the controller selects pods by, an lws label, the pool label, the pod deletion cost; nothing to change |
 | `migrate plan` | both records, both plans | nothing | — (reports refusals) |
 | `migrate start/step/finish` | both records, both plans, live workloads | target objects, both records, scaled objects; `finish` tears the source down | an unsettled source; another instance of that name in the target; a target not Ready before a step lowers the source; `finish` before the source is at 0 |
 | `teardown` | record, live objects | deletes objects and record | a delete permission is missing (nothing is removed) |

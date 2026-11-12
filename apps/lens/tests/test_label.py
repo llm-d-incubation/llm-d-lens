@@ -106,3 +106,29 @@ def test_relabel_touches_only_the_named_workloads(team):
     record = {**inventory.require(kube, "team-a", "r1"), "podLabels": {"model-a": {ROUTER: "pd"}}}
     assert label.relabel(kube, "team-a", record, ["other"]) == []
     assert label.relabel(kube, "team-a", record, ["model-a"]) == ["model-a-0", "model-a-1"]
+
+
+def test_annotations_go_in_the_same_patch_as_the_labels(llmrepo, team, capsys):
+    """A router that reads which ports to use from an annotation sees it as soon as the labels put the
+    pod in its pool: one patch per pod carries both."""
+    calls = len(team.calls)
+    argv = ["label", "r1", "model-a", f"{ROUTER}=pd", "--annotate", "example.com/ports=8000", "-n", "team-a"]
+    assert main(argv) == 0
+    patches = [json.loads(call[call.index("-p") + 1]) for call in team.calls[calls:] if call[0] == "patch"]
+    assert patches == [{"metadata": {"labels": {ROUTER: "pd"}, "annotations": {"example.com/ports": "8000"}}}] * 2
+    record = inventory.require(Kube(runner=team), "team-a", "r1")
+    assert record["podAnnotations"] == {"model-a": {"example.com/ports": "8000"}}
+    # A new pod gets both from `scale --wait`.
+    assert (
+        main(["scale", "r1", "model-a=3", "--wait", "--interval", "0", "-n", "team-a", "--source", str(llmrepo)]) == 0
+    )
+    pod = team.get("team-a", "pods", "model-a-2")["metadata"]
+    assert pod["labels"][ROUTER] == "pd" and pod["annotations"]["example.com/ports"] == "8000"
+
+
+def test_an_annotation_alone_and_the_deletion_cost_refused(team, capsys):
+    assert main(["label", "r1", "model-a", "--annotate", "example.com/ports=8000", "-n", "team-a"]) == 0
+    assert "podLabels" not in inventory.require(Kube(runner=team), "team-a", "r1")
+    cost = "controller.kubernetes.io/pod-deletion-cost=1"
+    assert main(["label", "r1", "model-a", "--annotate", cost, "-n", "team-a"]) == 3
+    assert main(["label", "r1", "model-a", "-n", "team-a"]) == 2  # nothing to change

@@ -4,13 +4,15 @@ A router that takes over from another can serve pods that already run once they 
 selects on, such as an aggregated Deployment's pods joining the pool of a router that also serves a
 DisaggregatedSet. Adding the labels to the pod template would replace every pod, and lose what each
 one has cached, so ``llmd label`` patches the running pods instead and keeps the labels in the
-instance's record (``podLabels``). Pods the controller creates later start without them:
+instance's record (``podLabels``). ``--annotate`` does the same for annotations a router reads, such
+as the ports it routes to, in the same patch as the labels (``podAnnotations``), so a pod never joins
+a pool with its labels but without them. Pods the controller creates later start without either:
 ``llmd scale --wait`` labels the new pods of the workloads it raises, ``llmd label`` run again labels
 any pod that lacks them, and ``llmd status`` names such pods.
 
 Refused: keys the workload's controller selects pods by (a pod that no longer matches is orphaned,
-and the controller starts a replacement), the labels lws keeps on its pods, and the instance's pool
-label, which a drain sets.
+and the controller starts a replacement), the labels lws keeps on its pods, the instance's pool
+label and the pod deletion cost, which a drain sets.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from .. import health, inventory, overrides
+from .. import draining, health, inventory, overrides
 from ..errors import CommandError, NotFoundError, PolicyError, UsageError
 from ..kube import Kube
 from . import Context, Handler, add_target_arguments, rollouts
@@ -27,6 +29,8 @@ from . import Context, Handler, add_target_arguments, rollouts
 CONTROLLER_KEYS = ("pod-template-hash", "controller-revision-hash", "statefulset.kubernetes.io/pod-name")
 #: Label prefixes lws keeps on the pods of a LeaderWorkerSet or DisaggregatedSet.
 LWS_PREFIXES = ("leaderworkerset.sigs.k8s.io/", "disaggregatedset.x-k8s.io/")
+#: Record keys of what the instance keeps on pods, per kind of metadata.
+KEPT = {"labels": "podLabels", "annotations": "podAnnotations"}
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -40,7 +44,14 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
     )
     parser.add_argument("instance")
     parser.add_argument("workload", metavar="WORKLOAD")
-    parser.add_argument("labels", nargs="+", metavar="KEY=VALUE|KEY-")
+    parser.add_argument("labels", nargs="*", metavar="KEY=VALUE|KEY-")
+    parser.add_argument(
+        "--annotate",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE|KEY-",
+        help="an annotation to set (or remove) in the same patch as the labels, kept the same way (repeatable)",
+    )
     add_target_arguments(parser)
     parser.add_argument("--pool-label", default=None, metavar="LABEL", help=rollouts.POOL_HELP)
     parser.add_argument("--dry-run", action="store_true", help="show which pods would change; change nothing")
@@ -111,9 +122,18 @@ def protected(live: dict[str, Any], key: str) -> bool:
     return live.get("kind") in ("LeaderWorkerSet", "DisaggregatedSet") and key.startswith(LWS_PREFIXES)
 
 
-def lacking(pod: dict[str, Any], labels: dict[str, str]) -> bool:
-    current = health.labels(pod)
-    return any(current.get(key) != value for key, value in labels.items())
+def lacking(pod: dict[str, Any], kept: dict[str, dict[str, str]]) -> bool:
+    """Whether a pod lacks some of the labels or annotations ``kept`` (``{"labels": ..., "annotations": ...}``)."""
+    metadata = pod.get("metadata") or {}
+    return any(
+        (metadata.get(kind) or {}).get(key) != value for kind, values in kept.items() for key, value in values.items()
+    )
+
+
+def _patched(current: dict[str, str], changes: dict[str, str | None]) -> bool:
+    return all(
+        (current.get(key) == value) if value is not None else key not in current for key, value in changes.items()
+    )
 
 
 def label_pods(
@@ -123,10 +143,14 @@ def label_pods(
     workload: str,
     changes: dict[str, str | None],
     *,
+    annotations: dict[str, str | None] | None = None,
     pool_label: str = "",
     dry_run: bool = False,
     actor: str = "",
 ) -> dict[str, Any]:
+    annotations = annotations or {}
+    if not changes and not annotations:
+        raise UsageError("name a label (KEY=VALUE or KEY-) or an --annotate to change")
     record = inventory.require(kube, namespace, instance)
     live = workload_object(kube, namespace, record, workload)
     refused = sorted(key for key in changes if protected(live, key))
@@ -140,38 +164,42 @@ def label_pods(
             f"{pool_label} is the instance's pool label: a drain sets it",
             hint="Use `llmd scale --drain-idle` to take pods out of the pool before they go.",
         )
-    kept = dict((record.get("podLabels") or {}).get(workload) or {})
-    for key, value in changes.items():
-        if value is None:
-            kept.pop(key, None)
-        else:
-            kept[key] = value
+    if draining.DELETION_COST in annotations:
+        raise PolicyError(f"{draining.DELETION_COST} is set by `llmd scale --drain-idle` for the pods it removes")
+    requested = {"labels": changes, "annotations": annotations}
+    kept = {}
+    for kind, values in requested.items():
+        kept[kind] = dict((record.get(KEPT[kind]) or {}).get(workload) or {})
+        for key, value in values.items():
+            if value is None:
+                kept[kind].pop(key, None)
+            else:
+                kept[kind][key] = value
     pods = workload_pods(kube, namespace, live, workload)
     patched = []
     for pod in pods:
-        current = health.labels(pod)
-        if all(
-            (current.get(key) == value) if value is not None else key not in current for key, value in changes.items()
-        ):
+        metadata = pod.get("metadata") or {}
+        if all(_patched(metadata.get(kind) or {}, values) for kind, values in requested.items()):
             continue
-        patched.append(pod["metadata"]["name"])
+        patched.append(metadata["name"])
         if not dry_run:
-            kube.patch_metadata("pods", pod["metadata"]["name"], namespace, labels=changes)
+            kube.patch_metadata("pods", metadata["name"], namespace, labels=changes, annotations=annotations)
     if not dry_run:
-        everything = {**(record.get("podLabels") or {}), workload: kept}
-        updated = {
-            **record,
-            "updatedBy": actor,
-            "podLabels": {key: value for key, value in everything.items() if value},
-        }
-        if not updated["podLabels"]:
-            updated.pop("podLabels")
+        updated = {**record, "updatedBy": actor}
+        for kind, field in KEPT.items():
+            everything = {**(record.get(field) or {}), workload: kept[kind]}
+            remaining = {key: value for key, value in everything.items() if value}
+            if remaining:
+                updated[field] = remaining
+            else:
+                updated.pop(field, None)
         inventory.write(kube, updated)
     return {
         "instance": instance,
         "namespace": namespace,
         "workload": workload,
-        "labels": kept,
+        "labels": kept["labels"],
+        "annotations": kept["annotations"],
         "pods": [pod["metadata"]["name"] for pod in pods],
         "patched": patched,
         "dryRun": dry_run,
@@ -179,28 +207,31 @@ def label_pods(
 
 
 def missing(kube: Kube, namespace: str, record: dict[str, Any]) -> list[dict[str, Any]]:
-    """For each workload with kept labels, its running pods that lack them."""
+    """For each workload with kept labels or annotations, its running pods that lack some of them."""
     found = []
-    for workload, labels in sorted((record.get("podLabels") or {}).items()):
+    workloads = sorted(set(record.get("podLabels") or {}) | set(record.get("podAnnotations") or {}))
+    for workload in workloads:
+        kept = {kind: dict((record.get(field) or {}).get(workload) or {}) for kind, field in KEPT.items()}
         try:
             live = workload_object(kube, namespace, record, workload)
             running = workload_pods(kube, namespace, live, workload)
         except (NotFoundError, UsageError, CommandError):
             continue  # status reports a workload it cannot read on its own
-        pods = [pod["metadata"]["name"] for pod in running if lacking(pod, labels)]
+        pods = [pod["metadata"]["name"] for pod in running if lacking(pod, kept)]
         if pods:
-            found.append({"workload": workload, "labels": labels, "pods": pods})
+            found.append({"workload": workload, **kept, "pods": pods})
     return found
 
 
 def relabel(kube: Kube, namespace: str, record: dict[str, Any], workloads: list[str]) -> list[str]:
-    """Give the running pods of ``workloads`` the labels the instance keeps for them; the pods changed."""
+    """Give the running pods of ``workloads`` the labels and annotations the instance keeps for them, in
+    one patch per pod; the pods changed."""
     changed = []
     for item in missing(kube, namespace, record):
         if item["workload"] not in workloads:
             continue
         for pod in item["pods"]:
-            kube.patch_metadata("pods", pod, namespace, labels=item["labels"])
+            kube.patch_metadata("pods", pod, namespace, labels=item["labels"], annotations=item["annotations"])
             changed.append(pod)
     return changed
 
@@ -216,6 +247,7 @@ def command_label(ctx: Context) -> int:
         args.instance,
         args.workload,
         parse(args.labels),
+        annotations=parse(args.annotate),
         pool_label=rollouts.pool_label(ctx, record),
         dry_run=args.dry_run,
         actor=kube.whoami(),
@@ -226,7 +258,10 @@ def command_label(ctx: Context) -> int:
     verb = "Would label" if args.dry_run else "Labelled"
     kept = ", ".join(f"{key}={value}" for key, value in sorted(result["labels"].items())) or "none"
     print(f"{verb} {len(result['patched'])} of {len(result['pods'])} pod(s) of {args.workload} in {namespace}")
-    print(f"  kept for {args.workload}: {kept}")
+    print(f"  labels kept for {args.workload}: {kept}")
+    if result["annotations"]:
+        noted = ", ".join(f"{key}={value}" for key, value in sorted(result["annotations"].items()))
+        print(f"  annotations kept for {args.workload}: {noted}")
     print(
         "  pods created later start without them: `llmd scale --wait` labels a raised workload's new pods, "
         "and `llmd status` names pods that lack them"
