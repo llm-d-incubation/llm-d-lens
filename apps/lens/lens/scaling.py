@@ -10,7 +10,8 @@ does: the llm-d guides' vLLM overlays wait in ``preStop`` and finish requests in
 ``--shutdown-timeout``, which ``no_drain`` relies on. A stack that guards its groups with an
 admission policy admits the lowering only from its own drain tool: with ``drain``, llmd runs that
 command, which drains the groups and lowers the count itself, and records the count once it
-succeeds. Raising a role, or scaling a Deployment, is applied directly.
+succeeds. Lowering a Deployment, StatefulSet or LeaderWorkerSet is applied directly unless a
+``drain`` command is given, which then lowers it the same way. Raising is applied directly.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def scale(
         document, holder = overrides.find(plan.documents, workload)
         before = current_replicas(kube, plan, workload)
         after = overrides.replicas(holder)
-        lowers_role = "/" in workload and before is not None and after < before
+        lowers = before is not None and after < before
         steps.append(
             {
                 "workload": workload,
@@ -86,7 +87,7 @@ def scale(
                 "resource": names[object_ref(document)],
                 "from": before,
                 "to": after,
-                "drain": lowers_role and bool(drain),
+                "drain": lowers and bool(drain),
             }
         )
     for step in steps:
@@ -133,8 +134,9 @@ def _run_drain(plan: Plan, step: dict[str, Any], template: str, runner: Runner) 
     goes to the terminal: a drain takes minutes and says what it waits for."""
     name, _, role = step["workload"].partition("/")
     values = {
+        "workload": step["workload"],
         "role": role,
-        "set": name,
+        "set": name if role else "",
         "namespace": plan.namespace,
         "source": str(plan.stack.source.root),
         "count": str(step["to"]),

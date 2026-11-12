@@ -153,6 +153,22 @@ def test_a_drain_tool_lowers_a_guarded_role_itself(rollrepo, cluster, monkeypatc
     assert [role["spec"]["replicas"] for role in live["spec"]["roles"]] == [4, 3]
 
 
+def test_a_drain_tool_lowers_a_deployment_too(llmrepo, team, capsys):
+    """A Deployment's drain tool takes its pods out of the pool and lowers the count itself, as for a
+    role; before, a Deployment was lowered directly and the command was not run."""
+    llmd("scale", "r1", "model-a=3", "-n", "team-a", source=llmrepo)
+    capsys.readouterr()
+    marker = llmrepo / "drained.txt"
+    write = "import sys; open(sys.argv[1], 'w').write(' '.join(sys.argv[2:]))"
+    drain = f'{sys.executable} -c "{write}" {marker} {{workload}} {{count}} {{namespace}}'
+    assert llmd("scale", "r1", "model-a=2", "-n", "team-a", "--drain", drain, source=llmrepo) == 0
+    assert marker.read_text() == "model-a 2 team-a"
+    [step] = json.loads(capsys.readouterr().out)["steps"]
+    assert step["drain"] is True and (step["from"], step["to"]) == (3, 2)
+    assert team.get("team-a", DEPLOYMENTS, "model-a")["spec"]["replicas"] == 3  # the tool's business
+    assert inventory.require(Kube(runner=team), "team-a", "r1")["overrides"] == {"model-a": 2}
+
+
 def test_a_failing_drain_records_nothing(rollrepo, cluster, monkeypatch, capsys):  # noqa: F811
     monkeypatch.setattr(commands, "RUNNER", cluster)
     drain = f"{sys.executable} -c 'raise SystemExit(3)'"

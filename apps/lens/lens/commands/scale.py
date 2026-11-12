@@ -30,8 +30,9 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
         "--drain",
         default="",
         metavar="COMMAND",
-        help="the stack's drain tool, run to lower a DisaggregatedSet role (it removes the groups once they "
-        "are out of the pool and idle); fields: {role} {set} {count} {namespace} {source}",
+        help="the stack's drain tool, run to lower a workload (it removes the pods or groups once they are out "
+        "of the pool and idle, and lowers the count itself); fields: {workload} {role} {set} {count} "
+        "{namespace} {source}",
     )
     drain.add_argument(
         "--no-drain",

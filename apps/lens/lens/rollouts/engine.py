@@ -54,6 +54,7 @@ def drainer_plan(rollout: RolloutPlan, template: str, directory: Path) -> list[D
     drainers = []
     for role in roll.roles:
         values = {
+            "workload": f"{roll.name}/{role.name}",
             "role": role.name,
             "source": str(rollout.plan.stack.source.root),
             "namespace": rollout.plan.namespace,
