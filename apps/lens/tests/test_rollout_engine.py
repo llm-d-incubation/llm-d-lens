@@ -444,3 +444,23 @@ def test_a_claim_or_an_object_made_again_is_kept():
     assert engine._still_needed(item, made_again, [], delete_volumes=True, **options) == (
         "deleted and created again outside llmd"
     )
+
+
+def test_an_object_labelled_as_another_instances_is_kept(rollrepo, cluster, tmp_path, capsys, monkeypatch):  # noqa: F811
+    """An imported stack can record an object another llm-d-lens instance made (a Route, say); neither
+    prune nor teardown deletes it."""
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    service = cluster.get(NS, "services", "model-p")
+    service["metadata"]["labels"] = {"lens.llm-d.ai/instance": "made-by-lens"}
+    path = rollrepo / "guides/demo-pd/modelserver/gpu/vllm/base/kustomization.yaml"
+    path.write_text(path.read_text().replace("  - service.yaml\n", ""))
+    git(rollrepo, "commit", "-q", "-am", "drop the Service")
+    argv = ["--state-dir", str(tmp_path), "rollouts"]
+    source = ["-n", NS, "--source", str(rollrepo)]
+    assert main([*argv, "start", STACK, "--name", "pd", *source]) == 0
+    capsys.readouterr()
+    assert main(["-o", "json", *argv, "prune", "pd", "-y", *source]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["kept"] == [{"object": "Service/model-p", "reason": "labelled as llm-d-lens instance made-by-lens's"}]
+    assert lifecycle.teardown(Kube(runner=cluster), NS, "pd")["skipped"] == ["Service/model-p"]
+    assert cluster.get(NS, "services", "model-p") is not None

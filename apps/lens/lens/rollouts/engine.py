@@ -19,7 +19,8 @@ Until then ``abort`` re-applies it as it was.
 
 A rollout never deletes. ``prune`` removes what the instance records and its stack no longer
 renders, once nothing uses it: a workload at 0 with no pod left, a ConfigMap, Secret or
-ServiceAccount no pod refers to. Claims are kept unless asked.
+ServiceAccount no pod refers to. Claims are kept unless asked, and so is an object labelled as
+another llm-d-lens instance's (an imported stack can record one that tool made).
 """
 
 from __future__ import annotations
@@ -502,6 +503,8 @@ def _still_needed(
     if item.get("uid") and live["metadata"].get("uid") != item["uid"]:
         return "deleted and created again outside llmd"
     labels = (live.get("metadata") or {}).get("labels") or {}
+    if labels.get(INSTANCE_LABEL) and labels[INSTANCE_LABEL] != instance:
+        return f"labelled as llm-d-lens instance {labels[INSTANCE_LABEL]}'s"
     owned = labels.get(INSTANCE_LABEL) == instance and labels.get(MANAGED_BY_LABEL) == MANAGED_BY_VALUE
     if not imported and not owned:
         return "no longer carries the instance's labels"

@@ -117,7 +117,8 @@ def teardown(
     """Delete what the instance owns, newest first, and its record.
 
     An object is deleted only while its UID is the recorded one (and, for objects llmd applied,
-    while it still carries the instance's labels); anything else is skipped and reported.
+    while it still carries the instance's labels); one labelled as another instance's (an imported
+    stack can record an object that tool made) and anything else is skipped and reported.
     ``forget`` deletes only the record: the objects stay as they are, unmanaged."""
     record = inventory.require(kube, namespace, instance)
     imported = inventory.management(record) == inventory.IMPORTED
@@ -156,7 +157,8 @@ def teardown(
         if live is None:
             continue
         same = not item.get("uid") or live["metadata"].get("uid") == item["uid"]
-        if not same or (not imported and not _owned(live, instance)):
+        other = (((live.get("metadata") or {}).get("labels") or {}).get(INSTANCE_LABEL) or instance) != instance
+        if not same or other or (not imported and not _owned(live, instance)):
             skipped.append(ref)
             continue
         kube.delete(item["resource"], item["name"], namespace)
