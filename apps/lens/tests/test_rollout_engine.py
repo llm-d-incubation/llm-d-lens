@@ -464,3 +464,31 @@ def test_an_object_labelled_as_another_instances_is_kept(rollrepo, cluster, tmp_
     assert result["kept"] == [{"object": "Service/model-p", "reason": "labelled as llm-d-lens instance made-by-lens's"}]
     assert lifecycle.teardown(Kube(runner=cluster), NS, "pd")["skipped"] == ["Service/model-p"]
     assert cluster.get(NS, "services", "model-p") is not None
+
+
+def test_a_service_switched_to_another_selector_needs_ready_pods_there(llmrepo, router, tmp_path, capsys):
+    """Traffic moved by a Service's selector (to a warm generation of a router, say) replaces no pods; the
+    plan checks that the new selector finds Ready pods."""
+    path = llmrepo / "examples/model-a/base/model-server/service.yaml"
+    path.write_text(
+        path.read_text().replace("    app: model-a\n", "    app: model-a\n    example.com/generation: v2\n")
+    )
+    git(llmrepo, "commit", "-q", "-am", "switch the Service")
+    argv = ["-o", "json", "rollouts", "plan", "examples/model-a/cluster-a", "--name", "r1", "-n", "team-a"]
+    source = ["--source", str(llmrepo)]
+    assert main([*argv, *source]) == 3
+    [finding] = [item for item in json.loads(capsys.readouterr().out)["findings"] if "service" in item["code"]]
+    assert finding["code"] == "service-selects-no-ready-pod" and finding["severity"] == "error"
+    assert main([*argv, *source, "--allow-outage"]) == 0
+    capsys.readouterr()
+    for (_, kind, name), pod in router.objects.items():
+        if kind == "pods" and name.startswith("model-a-"):
+            pod["metadata"]["labels"]["example.com/generation"] = "v2"
+    assert main([*argv, *source]) == 0
+    [finding] = [item for item in json.loads(capsys.readouterr().out)["findings"] if "service" in item["code"]]
+    assert finding["message"] == (
+        "Service/model-a: its selector moves to app=model-a,example.com/generation=v2; 1 Ready pod(s) match"
+    )
+    start = ["--state-dir", str(tmp_path), "rollouts", "start", "examples/model-a/cluster-a", "--name", "r1"]
+    assert main([*start, "-n", "team-a", *source]) == 0
+    assert inventory.require(Kube(runner=router), "team-a", "r1")["rollout"]["phase"] == "Finished"

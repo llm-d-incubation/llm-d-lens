@@ -12,7 +12,9 @@ and refuses what is not one safe in-place rollout:
 * the stack renders an object the namespace policy refuses (the same checks as a standup).
 
 It warns when a Deployment's or StatefulSet's pod template changes: every pod is replaced, and
-starts again without what it had cached, and a surge needs room for the extra pods.
+starts again without what it had cached, and a surge needs room for the extra pods. A Service whose
+selector moves (traffic switched to another generation of a router, say) has to select Ready pods,
+or it would have no endpoint; ``--allow-outage`` accepts that.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import inventory
+from .. import health, inventory
 from ..errors import ConflictError, PolicyError
 from ..kube import Kube
 from ..model import Finding, object_ref
@@ -173,6 +175,9 @@ def plan_rollout(
                 )
     rendered = {object_ref(document): document for document in plan.documents}
     findings += [_restart(rendered[ref]) for ref in change.restarts]
+    for ref, document in rendered.items():
+        if document["kind"] == "Service" and change.objects.get(ref) == "changed":
+            findings += _switch(kube, plan.namespace, document, live[ref], allow_outage=allow_outage)
     if not any(state != "same" for state in change.objects.values()):
         findings.append(Finding("info", "nothing-to-do", "the instance already runs what this ref renders"))
     return RolloutPlan(plan=plan, record=record, change=change, before=before, findings=findings)
@@ -208,6 +213,36 @@ def _restart(document: dict[str, Any]) -> Finding:
         hint="New pods start empty: their caches and what the router knows of them start over. To give "
         "running pods labels without replacing them, use `llmd label`.",
     )
+
+
+def _switch(
+    kube: Kube, namespace: str, document: dict[str, Any], live: dict[str, Any] | None, *, allow_outage: bool
+) -> list[Finding]:
+    """A Service whose selector moves: how many Ready pods the new selector finds."""
+    new = {str(key): str(value) for key, value in ((document.get("spec") or {}).get("selector") or {}).items()}
+    old = {str(key): str(value) for key, value in (((live or {}).get("spec") or {}).get("selector") or {}).items()}
+    if not new or new == old:
+        return []
+    ref = object_ref(document)
+    selector = ",".join(f"{key}={value}" for key, value in sorted(new.items()))
+    ready = [pod for pod in kube.get_json("pods", namespace, selector=selector) if health.pod_ready(pod)]
+    if ready:
+        return [
+            Finding(
+                "info", "service-switch", f"{ref}: its selector moves to {selector}; {len(ready)} Ready pod(s) match"
+            )
+        ]
+    return [
+        Finding(
+            "warning" if allow_outage else "error",
+            "service-selects-no-ready-pod",
+            f"{ref}: its selector moves to {selector}, which selects no Ready pod, so the Service would have no "
+            "endpoint",
+            object=ref,
+            hint="Start the pods it is to select first (a warm generation of a router, say) and switch once they "
+            "are Ready, or pass --allow-outage.",
+        )
+    ]
 
 
 def _settled(progress: Progress) -> list[Finding]:

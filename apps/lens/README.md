@@ -283,6 +283,11 @@ A change to a Deployment's or StatefulSet's pod template (a router's endpoint pi
 stays `Rolling` until the new pods are Ready and no old pod is left, so `status --watch`, `abort` and `finish`
 follow it like a DisaggregatedSet roll. A change that replaces no pods finishes at once.
 
+Traffic can also move without replacing pods: a Service whose selector moves to another generation of a
+router that already runs. `rollouts plan` counts the Ready pods the new selector finds, and blocks when there
+are none (`service-selects-no-ready-pod`; `--allow-outage` accepts it). Such a rollout finishes at once, so
+going back is a rollout of the previous ref.
+
 A rollout never deletes. What the instance's stack no longer renders keeps running until pruned:
 
 ```sh
@@ -292,8 +297,9 @@ llmd rollouts prune <instance> -n <namespace>                # asks first; -y sk
 
 `prune` renders the stack at the revision the instance runs and deletes a recorded object it no longer renders
 once nothing uses it: a workload at 0 replicas with no pod left; a ConfigMap, Secret or ServiceAccount no pod
-refers to. Claims stay unless `--delete-volumes`. A ref that only drops objects is recorded by `rollouts start`
-(nothing to apply), so `prune` can follow it.
+refers to. Claims stay unless `--delete-volumes`, and so does an object labelled as another llm-d-lens instance's
+(`lens.llm-d.ai/instance`), which an imported stack can record; `teardown` skips those too. A ref that only drops
+objects is recorded by `rollouts start` (nothing to apply), so `prune` can follow it.
 
 ## Development
 

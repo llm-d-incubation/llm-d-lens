@@ -445,10 +445,10 @@ and the ownership checks depend on them.
 | `standup` | plan, record | record, then objects | blocking findings; digest mismatch; objects owned by another tool |
 | `import` | plan, live objects | record only | the instance is already recorded; an object of the stack is missing (`--dry-run` also shows drift) |
 | `status`, `list` | record, live objects | nothing | the instance is not found |
-| `rollouts plan` | record, plan of the new ref, live sets | nothing | — (reports refusals) |
+| `rollouts plan` | record, plan of the new ref, live sets; pods a Service's new selector finds | nothing | — (reports refusals, among them a Service switched to a selector with no Ready pod) |
 | `rollouts start` | rollout plan | record, objects, drainer processes | blocking findings (a claim being deleted is one); digest mismatch; a rollout in progress; a Secret would change; another stack path without `--switch-stack` |
 | `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll and the replaced pods complete |
-| `rollouts prune` | record, plan at the recorded revision, live objects and pods | deletes objects, record | a rollout in progress; the source at another revision; a delete permission is missing. Objects still in use are kept and reported |
+| `rollouts prune` | record, plan at the recorded revision, live objects and pods | deletes objects, record | a rollout in progress; the source at another revision; a delete permission is missing. Objects still in use, and objects labelled as another instance's, are kept and reported |
 | `scale` | record, plan, live workload; pod metrics through the pod proxy (`--drain-idle`) | the scaled object, record (`overrides`); pod labels and deletion cost (`--drain-idle`), recorded pod labels (`--wait`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain`, `--drain-idle` or `--no-drain`; a failed drain command; `--drain-idle` without a pool label, with a pool that ignores it, with a pod not Ready, or during a rollout; a batch that does not go idle; `--wait` past its timeout |
 | `label` | record, live workload and pods | pod labels and annotations, record (`podLabels`, `podAnnotations`) | a key the controller selects pods by, an lws label, the pool label, the pod deletion cost; nothing to change |
 | `migrate plan` | both records, both plans | nothing | — (reports refusals) |
