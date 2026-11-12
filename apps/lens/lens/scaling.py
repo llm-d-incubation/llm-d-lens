@@ -186,11 +186,15 @@ def wait_serving(
     timeout: float,
     interval: float = 15,
     emit: Callable[[str], None] | None = None,
+    each: Callable[[], None] | None = None,
 ) -> None:
-    """Wait until each workload in ``counts`` has that many replicas serving (see :func:`serving`)."""
+    """Wait until each workload in ``counts`` has that many replicas serving (see :func:`serving`).
+    ``each`` runs before every read (``llmd scale`` labels new pods there)."""
     deadline = time.monotonic() + timeout
     last = ""
     while True:
+        if each:
+            each()
         kube.forget()
         have = {workload: serving(kube, plan, workload, pool_label=pool_label) for workload in counts}
         line = ", ".join(f"{workload} {have[workload]}/{count}" for workload, count in sorted(counts.items()))

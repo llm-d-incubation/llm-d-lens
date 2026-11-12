@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import time
 
+from .. import inventory
 from ..status import instance_status, list_instances
-from . import Context, Handler, add_target_arguments
+from . import Context, Handler, add_target_arguments, label
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -24,6 +25,7 @@ def command_status(ctx: Context) -> int:
     namespace = ctx.namespace(kube)
     while True:
         status = instance_status(kube, namespace, ctx.args.instance)
+        status["lackingLabels"] = label.missing(kube, namespace, inventory.require(kube, namespace, ctx.args.instance))
         if ctx.args.output != "text":
             ctx.emit(status)
         else:
@@ -58,6 +60,12 @@ def print_status(status: dict) -> None:
                 print(f"      {text}")
     for workload, count in sorted((status.get("overrides") or {}).items()):
         print(f"  scaled       {workload} to {count} with `llmd scale` (record it in the stack's repository)")
+    for item in status.get("lackingLabels") or []:
+        labels = ", ".join(f"{key}={value}" for key, value in sorted(item["labels"].items()))
+        print(
+            f"  unlabelled   {len(item['pods'])} pod(s) of {item['workload']} lack {labels} (kept by `llmd label`): "
+            + ", ".join(item["pods"])
+        )
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
     if status.get("unreadable"):

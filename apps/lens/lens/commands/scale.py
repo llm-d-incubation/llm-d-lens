@@ -9,7 +9,7 @@ from .. import catalog, draining, inventory, overrides, scaling
 from ..errors import UsageError
 from ..plan import Options, discovered_scope, make_plan
 from ..preflight import preflight
-from . import Context, Handler, add_source_arguments, add_target_arguments, progress, rollouts
+from . import Context, Handler, add_source_arguments, add_target_arguments, label, progress, rollouts
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -192,6 +192,7 @@ def command_scale(ctx: Context) -> int:
             timeout=args.timeout,
             interval=args.interval,
             emit=progress,
+            each=lambda: label.relabel(kube, namespace, record, list(raised)),
         )
     if args.output != "text":
         ctx.emit(result)
