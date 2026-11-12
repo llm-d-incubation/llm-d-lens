@@ -16,6 +16,10 @@ A Deployment or StatefulSet whose pod template changes (a router's, say) is foll
 rollout stays Rolling until its new pods are Ready and its old pods are gone, which for an
 endpoint picker that finishes its streams before it exits can take its whole grace period.
 Until then ``abort`` re-applies it as it was.
+
+A rollout never deletes. ``prune`` removes what the instance records and its stack no longer
+renders, once nothing uses it: a workload at 0 with no pod left, a ConfigMap, Secret or
+ServiceAccount no pod refers to. Claims are kept unless asked.
 """
 
 from __future__ import annotations
@@ -29,7 +33,8 @@ from .. import health, inventory, yamlio
 from ..errors import ConflictError, NotReadyError, PolicyError, UsageError
 from ..importing import comparable
 from ..kube import Kube
-from ..model import object_ref
+from ..model import INSTANCE_LABEL, KEPT_KINDS, MANAGED_BY_LABEL, MANAGED_BY_VALUE, object_ref
+from ..plan import Plan
 from ..preflight import resources
 from .drainers import Drainer, Drainers, command
 from .plan import RolloutPlan
@@ -104,6 +109,20 @@ def start(
             "--drain 'COMMAND {role} ...' for the stack's drain tool.",
         )
     changed = rollout.change.changed_documents(plan.documents)
+    if not changed and rollout.change.left_alone and record["stack"].get("source") != plan.stack.source.describe():
+        # The ref only drops objects: nothing to apply, but the instance now runs this ref, so
+        # `prune` can delete what it no longer renders.
+        record = {**record, "stack": plan.stack_record(), "planDigest": plan.digest, "updatedBy": actor}
+        inventory.write(kube, record)
+        return {
+            "instance": plan.instance,
+            "namespace": plan.namespace,
+            "applied": [],
+            "rolls": "",
+            "drainers": [],
+            "phase": (record.get("rollout") or {}).get("phase") or "None",
+            "leftAlone": rollout.change.left_alone,
+        }
     if not changed:
         raise UsageError("nothing to roll out: the instance already runs what this ref renders")
     secrets = [object_ref(doc) for doc in changed if doc["kind"] == "Secret"]
@@ -171,6 +190,7 @@ def start(
         "instance": plan.instance,
         "namespace": plan.namespace,
         "applied": [object_ref(doc) for doc in changed],
+        "leftAlone": rollout.change.left_alone,
         "rolls": ", ".join(rolling),
         "drainers": [item.describe() for item in started],
         "phase": record["rollout"]["phase"],
@@ -398,3 +418,154 @@ def describe_progress(current: dict[str, Any]) -> str:
         old = sum(value["groups"] for revision, value in item["byRevision"].items() if revision != progress["target"])
         parts.append(f"{role} {new['serving']}/{item['replicas']} new serving, {old} old left")
     return f"{current['phase']}: " + "; ".join(parts + rolling)
+
+
+#: Kinds that run pods: pruned only once they ask for none and none is left.
+WORKLOAD_KINDS = ("Deployment", "StatefulSet", "ReplicaSet", "DaemonSet", "LeaderWorkerSet", "DisaggregatedSet", "Job")
+
+
+def prune(kube: Kube, plan: Plan, *, delete_volumes: bool = False, dry_run: bool = False) -> dict[str, Any]:
+    """Delete the objects the instance records that ``plan`` (its own stack) no longer renders, once
+    nothing uses them, and drop them from the record."""
+    record = _record(kube, plan.namespace, plan.instance)
+    if (record.get("rollout") or {}).get("phase") in ("Rolling", "Paused", "Aborting"):
+        raise ConflictError(
+            f"instance {plan.instance} has a rollout in progress; prune it once the rollout is finished",
+            hint=f"See `llmd rollouts status {plan.instance}`.",
+        )
+    imported = inventory.management(record) == inventory.IMPORTED
+    rendered = {(document["kind"], document["metadata"]["name"]) for document in plan.documents}
+    stale = [item for item in record["objects"] if (item["kind"], item["name"]) not in rendered]
+    pods = kube.get_json("pods", plan.namespace) if stale else []
+    deleted, kept, gone = [], [], []
+    for item in stale:
+        ref = f"{item['kind']}/{item['name']}"
+        live = kube.get(item["resource"], item["name"], plan.namespace)
+        if live is None:
+            gone.append(ref)
+            continue
+        reason = _still_needed(
+            item, live, pods, instance=plan.instance, imported=imported, delete_volumes=delete_volumes
+        )
+        if reason:
+            kept.append({"object": ref, "reason": reason})
+        else:
+            deleted.append(item)
+    if not dry_run and (deleted or gone):
+        names = sorted({item["resource"] for item in deleted})
+        answers = kube.access_reviews([("delete", *_split(name), plan.namespace) for name in names])
+        denied = [name for name, allowed in zip(names, answers, strict=True) if allowed is False]
+        if denied:
+            raise PolicyError(
+                f"you cannot delete {', '.join(denied)} in {plan.namespace}; nothing was removed",
+                hint="Ask a namespace administrator for the missing permission.",
+            )
+        for item in deleted:
+            kube.delete(item["resource"], item["name"], plan.namespace)
+        removed = {f"{item['kind']}/{item['name']}" for item in deleted} | set(gone)
+        workloads = {ref.partition("/")[2] for ref in removed if ref.partition("/")[0] in WORKLOAD_KINDS}
+        updated = {
+            **record,
+            "objects": [item for item in record["objects"] if f"{item['kind']}/{item['name']}" not in removed],
+        }
+        for key in ("overrides", "podLabels"):
+            remaining = {
+                workload: value
+                for workload, value in (record.get(key) or {}).items()
+                if workload.partition("/")[0] not in workloads
+            }
+            if remaining:
+                updated[key] = remaining
+            else:
+                updated.pop(key, None)
+        inventory.write(kube, updated)
+    return {
+        "instance": plan.instance,
+        "namespace": plan.namespace,
+        "deleted": [f"{item['kind']}/{item['name']}" for item in deleted],
+        "kept": kept,
+        "gone": gone,
+        "dryRun": dry_run,
+    }
+
+
+def _still_needed(
+    item: dict[str, Any],
+    live: dict[str, Any],
+    pods: list[dict[str, Any]],
+    *,
+    instance: str,
+    imported: bool,
+    delete_volumes: bool,
+) -> str:
+    """Why a stale object stays ("" when it can go)."""
+    if item.get("uid") and live["metadata"].get("uid") != item["uid"]:
+        return "deleted and created again outside llmd"
+    labels = (live.get("metadata") or {}).get("labels") or {}
+    owned = labels.get(INSTANCE_LABEL) == instance and labels.get(MANAGED_BY_LABEL) == MANAGED_BY_VALUE
+    if not imported and not owned:
+        return "no longer carries the instance's labels"
+    if item["kind"] in KEPT_KINDS and not delete_volumes:
+        return "a claim: pass --delete-volumes to delete it"
+    if item["kind"] in WORKLOAD_KINDS:
+        wanted = _replicas(live)
+        selector = health.pod_selector(live)
+        running = [pod for pod in pods if selector and _selected(pod, selector)]
+        if wanted:
+            return f"asks for {wanted} replica(s): lower it to 0 (`llmd scale`) while the stack still renders it"
+        if running:
+            return f"{len(running)} pod(s) still run; prune again once they are gone"
+        return ""
+    users = sorted(pod["metadata"]["name"] for pod in pods if _refers(pod, item["kind"], item["name"]))
+    if users:
+        return f"used by pod(s) {', '.join(users[:5])}" + (" and more" if len(users) > 5 else "")
+    return ""
+
+
+def _replicas(live: dict[str, Any]) -> int:
+    spec = live.get("spec") or {}
+    if live["kind"] == "DisaggregatedSet":
+        return sum(int((role.get("spec") or {}).get("replicas") or 0) for role in spec.get("roles") or [])
+    if live["kind"] in ("DaemonSet", "Job"):
+        return int(((live.get("status") or {}).get("active") or 0) if live["kind"] == "Job" else 0)
+    return int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)
+
+
+def _selected(pod: dict[str, Any], selector: str) -> bool:
+    labels = health.labels(pod)
+    return all(labels.get(key) == value for key, _, value in (term.partition("=") for term in selector.split(",")))
+
+
+def _refers(pod: dict[str, Any], kind: str, name: str) -> bool:
+    """Whether a pod mounts, reads or runs as the ConfigMap, Secret or ServiceAccount ``name``."""
+    spec = pod.get("spec") or {}
+    if kind == "ServiceAccount":
+        return (spec.get("serviceAccountName") or spec.get("serviceAccount")) == name
+    key = {
+        "ConfigMap": ("configMap", "name", "configMapRef", "configMapKeyRef"),
+        "Secret": ("secret", "secretName", "secretRef", "secretKeyRef"),
+    }.get(kind)
+    if key is None:
+        return False
+    volume_key, volume_name, from_key, ref_key = key
+    for volume in spec.get("volumes") or []:
+        if (volume.get(volume_key) or {}).get(volume_name) == name:
+            return True
+        for source in (volume.get("projected") or {}).get("sources") or []:
+            if (source.get(volume_key) or {}).get("name") == name:
+                return True
+    for container in [*(spec.get("initContainers") or []), *(spec.get("containers") or [])]:
+        if any((item.get(from_key) or {}).get("name") == name for item in container.get("envFrom") or []):
+            return True
+        if any(
+            ((item.get("valueFrom") or {}).get(ref_key) or {}).get("name") == name
+            for item in container.get("env") or []
+        ):
+            return True
+    return kind == "Secret" and any(item.get("name") == name for item in spec.get("imagePullSecrets") or [])
+
+
+def _split(resource: str) -> tuple[str, str]:
+    """``plural.group`` -> (group, plural)."""
+    plural, _, group = resource.partition(".")
+    return group, plural

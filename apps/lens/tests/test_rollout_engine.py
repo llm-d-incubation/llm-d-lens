@@ -342,3 +342,105 @@ def test_the_plan_says_which_pods_a_template_change_replaces(llmrepo, router, tm
         "the surge needs 1 nvidia.com/gpu more"
     )
     assert finding["severity"] == "warning"
+
+
+def drop(repo, name, add=None):
+    """Take ``name`` out of model-a's model-server kustomization (and add ``add``), and commit."""
+    path = repo / "examples/model-a/base/model-server/kustomization.yaml"
+    text = path.read_text().replace(f"  - {name}\n", f"  - {add}\n" if add else "")
+    path.write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", f"drop {name}")
+
+
+def test_prune_deletes_what_the_stack_no_longer_renders_once_unused(llmrepo, router, tmp_path, capsys):
+    drop(llmrepo, "service.yaml")
+    argv = ["--state-dir", str(tmp_path), "rollouts"]
+    source = ["-n", "team-a", "--source", str(llmrepo)]
+    assert main([*argv, "prune", "r1", *source]) == 4  # the instance still runs the older ref
+    assert "but instance r1 runs" in capsys.readouterr().err
+    assert main([*argv, "start", "examples/model-a/cluster-a", "--name", "r1", *source]) == 0
+    out = capsys.readouterr().out
+    assert "Nothing to apply" in out and "`llmd rollouts prune r1`" in out
+    assert main(["-o", "json", *argv, "prune", "r1", "--dry-run", *source]) == 0
+    assert json.loads(capsys.readouterr().out)["deleted"] == ["Service/model-a"]
+    assert router.get("team-a", "services", "model-a") is not None
+    assert main([*argv, "prune", "r1", *source]) == 1  # no terminal to confirm
+    assert main([*argv, "prune", "r1", "-y", *source]) == 0
+    assert "delete  Service/model-a" in capsys.readouterr().out
+    assert router.get("team-a", "services", "model-a") is None
+    recorded = [item["kind"] for item in inventory.require(Kube(runner=router), "team-a", "r1")["objects"]]
+    assert "Service" not in recorded
+
+
+def test_prune_keeps_a_workload_until_it_runs_nothing(llmrepo, router, tmp_path, capsys):
+    main(["scale", "r1", "model-a=2", "-n", "team-a", "--source", str(llmrepo)])
+    main(["label", "r1", "model-a", "example.com/router=pd", "-n", "team-a"])
+    config = llmrepo / "examples/model-a/base/model-server/config.yaml"
+    config.write_text("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: model-a-config\ndata:\n  a: b\n")
+    overlay = llmrepo / "examples/model-a/cluster-a/kustomization.yaml"
+    overlay.write_text(overlay.read_text().replace("replicas:\n  - name: model-a\n    count: 1\n", ""))
+    drop(llmrepo, "deployment.yaml", add="config.yaml")
+    argv = ["--state-dir", str(tmp_path), "rollouts"]
+    source = ["-n", "team-a", "--source", str(llmrepo)]
+    assert main([*argv, "start", "examples/model-a/cluster-a", "--name", "r1", *source]) == 0
+    capsys.readouterr()
+    assert main(["-o", "json", *argv, "prune", "r1", "-y", *source]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["deleted"] == [] and result["kept"] == [
+        {
+            "object": "Deployment/model-a",
+            "reason": "asks for 2 replica(s): lower it to 0 (`llmd scale`) while the stack still renders it",
+        }
+    ]
+    router.get("team-a", "deployments.apps", "model-a")["spec"]["replicas"] = 0
+    router.settle()
+    assert main(["-o", "json", *argv, "prune", "r1", "-y", *source]) == 0
+    assert json.loads(capsys.readouterr().out)["deleted"] == ["Deployment/model-a"]
+    record = inventory.require(Kube(runner=router), "team-a", "r1")
+    assert "overrides" not in record and "podLabels" not in record
+
+
+def test_what_a_pod_refers_to_is_kept():
+    pod = {
+        "metadata": {"name": "p"},
+        "spec": {
+            "serviceAccountName": "sa",
+            "imagePullSecrets": [{"name": "pull"}],
+            "volumes": [
+                {"name": "c", "configMap": {"name": "mounted"}},
+                {"name": "s", "secret": {"secretName": "certs"}},
+                {"name": "x", "projected": {"sources": [{"configMap": {"name": "projected"}}]}},
+            ],
+            "containers": [
+                {
+                    "envFrom": [{"secretRef": {"name": "env-secret"}}],
+                    "env": [{"name": "A", "valueFrom": {"configMapKeyRef": {"name": "one-key", "key": "a"}}}],
+                }
+            ],
+        },
+    }
+    for kind, name in (
+        ("ServiceAccount", "sa"),
+        ("Secret", "pull"),
+        ("ConfigMap", "mounted"),
+        ("Secret", "certs"),
+        ("ConfigMap", "projected"),
+        ("Secret", "env-secret"),
+        ("ConfigMap", "one-key"),
+    ):
+        assert engine._refers(pod, kind, name), (kind, name)
+    assert not engine._refers(pod, "ConfigMap", "other") and not engine._refers(pod, "Service", "sa")
+
+
+def test_a_claim_or_an_object_made_again_is_kept():
+    claim = {"kind": "PersistentVolumeClaim", "name": "c", "uid": "u1"}
+    live = {"kind": "PersistentVolumeClaim", "metadata": {"uid": "u1"}}
+    options = {"instance": "r1", "imported": True}
+    assert "--delete-volumes" in engine._still_needed(claim, live, [], delete_volumes=False, **options)
+    assert engine._still_needed(claim, live, [], delete_volumes=True, **options) == ""
+    made_again = {"kind": "ConfigMap", "metadata": {"uid": "u2"}}
+    item = {"kind": "ConfigMap", "name": "c", "uid": "u1"}
+    assert engine._still_needed(item, made_again, [], delete_volumes=True, **options) == (
+        "deleted and created again outside llmd"
+    )

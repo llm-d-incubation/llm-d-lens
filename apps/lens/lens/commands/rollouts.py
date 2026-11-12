@@ -6,12 +6,13 @@ import argparse
 import sys
 import time
 
-from .. import inventory, yamlio
-from ..errors import LlmdError, PolicyError, UsageError
+from .. import catalog, inventory, yamlio
+from ..errors import ConflictError, LlmdError, PolicyError, UsageError
+from ..plan import discovered_scope, make_plan
 from ..preflight import preflight
 from ..rollouts import engine
 from ..rollouts.plan import RolloutPlan, plan_rollout
-from . import Context, Handler, add_target_arguments
+from . import Context, Handler, add_source_arguments, add_target_arguments
 from .plan import add_plan_arguments, plan_from_args
 
 #: Help for --pool-label. llm-d's InferencePool selects pods by their labels, so with no label a group
@@ -115,6 +116,19 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
             _watch_arguments(action)
         if name == "abort":
             action.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
+    prune = actions.add_parser(
+        "prune",
+        help="delete what the instance records and its stack no longer renders, once nothing uses it",
+        description="A rollout never deletes. prune renders the instance's stack at the revision it runs and "
+        "deletes the recorded objects it no longer renders: a workload once it asks for no replicas and no pod "
+        "of it is left, a ConfigMap, Secret or ServiceAccount once no pod refers to it. Claims are kept.",
+    )
+    prune.add_argument("instance")
+    add_source_arguments(prune)
+    add_target_arguments(prune)
+    prune.add_argument("--delete-volumes", action="store_true", help="delete claims the stack no longer renders too")
+    prune.add_argument("--dry-run", action="store_true", help="list what would be deleted and what stays")
+    prune.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     return {"rollouts": command_rollouts}
 
 
@@ -151,6 +165,8 @@ def command_rollouts(ctx: Context) -> int:
         return PolicyError.exit_code if rollout.blocking else 0
     if action == "start":
         return command_start(ctx)
+    if action == "prune":
+        return command_prune(ctx)
     kube = ctx.kube()
     namespace = ctx.namespace(kube)
     instance = ctx.args.instance
@@ -217,7 +233,15 @@ def command_start(ctx: Context) -> int:
     if args.output != "text":
         ctx.emit(result)
     else:
-        print(f"Applied {', '.join(result['applied'])} to {result['instance']} in {result['namespace']}")
+        if result["applied"]:
+            print(f"Applied {', '.join(result['applied'])} to {result['instance']} in {result['namespace']}")
+        else:
+            print(f"Nothing to apply; {result['instance']} in {result['namespace']} now runs this ref")
+        if result.get("leftAlone"):
+            print(
+                f"  {len(result['leftAlone'])} object(s) it no longer renders still run; delete them once unused "
+                f"with `llmd rollouts prune {result['instance']}`"
+            )
         for drainer in result["drainers"]:
             print(f"  drainer {drainer['role']}: pid {drainer['pid']}, log {drainer['log']}")
         if result["rolls"]:
@@ -225,6 +249,47 @@ def command_start(ctx: Context) -> int:
             print(f"{result['rolls']} is rolling; follow it with `{follow}`")
     if result["rolls"] and args.watch:
         return _follow(ctx, kube, rollout.plan.namespace, rollout.plan.instance)
+    return 0
+
+
+def command_prune(ctx: Context) -> int:
+    from .scale import instance_options  # commands.scale imports this module
+
+    args = ctx.args
+    kube = ctx.kube()
+    namespace = ctx.namespace(kube)
+    record = inventory.require(kube, namespace, args.instance)
+    stack = catalog.find_stack(ctx.source(), record["stack"]["id"])
+    running = ((record.get("stack") or {}).get("source") or {}).get("revision") or ""
+    if running and stack.source.revision and stack.source.revision != running:
+        raise ConflictError(
+            f"the source is at {stack.source.revision[:12]}, but instance {args.instance} runs {running[:12]}",
+            hint="Prune from a checkout at the revision the instance runs, or roll it out to this one first.",
+        )
+    options = instance_options(record, namespace, args.instance, overrides=dict(record.get("overrides") or {}))
+    imported = inventory.management(record) == inventory.IMPORTED
+    plan = make_plan(stack, options, runner=ctx.runner, scope=discovered_scope(kube), label=not imported)
+    result = engine.prune(kube, plan, delete_volumes=args.delete_volumes, dry_run=True)
+    if not args.dry_run and result["deleted"]:
+        question = (
+            f"Delete {len(result['deleted'])} object(s) of {args.instance} that its stack no longer renders? [y/N] "
+        )
+        if not args.yes and not _confirm(question):
+            return 1
+        result = engine.prune(kube, plan, delete_volumes=args.delete_volumes)
+    elif not args.dry_run and result["gone"]:
+        result = engine.prune(kube, plan, delete_volumes=args.delete_volumes)
+    if args.output != "text":
+        ctx.emit(result)
+        return 0
+    verb = "Would delete" if result["dryRun"] else "Deleted"
+    print(f"{verb} {len(result['deleted'])} object(s) of {args.instance} that its stack no longer renders")
+    for ref in result["deleted"]:
+        print(f"  delete  {ref}")
+    for item in result["kept"]:
+        print(f"  keep    {item['object']}: {item['reason']}")
+    for ref in result["gone"]:
+        print(f"  gone    {ref} (already deleted; dropped from the record)")
     return 0
 
 
