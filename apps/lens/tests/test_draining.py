@@ -109,6 +109,12 @@ def test_drain_idle_removes_the_least_busy_pod_after_it_is_idle(llmrepo, pooled,
     assert inventory.require(Kube(runner=pooled), "team-a", "r1")["overrides"] == {"model-a": 2}
 
 
+def test_the_output_says_llmd_drained_the_pods(llmrepo, pooled, capsys):
+    argv = ["scale", "r1", "model-a=2", "--drain-idle", "-n", "team-a", "--source", str(llmrepo)]
+    assert main([*argv, "--pool-label", POOL, "--metrics-port", "8000", "--drain-interval", "0"]) == 0
+    assert "Scaled model-a of r1: 3 -> 2 (drained first)" in capsys.readouterr().out
+
+
 def test_a_batch_drains_pods_together_and_lowers_once(llmrepo, pooled, monkeypatch, capsys):
     applied = []
     apply = Kube.apply

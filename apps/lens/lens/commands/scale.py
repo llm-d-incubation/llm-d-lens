@@ -200,7 +200,7 @@ def command_scale(ctx: Context) -> int:
     verb = "Would scale" if result.get("dryRun") else "Scaled"
     for step in result["steps"]:
         before = "?" if step["from"] is None else step["from"]
-        how = " (by the drain command)" if step["drain"] else ""
+        how = (" (drained first)" if args.drain_idle else " (by the drain command)") if step["drain"] else ""
         same = " (unchanged)" if step["from"] == step["to"] else ""
         print(f"{verb} {step['workload']} of {args.instance}: {before} -> {step['to']}{how}{same}")
     if not result.get("dryRun"):
