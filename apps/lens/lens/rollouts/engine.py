@@ -11,6 +11,11 @@ the way its team applies them (client-side ``kubectl apply``), so their own
 ``abort`` re-applies the DisaggregatedSet as it was before the rollout: the controller has
 no pause and does not read ``partition``, so the old template is the only way back. It is
 itself a roll, and the drainers run for it the same way.
+
+A Deployment or StatefulSet whose pod template changes (a router's, say) is followed too: the
+rollout stays Rolling until its new pods are Ready and its old pods are gone, which for an
+endpoint picker that finishes its streams before it exits can take its whole grace period.
+Until then ``abort`` re-applies it as it was.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import inventory, yamlio
+from .. import health, inventory, yamlio
 from ..errors import ConflictError, NotReadyError, PolicyError, UsageError
 from ..importing import comparable
 from ..kube import Kube
@@ -116,6 +121,10 @@ def start(
             previous.append({"resource": names[object_ref(document)], "document": comparable(live)})
     directory = state / "rollouts" / plan.namespace / plan.instance
     planned_drainers = drainer_plan(rollout, drain, directory) if drain != "-" else []
+    restarts = [
+        {"kind": ref.partition("/")[0], "name": ref.partition("/")[2], "resource": names[ref]}
+        for ref in rollout.change.restarts
+    ]
     record = {
         **record,
         "rollout": {
@@ -131,6 +140,7 @@ def start(
             "previous": previous,
             "drain": drain if drain != "-" else "",
             **({"poolLabel": pool_label} if pool_label else {}),
+            **({"workloads": restarts} if restarts else {}),
             "steps": [],
         },
     }
@@ -153,14 +163,15 @@ def start(
             (kube.get(entry["resource"], entry["name"], plan.namespace) or {}).get("metadata", {}).get("uid", "")
         )
     record["objects"] = [*record["objects"], *new]
-    if not roll:
+    if not roll and not restarts:
         record["rollout"] = {**record["rollout"], "phase": "Finished", "finishedAt": inventory.now()}
     inventory.write(kube, record)
+    rolling = ([roll.name] if roll else []) + [f"{item['kind']}/{item['name']}" for item in restarts]
     return {
         "instance": plan.instance,
         "namespace": plan.namespace,
         "applied": [object_ref(doc) for doc in changed],
-        "rolls": roll.name if roll else "",
+        "rolls": ", ".join(rolling),
         "drainers": [item.describe() for item in started],
         "phase": record["rollout"]["phase"],
     }
@@ -179,10 +190,33 @@ def progress_of(kube: Kube, record: dict[str, Any], *, pool_label: str) -> Progr
     return progress
 
 
+def workloads_of(kube: Kube, record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Where each Deployment or StatefulSet the rollout replaces pods of stands: done once it reports
+    the new template Ready and no pod of it is terminating."""
+    found = []
+    for item in (record.get("rollout") or {}).get("workloads") or []:
+        live = kube.get(item["resource"], item["name"], record["namespace"])
+        selector = health.pod_selector(live) if live else ""
+        pods = kube.get_json("pods", record["namespace"], selector=selector) if selector else []
+        state, detail = health.evaluate(live, pods)
+        terminating = sum(1 for pod in pods if (pod.get("metadata") or {}).get("deletionTimestamp"))
+        found.append(
+            {
+                "object": f"{item['kind']}/{item['name']}",
+                "state": state,
+                "detail": detail,
+                "terminating": terminating,
+                "done": state == "ready" and not terminating,
+            }
+        )
+    return found
+
+
 def status(kube: Kube, namespace: str, instance: str, *, state: Path, pool_label: str) -> dict[str, Any]:
     record = _record(kube, namespace, instance)
     rollout = record.get("rollout") or {}
     progress = progress_of(kube, record, pool_label=pool_label) if rollout.get("set") else None
+    workloads = workloads_of(kube, record) if rollout.get("phase") in ("Rolling", "Paused", "Aborting") else []
     drainers = Drainers(state / "rollouts" / namespace / instance)
     return {
         "instance": instance,
@@ -193,7 +227,8 @@ def status(kube: Kube, namespace: str, instance: str, *, state: Path, pool_label
         "to": (rollout.get("to") or {}).get("revision", ""),
         "fromRevision": rollout.get("fromRevision", ""),
         "progress": progress.describe() if progress else None,
-        "done": _done(rollout, progress),
+        "workloads": workloads,
+        "done": _done(rollout, progress, workloads),
         "drainers": {
             "running": [item.describe() for item in drainers.running()],
             "exited": [item.describe() for item in drainers.exited()],
@@ -202,13 +237,19 @@ def status(kube: Kube, namespace: str, instance: str, *, state: Path, pool_label
     }
 
 
-def _done(rollout: dict[str, Any], progress: Progress | None) -> bool:
+def _done(rollout: dict[str, Any], progress: Progress | None, workloads: list[dict[str, Any]]) -> bool:
     """Rolled forward: every group serves a revision other than the one the rollout started from.
-    Aborted: every group serves that revision again."""
-    if progress is None or progress.rolling or not progress.done():
+    Aborted: every group serves that revision again. Either way, every Deployment or StatefulSet it
+    replaces pods of is done."""
+    if not rollout.get("set") and not rollout.get("workloads"):
         return False
-    back = progress.target == rollout.get("fromRevision")
-    return back if rollout.get("phase") == "Aborting" else not back
+    if rollout.get("set"):
+        if progress is None or progress.rolling or not progress.done():
+            return False
+        back = progress.target == rollout.get("fromRevision")
+        if not (back if rollout.get("phase") == "Aborting" else not back):
+            return False
+    return all(item["done"] for item in workloads)
 
 
 def _set_phase(kube: Kube, record: dict[str, Any], phase: str, **extra: Any) -> dict[str, Any]:
@@ -268,9 +309,15 @@ def finish(kube: Kube, namespace: str, instance: str, *, state: Path, pool_label
     record = _record(kube, namespace, instance)
     rollout = _rollout(record)
     progress = progress_of(kube, record, pool_label=pool_label)
-    if progress and not _done(rollout, progress):
+    workloads = workloads_of(kube, record)
+    if (progress or workloads) and not _done(rollout, progress, workloads):
+        unsettled = progress is not None and not _done({**rollout, "workloads": []}, progress, [])
+        waiting = [f"{progress.name} has not finished rolling ({', '.join(progress.revisions)})"] if unsettled else []
+        waiting += [
+            f"{item['object']} has not finished rolling ({item['detail']})" for item in workloads if not item["done"]
+        ]
         raise NotReadyError(
-            f"{progress.name} has not finished rolling ({', '.join(progress.revisions)})",
+            "; ".join(waiting) or "the rollout has not finished",
             hint="Follow it with `llmd rollouts status --watch`.",
         )
     Drainers(state / "rollouts" / namespace / instance).stop()
@@ -335,11 +382,19 @@ def _stalled(current: dict[str, Any]) -> list[dict[str, Any]]:
 
 def describe_progress(current: dict[str, Any]) -> str:
     progress = current.get("progress")
+    rolling = [
+        f"{item['object']} {item['detail']}"
+        + (f", {item['terminating']} old pod(s) finishing" if item["terminating"] else "")
+        for item in current.get("workloads") or []
+        if not item["done"]
+    ]
     if not progress:
-        return current["phase"]
+        return (
+            f"{current['phase']}: " + ("; ".join(rolling) or "done") if current.get("workloads") else current["phase"]
+        )
     parts = []
     for role, item in progress["roles"].items():
         new = item["byRevision"].get(progress["target"], {"groups": 0, "serving": 0})
         old = sum(value["groups"] for revision, value in item["byRevision"].items() if revision != progress["target"])
         parts.append(f"{role} {new['serving']}/{item['replicas']} new serving, {old} old left")
-    return f"{current['phase']}: " + "; ".join(parts)
+    return f"{current['phase']}: " + "; ".join(parts + rolling)

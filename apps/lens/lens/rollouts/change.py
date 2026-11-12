@@ -12,7 +12,9 @@ For each DisaggregatedSet the change is one of
 * ``none``.
 
 and every other object either stays, changes in place, or is new; an object the running
-instance has and the new render does not is never deleted by a rollout.
+instance has and the new render does not is never deleted by a rollout. A Deployment or
+StatefulSet whose pod template changes replaces its pods (``restarts``); the rollout follows it
+until the new pods are Ready and the old ones are gone.
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ REVISION_HASH_ANNOTATION = "disaggregatedset.x-k8s.io/revision-hash-version"
 #: ``leaderWorkerTemplate`` and ``groupIdentity`` (``ComputeRevisionV1``).
 OUTSIDE_REVISION = ("replicas", "rolloutStrategy", "groupReplacementPolicy")
 OUTSIDE_REVISION_ROLE = ("scaling", "subRoles")
+#: Workloads whose controller replaces every pod when the pod template changes.
+RESTARTING = ("Deployment", "StatefulSet")
 
 
 @dataclass
@@ -154,6 +158,8 @@ class Change:
     objects: dict[str, str]
     #: Objects the instance runs that the new render no longer has; a rollout leaves them alone.
     left_alone: list[str]
+    #: Deployments and StatefulSets whose pod template changes, so their pods are replaced.
+    restarts: list[str] = field(default_factory=list)
 
     @property
     def roll(self) -> SetChange | None:
@@ -167,7 +173,7 @@ def compare_objects(
     live: dict[str, dict[str, Any] | None], documents: list[dict[str, Any]], recorded: list[str]
 ) -> Change:
     """``live`` maps each object ref of ``documents`` to its running object (None when it is new)."""
-    objects, sets = {}, []
+    objects, sets, restarts = {}, [], []
     for document in documents:
         ref = object_ref(document)
         current = live.get(ref)
@@ -180,5 +186,15 @@ def compare_objects(
             objects[ref] = "same" if item.kind == "none" else "changed"
             continue
         objects[ref] = "changed" if drift(compared(document), compared(current)) else "same"
+        if (
+            objects[ref] == "changed"
+            and document["kind"] in RESTARTING
+            and drift(_template(document), _template(current))
+        ):
+            restarts.append(ref)
     left_alone = sorted(set(recorded) - set(objects))
-    return Change(sets=sets, objects=objects, left_alone=left_alone)
+    return Change(sets=sets, objects=objects, left_alone=left_alone, restarts=restarts)
+
+
+def _template(document: dict[str, Any]) -> dict[str, Any]:
+    return (compared(document).get("spec") or {}).get("template") or {}

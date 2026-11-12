@@ -271,6 +271,9 @@ def print_rollout_status(current: dict) -> None:
             for revision, value in item["byRevision"].items()
         )
         print(f"  {role:<10} {item['serving']}/{item['replicas']} serving  ({revisions})")
+    for item in current.get("workloads") or []:
+        finishing = f", {item['terminating']} old pod(s) finishing" if item["terminating"] else ""
+        print(f"  {item['object']:<10} {'done' if item['done'] else item['state']}: {item['detail']}{finishing}")
     for drainer in current["drainers"]["running"]:
         print(f"  drainer {drainer['role']} running (pid {drainer['pid']}), log {drainer['log']}")
     for drainer in current["drainers"]["exited"]:

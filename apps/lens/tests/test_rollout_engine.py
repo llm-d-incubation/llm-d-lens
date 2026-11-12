@@ -6,13 +6,17 @@ import sys
 
 import pytest
 
-from lens import inventory
+from lens import commands, inventory, lifecycle
 from lens.cli import main
 from lens.errors import ConflictError, NotReadyError, UsageError
 from lens.kube import Kube
 from lens.rollouts import engine
 from lens.rollouts.plan import plan_rollout
 
+from .conftest import git
+from .fakes import FakeCluster
+from .test_lifecycle import plan_for
+from .test_preflight import prerequisites
 from .test_rollout_plan import DS, NS, POOL, STACK, cluster, new_image, rollrepo, stack_plan  # noqa: F401
 
 #: A stand-in for the stack's drain tool: it runs until stopped and announces nothing itself; the
@@ -177,8 +181,6 @@ def test_a_privileged_imported_stack_rolls_through_the_cli(rollrepo, cluster, tm
 
 
 def git_commit(repo):
-    from .conftest import git
-
     git(repo, "commit", "-q", "-am", "privileged")
 
 
@@ -256,3 +258,75 @@ def test_the_pool_label_stays_with_the_rollout(rollrepo, cluster, tmp_path, caps
     assert main([*state, "-o", "json", "rollouts", "status", "pd", "-n", NS]) == 0
     assert json.loads(capsys.readouterr().out)["done"] is False
     assert main([*state, "rollouts", "finish", "pd", "-n", NS]) == 7
+
+
+@pytest.fixture
+def router(llmrepo, monkeypatch):
+    """model-a stood up by llmd, on a test cluster that reports Deployment rollouts."""
+    fake = FakeCluster()
+    fake.deployment_status = True
+    prerequisites(fake)
+    monkeypatch.setattr(commands, "RUNNER", fake)
+    lifecycle.standup(Kube(runner=fake), plan_for(llmrepo, fake))
+    return fake
+
+
+def new_template(repo):
+    path = repo / "examples/model-a/base/model-server/deployment.yaml"
+    path.write_text(path.read_text().replace("sha256:0000", "sha256:1111"))
+    git(repo, "commit", "-q", "-am", "new image")
+
+
+def image(fake):
+    return fake.get("team-a", "deployments.apps", "model-a")["spec"]["template"]["spec"]["containers"][0]["image"]
+
+
+def test_a_deployment_rollout_is_followed_until_its_pods_settle(llmrepo, router, tmp_path, capsys):
+    new_template(llmrepo)
+    router.rolling.add("model-a")
+    argv = ["--state-dir", str(tmp_path), "rollouts"]
+    target = ["-n", "team-a", "--source", str(llmrepo)]
+    assert main([*argv, "plan", "examples/model-a/cluster-a", "--name", "r1", *target]) == 0
+    assert main([*argv, "start", "examples/model-a/cluster-a", "--name", "r1", *target]) == 0
+    assert "Deployment/model-a is rolling" in capsys.readouterr().out
+    assert inventory.require(Kube(runner=router), "team-a", "r1")["rollout"]["phase"] == "Rolling"
+    assert main([*argv, "finish", "r1", "-n", "team-a"]) == 7  # not done yet
+    capsys.readouterr()
+    assert main([*argv, "status", "r1", "-n", "team-a"]) == 0
+    assert "Deployment/model-a progressing" in capsys.readouterr().out
+    # A pod of the old template still finishing its requests keeps the rollout going.
+    router.rolling.discard("model-a")
+    router.settle()
+    old = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "model-a-old", "labels": {"app": "model-a"}}}
+    old["metadata"]["deletionTimestamp"] = "2026-11-12T00:00:00Z"
+    router.put("team-a", old)
+    current = engine.status(Kube(runner=router), "team-a", "r1", state=tmp_path, pool_label="")
+    assert current["workloads"][0]["terminating"] == 1 and not current["done"]
+    del router.objects[("team-a", "pods", "model-a-old")]
+    assert main([*argv, "status", "r1", "-n", "team-a", "--watch", "--interval", "0"]) == 0
+    assert main([*argv, "finish", "r1", "-n", "team-a"]) == 0
+    assert inventory.require(Kube(runner=router), "team-a", "r1")["rollout"]["phase"] == "Finished"
+
+
+def test_a_deployment_rollout_can_be_aborted_until_it_is_done(llmrepo, router, tmp_path, capsys):
+    before = image(router)
+    new_template(llmrepo)
+    router.rolling.add("model-a")
+    argv = ["--state-dir", str(tmp_path), "rollouts"]
+    target = ["-n", "team-a", "--source", str(llmrepo)]
+    assert main([*argv, "start", "examples/model-a/cluster-a", "--name", "r1", *target]) == 0
+    assert image(router) != before
+    router.rolling.discard("model-a")
+    assert main([*argv, "abort", "r1", "-n", "team-a", "-y"]) == 0
+    assert image(router) == before
+    assert main([*argv, "finish", "r1", "-n", "team-a"]) == 0
+    assert inventory.require(Kube(runner=router), "team-a", "r1")["rollout"]["phase"] == "Aborted"
+
+
+def test_a_change_that_replaces_no_pods_finishes_at_once(llmrepo, router, tmp_path):
+    path = llmrepo / "examples/model-a/base/model-server/service.yaml"
+    path.write_text(path.read_text() + "  sessionAffinity: None\n")
+    git(llmrepo, "commit", "-q", "-am", "service only")
+    argv = ["--state-dir", str(tmp_path), "rollouts", "start", "examples/model-a/cluster-a", "--name", "r1"]
+    assert main([*argv, "-n", "team-a", "--source", str(llmrepo)]) == 0
+    assert inventory.require(Kube(runner=router), "team-a", "r1")["rollout"]["phase"] == "Finished"

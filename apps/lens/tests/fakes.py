@@ -106,6 +106,10 @@ class FakeCluster:
         #: (pod, port) -> what the pod serves at ``/metrics`` through the pod proxy: text, or a
         #: callable that returns it (read at each call, so a test can make an engine go idle).
         self.metrics: dict[tuple[str, int], object] = {}
+        #: Write each Deployment's generation and status as its controller does. The Deployments
+        #: named in ``rolling`` report no updated replicas, as during a rollout, until removed.
+        self.deployment_status = False
+        self.rolling: set[str] = set()
 
     # -- helpers for tests ---------------------------------------------------------------------------
     def serve(self, api_version: str, kind: str, plural: str, namespaced: bool = True) -> None:
@@ -149,6 +153,14 @@ class FakeCluster:
                 labels = dict(((spec.get("template") or {}).get("metadata") or {}).get("labels") or {})
                 replicas = int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)
                 self._pods(namespace, f"{name}-", replicas, labels, ranked=True)
+                if self.deployment_status:
+                    document["status"] = {
+                        "observedGeneration": document["metadata"].get("generation", 1),
+                        "replicas": replicas,
+                        "readyReplicas": replicas,
+                        "availableReplicas": replicas,
+                        "updatedReplicas": 0 if name in self.rolling else replicas,
+                    }
             elif resource.startswith("disaggregatedsets."):
                 self._reconcile_set(namespace, document)
 
@@ -500,6 +512,10 @@ class FakeCluster:
                 annotations["kubectl.kubernetes.io/last-applied-configuration"] = json.dumps(document)
             if current and "status" in current:
                 merged["status"] = current["status"]
+            if self.deployment_status and document["kind"] == "Deployment":
+                generation = int((current or {}).get("metadata", {}).get("generation", 0))
+                changed = current is None or current.get("spec") != merged.get("spec")
+                merged["metadata"]["generation"] = generation + 1 if changed else generation
             if not dry_run:
                 self._bump(merged)
                 self.objects[key] = merged
