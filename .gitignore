@@ -68,6 +68,7 @@ docs/design/*
 !docs/design/reuse-workflow.md
 !docs/design/capacity-planner-integration-design.md
 !docs/design/lens-cli-design.md
+!docs/design/lens-engine-architecture.md
 !docs/prism-cleanup.md
 !docs/superpowers/
 docs/superpowers/*
