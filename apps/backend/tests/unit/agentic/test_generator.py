@@ -469,9 +469,11 @@ def test_resolve_mcp_facts_accepts_nested_cluster_overview_hardware():
 @pytest.mark.parametrize(
     "accelerators,expected_system",
     [
-        (None, "a100"),
-        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "a100_sxm"),
-        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], "a100"),
+        (None, None),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["NVIDIA-A100-80GB-PCIe", "ampere"]}], "a100_pcie"),
+        ([{"id": "unknown", "models": ["NVIDIA-A100-80GB-PCIe"]}], None),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["A100 PCIe", "unknown"]}], None),
+        ([{"id": "nvidia", "gpuCount": 4, "models": ["A100 PCIe", "A100 SXM"]}], None),
         ([{"id": "nvidia", "gpuCount": 4, "models": ["H100"]}], "h100_sxm"),
     ],
 )
@@ -580,7 +582,10 @@ def test_ai_generator_gets_required_evidence_via_model_selected_mcp_call(
         *([] if shared_snapshot else [("get_cluster_overview", {"clusterId": "cluster-a"})]),
         (
             "search_candidates",
-            {**_aic_arguments(), "searchConfig": {"aicSystemName": expected_system, "totalGpus": 4}},
+            {
+                **_aic_arguments(),
+                "searchConfig": {"totalGpus": 4, **({"aicSystemName": expected_system} if expected_system else {})},
+            },
         ),
     ]
     assert "The server will independently recompute" in captured["system_prompt"]
@@ -705,7 +710,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
         "search_candidates",
         _aic_arguments()
         | {
-            "searchConfig": {"totalGpus": 4, **({"aicSystemName": "a100_sxm"} if discovered else {})},
+            "searchConfig": {"totalGpus": 4, **({"aicSystemName": "a100_pcie"} if discovered else {})},
             "workload": {
                 "model": "model",
                 "isl": 4000,
@@ -722,7 +727,7 @@ def test_ai_generator_relaxes_only_after_empty_aic_search_and_freezes_original_t
             "searchConfig": {
                 "capacityMode": "free",
                 "customGpuCount": None,
-                **({"aicSystemName": "a100_sxm"} if discovered else {}),
+                **({"aicSystemName": "a100_pcie"} if discovered else {}),
             },
         },
     )

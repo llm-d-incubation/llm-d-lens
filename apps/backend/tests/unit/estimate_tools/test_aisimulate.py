@@ -19,6 +19,22 @@ def request(**changes):
     )
 
 
+@pytest.mark.parametrize(
+    "model,system",
+    [
+        ("NVIDIA-A100-80GB-PCIe", "a100_pcie"),
+        ("A100 SXM", "a100_sxm"),
+        ("H100 PCIe", "h100_pcie"),
+        ("H100 SXM", "h100_sxm"),
+        ("ampere", None),
+        ("unknown", None),
+    ],
+)
+def test_shared_adapter_preserves_hardware_form_factor(model, system):
+    shared = request(hardware={"profile_id": "nvidia", "model": model, "nodes": 1, "devices_per_node": 8})
+    assert adapter.system_name(shared) == system
+
+
 @pytest.mark.asyncio
 async def test_exact_adapter_calls_legacy_once_and_keeps_native_definitions(monkeypatch):
     call = AsyncMock(return_value={"ttft_ms": 100, "tpot_ms": 10, "throughput_tokens_per_sec": None})

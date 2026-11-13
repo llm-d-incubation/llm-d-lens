@@ -12,6 +12,24 @@ slug: /resources/add-new-hardware
 
 ---
 
+## AIC 硬件身份与数据覆盖
+
+`planning.aic_system_models` 将具体设备名称映射到 AISimulate system。
+`planning.model_family_names` 声明仅表示架构的标签，例如 `ampere`；
+这些标签不是设备型号，不参与 AIC system 解析。未知设备名称、仅有架构标签的清单
+以及互相冲突的 system 仍保持无映射；AI 提供的 system 猜测不能覆盖发现的硬件。
+
+NVIDIA profile 将明确的 A100/H100 PCIe 名称映射为 `a100_pcie`/`h100_pcie`，
+而不是对应的 SXM system。没有 PCIe 标记的名称为兼容旧行为，继续默认映射为
+`a100_sxm`/`h100_sxm`；这一默认值不代表物理模块或互联已经得到验证。
+
+原生支持矩阵匹配不代表性能数据覆盖已经验证。Agentic 保持 `SILICON` 数据库模式，
+要求原生搜索成功且返回非空预测。搜索失败或为空时，记录包含 system 和数据库模式的
+不可用证据；存在显式负载目标时，规划仍会失败。不会替换为 SXM，也不会自动切换到
+`HYBRID`。AISimulate 打包的 PCIe system 在没有采集性能数据库时仅支持估算，
+因此 `SILICON` 预测需要匹配的实测数据。其他数据库模式仍须通过原生 AIC API
+显式选择，不会根据硬件默认推断。
+
 ## 0. 两种集成模式：内置 vs. 外部插件
 
 新增一种硬件恰好有两种方式。两者使用**相同的 JSON 契约、模式校验和快速失败（fail-fast）注册机制**；区别仅在于**文件存放在哪里、由谁声明入口点，以及插件如何分发**。

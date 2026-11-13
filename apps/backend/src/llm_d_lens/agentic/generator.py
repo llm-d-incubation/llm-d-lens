@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import ssl
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -628,15 +627,15 @@ class AICandidateGenerator:
                             config["totalGpus"] = budget
                         profiles = {profile.id: profile for profile in all_profiles()}
                         systems = {
-                            row["system"]
-                            for accelerator in hardware.get("accelerators", [])
-                            for model in accelerator.get("models") or []
+                            profile.planning.aic_system_for_models(accelerator.get("models") or [])
                             if (profile := profiles.get(accelerator.get("id"))) is not None
-                            for row in profile.planning.aic_system_models
-                            if row.get("pattern") and re.search(row["pattern"], model, re.IGNORECASE)
+                            else None
+                            for accelerator in hardware.get("accelerators", [])
                         }
-                        if len(systems) == 1:
+                        if len(systems) == 1 and None not in systems:
                             config["aicSystemName"] = next(iter(systems))
+                        else:
+                            config.pop("aicSystemName", None)
                         arguments["searchConfig"] = config
                         call = call.model_copy(update={"arguments": arguments})
                     other_calls.append(call)

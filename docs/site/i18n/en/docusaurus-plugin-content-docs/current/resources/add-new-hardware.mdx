@@ -37,6 +37,28 @@ sources. `planning.discovery` owns the discovery command and parser settings;
 Run the hardware/deploy/evaluate tests after changing a profile. A new profile must
 also pass `schema.json`; verify guide rendering against its intended llm-d revision.
 
+## AIC hardware identity and data coverage
+
+`planning.aic_system_models` maps concrete device names to AISimulate systems.
+`planning.model_family_names` declares architecture-only labels, such as `ampere`,
+which do not identify a device model and are excluded from AIC system resolution.
+Unknown device names, architecture-only inventories and conflicting systems remain
+unmapped; AI-supplied system guesses do not override discovered hardware.
+
+The NVIDIA profile maps explicit A100/H100 PCIe names to `a100_pcie`/`h100_pcie`,
+not their SXM equivalents. Names without a PCIe marker retain the existing
+`a100_sxm`/`h100_sxm` default for compatibility; that default is not verification
+of the physical module or interconnect.
+
+A native support-matrix match is not a certificate of performance-data coverage.
+Agentic keeps the `SILICON` database mode and requires a successful native search
+with nonempty predictions. A failed or empty search records unavailable evidence
+with its system and database mode; explicit load targets still fail planning.
+No SXM substitution or automatic switch to `HYBRID` occurs. AISimulate's packaged
+PCIe systems are estimate-only without a collected performance database, so
+`SILICON` predictions require matching measured data. Other database modes remain
+explicit choices through the native AIC API, not inferred hardware defaults.
+
 ## 0. Two integration models: built-in vs. external plugin
 
 There are exactly two ways to add a hardware. Both use the **same JSON contract,
