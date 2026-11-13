@@ -129,6 +129,21 @@ def test_an_object_another_tool_deployed_is_never_overwritten(llmrepo, cluster):
     assert plan.cluster["objects"]["foreign"] == 1
 
 
+def test_a_plan_another_tool_applies_needs_only_reads(llmrepo, cluster):
+    """With `applies=False` (Argo CD applies the stack), llmd writes only the record: no create rights on
+    the stack's kinds, no dry run, no prune list; `owns` says which live objects are the instance's."""
+    prerequisites(cluster)
+    cluster.denied = {("create", "deployments.apps"), ("patch", "deployments.apps")}
+    cluster.put("team-a", {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "model-a"}, "spec": {}})
+    stack = find_stack(resolve_source(str(llmrepo)), STACK)
+    plan = make_plan(stack, Options(namespace="team-a", instance="r1"), runner=cluster)
+    preflight(Kube(runner=cluster), plan, applies=False, owns=lambda live: live["kind"] == "Service")
+    assert not plan.blocking, plan.blocking
+    assert plan.cluster["dryRun"] == "skipped" and "prune" not in plan.cluster
+    assert plan.cluster["objects"] == {"create": 1, "update": 1, "foreign": 0}
+    assert not [call for call in cluster.calls if "--dry-run=server" in call]
+
+
 def test_discovery_decides_what_is_cluster_scoped(llmrepo, cluster):
     overlay = llmrepo / STACK
     (overlay / "widget.yaml").write_text("apiVersion: example.invalid/v1\nkind: Widget\nmetadata: {name: w}\n")

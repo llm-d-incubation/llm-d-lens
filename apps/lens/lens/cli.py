@@ -13,6 +13,7 @@ import sys
 
 from . import __version__
 from .commands import Context, Handler
+from .commands import admin as admin_command
 from .commands import importing as import_command
 from .commands import migrate as migrate_command
 from .commands import plan as plan_command
@@ -44,6 +45,8 @@ examples:
   llmd list
   llmd status <instance>
   llmd teardown <instance>
+  llmd plan optimized-baseline --backend argocd --argocd-app application.yaml   # delivered by Argo CD
+  llmd admin argocd check -n <argocd-namespace>
 """
 
 #: Modules that add subcommands, in the order ``--help`` lists them.
@@ -59,6 +62,7 @@ COMMAND_MODULES = [
     migrate_command,
     status_command,
     teardown_command,
+    admin_command,
 ]
 
 

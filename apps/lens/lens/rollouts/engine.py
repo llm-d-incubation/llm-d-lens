@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -76,9 +77,12 @@ def start(
     env: dict[str, str] | None = None,
     actor: str = "",
     pool_label: str = "",
+    deliver: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
     """Start the rollout. ``pool_label`` is recorded with it, so ``status``, ``finish`` and ``--watch``
-    judge serving groups the same way without the flag."""
+    judge serving groups the same way without the flag. ``deliver`` applies the change when another tool
+    delivers the instance (Argo CD: it moves the Application to the new render); by default llmd applies
+    the objects that change."""
     plan, record = rollout.plan, rollout.record
     if rollout.blocking:
         raise PolicyError(
@@ -136,7 +140,10 @@ def start(
     inventory.write(kube, record)
     started = Drainers(directory).start(planned_drainers, env=env) if planned_drainers else []
     imported = inventory.management(record) == inventory.IMPORTED
-    kube.apply(changed, plan.namespace, server_side=not imported)
+    if deliver is not None:
+        deliver(changed)
+    else:
+        kube.apply(changed, plan.namespace, server_side=not imported)
     record = _record(kube, plan.namespace, plan.instance)
     if record["stack"]["id"] != plan.stack.id:  # --switch-stack
         record["previousStack"] = record["stack"]
@@ -244,11 +251,23 @@ def resume(kube: Kube, namespace: str, instance: str, *, state: Path, env=None) 
     return {"instance": instance, "phase": "Rolling", "drainers": [item.describe() for item in started]}
 
 
-def abort(kube: Kube, namespace: str, instance: str, *, server_side: bool) -> dict[str, Any]:
+def abort(
+    kube: Kube,
+    namespace: str,
+    instance: str,
+    *,
+    server_side: bool,
+    deliver: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """Re-apply the objects as they were before the rollout. The controller rolls back the same
-    way it rolled forward, so the drainers must keep running."""
+    way it rolled forward, so the drainers must keep running. ``deliver`` restores the rollout's
+    ``from`` render instead, when another tool delivers the instance (Argo CD)."""
     record = _record(kube, namespace, instance)
     rollout = _rollout(record)
+    if deliver is not None:
+        deliver(record)
+        _set_phase(kube, record, "Aborting", abortedAt=inventory.now())
+        return {"instance": instance, "phase": "Aborting", "restored": list(rollout.get("objects") or [])}
     previous = rollout.get("previous") or []
     if not previous:
         raise UsageError("the rollout recorded no previous objects to restore")

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -45,13 +46,24 @@ PREREQUISITES = {
 }
 
 
-def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
+def preflight(
+    kube: Kube,
+    plan: Plan,
+    *,
+    existing: str = "refuse",
+    applies: bool = True,
+    owns: Callable[[dict[str, Any]], bool] | None = None,
+) -> None:
     """Check ``plan`` against the cluster and add findings to it.
 
     ``existing`` says what the plan is for: ``refuse`` (standup: an object that is already there
     but not this instance's is an error), ``import`` (the objects run already and are only
     recorded), or ``rollout`` (the instance's own objects change; no dry run of the whole stack,
-    the rollout applies only what changed)."""
+    the rollout applies only what changed).
+
+    ``applies`` is False when another tool applies the objects (Argo CD): the user then needs only to
+    read them and to write the instance's record, there is no dry run, and that tool prunes. ``owns``
+    says whether a live object is this instance's although it carries no llmd labels."""
     findings = plan.findings
     plan.cluster["context"] = kube.current_context()
     plan.cluster["user"] = kube.whoami()
@@ -73,10 +85,10 @@ def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
         _observe_only(plan)
     record = inventory.read(kube, plan.namespace, plan.instance)
     _prefetch(kube, plan, record)
-    _check_permissions(kube, plan, write=existing != "import")
+    _check_permissions(kube, plan, write=existing != "import" and applies)
     _check_prerequisites(kube, plan)
-    _check_existing(kube, plan, existing, record)
-    if plan.blocking or existing in ("import", "rollout"):
+    _check_existing(kube, plan, existing, record, prune=applies, owns=owns)
+    if plan.blocking or existing in ("import", "rollout") or not applies:
         plan.cluster["dryRun"] = "skipped"
         return
     deferred = _bindings_to_planned_roles(plan.documents)
@@ -266,7 +278,15 @@ def _only_monitors(item: dict[str, Any]) -> bool:
     return all(user.split("/", 1)[0] in MONITOR_KINDS for user in item["usedBy"])
 
 
-def _check_existing(kube: Kube, plan: Plan, existing: str, record: dict[str, Any] | None) -> None:
+def _check_existing(
+    kube: Kube,
+    plan: Plan,
+    existing: str,
+    record: dict[str, Any] | None,
+    *,
+    prune: bool = True,
+    owns: Callable[[dict[str, Any]], bool] | None = None,
+) -> None:
     """Who owns each planned object today."""
     if record and inventory.management(record) == inventory.IMPORTED and existing != "import":
         plan.findings.append(
@@ -281,7 +301,8 @@ def _check_existing(kube: Kube, plan: Plan, existing: str, record: dict[str, Any
     owned = {(item["kind"], item["name"]) for item in (record or {}).get("objects") or []}
     if existing == "refuse":
         _check_stack(plan, record)
-        _list_prunes(kube, plan, record)
+        if prune:
+            _list_prunes(kube, plan, record)
     counts = {"create": 0, "update": 0, "foreign": 0}
     found: list[dict[str, Any]] = []
     for document, resource in zip(plan.documents, resources(kube, plan), strict=True):
@@ -291,7 +312,7 @@ def _check_existing(kube: Kube, plan: Plan, existing: str, record: dict[str, Any
             continue
         labels = (live.get("metadata") or {}).get("labels") or {}
         ours = labels.get(INSTANCE_LABEL) == plan.instance and labels.get(MANAGED_BY_LABEL) == MANAGED_BY_VALUE
-        if ours or (document["kind"], document["metadata"]["name"]) in owned:
+        if ours or (document["kind"], document["metadata"]["name"]) in owned or (owns and owns(live)):
             counts["update"] += 1
             continue
         counts["foreign"] += 1

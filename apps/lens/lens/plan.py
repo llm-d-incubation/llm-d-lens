@@ -13,6 +13,7 @@ from typing import Any
 
 from . import overrides, yamlio
 from .catalog import Stack
+from .guides import Unit
 from .model import Finding, object_ref, validate_instance_name, validate_namespace
 from .policy import PolicyContext, PolicyResult, ScopeResolver, apply_policy, fallback_scope
 from .process import Runner
@@ -77,10 +78,17 @@ class Plan:
     #: For a guide: how each of its steps was followed, and the variables they saw.
     steps: list[dict[str, str]] = field(default_factory=list)
     variables: dict[str, str] = field(default_factory=dict)
+    #: What was rendered, in order, and which of them rendered each object (``Rendered.units``).
+    units: list[Unit] = field(default_factory=list)
+    unit_of: dict[str, int] = field(default_factory=dict)
+    #: What another tool is given to deliver the stack (Argo CD: the Application), when one delivers it.
+    #: The digest covers it, so a reviewed plan also pins how the stack is delivered.
+    delivery: dict[str, Any] = field(default_factory=dict)
 
     @property
     def digest(self) -> str:
-        return yamlio.digest({"namespace": self.namespace, "instance": self.instance, "documents": self.documents})
+        reviewed = {"namespace": self.namespace, "instance": self.instance, "documents": self.documents}
+        return yamlio.digest({**reviewed, **({"delivery": self.delivery} if self.delivery else {})})
 
     def stack_record(self) -> dict[str, Any]:
         """The stack as the instance's record keeps it: its path, source, and the user's choices."""
@@ -109,6 +117,7 @@ class Plan:
                 {"object": object_ref(part["document"]), "reason": part["reason"]} for part in self.policy.admin_parts
             ],
             "findings": [finding.as_dict() for finding in self.findings],
+            **({"application": self.delivery} if self.delivery else {}),
             "cluster": self.cluster,
             "digest": self.digest,
             "blocking": len(self.blocking),
@@ -165,4 +174,6 @@ def make_plan(
         policy=policy,
         steps=rendered.steps,
         variables=rendered.variables,
+        units=rendered.units,
+        unit_of=rendered.unit_of,
     )
