@@ -939,7 +939,8 @@ async def list_cluster_deployments(cluster_id: str, request: Request = None):
     "/orphans",
     summary="List deployment namespaces on a cluster that no Lens record references.",
     description="List namespaces under the deployment prefix with no execution record -- "
-    "leftovers from records deleted without namespace cleanup, or from a rebuilt database.",
+    "leftovers from records deleted without namespace cleanup, or from a rebuilt database. "
+    "Namespaces holding a Lens engine instance are excluded; the scan fails if an instance check fails.",
     operation_id="list_orphan_deployment_namespaces",
 )
 async def list_orphan_namespaces(cluster_id: str, request: Request = None) -> dict:
@@ -961,7 +962,8 @@ async def list_orphan_namespaces(cluster_id: str, request: Request = None) -> di
     "/orphans/clean",
     summary="Delete selected orphan deployment namespaces.",
     description="Delete the given orphan namespaces. Names outside the deployment prefix, or "
-    "still referenced by a Lens record, are refused rather than deleted.",
+    "still referenced by a Lens record, are refused rather than deleted. Namespaces holding a Lens engine "
+    "instance, or whose instance check fails, are also refused.",
     operation_id="clean_orphan_deployment_namespaces",
 )
 async def clean_orphan_namespaces_route(body: CleanOrphansRequest, request: Request = None) -> dict:

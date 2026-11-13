@@ -2180,7 +2180,7 @@ print(removed["success"], removed["namespace"])
 
 ### List orphan deployment namespaces
 
-List namespaces on a cluster that match the deployment namespace prefix but are not referenced by any Lens execution record. These are leftovers from records deleted without namespace cleanup, or from a rebuilt database; nothing else in Lens points at them.
+List namespaces on a cluster that match the deployment namespace prefix but are not referenced by any v1 Lens execution record and do not hold a Lens engine instance. These are leftovers from records deleted without namespace cleanup, or from a rebuilt database. Namespaces holding a Lens engine instance are not listed; the scan fails if it cannot check a candidate namespace for engine instances.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
@@ -2215,7 +2215,7 @@ List namespaces on a cluster that match the deployment namespace prefix but are 
 
 ### Clean orphan deployment namespaces
 
-Delete the given orphan namespaces (and the InferencePool/EPP/model server inside them). Names outside the deployment prefix, or still referenced by a Lens execution record, are refused rather than deleted.
+Delete the given orphan namespaces (and the InferencePool/EPP/model server inside them). Names outside the deployment prefix, still referenced by a v1 Lens execution record, or holding a Lens engine instance are refused rather than deleted. Cleanup also refuses any namespace it cannot check for engine instances and reports a per-namespace failure.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">

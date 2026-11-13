@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import os
+import stat
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -16,6 +19,68 @@ from llm_d_lens.infrastructure.process import CommandResult
 
 def _claim(*results: dict) -> dict:
     return {"status": {"allocation": {"devices": {"results": list(results)}}}}
+
+
+def test_kubeconfig_path_materializes_complete_private_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "cluster_settings", ClusterSettings(tmp_path / "sessions", "llm-d-bench-", tmp_path))
+    text = "apiVersion: v1\nclusters: []\n"
+    monkeypatch.setattr(registry, "_dao", lambda: SimpleNamespace(read_kubeconfig=lambda _id: text))
+    path = tmp_path / "kubeconfig_cache" / "cluster-a.kubeconfig"
+    host = registry.current_host()
+
+    def restrict(temporary):
+        assert temporary != path
+        assert temporary.read_text() == text
+        assert not path.exists()
+        host.restrict_to_owner(temporary)
+
+    monkeypatch.setattr(registry, "current_host", lambda: SimpleNamespace(restrict_to_owner=restrict))
+
+    assert registry.kubeconfig_path("cluster-a") == path
+    assert path.read_text() == text
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert list(path.parent.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("failure", ["write", "permissions", "replace"])
+def test_kubeconfig_path_failure_preserves_previous_file(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(registry, "cluster_settings", ClusterSettings(tmp_path / "sessions", "llm-d-bench-", tmp_path))
+    monkeypatch.setattr(registry, "_dao", lambda: SimpleNamespace(read_kubeconfig=lambda _id: "new content"))
+    path = registry._kubeconfig_cache_directory() / "cluster-a.kubeconfig"
+    path.write_text("previous content")
+    write_text = Path.write_text
+
+    def fail_write(temporary, text):
+        write_text(temporary, text[:3])
+        raise OSError("partial write")
+
+    def fail(*_args):
+        raise OSError("failed")
+
+    if failure == "write":
+        monkeypatch.setattr(Path, "write_text", fail_write)
+    elif failure == "permissions":
+        monkeypatch.setattr(registry, "current_host", lambda: SimpleNamespace(restrict_to_owner=fail))
+    else:
+        monkeypatch.setattr(registry.os, "replace", fail)
+
+    with pytest.raises(OSError):
+        registry.kubeconfig_path("cluster-a")
+
+    assert path.read_text() == "previous content"
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_kubeconfig_path_removes_file_when_text_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(registry, "cluster_settings", ClusterSettings(tmp_path / "sessions", "llm-d-bench-", tmp_path))
+    monkeypatch.setattr(registry, "_dao", lambda: SimpleNamespace(read_kubeconfig=lambda _id: None))
+    path = registry._kubeconfig_cache_directory() / "cluster-a.kubeconfig"
+    path.write_text("previous content")
+
+    assert registry.kubeconfig_path("cluster-a") == path
+    assert not path.exists()
+    assert list(path.parent.iterdir()) == []
 
 
 def test_gateway_namespace_is_stable_unique_and_visible_on_cluster_records():

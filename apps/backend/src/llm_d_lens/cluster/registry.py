@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -222,15 +224,23 @@ def kubeconfig_path(cluster_id: str) -> Path:
     Callers that need a filesystem path (``KUBECONFIG`` env var for
     subprocess kubectl/helm invocations) get one here; the file is always
     rewritten from the current DB content, since the DB -- not this cache
-    file -- is the source of truth.
+    file -- is the source of truth. Atomic replacement ensures readers always
+    see a complete file.
     """
     path = _kubeconfig_cache_directory() / f"{cluster_id}.kubeconfig"
     text = _dao().read_kubeconfig(cluster_id)
     if text is None:
         path.unlink(missing_ok=True)
         return path
-    path.write_text(text)
-    current_host().restrict_to_owner(path)
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{cluster_id}.", suffix=".tmp")
+    temporary = Path(temporary_name)
+    try:
+        os.close(descriptor)
+        temporary.write_text(text)
+        current_host().restrict_to_owner(temporary)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 
