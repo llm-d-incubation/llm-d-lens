@@ -177,7 +177,7 @@ with tarfile.open(archive, "r:gz") as source:
                 or not (member.isdir() or member.isfile())):
             sys.exit(f"Unsafe or unsupported source archive entry: {member.name}")
         seen.add(str(path))
-    required = ("package.json", "apps/backend/pyproject.toml", "hack/storage-env.sh",
+    required = ("package.json", "apps/backend/pyproject.toml", "apps/lens/pyproject.toml", "hack/storage-env.sh",
                 f"scripts/{installer}",
                 "apps/backend/src/llm_d_lens/infrastructure/hostos/__main__.py")
     for name in required:
@@ -879,18 +879,18 @@ ensure_venv() {
     local extra
     extra="[$(IFS=,; printf '%s' "${extras[*]}")]"
 
-    # A stamp of apps/backend/pyproject.toml (plus the selected extra) forces a reinstall
+    # A stamp of both Python pyproject.toml files (plus the selected extra) forces a reinstall
     # when a dependency is added/bumped by a source update, e.g. casbin. Without
-    # it, an existing .venv that still imports llm_d_lens/uvicorn/pgserver
+    # it, an existing .venv that still imports lens/llm_d_lens/uvicorn/pgserver
     # would skip the install and the database bootstrap would fail on the new
     # module. sync_source excludes .venv, so the stamp survives re-installs.
     local stamp=".venv/.install-stamp"
     local current_hash=""
-    if [[ -f apps/backend/pyproject.toml ]]; then
-        current_hash="${extra}:$(sha256_file apps/backend/pyproject.toml 2>/dev/null || true)"
+    if [[ -f apps/backend/pyproject.toml && -f apps/lens/pyproject.toml ]]; then
+        current_hash="${extra}:$(sha256_file apps/backend/pyproject.toml 2>/dev/null || true):$(sha256_file apps/lens/pyproject.toml 2>/dev/null || true)"
     fi
 
-    local check_import="import llm_d_lens, uvicorn"
+    local check_import="import lens, llm_d_lens, uvicorn"
     [[ "$DB_MODE" == "embedded" ]] && check_import="$check_import, pgserver"
     if [[ -x .venv/bin/python && -f "$stamp" && "$(cat "$stamp" 2>/dev/null)" == "$current_hash" ]] \
         && .venv/bin/python -c "$check_import" 2>/dev/null; then
@@ -901,11 +901,11 @@ ensure_venv() {
         info "creating virtualenv (.venv)..."
         "$PYTHON_BIN" -m venv .venv || { fail "Python virtualenv creation failed"; exit 1; }
     elif [[ -f "$stamp" && "$(cat "$stamp" 2>/dev/null)" != "$current_hash" ]]; then
-        info "backend pyproject.toml changed since the last install — refreshing Python dependencies..."
+        info "pyproject.toml changed since the last install — refreshing Python dependencies..."
     fi
-    info "installing Python dependencies (pip install -e apps/backend${extra})..."
+    info "installing Python dependencies (pip install -e apps/lens -e apps/backend${extra})..."
     .venv/bin/python -m pip install --upgrade pip >/dev/null 2>&1 || true
-    run_with_tail 5 .venv/bin/python -m pip install -e "apps/backend${extra}" || { fail "pip install -e apps/backend${extra} failed"; exit 1; }
+    run_with_tail 5 .venv/bin/python -m pip install -e apps/lens -e "apps/backend${extra}" || { fail "pip install -e apps/lens -e apps/backend${extra} failed"; exit 1; }
     echo "$current_hash" > "$stamp"
     ok "Python dependencies installed"
 }

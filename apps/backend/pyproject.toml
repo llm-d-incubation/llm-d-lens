@@ -18,6 +18,7 @@ dependencies = [
     "jsonschema>=4",
     "kubernetes==36.0.3",
     "limits>=5,<6",
+    "llm-d-lens-engine",
     "mcp>=1.13,<2",
     "paramiko>=3.4",
     "psycopg[binary]>=3",

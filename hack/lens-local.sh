@@ -444,19 +444,19 @@ ensure_node_modules() {
 
 # ---- venv setup ---------------------------------------------------------------
 # ensure_venv — create the virtualenv and install Python deps when missing, or
-# when apps/backend/pyproject.toml changed since the last install. The stamp mirrors
+# when either Python package's pyproject.toml changed since the last install. The stamp mirrors
 # ensure_node_modules: a `git pull` that adds/bumps a dependency (e.g. casbin)
 # must not be silently skipped just because the venv exists and the probed
-# imports (llm_d_lens/uvicorn/pgserver) still work.
+# imports (lens/llm_d_lens/uvicorn/pgserver) still work.
 ensure_venv() {
     local stamp=".venv/.install-stamp"
     local current_hash=""
-    if [[ -f apps/backend/pyproject.toml ]]; then
-        current_hash="$(sha256sum apps/backend/pyproject.toml 2>/dev/null | awk '{print $1}')"
+    if [[ -f apps/backend/pyproject.toml && -f apps/lens/pyproject.toml ]]; then
+        current_hash="$(sha256sum apps/backend/pyproject.toml apps/lens/pyproject.toml 2>/dev/null | sha256sum | awk '{print $1}')"
     fi
 
     if [[ -x .venv/bin/python && -f "$stamp" && "$(cat "$stamp" 2>/dev/null)" == "$current_hash" ]] \
-        && .venv/bin/python -c "import llm_d_lens, uvicorn, pgserver" 2>/dev/null; then
+        && .venv/bin/python -c "import lens, llm_d_lens, uvicorn, pgserver" 2>/dev/null; then
         return 0
     fi
 
@@ -477,10 +477,10 @@ ensure_venv() {
     # '[embedded-db]' pulls in pgserver, needed by ensure_database's default
     # built-in PostgreSQL fallback below. '[ldap]' pulls in ldap3 so the
     # Administration directory provider "Test" action works in local dev.
-    log "installing Python dependencies (pip install -e apps/backend[embedded-db,ldap])..."
+    log "installing Python dependencies (pip install -e apps/lens -e apps/backend[embedded-db,ldap])..."
     .venv/bin/python -m pip install --upgrade pip >/dev/null 2>&1 || true
-    run_with_tail 5 .venv/bin/python -m pip install -e "apps/backend[embedded-db,ldap]" || {
-        fail "pip install -e apps/backend[embedded-db,ldap] failed — see output above"
+    run_with_tail 5 .venv/bin/python -m pip install -e apps/lens -e "apps/backend[embedded-db,ldap]" || {
+        fail "pip install -e apps/lens -e apps/backend[embedded-db,ldap] failed — see output above"
         return 1
     }
     echo "$current_hash" > "$stamp"
@@ -558,9 +558,9 @@ cmd_check() {
     if [[ "$target" != frontend ]]; then
     if [[ -x .venv/bin/python ]]; then
         log "  venv:     $(.venv/bin/python --version 2>&1)"
-        .venv/bin/python -c "import llm_d_lens, uvicorn" 2>/dev/null \
-            && log "  python deps: llm_d_lens + uvicorn importable" \
-            || { fail "  python deps: import failed — run 'pip install -e apps/backend'"; ok=0; }
+        .venv/bin/python -c "import lens, llm_d_lens, uvicorn" 2>/dev/null \
+            && log "  python deps: lens + llm_d_lens + uvicorn importable" \
+            || { fail "  python deps: import failed — run 'pip install -e apps/lens -e apps/backend'"; ok=0; }
     else
         fail "  venv:     missing (.venv/bin/python) — 'hack/lens-local.sh start' will create it"
         ok=0

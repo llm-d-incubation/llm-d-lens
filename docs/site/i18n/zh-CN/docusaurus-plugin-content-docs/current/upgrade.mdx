@@ -17,7 +17,7 @@ description: 将现有的 Lens 安装升级到更新版本。
 ```bash
 git pull
 npm install
-python3 -m pip install -e 'apps/backend[dev]'
+python3 -m pip install -e apps/lens -e 'apps/backend[dev]'
 node hack/generate-mcp-tools.mjs
 hack/lens-local.sh restart
 ```

@@ -157,8 +157,8 @@ where they are; they are already hidden.
   The import name and command stay `lens`. The distribution name in
   `apps/lens/pyproject.toml` is `llm-d-lens-engine` until publishing is
   decided; `llm-d-lens` is held by the legacy service.
-- `llm_d_lens` does not declare a dependency on `lens` yet; it gets one when
-  the first route is moved onto the engine.
+- The backend declares a dependency on `llm-d-lens-engine`; every install path
+  installs `apps/lens` in the same pip call because the engine is not published.
 - `apps/backend/Dockerfile` (backend-only, not referenced by CI or scripts)
   stays where it is; it is a candidate for retirement later.
 - CI and `make` gate the engine from day one: `make test` and `make lint`

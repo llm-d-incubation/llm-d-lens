@@ -278,7 +278,7 @@ Rules for both:
   There is no other implicit registration — **an unregistered hardware is
   rejected when it is explicitly used.**
 - Install the plugin into the **backend's** Python environment; reinstall/restart
-  after changing an entry point (`pip install -e .` for built-ins,
+  after changing an entry point (`pip install -e apps/lens -e apps/backend` from the repository root for built-ins,
   `pip install <your-package>` for external plugins) or it will not be discovered.
 
 ---
@@ -375,7 +375,7 @@ npm run build   # if you changed frontend/gateway consumers
 | Symptom | Cause | Fix |
 |---|---|---|
 | "registration conflict" on startup | two profiles declare the same `device_classes`/prefix | make `id` and identity fields unique |
-| Hardware does not appear | entry point not installed/reinstalled, or the external plugin is not in the backend's environment | `pip install -e .` (built-in) or `pip install <plugin>` (external), then restart |
+| Hardware does not appear | entry point not installed/reinstalled, or the external plugin is not in the backend's environment | `pip install -e apps/lens -e apps/backend` from the repository root (built-in) or `pip install <plugin>` (external), then restart |
 | `ACCELERATOR_NOT_REGISTERED` when explicitly used | no profile registered, or `accelerator_keys` misses the key | add the profile or alias |
 | Deployment stuck at 0 ready | overlay directory missing / wrong `arch` (e.g. `cuda` but the real dir is `gpu`) | use `upstream_variant` |
 | `ResourceClaimTemplate is missing` | the hardware is extended-resource but treated as DRA | set `request_model="extended-resource"` |
