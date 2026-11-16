@@ -1,12 +1,15 @@
 """Profiles are trusted server configuration, not a file-presence support probe."""
 
+import asyncio
 import csv
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from textwrap import dedent
 from unittest.mock import AsyncMock
 
 import pytest
@@ -19,6 +22,8 @@ from llm_d_lens.estimate_tools.blis.service import (
     _compile_bundle,
     _compile_workload,
     _deployment_documents,
+    _execute_bundle,
+    _ExecutionLimits,
     availability,
     baseline_profile,
     file_digest,
@@ -26,6 +31,228 @@ from llm_d_lens.estimate_tools.blis.service import (
     tree_digest,
 )
 from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest, Problem, RunControls, Workload
+
+
+@pytest.mark.asyncio
+async def test_executor_does_not_compile_or_spawn_when_already_cancelled(bundle_profile, tmp_path):
+    cancelled = asyncio.Event()
+    cancelled.set()
+    destination = tmp_path / "not-started"
+    result = await _execute_bundle(bundle_profile.verified_request, bundle_profile, destination, cancelled)
+    assert isinstance(result, Problem)
+    assert result.code == "execution_cancelled"
+    assert not destination.exists()
+
+
+@pytest.fixture
+def executable_profile(bundle_profile):
+    if os.name != "posix":
+        pytest.skip("Process-group execution requires POSIX")
+
+    def configure(source):
+        bundle_profile.binary.write_text(f"#!{sys.executable}\n" + dedent(source), encoding="utf-8")
+        bundle_profile.binary_digest = file_digest(bundle_profile.binary)
+        return bundle_profile
+
+    return configure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returncode,status", [(0, "exited"), (7, "failed")])
+async def test_executor_uses_compiled_argv_isolated_environment_and_retained_logs(
+    executable_profile, tmp_path, monkeypatch, returncode, status
+):
+    monkeypatch.setenv("LENS_TEST_SECRET", "not-for-the-child")
+    profile = executable_profile(
+        f"""
+        import json, os, sys
+        print(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "env": dict(os.environ), "stdin": sys.stdin.read()}}))
+        sys.stderr.buffer.write(b"diagnostic\\xff")
+        sys.exit({returncode})
+        """
+    )
+    destination = tmp_path / "bundle"
+    result = await _execute_bundle(profile.verified_request, profile, destination, asyncio.Event())
+    assert not isinstance(result, Problem), result
+    assert result.status == status
+    assert result.returncode == returncode
+    assert (result.error.code if result.error else None) == ("process_failed" if returncode else None)
+    output = json.loads((destination / "stdout.log").read_bytes())
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert output["argv"] == ["run", *manifest["arguments"], "--format", "json", "--log", "warn"]
+    assert output["cwd"] == str(destination)
+    assert output["stdin"] == ""
+    assert "LENS_TEST_SECRET" not in output["env"]
+    assert "HOME" not in output["env"]
+    assert output["env"]["GOMAXPROCS"] == "1"
+    assert (destination / "stderr.log").read_bytes() == b"diagnostic\xff"
+    assert result.stdout_bytes == (destination / "stdout.log").stat().st_size
+    assert result.stderr_bytes == len(b"diagnostic\xff")
+    assert not result.output_truncated
+    assert not any(capability.enabled for capability in availability(profile).capabilities)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("descriptor", [1, 2])
+async def test_executor_bounds_output_and_terminates_noisy_process(executable_profile, tmp_path, descriptor):
+    profile = executable_profile(
+        f"""
+        import os, signal
+        os.write({descriptor}, b"x" * (1024 * 1024))
+        signal.pause()
+        """
+    )
+    destination = tmp_path / "bundle"
+    result = await asyncio.wait_for(
+        _execute_bundle(
+            profile.verified_request,
+            profile,
+            destination,
+            asyncio.Event(),
+            limits=_ExecutionLimits(output_bytes=2048, termination_grace_s=0.05),
+        ),
+        timeout=5,
+    )
+    assert not isinstance(result, Problem), result
+    assert result.status == "failed"
+    assert result.error.code == "output_limit_exceeded"
+    assert result.output_truncated
+    assert result.stdout_bytes + result.stderr_bytes == 2048
+    assert sum((destination / name).stat().st_size for name in ("stdout.log", "stderr.log")) == 2048
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested,maximum", [(0.1, 5), (5, 0.1)])
+async def test_executor_honors_request_timeout_and_server_ceiling(executable_profile, tmp_path, requested, maximum):
+    profile = executable_profile("import signal\nsignal.pause()\n")
+    profile.verified_request.run.wall_timeout_s = requested
+    result = await asyncio.wait_for(
+        _execute_bundle(
+            profile.verified_request,
+            profile,
+            tmp_path / "bundle",
+            asyncio.Event(),
+            limits=_ExecutionLimits(wall_timeout_s=maximum, termination_grace_s=0.05),
+        ),
+        timeout=5,
+    )
+    assert not isinstance(result, Problem), result
+    assert result.status == "timed_out"
+    assert result.error.code == "execution_timed_out"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "linux", reason="Inspect descendant state through Linux procfs")
+@pytest.mark.parametrize("termination", ["timeout", "event", "task", "parent_exit"])
+async def test_executor_reaps_group_even_when_term_is_ignored_or_parent_exits(
+    executable_profile, tmp_path, termination
+):
+    profile = executable_profile(
+        f"""
+        import json, os, signal, sys
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        child = os.fork()
+        if child == 0:
+            signal.pause()
+            os._exit(0)
+        print(json.dumps([os.getpid(), child]), flush=True)
+        if {termination == "parent_exit"!r}:
+            sys.exit(0)
+        signal.pause()
+        """
+    )
+    destination = tmp_path / "bundle"
+    cancel_event = asyncio.Event()
+    execution = asyncio.create_task(
+        _execute_bundle(
+            profile.verified_request,
+            profile,
+            destination,
+            cancel_event,
+            limits=_ExecutionLimits(wall_timeout_s=2, termination_grace_s=0.05),
+        )
+    )
+    async with asyncio.timeout(5):
+        output = destination / "stdout.log"
+        while not output.exists() or not output.read_bytes():
+            await asyncio.sleep(0.01)
+        parent, child = json.loads(output.read_bytes())
+        if termination == "event":
+            cancel_event.set()
+        elif termination == "task":
+            execution.cancel()
+            await asyncio.sleep(0)
+            execution.cancel()
+        if termination == "task":
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+        else:
+            result = await execution
+            assert not isinstance(result, Problem), result
+            assert result.status == ("cancelled" if termination == "event" else "timed_out")
+    assert not Path(f"/proc/{parent}").exists()
+    async with asyncio.timeout(5):
+        while (state := Path(f"/proc/{child}/stat")).exists() and state.read_text().split()[2] != "Z":
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_executor_cleans_process_when_cancelled_during_spawn(executable_profile, tmp_path, monkeypatch):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    profile = executable_profile("import signal\nsignal.pause()\n")
+    original_spawn = blis.spawn
+    launched, release = asyncio.Event(), asyncio.Event()
+    children = []
+
+    async def delayed_spawn(*args, **kwargs):
+        child = await original_spawn(*args, **kwargs)
+        children.append(child)
+        launched.set()
+        await release.wait()
+        return child
+
+    monkeypatch.setattr(blis, "spawn", delayed_spawn)
+    execution = asyncio.create_task(
+        _execute_bundle(profile.verified_request, profile, tmp_path / "bundle", asyncio.Event())
+    )
+    await asyncio.wait_for(launched.wait(), 5)
+    execution.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(execution, 5)
+    assert children[0].returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_executor_reports_spawn_failure_without_leaking_details(bundle_profile, tmp_path, monkeypatch):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    monkeypatch.setattr(blis, "spawn", AsyncMock(side_effect=OSError("secret host details")))
+    result = await _execute_bundle(
+        bundle_profile.verified_request, bundle_profile, tmp_path / "bundle", asyncio.Event()
+    )
+    assert isinstance(result, Problem)
+    assert result.code == "execution_failed"
+    assert "secret host details" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_executor_with_locked_runtime(tmp_path):
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).resolve(), inputs=Path(inputs).resolve())
+    destination = tmp_path / "bundle"
+    result = await _execute_bundle(profile.verified_request, profile, destination, asyncio.Event())
+    assert not isinstance(result, Problem), result
+    assert result.status == "exited"
+    assert result.returncode == 0
+    assert not result.output_truncated
+    evidence = json.JSONDecoder().raw_decode((destination / "stdout.log").read_text().lstrip())[0]
+    assert evidence["kind"] == "Result"
+    assert evidence["requests"]["completed"] == 8
+    assert not any(capability.enabled for capability in availability(profile).capabilities)
 
 
 def test_deployment_documents_use_native_fields_and_preserve_layout(profile):

@@ -1,17 +1,22 @@
-"""Resolve trusted runtime inputs without spawning BLIS or consulting AIC."""
+"""Compile trusted BLIS inputs and provide private, bounded process execution."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
 import shutil
+import signal
+from contextlib import suppress
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
 import yaml
 from pydantic import Field, JsonValue, ValidationError
+
+from llm_d_lens.infrastructure.process import spawn
 
 from ..models import (
     Capability,
@@ -21,6 +26,8 @@ from ..models import (
     EstimateRequest,
     NonemptyString,
     OptimizeRequest,
+    PositiveFloat,
+    PositiveInt,
     Problem,
     Request,
     RunControls,
@@ -465,6 +472,165 @@ def _compile_bundle(
             code="bundle_compilation_failed", message="Bundle inputs, router references or output are invalid"
         )
     return bundle
+
+
+class _ExecutionLimits(Contract):
+    wall_timeout_s: PositiveFloat = 120
+    output_bytes: PositiveInt = 8 * 1024 * 1024
+    termination_grace_s: PositiveFloat = 1
+
+
+class _ExecutionResult(Contract):
+    status: Literal["exited", "failed", "timed_out", "cancelled"]
+    returncode: int
+    stdout_bytes: int
+    stderr_bytes: int
+    output_truncated: bool
+    error: Problem | None = None
+
+
+async def _execute_bundle(
+    request: EstimateRequest,
+    profile: RuntimeProfile,
+    destination: Path,
+    cancel_event: asyncio.Event,
+    *,
+    limits: _ExecutionLimits | None = None,
+) -> _ExecutionResult | Problem:
+    """Run a newly compiled bundle; exit zero is not validated prediction evidence."""
+    limits = _ExecutionLimits.model_validate((limits or _ExecutionLimits()).model_dump())
+    if cancel_event.is_set():
+        return Problem(code="execution_cancelled", message="BLIS execution was cancelled before launch")
+    if os.name != "posix":
+        return Problem(code="execution_platform_unsupported", message="BLIS execution requires POSIX process groups")
+    bundle = _compile_bundle(request, profile, destination)
+    if isinstance(bundle, Problem):
+        return bundle
+    destination = destination.resolve()
+    timeout = min(request.run.wall_timeout_s or limits.wall_timeout_s, limits.wall_timeout_s)
+    counts = {"stdout": 0, "stderr": 0}
+    output_exceeded = asyncio.Event()
+    process: asyncio.subprocess.Process | None = None
+    workers: list[asyncio.Task] = []
+    watchers: list[asyncio.Task] = []
+
+    async def copy_stream(stream: asyncio.StreamReader, target, name: str) -> None:
+        while chunk := await stream.read(64 * 1024):
+            remaining = max(0, limits.output_bytes - sum(counts.values()))
+            retained = chunk[:remaining]
+            target.write(retained)
+            target.flush()
+            counts[name] += len(retained)
+            if len(retained) != len(chunk):
+                output_exceeded.set()
+
+    def start_workers(child: asyncio.subprocess.Process, stdout, stderr) -> None:
+        assert child.stdout is not None and child.stderr is not None
+        workers.extend(
+            (
+                asyncio.create_task(copy_stream(child.stdout, stdout, "stdout")),
+                asyncio.create_task(copy_stream(child.stderr, stderr, "stderr")),
+                asyncio.create_task(child.wait()),
+            )
+        )
+
+    def signal_group(child: asyncio.subprocess.Process, sig: signal.Signals) -> None:
+        with suppress(ProcessLookupError):
+            os.killpg(child.pid, sig)
+
+    try:
+        with (destination / "stdout.log").open("xb") as stdout, (destination / "stderr.log").open("xb") as stderr:
+            if cancel_event.is_set():
+                return Problem(code="execution_cancelled", message="BLIS execution was cancelled before launch")
+            if file_digest(profile.binary) != bundle.binary_digest:
+                return Problem(code="binary_digest_mismatch", message="Managed BLIS binary changed before launch")
+            launch = asyncio.create_task(
+                spawn(
+                    [str(profile.binary.resolve()), "run", *bundle.arguments, "--format", "json", "--log", "warn"],
+                    cwd=destination,
+                    env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "GOMAXPROCS": "1"},
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                )
+            )
+
+            async def cleanup() -> None:
+                try:
+                    child = await launch
+                except OSError:
+                    return
+                if not workers:
+                    start_workers(child, stdout, stderr)
+                signal_group(child, signal.SIGTERM)
+                try:
+                    await asyncio.wait_for(asyncio.shield(asyncio.gather(*workers)), limits.termination_grace_s)
+                except (TimeoutError, OSError):
+                    pass
+                finally:
+                    signal_group(child, signal.SIGKILL)
+                    await asyncio.gather(*workers, return_exceptions=True)
+                    for watcher in watchers:
+                        watcher.cancel()
+                    await asyncio.gather(*watchers, return_exceptions=True)
+
+            try:
+                process = await asyncio.shield(launch)
+                start_workers(process, stdout, stderr)
+
+                async def completion() -> None:
+                    await asyncio.gather(*workers)
+
+                finished = asyncio.create_task(completion())
+                cancelled = asyncio.create_task(cancel_event.wait())
+                exceeded = asyncio.create_task(output_exceeded.wait())
+                watchers.extend((finished, cancelled, exceeded))
+                done, _ = await asyncio.wait(watchers, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                if cancel_event.is_set():
+                    status, error = "cancelled", Problem(code="execution_cancelled", message="BLIS was cancelled")
+                elif output_exceeded.is_set():
+                    status, error = (
+                        "failed",
+                        Problem(code="output_limit_exceeded", message="BLIS output exceeded its limit"),
+                    )
+                elif finished not in done:
+                    status, error = (
+                        "timed_out",
+                        Problem(code="execution_timed_out", message="BLIS exceeded its wall timeout"),
+                    )
+                else:
+                    finished.result()
+                    status, error = "exited", None
+                    if process.returncode != 0:
+                        status, error = (
+                            "failed",
+                            Problem(code="process_failed", message="BLIS exited with a nonzero status"),
+                        )
+            finally:
+                cleaning = asyncio.create_task(cleanup())
+                interrupted = False
+                while not cleaning.done():
+                    try:
+                        await asyncio.shield(cleaning)
+                    except asyncio.CancelledError:
+                        interrupted = True
+                cleaning.result()
+                if interrupted:
+                    raise asyncio.CancelledError
+    except (OSError, ValueError):
+        return Problem(code="execution_failed", message="BLIS process or output files could not be accessed")
+    assert process is not None and process.returncode is not None
+    if output_exceeded.is_set() and status == "exited":
+        status, error = "failed", Problem(code="output_limit_exceeded", message="BLIS output exceeded its limit")
+    return _ExecutionResult(
+        status=status,
+        returncode=process.returncode,
+        stdout_bytes=counts["stdout"],
+        stderr_bytes=counts["stderr"],
+        output_truncated=output_exceeded.is_set(),
+        error=error,
+    )
 
 
 def capabilities() -> list[Capability]:
