@@ -19,6 +19,7 @@ from llm_d_lens.estimate_tools.blis.service import (
     _compile_bundle,
     _compile_workload,
     _deployment_documents,
+    _parse_result,
     availability,
     baseline_profile,
     file_digest,
@@ -26,6 +27,432 @@ from llm_d_lens.estimate_tools.blis.service import (
     tree_digest,
 )
 from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest, Problem, RunControls, Workload
+
+
+def test_result_parser_rejects_truncated_json_even_after_exit_zero(bundle_profile, tmp_path):
+    destination = tmp_path / "bundle"
+    bundle = _compile_bundle(bundle_profile.verified_request, bundle_profile, destination)
+    assert not isinstance(bundle, Problem)
+    evaluation = _parse_result(bundle_profile.verified_request, bundle_profile, destination, '{"kind": "Result"')
+    assert evaluation.status == "failed"
+    assert evaluation.error.code == "invalid_result"
+    assert evaluation.constraint_assessment == "unknown"
+    assert evaluation.metrics == []
+
+
+@pytest.fixture
+def result_case(bundle_profile, tmp_path):
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    directory = tmp_path / "bundle"
+    bundle = _compile_bundle(request, bundle_profile, directory)
+    assert not isinstance(bundle, Problem)
+    scenario, deployment = yaml.safe_load_all((directory / "inputs/scenarios/deployment.yaml").read_text())
+    definitions = {}
+    for name, formula, statistic in (
+        ("ttft_mean_ms", "ttft", "mean"),
+        ("ttft_p99_ms", "ttft", "p99"),
+        ("itl_mean_ms", "tpot_excl_first", "mean"),
+    ):
+        definitions[name] = {
+            "formula": formula,
+            "statistic": statistic,
+            "population": "per_request",
+            "clock": "simulated",
+            "unit": "ms",
+            "cite": "fixture source",
+        }
+        if statistic == "p99":
+            definitions[name]["percentile_method"] = "numpy_linear"
+    definitions["request_throughput"] = {
+        "formula": "request_throughput",
+        "population": "per_request",
+        "denominator": "profiling_window",
+        "clock": "simulated",
+        "unit": "requests_per_s",
+        "cite": "fixture source",
+    }
+    payload = {
+        "kind": "Result",
+        "schema_version": 1,
+        "name": "fixture-result",
+        "input": {
+            "scenario": scenario,
+            "deployment": deployment,
+            "run": {"load": {"request_rate": 2}, "num_requests": 8, "seed": 42, "horizon_s": 60},
+        },
+        "revisions": {
+            "blis": "unknown",
+            "engine": {"kind": "vllm", "upstream_version": "0.32.0", "release": "fixture-release"},
+        },
+        "metric_defs": definitions,
+        "window": {"start": "first_arrival_after_warmup", "stop": "last_completion", "duration_s": 4, "requests": 8},
+        "metrics": {"ttft_mean_ms": 10, "ttft_p99_ms": 15, "itl_mean_ms": 2, "request_throughput": 2},
+        "requests": dict.fromkeys(
+            (
+                "generated",
+                "rejected",
+                "injected",
+                "completed",
+                "still_queued",
+                "still_running",
+                "dropped_unservable",
+                "timed_out",
+                "routing_rejections",
+                "gateway_queue_depth",
+                "gateway_queue_rejected",
+                "gateway_evicted",
+                "gateway_expired",
+                "encode_routing_rejections",
+                "length_capped",
+            ),
+            0,
+        ),
+        "engine": {
+            "cluster": {
+                "measured_failed_requests": 0,
+                "measured_cancelled_requests": 0,
+                "measured_context_overflow_requests": 0,
+            }
+        },
+        "kernel": {
+            "colocated": {
+                "evidence_source": "kernel",
+                "assumptions": [{"Name": "fixture-assumption", "Method": "assumed"}],
+            }
+        },
+        "overrides": [
+            {
+                "setting": "workload-spec",
+                "run": f"sha256:{file_digest(directory / 'inputs/workload.yaml')}",
+                "source": "--workload-spec",
+            }
+        ],
+    }
+    payload["requests"].update(generated=8, injected=8, completed=8)
+    return request, bundle_profile, directory, payload
+
+
+def test_result_parser_preserves_native_metric_semantics_and_provenance(result_case):
+    request, profile, directory, payload = result_case
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+    assert result.constraint_assessment == "satisfied"
+    assert result.request_accounting == payload["requests"]
+    metrics = {metric.name: metric for metric in result.metrics}
+    assert metrics["itl_mean_ms"].formula == "tpot_excl_first"
+    assert metrics["itl_mean_ms"].statistic == "mean"
+    assert metrics["itl_mean_ms"].population == "per_request"
+    assert metrics["request_throughput"].statistic == "rate"
+    assert metrics["request_throughput"].unit == "requests_per_s"
+    assert metrics["ttft_p99_ms"].window == "simulated:first_arrival_after_warmup:last_completion"
+    assert result.coefficient_provenance["kernel"] == payload["kernel"]
+    assert result.revisions["native.engine.upstream_version"] == "0.32.0"
+    assert result.revisions["native.blis"] == "unknown"
+    assert result.resolved_input_digest == tree_digest(directory / "inputs")
+    assert result.evidence_maturity == "experimental"
+    assert not any(capability.enabled for capability in availability(profile).capabilities)
+
+
+@pytest.mark.parametrize(
+    "output", ["", "null", "[]", "{}", "{} {}", "{} trailing text", '{"kind":"Result","kind":"Result"}', b"\xff"]
+)
+def test_result_parser_rejects_noncanonical_json(result_case, output):
+    request, profile, directory, _ = result_case
+    result = _parse_result(request, profile, directory, output)
+    assert result.status == "failed"
+    assert result.error.code == "invalid_result"
+    assert result.constraint_assessment == "unknown"
+
+
+@pytest.mark.parametrize(
+    "path,value,code",
+    [
+        (("schema_version",), 2, "invalid_result"),
+        (("schema_version",), True, "invalid_result"),
+        (("kind",), "MetricsOutput", "invalid_result"),
+        (("metrics", "ttft_mean_ms"), float("nan"), "invalid_result"),
+        (("metrics", "ttft_mean_ms"), float("inf"), "invalid_result"),
+        (("metrics", "ttft_mean_ms"), -1, "invalid_result"),
+        (("metrics", "ttft_mean_ms"), True, "invalid_result"),
+        (("metrics", "ttft_mean_ms"), "10", "invalid_result"),
+        (("window", "duration_s"), -1, "invalid_result"),
+        (("requests", "completed"), 7.0, "invalid_result"),
+        (("requests", "completed"), -1, "invalid_result"),
+        (("requests", "completed"), True, "invalid_result"),
+        (("requests", "completed"), 9, "invalid_result_evidence"),
+        (("requests", "length_capped"), 9, "invalid_result_evidence"),
+        (("requests", "generated"), 9, "invalid_result_evidence"),
+        (("window", "requests"), 9, "invalid_result_evidence"),
+        (("window", "duration_s"), 0, "invalid_result_evidence"),
+        (("metrics", "request_throughput"), 99, "invalid_result_evidence"),
+        (("metric_defs", "itl_mean_ms", "formula"), "itl", "invalid_result_evidence"),
+        (("metric_defs", "ttft_p99_ms", "percentile_method"), "nearest_rank", "invalid_result_evidence"),
+        (("metric_defs", "ttft_mean_ms", "unit"), "s", "invalid_result_evidence"),
+        (("metric_defs", "ttft_mean_ms", "clock"), "wall", "invalid_result"),
+        (("input", "run", "seed"), 0, "result_input_mismatch"),
+        (("revisions", "engine", "upstream_version"), "0.31.0", "result_input_mismatch"),
+        (("revisions", "engine", "kind"), "other", "result_input_mismatch"),
+        (("input", "run", "load", "request_rate"), 3, "result_input_mismatch"),
+        (("input", "scenario", "cluster", "nodes"), True, "result_input_mismatch"),
+        (("input", "deployment", "pools", 0, "parallel", "tp"), 2, "result_input_mismatch"),
+        (("overrides", 0, "run"), "sha256:" + "0" * 64, "result_input_mismatch"),
+    ],
+)
+def test_result_parser_rejects_invalid_or_unattributable_evidence(result_case, path, value, code):
+    request, profile, directory, payload = result_case
+    parent = payload
+    for key in path[:-1]:
+        parent = parent[key]
+    parent[path[-1]] = value
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "failed", result
+    assert result.error.code == code
+    assert result.metrics == []
+    assert result.constraint_assessment == "unknown"
+
+
+@pytest.mark.parametrize(
+    "section,key", [("requests", "timed_out"), ("metric_defs", "ttft_mean_ms"), ("metrics", "ttft_mean_ms")]
+)
+def test_result_parser_never_defaults_missing_evidence_to_zero(result_case, section, key):
+    request, profile, directory, payload = result_case
+    del payload[section][key]
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "failed"
+    assert result.constraint_assessment == "unknown"
+
+
+@pytest.mark.parametrize(
+    "relative", ["inputs/workload.yaml", "inputs/scenarios/deployment.yaml", "effective-input.json", "manifest.json"]
+)
+def test_result_parser_refuses_tampered_bundle(result_case, relative):
+    request, profile, directory, payload = result_case
+    (directory / relative).write_text("changed")
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "failed"
+    assert result.error.code == "result_input_mismatch"
+
+
+@pytest.mark.parametrize(
+    "changes,expected",
+    [
+        ({"returncode": 1}, "failed"),
+        ({"output_truncated": True}, "failed"),
+        ({"execution_status": "failed"}, "failed"),
+        ({"execution_status": "timed_out"}, "timed_out"),
+        ({"execution_status": "cancelled"}, "cancelled"),
+    ],
+)
+def test_result_parser_cannot_promote_output_from_unsuccessful_execution(result_case, changes, expected):
+    request, profile, directory, payload = result_case
+    result = _parse_result(request, profile, directory, json.dumps(payload), **changes)
+    assert result.status == expected
+    assert result.metrics == []
+    assert result.error is not None
+    assert result.constraint_assessment == "unknown"
+
+
+@pytest.mark.parametrize(
+    "comparison,threshold,expected",
+    [("le", 15, "satisfied"), ("le", 14, "not_satisfied"), ("ge", 15, "satisfied"), ("ge", 16, "not_satisfied")],
+)
+def test_result_parser_separates_execution_success_from_constraints(result_case, comparison, threshold, expected):
+    from llm_d_lens.estimate_tools.models import MetricConstraint, MetricDefinition
+
+    request, profile, directory, payload = result_case
+    parsed = _parse_result(request, profile, directory, json.dumps(payload))
+    definition = next(metric for metric in parsed.metrics if metric.name == "ttft_p99_ms").model_dump(exclude={"value"})
+    request.constraints.metrics = [
+        MetricConstraint(metric=MetricDefinition(**definition), comparison=comparison, threshold=threshold)
+    ]
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded"
+    assert result.constraint_assessment == expected
+    assert result.error is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("name", "tpot_p99_ms"),
+        ("unit", "s"),
+        ("statistic", "p95"),
+        ("formula", "itl"),
+        ("population", "per_token"),
+        ("window", "whole_run"),
+    ],
+)
+def test_result_parser_leaves_incomparable_constraints_unknown(result_case, field, value):
+    from llm_d_lens.estimate_tools.models import MetricConstraint, MetricDefinition
+
+    request, profile, directory, payload = result_case
+    parsed = _parse_result(request, profile, directory, json.dumps(payload))
+    definition = next(metric for metric in parsed.metrics if metric.name == "ttft_p99_ms").model_dump(exclude={"value"})
+    definition[field] = value
+    request.constraints.metrics = [
+        MetricConstraint(metric=MetricDefinition(**definition), comparison="le", threshold=100)
+    ]
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded"
+    assert result.constraint_assessment == "unknown"
+    assert any("matching definition" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    [
+        "rejected",
+        "timed_out",
+        "dropped_unservable",
+        "routing_rejections",
+        "gateway_queue_rejected",
+        "gateway_evicted",
+        "gateway_expired",
+        "encode_routing_rejections",
+        "still_queued",
+        "still_running",
+        "gateway_queue_depth",
+        "length_capped",
+    ],
+)
+def test_result_parser_reports_incomplete_requests_without_discarding_valid_metrics(result_case, bucket):
+    request, profile, directory, payload = result_case
+    payload["requests"][bucket] = 1
+    if bucket != "length_capped":
+        payload["requests"]["completed"] = 7
+        payload["window"]["requests"] = 7
+        payload["metrics"]["request_throughput"] = 7 / 4
+    if bucket == "rejected":
+        payload["requests"]["injected"] = 7
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+    assert result.constraint_assessment == "not_satisfied"
+    assert result.request_accounting[bucket] == 1
+    assert result.metrics
+
+
+@pytest.mark.parametrize(
+    "bucket,threshold,expected",
+    [
+        ("timed_out", 0.125, "satisfied"),
+        ("timed_out", 0.12, "not_satisfied"),
+        ("still_running", 0.5, "unknown"),
+        ("length_capped", 0, "not_satisfied"),
+    ],
+)
+def test_result_parser_assesses_failure_fraction_without_counting_pending_as_success(
+    result_case, bucket, threshold, expected
+):
+    request, profile, directory, payload = result_case
+    request.constraints.require_complete = False
+    request.constraints.max_failure_fraction = threshold
+    payload["requests"][bucket] = 1
+    if bucket != "length_capped":
+        payload["requests"]["completed"] = 7
+        payload["window"]["requests"] = 7
+        payload["metrics"]["request_throughput"] = 7 / 4
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+    assert result.constraint_assessment == expected
+
+
+def test_result_parser_retains_unknown_provenance_without_claiming_satisfied_constraints(result_case):
+    request, profile, directory, payload = result_case
+    payload.pop("kernel")
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded"
+    assert result.constraint_assessment == "unknown"
+    assert result.evidence_maturity == "unknown"
+    assert result.metrics
+
+
+def test_result_parser_zero_completions_does_not_invent_latency_or_claim_slo_success(result_case):
+    from llm_d_lens.estimate_tools.models import MetricConstraint, MetricDefinition
+
+    request, profile, directory, payload = result_case
+    payload["requests"].update(completed=0, timed_out=8)
+    payload["window"].update(start="simulation_start", stop="simulation_end", requests=0)
+    payload["metrics"] = {"request_throughput": 0}
+    payload["metric_defs"] = {"request_throughput": payload["metric_defs"]["request_throughput"]}
+    request.constraints.require_complete = False
+    request.constraints.metrics = [
+        MetricConstraint(
+            metric=MetricDefinition(
+                name="ttft_p99_ms",
+                unit="ms",
+                statistic="p99",
+                formula="ttft",
+                population="per_request",
+                window="simulated:simulation_start:simulation_end",
+            ),
+            comparison="le",
+            threshold=100,
+        )
+    ]
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+    assert result.constraint_assessment == "unknown"
+    assert [metric.name for metric in result.metrics] == ["request_throughput"]
+    assert result.metrics[0].value == 0
+    assert result.request_accounting["timed_out"] == 8
+
+
+def test_result_parser_ungenerated_workload_is_not_complete_or_zero_failure(result_case):
+    request, profile, directory, payload = result_case
+    payload["requests"].update(generated=7, injected=7, completed=7)
+    payload["window"]["requests"] = 7
+    payload["metrics"]["request_throughput"] = 7 / 4
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+    assert result.constraint_assessment == "not_satisfied"
+    request.constraints.require_complete = False
+    request.constraints.max_failure_fraction = 0
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded"
+    assert result.constraint_assessment == "unknown"
+
+
+@pytest.mark.parametrize(
+    "overrides", [None, [], [{"setting": "output-tokens", "run": "1"}], [{"setting": {}, "run": "anything"}]]
+)
+def test_result_parser_requires_known_and_unique_workload_overrides(result_case, overrides):
+    request, profile, directory, payload = result_case
+    payload["overrides"] = overrides
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "failed"
+    assert result.error.code == "result_input_mismatch"
+
+
+def test_result_parser_rejects_duplicate_overrides(result_case):
+    request, profile, directory, payload = result_case
+    payload["overrides"].append(dict(payload["overrides"][0]))
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "failed"
+    assert result.error.code == "result_input_mismatch"
+
+
+def test_result_parser_cannot_hide_a_known_constraint_failure_behind_unknown_metrics(result_case):
+    from llm_d_lens.estimate_tools.models import MetricConstraint, MetricDefinition
+
+    request, profile, directory, payload = result_case
+    request.constraints.metrics = [
+        MetricConstraint(
+            metric=MetricDefinition(
+                name="unreported",
+                unit="ms",
+                statistic="p99",
+                formula="ttft",
+                population="per_request",
+                window="whole_run",
+            ),
+            comparison="le",
+            threshold=100,
+        )
+    ]
+    payload["requests"]["length_capped"] = 1
+    result = _parse_result(request, profile, directory, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+    assert result.constraint_assessment == "not_satisfied"
 
 
 def test_deployment_documents_use_native_fields_and_preserve_layout(profile):
@@ -482,6 +909,50 @@ def test_generated_bundle_with_locked_runtime(tmp_path, tp, pp, dp, nodes, devic
     assert bundle.arguments[-2:] == ["--num-instances", str(replicas)]
     assert bundle.input_digest == tree_digest(moved / "inputs")
 
+    evaluation = _parse_result(request, profile, moved, completed.stdout)
+    assert evaluation.status == "succeeded", evaluation.error
+    assert evaluation.constraint_assessment == "satisfied", evaluation.warnings
+    assert evaluation.request_accounting["completed"] == 8
+    assert evaluation.coefficient_provenance["kernel"] == result["kernel"]
+
+
+@pytest.mark.parametrize("case", ["horizon", "deadline", "one-token"])
+def test_result_parser_with_locked_incomplete_and_single_token_runs(tmp_path, case):
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).resolve(), inputs=Path(inputs).resolve())
+    request = profile.verified_request.model_copy(deep=True)
+    if case == "horizon":
+        request.run.horizon_s = 0.000001
+    elif case == "deadline":
+        request.run.request_deadline_s = 0.000001
+    else:
+        request.workload.output_tokens = 1
+    directory = tmp_path / "bundle"
+    bundle = _compile_bundle(request, profile, directory)
+    assert not isinstance(bundle, Problem), bundle
+    completed = subprocess.run(
+        [str(profile.binary), "run", *bundle.arguments, "--format", "json", "--log", "warn"],
+        cwd=directory,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "TZ": "UTC", "GOMAXPROCS": "1"},
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    evaluation = _parse_result(request, profile, directory, completed.stdout)
+    assert evaluation.status == "succeeded", evaluation.error
+    if case == "one-token":
+        assert evaluation.constraint_assessment == "satisfied"
+        assert evaluation.request_accounting["completed"] == request.run.num_requests
+    else:
+        assert evaluation.constraint_assessment == "not_satisfied"
+        assert evaluation.request_accounting["completed"] == 0
+        if case == "deadline":
+            assert evaluation.request_accounting["timed_out"] == request.run.num_requests
+    assert not any(metric.formula == "tpot_excl_first" for metric in evaluation.metrics)
+
 
 @pytest.mark.parametrize("load", [{"request_rate": 2.5}, {"request_rate": 4}, {"concurrency": 3}])
 @pytest.mark.parametrize(
@@ -561,6 +1032,11 @@ def test_compiled_workload_with_locked_runtime(
     else:
         assert arrivals[: load["concurrency"]] == [0] * load["concurrency"]
         assert all(arrival > 0 for arrival in arrivals[load["concurrency"] :])
+
+    evaluation = _parse_result(request, profile, moved, completed.stdout)
+    assert evaluation.status == "succeeded", evaluation.error
+    assert evaluation.constraint_assessment == "satisfied", evaluation.warnings
+    assert evaluation.request_accounting["completed"] == num_requests
 
 
 @pytest.fixture

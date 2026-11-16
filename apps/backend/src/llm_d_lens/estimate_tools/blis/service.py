@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import Field, JsonValue, ValidationError
@@ -19,6 +20,9 @@ from ..models import (
     Digest,
     EffectiveConfiguration,
     EstimateRequest,
+    Evaluation,
+    Metric,
+    MetricDefinition,
     NonemptyString,
     OptimizeRequest,
     Problem,
@@ -465,6 +469,394 @@ def _compile_bundle(
             code="bundle_compilation_failed", message="Bundle inputs, router references or output are invalid"
         )
     return bundle
+
+
+_Count = Annotated[int, Field(strict=True, ge=0, le=2**63 - 1)]
+_Number = Annotated[float, Field(strict=True, ge=0, allow_inf_nan=False)]
+
+
+class _ResultWindow(Contract):
+    start: Literal["first_arrival_after_warmup", "simulation_start", "profiling_start"]
+    stop: Literal["last_completion", "simulation_end", "profiling_end"]
+    duration_s: _Number
+    requests: _Count
+
+
+class _ResultMetricDefinition(Contract):
+    formula: NonemptyString
+    statistic: NonemptyString | None = None
+    population: NonemptyString
+    denominator: NonemptyString | None = None
+    clock: Literal["simulated"]
+    unit: NonemptyString
+    percentile_method: NonemptyString | None = None
+    cite: NonemptyString
+
+
+class _ResultRequests(Contract):
+    generated: _Count
+    rejected: _Count
+    injected: _Count
+    completed: _Count
+    still_queued: _Count
+    still_running: _Count
+    dropped_unservable: _Count
+    timed_out: _Count
+    routing_rejections: _Count
+    gateway_queue_depth: _Count
+    gateway_queue_rejected: _Count
+    gateway_evicted: _Count
+    gateway_expired: _Count
+    encode_routing_rejections: _Count
+    length_capped: _Count
+
+
+class _NativeResult(Contract):
+    kind: Literal["Result"]
+    schema_version: Annotated[int, Field(strict=True, ge=1, le=1)]
+    name: NonemptyString
+    input: dict[str, JsonValue]
+    revisions: dict[str, JsonValue]
+    metric_defs: dict[str, _ResultMetricDefinition]
+    window: _ResultWindow
+    metrics: dict[str, _Number]
+    requests: _ResultRequests
+    engine: dict[str, JsonValue]
+    router: dict[str, JsonValue] | None = None
+    kernel: dict[str, JsonValue] | None = None
+    overrides: list[dict[str, JsonValue]] | None = None
+    artifacts: dict[str, JsonValue] | None = None
+    breakdowns: dict[str, JsonValue] | None = None
+    goodput: dict[str, JsonValue] | None = None
+    saturation: dict[str, JsonValue] | None = None
+    runtime: dict[str, JsonValue] | None = None
+
+
+def _json_equal(actual: JsonValue, expected: JsonValue) -> bool:
+    if isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and actual.keys() == expected.keys()
+            and all(_json_equal(actual[key], value) for key, value in expected.items())
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(_json_equal(left, right) for left, right in zip(actual, expected, strict=True))
+        )
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is type(expected) and actual == expected
+    return actual == expected
+
+
+def _result_metrics(result: _NativeResult) -> list[Metric]:
+    if not result.metrics or result.metrics.keys() != result.metric_defs.keys():
+        raise ValueError("Every metric needs exactly one definition")
+    expected: dict[str, tuple[str, str | None, str, str | None, str]] = {}
+    for family, formula, unit, statistics in (
+        ("ttft", "ttft", "ms", ("mean", "p50", "p90", "p95", "p99")),
+        ("e2e", "e2el", "ms", ("mean", "p50", "p90", "p95", "p99")),
+        ("itl", "tpot_excl_first", "ms", ("mean", "p50", "p90", "p99")),
+    ):
+        for statistic in statistics:
+            expected[f"{family}_{statistic}_ms"] = (formula, statistic, "per_request", None, unit)
+    expected.update(
+        {
+            "interactivity_mean": ("user_tps", "mean", "per_request", None, "tokens_per_s"),
+            "interactivity_p50": ("interactivity", "p50", "per_request", None, "tokens_per_s"),
+            "interactivity_p90": ("interactivity", "p90", "per_request", None, "tokens_per_s"),
+            "output_tok_s": ("output_throughput", None, "pooled_tokens", "profiling_window", "tokens_per_s"),
+            "output_tok_s_per_gpu": ("output_throughput", None, "pooled_tokens", "per_gpu", "tokens_per_s"),
+            "request_throughput": ("request_throughput", None, "per_request", "profiling_window", "requests_per_s"),
+        }
+    )
+    metrics = []
+    window = f"simulated:{result.window.start}:{result.window.stop}"
+    for name, value in sorted(result.metrics.items()):
+        definition = result.metric_defs[name]
+        identity = (
+            definition.formula,
+            definition.statistic,
+            definition.population,
+            definition.denominator,
+            definition.unit,
+        )
+        if expected.get(name) != identity:
+            raise ValueError("Unknown metric name or incompatible native definition")
+        percentile = definition.statistic is not None and definition.statistic.startswith("p")
+        if definition.percentile_method != ("numpy_linear" if percentile else None):
+            raise ValueError("Unsupported percentile method")
+        if definition.statistic is not None and not result.window.requests:
+            raise ValueError("A latency or interactivity statistic needs measured requests")
+        if definition.statistic is None and result.window.duration_s <= 0:
+            raise ValueError("A rate needs a positive measured duration")
+        metrics.append(
+            Metric(
+                name=name,
+                value=value,
+                unit=definition.unit,
+                statistic=definition.statistic or "rate",
+                formula=definition.formula,
+                population=definition.population,
+                window=window,
+            )
+        )
+    return metrics
+
+
+def _assess_constraints(
+    request: EstimateRequest, result: _NativeResult, metrics: list[Metric]
+) -> tuple[str, list[str]]:
+    counts = result.requests
+    warnings = []
+    assessments = []
+    pending = counts.still_queued + counts.still_running + counts.gateway_queue_depth
+    complete = counts.generated == request.run.num_requests and counts.completed == counts.generated
+    complete = complete and counts.length_capped == 0
+    if not complete:
+        warnings.append("Run did not successfully complete the full requested workload")
+    if request.constraints.require_complete:
+        assessments.append("satisfied" if complete else "not_satisfied")
+    if request.constraints.max_devices is not None:
+        used = sum(role.device_count for role in request.configuration.roles)
+        assessments.append("satisfied" if used <= request.constraints.max_devices else "not_satisfied")
+    if request.constraints.max_failure_fraction is not None:
+        if counts.generated:
+            failures = counts.generated - counts.completed - pending + counts.length_capped
+            assessments.append(
+                "satisfied"
+                if failures / counts.generated <= request.constraints.max_failure_fraction
+                else "not_satisfied"
+            )
+            if pending or counts.generated != request.run.num_requests:
+                if assessments[-1] == "satisfied":
+                    assessments[-1] = "unknown"
+                warnings.append("Unfinished or ungenerated requests prevent certifying the final failure fraction")
+        else:
+            assessments.append("unknown")
+            warnings.append("Failure fraction is unknown because no requests were generated")
+    for constraint in request.constraints.metrics:
+        observed = next(
+            (
+                metric
+                for metric in metrics
+                if MetricDefinition(**metric.model_dump(exclude={"value"})) == constraint.metric
+            ),
+            None,
+        )
+        if observed is None:
+            assessments.append("unknown")
+            warnings.append(f"Metric constraint {constraint.metric.name} has no exactly matching definition")
+        else:
+            matches = (
+                observed.value <= constraint.threshold
+                if constraint.comparison == "le"
+                else observed.value >= constraint.threshold
+            )
+            assessments.append("satisfied" if matches else "not_satisfied")
+    assessment = (
+        "not_satisfied" if "not_satisfied" in assessments else "unknown" if "unknown" in assessments else "satisfied"
+    )
+    return assessment, warnings
+
+
+def _parse_result(
+    request: EstimateRequest,
+    profile: RuntimeProfile,
+    directory: Path,
+    output: str | bytes,
+    *,
+    returncode: int = 0,
+    execution_status: Literal["exited", "failed", "timed_out", "cancelled"] = "exited",
+    output_truncated: bool = False,
+) -> Evaluation:
+    """Validate locked Result v1 evidence without spawning BLIS or enabling dispatch."""
+    base = {
+        "tool": "blis",
+        "strategy": "exact",
+        "runtime_profile": profile.id,
+        "configuration_fingerprint": EffectiveConfiguration.from_request(request).fingerprint,
+        "revisions": dict(profile.revisions),
+        "warnings": list(profile.limitations),
+    }
+    for condition, status, code in (
+        (execution_status == "cancelled", "cancelled", "execution_cancelled"),
+        (execution_status == "timed_out", "timed_out", "execution_timed_out"),
+        (output_truncated, "failed", "output_limit_exceeded"),
+        (returncode != 0 or execution_status == "failed", "failed", "process_failed"),
+    ):
+        if condition:
+            return Evaluation(**base, status=status, error=Problem(code=code, message="BLIS execution did not succeed"))
+
+    def unique_object(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("Duplicate JSON key")
+            obj[key] = value
+        return obj
+
+    try:
+        raw = json.loads(output, object_pairs_hook=unique_object)
+        result = _NativeResult.model_validate(raw)
+    except (ValueError, TypeError, RecursionError):
+        return Evaluation(
+            **base,
+            status="failed",
+            error=Problem(code="invalid_result", message="BLIS must emit one valid Result v1 JSON document"),
+        )
+    try:
+        manifest = _DeploymentBundle.model_validate_json(_contained_input(directory, "manifest.json").read_bytes())
+        if (
+            manifest.runtime_profile != profile.id
+            or manifest.configuration_fingerprint != base["configuration_fingerprint"]
+            or manifest.binary_digest != profile.binary_digest
+            or manifest.runtime_inputs_digest != profile.inputs_digest
+            or manifest.revisions != profile.revisions
+            or tree_digest(directory / "inputs/catalog") != profile.catalog_digest
+            or tree_digest(directory / "inputs/registry") != profile.registry_digest
+            or tree_digest(directory / "inputs") != manifest.input_digest
+            or any(
+                file_digest(_contained_input(directory, path)) != digest
+                for path, digest in manifest.file_digests.items()
+            )
+        ):
+            raise ValueError("Bundle differs from its manifest or managed runtime")
+        snapshot = json.loads(_contained_input(directory, "effective-input.json").read_bytes())
+        compiled_request = EstimateRequest.model_validate(snapshot["request"])
+        if not _json_equal(
+            compiled_request.model_dump(mode="json", exclude={"constraints"}),
+            request.model_dump(mode="json", exclude={"constraints"}),
+        ):
+            raise ValueError("Request differs from the compiled input")
+        scenario, deployment = yaml.safe_load_all(
+            _contained_input(directory, "inputs/scenarios/deployment.yaml").read_text()
+        )
+        load = (
+            {"concurrency": request.workload.concurrency}
+            if request.workload.concurrency is not None
+            else {"request_rate": request.workload.request_rate}
+        )
+        expected_input = {
+            "scenario": scenario,
+            "deployment": deployment,
+            "run": {
+                "load": load,
+                "num_requests": request.run.num_requests,
+                "seed": request.run.seed,
+                "horizon_s": request.run.horizon_s,
+            },
+        }
+        if not _json_equal(result.input, expected_input):
+            raise ValueError("Native Result inputs differ from the bundle")
+        native_engine = result.revisions.get("engine")
+        if not isinstance(native_engine, dict) or (
+            native_engine.get("kind") != request.configuration.engine
+            or native_engine.get("upstream_version") != request.configuration.engine_version
+        ):
+            raise ValueError("Native engine revision differs from the requested engine")
+        allowed_overrides = {
+            "workload-spec": f"sha256:{file_digest(directory / 'inputs/workload.yaml')}",
+            "seed": str(request.run.seed),
+            "num-instances": str(request.configuration.roles[0].replicas),
+        }
+        overrides = result.overrides or []
+        seen = set()
+        for override in overrides:
+            setting = override.get("setting")
+            if (
+                not isinstance(setting, str)
+                or setting in seen
+                or setting not in allowed_overrides
+                or override.get("run") != allowed_overrides[setting]
+            ):
+                raise ValueError("Native Result overrides differ from the compiled command")
+            seen.add(setting)
+        if "workload-spec" not in seen:
+            raise ValueError("Result does not identify the compiled workload digest")
+        if request.configuration.roles[0].replicas != 1 and "num-instances" not in seen:
+            raise ValueError("Result does not confirm the requested instance count")
+    except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError):
+        return Evaluation(
+            **base,
+            status="failed",
+            error=Problem(
+                code="result_input_mismatch", message="Result is not attributable to the locked bundle and request"
+            ),
+        )
+    try:
+        counts = result.requests.model_dump()
+        buckets = sum(
+            value
+            for name, value in counts.items()
+            if name not in {"generated", "rejected", "injected", "length_capped"}
+        )
+        if (
+            result.requests.generated != result.requests.rejected + result.requests.injected
+            or result.requests.injected != buckets
+            or result.requests.generated > request.run.num_requests
+            or result.requests.length_capped > result.requests.completed
+            or result.window.requests > result.requests.completed
+        ):
+            raise ValueError("Request counts do not conserve arrivals")
+        metrics = _result_metrics(result)
+        if request.workload.output_tokens < 2 and any(
+            metric.formula in {"tpot_excl_first", "interactivity", "user_tps"} for metric in metrics
+        ):
+            raise ValueError("TPOT and interactivity need requests with at least two output tokens")
+        if "request_throughput" in result.metrics and not math.isclose(
+            result.metrics["request_throughput"],
+            result.window.requests / result.window.duration_s,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("Request throughput disagrees with the measured window")
+    except (ValueError, TypeError, ZeroDivisionError):
+        return Evaluation(
+            **base,
+            status="failed",
+            error=Problem(
+                code="invalid_result_evidence", message="Result metrics, window or request accounting are inconsistent"
+            ),
+        )
+    assessment, warnings = _assess_constraints(request, result, metrics)
+    revisions = dict(profile.revisions)
+
+    def record_revisions(prefix, value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                record_revisions(f"{prefix}.{key}", child)
+        elif isinstance(value, str):
+            revisions[prefix] = value
+
+    record_revisions("native", result.revisions)
+    warnings.extend(profile.limitations)
+    warnings.append(
+        f"Native simulated measurement window: {result.window.start} to {result.window.stop}, "
+        f"{result.window.duration_s:g} seconds, {result.window.requests} measured completions; "
+        "percentiles use numpy_linear"
+    )
+    if not result.kernel:
+        warnings.append("Native coefficient provenance is missing; prediction evidence remains unknown")
+        if assessment == "satisfied":
+            assessment = "unknown"
+    warnings.append("Simulation integration evidence does not establish prediction accuracy or deployment approval")
+    return Evaluation(
+        tool="blis",
+        strategy="exact",
+        runtime_profile=profile.id,
+        configuration_fingerprint=base["configuration_fingerprint"],
+        status="succeeded",
+        constraint_assessment=assessment,
+        metrics=metrics,
+        request_accounting=counts,
+        revisions=revisions,
+        coefficient_provenance={"coefficient_ids": list(profile.coefficient_ids), "kernel": result.kernel or {}},
+        resolved_input_digest=manifest.input_digest,
+        evidence_maturity="experimental" if result.kernel else "unknown",
+        warnings=warnings,
+    )
 
 
 def capabilities() -> list[Capability]:
