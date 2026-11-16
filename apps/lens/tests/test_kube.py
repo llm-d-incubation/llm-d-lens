@@ -97,3 +97,15 @@ def test_identity(kube):
     assert kube.whoami() == "alice"
     assert kube.current_context() == "ctx"
     assert kube.namespace_state("team-a") == "exists" and kube.namespace_state("other") == "missing"
+
+
+def test_a_merge_patch_changes_one_field_and_null_removes_one(kube, cluster):
+    stored = cluster.put("team-a", {**CONFIGMAP, "metadata": {"name": "a", "finalizers": ["keep.example.invalid"]}})
+    patched = kube.patch("configmaps", "a", "team-a", {"data": {"k": "w"}, "metadata": {"finalizers": None}})
+    assert patched["data"] == {"k": "w"} and "finalizers" not in patched["metadata"]
+    assert patched["metadata"]["uid"] == stored["metadata"]["uid"]
+    assert "--type" in cluster.calls[-1] and "merge" in cluster.calls[-1]
+    with pytest.raises(PolicyError, match="not a namespaced resource"):
+        kube.patch("namespaces", "team-a", "team-a", {"metadata": {"labels": {"a": "b"}}})
+    with pytest.raises(CommandError, match="not found"):
+        kube.patch("configmaps", "missing", "team-a", {"data": {}})

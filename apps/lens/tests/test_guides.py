@@ -114,6 +114,9 @@ def test_a_guide_renders_what_its_readme_would_apply(llmrepo):
         "ServiceAccount/demo-baseline-sa",
     ]
     assert rendered.command.startswith("helm template demo-baseline charts/router --version 0.1.0")
+    assert [unit.kind for unit in rendered.units] == ["helm", "kustomize"]
+    assert rendered.unit_of["Deployment/demo-baseline-epp"] == 0
+    assert rendered.unit_of["Deployment/demo-baseline-decode"] == 1
 
 
 @needs_tools

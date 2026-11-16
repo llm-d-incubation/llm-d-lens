@@ -155,6 +155,14 @@ class PolicyResult:
     #: The namespaces the stack was written for, when it is deployed elsewhere.
     source_namespaces: list[str] = field(default_factory=list)
     accelerators: dict[str, int] = field(default_factory=dict)
+    #: ``Kind/name`` -> the namespace the object was written for, for each one moved to the target.
+    moved: dict[str, str] = field(default_factory=dict)
+    #: In-stack references to the namespaces the stack was written for that were rewritten.
+    rewrites: int = 0
+    #: {"document", "reason"}: every rendered object llmd does not apply (a Namespace, a cluster-scoped
+    #: object, an SCC binding), whoever applies it instead. A delivery that applies the stack's files
+    #: as they are (Argo CD) applies these too.
+    left_out: list[dict[str, Any]] = field(default_factory=list)
 
 
 # -- pod templates -----------------------------------------------------------------------------------
@@ -253,6 +261,7 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
             continue
         seen.add(identity)
         if context.scope(document["apiVersion"], kind) is False:
+            result.left_out.append(_left_out(document, "namespace" if kind == "Namespace" else "cluster-scoped"))
             if kind == "Namespace":
                 findings.append(
                     Finding(
@@ -289,8 +298,11 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
         for index, document in enumerate(kept):
             kept[index], count = _rewrite_namespace_references(document, old, context.namespace)
             rewrites += count
+    result.rewrites = rewrites
     for document, written_for in zip(kept, origins, strict=True):
         moved = written_for and written_for != context.namespace
+        if moved:
+            result.moved[object_ref(document)] = written_for
         if moved and document["kind"] == "Route" and document.get("spec", {}).get("host"):
             findings.extend(_drop_route_host(document, context.namespace))
     # A stack whose objects name several namespaces puts some of them where their readers look
@@ -329,6 +341,7 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
         # --skip-admin-parts wins over --allow-privileged: an administrator applied the binding, and
         # the privileged pods it admits still need the acknowledgement.
         if _is_scc_binding(document) and context.skip_admin_parts:
+            result.left_out.append(_left_out(document, "scc-binding"))
             findings.append(
                 Finding(
                     "warning",
@@ -338,6 +351,7 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
             )
             continue
         if _is_scc_binding(document) and not context.allow_privileged:
+            result.left_out.append(_left_out(document, "scc-binding"))
             result.admin_parts.append({"document": document, "reason": "scc-binding"})
             findings.append(_scc_finding(document))
             continue
@@ -354,6 +368,10 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
         key=lambda doc: order.get(doc["kind"], len(order) + (1 if doc["kind"] in WORKLOAD_KINDS else 0)),
     )
     return result
+
+
+def _left_out(document: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {"document": document, "reason": reason}
 
 
 #: What the llm-d router chart's metrics RBAC lets the endpoint picker do: check the tokens of

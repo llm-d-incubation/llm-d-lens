@@ -6,14 +6,15 @@ import argparse
 import sys
 
 from .. import companions, lifecycle
+from ..argocd import delivery
 from ..catalog import find_stack
-from ..errors import PolicyError
+from ..errors import PolicyError, UsageError
 from ..kube import Kube
 from ..plan import Options, Plan, discovered_scope, make_plan
 from ..preflight import preflight
 from ..status import wait_ready
-from . import Context, Handler, progress
-from .plan import add_plan_arguments, plan_from_args, print_plan
+from . import Context, Handler, argocd_settings, progress
+from .plan import add_plan_arguments, check_plan, plan_from_args, print_plan
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -37,6 +38,8 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
 
 
 def command_standup(ctx: Context) -> int:
+    if argocd_settings(ctx.args) is not None:
+        return _standup_argocd(ctx)
     kube = ctx.kube()
     plan = plan_from_args(ctx, kube)
     preflight(kube, plan)
@@ -73,6 +76,42 @@ def command_standup(ctx: Context) -> int:
         print(f"  moved from stack {result['switchedFrom']}")
     for item in result["pruned"]:
         print(f"  pruned {item} (no longer in the stack)")
+    print(f"Follow it with: llmd status {result['instance']} -n {result['namespace']}")
+    return 0
+
+
+def _standup_argocd(ctx: Context) -> int:
+    """Stand the stack up through Argo CD: record it, submit its Application, follow its sync."""
+    if ctx.args.with_companions:
+        raise UsageError(
+            "--with-companions stands companions up directly; with --backend argocd stand each one up first",
+            hint="Run `llmd standup COMPANION --backend argocd` for each companion `llmd plan` lists.",
+        )
+    kube = ctx.kube()
+    plan = plan_from_args(ctx, kube)
+    check_plan(ctx, kube, plan)
+    companions.check(kube, plan, ctx.runner)
+    if plan.blocking or not plan.delivery:
+        print_plan(plan) if ctx.args.output == "text" else ctx.emit(plan.summary())
+        return PolicyError.exit_code
+    emit = lambda line: print(f"[argocd] {line}", file=sys.stderr, flush=True)  # noqa: E731
+    result = delivery.standup(
+        kube,
+        plan,
+        plan.delivery,
+        expected_digest=ctx.args.expected_digest,
+        actor=plan.cluster.get("user", ""),
+        timeout=ctx.args.timeout,
+        emit=emit,
+    )
+    if ctx.args.wait:
+        result["status"] = wait_ready(kube, plan.namespace, plan.instance, timeout=ctx.args.timeout, emit=emit)
+    if ctx.args.output != "text":
+        ctx.emit(result)
+        return 0
+    where = f"{result['instance']} in {result['namespace']}"
+    print(f"Stood up {where} through Argo CD Application {result['application']} (digest {result['digest'][:12]})")
+    print(f"  Argo CD synced {result['objects']} object(s) at {result['revision'][:12]}")
     print(f"Follow it with: llmd status {result['instance']} -n {result['namespace']}")
     return 0
 

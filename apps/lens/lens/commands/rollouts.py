@@ -6,13 +6,17 @@ import argparse
 import sys
 import time
 
-from .. import inventory, yamlio
-from ..errors import LlmdError, PolicyError, UsageError
+from .. import catalog, inventory, yamlio
+from ..argocd import delivery
+from ..errors import ConflictError, LlmdError, PolicyError, UsageError
+from ..plan import discovered_scope, make_plan
 from ..preflight import preflight
 from ..rollouts import engine
 from ..rollouts.plan import RolloutPlan, plan_rollout
+from ..sources import resolve_source
 from . import Context, Handler, add_target_arguments
 from .plan import add_plan_arguments, plan_from_args
+from .scale import instance_options
 
 #: Help for --pool-label. llm-d's InferencePool selects pods by their labels, so with no label a group
 #: serves once its pods are Ready; a stack whose drain tool takes groups out of the pool names that label.
@@ -129,8 +133,20 @@ def rollout_plan(ctx: Context) -> RolloutPlan:
     # Rendered the way the instance was deployed: an imported stack carries no llmd labels. Its
     # objects already run, so privileged findings describe them (as for an import) instead of
     # blocking; an instance llmd stood up was planned with the same acknowledgements as before.
-    plan = plan_from_args(ctx, kube, label=not imported)
-    preflight(kube, plan, existing="import" if imported else "rollout")
+    argocd = delivery.is_argocd(record)
+    plan = plan_from_args(ctx, kube, label=not imported and not argocd)
+    if argocd:
+        # Argo CD applies the new ref from the Application, rebuilt from the live one at that commit.
+        settings = delivery.settings_for(
+            kube,
+            record,
+            revision=ctx.args.argocd_revision,
+            namespace=ctx.args.argocd_namespace,
+            remote=ctx.args.argocd_remote,
+        )
+        delivery.check(kube, plan, settings, ctx.runner, existing="rollout")
+    else:
+        preflight(kube, plan, existing="import" if imported else "rollout")
     return plan_rollout(
         kube,
         plan,
@@ -177,7 +193,13 @@ def command_rollouts(ctx: Context) -> int:
         if not ctx.args.yes and not _confirm(f"Roll {instance} back to what it ran before the rollout? [y/N] "):
             return 1
         record = inventory.require(kube, namespace, instance)
-        result = engine.abort(kube, namespace, instance, server_side=inventory.management(record) != inventory.IMPORTED)
+        result = engine.abort(
+            kube,
+            namespace,
+            instance,
+            server_side=inventory.management(record) != inventory.IMPORTED,
+            deliver=(lambda current: _restore_application(ctx, kube, current)) if delivery.is_argocd(record) else None,
+        )
         print(
             f"Aborting {instance}: re-applied {', '.join(result['restored'])}; the controller rolls back "
             "the same way, so keep the drainers running"
@@ -204,15 +226,18 @@ def command_start(ctx: Context) -> int:
         print_rollout_plan(rollout) if args.output == "text" else ctx.emit(rollout.summary())
         return PolicyError.exit_code
     kube = ctx.kube()
+    actor = rollout.plan.cluster.get("user", "")
+    argocd = delivery.is_argocd(rollout.record)
     result = engine.start(
         kube,
         rollout,
         drain="-" if args.no_drain else args.drain,
         state=ctx.state_dir,
         expected_digest=args.expected_digest,
-        actor=rollout.plan.cluster.get("user", ""),
+        actor=actor,
         env=_kube_env(ctx),
         pool_label=pool_label(ctx, rollout.record),
+        deliver=(lambda _: _move_application(kube, rollout, actor)) if argocd else None,
     )
     if args.output != "text":
         ctx.emit(result)
@@ -226,6 +251,46 @@ def command_start(ctx: Context) -> int:
     if result["rolls"] and args.watch:
         return _follow(ctx, kube, rollout.plan.namespace, rollout.plan.instance)
     return 0
+
+
+def _move_application(kube, rollout: RolloutPlan, actor: str) -> None:
+    """A rollout of an Argo CD instance: the Application moves to the new render, and Argo CD applies it.
+    The record keeps the rollout, as for the direct backend; the stack and revision follow."""
+    record = inventory.require(kube, rollout.plan.namespace, rollout.plan.instance)
+    delivery.update(kube, rollout.plan, record, actor=actor)
+
+
+def _restore_application(ctx: Context, kube, record: dict) -> None:
+    """Abort: render the rollout's ``from`` source again and move the Application back to it."""
+    rollout = record.get("rollout") or {}
+    source = rollout.get("from") or {}
+    location = source.get("location", "")
+    revision = source.get("revision", "")
+    if not location or not revision:
+        raise UsageError("the rollout did not record the source it started from; abort it in Argo CD")
+    spec = location if source.get("kind") != "git" else f"{location}#{revision}"
+    restored = resolve_source(spec, registry=ctx.registry, runner=ctx.runner)
+    if restored.revision != revision:
+        raise ConflictError(
+            f"the source the rollout started from is at {restored.revision[:12]}, not {revision[:12]}",
+            hint=f"Check out {revision[:12]} there, or roll forward again with `llmd rollouts start`.",
+        )
+    stack = catalog.find_stack(restored, record["stack"]["id"])
+    plan = make_plan(
+        stack,
+        instance_options(
+            record, record["namespace"], record["instance"], overrides=dict(record.get("overrides") or {})
+        ),
+        runner=ctx.runner,
+        scope=discovered_scope(kube),
+    )
+    delivery.check(kube, plan, delivery.settings_for(kube, record), ctx.runner, existing="rollout")
+    if plan.blocking:
+        raise PolicyError(
+            "the render the rollout started from no longer plans clean; nothing was restored",
+            details=[finding.as_dict() for finding in plan.blocking],
+        )
+    delivery.update(kube, plan, record, actor=kube.whoami())
 
 
 def _follow(ctx: Context, kube, namespace: str, instance: str) -> int:

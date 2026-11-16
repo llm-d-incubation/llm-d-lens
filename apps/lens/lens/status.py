@@ -22,6 +22,7 @@ import time
 from typing import Any
 
 from . import health, inventory
+from .argocd import delivery
 from .errors import CommandError, NotReadyError
 from .kube import Kube
 from .policy import pod_templates, template_accelerators
@@ -36,6 +37,11 @@ def _denied(error: CommandError) -> str:
 
 def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]:
     record = inventory.require(kube, namespace, instance)
+    argocd = None
+    if delivery.is_argocd(record):
+        # Argo CD may have synced since the last command: record what it manages now.
+        record = delivery.refresh_objects(kube, record)
+        argocd = delivery.status(kube, record)
     objects, problems, endpoints, seen, unreadable = [], [], [], [], []
     pods_ready = pods_total = 0
     kube.progress(f"reading {len(record.get('objects') or [])} object(s) of {instance}")
@@ -80,6 +86,9 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
                 endpoints.append(f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}")
     problems += _pending_warnings(kube, namespace, seen, problems)
     kube.forget()
+    overall = health.overall(objects, problems, partial=bool(unreadable))
+    if argocd is not None and argocd["state"] != "Synced":
+        overall = overall if overall == "Failed" else delivery.HEALTH.get(argocd["state"], overall)
     return {
         "instance": instance,
         "namespace": namespace,
@@ -87,7 +96,8 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "previousStack": (record.get("previousStack") or {}).get("id"),
         "management": record.get("management") or {"mode": inventory.MANAGED},
         "phase": record.get("phase"),
-        "health": health.overall(objects, problems, partial=bool(unreadable)),
+        "health": overall,
+        **({"argocd": argocd} if argocd is not None else {}),
         "objects": objects,
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
@@ -214,6 +224,7 @@ def list_instances(kube: Kube, namespace: str) -> list[dict[str, Any]]:
             {
                 "instance": record["instance"],
                 "stack": (record.get("stack") or {}).get("id"),
+                "backend": (record.get("delivery") or {}).get("backend") or "direct",
                 "management": (record.get("management") or {}).get("mode") or inventory.MANAGED,
                 "phase": record.get("phase"),
                 "pods": {"ready": ready, "total": total},
