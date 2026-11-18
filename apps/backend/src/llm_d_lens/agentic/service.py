@@ -30,6 +30,7 @@ from llm_d_lens.deploy.providers.hardware_profile import cluster_accelerator
 from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.estimate_tools.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
 from llm_d_lens.estimate_tools.aic.service import AICError, estimate
+from llm_d_lens.estimate_tools.models import BatchResult
 from llm_d_lens.infrastructure.kubernetes import list_resources
 
 from .benchmark_evidence import BenchmarkRecord
@@ -52,6 +53,7 @@ from .models import (
     AgenticDeploymentCreateRequest,
     AgenticDeploymentRun,
     AgenticDeploymentStatus,
+    AgenticExactEvaluationResult,
 )
 from .performance_evidence import BenchmarkPerformanceEvidence
 from .planner import (
@@ -70,6 +72,30 @@ from .planning_snapshot import PlanningSnapshotStore
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 RetrievalContext = tuple[PlanningFacts, PlanningEvidence, InternalCaseOutcome, CaseEvidenceBundle]
+
+
+def exact_evaluation_evidence(artifact_id: str, result: BatchResult) -> AgenticExactEvaluationResult:
+    evidence = [
+        PlanningEvidence(
+            id=f"estimate:{evaluation.tool}:{evaluation.configuration_fingerprint}",
+            source=evaluation.tool,
+            status=evaluation.status,
+            details=evaluation.model_dump(mode="json"),
+        )
+        for evaluation in result.evaluations
+    ]
+    warnings = ["Exact estimates are independent tool evidence, not measurements, rankings or deployment approval"]
+    if any(item.constraint_assessment == "unknown" for item in result.evaluations):
+        warnings.append("Unknown constraints remain unknown; successful execution does not establish feasibility")
+    assessments = {item.constraint_assessment for item in result.evaluations if item.status == "succeeded"}
+    if {"satisfied", "not_satisfied"} <= assessments:
+        warnings.append("Selected tools have conflicting constraint assessments; no winning tool is selected")
+    return AgenticExactEvaluationResult(
+        configuration_artifact_id=artifact_id,
+        result=result,
+        evidence=evidence,
+        warnings=warnings,
+    )
 
 
 class AgenticDeploymentService:

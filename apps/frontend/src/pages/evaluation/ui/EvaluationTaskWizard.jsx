@@ -330,9 +330,9 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         if (!quiet) setClusterHardwareLoading(true);
         let hardware = null;
         let failure;
-        await hardwareRequest.run(() => loadClusterOverview(selectedClusterId), {
+        await hardwareRequest.run((signal) => loadClusterOverview(selectedClusterId, { signal }), {
             onSuccess: (overview) => {
-                hardware = overview?.kubernetes?.hardware || null;
+                hardware = overview?.kubernetes?.hardware ? { ...overview.kubernetes.hardware, nodeSummaries: overview.kubernetes.nodes || [] } : null;
                 setClusterHardware(hardware);
                 const workers = (overview?.kubernetes?.nodes || []).filter((node) => node.ready && !node.schedulingDisabled);
                 const sharedImages = workers.length

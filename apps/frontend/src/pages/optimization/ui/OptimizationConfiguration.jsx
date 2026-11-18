@@ -19,6 +19,7 @@ import { loadGuideCatalog, planGuideDeployment, prepareGuideSource } from './Opt
 import { checkAicSupport, searchAicCandidates } from './OptimizationWorkspace/candidateBackend';
 import { loadClusterOverview, loadClusters, selectCluster } from './OptimizationWorkspace/clusterBackend';
 import { loadConfigurationCapabilities, renderConfiguration, saveConfiguration } from './OptimizationWorkspace/configurationBackend';
+import EstimateTools, { editorEstimateContext } from './EstimateTools';
 import { MultiSelectDropdown } from '../../../shared/ui/MultiSelectDropdown';
 import { listStorageVolumes } from '../../storage';
 import { listModelCacheEntries } from '../../model-cache';
@@ -273,6 +274,11 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [pdRecommendation, setPdRecommendation] = useState(false);
     const [publishing, setPublishing] = useState(false);
     const [publishError, setPublishError] = useState('');
+    const [estimateState, setEstimateState] = useState(() => ({
+        selection: initialArtifact?.deployable_configuration?.content?.estimateSelection || { tools: ['aisimulate'], runtime_profiles: {} },
+        configuration: initialArtifact?.deployable_configuration?.content?.estimateConfiguration || null,
+        error: '',
+    }));
     const [planInSession] = useState(() => createPlanningSession(planGuideDeployment));
     const [progress, setProgress] = useState('');
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -428,18 +434,20 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setClusterSessionLoading(true);
         setClusterHardwareLoading(true);
         setClusterError('');
+        const controller = new AbortController();
+        loadClusterOverview(selectedClusterId, { signal: controller.signal })
+            .then((overview) => active && setClusterHardware(overview?.kubernetes?.hardware ? { ...overview.kubernetes.hardware, nodeSummaries: overview.kubernetes.nodes || [] } : null))
+            .catch(() => active && setClusterHardware(null))
+            .finally(() => active && setClusterHardwareLoading(false));
         resolveClusterSession(selectedClusterId)
             .then((cluster) => {
                 if (!active) return;
                 persistClusterSession(cluster);
                 setConnectedCluster(cluster);
-                loadClusterOverview(selectedClusterId)
-                    .then((overview) => active && setClusterHardware(overview?.kubernetes?.hardware || null))
-                    .catch(() => active && setClusterHardware(null))
-                    .finally(() => active && setClusterHardwareLoading(false));
             })
             .catch((error) => {
                 if (!active) return;
+                controller.abort();
                 persistClusterSession(null);
                 setClusterHardware(null);
                 setClusterHardwareLoading(false);
@@ -449,7 +457,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                 if (!active) return;
                 setClusterSessionLoading(false);
             });
-        return () => { active = false; };
+        return () => { active = false; controller.abort(); };
     }, [selectedClusterId, embedded]);
 
     // Model Cache storage volumes registered for the selected cluster --
@@ -842,7 +850,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setClusterHardwareLoading(true);
         try {
             const overview = await loadClusterOverview(selectedClusterId);
-            const hardware = overview?.kubernetes?.hardware || null;
+            const hardware = overview?.kubernetes?.hardware ? { ...overview.kubernetes.hardware, nodeSummaries: overview.kubernetes.nodes || [] } : null;
             setClusterHardware(hardware);
             return hardware;
         } finally {
@@ -909,6 +917,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setPublishError('');
         setProgress('Preparing configuration…');
         try {
+            if (estimateState.error) throw new Error(estimateState.error);
             if (modelSource === 'shared-path' && (!modelPath.startsWith('/') || modelPath.split('/').includes('..'))) {
                 throw new Error('Shared model path must be an absolute path available on every selected worker node');
             }
@@ -932,6 +941,8 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                 }
                 const candidateConfig = {
                     schema_version: '1.0',
+                    estimate_selection: estimateState.selection,
+                    estimate_configuration: estimateState.configuration,
                     type: isPd ? 'pd' : 'baseline',
                     guide_settings: normalizeGuideSettings(workload.guide, guideVariant, guideSettings),
                     candidate_source: { name: sourceName },
@@ -1014,6 +1025,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setUploadError('');
         setProgress('Importing configuration YAML…');
         try {
+            if (estimateState.error) throw new Error(estimateState.error);
             const renderedManifest = await file.text();
             validateImportManifest(renderedManifest);
             if (configurationInputErrors.length) throw new Error(configurationInputErrors.map(error => error.message).join(' '));
@@ -1033,6 +1045,8 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             }
             const candidateConfig = {
                 schema_version: '1.0',
+                estimate_selection: estimateState.selection,
+                estimate_configuration: estimateState.configuration,
                 type: isPd ? 'pd' : 'baseline',
                 guide_settings: normalizeGuideSettings(selection.guide, guideVariant, guideSettings),
                 candidate_source: { name: 'manual' },
@@ -1546,6 +1560,20 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                             <AlertTriangle className="h-4 w-4" /> {planError}
                         </div>
                     )}
+
+                    <EstimateTools key={initialArtifact?.artifact_id || 'new-configuration'}
+                        clusterHardware={clusterHardware} hardwareProfiles={hardwareProfiles}
+                        context={editorEstimateContext({
+                            model, engine: selection.modelServer,
+                            roles: selection.guide === 'pd-disaggregation'
+                                ? [{ role: 'prefill', tp: prefillTensorParallelSize, replicas: prefillReplicas }, { role: 'decode', tp: tensorParallelSize, replicas }]
+                                : [{ role: 'colocated', tp: tensorParallelSize, replicas }],
+                            overrides: [...runtimeControlOverrides({ maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens }, selection.modelServer), ...customRows],
+                            routerValues: guideSettings.routerValues || '',
+                        })}
+                        initialSelection={initialArtifact?.deployable_configuration?.content?.estimateSelection}
+                        initialConfiguration={initialArtifact?.deployable_configuration?.content?.estimateConfiguration}
+                        onChange={setEstimateState} disabled={operationBusy} />
 
                     {!embedded && planResult && (
                         <section className="border border-slate-800 bg-slate-950/40 p-4">

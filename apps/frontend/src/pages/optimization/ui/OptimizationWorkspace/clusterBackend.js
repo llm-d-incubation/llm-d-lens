@@ -26,9 +26,9 @@ export function selectCluster(clusterId) {
     return clusterRequest(`/api/cluster/session?${query.toString()}`);
 }
 
-export function loadClusterOverview(clusterId) {
-    const query = new URLSearchParams({ clusterId });
-    return clusterRequest(`/api/cluster/overview?${query.toString()}`);
+export function loadClusterOverview(clusterId, { signal, includeTelemetry = false } = {}) {
+    const query = new URLSearchParams({ clusterId, includeTelemetry: String(includeTelemetry) });
+    return clusterRequest(`/api/cluster/overview?${query.toString()}`, { signal });
 }
 
 export function loadModelSecrets(clusterId) {

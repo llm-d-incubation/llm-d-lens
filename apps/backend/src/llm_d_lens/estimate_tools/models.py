@@ -186,9 +186,20 @@ class SearchSpace(Contract):
         return self
 
 
-class Request(Contract):
+class ToolSelection(Contract):
     tools: list[ToolId] = Field(default_factory=lambda: ["aisimulate"], min_length=1)
     runtime_profiles: dict[ToolId, NonemptyString] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def check_tools(self) -> Self:
+        if len(set(self.tools)) != len(self.tools):
+            raise ValueError("Tool selections must be unique")
+        if set(self.runtime_profiles) - set(self.tools):
+            raise ValueError("Runtime profiles may only select requested tools")
+        return self
+
+
+class Request(ToolSelection):
     model: Model
     hardware: Hardware
     configuration: Configuration = Field(default_factory=Configuration)
@@ -198,10 +209,6 @@ class Request(Contract):
 
     @model_validator(mode="after")
     def check_selection(self) -> Self:
-        if len(set(self.tools)) != len(self.tools):
-            raise ValueError("Tool selections must be unique")
-        if set(self.runtime_profiles) - set(self.tools):
-            raise ValueError("Runtime profiles may only select requested tools")
         required = sum(role.device_count for role in self.configuration.roles)
         if required > self.hardware.device_count:
             raise ValueError("Topology exceeds physical device capacity")

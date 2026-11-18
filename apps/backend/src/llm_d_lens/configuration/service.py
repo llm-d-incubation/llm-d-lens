@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 
 from llm_d_lens.cluster import require_active_session
 from llm_d_lens.deploy.contracts import DeployableConfiguration
+from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest, ToolSelection
 from llm_d_lens.infrastructure.artifacts.manifests import (
     configuration_checksum,
     deployment_manifest,
@@ -134,6 +135,7 @@ def render_configuration(request: RenderRequest) -> RenderResponse:
     serving = candidate.serving or {}
     content: dict[str, Any] = {
         "deploymentType": candidate.type,
+        "estimateSelection": candidate.estimate_selection.model_dump(mode="json"),
         "model": {
             "name": candidate.target.get("model"),
             "maxModelLen": serving.get("max_model_len"),
@@ -157,6 +159,8 @@ def render_configuration(request: RenderRequest) -> RenderResponse:
         content["network"] = candidate.network
     if candidate.runtime:
         content["runtime"] = candidate.runtime
+    if candidate.estimate_configuration is not None:
+        content["estimateConfiguration"] = candidate.estimate_configuration.model_dump(mode="json")
     custom_parameters = getattr(candidate, "custom_parameters", None)
     if isinstance(custom_parameters, list):
         content["customParameters"] = custom_parameters
@@ -206,6 +210,45 @@ def render_configuration(request: RenderRequest) -> RenderResponse:
     )
 
 
+def saved_estimate_request(configuration: DeployableConfiguration, request: EstimateRequest) -> EstimateRequest:
+    """Bind exact evaluation to saved topology and selection, without recommendation calls."""
+    manifest, _, _ = deployment_manifest(configuration)
+    validate_manifest_facts(configuration.content, manifest)
+    selection = ToolSelection.model_validate(configuration.content.get("estimateSelection", {}))
+    content = configuration.content
+    if request.model.name != (content.get("model") or {}).get("name"):
+        raise ValueError("Estimate model does not match the saved configuration")
+    expected_mode = {"baseline": "agg", "pd": "disagg"}.get(configuration.type)
+    if request.configuration.mode != expected_mode:
+        raise ValueError("Saved configuration mode is not represented by this exact request")
+    snapshot = content.get("estimateConfiguration")
+    if snapshot is not None:
+        expected = EffectiveConfiguration.model_validate(snapshot)
+        if EffectiveConfiguration.from_request(request) != expected:
+            raise ValueError("Estimate configuration differs from the saved simulation configuration")
+        return EstimateRequest.model_validate({**request.model_dump(), **selection.model_dump()})
+    if (
+        request.model.precision is not None
+        or request.model.quantization is not None
+        or request.configuration.engine != "vllm"
+        or request.configuration.engine_version is not None
+        or request.configuration.engine_settings
+        or request.configuration.router_settings
+    ):
+        raise ValueError("Explicit precision or engine/router settings require a saved simulation configuration")
+    for role in request.configuration.roles:
+        component = content.get("serving" if role.role == "colocated" else role.role) or {}
+        if (
+            role.tp != component.get("tensorParallelSize")
+            or role.replicas != component.get("replicaCount")
+            or role.pp != 1
+            or role.dp != 1
+            or role.expert_parallel
+        ):
+            raise ValueError("Estimate topology does not match the saved configuration")
+    return EstimateRequest.model_validate({**request.model_dump(), **selection.model_dump()})
+
+
 def _safe_file_name(requested: str | None, config_type: str, file_format: str) -> str:
     extension = ".yaml" if file_format in {"helm", "kustomize", "manifest"} else ".json"
     candidate = Path(requested or f"{config_type}-configuration{extension}").name
@@ -219,6 +262,7 @@ def _safe_file_name(requested: str | None, config_type: str, file_format: str) -
 
 def save_configuration(request: SaveRequest) -> SaveResponse:
     deployable = request.deployable_configuration
+    ToolSelection.model_validate(deployable.content.get("estimateSelection", {}))
     if deployable.checksum != configuration_checksum(deployable.content):
         raise ValueError("deployable configuration checksum does not match content")
     session = require_active_session(deployable.provenance.get("cluster_ref", {}).get("session_id"))

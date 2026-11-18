@@ -1979,6 +1979,95 @@ def _node_summary(
     }
 
 
+def _annotate_node_availability(
+    summaries: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    pods: list[dict[str, Any]],
+    claims: list[dict[str, Any]],
+    slices: list[dict[str, Any]],
+    *,
+    claims_available: bool,
+) -> None:
+    profiles = _hardware_profiles()
+    drivers = {driver: profile.id for profile in profiles for driver in profile.device_classes}
+    inventory = {}
+    for item in slices:
+        spec = item.get("spec") or {}
+        driver = spec.get("driver")
+        for device in spec.get("devices") or []:
+            inventory[(driver, (spec.get("pool") or {}).get("name"), device.get("name"))] = spec.get("nodeName")
+    allocated: dict[str, dict[str, int]] = {}
+    for pod in pods:
+        if (pod.get("status") or {}).get("phase") in {"Succeeded", "Failed"}:
+            continue
+        spec = pod.get("spec") or {}
+        node_name = spec.get("nodeName")
+        if not node_name:
+            continue
+        regular: dict[str, int] = {}
+        sidecars: dict[str, int] = {}
+        peak: dict[str, int] = {}
+        for container in spec.get("initContainers") or []:
+            resources = container.get("resources") or {}
+            counts = _gpu_counts_by_profile(resources.get("requests") or resources.get("limits") or {})
+            if container.get("restartPolicy") == "Always":
+                for profile_id, count in counts.items():
+                    sidecars[profile_id] = sidecars.get(profile_id, 0) + count
+                counts = {}
+            for profile in profiles:
+                peak[profile.id] = max(peak.get(profile.id, 0), sidecars.get(profile.id, 0) + counts.get(profile.id, 0))
+        for container in spec.get("containers") or []:
+            resources = container.get("resources") or {}
+            counts = _gpu_counts_by_profile(resources.get("requests") or resources.get("limits") or {})
+            for profile_id, count in counts.items():
+                regular[profile_id] = regular.get(profile_id, 0) + count
+        bucket = allocated.setdefault(node_name, {})
+        for profile in profiles:
+            bucket[profile.id] = bucket.get(profile.id, 0) + max(
+                regular.get(profile.id, 0) + sidecars.get(profile.id, 0), peak.get(profile.id, 0)
+            )
+    dra_profiles = {
+        drivers[spec["driver"]] for item in slices if (spec := item.get("spec") or {}).get("driver") in drivers
+    }
+    unknown = dra_profiles if not claims_available else set()
+    reserved = set()
+    for claim in claims:
+        results = (((claim.get("status") or {}).get("allocation") or {}).get("devices") or {}).get("results") or []
+        for result in results:
+            driver = result.get("driver")
+            if driver not in drivers or result.get("adminAccess", False):
+                continue
+            key = (driver, result.get("pool"), result.get("device"))
+            if key in reserved:
+                continue
+            reserved.add(key)
+            node_name = inventory.get(key)
+            profile_id = drivers[driver]
+            if not node_name:
+                unknown.add(profile_id)
+                continue
+            bucket = allocated.setdefault(node_name, {})
+            bucket[profile_id] = bucket.get(profile_id, 0) + 1
+    raw_nodes = {(node.get("metadata") or {}).get("name"): node for node in nodes}
+    for summary in summaries:
+        status = raw_nodes.get(summary["name"], {}).get("status") or {}
+        allocatable = _gpu_counts_by_profile(status.get("allocatable") or {})
+        summary["availableGpuByProfile"] = {
+            profile_id: 0
+            if not summary["ready"] or summary["schedulingDisabled"]
+            else (
+                None
+                if profile_id in unknown
+                else max(
+                    0,
+                    min(count, allocatable.get(profile_id, count))
+                    - allocated.get(summary["name"], {}).get(profile_id, 0),
+                )
+            )
+            for profile_id, count in summary["gpuByProfile"].items()
+        }
+
+
 def _active_gpu_allocations(pods: list[dict[str, Any]], resource_claims: list[dict[str, Any]]) -> int:
     """Count Intel GPUs reserved by active pods and exclusive DRA claims."""
     pod_allocations = 0
@@ -2126,22 +2215,13 @@ def _hardware_summary(
     }
 
 
-async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
+async def build_overview(cluster: registry.Cluster, *, include_telemetry: bool = True) -> dict[str, Any]:
     kubeconfig = registry.kubeconfig_path(cluster.id)
     if not kubeconfig.is_file():
         raise ClusterOverviewError(
             "Cluster kubeconfig is not readable", status_code=409, code="cluster_kubeconfig_missing"
         )
-    (
-        nodes_result,
-        namespaces_result,
-        components_result,
-        pods_result,
-        claims_result,
-        slices_result,
-        top_nodes_result,
-        monitoring,
-    ) = await asyncio.gather(
+    queries = [
         run_kubectl(["get", "nodes", "-o", "json"], cluster_id=cluster.id, timeout=30),
         run_kubectl(["get", "namespaces", "-o", "json"], cluster_id=cluster.id, timeout=30),
         run_kubectl(
@@ -2154,12 +2234,17 @@ async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
         ),
         run_kubectl(["get", "resourceclaims.resource.k8s.io", "-A", "-o", "json"], cluster_id=cluster.id, timeout=30),
         run_kubectl(["get", "resourceslices.resource.k8s.io", "-o", "json"], cluster_id=cluster.id, timeout=30),
-        # metrics-server is optional and often absent/slow; a bounded probe keeps
-        # it from holding the whole overview (and the Configure-deployment cluster
-        # field) for the full timeout when it is not installed.
-        run_kubectl(["get", "--raw=/apis/metrics.k8s.io/v1beta1/nodes"], cluster_id=cluster.id, timeout=5),
-        monitoring_component(cluster),
-    )
+    ]
+    if include_telemetry:
+        queries.extend(
+            [
+                run_kubectl(["get", "--raw=/apis/metrics.k8s.io/v1beta1/nodes"], cluster_id=cluster.id, timeout=5),
+                monitoring_component(cluster),
+            ]
+        )
+    results = await asyncio.gather(*queries)
+    nodes_result, namespaces_result, components_result, pods_result, claims_result, slices_result = results[:6]
+    top_nodes_result, monitoring = results[6:] if include_telemetry else (None, None)
     nodes = json_output(nodes_result, "kubectl get nodes").get("items") or []
     namespaces = [
         item
@@ -2197,6 +2282,14 @@ async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
         if summary.get("role") == "worker"
     ]
     worker_node_names = {node["name"] for node in node_summaries}
+    _annotate_node_availability(
+        node_summaries,
+        nodes,
+        pods,
+        resource_claims,
+        resource_slices,
+        claims_available=claims_result.returncode == 0,
+    )
     vram_by_node = _resource_slice_gpu_vram_by_node(resource_slices, worker_node_names)
     for node in node_summaries:
         if not vram_by_node.get(node["name"]):
@@ -2204,14 +2297,16 @@ async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
     vram_bytes = sum(vram_by_node.values())
     top_nodes = (
         json_output(top_nodes_result, "kubectl node metrics").get("items") or []
-        if top_nodes_result.returncode == 0
+        if top_nodes_result is not None and top_nodes_result.returncode == 0
         else []
     )
     allocated_gpu_count = _active_gpu_allocations(pods, resource_claims)
-    prometheus_metrics, disk_usage_by_node = await asyncio.gather(
-        _prometheus_hardware_metrics(cluster.id, worker_node_names, gpu_devices),
-        _node_disk_usage(cluster.id, worker_node_names),
-    )
+    prometheus_metrics, disk_usage_by_node = {}, {}
+    if include_telemetry:
+        prometheus_metrics, disk_usage_by_node = await asyncio.gather(
+            _prometheus_hardware_metrics(cluster.id, worker_node_names, gpu_devices),
+            _node_disk_usage(cluster.id, worker_node_names),
+        )
     node_usage_by_node = _node_usage_by_node(top_nodes, worker_node_names)
     node_usage = _node_usage_summary(top_nodes, worker_node_names)
     node_summaries = _annotate_node_usage(

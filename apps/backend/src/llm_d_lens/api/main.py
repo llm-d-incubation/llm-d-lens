@@ -47,6 +47,7 @@ from llm_d_lens.deploy.guide_planning import router as guide_planning_router
 from llm_d_lens.deploy.remote_deploy import router as remote_deploy_router
 from llm_d_lens.deploy.router import router as deploy_router
 from llm_d_lens.estimate_tools.aic import router as aic_router
+from llm_d_lens.estimate_tools.router import router as estimate_tools_router
 from llm_d_lens.evaluation import router as evaluate_router
 from llm_d_lens.hardware.router import router as hardware_router
 from llm_d_lens.infrastructure.kubernetes import router as cluster_router
@@ -324,6 +325,7 @@ app.include_router(agentic_deployment_router)
 app.include_router(capacity_router)
 app.include_router(auth_router)
 app.include_router(aic_router)
+app.include_router(estimate_tools_router)
 app.include_router(cluster_router)
 app.include_router(system_database_router)
 app.include_router(cluster_management_router)

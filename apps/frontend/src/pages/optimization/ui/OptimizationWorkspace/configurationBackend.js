@@ -39,3 +39,18 @@ export async function loadConfigurationArtifacts() {
 export async function deleteConfigurationArtifact(artifactId) {
     await requestJson(`/api/v1/configurations/artifacts/${encodeURIComponent(artifactId)}`, { method: 'DELETE' });
 }
+
+export function loadEstimateTools(options = {}) {
+    return requestJson('/api/v1/estimate-tools', options, { strictJson: true });
+}
+
+export function checkEstimateSupport(payload, options = {}) {
+    return postJson('/api/v1/estimate-tools/support', payload, options);
+}
+
+export function estimateConfiguration(payload, { artifactId, ...options } = {}) {
+    const path = artifactId
+        ? `/api/v1/estimate-tools/configurations/${encodeURIComponent(artifactId)}/estimate`
+        : '/api/v1/estimate-tools/estimate';
+    return postJson(path, payload, options);
+}

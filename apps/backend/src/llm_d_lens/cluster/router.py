@@ -641,16 +641,19 @@ async def cluster_session(
     description=(
         "Get the live Kubernetes overview for a Lens-managed cluster, including node, GPU, cached container image, "
         "and component health summaries. Each worker node reports cachedImages from its Kubernetes node status; "
-        "clients can use images shared by eligible workers to avoid an image pull at deployment time."
+        "clients can use images shared by eligible workers to avoid an image pull at deployment time. "
+        "Set includeTelemetry=false for resource planning without monitoring, metrics-server, "
+        "Prometheus or disk probes."
     ),
     operation_id="get_cluster_overview",
 )
 async def overview(
     cluster_id: str = Query(..., alias="clusterId", min_length=1, max_length=128),
+    include_telemetry: bool = Query(True, alias="includeTelemetry"),
 ) -> OverviewResponse:
     cluster = registry.require_cluster(cluster_id)
     try:
-        kubernetes = await service.build_overview(cluster)
+        kubernetes = await service.build_overview(cluster, include_telemetry=include_telemetry)
     except ClusterOverviewError:
         raise
     except FileNotFoundError as error:

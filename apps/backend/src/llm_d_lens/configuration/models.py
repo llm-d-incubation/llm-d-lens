@@ -16,6 +16,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from llm_d_lens.deploy.contracts import DeployableConfiguration
+from llm_d_lens.estimate_tools.models import EffectiveConfiguration, ToolSelection
 
 CandidateSourceName = Literal[
     "aic",
@@ -74,6 +75,8 @@ class CandidateConfig(BaseModel):
     network: dict[str, Any] | None = None
     performance: dict[str, Any] | None = None
     runtime: dict[str, Any] | None = None
+    estimate_selection: ToolSelection = Field(default_factory=ToolSelection)
+    estimate_configuration: EffectiveConfiguration | None = None
 
 
 class ResolveResult(BaseModel):

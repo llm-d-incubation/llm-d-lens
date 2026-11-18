@@ -390,6 +390,168 @@ requested workload and GPU budget. After changing the dependency pin, reinstall
 project dependencies and restart the backend so support checks and searches use
 the same SDK release.
 
+### Independent exact estimates
+
+The Configuration page's **Exact estimates** panel uses the tool-neutral API
+below. It does not replace the legacy AISimulate recommendation flow.
+
+The accelerator and observed node capacity are prefilled when the cluster reports
+an unambiguous device model and homogeneous node capacity. Architecture labels do
+not prevent selecting a uniquely profile-matched device model. Saved nonempty
+hardware declarations and manual edits are preserved; ambiguous fields remain blank.
+
+The **Cards** control selects all cluster cards, currently available cards, or a
+custom count for the selected accelerator model. Available capacity comes from
+per-node, per-profile inventory; missing evidence is not treated as free capacity.
+The count is translated into a uniform node layout without exceeding observed
+per-node capacity. Unsupported uneven layouts are reported rather than flattened
+into a fictitious single node. An unchanged custom count preserves a valid saved
+node layout. These inputs are estimates, not reservations.
+Switching to an accelerator without matching cluster capacity preserves the
+displayed count as an editable custom declaration rather than leaving it blank.
+Capacity matching recognizes canonical system aliases through the selected hardware
+profile in every tool mode; PCIe and SXM remain distinct, and request model names are preserved.
+
+AISimulate always uses native defaults in this panel, including dual selection. Its request
+clears precision, quantization, engine version and engine/router settings, uses
+PP 1 and DP 1 with expert parallel disabled, and submits native mean token lengths
+without prefix, load targets or explicit run controls. Model name, accelerator,
+device capacity, TP and replicas remain declared inputs. There is no estimation-mode
+selector or excluded-parameter list. The effective-input preview shows the cleared
+request; this does not verify the full deployment or alter its saved declarations.
+Selecting both tools submits independent single-tool requests: native inputs for
+AISimulate and explicit workload/runtime declarations for BLIS. Each tool's result
+is retained independently. Direct and saved-configuration APIs remain strict;
+this panel does not change their validation or silently normalize API payloads.
+Runtime
+availability is shown only for selected tools, without raw capability JSON.
+For `model_backend_unsupported`, the result identifies the submitted model,
+accelerator, engine and serving mode. Native defaults do not bypass the installed
+AISimulate support matrix. Supported states are green and unsupported states red.
+Unknown constraint assessments are omitted; known assessments remain visible.
+**Cancel** stays visible, is enabled during support checks and estimation, and
+aborts outstanding requests without discarding completed results.
+
+Selecting BLIS prefills an editable sample workload: constant lengths of 4000
+input and 1000 output tokens, 1 request per second, seed 42, 100 requests and a
+300-second simulated horizon. BLIS requires a constant distribution, one load
+target, seed, request count and simulation duration. The seed is fixed at 42 in the
+panel and has no separate input. **Simulation duration (s)** labels the simulated
+time limit, not real elapsed time. These are UI defaults, not new API
+defaults or measured traffic. Field help describes requirements and units.
+Advanced optional controls leave request deadlines disabled, use the server's
+120-second wall-clock limit, and use zero shared-prefix tokens. Fabric and runtime
+declarations must still match the selected profile; defaults do not establish
+support or successful workload completion. Switching tools preserves separate
+BLIS controls without adding them to AISimulate requests. Runtime declarations
+keep the engine-settings editor without a duplicate configuration JSON preview.
+
+BLIS requires explicit `block_size`, `max_num_seqs`, `max_num_batched_tokens`
+and `gpu_memory_utilization`.
+For a unique available runtime with a matching engine, the panel prefills missing
+values from its confirmed inputs in the existing **Engine settings (JSON)** editor.
+Only these four limits are copied, not model-specific settings such as the MoE
+backend. The initial `max_model_len` is the sample's total prompt plus output
+length, including any prefix not already counted in the input; it is not copied
+from another model's reference configuration. Saved values and manual JSON edits
+take precedence. API requests are not
+silently completed: missing limits return `engine_settings_required` during support
+checks, before native execution. A model graph without a context window also
+requires explicit `max_model_len`.
+
+Saving a configuration automatically retains the declared estimator model,
+hardware and inference settings, without a separate opt-in checkbox. Workload
+token lengths, load targets, run controls and estimate results are not saved.
+
+If Check support reports `runtime_not_configured` for BLIS, the result prompts
+an administrator to install and register the managed runtime, restart the backend
+to activate it, and check support again. Selecting vLLM does not install BLIS;
+support checks never install or activate runtimes automatically.
+
+Support checks establish input mappings and known constraints, not successful
+native execution. Exact AISimulate calls declare MoE TP equal to the role's TP
+and MoE EP as 1, preserving the no-EP contract. If the installed native database
+lacks measured data for the requested geometry, estimation returns
+`native_perf_data_missing` without substitute data or metrics. BLIS checks explicit
+`block_size` against the locked model and GPU architecture: DeepSeek-V4 requires
+multiples of 256; V4.1 requires multiples of 64 on SM90 and 128 elsewhere. Invalid
+values return `engine_settings_not_supported` without rewriting them. A native
+per-rank memory-layout refusal returns `native_memory_layout_rejected`, not a
+guessed memory budget. Other native failures remain failures; bounded BLIS stderr
+is retained only in backend logs, not exposed in API results.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+    | Endpoint | Purpose |
+    | --- | --- |
+    | `GET /api/v1/estimate-tools` | Discover managed runtime availability and execution capabilities. |
+    | `POST /api/v1/estimate-tools/support` | Check each selected tool against explicit inputs. |
+    | `POST /api/v1/estimate-tools/estimate` | Run an `EstimateRequest`, returning independent `evaluations`. |
+    | `POST /api/v1/estimate-tools/configurations/{artifact_id}/estimate` | Evaluate a readable saved configuration, enforcing saved tool choice and manifest identity. |
+    | `POST /api/agentic-deployments/estimate` | Wrap a saved exact evaluation as Agentic evidence; no candidate generation or deployment. |
+
+    Estimate requests contain `model`, `hardware`, `configuration`, `workload`,
+    optional `constraints` and `run`. `tools` defaults to `["aisimulate"]` and
+    accepts `["blis"]` or both; optional `runtime_profiles` keys must be selected
+    tools. The Agentic endpoint takes `configuration_artifact_id` and
+    `estimate_request`. Existing saved configurations without `estimateSelection`
+    default to AISimulate. `estimateConfiguration`, when saved, must agree with
+    manifest model, topology and runtime arguments; declared hardware and version
+    remain assumptions, not cluster measurements.
+
+    Runtime availability, request support, execution success and constraint
+    satisfaction are distinct. Batch outcomes may be `succeeded`, `partial` or
+    `failed`; inspect each evaluation's status, structured error, warnings and
+    constraint assessment. Metrics retain unit, statistic, formula, population
+    and window. Do not average or rank across tools or treat unknown as satisfied.
+    Requests are nonqueued and bounded; busy tools report `estimate_busy`.
+    The shared wall-clock deadline is at most 120 seconds. Client disconnect
+    cancels work and awaits worker cleanup.
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+    Use `llm_d_lens.estimate_tools.service.default_estimator()` and its
+    `discover()`, `await support(request)` and `await estimate(request)` methods.
+    Inputs use `EstimateRequest` from `llm_d_lens.estimate_tools.models`;
+    results use `ToolSupport` and `BatchResult`. `EstimateService` also accepts
+    explicit server-owned `blis_profiles` for isolated integrations. Never accept
+    executable paths or runtime installation directives from a request.
+
+  </TabItem>
+</Tabs>
+
+See [optional BLIS installation](/installation#optional-blis-exact-estimate-runtime).
+The managed runtime accepts aggregated exact requests through locked catalog and
+compiler checks, rather than requiring equality with the installation baseline.
+Models resolve by catalog ID or the exact source repository declared in
+`model.yaml` (case-insensitive, without dropping repository owners). Explicit
+precision/quantization must agree with the catalog graph/configuration; omitted
+values use that catalog form, not a conversion. Hardware and fabric resolve by
+catalog ID (case-insensitive; underscores normalize to hyphens), within the
+runtime's hardware profile. Missing or ambiguous mappings are refused. For
+example, `h100` describes SXM hardware; the locked catalog has no `h100_pcie`
+entry, so PCIe is not silently mapped to SXM. Multi-node requests need an explicit
+catalog fabric. Existing approved baseline mappings remain valid.
+
+This runtime still requires vLLM `0.32.0`, supported engine/router settings,
+placeable aggregated TP/PP/DP/replica geometry, constant token lengths, an explicit
+QPS or native-concurrency target and explicit run controls. Combined PP and DP,
+and native concurrency with shared prefixes, are refused. The pinned coefficient
+sets remain server-owned; the native kernel performs final construction,
+coefficient and memory checks during bounded execution. A successful support
+check does not guarantee execution, full workload completion or SLO satisfaction.
+`approved_inputs` records reference configurations, not an exhaustive catalog
+whitelist. `execution_confirmed` is true only for the exact recorded baseline;
+other accepted requests remain unconfirmed until their own execution result.
+Results retain the declared configuration fingerprint and resolved catalog
+model/hardware/fabric plus native coefficient provenance. Artifact digests remain
+locked, and no request installs a runtime or modifies its catalog.
+
+BLIS P/D, search, capacity, replay and merged rankings remain unsupported. Independent exact
+Agentic evidence does not change recommendation scoring or authorize deployment.
+
 ### Search or size an AISimulate workload
 
 The MCP generation and plain-estimate fallback behavior above applies when no load

@@ -18,6 +18,15 @@ from .models import CandidateConfig
 
 async def check_capability(candidate: CandidateConfig) -> tuple[bool, str | None, list[str]]:
     """Return support status, failure reason, and non-fatal warnings."""
+    if candidate.estimate_selection.tools != ["aisimulate"]:
+        return (
+            True,
+            None,
+            [
+                "Selected tools require independent exact-evaluation support checks; "
+                "AISimulate recommendation support is not a deployment gate"
+            ],
+        )
     model = candidate.target.get("model")
     hardware: dict[str, Any] = candidate.target.get("hardware") or {}
     system_name = hardware.get("aic_system_name") or hardware.get("accelerator_model")

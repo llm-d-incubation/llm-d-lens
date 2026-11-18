@@ -839,6 +839,16 @@ Gateway 命名空间必须清理成功：失败或超时返回 `502 cluster_gate
 
 返回一个集群的实时 Kubernetes 概览信息，包括节点、GPU、命名空间、缓存镜像以及组件健康状况摘要。该路由还会在返回实时快照的同时报告当前的集群记录。
 
+配置与评估表单请求 `includeTelemetry=false`：保留节点及 ResourceSlice 设备身份、
+卡容量、分配证据和缓存镜像，但不等待 monitoring 发现、metrics-server、Prometheus
+或 kubelet 磁盘探测。此模式下用量遥测为未知，不是零，未查询的 `components.monitoring`
+返回 `null`。监控调用者的默认值仍为 `true`。
+
+各节点的 `availableGpuByProfile` 按硬件 profile ID 返回未分配卡数，
+不超过可分配容量，并扣除活跃 Pod 请求及独占 DRA 预留。未就绪或已封锁调度的节点返回零。
+某项为 `null` 表示无法获取 DRA claim 证据或无法映射到节点；缺少某项表示未知，不是零。
+此快照不预留设备、不保证可调度，也不应用全局 PCI 白名单预算。
+
 显存容量优先使用 Prometheus 遥测，其次使用 DRA ResourceSlice 容量。
 两者均未提供容量时，已注册的硬件 profile 可以读取工作节点上的每卡显存和设备数量标签。
 NVIDIA profile 使用 GFD 的 `nvidia.com/gpu.memory`（MiB）和 `nvidia.com/gpu.count`；
@@ -855,6 +865,7 @@ NVIDIA profile 使用 GFD 的 `nvidia.com/gpu.memory`（MiB）和 `nvidia.com/gp
     请求：无请求体。
 
     - `clusterId`（`string`，查询参数）：目标集群 id。
+    - `includeTelemetry`（`boolean`，查询参数，默认 `true`）：设为 `false` 时读取不含遥测探测的资源规划数据。
 
     响应：`OverviewResponse`。
 
@@ -969,6 +980,8 @@ NVIDIA profile 使用 GFD 的 `nvidia.com/gpu.memory`（MiB）和 `nvidia.com/gp
         cluster = registry.require_cluster("cluster-a")
         overview = await service.build_overview(cluster)
         print(overview)
+        inventory = await service.build_overview(cluster, include_telemetry=False)
+        print(inventory["hardware"])
 
     asyncio.run(main())
     ```
