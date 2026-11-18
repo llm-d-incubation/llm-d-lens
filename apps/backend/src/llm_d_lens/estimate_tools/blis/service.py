@@ -1,4 +1,4 @@
-"""Compile trusted BLIS inputs and provide private, bounded process execution."""
+"""Compile trusted BLIS inputs and provide private, bounded execution and topology search."""
 
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ import shutil
 import signal
 from contextlib import suppress
 from decimal import Decimal
+from itertools import product
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Annotated, Literal
 
 import yaml
@@ -20,6 +22,7 @@ from pydantic import Field, JsonValue, ValidationError
 from llm_d_lens.infrastructure.process import spawn
 
 from ..models import (
+    Candidate,
     Capability,
     Contract,
     Digest,
@@ -881,6 +884,208 @@ class _ExecutionResult(Contract):
     error: Problem | None = None
 
 
+class _SearchLimits(Contract):
+    max_evaluations: PositiveInt = 256
+    parallelism: PositiveInt = 4
+    wall_duration_s: PositiveFloat = 120
+    max_grid_size: PositiveInt = 4096
+
+
+class _TopologySearchResult(Contract):
+    candidates: list[Candidate]
+    ranked_fingerprints: list[Digest]
+    search_complete: bool
+    termination_reason: Problem | None = None
+
+
+async def _search_topologies(
+    request: OptimizeRequest,
+    profile: RuntimeProfile,
+    directory: Path,
+    cancel_event: asyncio.Event,
+    *,
+    limits: _SearchLimits | None = None,
+    execution_limits: _ExecutionLimits | None = None,
+) -> _TopologySearchResult | Problem:
+    """Evaluate explicit TP/replica grids, preserving PP/DP, engine, workload and run controls.
+
+    Every visited point consumes an evaluation, including static refusals and failures.
+    Candidates retain enumeration order; ranking contains only proven feasible points
+    with an exact objective definition. Completion means grid exhaustion, not feasibility
+    or accuracy certification. The caller owns the scratch parent; bundles are removed.
+    Search caps are server-owned, and cancellation cleanup may outlive the wall budget.
+    Product dispatch, capacity, P/D, replay and cross-tool search remain disabled.
+    """
+    request = OptimizeRequest.model_validate(request.model_dump())
+    limits = _SearchLimits.model_validate((limits or _SearchLimits()).model_dump())
+    if request.space.mode != "find_configuration" or request.configuration.mode != "agg":
+        return Problem(code="search_mode_not_supported", message="Only aggregated topology search is implemented")
+    if request.budget.cross_evaluations:
+        return Problem(code="cross_evaluation_not_supported", message="Topology search does not cross-evaluate tools")
+    grid_size = len(request.space.tensor_parallel) * len(request.space.replicas)
+    if grid_size > limits.max_grid_size:
+        return Problem(code="search_grid_too_large", message="Topology grid exceeds the server-owned size limit")
+    maximum = min(request.budget.max_evaluations, limits.max_evaluations)
+    parallelism = min(request.budget.parallelism, limits.parallelism)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + min(request.budget.wall_duration_s, limits.wall_duration_s)
+    candidates: list[Candidate] = []
+    reason: Problem | None = None
+    stopped_status: Literal["cancelled", "timed_out"] = "cancelled"
+
+    async def evaluate(tp: int, replicas: int) -> Candidate:
+        configuration = request.configuration.model_copy(deep=True)
+        configuration.roles[0].tp = tp
+        configuration.roles[0].replicas = replicas
+        effective = EffectiveConfiguration(model=request.model, hardware=request.hardware, configuration=configuration)
+
+        def failure(status: Literal["unsupported", "failed", "timed_out", "cancelled"], problem: Problem) -> Evaluation:
+            return Evaluation(
+                tool="blis",
+                strategy="managed_sweep",
+                runtime_profile=profile.id,
+                configuration_fingerprint=effective.fingerprint,
+                status=status,
+                error=problem,
+                revisions=dict(profile.revisions),
+                warnings=list(profile.limitations),
+            )
+
+        try:
+            payload = request.model_dump(exclude={"operation", "objective", "budget", "space"})
+            payload["configuration"] = configuration.model_dump()
+            exact = EstimateRequest.model_validate(payload)
+        except ValidationError:
+            evaluation = failure(
+                "unsupported", Problem(code="invalid_configuration", message="Topology exceeds the device budget")
+            )
+        else:
+            try:
+                documents = _deployment_documents(exact, profile)
+                workload = _compile_workload(exact.workload, exact.run)
+                problem = next((value for value in (documents, workload) if isinstance(value, Problem)), None)
+                if problem is not None:
+                    return Candidate(
+                        effective_configuration=effective,
+                        generated_by=["blis"],
+                        evaluations=[failure("unsupported", problem)],
+                    )
+                with TemporaryDirectory(prefix="blis-search-", dir=directory) as scratch:
+                    destination = Path(scratch) / "bundle"
+                    execution = await _execute_bundle(
+                        exact, profile, destination, cancel_event, limits=execution_limits, deadline=deadline
+                    )
+                    if isinstance(execution, Problem):
+                        evaluation = failure(
+                            "cancelled"
+                            if execution.code == "execution_cancelled"
+                            else "timed_out"
+                            if execution.code == "execution_timed_out"
+                            else "failed",
+                            execution,
+                        )
+                    else:
+                        evaluation = _parse_result(
+                            exact,
+                            profile,
+                            destination,
+                            (destination / "stdout.log").read_bytes(),
+                            returncode=execution.returncode,
+                            execution_status=execution.status,
+                            output_truncated=execution.output_truncated,
+                        )
+                        evaluation.strategy = "managed_sweep"
+            except asyncio.CancelledError:
+                evaluation = failure(
+                    stopped_status,
+                    Problem(code="search_interrupted", message="Search stopped before this evaluation completed"),
+                )
+            except (OSError, ValueError):
+                evaluation = failure(
+                    "failed", Problem(code="search_evaluation_failed", message="Candidate evidence could not be read")
+                )
+        return Candidate(effective_configuration=effective, generated_by=["blis"], evaluations=[evaluation])
+
+    grid = iter(product(sorted(request.space.tensor_parallel), sorted(request.space.replicas)))
+    cancellation = asyncio.create_task(cancel_event.wait())
+    pending: list[asyncio.Task] = []
+
+    async def drain() -> None:
+        for task in pending:
+            task.cancel()
+        cleanup = asyncio.gather(*pending, return_exceptions=True)
+        interrupted = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                interrupted = True
+        if interrupted:
+            raise asyncio.CancelledError
+
+    try:
+        while len(candidates) < min(maximum, grid_size):
+            if cancel_event.is_set() or loop.time() >= deadline:
+                stopped_status = "cancelled" if cancel_event.is_set() else "timed_out"
+                reason = Problem(code=f"search_{stopped_status}", message="Search reached cancellation or wall limit")
+                break
+            pending = [
+                asyncio.create_task(evaluate(*next(grid)))
+                for _ in range(min(parallelism, maximum - len(candidates), grid_size - len(candidates)))
+            ]
+            unfinished = set(pending)
+            while unfinished:
+                done, _ = await asyncio.wait(
+                    [*unfinished, cancellation],
+                    timeout=max(0, deadline - loop.time()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                unfinished.difference_update(done)
+                if cancel_event.is_set() or loop.time() >= deadline:
+                    stopped_status = "cancelled" if cancel_event.is_set() else "timed_out"
+                    reason = Problem(
+                        code=f"search_{stopped_status}", message="Search reached cancellation or wall limit"
+                    )
+                    await drain()
+                    break
+            candidates.extend(task.result() for task in pending)
+            pending = []
+            if reason:
+                break
+    finally:
+        try:
+            await drain()
+        finally:
+            cancellation.cancel()
+            await asyncio.gather(cancellation, return_exceptions=True)
+
+    if reason is None and len(candidates) < grid_size:
+        reason = Problem(code="evaluation_budget_exhausted", message="Search exhausted its evaluation budget")
+    ranked = []
+    for candidate in candidates:
+        evaluation = candidate.evaluations[0]
+        if evaluation.status != "succeeded" or evaluation.constraint_assessment != "satisfied":
+            continue
+        matches = [
+            metric.value
+            for metric in evaluation.metrics
+            if MetricDefinition.model_validate(metric.model_dump(exclude={"value"})) == request.objective.metric
+        ]
+        if len(matches) != 1:
+            continue
+        fingerprint = candidate.effective_configuration.fingerprint
+        devices = sum(role.device_count for role in candidate.effective_configuration.configuration.roles)
+        ties = [devices if key == "device_count" else fingerprint for key in request.objective.tie_breaks]
+        value = matches[0] if request.objective.direction == "minimize" else -matches[0]
+        ranked.append(((value, *ties, fingerprint), fingerprint))
+    return _TopologySearchResult(
+        candidates=candidates,
+        ranked_fingerprints=[fingerprint for _, fingerprint in sorted(ranked)],
+        search_complete=reason is None,
+        termination_reason=reason,
+    )
+
+
 async def _execute_bundle(
     request: EstimateRequest,
     profile: RuntimeProfile,
@@ -888,11 +1093,14 @@ async def _execute_bundle(
     cancel_event: asyncio.Event,
     *,
     limits: _ExecutionLimits | None = None,
+    deadline: float | None = None,
 ) -> _ExecutionResult | Problem:
     """Run a newly compiled bundle; exit zero is not validated prediction evidence."""
     limits = _ExecutionLimits.model_validate((limits or _ExecutionLimits()).model_dump())
     if cancel_event.is_set():
         return Problem(code="execution_cancelled", message="BLIS execution was cancelled before launch")
+    if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+        return Problem(code="execution_timed_out", message="BLIS search deadline expired before compilation")
     if os.name != "posix":
         return Problem(code="execution_platform_unsupported", message="BLIS execution requires POSIX process groups")
     bundle = _compile_bundle(request, profile, destination)
@@ -936,6 +1144,10 @@ async def _execute_bundle(
                 return Problem(code="execution_cancelled", message="BLIS execution was cancelled before launch")
             if file_digest(profile.binary) != bundle.binary_digest:
                 return Problem(code="binary_digest_mismatch", message="Managed BLIS binary changed before launch")
+            if deadline is not None:
+                timeout = min(timeout, max(0, deadline - asyncio.get_running_loop().time()))
+                if timeout <= 0:
+                    return Problem(code="execution_timed_out", message="BLIS search deadline expired before launch")
             launch = asyncio.create_task(
                 spawn(
                     [str(profile.binary.resolve()), "run", *bundle.arguments, "--format", "json", "--log", "warn"],

@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import AsyncMock
@@ -24,14 +25,387 @@ from llm_d_lens.estimate_tools.blis.service import (
     _deployment_documents,
     _execute_bundle,
     _ExecutionLimits,
+    _ExecutionResult,
     _parse_result,
+    _search_topologies,
+    _SearchLimits,
     availability,
     baseline_profile,
     file_digest,
     support,
     tree_digest,
 )
-from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest, Problem, RunControls, Workload
+from llm_d_lens.estimate_tools.models import (
+    EffectiveConfiguration,
+    EstimateRequest,
+    MetricConstraint,
+    OptimizeRequest,
+    Problem,
+    RunControls,
+    Workload,
+)
+
+
+@pytest.fixture
+def topology_request(bundle_profile):
+    return OptimizeRequest.model_validate(
+        {
+            **bundle_profile.verified_request.model_dump(exclude={"operation"}),
+            "objective": {
+                "metric": {
+                    "name": "ttft_mean_ms",
+                    "unit": "ms",
+                    "statistic": "mean",
+                    "formula": "ttft",
+                    "population": "per_request",
+                    "window": "simulated:first_arrival_after_warmup:last_completion",
+                },
+                "direction": "minimize",
+                "tie_breaks": ["device_count", "configuration_fingerprint"],
+            },
+            "budget": {"max_evaluations": 4, "parallelism": 2, "wall_duration_s": 5},
+            "space": {"mode": "find_configuration", "tensor_parallel": [16, 1], "replicas": [2, 1]},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_topology_search_counts_failed_and_invalid_candidates(
+    topology_request, bundle_profile, tmp_path, monkeypatch
+):
+    execute = AsyncMock(return_value=Problem(code="fixture_failure", message="Fixture execution failed"))
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.candidates) == 4
+    assert [candidate.evaluations[0].status for candidate in result.candidates] == [
+        "failed",
+        "failed",
+        "unsupported",
+        "unsupported",
+    ]
+    assert execute.await_count == 2
+    assert result.ranked_fingerprints == []
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+async def test_topology_search_stops_at_attempt_budget(topology_request, bundle_profile, tmp_path, monkeypatch):
+    topology_request.budget.max_evaluations = 1
+    execute = AsyncMock(return_value=Problem(code="fixture_failure", message="Fixture execution failed"))
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(result.candidates) == 1
+    assert not result.search_complete
+    assert result.termination_reason.code == "evaluation_budget_exhausted"
+    execute.assert_awaited_once()
+
+
+@pytest.fixture
+def topology_executor(result_case, monkeypatch):
+    _, _, _, template = result_case
+    calls = []
+
+    async def execute(request, profile, destination, cancel_event, **kwargs):
+        calls.append(request.model_copy(deep=True))
+        bundle = _compile_bundle(request, profile, destination)
+        assert not isinstance(bundle, Problem), bundle
+        payload = deepcopy(template)
+        payload["metrics"]["ttft_mean_ms"] = request.configuration.roles[0].tp * 10
+        scenario, deployment = yaml.safe_load_all((destination / "inputs/scenarios/deployment.yaml").read_text())
+        payload["input"].update(scenario=scenario, deployment=deployment)
+        payload["overrides"][0]["run"] = f"sha256:{file_digest(destination / 'inputs/workload.yaml')}"
+        payload["overrides"].append(
+            {
+                "setting": "num-instances",
+                "run": str(request.configuration.roles[0].replicas),
+                "source": "--num-instances",
+            }
+        )
+        (destination / "stdout.log").write_text(json.dumps(payload))
+        return _ExecutionResult(status="exited", returncode=0, stdout_bytes=1, stderr_bytes=0, output_truncated=False)
+
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    return calls, template
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", ["minimize", "maximize"])
+@pytest.mark.parametrize("ties", [["device_count"], ["configuration_fingerprint", "device_count"]])
+async def test_topology_search_deterministic_ranking_and_preserved_inputs(
+    topology_request, bundle_profile, tmp_path, topology_executor, direction, ties
+):
+    calls, _ = topology_executor
+    topology_request.space.tensor_parallel = [2, 1]
+    topology_request.objective.direction = direction
+    topology_request.objective.tie_breaks = ties
+    before = topology_request.model_dump()
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.ranked_fingerprints) == 4
+    expected = sorted(
+        result.candidates,
+        key=lambda candidate: (
+            candidate.effective_configuration.configuration.roles[0].tp * (1 if direction == "minimize" else -1),
+            *(
+                sum(role.device_count for role in candidate.effective_configuration.configuration.roles)
+                if key == "device_count"
+                else candidate.effective_configuration.fingerprint
+                for key in [*ties, "configuration_fingerprint"]
+            ),
+        ),
+    )
+    assert result.ranked_fingerprints == [candidate.effective_configuration.fingerprint for candidate in expected]
+    assert [(call.configuration.roles[0].tp, call.configuration.roles[0].replicas) for call in calls] == [
+        (1, 1),
+        (1, 2),
+        (2, 1),
+        (2, 2),
+    ]
+    assert topology_request.model_dump() == before
+    assert all(call.workload == topology_request.workload and call.run == topology_request.run for call in calls)
+    assert all(candidate.evaluations[0].strategy == "managed_sweep" for candidate in result.candidates)
+    assert all(candidate.evaluations[0].coefficient_provenance for candidate in result.candidates)
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["unknown_objective", "violated_constraint", "unknown_constraint", "incomplete"])
+async def test_topology_search_does_not_rank_unproven_candidates(
+    topology_request, bundle_profile, tmp_path, topology_executor, case
+):
+    _, template = topology_executor
+    topology_request.space.tensor_parallel = [1]
+    if case == "unknown_objective":
+        topology_request.objective.metric.unit = "s"
+    elif case in ("violated_constraint", "unknown_constraint"):
+        metric = topology_request.objective.metric.model_dump()
+        if case == "unknown_constraint":
+            metric["unit"] = "s"
+        topology_request.constraints.metrics = [MetricConstraint(metric=metric, comparison="le", threshold=0)]
+    else:
+        template["requests"].update(completed=7, still_running=1)
+        template["window"]["requests"] = 7
+        template["metrics"]["request_throughput"] = 1.75
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert all(candidate.evaluations[0].status == "succeeded" for candidate in result.candidates)
+    assert result.ranked_fingerprints == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["grid", "capacity", "cross_evaluations"])
+async def test_topology_search_refuses_unsupported_search_before_execution(
+    topology_request, bundle_profile, tmp_path, monkeypatch, case
+):
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    limits = _SearchLimits(max_grid_size=1) if case == "grid" else None
+    if case == "capacity":
+        topology_request.space = topology_request.space.model_validate({"mode": "find_capacity", "request_rates": [1]})
+    if case == "cross_evaluations":
+        topology_request.budget.cross_evaluations = 1
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event(), limits=limits)
+    assert isinstance(result, Problem)
+    assert (
+        result.code
+        == {
+            "grid": "search_grid_too_large",
+            "capacity": "search_mode_not_supported",
+            "cross_evaluations": "cross_evaluation_not_supported",
+        }[case]
+    )
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_topology_search_server_evaluation_ceiling(topology_request, bundle_profile, tmp_path, topology_executor):
+    result = await _search_topologies(
+        topology_request, bundle_profile, tmp_path, asyncio.Event(), limits=_SearchLimits(max_evaluations=1)
+    )
+    assert len(result.candidates) == 1
+    assert result.termination_reason.code == "evaluation_budget_exhausted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["event", "deadline", "task"])
+async def test_topology_search_bounds_concurrency_and_cleans_interrupted_work(
+    topology_request, bundle_profile, tmp_path, monkeypatch, stop
+):
+    topology_request.space.tensor_parallel = [1, 2]
+    topology_request.budget.parallelism = 4
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    active = 0
+    calls = 0
+
+    async def execute(*args, **kwargs):
+        nonlocal active, calls
+        active += 1
+        calls += 1
+        if active == 2:
+            started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            active -= 1
+
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    task = asyncio.create_task(
+        _search_topologies(
+            topology_request,
+            bundle_profile,
+            tmp_path,
+            cancelled,
+            limits=_SearchLimits(parallelism=2, wall_duration_s=0.1 if stop == "deadline" else 5),
+        )
+    )
+    await asyncio.wait_for(started.wait(), 2)
+    if stop == "event":
+        cancelled.set()
+    elif stop == "task":
+        task.cancel()
+    if stop == "task":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+    else:
+        result = await asyncio.wait_for(task, 2)
+        status = "cancelled" if stop == "event" else "timed_out"
+        assert result.termination_reason.code == f"search_{status}"
+        assert not result.search_complete
+        assert len(result.candidates) == 2
+        assert all(candidate.evaluations[0].status == status for candidate in result.candidates)
+    assert calls == 2
+    assert active == 0
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+async def test_topology_search_pre_cancelled_does_not_launch(topology_request, bundle_profile, tmp_path, monkeypatch):
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    cancelled = asyncio.Event()
+    cancelled.set()
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, cancelled)
+    assert result.candidates == []
+    assert result.termination_reason.code == "search_cancelled"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_topology_search_retains_completed_candidates_when_cancelled(
+    topology_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    original = blis._execute_bundle
+    cancelled = asyncio.Event()
+
+    async def execute(request, *args, **kwargs):
+        if request.configuration.roles[0].replicas == 1:
+            return await original(request, *args, **kwargs)
+        cancelled.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Blocked evaluation must be cancelled")
+
+    monkeypatch.setattr(blis, "_execute_bundle", execute)
+    result = await _search_topologies(topology_request, bundle_profile, tmp_path, cancelled)
+    assert not result.search_complete
+    assert [candidate.evaluations[0].status for candidate in result.candidates] == ["succeeded", "cancelled"]
+    assert result.ranked_fingerprints == [result.candidates[0].effective_configuration.fingerprint]
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+async def test_topology_search_repeated_task_cancellation_waits_for_cleanup(
+    topology_request, bundle_profile, tmp_path, monkeypatch
+):
+    started = asyncio.Event()
+    cleaning = asyncio.Event()
+    release = asyncio.Event()
+    cleaned = asyncio.Event()
+    topology_request.budget.parallelism = 1
+
+    async def execute(*args, **kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            cleaned.set()
+
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    task = asyncio.create_task(_search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event()))
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    await asyncio.wait_for(cleaning.wait(), 2)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    assert cleaned.is_set()
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+async def test_executor_search_deadline_blocks_compilation_and_launch(bundle_profile, tmp_path, monkeypatch):
+    compile_bundle = AsyncMock(side_effect=AssertionError("Expired search must not compile"))
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._compile_bundle", compile_bundle)
+    result = await _execute_bundle(
+        bundle_profile.verified_request, bundle_profile, tmp_path / "bundle", asyncio.Event(), deadline=0
+    )
+    assert isinstance(result, Problem)
+    assert result.code == "execution_timed_out"
+    compile_bundle.assert_not_called()
+    assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.asyncio
+async def test_topology_search_with_locked_runtime(tmp_path, monkeypatch):
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).absolute(), inputs=Path(inputs).absolute())
+    request = OptimizeRequest.model_validate(
+        {
+            **profile.verified_request.model_dump(exclude={"operation"}),
+            "objective": {
+                "metric": {
+                    "name": "ttft_mean_ms",
+                    "unit": "ms",
+                    "statistic": "mean",
+                    "formula": "ttft",
+                    "population": "per_request",
+                    "window": "simulated:first_arrival_after_warmup:last_completion",
+                },
+                "direction": "minimize",
+                "tie_breaks": ["device_count", "configuration_fingerprint"],
+            },
+            "space": {"mode": "find_configuration", "tensor_parallel": [8, 4], "replicas": [1]},
+            "budget": {"max_evaluations": 2, "parallelism": 2, "wall_duration_s": 60},
+        }
+    )
+    no_aic = AsyncMock(side_effect=AssertionError("BLIS search must not invoke AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", no_aic)
+    result = await _search_topologies(request, profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.candidates) == 2
+    assert len(result.ranked_fingerprints) == 2
+    values = {}
+    for candidate in result.candidates:
+        evaluation = candidate.evaluations[0]
+        assert evaluation.status == "succeeded", evaluation.error
+        assert evaluation.constraint_assessment == "satisfied", evaluation.warnings
+        assert evaluation.request_accounting["completed"] == 8
+        assert evaluation.coefficient_provenance["kernel"]
+        assert evaluation.configuration_fingerprint == candidate.effective_configuration.fingerprint
+        values[evaluation.configuration_fingerprint] = next(
+            metric.value for metric in evaluation.metrics if metric.name == "ttft_mean_ms"
+        )
+    assert [values[fingerprint] for fingerprint in result.ranked_fingerprints] == sorted(values.values())
+    no_aic.assert_not_awaited()
+    assert not list(tmp_path.iterdir())
 
 
 def test_result_parser_rejects_truncated_json_even_after_exit_zero(bundle_profile, tmp_path):
