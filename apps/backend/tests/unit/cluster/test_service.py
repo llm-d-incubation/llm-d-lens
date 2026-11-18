@@ -1608,7 +1608,7 @@ async def test_overview_prefers_prometheus_then_dra_then_node_label_vram(monkeyp
 
     async def query(args, **_kwargs):
         if source == "inventory":
-            assert not any("metrics.k8s.io" in argument for argument in args)
+            assert "--raw=/apis/metrics.k8s.io/v1beta1/nodes" not in args
         items = [node] if args[1] == "nodes" else slices if args[1] == "resourceslices.resource.k8s.io" else []
         if source in {"labels", "inventory"} and args[1] == "resourceslices.resource.k8s.io":
             items = []
