@@ -120,8 +120,10 @@ class RuntimeProfile(Contract):
     inputs_digest: Digest
     catalog_model: NonemptyString
     catalog_hardware: NonemptyString
+    hardware_aliases: dict[NonemptyString, NonemptyString] = Field(default_factory=dict)
     catalog_fabric: NonemptyString | None = None
     coefficient_ids: list[NonemptyString] = Field(default_factory=list)
+    catalog_execution: bool = False
     verified_request: EstimateRequest
     kernel_construction: Literal["unknown", "refused", "confirmed"] = "unknown"
     result_digest: Digest | None = None
@@ -129,19 +131,33 @@ class RuntimeProfile(Contract):
     limitations: list[str] = Field(default_factory=list)
 
 
-def baseline_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
+def baseline_profile(*, binary: Path, inputs: Path, complete_catalog: bool = False) -> RuntimeProfile:
     """Opt in to the Step 1 lock; paths must be supplied by provisioning code."""
     return RuntimeProfile(
-        id="blis-762f1605-muse-h100-roce-armB-experimental",
+        id=(
+            "blis-762f1605-full-catalog-b5550f75-experimental"
+            if complete_catalog
+            else "blis-762f1605-muse-h100-roce-armB-experimental"
+        ),
         binary=binary,
         inputs=inputs,
         binary_digest="c701b5577e06009157c268e19532c0d598576288c40d9f4a95ce515edc529d16",
-        catalog_digest="ba72abe7791388114f1b77cfa094c88e5ca6658aed0178bf86bdd87341b9b69b",
+        catalog_digest=(
+            "ce4886a01c27882c2481aea2f3cac13758d2fc3e3661b71b7ca25ee4dd985923"
+            if complete_catalog
+            else "ba72abe7791388114f1b77cfa094c88e5ca6658aed0178bf86bdd87341b9b69b"
+        ),
         registry_digest="4f492df94b6f6ac4bad2759d3d916da4ec0c3aa66ff06c77a4f9981936f64462",
-        inputs_digest="28cc378251abb2bd6be3035bee5ac2c29c1cf42ee2e45afd57a297cfee88ee3a",
+        inputs_digest=(
+            "98cf41670c054d2c98a666381dd57826862ea64a7e8e2dd611e34af9fbce2fd1"
+            if complete_catalog
+            else "28cc378251abb2bd6be3035bee5ac2c29c1cf42ee2e45afd57a297cfee88ee3a"
+        ),
         catalog_model="muse-spark-open-816b-a42b-nvfp4",
         catalog_hardware="h100",
+        hardware_aliases={"h100-sxm": "h100"},
         catalog_fabric="roce-200g",
+        catalog_execution=True,
         coefficient_ids=[
             "cost-model-primitives",
             "cost-model-collectives",
@@ -164,7 +180,7 @@ def baseline_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
         },
         limitations=[
             "Experimental CPU-only integration evidence, not prediction accuracy validation",
-            "Only the exact Step 1 configuration, workload and run controls are execution-confirmed",
+            "Catalog/compiler support is distinct from exact-input execution evidence",
             "B60, P/D, replay, concurrency, search and capacity certification are not enabled",
             "Vision/audio encoding is unpriced; expert routing is assumed even",
             "Pipeline memory binding and graph defaults remain kernel assumptions",
@@ -208,6 +224,124 @@ def baseline_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
     )
 
 
+def provisioned_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
+    """Select only a known input lock; availability still verifies every artifact."""
+    complete = baseline_profile(binary=binary, inputs=inputs, complete_catalog=True)
+    try:
+        if tree_digest(inputs) == complete.inputs_digest:
+            return complete
+    except (OSError, ValueError):
+        pass
+    return baseline_profile(binary=binary, inputs=inputs)
+
+
+def _catalog_profile(request: EstimateRequest, profile: RuntimeProfile) -> RuntimeProfile | Problem:
+    if not profile.catalog_execution:
+        return profile
+    expected = profile.verified_request
+    model = profile.catalog_model
+    hardware = profile.catalog_hardware
+    fabric = None
+    try:
+        if request.model != expected.model:
+            candidates = []
+            for entry in sorted((profile.inputs / "catalog/models").iterdir()):
+                metadata = yaml.safe_load(
+                    _contained_input(profile.inputs, f"catalog/models/{entry.name}/model.yaml").read_text()
+                )
+                if not isinstance(metadata, dict) or metadata.get("name") != entry.name:
+                    raise ValueError("Invalid catalog model identity")
+                source = metadata.get("source", {})
+                aliases = [entry.name]
+                if (
+                    isinstance(source, dict)
+                    and source.get("provider") == "huggingface"
+                    and isinstance(source.get("repo"), str)
+                ):
+                    aliases.append(source["repo"])
+                if request.model.name.casefold() in {alias.casefold() for alias in aliases}:
+                    candidates.append(entry.name)
+            if len(candidates) != 1:
+                return Problem(
+                    code="model_mapping_ambiguous" if candidates else "model_mapping_missing",
+                    message="Model must identify exactly one locked catalog ID or declared source repository",
+                )
+            model = candidates[0]
+            graph = yaml.safe_load(_contained_input(profile.inputs, f"catalog/models/{model}/graph.yaml").read_text())
+            config = json.loads(_contained_input(profile.inputs, f"catalog/models/{model}/config.json").read_bytes())
+            if not isinstance(graph, dict) or graph.get("kind") != "ModelGraph" or graph.get("name") != model:
+                raise ValueError("Invalid model graph identity")
+            dtype_aliases = {"bfloat16": "bf16", "float16": "fp16", "float32": "fp32"}
+            dtype = graph.get("global", {}).get("weight_dtype")
+            precision = request.model.precision
+            if precision is not None and dtype_aliases.get(precision.casefold(), precision.casefold()) != dtype:
+                return Problem(
+                    code="precision_mapping_missing", message="Requested precision differs from the locked model graph"
+                )
+            quant = config.get("quantization_config") or config.get("text_config", {}).get("quantization_config") or {}
+            declared_quant = str(quant.get("quant_algo") or quant.get("quant_method") or "none").casefold()
+            quantizations = {declared_quant}
+            if quant and dtype not in {"bf16", "fp16", "fp32", None}:
+                quantizations.add(dtype)
+            if request.model.quantization is not None and request.model.quantization.casefold() not in quantizations:
+                return Problem(
+                    code="precision_mapping_missing",
+                    message="Requested quantization differs from the locked model configuration",
+                )
+        if request.hardware.profile_id != expected.hardware.profile_id:
+            return Problem(
+                code="hardware_mapping_missing", message="Hardware profile is outside this runtime's catalog scope"
+            )
+        if request.hardware.model != expected.hardware.model:
+            identity = "-".join(request.hardware.model.casefold().replace("_", "-").split())
+            identities = {identity}
+            if identity in profile.hardware_aliases:
+                identities.add(profile.hardware_aliases[identity].casefold())
+            hardware_ids = sorted(entry.stem for entry in (profile.inputs / "catalog/hardware").glob("*.yaml"))
+            candidates = [hardware_id for hardware_id in hardware_ids if hardware_id.casefold() in identities]
+            if len(candidates) != 1:
+                return Problem(
+                    code="hardware_mapping_missing",
+                    message=(
+                        f"Device {request.hardware.model!r} has no locked hardware catalog mapping. "
+                        f"Available hardware IDs: {', '.join(hardware_ids)}. Variants are not interchangeable"
+                    ),
+                )
+            hardware = candidates[0]
+        if request.hardware.fabric is not None:
+            if request.hardware.fabric == expected.hardware.fabric:
+                fabric = profile.catalog_fabric
+            else:
+                identity = request.hardware.fabric.casefold().replace("_", "-")
+                candidates = [
+                    entry.stem
+                    for entry in (profile.inputs / "catalog/networks").glob("*.yaml")
+                    if entry.stem.casefold() == identity
+                ]
+                if len(candidates) != 1:
+                    return Problem(
+                        code="fabric_mapping_missing", message="Fabric must identify a locked network catalog entry"
+                    )
+                fabric = candidates[0]
+        if request.hardware.nodes > 1 and fabric is None:
+            return Problem(
+                code="fabric_mapping_missing", message="Multi-node estimates require an explicit managed fabric"
+            )
+        for relative in (
+            f"catalog/models/{model}/graph.yaml",
+            f"catalog/hardware/{hardware}.yaml",
+            *(f"registry/coefficients/{name}.yaml" for name in profile.coefficient_ids),
+            *([f"catalog/networks/{fabric}.yaml"] if fabric is not None else []),
+        ):
+            _contained_input(profile.inputs, relative)
+    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+        return Problem(
+            code="catalog_mapping_invalid",
+            message="Locked catalog metadata or required managed dependencies are invalid",
+        )
+    return profile.model_copy(update={"catalog_model": model, "catalog_hardware": hardware, "catalog_fabric": fabric})
+
+
 def _deployment_documents(
     request: EstimateRequest,
     profile: RuntimeProfile,
@@ -218,14 +352,22 @@ def _deployment_documents(
         return Problem(
             code="invalid_configuration", message="Request exceeds capacity or violates the estimate contract"
         )
+    mapped = _catalog_profile(request, profile)
+    if isinstance(mapped, Problem):
+        return mapped
+    profile = mapped
     expected = profile.verified_request
     if request.configuration.mode != "agg":
         return Problem(code="mode_not_supported", message="Bundle compilation supports aggregated deployments only")
-    if request.model != expected.model:
+    if not profile.catalog_execution and request.model != expected.model:
         return Problem(
             code="model_mapping_missing", message="Model precision/quantization needs an approved catalog mapping"
         )
-    if (request.hardware.profile_id, request.hardware.model, request.hardware.fabric) != (
+    if not profile.catalog_execution and (
+        request.hardware.profile_id,
+        request.hardware.model,
+        request.hardware.fabric,
+    ) != (
         expected.hardware.profile_id,
         expected.hardware.model,
         expected.hardware.fabric,
@@ -237,18 +379,77 @@ def _deployment_documents(
         expected.configuration.engine,
         expected.configuration.engine_version,
     ) or request.configuration.engine_version is None:
-        return Problem(code="engine_not_supported", message="Engine kind/version is outside the managed profile")
+        return Problem(
+            code="engine_not_supported",
+            message=(
+                f"Managed profile requires {expected.configuration.engine}/{expected.configuration.engine_version}; "
+                f"received {request.configuration.engine}/{request.configuration.engine_version or 'unspecified'}"
+            ),
+        )
     if request.runtime_profiles.get("blis", profile.id) != profile.id:
         return Problem(code="runtime_profile_mismatch", message="Request selected a different managed BLIS runtime")
     settings = request.configuration.engine_settings
     approved_settings = expected.configuration.engine_settings
     if any(
-        key not in approved_settings or type(value) is not type(approved_settings[key])
+        key not in approved_settings
+        or type(value) is not type(approved_settings[key])
+        or (isinstance(value, str) and value != approved_settings[key])
         for key, value in settings.items()
     ):
         return Problem(
             code="engine_settings_not_supported", message="Engine settings need approved names and value types"
         )
+    if profile.catalog_execution and (
+        any(
+            settings.get(key, 1) <= 0
+            for key in ("block_size", "max_num_seqs", "max_num_batched_tokens", "max_model_len")
+        )
+        or not 0 < settings.get("gpu_memory_utilization", 0.9) <= 1
+    ):
+        return Problem(
+            code="engine_settings_not_supported",
+            message="Engine limits must be positive and memory utilization must be in (0, 1]",
+        )
+
+    missing = [
+        key
+        for key in ("block_size", "max_num_seqs", "max_num_batched_tokens", "gpu_memory_utilization")
+        if key not in settings
+    ]
+    if profile.catalog_execution:
+        try:
+            graph = yaml.safe_load(
+                _contained_input(profile.inputs, f"catalog/models/{profile.catalog_model}/graph.yaml").read_text()
+            )
+            if "max_model_len" not in settings and not graph.get("global", {}).get("context_window"):
+                missing.append("max_model_len")
+            if missing:
+                return Problem(
+                    code="engine_settings_required",
+                    message=f"BLIS requires explicit engine settings: {', '.join(missing)}",
+                )
+            architecture = graph.get("global", {}).get("architecture")
+            block_multiple = None
+            if architecture == "DeepseekV4ForCausalLM":
+                block_multiple = 256
+            elif architecture == "DeepseekV41ForCausalLM":
+                chip = yaml.safe_load(
+                    _contained_input(profile.inputs, f"catalog/hardware/{profile.catalog_hardware}.yaml").read_text()
+                )
+                capability = str(chip.get("ComputeCapability", ""))
+                if not capability:
+                    raise ValueError("Missing compute capability")
+                block_multiple = 64 if capability.split(".", 1)[0] == "9" else 128
+            if block_multiple is not None and settings["block_size"] % block_multiple:
+                return Problem(
+                    code="engine_settings_not_supported",
+                    message=(
+                        f"{profile.catalog_model} on {profile.catalog_hardware} requires block_size "
+                        f"to be a multiple of {block_multiple}; received {settings['block_size']}"
+                    ),
+                )
+        except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError):
+            return Problem(code="catalog_mapping_invalid", message="Locked block-size metadata is invalid")
 
     role = request.configuration.roles[0]
     hardware = request.hardware
@@ -336,15 +537,16 @@ def _contained_input(root: Path, relative: str) -> Path:
     return source
 
 
-def _bundle_router(settings: dict[str, JsonValue], inputs: Path, scenarios: Path) -> dict[str, JsonValue]:
+def _bundle_router(settings: dict[str, JsonValue], inputs: Path, scenarios: Path | None) -> dict[str, JsonValue]:
     router = _RouterSettings.model_validate(settings)
 
     def copy_reference(relative: str) -> str:
         source = _contained_input(inputs, relative)
         digest = file_digest(source)
-        target = scenarios / "router" / f"{digest}.yaml"
-        target.parent.mkdir(exist_ok=True)
-        shutil.copyfile(source, target)
+        if scenarios is not None:
+            target = scenarios / "router" / f"{digest}.yaml"
+            target.parent.mkdir(exist_ok=True)
+            shutil.copyfile(source, target)
         return f"router/{digest}.yaml"
 
     flags: list[JsonValue] = []
@@ -381,6 +583,10 @@ def _compile_bundle(
     request: EstimateRequest, profile: RuntimeProfile, destination: Path
 ) -> _DeploymentBundle | Problem:
     """Write into a new caller-owned task directory; never spawn or enable BLIS."""
+    mapped = _catalog_profile(request, profile)
+    if isinstance(mapped, Problem):
+        return mapped
+    profile = mapped
     documents = _deployment_documents(request, profile)
     if isinstance(documents, Problem):
         return documents
@@ -740,6 +946,13 @@ def _parse_result(
         scenario, deployment = yaml.safe_load_all(
             _contained_input(directory, "inputs/scenarios/deployment.yaml").read_text()
         )
+        expected_documents = _deployment_documents(request, profile)
+        if not isinstance(expected_documents, Problem):
+            router = _bundle_router(request.configuration.router_settings, profile.inputs, None)
+            if router:
+                expected_documents[1]["router"] = router
+        if isinstance(expected_documents, Problem) or not _json_equal([scenario, deployment], list(expected_documents)):
+            raise ValueError("Bundle catalog mappings differ from the requested configuration")
         load = (
             {"concurrency": request.workload.concurrency}
             if request.workload.concurrency is not None
@@ -859,7 +1072,13 @@ def _parse_result(
         metrics=metrics,
         request_accounting=counts,
         revisions=revisions,
-        coefficient_provenance={"coefficient_ids": list(profile.coefficient_ids), "kernel": result.kernel or {}},
+        coefficient_provenance={
+            "coefficient_ids": scenario["coefficients"],
+            "catalog_model": scenario["model"],
+            "catalog_hardware": scenario["cluster"]["hardware"],
+            "catalog_fabric": scenario["cluster"].get("fabric"),
+            "kernel": result.kernel or {},
+        },
         resolved_input_digest=manifest.input_digest,
         evidence_maturity="experimental" if result.kernel else "unknown",
         warnings=warnings,
@@ -1094,6 +1313,24 @@ def availability(profile: RuntimeProfile | None = None) -> ToolSupport:
 
 def matching_problem(request: Request, profile: RuntimeProfile) -> Problem | None:
     expected = profile.verified_request
+    if profile.catalog_execution:
+        if profile.kernel_construction == "refused":
+            return Problem(code="kernel_construction_refused", message="Managed runtime refuses kernel construction")
+        if isinstance(request, OptimizeRequest):
+            return Problem(code="optimization_not_enabled", message="BLIS managed optimization is not implemented")
+        documents = _deployment_documents(request, profile)
+        if isinstance(documents, Problem):
+            return documents
+        workload = _compile_workload(request.workload, request.run)
+        if isinstance(workload, Problem):
+            return workload
+        try:
+            _bundle_router(request.configuration.router_settings, profile.inputs, None)
+        except (OSError, ValueError, yaml.YAMLError):
+            return Problem(
+                code="router_settings_not_supported", message="Router settings or managed references are invalid"
+            )
+        return None
     if request.model.name != expected.model.name:
         return Problem(code="model_mapping_missing", message="Model has no approved BLIS catalog mapping")
     if request.model != expected.model:
@@ -1114,7 +1351,7 @@ def matching_problem(request: Request, profile: RuntimeProfile) -> Problem | Non
             code="workload_not_verified",
             message="Workload mode, distribution or prefix semantics are outside the verified envelope",
         )
-    if request.run != expected.run:
+    if request.run.model_dump(exclude={"wall_timeout_s"}) != expected.run.model_dump(exclude={"wall_timeout_s"}):
         return Problem(code="run_controls_not_verified", message="Run controls are outside the verified envelope")
     if isinstance(request, OptimizeRequest):
         return Problem(code="optimization_not_enabled", message="BLIS managed optimization is not implemented")
@@ -1159,6 +1396,13 @@ def support(request: Request, profiles: tuple[RuntimeProfile, ...] = ()) -> Tool
         )
         return result
     result.status = "supported"
-    result.execution_confirmed = True
+    expected = resolved.verified_request
+    result.execution_confirmed = (
+        EffectiveConfiguration.from_request(request) == EffectiveConfiguration.from_request(expected)
+        and request.workload == expected.workload
+        and request.run.model_dump(exclude={"wall_timeout_s"}) == expected.run.model_dump(exclude={"wall_timeout_s"})
+    )
+    if not result.execution_confirmed:
+        result.warnings.append("This exact input has not been execution-confirmed; prediction accuracy is unvalidated")
     result.evidence_maturity = "experimental"
     return result

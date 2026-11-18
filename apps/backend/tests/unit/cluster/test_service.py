@@ -1578,7 +1578,9 @@ def test_node_memory_label_discovery_uses_registered_profile_keys_and_units(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("source", "per_gpu_gib"), [("labels", 80), ("dra", 32), ("prometheus", 24)])
+@pytest.mark.parametrize(
+    ("source", "per_gpu_gib"), [("labels", 80), ("dra", 32), ("prometheus", 24), ("inventory", 80)]
+)
 async def test_overview_prefers_prometheus_then_dra_then_node_label_vram(monkeypatch, tmp_path, source, per_gpu_gib):
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("")
@@ -1605,8 +1607,10 @@ async def test_overview_prefers_prometheus_then_dra_then_node_label_vram(monkeyp
     ]
 
     async def query(args, **_kwargs):
+        if source == "inventory":
+            assert "--raw=/apis/metrics.k8s.io/v1beta1/nodes" not in args
         items = [node] if args[1] == "nodes" else slices if args[1] == "resourceslices.resource.k8s.io" else []
-        if source == "labels" and args[1] == "resourceslices.resource.k8s.io":
+        if source in {"labels", "inventory"} and args[1] == "resourceslices.resource.k8s.io":
             items = []
         return CommandResult(argv=(), returncode=0, stdout=json.dumps({"items": items}), stderr="")
 
@@ -1622,7 +1626,14 @@ async def test_overview_prefers_prometheus_then_dra_then_node_label_vram(monkeyp
     monkeypatch.setattr(service, "monitoring_component", AsyncMock(return_value={}))
     monkeypatch.setattr(service, "_prometheus_hardware_metrics", AsyncMock(return_value=metrics))
     monkeypatch.setattr(service, "_node_disk_usage", AsyncMock(return_value={}))
-    overview = await service.build_overview(SimpleNamespace(id="cluster-a"))
+    overview = await service.build_overview(SimpleNamespace(id="cluster-a"), include_telemetry=source != "inventory")
+    if source == "inventory":
+        from llm_d_lens.cluster.models import KubernetesSummary
+
+        service.monitoring_component.assert_not_awaited()
+        service._prometheus_hardware_metrics.assert_not_awaited()
+        service._node_disk_usage.assert_not_awaited()
+        assert KubernetesSummary.model_validate(overview).components.monitoring is None
     assert overview["hardware"]["gpuCount"] == 7
     assert overview["hardware"]["vramBytes"] == 7 * per_gpu_gib * 1024**3
     assert overview["nodes"][0]["vramBytes"] == 7 * per_gpu_gib * 1024**3
@@ -1632,6 +1643,54 @@ async def test_overview_prefers_prometheus_then_dra_then_node_label_vram(monkeyp
         assert overview["nodes"][0]["vramUsagePercent"] is None
         assert all(gpu["vramUsedBytes"] is None for gpu in overview["nodes"][0]["gpus"])
         assert all(gpu["vramUsagePercent"] is None for gpu in overview["nodes"][0]["gpus"])
+
+
+def test_node_availability_tracks_profile_allocations_and_schedulability():
+    from llm_d_lens.cluster.models import NodeSummary
+
+    nodes = [
+        {
+            "metadata": {"name": name},
+            "spec": {"unschedulable": name == "cordoned"},
+            "status": {
+                "capacity": {"nvidia.com/gpu": "8", "gpu.intel.com/xe": "4"},
+                "allocatable": {"nvidia.com/gpu": "6", "gpu.intel.com/xe": "4"},
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        }
+        for name in ["worker", "cordoned"]
+    ]
+    summaries = [service._node_summary(node) for node in nodes]
+    pods = [
+        {
+            "spec": {
+                "nodeName": "worker",
+                "containers": [{"resources": {"requests": {"nvidia.com/gpu": "2"}}}],
+                "initContainers": [{"resources": {"limits": {"nvidia.com/gpu": "3"}}}],
+            },
+            "status": {"phase": "Running"},
+        }
+    ]
+    slices = [
+        {
+            "spec": {
+                "driver": "gpu.intel.com",
+                "nodeName": "worker",
+                "pool": {"name": "pool"},
+                "devices": [{"name": "card"}],
+            }
+        }
+    ]
+    reservation = {"driver": "gpu.intel.com", "pool": "pool", "device": "card"}
+    claims = [{"status": {"allocation": {"devices": {"results": [reservation, reservation]}}}}]
+    service._annotate_node_availability(summaries, nodes, pods, claims, slices, claims_available=True)
+    assert summaries[0]["availableGpuByProfile"] == {"intel-xpu": 3, "nvidia": 3}
+    assert summaries[1]["availableGpuByProfile"] == {"intel-xpu": 0, "nvidia": 0}
+    assert NodeSummary.model_validate(summaries[0]).available_gpu_by_profile["nvidia"] == 3
+    service._annotate_node_availability(summaries, nodes, pods, claims, slices, claims_available=False)
+    assert summaries[0]["availableGpuByProfile"]["intel-xpu"] is None
+    service._annotate_node_availability(summaries, nodes, pods, claims, [], claims_available=True)
+    assert summaries[0]["availableGpuByProfile"]["intel-xpu"] is None
 
 
 def test_node_summary_counts_extended_resources_per_profile_and_excludes_monitor_marker():

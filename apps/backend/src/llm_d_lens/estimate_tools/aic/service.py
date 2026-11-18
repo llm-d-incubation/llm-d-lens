@@ -30,6 +30,10 @@ class AICError(RuntimeError):
     """A user-visible AISimulate integration failure."""
 
 
+class AICPerformanceDataMissingError(AICError):
+    """The native estimator has no measured data for the requested geometry."""
+
+
 def _cli():
     try:
         from aisimulate.legacy_cli import cli_default, cli_exp, cli_support
@@ -232,7 +236,11 @@ def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
     if payload.ttft_target_ms is None and payload.tpot_target_ms is None:
         try:
             from aisimulate.legacy_cli.api import cli_estimate
+            from aisimulate_core.sdk.errors import PerfDataNotAvailableError
+        except ImportError as error:
+            raise AICError(str(error)) from error
 
+        try:
             kwargs: dict[str, Any] = {
                 "model_path": payload.model_name,
                 "system_name": payload.aic_system_name,
@@ -243,13 +251,19 @@ def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
                 "osl": payload.mean_output_tokens,
             }
             if is_agg:
-                kwargs.update(tp_size=payload.tp, pp_size=payload.pp, batch_size=1)
+                kwargs.update(
+                    tp_size=payload.tp, pp_size=payload.pp, batch_size=1, moe_tp_size=payload.tp, moe_ep_size=1
+                )
             else:
                 kwargs.update(
                     prefill_tp_size=payload.prefill_tp,
+                    prefill_moe_tp_size=payload.prefill_tp,
+                    prefill_moe_ep_size=1,
                     prefill_num_workers=payload.prefill_replicas,
                     prefill_batch_size=1,
                     decode_tp_size=payload.decode_tp,
+                    decode_moe_tp_size=payload.decode_tp,
+                    decode_moe_ep_size=1,
                     decode_num_workers=payload.decode_replicas,
                     decode_batch_size=1,
                 )
@@ -290,6 +304,8 @@ def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
             return prediction
         except AICError:
             raise
+        except PerfDataNotAvailableError as error:
+            raise AICPerformanceDataMissingError(str(error)) from error
         except Exception as error:
             raise AICError(str(error)) from error
     experiment: dict[str, Any] = {

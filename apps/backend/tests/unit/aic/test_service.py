@@ -317,7 +317,8 @@ def test_estimate_accepts_matching_disaggregated_topology(monkeypatch):
     assert captured["total_gpus"] == 4
 
 
-def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch):
+@pytest.mark.parametrize("tp", [1, 2])
+def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch, tp):
     from aisimulate.legacy_cli import api
 
     captured = {}
@@ -328,9 +329,9 @@ def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch)
             ttft=45,
             tpot=7,
             raw={
-                "tp": 1,
+                "tp": tp,
                 "pp": 1,
-                "num_total_gpus": 1,
+                "num_total_gpus": tp,
                 "tokens/s": 150,
             },
         )
@@ -340,8 +341,8 @@ def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch)
         estimate_request(
             scenario="inference_scheduling",
             model_name="Qwen/Qwen3-0.6B",
-            gpu_count=1,
-            tp=1,
+            gpu_count=tp,
+            tp=tp,
             replicas=1,
             mean_input_tokens=1024,
             mean_output_tokens=256,
@@ -353,6 +354,8 @@ def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch)
     assert captured["isl"] == 1024
     assert captured["osl"] == 256
     assert captured["batch_size"] == 1
+    assert captured["moe_tp_size"] == tp
+    assert captured["moe_ep_size"] == 1
     assert "ttft" not in captured and "tpot" not in captured
 
 
@@ -382,6 +385,20 @@ def test_estimate_without_targets_rejects_mismatched_direct_topology(monkeypatch
         )
 
 
+def test_estimate_preserves_native_missing_performance_data(monkeypatch):
+    from aisimulate.legacy_cli import api
+    from aisimulate_core.sdk.errors import PerfDataNotAvailableError
+
+    def missing(**kwargs):
+        raise PerfDataNotAvailableError("private database details")
+
+    monkeypatch.setattr(api, "cli_estimate", missing)
+    with pytest.raises(service.AICPerformanceDataMissingError):
+        service.estimate_sync(
+            estimate_request(scenario="inference_scheduling", model_name="test/model", gpu_count=1, tp=1)
+        )
+
+
 def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeypatch):
     from aisimulate.legacy_cli import api
 
@@ -393,11 +410,11 @@ def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeyp
             ttft=44,
             tpot=7,
             raw={
-                "(p)tp": 1,
+                "(p)tp": 2,
                 "(p)workers": 2,
                 "(d)tp": 1,
                 "(d)workers": 3,
-                "num_total_gpus": 5,
+                "num_total_gpus": 7,
                 "tokens/s": 300,
             },
         )
@@ -407,8 +424,8 @@ def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeyp
         estimate_request(
             scenario="pd_disaggregation",
             model_name="Qwen/Qwen3-0.6B",
-            gpu_count=5,
-            prefill_tp=1,
+            gpu_count=7,
+            prefill_tp=2,
             prefill_replicas=2,
             decode_tp=1,
             decode_replicas=3,
@@ -422,6 +439,10 @@ def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeyp
     assert result["decode_replicas"] == 3
     assert captured["prefill_num_workers"] == 2
     assert captured["decode_num_workers"] == 3
+    assert captured["prefill_moe_tp_size"] == 2
+    assert captured["prefill_moe_ep_size"] == 1
+    assert captured["decode_moe_tp_size"] == 1
+    assert captured["decode_moe_ep_size"] == 1
     assert captured["isl"] == 1024 and captured["osl"] == 256
     assert "ttft" not in captured and "tpot" not in captured
 

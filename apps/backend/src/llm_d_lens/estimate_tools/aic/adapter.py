@@ -202,6 +202,18 @@ async def estimate(request: EstimateRequest) -> Evaluation:
                     window="not_reported",
                 )
             )
+    except service.AICPerformanceDataMissingError:
+        return Evaluation(
+            **base,
+            status="unsupported",
+            error=Problem(
+                code="native_perf_data_missing",
+                message=(
+                    "AISimulate has no measured performance data for this model, hardware, topology "
+                    "and token geometry; no substitute data or metrics were generated"
+                ),
+            ),
+        )
     except service.AICError:
         return Evaluation(
             **base,

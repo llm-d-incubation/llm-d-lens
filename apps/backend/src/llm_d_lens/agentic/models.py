@@ -13,6 +13,7 @@ from llm_d_lens.agentic.public_benchmark_record.case_retrieval import CandidateE
 from llm_d_lens.ai_providers.client import AIRequestRecord
 from llm_d_lens.configuration.models import ModelSecretConfiguration
 from llm_d_lens.deploy.standard_kubernetes_service import StandardKubernetesServiceRequest
+from llm_d_lens.estimate_tools.models import BatchResult, EstimateRequest
 
 from .configuration import AGENTIC_RUNTIME_BACKEND
 from .facts import PlanningEvidence
@@ -36,6 +37,18 @@ class AgenticExecutionPolicy(BaseModel):
     max_optimization_iterations: int = Field(default=0, ge=0, le=3)
     max_benchmark_runs: int = Field(default=0, ge=0, le=4)
     max_total_duration_minutes: int = Field(default=60, ge=1, le=180)
+
+
+class AgenticExactEvaluationRequest(BaseModel):
+    configuration_artifact_id: str = Field(min_length=1)
+    estimate_request: EstimateRequest
+
+
+class AgenticExactEvaluationResult(BaseModel):
+    configuration_artifact_id: str
+    result: BatchResult
+    evidence: list[PlanningEvidence]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AgenticDeploymentCreateRequest(StandardKubernetesServiceRequest):

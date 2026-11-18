@@ -133,6 +133,157 @@ def test_rechecks_router_semantics_even_if_all_checksums_are_recomputed(monkeypa
         service.save_configuration(SaveRequest(deployable_configuration=configuration))
 
 
+@pytest.mark.parametrize("tools", [["aisimulate"], ["blis"], ["blis", "aisimulate"]])
+def test_estimate_selection_survives_render_save_reload(monkeypatch, tmp_path, tools):
+    from llm_d_lens.estimate_tools.models import EstimateRequest
+
+    setup_service(monkeypatch, tmp_path)
+    payload = request_payload()
+    payload["candidate_config"]["estimate_selection"] = {"tools": tools}
+    rendered = service.render_configuration(RenderRequest.model_validate(payload))
+    saved = service.save_configuration(SaveRequest(deployable_configuration=rendered.deployable_configuration))
+    restored = service.get_configuration_artifact(saved.artifact.artifact_id)
+    request = EstimateRequest.model_validate(
+        {
+            "model": {"name": "New/Model"},
+            "hardware": {"profile_id": "nvidia", "model": "H100", "nodes": 1, "devices_per_node": 8},
+            "configuration": {"roles": [{"role": "colocated", "replicas": 2}]},
+        }
+    )
+    effective = service.saved_estimate_request(restored.deployable_configuration, request)
+    assert effective.tools == tools
+    assert request.tools == ["aisimulate"]
+    restored.deployable_configuration.content.pop("estimateSelection")
+    restored.deployable_configuration.checksum = configuration_checksum(restored.deployable_configuration.content)
+    assert service.saved_estimate_request(restored.deployable_configuration, request).tools == ["aisimulate"]
+    mismatched = request.model_copy(deep=True)
+    mismatched.configuration.roles[0].replicas = 1
+    with pytest.raises(ValueError, match="topology"):
+        service.saved_estimate_request(restored.deployable_configuration, mismatched)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [["blis"], ["aisimulate", "blis"]])
+async def test_selected_configuration_does_not_probe_legacy_aic(monkeypatch, tools):
+    from unittest.mock import AsyncMock
+
+    from llm_d_lens.configuration import capability
+    from llm_d_lens.configuration.models import CandidateConfig
+
+    probe = AsyncMock(side_effect=AssertionError("Unexpected legacy capability call"))
+    monkeypatch.setattr(capability, "check_support", probe)
+    candidate = CandidateConfig.model_validate(
+        {
+            "type": "baseline",
+            "candidate_source": {"name": "manual"},
+            "target": {"model": "New/Model", "hardware": {"accelerator_model": "H100"}},
+            "estimate_selection": {"tools": tools},
+        }
+    )
+    assert (await capability.check_capability(candidate))[0]
+    probe.assert_not_awaited()
+
+
+def test_explicit_blis_configuration_snapshot_matches_manifest_and_survives_reload(monkeypatch, tmp_path):
+    from llm_d_lens.estimate_tools.models import EffectiveConfiguration, EstimateRequest
+
+    setup_service(monkeypatch, tmp_path)
+    payload = request_payload()
+    request = EstimateRequest.model_validate(
+        {
+            "tools": ["blis"],
+            "model": {"name": "New/Model", "quantization": "nvfp4"},
+            "hardware": {"profile_id": "nvidia", "model": "H100", "nodes": 2, "devices_per_node": 8},
+            "configuration": {
+                "engine_version": "0.32.0",
+                "roles": [
+                    {"role": "colocated", "replicas": 2, "pp": 2, "expert_parallel": True},
+                ],
+                "engine_settings": {"max_num_seqs": 64},
+            },
+        }
+    )
+    payload["candidate_config"]["estimate_selection"] = {"tools": ["blis"]}
+    payload["candidate_config"]["estimate_configuration"] = EffectiveConfiguration.from_request(request).model_dump()
+    documents = list(yaml.safe_load_all(payload["render"]["rendered_manifest"]))
+    container = documents[0]["spec"]["template"]["spec"]["containers"][0]
+    container["args"].extend(
+        [
+            "--pipeline-parallel-size=2",
+            "--enable-expert-parallel",
+            "--quantization=nvfp4",
+            "--max-num-seqs=64",
+        ]
+    )
+    payload["render"]["rendered_manifest"] = yaml.safe_dump_all(documents)
+    rendered = service.render_configuration(RenderRequest.model_validate(payload))
+    saved = service.save_configuration(SaveRequest(deployable_configuration=rendered.deployable_configuration))
+    restored = service.get_configuration_artifact(saved.artifact.artifact_id)
+    assert service.saved_estimate_request(restored.deployable_configuration, request) == request
+    mutated = request.model_copy(deep=True)
+    mutated.hardware.nodes = 3
+    with pytest.raises(ValueError, match="saved simulation configuration"):
+        service.saved_estimate_request(restored.deployable_configuration, mutated)
+    documents[0]["spec"]["template"]["spec"]["containers"][0]["args"].remove("--pipeline-parallel-size=2")
+    payload["render"]["rendered_manifest"] = yaml.safe_dump_all(documents)
+    with pytest.raises(ValueError, match="pipeline-parallel-size"):
+        service.render_configuration(RenderRequest.model_validate(payload))
+
+
+@pytest.mark.asyncio
+async def test_locked_blis_from_saved_configuration_to_agentic_evidence(monkeypatch, tmp_path):
+    import os
+    from pathlib import Path
+    from unittest.mock import AsyncMock
+
+    from llm_d_lens.agentic.service import exact_evaluation_evidence
+    from llm_d_lens.estimate_tools.aic import adapter
+    from llm_d_lens.estimate_tools.blis.service import baseline_profile
+    from llm_d_lens.estimate_tools.models import EffectiveConfiguration
+    from llm_d_lens.estimate_tools.service import EstimateService
+
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set locked BLIS test inputs for saved-configuration acceptance")
+    profile = baseline_profile(binary=Path(binary), inputs=Path(inputs))
+    exact = profile.verified_request
+    setup_service(monkeypatch, tmp_path / "artifacts")
+    monkeypatch.setenv("LENS_SCRATCH_DIR", str(tmp_path / "scratch"))
+    native = AsyncMock(side_effect=AssertionError("BLIS-only must not call AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", native)
+    payload = request_payload()
+    candidate = payload["candidate_config"]
+    candidate["target"]["model"] = exact.model.name
+    candidate["serving"] = {"replicas": 1, "tensor_parallel_size": 8}
+    candidate["estimate_selection"] = {"tools": ["blis"]}
+    candidate["estimate_configuration"] = EffectiveConfiguration.from_request(exact).model_dump()
+    documents = list(yaml.safe_load_all(payload["render"]["rendered_manifest"]))
+    documents[0]["spec"]["replicas"] = 1
+    arguments = [
+        exact.model.name,
+        "--tensor-parallel-size=8",
+        "--pipeline-parallel-size=2",
+        "--enable-expert-parallel",
+        "--quantization=nvfp4",
+    ]
+    for name, value in exact.configuration.engine_settings.items():
+        flag = name.replace("_", "-")
+        arguments.append(f"--{flag}" if value is True else f"--no-{flag}" if value is False else f"--{flag}={value}")
+    documents[0]["spec"]["template"]["spec"]["containers"][0]["args"] = arguments
+    payload["render"]["rendered_manifest"] = yaml.safe_dump_all(documents)
+    rendered = service.render_configuration(RenderRequest.model_validate(payload))
+    saved = service.save_configuration(SaveRequest(deployable_configuration=rendered.deployable_configuration))
+    restored = service.get_configuration_artifact(saved.artifact.artifact_id)
+    effective = service.saved_estimate_request(restored.deployable_configuration, exact)
+    result = await EstimateService(blis_profiles=(profile,)).estimate(effective)
+    evidence = exact_evaluation_evidence(restored.artifact_id, result)
+    assert evidence.result.outcome == "succeeded", evidence
+    assert evidence.evidence[0].source == "blis"
+    assert evidence.evidence[0].details["request_accounting"]["completed"] == 8
+    assert evidence.evidence[0].details["constraint_assessment"] == "satisfied"
+    native.assert_not_awaited()
+
+
 def test_same_filename_is_saved_immutably_and_registered(monkeypatch, tmp_path):
     import json
 

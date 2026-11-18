@@ -897,7 +897,13 @@ def bundle_profile(profile):
     profile.catalog_fabric = "fixture-fabric"
     profile.verified_request.hardware.fabric = "public-fabric"
     profile.verified_request.configuration.engine_version = "0.32.0"
-    profile.verified_request.configuration.engine_settings = {"max_num_seqs": 64}
+    profile.verified_request.configuration.engine_settings = {
+        "block_size": 16,
+        "max_num_seqs": 64,
+        "max_num_batched_tokens": 8192,
+        "gpu_memory_utilization": 0.9,
+        "max_model_len": 5000,
+    }
     profile.verified_request.run = RunControls(seed=42, num_requests=8, horizon_s=60, request_deadline_s=30)
     for relative in (
         "catalog/models/fixture-model/graph.yaml",
@@ -914,6 +920,230 @@ def bundle_profile(profile):
     profile.registry_digest = tree_digest(profile.inputs / "registry")
     profile.inputs_digest = tree_digest(profile.inputs)
     return profile
+
+
+def test_result_parser_preserves_bundled_router_reference_attribution(result_case):
+    request, profile, directory, payload = result_case
+    request.configuration.router_settings = {"manifests": ["router/manifests.yaml"]}
+    destination = directory.with_name("router-bundle")
+    assert not isinstance(_compile_bundle(request, profile, destination), Problem)
+    scenario, deployment = yaml.safe_load_all((destination / "inputs/scenarios/deployment.yaml").read_text())
+    payload["input"].update(scenario=scenario, deployment=deployment)
+    result = _parse_result(request, profile, destination, json.dumps(payload))
+    assert result.status == "succeeded", result.error
+
+
+def test_support_accepts_compilable_configuration_and_workload_changes(bundle_profile):
+    bundle_profile.catalog_execution = True
+    bundle_profile.kernel_construction = "confirmed"
+    bundle_profile.result_digest = "a" * 64
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    request.configuration.roles[0].tp = 2
+    request.configuration.engine_settings["max_num_seqs"] = 32
+    request.workload.input_tokens = 256
+    request.workload.output_tokens = 16
+    request.workload.request_rate = 1
+    request.run.num_requests = 16
+    request.run.horizon_s = 120
+    result = support(request, (bundle_profile,))
+    assert result.status == "supported", result.reason
+    assert result.execution_confirmed is False
+
+
+def test_catalog_mapping_compiles_source_alias_without_rewriting_request(bundle_profile, tmp_path):
+    bundle_profile.catalog_execution = True
+    model = bundle_profile.inputs / "catalog/models/another-model"
+    model.mkdir()
+    (model / "model.yaml").write_text(
+        "name: another-model\nsource: {provider: huggingface, repo: Example/Another-Model}\n"
+    )
+    (model / "graph.yaml").write_text("kind: ModelGraph\nname: another-model\nglobal: {weight_dtype: bf16}\n")
+    (model / "config.json").write_text("{}")
+    (bundle_profile.inputs / "catalog/models/fixture-model/model.yaml").write_text("name: fixture-model\n")
+    (bundle_profile.inputs / "catalog/hardware/another-chip.yaml").write_text("MemoryGiB: 80\n")
+    bundle_profile.catalog_digest = tree_digest(bundle_profile.inputs / "catalog")
+    bundle_profile.inputs_digest = tree_digest(bundle_profile.inputs)
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    request.model.name = "Example/Another-Model"
+    request.model.precision = "bfloat16"
+    request.hardware.model = "another_chip"
+    request.hardware.fabric = None
+    result = _compile_bundle(request, bundle_profile, tmp_path / "bundle")
+    assert not isinstance(result, Problem), result
+    scenario, _ = yaml.safe_load_all((tmp_path / "bundle/inputs/scenarios/deployment.yaml").read_text())
+    assert scenario["model"] == "another-model"
+    assert scenario["cluster"]["hardware"] == "another-chip"
+    assert "fabric" not in scenario["cluster"]
+    snapshot = json.loads((tmp_path / "bundle/effective-input.json").read_text())
+    assert snapshot["request"]["model"]["name"] == "Example/Another-Model"
+    request.model.precision = "fp8"
+    assert _deployment_documents(request, bundle_profile).code == "precision_mapping_missing"
+    request.model.precision = "bf16"
+    request.model.quantization = "nvfp4"
+    assert _deployment_documents(request, bundle_profile).code == "precision_mapping_missing"
+    request.model.quantization = None
+    request.model.name = "Unknown/Another-Model"
+    assert _deployment_documents(request, bundle_profile).code == "model_mapping_missing"
+    request.model.name = "Example/Another-Model"
+    duplicate = bundle_profile.inputs / "catalog/models/duplicate"
+    duplicate.mkdir()
+    (duplicate / "model.yaml").write_text(
+        "name: duplicate\nsource: {provider: huggingface, repo: Example/Another-Model}\n"
+    )
+    assert _deployment_documents(request, bundle_profile).code == "model_mapping_ambiguous"
+
+
+@pytest.mark.parametrize(
+    "section,field,value,code",
+    [
+        ("configuration", "engine_version", "0.99.0", "engine_not_supported"),
+        ("configuration", "engine_version", None, "engine_not_supported"),
+        ("configuration", "engine", "other", "engine_not_supported"),
+        ("configuration", "engine_settings", {"max_num_seqs": 0}, "engine_settings_not_supported"),
+        ("configuration", "engine_settings", {"unknown": True}, "engine_settings_not_supported"),
+        ("configuration", "router_settings", {"manifests": ["../escape.yaml"]}, "router_settings_not_supported"),
+        ("workload", "distribution", "native_mean", "distribution_not_supported"),
+        ("run", "seed", None, "run_controls_required"),
+        ("hardware", "fabric", "not-in-catalog", "fabric_mapping_missing"),
+    ],
+)
+def test_catalog_support_rejects_unrepresentable_capabilities(bundle_profile, section, field, value, code):
+    bundle_profile.catalog_execution = True
+    bundle_profile.kernel_construction = "confirmed"
+    bundle_profile.result_digest = "a" * 64
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    setattr(getattr(request, section), field, value)
+    result = support(request, (bundle_profile,))
+    assert result.status == "unsupported"
+    assert result.reason.code == code
+    if code == "engine_not_supported":
+        expected = bundle_profile.verified_request.configuration
+        actual = request.configuration
+        assert f"requires {expected.engine}/{expected.engine_version}" in result.reason.message
+        assert f"received {actual.engine}/{actual.engine_version or 'unspecified'}" in result.reason.message
+
+
+@pytest.mark.parametrize("device", ["fixture sxm", "FIXTURE_SXM", "fixture-sxm"])
+def test_catalog_hardware_alias_preserves_declared_identity(bundle_profile, tmp_path, device):
+    bundle_profile.catalog_execution = True
+    bundle_profile.hardware_aliases = {"fixture-sxm": "fixture-hardware"}
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    request.hardware.model = device
+    result = _compile_bundle(request, bundle_profile, tmp_path / "bundle")
+    assert not isinstance(result, Problem), result
+    scenario, _ = yaml.safe_load_all((tmp_path / "bundle/inputs/scenarios/deployment.yaml").read_text())
+    assert scenario["cluster"]["hardware"] == "fixture-hardware"
+    snapshot = json.loads((tmp_path / "bundle/effective-input.json").read_text())
+    assert snapshot["request"]["hardware"]["model"] == device
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["block_size", "max_num_seqs", "max_num_batched_tokens", "gpu_memory_utilization", "max_model_len", "all"],
+)
+def test_catalog_support_requires_explicit_native_engine_limits(bundle_profile, missing):
+    bundle_profile.catalog_execution = True
+    bundle_profile.kernel_construction = "confirmed"
+    bundle_profile.result_digest = "a" * 64
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    required = list(request.configuration.engine_settings)
+    if missing == "all":
+        request.configuration.engine_settings = {}
+    else:
+        del request.configuration.engine_settings[missing]
+    result = support(request, (bundle_profile,))
+    assert result.status == "unsupported"
+    assert result.reason.code == "engine_settings_required"
+    for key in required if missing == "all" else [missing]:
+        assert key in result.reason.message
+    assert missing == "all" or missing not in request.configuration.engine_settings
+
+
+@pytest.mark.parametrize(
+    "architecture,capability,multiple",
+    [
+        ("DeepseekV4ForCausalLM", "9.0", 256),
+        ("DeepseekV4ForCausalLM", "10.0", 256),
+        ("DeepseekV41ForCausalLM", "9.0", 64),
+        ("DeepseekV41ForCausalLM", "10.0", 128),
+    ],
+)
+def test_catalog_support_checks_sparse_block_size(bundle_profile, architecture, capability, multiple):
+    bundle_profile.catalog_execution = True
+    bundle_profile.kernel_construction = "confirmed"
+    bundle_profile.result_digest = "a" * 64
+    bundle_profile.verified_request.configuration.engine_settings["block_size"] = 16
+    (bundle_profile.inputs / "catalog/models/fixture-model/graph.yaml").write_text(
+        yaml.safe_dump({"global": {"architecture": architecture}})
+    )
+    (bundle_profile.inputs / "catalog/hardware/fixture-hardware.yaml").write_text(
+        yaml.safe_dump({"ComputeCapability": capability})
+    )
+    bundle_profile.catalog_digest = tree_digest(bundle_profile.inputs / "catalog")
+    bundle_profile.inputs_digest = tree_digest(bundle_profile.inputs)
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    rejected = support(request, (bundle_profile,))
+    assert rejected.status == "unsupported"
+    assert rejected.reason.code == "engine_settings_not_supported"
+    assert f"multiple of {multiple}; received 16" in rejected.reason.message
+    assert request.configuration.engine_settings["block_size"] == 16
+    for block_size in (multiple, multiple * 2):
+        request.configuration.engine_settings["block_size"] = block_size
+        accepted = support(request, (bundle_profile,))
+        assert accepted.status == "supported", accepted.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "diagnostic,code",
+    [
+        (
+            "private path: kernel reports 80.2 GiB of per-rank fixed occupancy. A per-rank figure cannot exceed the part",
+            "native_memory_layout_rejected",
+        ),
+        ("private path: some other native failure", "process_failed"),
+    ],
+)
+async def test_native_memory_rejection_is_specific_and_sanitized(
+    bundle_profile, tmp_path, monkeypatch, diagnostic, code
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    bundle_profile.catalog_execution = True
+    bundle_profile.kernel_construction = "confirmed"
+    bundle_profile.result_digest = "a" * 64
+    monkeypatch.setenv("LENS_SCRATCH_DIR", str(tmp_path / "scratch"))
+
+    async def failed(request, profile, directory, cancel_event):
+        directory.mkdir(parents=True)
+        (directory / "stdout.log").write_text("{}")
+        (directory / "stderr.log").write_text(diagnostic)
+        return blis._ExecutionResult(
+            status="failed", returncode=1, stdout_bytes=2, stderr_bytes=len(diagnostic), output_truncated=False
+        )
+
+    monkeypatch.setattr(blis, "_execute_bundle", failed)
+    estimator = service.EstimateService(blis_profiles=(bundle_profile,))
+    result = await estimator._blis(bundle_profile.verified_request)
+    assert result.status == "failed"
+    assert result.error.code == code
+    assert result.metrics == []
+    assert "private" not in result.model_dump_json()
+    assert not list((tmp_path / "scratch/estimate-tools").iterdir())
+
+
+@pytest.mark.parametrize(
+    "device", ["h100_pcie", "h100 pcie", "NVIDIA-A100-80GB-PCIe", "fixture sxm", "not-in-catalog", "../../h100"]
+)
+def test_catalog_mapping_rejects_unregistered_device_variants(bundle_profile, device):
+    bundle_profile.catalog_execution = True
+    bundle_profile.hardware_aliases = {"h100-sxm": "h100"}
+    request = bundle_profile.verified_request.model_copy(deep=True)
+    request.hardware.model = device
+    reason = support(request, (bundle_profile,)).reason
+    assert reason.code == "hardware_mapping_missing"
+    assert device in reason.message
+    assert "Available hardware IDs: fixture-hardware" in reason.message
 
 
 def test_bundle_is_relocatable_and_records_exact_inputs(bundle_profile, tmp_path):

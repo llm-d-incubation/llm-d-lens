@@ -103,6 +103,13 @@ export function generatorLabel(generator) {
     return generator === 'ai-mcp' ? 'AI MCP generator' : 'Deterministic generator';
 }
 
+export function aicCandidates(run) {
+    const details = run?.planning_evidence?.find((item) => item.id === 'aic:search')?.details;
+    if (Array.isArray(details?.configs)) return details.configs;
+    const candidates = details?.candidates?.candidates;
+    return Array.isArray(candidates) ? candidates : [];
+}
+
 export function relaxedAicCandidates(run) {
     const trace = run?.generator_tool_trace?.find((entry) => entry.tool === 'search_aic_with_relaxation' && entry.status === 'success');
     return Array.isArray(trace?.result?.candidates) ? trace.result.candidates : [];

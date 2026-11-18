@@ -169,4 +169,6 @@ def normalize_configuration(
         network=network,
         performance=performance,
         runtime=runtime,
+        estimate_selection=payload.get("estimate_selection", {}),
+        estimate_configuration=payload.get("estimate_configuration"),
     )

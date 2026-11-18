@@ -114,6 +114,7 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("GET", "/api/agentic-deployments", "deployment:agentic:read"),
     RoutePermission("POST", "/api/agentic-deployments", "deployment:agentic:create"),
     RoutePermission("POST", "/api/agentic-deployments/stream", "deployment:agentic:create"),
+    RoutePermission("POST", "/api/agentic-deployments/estimate", "candidate:candidate:search"),
     RoutePermission("GET", "/api/agentic-deployments/{run_id}", "deployment:agentic:read"),
     RoutePermission("POST", "/api/agentic-deployments/{run_id}/approve", "deployment:agentic:approve"),
     RoutePermission("POST", "/api/agentic-deployments/{run_id}/refine", "deployment:agentic:create"),
@@ -191,6 +192,12 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("POST", "/api/v1/aic/experiments", "candidate:candidate:search"),
     RoutePermission("POST", "/api/v1/aic/search", "candidate:candidate:search"),
     RoutePermission("POST", "/api/v1/aic/support", "candidate:candidate:search"),
+    RoutePermission("GET", "/api/v1/estimate-tools", "candidate:candidate:search"),
+    RoutePermission("POST", "/api/v1/estimate-tools/support", "candidate:candidate:search"),
+    RoutePermission("POST", "/api/v1/estimate-tools/estimate", "candidate:candidate:search"),
+    RoutePermission(
+        "POST", "/api/v1/estimate-tools/configurations/{artifact_id}/estimate", "candidate:candidate:search"
+    ),
     # --- configurations ---
     RoutePermission("GET", "/api/v1/configurations/artifacts", "configuration:artifact:read"),
     RoutePermission("DELETE", "/api/v1/configurations/artifacts/{artifact_id}", "configuration:artifact:delete"),

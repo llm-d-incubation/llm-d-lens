@@ -11,7 +11,7 @@ import PodPlacementControl from '../../../shared/ui/PodPlacementControl';
 import { listDeploymentNodeLabels } from '../../optimization';
 import { listAIProviders } from '../../ai-providers';
 import { streamAgenticRecommendation, streamAgenticRefinement } from '../api/agenticDeploymentBackend';
-import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, planningEvidenceLabel, publicRagMatchSummary, relaxedAicCandidates, retrievalBranchSummaries } from '../lib/agenticPresentation';
+import { aicCandidates, candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, planningEvidenceLabel, publicRagMatchSummary, relaxedAicCandidates, retrievalBranchSummaries } from '../lib/agenticPresentation';
 
 function api(path, options = {}) {
     return requestJson(path, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -354,7 +354,7 @@ export default function AgenticDeploymentWorkspace({ draft, embedded = false, on
     );
     const hasAicPrediction = run?.planning_evidence?.some((item) => item.id === 'aic:search' && item.status === 'available');
     const canDeploy = run?.status === 'awaiting_approval';
-    const aicConfigs = run?.planning_evidence?.find((item) => item.id === 'aic:search')?.details?.candidates?.candidates || [];
+    const aicConfigs = aicCandidates(run);
     const relaxedConfigs = relaxedAicCandidates(run);
     const clusterDetails = run?.planning_evidence?.find((item) => item.id.startsWith('cluster-overview:'))?.details;
     const usedAiProviderName = aiProviders.find((provider) => provider.id === run?.request?.ai_provider_id)?.name;

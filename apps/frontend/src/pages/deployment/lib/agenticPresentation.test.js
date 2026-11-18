@@ -3,7 +3,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RetrievalEvidenceSources } from '../ui/AgenticDeploymentWorkspace.jsx';
-import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, planningEvidenceLabel, publicRagMatchSummary, relaxedAicCandidates, retrievalBranchSummaries } from './agenticPresentation.js';
+import { aicCandidates, candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, planningEvidenceLabel, publicRagMatchSummary, relaxedAicCandidates, retrievalBranchSummaries } from './agenticPresentation.js';
 
 test('retrieval summaries distinguish public observations from internal experiments', () => {
     const summaries = retrievalBranchSummaries({ planning_evidence: [
@@ -214,6 +214,39 @@ test('generator presentation distinguishes AI MCP and deterministic candidate ge
     assert.equal(generatorLabel('ai-mcp'), 'AI MCP generator');
     assert.equal(generatorLabel('deterministic'), 'Deterministic generator');
     assert.equal(generatorLabel('unknown'), 'Deterministic generator');
+});
+
+test('AIC search configs display exact baseline and PD predictions', () => {
+    const configs = [
+        { mode: 'agg', tp: 1, replicas: 1, ttft_ms: 190.228, tpot_ms: 28.95, throughput_tokens_per_sec: 777.412 },
+        { mode: 'disagg', decode_tp: 1, decode_replicas: 3, prefill_tp: 1, prefill_replicas: 1,
+            ttft_ms: 95.767, tpot_ms: 12.784, throughput_tokens_per_sec: 1691.64 },
+    ];
+    const predictions = aicCandidates({ planning_evidence: [
+        { id: 'aic:search', status: 'available', details: { configs, candidates: { candidates: [] } } },
+    ] });
+    assert.deepEqual(predictions, configs);
+    const baseline = { provider_ref: 'optimized-baseline', tensor_parallel_size: 1, replicas: 1 };
+    const pd = { provider_ref: 'pd-disaggregation', tensor_parallel_size: 1, replicas: 3,
+        prefill_tensor_parallel_size: 1, prefill_replicas: 1 };
+    assert.equal(candidateAnalysis(baseline, 0, predictions, [], null).performance,
+        'AIC estimate: TTFT 190.2 ms, TPOT 28.9 ms, throughput 777.4 tokens/s.');
+    assert.equal(candidateAnalysis(pd, 1, predictions, [], null).performance,
+        'AIC estimate: TTFT 95.8 ms, TPOT 12.8 ms, throughput 1691.6 tokens/s.');
+    assert.match(candidateAnalysis({ ...pd, prefill_replicas: 2 }, 1, predictions, [], null).performance,
+        /No exact AIC topology prediction is available/);
+});
+
+test('AIC candidates preserve legacy records and handle absent predictions', () => {
+    const candidates = [{ topologyMode: 'agg', decodeTp: 1, decodeReplicas: 1, predicted: { ttftMs: 44.872 } }];
+    assert.deepEqual(aicCandidates({ planning_evidence: [
+        { id: 'aic:search', details: { candidates: { candidates } } },
+    ] }), candidates);
+    for (const run of [undefined, {}, { planning_evidence: [] }, { planning_evidence: [
+        { id: 'aic:search', details: { configs: [], candidates: { candidates } } },
+    ] }]) {
+        assert.deepEqual(aicCandidates(run), []);
+    }
 });
 
 test('relaxed AIC candidates remain visible even when no prediction survives planning evidence filtering', () => {

@@ -16,8 +16,10 @@ from .models import (
     AgenticCandidateSelectionRequest,
     AgenticDeploymentCreateRequest,
     AgenticDeploymentRun,
+    AgenticExactEvaluationRequest,
+    AgenticExactEvaluationResult,
 )
-from .service import service
+from .service import exact_evaluation_evidence, service
 from .streaming import planning_stream_response
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,27 @@ def _require_plan_evidence_access(run: AgenticDeploymentRun, principal: Principa
     for item in run.planning_evidence:
         if item.source == "configuration-cases":
             assert_case_access(tuple(item.details.get("cases", ())), principal)
+
+
+@router.post(
+    "/estimate",
+    response_model=AgenticExactEvaluationResult,
+    summary="Collect independent exact-estimation evidence for a saved configuration.",
+    description=(
+        "Evaluate an accessible saved configuration using its saved tool selection and explicit workload. "
+        "Return tool-attributed evidence, unknown constraints and conflicting assessments without averaging, "
+        "ranking, candidate generation, recommendation calls or deployment. This request-response operation "
+        "does not create or refine an Agentic plan; existing AIC recommendation behavior is unchanged."
+    ),
+    operation_id="estimate_agentic_configuration",
+)
+async def estimate_agentic_configuration(
+    payload: AgenticExactEvaluationRequest, http_request: Request
+) -> AgenticExactEvaluationResult:
+    from llm_d_lens.estimate_tools.router import estimate_saved_endpoint
+
+    result = await estimate_saved_endpoint(payload.configuration_artifact_id, payload.estimate_request, http_request)
+    return exact_evaluation_evidence(payload.configuration_artifact_id, result)
 
 
 @router.post(

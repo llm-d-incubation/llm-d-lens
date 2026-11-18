@@ -103,6 +103,18 @@ async def test_native_failure_is_structured_without_backend_details(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_missing_measured_data_is_explicit_without_backend_details(monkeypatch):
+    monkeypatch.setattr(
+        service, "estimate", AsyncMock(side_effect=service.AICPerformanceDataMissingError("private database details"))
+    )
+    result = await adapter.estimate(request())
+    assert result.status == "unsupported"
+    assert result.error.code == "native_perf_data_missing"
+    assert "private" not in result.error.message
+    assert result.metrics == []
+
+
+@pytest.mark.asyncio
 async def test_support_uses_selected_serving_mode_and_not_validation_claim(monkeypatch):
     probe = AsyncMock(return_value=AICSupportResponse(supported=True, agg_supported=True, disagg_supported=False))
     monkeypatch.setattr(service, "check_support", probe)

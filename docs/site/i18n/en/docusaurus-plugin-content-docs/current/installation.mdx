@@ -128,6 +128,119 @@ To constrain deployments to a node, pass `--target-node NODE` and optionally
 configuration file is needed. See the [CLI Reference](/cli-reference) for
 preflight requirements and every `hack/lens-local.sh` subcommand.
 
+## Optional BLIS exact-estimate runtime
+
+BLIS is not installed by the online installer or backend Python dependencies.
+AISimulate remains the default. BLIS installation is a separate, explicit step
+on a compatible POSIX host, as the same user and with the same `LENS_CACHE_DIR`
+as the backend. No API request downloads, builds or installs a runtime.
+
+Obtain the audited binary and complete input tree from your administrator.
+This procedure does not provide a public binary download or build arbitrary
+source revisions. The accepted binary is the experimental `762f1605` baseline;
+its SHA-256 must be
+`c701b5577e06009157c268e19532c0d598576288c40d9f4a95ce515edc529d16`.
+The recommended input tree includes all 42 model entries from `blis-catalog`
+commit `b5550f750cb51571498577fbdc1c68f78cda67db`, with catalog digest
+`ce4886a01c27882c2481aea2f3cac13758d2fc3e3661b71b7ca25ee4dd985923` and whole-input
+digest `98cf41670c054d2c98a666381dd57826862ea64a7e8e2dd611e34af9fbce2fd1`.
+The original 24-model input tree remains accepted with whole-input digest
+`28cc378251abb2bd6be3035bee5ac2c29c1cf42ee2e45afd57a297cfee88ee3a`.
+Both profiles keep the same binary and registry locks. Installation recognizes
+only these known input locks; it does not trust a digest supplied by the caller.
+A different build, even from the same commit, is not accepted automatically.
+
+From the installed Lens directory:
+
+```bash
+.venv/bin/python -m llm_d_lens.estimate_tools.blis.install install \
+	--binary /absolute/path/to/audited/blis \
+	--inputs /absolute/path/to/audited/inputs
+.venv/bin/python -m llm_d_lens.estimate_tools.blis.install check
+```
+
+Installation validates the locks, copies into private staging, executes the
+confirmed eight-request baseline, validates its result and publishes the runtime
+under `$LENS_CACHE_DIR/estimate-tools/managed-blis-762f1605` (the default cache root
+is `~/.cache/lens`). Failed verification removes staging; existing installations
+are never overwritten. The copied inputs and installation record belong to this
+optional cache, not the database. Restart the backend after installation; source
+users use `hack/lens-local.sh restart backend`, packaged users use `lensctl.sh`
+to stop and start the application. Runtime discovery is process-cached.
+
+Alternatively, explicitly set **both** `LENS_BLIS_BINARY` and `LENS_BLIS_INPUTS`
+in the backend service environment to administrator-managed absolute paths and
+restart it. These paths take precedence over the installed cache and must satisfy
+the same locks. Neither `PATH` nor `LENS_TEST_BLIS_*` enables product execution.
+To disable the optional runtime, stop the backend, unset both explicit paths,
+move the managed runtime directory outside this discovery location and restart.
+Moving files does not affect an already running process.
+
+To upgrade an existing installation, first obtain and verify the full-catalog
+artifacts, stop the backend and move the old managed directory to a backup
+outside the discovery location. Install and check the new artifacts, then start
+the backend. Keep the backup for rollback; do not merge files into an installed
+runtime or edit its installation record. Saved explicit runtime profile IDs are
+not automatically rewritten to the new full-catalog profile.
+
+Model names must match a catalog ID or its declared complete source repository,
+case-insensitively. The full catalog is complete for this pinned revision, not
+for all Hugging Face models; it still has no `Qwen/Qwen3-8B` entry. Catalog
+presence is not certification of every hardware/topology combination or prediction
+accuracy. Native construction and per-request validation remain required.
+
+The pinned full hardware catalog contains `a100-80`, `a100-sxm`, `b200`, `b300`,
+`gb200-nvl72`, `gb300`, `h100`, `h200` and `l40s`. `a100-80` is explicitly an
+alias of A100 SXM, and `h100` describes H100 SXM5; neither is a PCIe entry.
+Discovered A100/H100 PCIe devices therefore remain unsupported by this BLIS
+profile. Do not select an SXM identity merely to make support pass. Device names
+must match a catalog ID or an explicitly approved runtime alias, ignoring case
+and treating whitespace and underscores as hyphens. The pinned profiles map
+`h100 sxm`, `h100_sxm` and `h100-sxm` to `h100`; they do not map H100 PCIe.
+Arbitrary vendor product labels are not automatically equivalent to catalog IDs.
+
+In Configuration, **Exact estimates** lets you select AISimulate, BLIS or both.
+AISimulate-only shows native mean token lengths and readable accelerator choices,
+mapped internally through hardware profiles. BLIS adds explicit workload, load,
+prefix and run controls, plus runtime declarations. Selecting both separates
+common inputs from BLIS controls and reports semantics AISimulate cannot represent;
+it never drops settings or rewrites the workload to make the tools agree.
+Connected cluster information prefills unambiguous accelerator identity and known
+uniform node capacity. Unknown or heterogeneous capacity stays blank. Saved inputs
+and manual edits take precedence over later discovery. These remain declared
+simulation inputs, not resource reservations or verified simulator matches.
+Engine versions are simulation declarations, not detected cluster versions. When
+BLIS is selected and the version is blank, the panel prefills it from the confirmed
+inputs of a unique available managed runtime with a matching engine kind. This
+does not overwrite saved or manually edited versions, including a manual clear.
+Check support for the explicit topology and workload before
+estimating. Results retain independent execution statuses, constraint assessments,
+metric definitions and provenance. Cancel aborts the request; editing inputs
+clears previous results. Tool choice is saved with the configuration. Saving
+declared simulation inputs is optional and requires matching the rendered manifest.
+
+The panel exposes runtime capabilities and confirmed reference configurations.
+The confirmed baseline uses constant
+128-token input and 32-token output at 2 requests/second, seed 42, 8 requests,
+a 60-second horizon and a 30-second request deadline, with no shared prefix.
+This is an installation reference, not a request whitelist. Aggregated estimates
+may use other models and hardware present in the locked catalog, with compatible
+precision/quantization, fabric, topology, vLLM `0.32.0` settings, constant workloads
+and explicit run controls. Model source repository aliases must be declared in
+the catalog. Multi-node estimates need an explicit catalog fabric; missing
+hardware variants such as `h100_pcie` remain unsupported, not approximated by
+`h100` SXM. Native-mean workloads are not silently converted. See the
+[estimate API](/api-reference/modules/deployments)
+for mapping and capability rules.
+
+Runtime availability alone does not establish request support, and compiler
+support is not exact-input execution evidence or prediction-accuracy validation.
+The installation still verifies the reference case, not every catalog combination.
+P/D, search,
+capacity, replay and merged rankings are not enabled. Unsupported inputs are
+reported per tool without falling back to AISimulate. Existing AISimulate
+recommendation routes and Agentic recommendation behavior are unchanged.
+
 ## Build and test
 
 ```bash

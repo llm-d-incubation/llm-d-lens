@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from llm_d_lens.estimate_tools.models import EffectiveConfiguration
+
 from .managed_environment import admin_managed_environment_names
 
 
@@ -448,8 +450,49 @@ def _validate_kv_topic(tokens: list[str], deployment_name: str, expected_model: 
         )
 
 
+def validate_estimate_configuration(content: dict[str, Any], manifest: str) -> None:
+    raw = content.get("estimateConfiguration")
+    if raw is None:
+        return
+    estimate = EffectiveConfiguration.model_validate(raw)
+    if estimate.model.name != (content.get("model") or {}).get("name"):
+        raise ValueError("Simulation model does not match the saved configuration")
+    expected_mode = {"baseline": "agg", "pd": "disagg"}.get(content.get("deploymentType"))
+    if estimate.configuration.mode != expected_mode or estimate.configuration.engine != "vllm":
+        raise ValueError("Simulation serving mode or engine does not match the configuration")
+    if estimate.configuration.router_settings:
+        raise ValueError("Explicit simulation router settings cannot be verified against this manifest")
+    workloads = _modelserver_containers(_documents(manifest))
+    for role in estimate.configuration.roles:
+        role_name = "serving" if role.role == "colocated" else role.role
+        component = content.get(role_name) or {}
+        if role.tp != component.get("tensorParallelSize") or role.replicas != component.get("replicaCount"):
+            raise ValueError("Simulation topology does not match the configuration")
+        matching = [item for item in workloads if role.role == "colocated" or item[0]["role"] == role_name]
+        if not matching:
+            raise ValueError("Simulation role has no modelserver workload")
+        for workload, container in matching:
+            name = workload["name"]
+            tokens = _invocation_tokens(container, name)
+            for flag, expected in (("pipeline-parallel-size", role.pp), ("data-parallel-size", role.dp)):
+                actual = _argument_value(tokens, {f"--{flag}"}, name)
+                if (1 if actual is _MISSING else int(str(actual))) != expected:
+                    raise ValueError(f"Simulation {flag} differs from the rendered manifest")
+            expert = _argument_value(tokens, {"--enable-expert-parallel"}, name)
+            if role.expert_parallel or expert is not _MISSING:
+                _validate_argument(tokens, name, "enable-expert-parallel", str(role.expert_parallel).lower())
+            if estimate.model.quantization is not None:
+                _validate_argument(tokens, name, "quantization", estimate.model.quantization)
+            if estimate.model.precision is not None:
+                _validate_argument(tokens, name, "dtype", estimate.model.precision)
+            for setting, expected in estimate.configuration.engine_settings.items():
+                value = str(expected).lower() if isinstance(expected, bool) else expected
+                _validate_argument(tokens, name, setting.replace("_", "-"), value)
+
+
 def validate_manifest_facts(configuration_content: dict[str, Any], manifest: str) -> None:
     """Reject explicit Configuration facts that the rendered manifest does not prove."""
+    validate_estimate_configuration(configuration_content, manifest)
     model = configuration_content.get("model")
     expected_model = model.get("name") if isinstance(model, dict) else None
     if not isinstance(expected_model, str) or not expected_model:

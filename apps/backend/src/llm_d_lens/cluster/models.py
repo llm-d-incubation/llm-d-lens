@@ -203,7 +203,7 @@ class ComponentSummary(StrictModel):
 
 class ComponentsSummary(StrictModel):
     intel_device_plugin: ComponentSummary = Field(alias="intelDevicePlugin")
-    monitoring: ComponentSummary
+    monitoring: ComponentSummary | None
     accelerator_device_plugins: dict[str, ComponentSummary] = Field(
         default_factory=dict, alias="acceleratorDevicePlugins"
     )
@@ -237,6 +237,7 @@ class NodeSummary(StrictModel):
     gpu: bool = False
     gpu_count: int = Field(default=0, alias="gpuCount")
     gpu_by_profile: dict[str, int] = Field(default_factory=dict, alias="gpuByProfile")
+    available_gpu_by_profile: dict[str, int | None] = Field(default_factory=dict, alias="availableGpuByProfile")
     gpu_models_by_profile: dict[str, list[str]] = Field(default_factory=dict, alias="gpuModelsByProfile")
     gpu_usage_percent: float | None = Field(default=None, alias="gpuUsagePercent")
     vram_bytes: int = Field(default=0, alias="vramBytes")

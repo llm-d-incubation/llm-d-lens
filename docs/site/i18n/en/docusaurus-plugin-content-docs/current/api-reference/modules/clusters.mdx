@@ -838,6 +838,20 @@ Get or create the active Lens session metadata for a cluster id. Use this when a
 
 Return a live Kubernetes overview for one cluster, including node, GPU, namespace, cached-image, and component-health summaries. Accelerator models come from node product labels and DRA ResourceSlice device attributes when present. The route also reports the current cluster record alongside the live snapshot.
 
+Configuration and evaluation forms request `includeTelemetry=false`: node and
+ResourceSlice identity, card capacity, allocation evidence and cached images
+remain available without waiting for monitoring discovery, metrics-server,
+Prometheus or kubelet disk probes. Usage telemetry is unknown in this mode, not
+zero, and `components.monitoring` is `null` because it was not queried.
+The default remains `true` for monitoring callers.
+
+Each node's `availableGpuByProfile` maps hardware profile IDs to unallocated card
+counts, bounded by allocatable capacity and reduced by active Pod requests and
+exclusive DRA reservations. Not-ready or cordoned nodes report zero. A `null`
+entry means DRA claim evidence is unavailable or cannot be mapped to a node;
+missing entries are unknown, not zero. This snapshot does not reserve devices or
+guarantee scheduling, and does not apply the global PCI allowlist budget.
+
 VRAM capacity prefers Prometheus telemetry, then DRA ResourceSlice capacity.
 When neither provides capacity, registered profiles can read per-device memory
 and device-count labels from worker nodes. The NVIDIA profile uses GFD
@@ -857,6 +871,7 @@ Profiles declare label names and units in
     Request: no request body.
 
     - `clusterId` (`string`, query): target cluster id.
+    - `includeTelemetry` (`boolean`, query, default `true`): set to `false` for resource planning without telemetry probes.
 
     Response: `OverviewResponse`.
 
@@ -976,6 +991,8 @@ Profiles declare label names and units in
         cluster = registry.require_cluster("cluster-a")
         overview = await service.build_overview(cluster)
         print(overview)
+        inventory = await service.build_overview(cluster, include_telemetry=False)
+        print(inventory["hardware"])
 
     asyncio.run(main())
     ```

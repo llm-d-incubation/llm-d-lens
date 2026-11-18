@@ -295,6 +295,133 @@ GPU 节省量更大的方案。未知的估算值不会被视为失败。
 只有返回的前三个候选方案会被评分；对于该集合之外的候选方案，
 不会推断出任何理由。
 
+### 独立的精确估算
+
+配置页的 **Exact estimates** 使用以下工具中立接口，不替代现有的 AISimulate 推荐流程。
+
+集群报告的设备型号明确且节点容量一致时，会预填加速器和探测到的节点容量。
+如果硬件 profile 能唯一匹配具体设备型号，附带的架构标签不会阻止预填。
+已保存的非空硬件声明和手动修改会保留；有歧义的字段仍留空。
+
+**Cards** 可选择当前加速器型号的全部集群卡、当前可用卡或自定义卡数。
+可用容量来自逐节点、逐硬件 profile 的清单；证据缺失不视为空闲。
+卡数会转换为不超过各节点实际容量的均匀节点布局。无法表达的不均匀布局会明确报错，
+不会虚构为单节点。自定义卡数未变化且已保存布局仍有效时，会保留原节点布局。
+这些输入用于估算，不预留资源。
+切换到没有匹配集群容量的加速器时，会将当前卡数保留为可编辑的自定义声明，而不是显示为空。
+所有工具模式均通过所选硬件 profile 识别标准系统别名以匹配容量；PCIe 和 SXM 仍严格区分，
+提交请求中的设备型号名称保持原样。
+
+面板中的 AISimulate 始终使用原生默认设置，双选时也相同。
+估算请求会清空精度、量化、引擎版本和引擎/路由设置，使用 PP 1、DP 1 并关闭
+专家并行，提交原生平均 token 长度，不带共享前缀、负载目标或显式运行控制。
+模型名称、加速器、设备容量、TP 和实例数仍作为声明输入。不再展示估算模式选择或排除参数列表。
+实际输入预览显示清空后的请求，不代表完整部署配置已验证，也不会修改保存的部署声明。
+双选时分别提交单工具请求：AISimulate 使用原生输入，BLIS 保留显式负载及运行时声明，
+各工具结果独立保留。直接调用及已保存配置估算 API 仍严格校验，
+不会因面板行为而自动清空 API 请求参数或放宽校验。
+运行时可用状态仅显示所选工具，
+不展示原始能力 JSON。返回 `model_backend_unsupported` 时，结果会标明实际提交的
+模型、加速器、引擎和服务模式；原生默认模式不会绕过已安装 AISimulate 的支持矩阵。
+支持状态标绿，不支持状态标红。未知约束评估不展示，已知评估仍保留。
+**Cancel** 始终可见，仅在支持检查和估算期间启用；取消会中止未完成请求，保留已完成结果。
+
+选择 BLIS 后会预填可编辑的示例负载：固定 4000 个输入和 1000 个输出 token、
+每秒 1 个请求、随机种子 42、100 个请求，以及 300 秒模拟时长上限。
+BLIS 必须提供固定长度分布、一个负载目标、随机种子、请求数和模拟时长。
+面板固定使用随机种子 42，不单独展示输入；**Simulation duration (s)** 表示模拟时长上限，
+不是实际运行耗时。
+这些是界面默认值，不是新增的 API 默认值，也不是实测流量；字段帮助会说明要求和单位。
+高级可选控制默认不设置请求 deadline，使用服务端 120 秒墙钟上限，共享前缀为 0。
+互连及运行时声明仍须匹配所选 profile；默认值不能证明请求受支持或负载会完整执行。
+切换工具会保留独立的 BLIS 控制，不会将其带入 AISimulate 请求。
+运行时声明保留引擎设置编辑框，不再在其下重复展示配置 JSON。
+
+BLIS 必须显式声明 `block_size`、`max_num_seqs`、`max_num_batched_tokens`
+和 `gpu_memory_utilization`。
+存在引擎匹配、唯一可用的运行时时，面板会从其已确认输入中将缺少的值预填到现有
+**Engine settings (JSON)** 编辑器，只复制这四个限制，不复制 MoE 后端等模型专用设置。
+初始 `max_model_len` 按样例的总提示长度加输出长度生成，计入输入长度尚未包含的额外前缀，
+不会复制其他模型参考配置的上下文长度。
+保存的值和手动 JSON 编辑优先。API 请求不会被静默补全：缺少必需值时，支持检查会在
+原生执行前返回 `engine_settings_required`。模型 graph 未声明上下文窗口时，还必须显式
+提供 `max_model_len`。
+
+保存配置时会自动保留估算器中声明的模型、硬件和推理设置，无需单独勾选。
+负载 token 长度、负载目标、运行控制和估算结果不会保存。
+
+如果 Check support 为 BLIS 返回 `runtime_not_configured`，结果会提示管理员
+安装并注册受管运行时，重启后端激活后再次检查支持情况。选择 vLLM 不会安装 BLIS；
+支持检查不会自动安装或激活运行时。
+
+支持检查只确认输入映射和已知限制，不保证原生执行成功。AISimulate 精确调用将 MoE TP
+显式设为角色的 TP、MoE EP 设为 1，保持不启用 EP 的声明。若安装的原生数据库缺少请求
+几何的实测数据，估算返回 `native_perf_data_missing`，不会替换数据或生成指标。
+BLIS 根据锁定的模型和 GPU 架构检查显式 `block_size`：DeepSeek-V4 要求 256 的倍数；
+V4.1 在 SM90 上要求 64 的倍数，其他架构要求 128 的倍数。不合法的值会返回
+`engine_settings_not_supported`，不会被自动改写。原生逐 rank 内存布局拒绝返回
+`native_memory_layout_rejected`，不会猜测显存预算。其他原生错误仍保留失败状态；
+BLIS stderr 只截取有限内容记录在后端日志，不会暴露在 API 结果中。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+    | 接口 | 用途 |
+    | --- | --- |
+    | `GET /api/v1/estimate-tools` | 发现受管运行时的可用性及执行能力。 |
+    | `POST /api/v1/estimate-tools/support` | 针对显式输入分别检查所选工具。 |
+    | `POST /api/v1/estimate-tools/estimate` | 执行 `EstimateRequest`，返回相互独立的 `evaluations`。 |
+    | `POST /api/v1/estimate-tools/configurations/{artifact_id}/estimate` | 评估有权读取的已保存配置，强制采用保存的工具选择并校验清单身份。 |
+    | `POST /api/agentic-deployments/estimate` | 将已保存配置的精确估算包装为 Agentic 证据，不生成候选或部署。 |
+
+    请求包含 `model`、`hardware`、`configuration`、`workload` 及可选的
+    `constraints`、`run`。`tools` 默认为 `["aisimulate"]`，也可选择
+    `["blis"]` 或两者；`runtime_profiles` 的键必须是所选工具。
+    Agentic 接口接收 `configuration_artifact_id` 和 `estimate_request`。
+    缺少 `estimateSelection` 的旧配置默认使用 AISimulate。
+    保存的 `estimateConfiguration` 必须与清单中的模型、拓扑及运行参数一致；
+    硬件和引擎版本仍属于声明假设，而非集群测量。
+
+    运行时可用、请求受支持、执行成功及约束满足是不同状态。
+    批次状态可能是 `succeeded`、`partial` 或 `failed`；需分别检查每个工具的
+    状态、结构化错误、警告及约束判断。指标保留单位、统计量、公式、统计总体和时间窗。
+    不应对不同工具的结果求平均或合并排名，也不能将未知当作满足。
+    请求不排队且有资源上限，繁忙时返回 `estimate_busy`。
+    共享墙钟截止时间不超过 120 秒；客户端断开会取消工作并等待执行器清理。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+    使用 `llm_d_lens.estimate_tools.service.default_estimator()` 及其
+    `discover()`、`await support(request)`、`await estimate(request)` 方法。
+    输入类型为 `llm_d_lens.estimate_tools.models` 中的 `EstimateRequest`，
+    返回类型为 `ToolSupport` 和 `BatchResult`。
+    `EstimateService` 也支持由服务端显式传入 `blis_profiles`，用于隔离集成。
+    不得接受请求提供的可执行文件路径或运行时安装指令。
+
+  </TabItem>
+</Tabs>
+
+参见[可选 BLIS 安装](/installation#可选的-blis-精确估算运行时)。
+受管运行时根据锁定目录与编译能力检查接受聚合精确请求，不再要求与安装基线逐字段相等。
+模型按目录 ID 或 `model.yaml` 中声明的完整来源仓库名解析，忽略大小写，但不会丢弃仓库所有者。
+显式精度、量化必须与目录图和配置一致；省略时使用目录原生形式，不执行转换。
+硬件和互连按目录 ID 解析，忽略大小写并将下划线归一化为连字符，且须在运行时硬件 profile 范围内。
+缺失或歧义映射会被拒绝。例如，`h100` 描述 SXM 硬件；锁定目录中没有 `h100_pcie`，
+因此不会将 PCIe 静默映射为 SXM。多节点请求必须显式提供目录互连。既有批准基线映射仍然有效。
+
+当前运行时仍要求 vLLM `0.32.0`、受支持的引擎及路由设置、可放置的聚合 TP/PP/DP/副本拓扑、
+固定 token 长度、显式 QPS 或原生并发目标，以及显式运行控制。
+不支持同时启用 PP 和 DP，也不支持原生并发与共享前缀组合。系数集合仍由服务端锁定；
+原生内核在有界执行期间完成最终构造、系数与内存校验。支持检查成功不保证执行成功、
+负载完整完成或 SLO 满足。`approved_inputs` 记录参考配置，并非完整目录白名单。
+`execution_confirmed` 仅对已记录的精确基线为真；其他被接受请求仍须以自身执行结果为证。
+结果保留声明配置指纹、解析后的目录模型/硬件/互连及原生系数来源。
+制品摘要锁保持不变，请求不会安装运行时或修改目录。
+
+BLIS 的 P/D、搜索、容量估算、回放和合并排名仍不受支持。
+独立的 Agentic 精确证据不会改变推荐评分，也不授予部署许可。
+
 ### 搜索或估算 AIC 负载容量
 
 上文的 MCP 生成和普通 estimate 回退行为适用于未提供负载目标的请求。
