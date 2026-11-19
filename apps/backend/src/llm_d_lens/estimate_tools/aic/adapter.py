@@ -56,6 +56,8 @@ def system_name(request: Request) -> str | None:
 
 def representation_problem(request: Request) -> Problem | None:
     configuration, workload = request.configuration, request.workload
+    if configuration.offload is not None:
+        return Problem(code="offload_not_representable", message="The legacy AIC API cannot represent KV offloading")
     if request.runtime_profiles.get("aisimulate", PROFILE_ID) != PROFILE_ID:
         return Problem(code="unknown_runtime_profile", message="Unknown AISimulate runtime profile")
     if system_name(request) is None:
