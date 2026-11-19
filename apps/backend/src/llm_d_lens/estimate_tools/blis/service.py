@@ -638,7 +638,9 @@ def _assess_constraints(
     warnings = []
     assessments = []
     pending = counts.still_queued + counts.still_running + counts.gateway_queue_depth
-    complete = counts.generated == request.run.num_requests and counts.completed == counts.generated
+    complete = (request.run.num_requests == 0 or counts.generated == request.run.num_requests) and (
+        counts.completed == counts.generated
+    )
     complete = complete and counts.length_capped == 0
     if not complete:
         warnings.append("Run did not successfully complete the full requested workload")
@@ -655,7 +657,7 @@ def _assess_constraints(
                 if failures / counts.generated <= request.constraints.max_failure_fraction
                 else "not_satisfied"
             )
-            if pending or counts.generated != request.run.num_requests:
+            if pending or (request.run.num_requests != 0 and counts.generated != request.run.num_requests):
                 if assessments[-1] == "satisfied":
                     assessments[-1] = "unknown"
                 warnings.append("Unfinished or ungenerated requests prevent certifying the final failure fraction")
@@ -769,7 +771,9 @@ def _parse_result(
             "deployment": deployment,
             "run": {
                 "load": load,
-                "num_requests": request.run.num_requests,
+                "num_requests": (
+                    max(result.requests.generated, 1) if request.run.num_requests == 0 else request.run.num_requests
+                ),
                 "seed": request.run.seed,
                 "horizon_s": request.run.horizon_s,
             },
@@ -821,7 +825,7 @@ def _parse_result(
         if (
             result.requests.generated != result.requests.rejected + result.requests.injected
             or result.requests.injected != buckets
-            or result.requests.generated > request.run.num_requests
+            or (request.run.num_requests != 0 and result.requests.generated > request.run.num_requests)
             or result.requests.length_capped > result.requests.completed
             or result.window.requests > result.requests.completed
         ):
@@ -925,11 +929,12 @@ class _SweepPoint(Contract):
     run: RunControls
     evaluation: Evaluation
     execution: _ExecutionResult | None = None
+    measured_duration_s: float | None = None
 
     @property
     def fingerprint(self) -> str:
         encoded = json.dumps(
-            self.model_dump(mode="json", exclude={"evaluation", "execution"}),
+            self.model_dump(mode="json", exclude={"evaluation", "execution", "measured_duration_s"}),
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
@@ -976,6 +981,8 @@ class _JointSweepRequest(Request):
         default_factory=lambda: SearchBudget(max_evaluations=256, parallelism=4, wall_duration_s=120)
     )
     mode: _RecommendationMode = "economic"
+    validation_horizon_s: PositiveFloat = 2000
+    validation_min_throughput_fraction: Annotated[float, Field(strict=True, gt=0, le=1)] = 0.99
 
     @model_validator(mode="before")
     @classmethod
@@ -1020,11 +1027,17 @@ class _CapacitySweepResult(_GridSearchResult):
 class _JointSweepResult(_GridSearchResult):
     recommendations: list[_JointRecommendation]
     mode: _RecommendationMode
+    validation_points: list[_SweepPoint] = Field(default_factory=list)
+    validation_complete: bool = False
+    validation_termination_reason: Problem | None = None
+    validation_horizon_s: PositiveFloat = 2000
+    validation_min_throughput_fraction: PositiveFloat = 0.99
     warnings: list[str] = Field(
         default_factory=lambda: [
             "Recommendations cover only evaluated grid points, not untested capacity or a global optimum",
             "Grid completion does not prove feasibility; failed evaluations remain unknown, not infeasible",
-            "Finite request completion does not establish sustained business-load capacity",
+            "Recommendations require unphased horizon validation; this is not a steady-state capacity proof",
+            "Open-loop validation requires zero observed losses and the declared E2E-tail-adjusted completion fraction",
             "Native ITL is per-request TPOT excluding the first token, not per-token latency",
             "Simulation integration evidence does not establish prediction accuracy or deployment approval",
         ]
@@ -1034,6 +1047,65 @@ class _JointSweepResult(_GridSearchResult):
 def _geometric_counts(maximum: int) -> list[int]:
     maximum = min(maximum, 2**63 - 1)
     return sorted({1 << power for power in range(maximum.bit_length())} | {maximum}) if maximum > 0 else []
+
+
+def _assess_joint_validation(point: _SweepPoint, request: _JointSweepRequest) -> bool:
+    evaluation = point.evaluation
+    if evaluation.status != "succeeded":
+        return False
+    if point.measured_duration_s is None or point.measured_duration_s < 0.99 * request.validation_horizon_s:
+        evaluation.constraint_assessment = "unknown"
+        evaluation.warnings.append("Native measured window did not cover the validation horizon")
+        return False
+    counts = evaluation.request_accounting
+    losses = sum(
+        counts.get(name, 0)
+        for name in (
+            "rejected",
+            "dropped_unservable",
+            "timed_out",
+            "routing_rejections",
+            "gateway_queue_rejected",
+            "gateway_evicted",
+            "gateway_expired",
+            "encode_routing_rejections",
+            "length_capped",
+        )
+    )
+    completed = counts.get("completed", 0)
+    mean_e2e_s = next(
+        (
+            metric.value / 1000
+            for metric in evaluation.metrics
+            if metric.name == "e2e_mean_ms"
+            and metric.formula == "e2el"
+            and metric.statistic == "mean"
+            and metric.window == "simulated:first_arrival_after_warmup:last_completion"
+        ),
+        0,
+    )
+    completion_window_s = request.validation_horizon_s - mean_e2e_s
+    if completion_window_s <= 0:
+        evaluation.constraint_assessment = "unknown"
+        evaluation.warnings.append("Mean E2E spans the validation horizon; completion capacity is unknown")
+        return False
+    completion_rate = completed / completion_window_s
+    evaluation.warnings.append(
+        f"Unphased completion check: {completed} / ({request.validation_horizon_s:g}s - "
+        f"{mean_e2e_s:g}s mean E2E); required offered-load fraction "
+        f"{request.validation_min_throughput_fraction:g}. This tail correction is not a stability proof"
+    )
+    if (
+        losses
+        or not completed
+        or (
+            request.workload.request_rate is not None
+            and completion_rate < request.workload.request_rate * request.validation_min_throughput_fraction
+        )
+    ):
+        evaluation.constraint_assessment = "not_satisfied"
+        evaluation.warnings.append("Horizon validation failed request-loss or offered-load completion checks")
+    return evaluation.constraint_assessment == "satisfied"
 
 
 async def _search_joint(
@@ -1048,13 +1120,17 @@ async def _search_joint(
     """Recommend budgeted configurations for a fixed business workload and latency targets.
 
     Omitted topology axes use powers of two plus budget boundaries, with fixed PP/DP.
-    Economic mode minimizes devices; performance mode maximizes measured throughput.
+    Economic mode minimizes devices; performance mode maximizes validated throughput.
+    Screening defaults to 256 requests; recommendations require a separate unphased
+    horizon run. Both stages consume the same evaluation and wall-time budgets.
     Neither mode scans or invents loads; capacity sweeps have a separate entry. Statistics default
     to p99 and use exact native definitions. All points retain evidence and identity;
     public dispatch and unapproved native settings remain disabled.
     """
     request = _JointSweepRequest.model_validate(request.model_dump())
     limits = _SearchLimits.model_validate((limits or _SearchLimits()).model_dump())
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + min(request.budget.wall_duration_s, limits.wall_duration_s)
     if request.configuration.mode != "agg":
         return Problem(code="search_mode_not_supported", message="Joint search supports aggregated deployments only")
     if request.workload.distribution != "constant":
@@ -1062,8 +1138,15 @@ async def _search_joint(
     if request.space.tpot_target_ms is not None and request.workload.output_tokens < 2:
         return Problem(code="tpot_not_observable", message="A TPOT target requires at least two output tokens")
     request.run = RunControls.model_validate(
-        {**profile.verified_request.run.model_dump(), **request.run.model_dump(exclude_none=True)}
+        {
+            **profile.verified_request.run.model_dump(),
+            "num_requests": 256,
+            "horizon_s": 900,
+            **request.run.model_dump(exclude_none=True),
+        }
     )
+    if request.run.num_requests == 0:
+        return Problem(code="screening_requests_required", message="Quick screening requires a positive request count")
     topologies = None
     if not request.space.tensor_parallel or not request.space.replicas:
         available = min(request.hardware.device_count, request.constraints.max_devices or request.hardware.device_count)
@@ -1182,7 +1265,110 @@ async def _search_joint(
     recommendations = {}
     for _, recommendation in sorted(ranked, key=lambda entry: entry[0]):
         recommendations.setdefault(recommendation.effective_configuration.fingerprint, recommendation)
-    return _JointSweepResult(**result.model_dump(), recommendations=list(recommendations.values()), mode=request.mode)
+    validation_points = []
+    validated = []
+    validation_reason = None
+    validation_complete = True
+    maximum = min(request.budget.max_evaluations, limits.max_evaluations)
+    for candidate in recommendations.values():
+        if request.mode == "economic" and validated and candidate.device_count > validated[0].device_count:
+            break
+        if cancel_event.is_set() or loop.time() >= deadline or len(result.points) + len(validation_points) >= maximum:
+            validation_complete = False
+            validation_reason = Problem(
+                code="validation_cancelled" if cancel_event.is_set() else "validation_budget_exhausted",
+                message="Formal validation stopped before all competitive candidates were checked",
+            )
+            break
+        validation = request.model_copy(deep=True)
+        validation.hardware = candidate.effective_configuration.hardware.model_copy(deep=True)
+        validation.configuration = candidate.effective_configuration.configuration.model_copy(deep=True)
+        role = validation.configuration.roles[0]
+        validation.space.tensor_parallel = [role.tp]
+        validation.space.replicas = [role.replicas]
+        validation.space.fabrics = [validation.hardware.fabric]
+        validation.space.engine_settings = [{}]
+        validation.space.offloads = [validation.configuration.offload]
+        validation.run.num_requests = 0
+        validation.run.horizon_s = request.validation_horizon_s
+        validation.constraints.require_complete = False
+        validation.constraints.max_failure_fraction = None
+        validation.budget.max_evaluations = 1
+        validation.budget.parallelism = 1
+        validation.budget.wall_duration_s = max(1e-6, deadline - loop.time())
+        checked = await _search_grid(
+            validation,
+            profile,
+            directory,
+            cancel_event,
+            limits=limits,
+            execution_limits=execution_limits,
+        )
+        if isinstance(checked, Problem):
+            validation_complete = False
+            validation_reason = checked
+            continue
+        if not checked.search_complete:
+            validation_complete = False
+            validation_reason = checked.termination_reason
+        for point in checked.points:
+            validation_points.append(point)
+            evaluation = point.evaluation
+            if evaluation.status != "succeeded":
+                validation_complete = False
+                validation_reason = evaluation.error
+                continue
+            if not _assess_joint_validation(point, request):
+                if evaluation.constraint_assessment == "unknown":
+                    validation_complete = False
+                continue
+            matches = [
+                metric.value
+                for metric in evaluation.metrics
+                if MetricDefinition.model_validate(metric.model_dump(exclude={"value"})) == throughput_definition
+            ]
+            if len(matches) != 1 or matches[0] <= 0:
+                validation_complete = False
+                continue
+            validated.append(
+                _JointRecommendation(
+                    effective_configuration=point.effective_configuration,
+                    point_fingerprint=point.fingerprint,
+                    workload=point.workload,
+                    measured_throughput=matches[0],
+                    throughput_per_device=matches[0] / candidate.device_count,
+                    device_count=candidate.device_count,
+                    metrics=evaluation.metrics,
+                )
+            )
+
+    def validated_key(candidate: _JointRecommendation) -> tuple:
+        latency_ties = tuple(
+            metric.value
+            for name in (
+                f"ttft_{request.space.ttft_statistic}_ms",
+                f"itl_{request.space.tpot_statistic}_ms",
+                f"e2e_{request.space.latency_statistic}_ms",
+            )
+            for metric in candidate.metrics
+            if metric.name == name
+        )
+        return (
+            (candidate.device_count, -candidate.measured_throughput, latency_ties, candidate.point_fingerprint)
+            if request.mode == "economic"
+            else (-candidate.measured_throughput, latency_ties, candidate.device_count, candidate.point_fingerprint)
+        )
+
+    return _JointSweepResult(
+        **result.model_dump(),
+        recommendations=sorted(validated, key=validated_key),
+        mode=request.mode,
+        validation_points=validation_points,
+        validation_complete=validation_complete,
+        validation_termination_reason=validation_reason,
+        validation_horizon_s=request.validation_horizon_s,
+        validation_min_throughput_fraction=request.validation_min_throughput_fraction,
+    )
 
 
 async def _search_topologies(
@@ -1378,8 +1564,19 @@ async def _search_grid(
             )
 
         execution_result = None
+        measured_duration_s = None
         try:
-            payload = request.model_dump(exclude={"operation", "objective", "mode", "budget", "space"})
+            payload = request.model_dump(
+                exclude={
+                    "operation",
+                    "objective",
+                    "mode",
+                    "budget",
+                    "space",
+                    "validation_horizon_s",
+                    "validation_min_throughput_fraction",
+                }
+            )
             payload["configuration"] = configuration.model_dump()
             payload["hardware"] = hardware.model_dump()
             payload["workload"] = workload.model_dump()
@@ -1426,6 +1623,9 @@ async def _search_grid(
                             output_truncated=execution.output_truncated,
                         )
                         evaluation.strategy = "managed_sweep"
+                        if evaluation.status == "succeeded":
+                            native = _NativeResult.model_validate_json((destination / "stdout.log").read_bytes())
+                            measured_duration_s = native.window.duration_s
             except asyncio.CancelledError:
                 evaluation = failure(
                     stopped_status,
@@ -1441,6 +1641,7 @@ async def _search_grid(
             run=request.run,
             evaluation=evaluation,
             execution=execution_result,
+            measured_duration_s=measured_duration_s,
         )
 
     grid = (

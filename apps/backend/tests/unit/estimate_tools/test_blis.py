@@ -134,9 +134,12 @@ async def test_joint_sweep_preserves_business_load_under_latency_targets(
     before = request.model_dump()
     result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
     assert result.search_complete
-    assert len(result.points) == len(calls) == 4
+    assert len(result.points) == 4
+    assert len(calls) == 5
     assert len({point.fingerprint for point in result.points}) == 4
-    assert len(result.recommendations) == 4
+    assert len(result.recommendations) == 1
+    assert result.validation_complete
+    assert len(result.validation_points) == 1
     assert result.execution_counts == {"succeeded": 4, "unsupported": 0, "failed": 0, "timed_out": 0, "cancelled": 0}
     assert result.constraint_counts == {"satisfied": 4, "not_satisfied": 0, "unknown": 0}
     best = result.recommendations[0]
@@ -169,6 +172,107 @@ def joint_request(topology_request):
 
 
 @pytest.mark.asyncio
+async def test_joint_sweep_requires_long_validation_before_recommending(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    calls, _ = topology_executor
+    execute = blis_service._execute_bundle
+    validation_calls = []
+
+    async def fail_validation(request, *args, **kwargs):
+        if request.run.horizon_s == 2000:
+            validation_calls.append(request)
+            return Problem(code="execution_timed_out", message="Validation exceeded its execution limit")
+        return await execute(request, *args, **kwargs)
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", fail_validation)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(calls) == 4
+    assert validation_calls
+    assert result.recommendations == []
+    assert not result.validation_complete
+    assert all(point.evaluation.status == "timed_out" for point in result.validation_points)
+
+
+@pytest.mark.asyncio
+async def test_joint_validation_allows_normal_inflight_work_without_drain(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    joint_request.space.tensor_parallel = [1]
+    joint_request.space.replicas = [1]
+    execute = blis_service._execute_bundle
+
+    async def with_inflight(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        if request.run.num_requests == 0:
+            payload = json.loads((destination / "stdout.log").read_text())
+            payload["requests"].update(completed=3980, still_running=20)
+            payload["window"]["requests"] = 3980
+            payload["metrics"]["request_throughput"] = 3980 / 2000
+            payload["metrics"]["e2e_mean_ms"] = 10000
+            payload["metric_defs"]["e2e_mean_ms"] = {
+                **payload["metric_defs"]["ttft_mean_ms"],
+                "formula": "e2el",
+            }
+            (destination / "stdout.log").write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", with_inflight)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.validation_complete
+    assert len(result.recommendations) == 1
+    point = result.validation_points[0]
+    assert point.run.num_requests == 0
+    assert point.run.horizon_s == 2000
+    assert point.evaluation.request_accounting["still_running"] == 20
+    assert result.recommendations[0].point_fingerprint == point.fingerprint
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["throughput", "timeout", "latency", "short_window"])
+async def test_joint_validation_rejects_short_run_false_positives(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch, case
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    joint_request.space.tensor_parallel = [1]
+    joint_request.space.replicas = [1]
+    execute = blis_service._execute_bundle
+
+    async def invalid_validation(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        if request.run.num_requests == 0:
+            payload = json.loads((destination / "stdout.log").read_text())
+            if case == "throughput":
+                payload["requests"].update(completed=2000, still_running=2000)
+                payload["window"]["requests"] = 2000
+            elif case == "timeout":
+                payload["requests"].update(completed=3999, timed_out=1)
+                payload["window"]["requests"] = 3999
+            elif case == "latency":
+                payload["metrics"]["ttft_mean_ms"] = 26
+            else:
+                payload["window"]["duration_s"] = 10
+            payload["metrics"]["request_throughput"] = payload["window"]["requests"] / payload["window"]["duration_s"]
+            (destination / "stdout.log").write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", invalid_validation)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.points[0].evaluation.constraint_assessment == "satisfied"
+    assert result.recommendations == []
+    assert len(result.validation_points) == 1
+    assert result.validation_points[0].evaluation.constraint_assessment == (
+        "unknown" if case == "short_window" else "not_satisfied"
+    )
+    assert result.validation_complete == (case != "short_window")
+
+
+@pytest.mark.asyncio
 async def test_joint_sweep_generates_budgeted_topologies_and_checks_latency(
     joint_request, bundle_profile, tmp_path, topology_executor
 ):
@@ -194,7 +298,8 @@ async def test_joint_sweep_generates_budgeted_topologies_and_checks_latency(
     result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
     assert result.search_complete
     assert result.mode == "economic"
-    assert len(result.points) == len(calls) == 10
+    assert len(result.points) == 10
+    assert len(calls) == 11
     assert all(call.configuration.roles[0].device_count <= request.hardware.device_count for call in calls)
     assert {call.configuration.roles[0].tp for call in calls} == {1, 2, 4, 8}
     assert {call.workload.concurrency for call in calls} == {4}
@@ -244,22 +349,30 @@ async def test_joint_sweep_ranks_measured_throughput_not_offered_load(
     from llm_d_lens.estimate_tools.blis import service as blis
 
     joint_request.mode = mode
+    joint_request.workload.request_rate = None
+    joint_request.workload.concurrency = 4
     execute = blis._execute_bundle
 
     async def measured_execute(request, profile, destination, *args, **kwargs):
         execution = await execute(request, profile, destination, *args, **kwargs)
         payload = json.loads((destination / "stdout.log").read_text())
-        throughput = (1 + 0.5 * (request.configuration.roles[0].tp - 1)) * 2 / request.workload.request_rate
+        throughput = 1 + 0.5 * (request.configuration.roles[0].tp - 1)
         payload["metrics"]["request_throughput"] = throughput
-        payload["window"]["duration_s"] = 8 / throughput
+        if request.run.num_requests == 0:
+            count = int(throughput * request.run.horizon_s)
+            payload["requests"].update(generated=count, injected=count, completed=count)
+            payload["window"]["requests"] = count
+            payload["input"]["run"]["num_requests"] = count
+        else:
+            payload["window"]["duration_s"] = 8 / throughput
         (destination / "stdout.log").write_text(json.dumps(payload))
         return execution
 
     monkeypatch.setattr(blis, "_execute_bundle", measured_execute)
     result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
-    assert len(result.recommendations) == 4
+    assert len(result.recommendations) == (4 if mode == "performance" else 1)
     best = result.recommendations[0]
-    assert best.workload.request_rate == 2
+    assert best.workload.concurrency == 4
     assert best.effective_configuration.configuration.roles[0].tp == (2 if mode == "performance" else 1)
     assert best.effective_configuration.configuration.roles[0].replicas == 1
     assert result.mode == mode
@@ -333,7 +446,8 @@ async def test_joint_sweep_budget_defaults_and_latency_only_target(
     assert request.budget.max_evaluations == 256
     assert result.search_complete
     assert result.recommendations
-    assert all(point.run == bundle_profile.verified_request.run for point in result.points)
+    assert all(point.run.num_requests == 256 and point.run.horizon_s == 900 for point in result.points)
+    assert all(point.run.num_requests == 0 and point.run.horizon_s == 2000 for point in result.validation_points)
 
 
 @pytest.mark.asyncio
@@ -491,8 +605,9 @@ async def test_joint_sweep_engine_variants_and_concurrency_preserve_attribution(
     before = joint_request.model_dump()
     result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
     assert result.search_complete
-    assert len(result.points) == len(calls) == 8
-    assert len(result.recommendations) == 8
+    assert len(result.points) == 8
+    assert len(calls) == 10
+    assert len(result.recommendations) == 2
     assert len({point.fingerprint for point in result.points}) == 8
     assert all(call.workload.request_rate is None for call in calls)
     assert {call.workload.concurrency for call in calls} == {2}
@@ -837,7 +952,7 @@ async def test_sweep_retains_failure_diagnostics_without_guessing_feasibility(
         point = result.points[0]
         expected = hashlib.sha256(
             json.dumps(
-                point.model_dump(mode="json", exclude={"evaluation", "execution"}),
+                point.model_dump(mode="json", exclude={"evaluation", "execution", "measured_duration_s"}),
                 sort_keys=True,
                 separators=(",", ":"),
                 allow_nan=False,
@@ -872,6 +987,22 @@ def topology_executor(result_case, monkeypatch):
         assert not isinstance(bundle, Problem), bundle
         payload = deepcopy(template)
         payload["metrics"]["ttft_mean_ms"] = request.configuration.roles[0].tp * 10
+        if request.run.num_requests == 0:
+            count = int(request.run.horizon_s * (request.workload.request_rate or 2))
+            payload["requests"].update(generated=count, injected=count, completed=count)
+            payload["window"].update(duration_s=request.run.horizon_s, requests=count)
+            payload["metrics"]["request_throughput"] = count / request.run.horizon_s
+        elif request.run.num_requests != template["input"]["run"]["num_requests"]:
+            count = request.run.num_requests
+            payload["requests"].update(generated=count, injected=count, completed=count)
+            payload["window"].update(duration_s=count / 2, requests=count)
+            payload["metrics"]["request_throughput"] = 2
+        payload["input"]["run"].update(
+            num_requests=max(payload["requests"]["generated"], 1)
+            if request.run.num_requests == 0
+            else request.run.num_requests,
+            horizon_s=request.run.horizon_s,
+        )
         scenario, deployment = yaml.safe_load_all((destination / "inputs/scenarios/deployment.yaml").read_text())
         payload["input"].update(scenario=scenario, deployment=deployment)
         payload["input"]["run"]["load"] = (
@@ -1108,8 +1239,9 @@ async def test_managed_sweep_retains_completed_evidence_when_cancelled(
     assert not result.search_complete
     if sweep is _search_joint:
         assert [point.evaluation.status for point in result.points] == ["succeeded", "cancelled"]
-        assert len(result.recommendations) == 1
-        assert result.recommendations[0].workload.request_rate == 2
+        assert result.recommendations == []
+        assert not result.validation_complete
+        assert result.points[0].workload.request_rate == 2
     elif sweep is _sweep_capacity:
         assert [point.evaluation.status for point in result.points] == ["succeeded", "cancelled"]
         assert result.feasible_loads == [1]
