@@ -107,7 +107,7 @@ For an upgrade:
    released version in `pyproject.toml`; a passing matrix on `main` may not
    exist in a published wheel.
 2. Install from the repository root with
-   `.venv/bin/python -m pip install -e '.[embedded-db,ldap]'`.
+   `.venv/bin/python -m pip install -e apps/lens -e 'apps/backend[embedded-db,ldap]'`.
 3. Run `.venv/bin/python -m pip check` and
    `.venv/bin/python -m pytest apps/backend/tests/unit/aic apps/backend/tests/unit/configuration -q`.
 4. Check both support flags and an actual candidate search for the target model,

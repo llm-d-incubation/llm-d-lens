@@ -232,7 +232,7 @@ myvendor_lens_hardware = ["profiles/*.json"]
 - `profiles/` 下的内置 profile JSON 会被自动加载；每个 **provider** 以及每个**外部 profile** 都是通过这些入口点组被发现的。
   没有其他隐式注册方式——**未注册的硬件一旦被显式使用就会被拒绝。**
 - 将插件安装到**后端**的 Python 环境中；更改入口点后需要重新安装/重启
-  （内置使用 `pip install -e .`，外部插件使用 `pip install <你的包>`），否则不会被发现。
+  （内置在仓库根目录使用 `pip install -e apps/lens -e apps/backend`，外部插件使用 `pip install <你的包>`），否则不会被发现。
 
 ---
 
@@ -322,7 +322,7 @@ npm run build   # 如果你改动了前端/网关的消费方代码
 | 现象 | 原因 | 解决方法 |
 |---|---|---|
 | 启动时出现“registration conflict” | 两个 profile 声明了相同的 `device_classes`/前缀 | 使 `id` 及身份字段唯一 |
-| 硬件没有出现 | 入口点未安装/未重新安装，或外部插件不在后端环境中 | 执行 `pip install -e .`（内置）或 `pip install <插件>`（外部），然后重启 |
+| 硬件没有出现 | 入口点未安装/未重新安装，或外部插件不在后端环境中 | 在仓库根目录执行 `pip install -e apps/lens -e apps/backend`（内置）或 `pip install <插件>`（外部），然后重启 |
 | 显式使用时出现 `ACCELERATOR_NOT_REGISTERED` | 没有注册 profile，或 `accelerator_keys` 缺少对应的键 | 添加 profile 或别名 |
 | 部署卡在 0 个就绪 | overlay 目录缺失 / `arch` 不对（例如写了 `cuda` 但实际目录是 `gpu`） | 使用 `upstream_variant` |
 | `ResourceClaimTemplate is missing` | 该硬件本是扩展资源却被当作 DRA 处理 | 设置 `request_model="extended-resource"` |

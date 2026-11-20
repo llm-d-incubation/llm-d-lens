@@ -134,7 +134,7 @@ jobs:
       - name: Validate Python MCP catalog and migrated API contracts
         run: |
           python -m venv .venv
-          .venv/bin/pip install -e "apps/backend[dev,embedded-db]"
+          .venv/bin/pip install -e apps/lens -e "apps/backend[dev,embedded-db]"
           node hack/generate-mcp-tools.mjs --check
           .venv/bin/python -m pytest apps/backend/tests/contract apps/backend/tests/unit/auth -q
 

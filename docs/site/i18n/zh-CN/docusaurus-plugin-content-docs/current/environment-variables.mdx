@@ -108,7 +108,8 @@ Inference Payload Processor 的 Helm chart 和版本无法通过环境变量配�
 
 完整后端变量优先于旧的只读变量；无效值会报错。修改环境变量后需重启后端。
 依赖以 `apps/backend/pyproject.toml` 为准；在后端环境中，从仓库根目录运行
-`pip install -e apps/backend` 安装。
+`pip install -e apps/lens -e apps/backend` 安装。
+引擎尚未发布到 PyPI，因此必须在同一次 pip 调用中传入这两个本地包。
 
 不支持的命令形式在**执行之前**选择 CLI；SDK 请求失败绝不会改用 CLI 重试。
 仍须安装 kubectl：客户端 apply、Helm/Kustomize、exec、端口转发、流式或按工作负载

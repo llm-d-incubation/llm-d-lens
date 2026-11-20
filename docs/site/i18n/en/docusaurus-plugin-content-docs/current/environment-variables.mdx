@@ -109,7 +109,8 @@ for target-node preflight and argument precedence.
 The full backend variable overrides the legacy read-only variable. Invalid
 values fail. Restart the backend after changing its environment. Dependencies
 come from `apps/backend/pyproject.toml`; from the repository root install them
-in the backend environment with `pip install -e apps/backend`.
+in the backend environment with `pip install -e apps/lens -e apps/backend`.
+The engine is not published on PyPI, so pass both local packages in the same pip invocation.
 
 Unsupported command forms choose CLI **before execution**; an SDK request failure
 never retries through CLI. Keep kubectl installed: client-side apply, Helm/Kustomize,
