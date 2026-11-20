@@ -1042,6 +1042,56 @@ AISimulate recommendations, including replica counts outside the ordinary candid
   </TabItem>
 </Tabs>
 
+#### Shared estimate contracts (development)
+
+The separate shared Python contract in `llm_d_lens.estimate_tools.models`
+accepts an optional `Configuration.offload` block, for example
+`{"tiers": [{"tier": "cpu_dram", "bytes": 1073741824}]}`. The current
+implementation represents one CPU KV tier with `OffloadingConnector`, either
+`CPUOffloadingSpec` or `TieringOffloadingSpec`, and LRU eviction. The managed
+BLIS profile must explicitly approve CPU offloading; requests cannot enable
+that server-owned permission. NVMe tiers, LMCache connectors and connector
+options are not represented. Disabled offloading preserves existing configuration
+fingerprints; enabled tier capacity is part of the identity.
+
+AISimulate explicitly refuses this block instead of ignoring it. These are not
+new fields on the legacy `AICEstimateRequest` or `/api/v1/aic/*` routes. Internal
+BLIS topology, capacity and joint TTFT/TPOT grid searches remain private Python
+development interfaces, without HTTP, MCP, Configuration UI or Agentic dispatch.
+Joint search also accepts an end-to-end `latency_target_ms`. At least one latency
+target is required; each selected statistic defaults to p99 and missing native
+evidence stays unknown. Omitted topology axes generate a bounded family from the
+available GPU budget and fixed PP/DP: powers of two, device-budget boundaries and
+whole-node TP groups. Explicit topology grids override generation. Configuration
+recommendation requires one explicit business load in `workload.request_rate` or
+`workload.concurrency`, preserved for every candidate. Load grids and implicit
+load generation are not accepted by recommendation. The default `mode="economic"`
+ranks target-satisfying configurations by fewer used devices, then greater measured
+throughput. `mode="performance"` prioritizes measured request throughput within
+the device budget, breaking throughput ties by lower latency (TTFT, TPOT, then
+end-to-end latency at the selected statistics), then fewer devices. At fixed QPS,
+fully served candidates may have similar throughput; this is not a capacity claim.
+The independent capacity sweep preserves a fixed configuration and evaluates an
+explicit QPS or concurrency grid, reporting feasible tested loads without ranking
+or recommending configurations.
+Recommendations include device counts and native metrics. These are best observed
+points, not global optima or promises to serve an unspecified load. Missing run
+controls inherit the managed profile's verified controls, not invented evidence.
+Only fully completed, constraint-satisfied observed points can be recommended;
+simulator results do not establish prediction accuracy or deployment approval.
+
+Private sweep results separate `execution_counts` from `constraint_counts`; the
+latter counts successful evaluations only. Grid exhaustion is not a feasibility
+proof, and finite request completion does not certify sustained business load.
+Each executed point retains `execution` metadata and at most the last 4096 bytes
+of native stderr, decoded with replacement for invalid UTF-8. The
+`stderr_tail_truncated` flag reports tail truncation separately from the execution
+output limit. Diagnostics survive temporary bundle cleanup and do not affect point
+identity. Topology search exposes failed execution metadata by configuration
+fingerprint in `execution_diagnostics`. Native stderr is diagnostic text, not a
+typed capacity verdict: unknown process failures remain failed/unknown, never
+silently classified as infeasible from memory-related wording.
+
 ### List deployment node labels
 
 List the distinct key/value labels on nodes of a cluster the caller can access. Advanced placement uses these values to populate its optional node-label selector.
