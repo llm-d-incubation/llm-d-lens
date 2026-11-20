@@ -128,7 +128,7 @@ class Workload(Contract):
 
 class RunControls(Contract):
     seed: Annotated[int, Field(strict=True, ge=0)] | None = None
-    num_requests: PositiveInt | None = None
+    num_requests: Annotated[int, Field(strict=True, ge=0)] | None = None
     horizon_s: PositiveFloat | None = None
     request_deadline_s: PositiveFloat | None = None
     wall_timeout_s: PositiveFloat | None = None
