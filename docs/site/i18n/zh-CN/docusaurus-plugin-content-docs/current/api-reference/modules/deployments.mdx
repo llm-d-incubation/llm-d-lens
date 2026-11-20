@@ -845,6 +845,43 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
   </TabItem>
 </Tabs>
 
+#### 共享估算契约（开发中）
+
+独立的共享 Python 契约 `llm_d_lens.estimate_tools.models` 接受可选的
+`Configuration.offload` 配置，例如
+`{"tiers": [{"tier": "cpu_dram", "bytes": 1073741824}]}`。当前实现支持单个 CPU KV 层、
+`OffloadingConnector`、`CPUOffloadingSpec` 或 `TieringOffloadingSpec`，以及 LRU 淘汰策略。
+托管 BLIS profile 必须显式批准 CPU offloading；请求不能开启这项服务器权限。
+当前不表达 NVMe 层、LMCache 连接器或连接器选项。关闭 offloading 时保留旧配置指纹，
+开启时层容量会参与配置身份计算。
+
+AISimulate 会显式拒绝该配置，不会忽略它。这不是旧版 `AICEstimateRequest` 或
+`/api/v1/aic/*` 接口的新增字段。BLIS 拓扑、容量和 TTFT/TPOT 联合网格搜索仍是私有
+Python 开发接口，尚未接入 HTTP、MCP、配置页面或 Agentic 调度。只有完整完成且满足
+约束的已观测点才可成为推荐；模拟结果不代表预测准确性认证或部署批准。
+
+联合搜索还接受总延迟目标 `latency_target_ms`。至少需要一种延迟目标，各指标统计口径
+默认 p99；缺失原生证据时保持未知。省略拓扑网格时，按可用 GPU 预算及固定 PP/DP
+生成有限候选，包括二次幂、设备预算边界和整节点 TP 分组；显式网格可覆盖自动生成。
+配置推荐必须通过 `workload.request_rate` 或 `workload.concurrency` 指定一个业务负载，
+所有候选均保留该负载，不接受负载网格，也不自动生成负载。
+默认 `mode="economic"` 按满足目标后设备数最少、再按实测吞吐量较大排序；
+`mode="performance"` 在设备预算内优先实测请求吞吐量，吞吐量相同时依次比较所选统计
+口径下的 TTFT、TPOT、总延迟，再优先设备数较少的配置。固定 QPS 下，完整承载的候选
+可能具有相近吞吐量，这不表示其容量上限。独立容量探测保持配置不变，扫描显式 QPS
+或并发网格，仅报告已测试的可行负载，不排序或推荐配置。推荐结果包含设备数
+及原生指标，只表示已观测候选中的最优点，不是全局最优或承载未声明负载的保证。
+缺失的运行控制继承托管 profile 已验证的设置，不会虚构执行证据。
+
+私有扫描结果通过 `execution_counts` 与 `constraint_counts` 分开统计执行状态和约束
+结果，后者仅统计成功执行的点。网格遍历完成不表示配置可行，有限请求全部完成也不
+证明持续承载业务负载。已执行点的 `execution` 保留执行元数据及原生 stderr 最后最多
+4096 字节，无效 UTF-8 使用替换字符解码；`stderr_tail_truncated` 独立于执行输出上限
+标记诊断尾部是否被截断。诊断在临时目录清理后仍保留，不参与点指纹。拓扑搜索通过
+`execution_diagnostics` 按配置指纹保留失败执行元数据。原生 stderr 仅是诊断文本，
+不是结构化容量结论；未知进程失败继续保持 failed／unknown，不根据内存相关措辞
+静默判定配置不可行。
+
 ### 启动一次部署运行
 
 从一个或多个已经渲染好的可部署配置启动一次部署运行。

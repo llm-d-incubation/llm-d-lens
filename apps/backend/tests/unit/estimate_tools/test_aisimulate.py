@@ -80,6 +80,7 @@ async def test_native_search_and_experiments_delegate_unchanged(monkeypatch):
         ),
         ({"model": {"name": "model", "precision": "fp8"}}, "precision_mapping_missing"),
         ({"configuration": {"engine_settings": {"max_num_seqs": 64}}}, "settings_not_representable"),
+        ({"configuration": {"offload": {"tiers": [{"bytes": 1073741824}]}}}, "offload_not_representable"),
         ({"workload": {"request_rate": 2}}, "exact_load_not_representable"),
         ({"run": {"horizon_s": 60}}, "run_controls_not_representable"),
         ({"runtime_profiles": {"aisimulate": "unknown"}}, "unknown_runtime_profile"),

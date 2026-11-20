@@ -1,4 +1,4 @@
-"""Compile trusted BLIS inputs and provide private, bounded execution and topology search."""
+"""Compile trusted BLIS inputs and provide private, bounded execution and managed sweeps."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import Field, JsonValue, ValidationError
+from pydantic import Field, JsonValue, ValidationError, model_validator
 
 from llm_d_lens.infrastructure.process import spawn
 
@@ -29,15 +29,19 @@ from ..models import (
     EffectiveConfiguration,
     EstimateRequest,
     Evaluation,
+    KVOffload,
     Metric,
+    MetricConstraint,
     MetricDefinition,
     NonemptyString,
+    Objective,
     OptimizeRequest,
     PositiveFloat,
     PositiveInt,
     Problem,
     Request,
     RunControls,
+    SearchBudget,
     ToolSupport,
     Workload,
 )
@@ -124,6 +128,9 @@ class RuntimeProfile(Contract):
     catalog_model: NonemptyString
     catalog_hardware: NonemptyString
     catalog_fabric: NonemptyString | None = None
+    fabric_mappings: dict[NonemptyString, NonemptyString] = Field(default_factory=dict)
+    cpu_offload_enabled: bool = False
+    disagg_enabled: bool = False
     coefficient_ids: list[NonemptyString] = Field(default_factory=list)
     verified_request: EstimateRequest
     kernel_construction: Literal["unknown", "refused", "confirmed"] = "unknown"
@@ -211,6 +218,12 @@ def baseline_profile(*, binary: Path, inputs: Path) -> RuntimeProfile:
     )
 
 
+def _resolved_fabric(profile: RuntimeProfile, fabric: str | None) -> str | None:
+    if fabric == profile.verified_request.hardware.fabric:
+        return profile.catalog_fabric
+    return profile.fabric_mappings.get(fabric or "")
+
+
 def _deployment_documents(
     request: EstimateRequest,
     profile: RuntimeProfile,
@@ -222,20 +235,27 @@ def _deployment_documents(
             code="invalid_configuration", message="Request exceeds capacity or violates the estimate contract"
         )
     expected = profile.verified_request
-    if request.configuration.mode != "agg":
-        return Problem(code="mode_not_supported", message="Bundle compilation supports aggregated deployments only")
+    disaggregated = request.configuration.mode == "disagg"
+    if disaggregated and not profile.disagg_enabled:
+        return Problem(code="mode_not_supported", message="P/D compilation is not enabled by this managed profile")
+    if disaggregated and not request.configuration.router_settings:
+        return Problem(code="router_required", message="P/D compilation requires an explicit managed router")
+    if disaggregated and request.hardware.fabric is None:
+        return Problem(code="fabric_required", message="P/D compilation requires an explicit managed fabric")
     if request.model != expected.model:
         return Problem(
             code="model_mapping_missing", message="Model precision/quantization needs an approved catalog mapping"
         )
-    if (request.hardware.profile_id, request.hardware.model, request.hardware.fabric) != (
+    catalog_fabric = _resolved_fabric(profile, request.hardware.fabric)
+    if (request.hardware.profile_id, request.hardware.model) != (
         expected.hardware.profile_id,
         expected.hardware.model,
-        expected.hardware.fabric,
-    ):
+    ) or (request.hardware.fabric != expected.hardware.fabric and catalog_fabric is None):
         return Problem(code="hardware_mapping_missing", message="Hardware and fabric need approved catalog mappings")
-    if not profile.coefficient_ids or (request.hardware.fabric is not None and profile.catalog_fabric is None):
+    if not profile.coefficient_ids or (request.hardware.fabric is not None and catalog_fabric is None):
         return Problem(code="bundle_mapping_missing", message="Managed profile needs coefficient and fabric mappings")
+    if request.configuration.offload is not None and not profile.cpu_offload_enabled:
+        return Problem(code="offload_not_supported", message="CPU KV offloading is not enabled by this managed profile")
     if (request.configuration.engine, request.configuration.engine_version) != (
         expected.configuration.engine,
         expected.configuration.engine_version,
@@ -253,26 +273,50 @@ def _deployment_documents(
             code="engine_settings_not_supported", message="Engine settings need approved names and value types"
         )
 
-    role = request.configuration.roles[0]
     hardware = request.hardware
-    if (
-        max(hardware.nodes, hardware.devices_per_node, role.tp, role.pp, role.dp, role.replicas, role.device_count)
-        > 2**63 - 1
-    ):
+    roles = request.configuration.roles
+    if max(hardware.nodes, hardware.devices_per_node, sum(role.replicas for role in roles)) > 2**63 - 1:
         return Problem(code="placement_out_of_range", message="BLIS placement counts must fit signed int64")
-    if role.pp > 1 and role.dp > 1:
+    if disaggregated and any(role.dp != 1 for role in roles):
         return Problem(
-            code="parallelism_not_supported", message="The locked BLIS runtime cannot price combined PP and DP"
+            code="parallelism_not_supported",
+            message="The locked vLLM runtime does not implement P/D KV transfer with DP",
         )
-    groups = role.pp * role.dp * role.replicas
-    if role.tp <= hardware.devices_per_node:
-        fits = groups <= hardware.nodes * (hardware.devices_per_node // role.tp)
-    else:
-        if role.tp % hardware.devices_per_node:
-            return Problem(code="placement_not_supported", message="Cross-node TP must occupy whole nodes")
-        fits = groups * (role.tp // hardware.devices_per_node) <= hardware.nodes
-    if not fits:
+    pools: list[dict[str, JsonValue]] = []
+    required_nodes = 0
+    for role in roles:
+        if max(role.tp, role.pp, role.dp, role.replicas, role.device_count) > 2**63 - 1:
+            return Problem(code="placement_out_of_range", message="BLIS placement counts must fit signed int64")
+        if role.pp > 1 and role.dp > 1:
+            return Problem(
+                code="parallelism_not_supported", message="The locked BLIS runtime cannot price combined PP and DP"
+            )
+        groups = role.pp * role.dp * role.replicas
+        if role.tp <= hardware.devices_per_node:
+            groups_per_node = hardware.devices_per_node // role.tp
+            nodes = (groups + groups_per_node - 1) // groups_per_node
+        else:
+            if role.tp % hardware.devices_per_node:
+                return Problem(code="placement_not_supported", message="Cross-node TP must occupy whole nodes")
+            nodes = groups * (role.tp // hardware.devices_per_node)
+        required_nodes += nodes
+        pools.append(
+            {
+                "role": role.role,
+                "nodes": nodes if disaggregated else hardware.nodes,
+                "parallel": {
+                    "tp": role.tp,
+                    "pp": role.pp,
+                    "dp": role.dp,
+                    "enable_expert_parallel": role.expert_parallel,
+                },
+                "engine": dict(settings),
+            }
+        )
+    if required_nodes > hardware.nodes:
         return Problem(code="placement_impossible", message="TP groups cannot be placed within the available nodes")
+    if disaggregated:
+        pools[-1]["nodes"] = nodes + hardware.nodes - required_nodes
 
     name = f"lens-{EffectiveConfiguration.from_request(request).fingerprint[:16]}"
     cluster: dict[str, JsonValue] = {
@@ -280,8 +324,8 @@ def _deployment_documents(
         "nodes": hardware.nodes,
         "gpus_per_node": hardware.devices_per_node,
     }
-    if profile.catalog_fabric is not None:
-        cluster["fabric"] = profile.catalog_fabric
+    if catalog_fabric is not None:
+        cluster["fabric"] = catalog_fabric
     scenario: dict[str, JsonValue] = {
         "kind": "Scenario",
         "name": name,
@@ -293,20 +337,12 @@ def _deployment_documents(
     deployment: dict[str, JsonValue] = {
         "kind": "Deployment",
         "name": name,
-        "pools": [
-            {
-                "role": "colocated",
-                "nodes": hardware.nodes,
-                "parallel": {
-                    "tp": role.tp,
-                    "pp": role.pp,
-                    "dp": role.dp,
-                    "enable_expert_parallel": role.expert_parallel,
-                },
-                "engine": dict(settings),
-            }
-        ],
+        "pools": list(pools),
     }
+    if disaggregated:
+        deployment["pd_transfer"] = {"connector": "NixlConnector"}
+    if request.configuration.offload is not None:
+        deployment["offload"] = request.configuration.offload.model_dump(mode="json")
     return scenario, deployment
 
 
@@ -409,8 +445,9 @@ def _compile_bundle(
             f"catalog/hardware/{profile.catalog_hardware}.yaml",
             *(f"registry/coefficients/{name}.yaml" for name in profile.coefficient_ids),
         ]
-        if profile.catalog_fabric is not None:
-            references.append(f"catalog/networks/{profile.catalog_fabric}.yaml")
+        catalog_fabric = _resolved_fabric(profile, request.hardware.fabric)
+        if catalog_fabric is not None:
+            references.append(f"catalog/networks/{catalog_fabric}.yaml")
         for reference in references:
             _contained_input(profile.inputs, reference)
         destination.mkdir(mode=0o700)
@@ -436,7 +473,7 @@ def _compile_bundle(
         snapshot = {
             "request": request.model_dump(mode="json"),
             "effective_configuration": EffectiveConfiguration.from_request(request).model_dump(mode="json"),
-            "num_instances": request.configuration.roles[0].replicas,
+            "num_instances": sum(role.replicas for role in request.configuration.roles),
         }
         (destination / "effective-input.json").write_text(
             json.dumps(snapshot, sort_keys=True, indent=2, allow_nan=False) + "\n",
@@ -468,7 +505,16 @@ def _compile_bundle(
                 "--seed",
                 str(request.run.seed),
                 "--num-instances",
-                str(request.configuration.roles[0].replicas),
+                str(sum(role.replicas for role in request.configuration.roles)),
+                *(
+                    [
+                        argument
+                        for role in request.configuration.roles
+                        for argument in (f"--{role.role}-instances", str(role.replicas))
+                    ]
+                    if request.configuration.mode == "disagg"
+                    else []
+                ),
             ],
         )
         (destination / "manifest.json").write_text(bundle.model_dump_json(indent=2) + "\n", encoding="utf-8")
@@ -622,7 +668,9 @@ def _assess_constraints(
     warnings = []
     assessments = []
     pending = counts.still_queued + counts.still_running + counts.gateway_queue_depth
-    complete = counts.generated == request.run.num_requests and counts.completed == counts.generated
+    complete = (request.run.num_requests == 0 or counts.generated == request.run.num_requests) and (
+        counts.completed == counts.generated
+    )
     complete = complete and counts.length_capped == 0
     if not complete:
         warnings.append("Run did not successfully complete the full requested workload")
@@ -639,7 +687,7 @@ def _assess_constraints(
                 if failures / counts.generated <= request.constraints.max_failure_fraction
                 else "not_satisfied"
             )
-            if pending or counts.generated != request.run.num_requests:
+            if pending or (request.run.num_requests != 0 and counts.generated != request.run.num_requests):
                 if assessments[-1] == "satisfied":
                     assessments[-1] = "unknown"
                 warnings.append("Unfinished or ungenerated requests prevent certifying the final failure fraction")
@@ -753,7 +801,9 @@ def _parse_result(
             "deployment": deployment,
             "run": {
                 "load": load,
-                "num_requests": request.run.num_requests,
+                "num_requests": (
+                    max(result.requests.generated, 1) if request.run.num_requests == 0 else request.run.num_requests
+                ),
                 "seed": request.run.seed,
                 "horizon_s": request.run.horizon_s,
             },
@@ -769,8 +819,12 @@ def _parse_result(
         allowed_overrides = {
             "workload-spec": f"sha256:{file_digest(directory / 'inputs/workload.yaml')}",
             "seed": str(request.run.seed),
-            "num-instances": str(request.configuration.roles[0].replicas),
+            "num-instances": str(sum(role.replicas for role in request.configuration.roles)),
         }
+        if request.configuration.mode == "disagg":
+            allowed_overrides.update(
+                {f"{role.role}-instances": str(role.replicas) for role in request.configuration.roles}
+            )
         overrides = result.overrides or []
         seen = set()
         for override in overrides:
@@ -785,7 +839,10 @@ def _parse_result(
             seen.add(setting)
         if "workload-spec" not in seen:
             raise ValueError("Result does not identify the compiled workload digest")
-        if request.configuration.roles[0].replicas != 1 and "num-instances" not in seen:
+        required_instances = {name for name in allowed_overrides if name.endswith("-instances")}
+        if request.configuration.mode == "agg" and request.configuration.roles[0].replicas == 1:
+            required_instances.clear()
+        if required_instances - seen:
             raise ValueError("Result does not confirm the requested instance count")
     except (OSError, ValueError, TypeError, KeyError, yaml.YAMLError):
         return Evaluation(
@@ -805,7 +862,7 @@ def _parse_result(
         if (
             result.requests.generated != result.requests.rejected + result.requests.injected
             or result.requests.injected != buckets
-            or result.requests.generated > request.run.num_requests
+            or (request.run.num_requests != 0 and result.requests.generated > request.run.num_requests)
             or result.requests.length_capped > result.requests.completed
             or result.window.requests > result.requests.completed
         ):
@@ -851,6 +908,33 @@ def _parse_result(
         warnings.append("Native coefficient provenance is missing; prediction evidence remains unknown")
         if assessment == "satisfied":
             assessment = "unknown"
+    provenance: dict[str, JsonValue] = {"coefficient_ids": list(profile.coefficient_ids), "kernel": result.kernel or {}}
+    evidence_known = bool(result.kernel)
+    if request.configuration.mode == "disagg":
+        pd_breakdown = (result.breakdowns or {}).get("pd")
+        pd_requests = pd_breakdown.get("disaggregated_requests") if isinstance(pd_breakdown, dict) else None
+        router_requirements = (result.router or {}).get("requirements")
+        evidence_known = (
+            all(
+                isinstance((result.kernel or {}).get(role), dict) and result.kernel[role]
+                for role in ("prefill", "decode")
+            )
+            and isinstance(pd_breakdown, dict)
+            and type(pd_requests) in (int, float)
+            and 0 <= pd_requests <= result.requests.injected
+            and int(pd_requests) == pd_requests
+            and isinstance(router_requirements, dict)
+            and router_requirements.get("Disaggregates") is True
+        )
+        provenance["pd"] = {
+            "transfer": deployment.get("pd_transfer"),
+            "breakdowns": pd_breakdown,
+            "router": result.router,
+        }
+        if not evidence_known:
+            warnings.append("Native P/D role, router or handoff evidence is missing; feasibility remains unknown")
+            if assessment == "satisfied":
+                assessment = "unknown"
     warnings.append("Simulation integration evidence does not establish prediction accuracy or deployment approval")
     return Evaluation(
         tool="blis",
@@ -862,9 +946,9 @@ def _parse_result(
         metrics=metrics,
         request_accounting=counts,
         revisions=revisions,
-        coefficient_provenance={"coefficient_ids": list(profile.coefficient_ids), "kernel": result.kernel or {}},
+        coefficient_provenance=provenance,
         resolved_input_digest=manifest.input_digest,
-        evidence_maturity="experimental" if result.kernel else "unknown",
+        evidence_maturity="experimental" if evidence_known else "unknown",
         warnings=warnings,
     )
 
@@ -881,6 +965,8 @@ class _ExecutionResult(Contract):
     stdout_bytes: int
     stderr_bytes: int
     output_truncated: bool
+    stderr_tail: str = Field(default="", max_length=4096)
+    stderr_tail_truncated: bool = False
     error: Problem | None = None
 
 
@@ -896,6 +982,503 @@ class _TopologySearchResult(Contract):
     ranked_fingerprints: list[Digest]
     search_complete: bool
     termination_reason: Problem | None = None
+    execution_counts: dict[str, int] = Field(default_factory=dict)
+    constraint_counts: dict[str, int] = Field(default_factory=dict)
+    execution_diagnostics: dict[Digest, _ExecutionResult] = Field(default_factory=dict)
+
+
+class _DisaggSearchSpace(Contract):
+    prefill_tensor_parallel: list[PositiveInt] = Field(min_length=1)
+    prefill_replicas: list[PositiveInt] = Field(min_length=1)
+    decode_tensor_parallel: list[PositiveInt] = Field(min_length=1)
+    decode_replicas: list[PositiveInt] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def check_grid(self) -> _DisaggSearchSpace:
+        for values in (
+            self.prefill_tensor_parallel,
+            self.prefill_replicas,
+            self.decode_tensor_parallel,
+            self.decode_replicas,
+        ):
+            if len(set(values)) != len(values):
+                raise ValueError("P/D search grids must not contain duplicates")
+        return self
+
+
+class _DisaggSearchRequest(Request):
+    operation: Literal["optimize"] = "optimize"
+    objective: Objective
+    budget: SearchBudget
+    space: _DisaggSearchSpace
+
+
+class _SweepPoint(Contract):
+    effective_configuration: EffectiveConfiguration
+    workload: Workload
+    run: RunControls
+    evaluation: Evaluation
+    execution: _ExecutionResult | None = None
+    measured_duration_s: float | None = None
+
+    @property
+    def fingerprint(self) -> str:
+        encoded = json.dumps(
+            self.model_dump(mode="json", exclude={"evaluation", "execution", "measured_duration_s"}),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+class _JointSearchSpace(Contract):
+    tensor_parallel: list[PositiveInt] = Field(default_factory=list)
+    replicas: list[PositiveInt] = Field(default_factory=list)
+    fabrics: list[NonemptyString | None] = Field(default_factory=list)
+    engine_settings: list[dict[str, JsonValue]] = Field(default_factory=lambda: [{}], min_length=1)
+    offloads: list[KVOffload | None] = Field(default_factory=list)
+    ttft_target_ms: PositiveFloat | None = None
+    tpot_target_ms: PositiveFloat | None = None
+    latency_target_ms: PositiveFloat | None = None
+    ttft_statistic: Literal["mean", "p50", "p90", "p95", "p99"] = "p99"
+    tpot_statistic: Literal["mean", "p50", "p90", "p99"] = "p99"
+    latency_statistic: Literal["mean", "p50", "p90", "p95", "p99"] = "p99"
+
+    @model_validator(mode="after")
+    def check_grid(self) -> _JointSearchSpace:
+        if all(target is None for target in (self.ttft_target_ms, self.tpot_target_ms, self.latency_target_ms)):
+            raise ValueError("Joint search requires at least one TTFT, TPOT or end-to-end latency target")
+        for values in (self.tensor_parallel, self.replicas, self.fabrics):
+            if len(set(values)) != len(values):
+                raise ValueError("Joint search grids must not contain duplicates")
+        settings = [json.dumps(value, sort_keys=True, separators=(",", ":")) for value in self.engine_settings]
+        if len(set(settings)) != len(settings):
+            raise ValueError("Joint engine-setting variants must not contain duplicates")
+        offloads = [value.model_dump_json() if value is not None else "null" for value in self.offloads]
+        if len(set(offloads)) != len(offloads):
+            raise ValueError("Joint offload variants must not contain duplicates")
+        return self
+
+
+_RecommendationMode = Literal["economic", "performance"]
+
+
+class _JointSweepRequest(Request):
+    operation: Literal["optimize"] = "optimize"
+    space: _JointSearchSpace
+    budget: SearchBudget = Field(
+        default_factory=lambda: SearchBudget(max_evaluations=256, parallelism=4, wall_duration_s=120)
+    )
+    mode: _RecommendationMode = "economic"
+    validation_horizon_s: PositiveFloat = 2000
+    validation_min_throughput_fraction: Annotated[float, Field(strict=True, gt=0, le=1)] = 0.99
+
+    @model_validator(mode="before")
+    @classmethod
+    def constant_token_defaults(cls, value: object) -> object:
+        if isinstance(value, dict) and isinstance(value.get("workload", {}), dict):
+            workload = {"distribution": "constant", **value.get("workload", {})}
+            return {**value, "workload": workload}
+        return value
+
+
+class _DisaggJointSweepRequest(_DisaggSearchRequest):
+    mode: _RecommendationMode = "economic"
+    validation_horizon_s: PositiveFloat = 2000
+    validation_min_throughput_fraction: Annotated[float, Field(strict=True, gt=0, le=1)] = 0.99
+
+
+class _JointRecommendation(Contract):
+    effective_configuration: EffectiveConfiguration
+    point_fingerprint: Digest
+    workload: Workload
+    measured_throughput: PositiveFloat
+    throughput_per_device: PositiveFloat
+    device_count: PositiveInt
+    metrics: list[Metric]
+
+
+class _GridSearchResult(Contract):
+    points: list[_SweepPoint]
+    search_complete: bool
+    termination_reason: Problem | None = None
+    execution_counts: dict[str, int] = Field(default_factory=dict)
+    constraint_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class _CapacitySweepResult(_GridSearchResult):
+    load_kind: Literal["request_rate", "concurrency"]
+    feasible_loads: list[PositiveFloat | PositiveInt]
+    highest_feasible_load: PositiveFloat | PositiveInt | None
+    warnings: list[str] = Field(
+        default_factory=lambda: [
+            "Only evaluated loads are reported; the highest feasible load is not an untested capacity bound",
+            "Grid completion does not prove feasibility; failed evaluations remain unknown, not infeasible",
+            "Simulation integration evidence does not establish prediction accuracy or deployment approval",
+        ]
+    )
+
+
+class _JointSweepResult(_GridSearchResult):
+    recommendations: list[_JointRecommendation]
+    mode: _RecommendationMode
+    validation_points: list[_SweepPoint] = Field(default_factory=list)
+    validation_complete: bool = False
+    validation_termination_reason: Problem | None = None
+    validation_horizon_s: PositiveFloat = 2000
+    validation_min_throughput_fraction: PositiveFloat = 0.99
+    warnings: list[str] = Field(
+        default_factory=lambda: [
+            "Recommendations cover only evaluated grid points, not untested capacity or a global optimum",
+            "Grid completion does not prove feasibility; failed evaluations remain unknown, not infeasible",
+            "Recommendations require unphased horizon validation; this is not a steady-state capacity proof",
+            "Open-loop validation requires zero observed losses and the declared E2E-tail-adjusted completion fraction",
+            "Native ITL is per-request TPOT excluding the first token, not per-token latency",
+            "Simulation integration evidence does not establish prediction accuracy or deployment approval",
+        ]
+    )
+
+
+def _geometric_counts(maximum: int) -> list[int]:
+    maximum = min(maximum, 2**63 - 1)
+    return sorted({1 << power for power in range(maximum.bit_length())} | {maximum}) if maximum > 0 else []
+
+
+def _assess_joint_validation(point: _SweepPoint, request: _JointSweepRequest | _DisaggJointSweepRequest) -> bool:
+    evaluation = point.evaluation
+    if evaluation.status != "succeeded":
+        return False
+    if point.measured_duration_s is None or point.measured_duration_s < 0.99 * request.validation_horizon_s:
+        evaluation.constraint_assessment = "unknown"
+        evaluation.warnings.append("Native measured window did not cover the validation horizon")
+        return False
+    counts = evaluation.request_accounting
+    losses = sum(
+        counts.get(name, 0)
+        for name in (
+            "rejected",
+            "dropped_unservable",
+            "timed_out",
+            "routing_rejections",
+            "gateway_queue_rejected",
+            "gateway_evicted",
+            "gateway_expired",
+            "encode_routing_rejections",
+            "length_capped",
+        )
+    )
+    completed = counts.get("completed", 0)
+    mean_e2e_s = next(
+        (
+            metric.value / 1000
+            for metric in evaluation.metrics
+            if metric.name == "e2e_mean_ms"
+            and metric.formula == "e2el"
+            and metric.statistic == "mean"
+            and metric.window == "simulated:first_arrival_after_warmup:last_completion"
+        ),
+        0,
+    )
+    completion_window_s = request.validation_horizon_s - mean_e2e_s
+    if completion_window_s <= 0:
+        evaluation.constraint_assessment = "unknown"
+        evaluation.warnings.append("Mean E2E spans the validation horizon; completion capacity is unknown")
+        return False
+    completion_rate = completed / completion_window_s
+    evaluation.warnings.append(
+        f"Unphased completion check: {completed} / ({request.validation_horizon_s:g}s - "
+        f"{mean_e2e_s:g}s mean E2E); required offered-load fraction "
+        f"{request.validation_min_throughput_fraction:g}. This tail correction is not a stability proof"
+    )
+    if (
+        losses
+        or not completed
+        or (
+            request.workload.request_rate is not None
+            and completion_rate < request.workload.request_rate * request.validation_min_throughput_fraction
+        )
+    ):
+        evaluation.constraint_assessment = "not_satisfied"
+        evaluation.warnings.append("Horizon validation failed request-loss or offered-load completion checks")
+    return evaluation.constraint_assessment == "satisfied"
+
+
+async def _search_joint(
+    request: _JointSweepRequest | _DisaggJointSweepRequest,
+    profile: RuntimeProfile,
+    directory: Path,
+    cancel_event: asyncio.Event,
+    *,
+    limits: _SearchLimits | None = None,
+    execution_limits: _ExecutionLimits | None = None,
+) -> _JointSweepResult | Problem:
+    """Recommend budgeted configurations for a fixed business workload and latency targets.
+
+    Omitted topology axes use powers of two plus budget boundaries, with fixed PP/DP.
+    Economic mode minimizes devices; performance mode maximizes validated throughput.
+    Screening defaults to 256 requests; recommendations require a separate unphased
+    horizon run. Both stages consume the same evaluation and wall-time budgets.
+    Private P/D requests retain their explicit role grids and managed-profile gate.
+    Neither mode scans or invents loads; capacity sweeps have a separate entry. Statistics default
+    to p99 and use exact native definitions. All points retain evidence and identity;
+    public dispatch and unapproved native settings remain disabled.
+    """
+    request = type(request).model_validate(request.model_dump())
+    limits = _SearchLimits.model_validate((limits or _SearchLimits()).model_dump())
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + min(request.budget.wall_duration_s, limits.wall_duration_s)
+    disaggregated = isinstance(request, _DisaggJointSweepRequest)
+    if request.configuration.mode != ("disagg" if disaggregated else "agg"):
+        return Problem(code="search_mode_not_supported", message="Joint search request and deployment mode must match")
+    if disaggregated and not profile.disagg_enabled:
+        return Problem(code="mode_not_supported", message="P/D search is not enabled by this managed profile")
+    if request.workload.distribution != "constant":
+        return Problem(code="distribution_not_supported", message="Joint search requires constant token lengths")
+    if (
+        isinstance(request, _JointSweepRequest)
+        and request.space.tpot_target_ms is not None
+        and request.workload.output_tokens < 2
+    ):
+        return Problem(code="tpot_not_observable", message="A TPOT target requires at least two output tokens")
+    request.run = RunControls.model_validate(
+        {
+            **profile.verified_request.run.model_dump(),
+            "num_requests": 256,
+            "horizon_s": 900,
+            **request.run.model_dump(exclude_none=True),
+        }
+    )
+    if request.run.num_requests == 0:
+        return Problem(code="screening_requests_required", message="Quick screening requires a positive request count")
+    topologies = None
+    if isinstance(request, _JointSweepRequest) and (not request.space.tensor_parallel or not request.space.replicas):
+        available = min(request.hardware.device_count, request.constraints.max_devices or request.hardware.device_count)
+        role = request.configuration.roles[0]
+        group_size = role.pp * role.dp
+        maximum_tp = available // group_size
+        node_size = request.hardware.devices_per_node
+        tensor_parallel = request.space.tensor_parallel or sorted(
+            set(_geometric_counts(maximum_tp))
+            | {nodes * node_size for nodes in _geometric_counts(maximum_tp // node_size)}
+        )
+        if max(len(tensor_parallel), len(request.space.replicas)) > limits.max_grid_size:
+            return Problem(code="search_grid_too_large", message="Topology axis exceeds the server-owned size limit")
+        topologies = []
+        for tp in sorted(tensor_parallel):
+            replicas = request.space.replicas or _geometric_counts(available // (tp * group_size))
+            for replica_count in sorted(replicas):
+                if tp * group_size * replica_count <= available:
+                    topologies.append((tp, replica_count))
+                    if len(topologies) > limits.max_grid_size:
+                        return Problem(
+                            code="search_grid_too_large", message="Topology grid exceeds the server-owned limit"
+                        )
+        if not topologies:
+            return Problem(code="no_budgeted_topologies", message="No generated topology fits the device budget")
+    variants = [
+        json.dumps({**request.configuration.engine_settings, **patch}, sort_keys=True)
+        for patch in (request.space.engine_settings if isinstance(request, _JointSweepRequest) else [{}])
+    ]
+    if len(set(variants)) != len(variants):
+        return Problem(code="duplicate_configuration", message="Engine variants produce duplicate effective settings")
+    targets = (
+        ("ttft", "ttft", request.space.ttft_statistic, request.space.ttft_target_ms),
+        ("itl", "tpot_excl_first", request.space.tpot_statistic, request.space.tpot_target_ms),
+        ("e2e", "e2el", request.space.latency_statistic, request.space.latency_target_ms),
+    ) if isinstance(request, _JointSweepRequest) else ()
+    for family, formula, statistic, target in targets:
+        if target is None:
+            continue
+        request.constraints.metrics.append(
+            MetricConstraint(
+                metric=MetricDefinition(
+                    name=f"{family}_{statistic}_ms",
+                    unit="ms",
+                    statistic=statistic,
+                    formula=formula,
+                    population="per_request",
+                    window="simulated:first_arrival_after_warmup:last_completion",
+                ),
+                comparison="le",
+                threshold=target,
+            )
+        )
+    latency_names = (
+        (f"ttft_{request.space.ttft_statistic}_ms", f"itl_{request.space.tpot_statistic}_ms",
+         f"e2e_{request.space.latency_statistic}_ms")
+        if isinstance(request, _JointSweepRequest)
+        else tuple(constraint.metric.name for constraint in request.constraints.metrics)
+    )
+    result = await _search_grid(
+        request,
+        profile,
+        directory,
+        cancel_event,
+        limits=limits,
+        execution_limits=execution_limits,
+        topologies=topologies,
+    )
+    if isinstance(result, Problem):
+        return result
+    throughput_definition = MetricDefinition(
+        name="request_throughput",
+        unit="requests_per_s",
+        statistic="rate",
+        formula="request_throughput",
+        population="per_request",
+        window="simulated:first_arrival_after_warmup:last_completion",
+    )
+    ranked = []
+    for point in result.points:
+        evaluation = point.evaluation
+        if (
+            evaluation.status != "succeeded"
+            or evaluation.constraint_assessment != "satisfied"
+            or request.run.num_requests is None
+            or evaluation.request_accounting.get("completed") != request.run.num_requests
+            or evaluation.request_accounting.get("length_capped") != 0
+        ):
+            continue
+        matches = [
+            metric.value
+            for metric in evaluation.metrics
+            if MetricDefinition.model_validate(metric.model_dump(exclude={"value"})) == throughput_definition
+        ]
+        if len(matches) != 1 or matches[0] <= 0:
+            continue
+        devices = sum(role.device_count for role in point.effective_configuration.configuration.roles)
+        recommendation = _JointRecommendation(
+            effective_configuration=point.effective_configuration,
+            point_fingerprint=point.fingerprint,
+            workload=point.workload,
+            measured_throughput=matches[0],
+            throughput_per_device=matches[0] / devices,
+            device_count=devices,
+            metrics=evaluation.metrics,
+        )
+        latency_ties = tuple(
+            metric.value
+            for name in latency_names
+            for metric in evaluation.metrics
+            if metric.name == name
+        )
+        key = (
+            (devices, -matches[0], latency_ties, point.fingerprint)
+            if request.mode == "economic"
+            else (-matches[0], latency_ties, devices, point.fingerprint)
+        )
+        ranked.append((key, recommendation))
+    recommendations = {}
+    for _, recommendation in sorted(ranked, key=lambda entry: entry[0]):
+        recommendations.setdefault(recommendation.effective_configuration.fingerprint, recommendation)
+    validation_points = []
+    validated = []
+    validation_reason = None
+    validation_complete = True
+    maximum = min(request.budget.max_evaluations, limits.max_evaluations)
+    for candidate in recommendations.values():
+        if request.mode == "economic" and validated and candidate.device_count > validated[0].device_count:
+            break
+        if cancel_event.is_set() or loop.time() >= deadline or len(result.points) + len(validation_points) >= maximum:
+            validation_complete = False
+            validation_reason = Problem(
+                code="validation_cancelled" if cancel_event.is_set() else "validation_budget_exhausted",
+                message="Formal validation stopped before all competitive candidates were checked",
+            )
+            break
+        validation = request.model_copy(deep=True)
+        validation.hardware = candidate.effective_configuration.hardware.model_copy(deep=True)
+        validation.configuration = candidate.effective_configuration.configuration.model_copy(deep=True)
+        if isinstance(validation, _DisaggJointSweepRequest):
+            roles = {role.role: role for role in validation.configuration.roles}
+            validation.space.prefill_tensor_parallel = [roles["prefill"].tp]
+            validation.space.prefill_replicas = [roles["prefill"].replicas]
+            validation.space.decode_tensor_parallel = [roles["decode"].tp]
+            validation.space.decode_replicas = [roles["decode"].replicas]
+        else:
+            role = validation.configuration.roles[0]
+            validation.space.tensor_parallel = [role.tp]
+            validation.space.replicas = [role.replicas]
+            validation.space.fabrics = [validation.hardware.fabric]
+            validation.space.engine_settings = [{}]
+            validation.space.offloads = [validation.configuration.offload]
+        validation.run.num_requests = 0
+        validation.run.horizon_s = request.validation_horizon_s
+        validation.constraints.require_complete = False
+        validation.constraints.max_failure_fraction = None
+        validation.budget.max_evaluations = 1
+        validation.budget.parallelism = 1
+        validation.budget.wall_duration_s = max(1e-6, deadline - loop.time())
+        checked = await _search_grid(
+            validation,
+            profile,
+            directory,
+            cancel_event,
+            limits=limits,
+            execution_limits=execution_limits,
+        )
+        if isinstance(checked, Problem):
+            validation_complete = False
+            validation_reason = checked
+            continue
+        if not checked.search_complete:
+            validation_complete = False
+            validation_reason = checked.termination_reason
+        for point in checked.points:
+            validation_points.append(point)
+            evaluation = point.evaluation
+            if evaluation.status != "succeeded":
+                validation_complete = False
+                validation_reason = evaluation.error
+                continue
+            if not _assess_joint_validation(point, request):
+                if evaluation.constraint_assessment == "unknown":
+                    validation_complete = False
+                continue
+            matches = [
+                metric.value
+                for metric in evaluation.metrics
+                if MetricDefinition.model_validate(metric.model_dump(exclude={"value"})) == throughput_definition
+            ]
+            if len(matches) != 1 or matches[0] <= 0:
+                validation_complete = False
+                continue
+            validated.append(
+                _JointRecommendation(
+                    effective_configuration=point.effective_configuration,
+                    point_fingerprint=point.fingerprint,
+                    workload=point.workload,
+                    measured_throughput=matches[0],
+                    throughput_per_device=matches[0] / candidate.device_count,
+                    device_count=candidate.device_count,
+                    metrics=evaluation.metrics,
+                )
+            )
+
+    def validated_key(candidate: _JointRecommendation) -> tuple:
+        latency_ties = tuple(
+            metric.value
+            for name in latency_names
+            for metric in candidate.metrics
+            if metric.name == name
+        )
+        return (
+            (candidate.device_count, -candidate.measured_throughput, latency_ties, candidate.point_fingerprint)
+            if request.mode == "economic"
+            else (-candidate.measured_throughput, latency_ties, candidate.device_count, candidate.point_fingerprint)
+        )
+
+    return _JointSweepResult(
+        **result.model_dump(),
+        recommendations=sorted(validated, key=validated_key),
+        mode=request.mode,
+        validation_points=validation_points,
+        validation_complete=validation_complete,
+        validation_termination_reason=validation_reason,
+        validation_horizon_s=request.validation_horizon_s,
+        validation_min_throughput_fraction=request.validation_min_throughput_fraction,
+    )
 
 
 async def _search_topologies(
@@ -914,30 +1497,223 @@ async def _search_topologies(
     with an exact objective definition. Completion means grid exhaustion, not feasibility
     or accuracy certification. The caller owns the scratch parent; bundles are removed.
     Search caps are server-owned, and cancellation cleanup may outlive the wall budget.
-    Product dispatch, capacity, P/D, replay and cross-tool search remain disabled.
+    Product dispatch, P/D, replay and cross-tool search remain disabled.
     """
     request = OptimizeRequest.model_validate(request.model_dump())
-    limits = _SearchLimits.model_validate((limits or _SearchLimits()).model_dump())
     if request.space.mode != "find_configuration" or request.configuration.mode != "agg":
         return Problem(code="search_mode_not_supported", message="Only aggregated topology search is implemented")
+    result = await _search_grid(
+        request, profile, directory, cancel_event, limits=limits, execution_limits=execution_limits
+    )
+    if isinstance(result, Problem):
+        return result
+    return _rank_topologies(request, result)
+
+
+async def _search_disaggregated(
+    request: _DisaggSearchRequest,
+    profile: RuntimeProfile,
+    directory: Path,
+    cancel_event: asyncio.Event,
+    *,
+    limits: _SearchLimits | None = None,
+    execution_limits: _ExecutionLimits | None = None,
+) -> _TopologySearchResult | Problem:
+    """Search explicit role TP/replica grids at fixed load, PP/DP, engine and router.
+
+    The private path requires a server-approved P/D profile. Every visited point
+    consumes the shared attempt budget, including placement refusals and failures.
+    Ranking requires complete uncapped workloads and exact objective definitions;
+    no public dispatch, untested-capacity or global-optimality claim is added.
+    """
+    request = _DisaggSearchRequest.model_validate(request.model_dump())
+    if request.configuration.mode != "disagg":
+        return Problem(code="search_mode_not_supported", message="P/D search requires prefill and decode roles")
+    if not profile.disagg_enabled:
+        return Problem(code="mode_not_supported", message="P/D search is not enabled by this managed profile")
+    result = await _search_grid(
+        request, profile, directory, cancel_event, limits=limits, execution_limits=execution_limits
+    )
+    if isinstance(result, Problem):
+        return result
+    return _rank_topologies(request, result)
+
+
+def _rank_topologies(
+    request: OptimizeRequest | _DisaggSearchRequest, result: _GridSearchResult
+) -> _TopologySearchResult:
+    candidates = [
+        Candidate(
+            effective_configuration=point.effective_configuration, generated_by=["blis"], evaluations=[point.evaluation]
+        )
+        for point in result.points
+    ]
+    ranked = []
+    for candidate in candidates:
+        evaluation = candidate.evaluations[0]
+        if evaluation.status != "succeeded" or evaluation.constraint_assessment != "satisfied":
+            continue
+        if isinstance(request, _DisaggSearchRequest) and (
+            request.run.num_requests is None
+            or evaluation.request_accounting.get("completed") != request.run.num_requests
+            or evaluation.request_accounting.get("length_capped") != 0
+        ):
+            continue
+        matches = [
+            metric.value
+            for metric in evaluation.metrics
+            if MetricDefinition.model_validate(metric.model_dump(exclude={"value"})) == request.objective.metric
+        ]
+        if len(matches) != 1:
+            continue
+        fingerprint = candidate.effective_configuration.fingerprint
+        devices = sum(role.device_count for role in candidate.effective_configuration.configuration.roles)
+        ties = [devices if key == "device_count" else fingerprint for key in request.objective.tie_breaks]
+        value = matches[0] if request.objective.direction == "minimize" else -matches[0]
+        ranked.append(((value, *ties, fingerprint), fingerprint))
+    return _TopologySearchResult(
+        candidates=candidates,
+        ranked_fingerprints=[fingerprint for _, fingerprint in sorted(ranked)],
+        search_complete=result.search_complete,
+        termination_reason=result.termination_reason,
+        execution_counts=result.execution_counts,
+        constraint_counts=result.constraint_counts,
+        execution_diagnostics={
+            point.effective_configuration.fingerprint: point.execution
+            for point in result.points
+            if point.execution is not None and point.evaluation.status != "succeeded"
+        },
+    )
+
+
+async def _sweep_capacity(
+    request: OptimizeRequest,
+    profile: RuntimeProfile,
+    directory: Path,
+    cancel_event: asyncio.Event,
+    *,
+    limits: _SearchLimits | None = None,
+    execution_limits: _ExecutionLimits | None = None,
+) -> _CapacitySweepResult | Problem:
+    """Evaluate an explicit load grid at fixed topology without inferring untested capacity.
+
+    Points preserve load declarations separately from configuration fingerprints.
+    Feasibility requires successful, constraint-satisfied, fully completed requests,
+    even when the caller relaxes require_complete. No monotonicity is assumed and
+    the objective does not rank or extrapolate loads. Product dispatch stays disabled.
+    """
+    request = OptimizeRequest.model_validate(request.model_dump())
+    if request.space.mode != "find_capacity" or request.configuration.mode != "agg":
+        return Problem(code="search_mode_not_supported", message="Only aggregated capacity sweeps are implemented")
+    if request.workload.distribution != "constant":
+        return Problem(code="distribution_not_supported", message="Capacity sweeps require a constant workload")
+    result = await _search_grid(
+        request, profile, directory, cancel_event, limits=limits, execution_limits=execution_limits
+    )
+    if isinstance(result, Problem):
+        return result
+    load_kind = "request_rate" if request.space.request_rates else "concurrency"
+    feasible = [
+        getattr(point.workload, load_kind)
+        for point in result.points
+        if point.evaluation.status == "succeeded"
+        and point.evaluation.constraint_assessment == "satisfied"
+        and point.evaluation.request_accounting.get("completed") == request.run.num_requests
+        and point.evaluation.request_accounting.get("length_capped") == 0
+        and request.run.num_requests is not None
+    ]
+    return _CapacitySweepResult(
+        **result.model_dump(),
+        load_kind=load_kind,
+        feasible_loads=feasible,
+        highest_feasible_load=max(feasible, default=None),
+    )
+
+
+async def _search_grid(
+    request: OptimizeRequest | _JointSweepRequest | _DisaggSearchRequest,
+    profile: RuntimeProfile,
+    directory: Path,
+    cancel_event: asyncio.Event,
+    *,
+    limits: _SearchLimits | None = None,
+    execution_limits: _ExecutionLimits | None = None,
+    topologies: list[tuple[int, int]] | None = None,
+) -> _GridSearchResult | Problem:
+    limits = _SearchLimits.model_validate((limits or _SearchLimits()).model_dump())
     if request.budget.cross_evaluations:
-        return Problem(code="cross_evaluation_not_supported", message="Topology search does not cross-evaluate tools")
-    grid_size = len(request.space.tensor_parallel) * len(request.space.replicas)
+        return Problem(code="cross_evaluation_not_supported", message="BLIS sweeps do not cross-evaluate tools")
+    joint = isinstance(request, _JointSweepRequest)
+    disaggregated = isinstance(request, _DisaggSearchRequest)
+    capacity = isinstance(request, OptimizeRequest) and request.space.mode == "find_capacity"
+    loads = sorted(request.space.request_rates or request.space.concurrencies) if capacity else []
+    if disaggregated:
+        topology_axes = [
+            sorted(request.space.prefill_tensor_parallel),
+            sorted(request.space.prefill_replicas),
+            sorted(request.space.decode_tensor_parallel),
+            sorted(request.space.decode_replicas),
+        ]
+    else:
+        role = request.configuration.roles[0]
+        topology_axes = [
+            [role.tp] if capacity else sorted(request.space.tensor_parallel),
+            [role.replicas] if capacity else sorted(request.space.replicas),
+        ]
+    fabrics = (
+        sorted(request.space.fabrics, key=lambda value: value or "")
+        if joint and request.space.fabrics
+        else [request.hardware.fabric]
+    )
+    variants = (
+        sorted(request.space.engine_settings, key=lambda value: json.dumps(value, sort_keys=True)) if joint else [{}]
+    )
+    offloads = (
+        sorted(request.space.offloads, key=lambda value: value.model_dump_json() if value is not None else "")
+        if joint and request.space.offloads
+        else [request.configuration.offload]
+    )
+    topology_count = len(topologies) if topologies is not None else math.prod(len(axis) for axis in topology_axes)
+    grid_size = topology_count * math.prod(
+        len(values) for values in (loads if capacity else [None], fabrics, variants, offloads)
+    )
     if grid_size > limits.max_grid_size:
-        return Problem(code="search_grid_too_large", message="Topology grid exceeds the server-owned size limit")
+        return Problem(code="search_grid_too_large", message="Search grid exceeds the server-owned size limit")
     maximum = min(request.budget.max_evaluations, limits.max_evaluations)
     parallelism = min(request.budget.parallelism, limits.parallelism)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + min(request.budget.wall_duration_s, limits.wall_duration_s)
-    candidates: list[Candidate] = []
+    points: list[_SweepPoint] = []
     reason: Problem | None = None
     stopped_status: Literal["cancelled", "timed_out"] = "cancelled"
 
-    async def evaluate(tp: int, replicas: int) -> Candidate:
+    async def evaluate(
+        topology: tuple[int, ...],
+        load: float | int | None,
+        fabric: str | None,
+        settings: dict[str, JsonValue],
+        offload: KVOffload | None,
+    ) -> _SweepPoint:
         configuration = request.configuration.model_copy(deep=True)
-        configuration.roles[0].tp = tp
-        configuration.roles[0].replicas = replicas
-        effective = EffectiveConfiguration(model=request.model, hardware=request.hardware, configuration=configuration)
+        if disaggregated:
+            roles = {role.role: role for role in configuration.roles}
+            roles["prefill"].tp, roles["prefill"].replicas, roles["decode"].tp, roles["decode"].replicas = topology
+        else:
+            configuration.roles[0].tp, configuration.roles[0].replicas = topology
+        configuration.engine_settings.update(settings)
+        configuration.offload = offload
+        hardware = request.hardware.model_copy(deep=True)
+        hardware.fabric = fabric
+        workload = request.workload.model_copy(deep=True)
+        if capacity:
+            workload = Workload.model_validate(
+                {
+                    **workload.model_dump(),
+                    "request_rate": load if request.space.request_rates else None,
+                    "concurrency": load if request.space.concurrencies else None,
+                }
+            )
+        effective = EffectiveConfiguration(model=request.model, hardware=hardware, configuration=configuration)
 
         def failure(status: Literal["unsupported", "failed", "timed_out", "cancelled"], problem: Problem) -> Evaluation:
             return Evaluation(
@@ -951,9 +1727,23 @@ async def _search_topologies(
                 warnings=list(profile.limitations),
             )
 
+        execution_result = None
+        measured_duration_s = None
         try:
-            payload = request.model_dump(exclude={"operation", "objective", "budget", "space"})
+            payload = request.model_dump(
+                exclude={
+                    "operation",
+                    "objective",
+                    "mode",
+                    "budget",
+                    "space",
+                    "validation_horizon_s",
+                    "validation_min_throughput_fraction",
+                }
+            )
             payload["configuration"] = configuration.model_dump()
+            payload["hardware"] = hardware.model_dump()
+            payload["workload"] = workload.model_dump()
             exact = EstimateRequest.model_validate(payload)
         except ValidationError:
             evaluation = failure(
@@ -962,13 +1752,14 @@ async def _search_topologies(
         else:
             try:
                 documents = _deployment_documents(exact, profile)
-                workload = _compile_workload(exact.workload, exact.run)
-                problem = next((value for value in (documents, workload) if isinstance(value, Problem)), None)
+                compiled_workload = _compile_workload(exact.workload, exact.run)
+                problem = next((value for value in (documents, compiled_workload) if isinstance(value, Problem)), None)
                 if problem is not None:
-                    return Candidate(
+                    return _SweepPoint(
                         effective_configuration=effective,
-                        generated_by=["blis"],
-                        evaluations=[failure("unsupported", problem)],
+                        workload=workload,
+                        run=request.run,
+                        evaluation=failure("unsupported", problem),
                     )
                 with TemporaryDirectory(prefix="blis-search-", dir=directory) as scratch:
                     destination = Path(scratch) / "bundle"
@@ -985,6 +1776,7 @@ async def _search_topologies(
                             execution,
                         )
                     else:
+                        execution_result = execution
                         evaluation = _parse_result(
                             exact,
                             profile,
@@ -995,6 +1787,9 @@ async def _search_topologies(
                             output_truncated=execution.output_truncated,
                         )
                         evaluation.strategy = "managed_sweep"
+                        if evaluation.status == "succeeded":
+                            native = _NativeResult.model_validate_json((destination / "stdout.log").read_bytes())
+                            measured_duration_s = native.window.duration_s
             except asyncio.CancelledError:
                 evaluation = failure(
                     stopped_status,
@@ -1004,9 +1799,22 @@ async def _search_topologies(
                 evaluation = failure(
                     "failed", Problem(code="search_evaluation_failed", message="Candidate evidence could not be read")
                 )
-        return Candidate(effective_configuration=effective, generated_by=["blis"], evaluations=[evaluation])
+        return _SweepPoint(
+            effective_configuration=effective,
+            workload=workload,
+            run=request.run,
+            evaluation=evaluation,
+            execution=execution_result,
+            measured_duration_s=measured_duration_s,
+        )
 
-    grid = iter(product(sorted(request.space.tensor_parallel), sorted(request.space.replicas)))
+    grid = product(
+        topologies if topologies is not None else product(*topology_axes),
+        loads if capacity else [None],
+        fabrics,
+        variants,
+        offloads,
+    )
     cancellation = asyncio.create_task(cancel_event.wait())
     pending: list[asyncio.Task] = []
 
@@ -1024,14 +1832,14 @@ async def _search_topologies(
             raise asyncio.CancelledError
 
     try:
-        while len(candidates) < min(maximum, grid_size):
+        while len(points) < min(maximum, grid_size):
             if cancel_event.is_set() or loop.time() >= deadline:
                 stopped_status = "cancelled" if cancel_event.is_set() else "timed_out"
                 reason = Problem(code=f"search_{stopped_status}", message="Search reached cancellation or wall limit")
                 break
             pending = [
                 asyncio.create_task(evaluate(*next(grid)))
-                for _ in range(min(parallelism, maximum - len(candidates), grid_size - len(candidates)))
+                for _ in range(min(parallelism, maximum - len(points), grid_size - len(points)))
             ]
             unfinished = set(pending)
             while unfinished:
@@ -1048,7 +1856,7 @@ async def _search_topologies(
                     )
                     await drain()
                     break
-            candidates.extend(task.result() for task in pending)
+            points.extend(task.result() for task in pending)
             pending = []
             if reason:
                 break
@@ -1059,30 +1867,23 @@ async def _search_topologies(
             cancellation.cancel()
             await asyncio.gather(cancellation, return_exceptions=True)
 
-    if reason is None and len(candidates) < grid_size:
+    if reason is None and len(points) < grid_size:
         reason = Problem(code="evaluation_budget_exhausted", message="Search exhausted its evaluation budget")
-    ranked = []
-    for candidate in candidates:
-        evaluation = candidate.evaluations[0]
-        if evaluation.status != "succeeded" or evaluation.constraint_assessment != "satisfied":
-            continue
-        matches = [
-            metric.value
-            for metric in evaluation.metrics
-            if MetricDefinition.model_validate(metric.model_dump(exclude={"value"})) == request.objective.metric
-        ]
-        if len(matches) != 1:
-            continue
-        fingerprint = candidate.effective_configuration.fingerprint
-        devices = sum(role.device_count for role in candidate.effective_configuration.configuration.roles)
-        ties = [devices if key == "device_count" else fingerprint for key in request.objective.tie_breaks]
-        value = matches[0] if request.objective.direction == "minimize" else -matches[0]
-        ranked.append(((value, *ties, fingerprint), fingerprint))
-    return _TopologySearchResult(
-        candidates=candidates,
-        ranked_fingerprints=[fingerprint for _, fingerprint in sorted(ranked)],
+    return _GridSearchResult(
+        points=points,
         search_complete=reason is None,
         termination_reason=reason,
+        execution_counts={
+            status: sum(point.evaluation.status == status for point in points)
+            for status in ("succeeded", "unsupported", "failed", "timed_out", "cancelled")
+        },
+        constraint_counts={
+            assessment: sum(
+                point.evaluation.status == "succeeded" and point.evaluation.constraint_assessment == assessment
+                for point in points
+            )
+            for assessment in ("satisfied", "not_satisfied", "unknown")
+        },
     )
 
 
@@ -1222,6 +2023,10 @@ async def _execute_bundle(
                 cleaning.result()
                 if interrupted:
                     raise asyncio.CancelledError
+        with (destination / "stderr.log").open("rb") as stream:
+            stderr_size = stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stderr_size - 4096))
+            stderr_tail = stream.read(4096).decode("utf-8", errors="replace")
     except (OSError, ValueError):
         return Problem(code="execution_failed", message="BLIS process or output files could not be accessed")
     assert process is not None and process.returncode is not None
@@ -1233,6 +2038,8 @@ async def _execute_bundle(
         stdout_bytes=counts["stdout"],
         stderr_bytes=counts["stderr"],
         output_truncated=output_exceeded.is_set(),
+        stderr_tail=stderr_tail,
+        stderr_tail_truncated=stderr_size > 4096,
         error=error,
     )
 

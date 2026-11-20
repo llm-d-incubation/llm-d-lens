@@ -69,6 +69,18 @@ class Role(Contract):
         return self.tp * self.pp * self.dp * self.replicas
 
 
+class KVOffloadTier(Contract):
+    tier: Literal["cpu_dram"] = "cpu_dram"
+    bytes: Annotated[int, Field(strict=True, gt=0, le=2**63 - 1)]
+
+
+class KVOffload(Contract):
+    tiers: list[KVOffloadTier] = Field(min_length=1, max_length=1)
+    connector: Literal["OffloadingConnector"] = "OffloadingConnector"
+    spec: Literal["CPUOffloadingSpec", "TieringOffloadingSpec"] = "CPUOffloadingSpec"
+    eviction_policy: Literal["lru"] = "lru"
+
+
 class Configuration(Contract):
     mode: Literal["agg", "disagg"] = "agg"
     engine: NonemptyString = "vllm"
@@ -76,6 +88,7 @@ class Configuration(Contract):
     roles: list[Role] = Field(default_factory=lambda: [Role(role="colocated")], min_length=1)
     engine_settings: dict[str, JsonValue] = Field(default_factory=dict)
     router_settings: dict[str, JsonValue] = Field(default_factory=dict)
+    offload: KVOffload | None = None
 
     @model_validator(mode="after")
     def check_roles(self) -> Self:
@@ -115,7 +128,7 @@ class Workload(Contract):
 
 class RunControls(Contract):
     seed: Annotated[int, Field(strict=True, ge=0)] | None = None
-    num_requests: PositiveInt | None = None
+    num_requests: Annotated[int, Field(strict=True, ge=0)] | None = None
     horizon_s: PositiveFloat | None = None
     request_deadline_s: PositiveFloat | None = None
     wall_timeout_s: PositiveFloat | None = None
@@ -232,7 +245,10 @@ class EffectiveConfiguration(Contract):
 
     @property
     def fingerprint(self) -> str:
-        encoded = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        payload = self.model_dump(mode="json")
+        if self.configuration.offload is None:
+            payload["configuration"].pop("offload", None)
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return hashlib.sha256(encoded.encode()).hexdigest()
 
 

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from llm_d_lens.estimate_tools import service
 from llm_d_lens.estimate_tools.aic import adapter
@@ -23,12 +24,18 @@ from llm_d_lens.estimate_tools.blis.service import (
     _compile_bundle,
     _compile_workload,
     _deployment_documents,
+    _DisaggJointSweepRequest,
+    _DisaggSearchRequest,
     _execute_bundle,
     _ExecutionLimits,
     _ExecutionResult,
+    _JointSweepRequest,
     _parse_result,
+    _search_disaggregated,
+    _search_joint,
     _search_topologies,
     _SearchLimits,
+    _sweep_capacity,
     availability,
     baseline_profile,
     file_digest,
@@ -38,6 +45,7 @@ from llm_d_lens.estimate_tools.blis.service import (
 from llm_d_lens.estimate_tools.models import (
     EffectiveConfiguration,
     EstimateRequest,
+    KVOffload,
     MetricConstraint,
     OptimizeRequest,
     Problem,
@@ -69,6 +77,1074 @@ def topology_request(bundle_profile):
     )
 
 
+@pytest.fixture
+def disagg_request(topology_request, bundle_profile):
+    bundle_profile.disagg_enabled = True
+    payload = topology_request.model_dump()
+    payload["hardware"].update(nodes=4, devices_per_node=8)
+    payload["configuration"].update(
+        mode="disagg",
+        roles=[{"role": "prefill"}, {"role": "decode"}],
+        router_settings={"endpoint_picker_config": "router/epp.yaml"},
+    )
+    payload["space"] = {
+        "prefill_tensor_parallel": [2, 1],
+        "prefill_replicas": [2, 1],
+        "decode_tensor_parallel": [2, 1],
+        "decode_replicas": [2, 1],
+    }
+    payload["budget"]["max_evaluations"] = 32
+    return _DisaggSearchRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_disaggregated_search_enumerates_both_roles_and_preserves_fixed_inputs(
+    disagg_request, bundle_profile, topology_executor, tmp_path
+):
+    calls, _ = topology_executor
+    before = disagg_request.model_dump()
+    result = await _search_disaggregated(disagg_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.candidates) == len(result.ranked_fingerprints) == len(calls) == 16
+    layouts = []
+    for candidate in result.candidates:
+        roles = {role.role: role for role in candidate.effective_configuration.configuration.roles}
+        layouts.append((roles["prefill"].tp, roles["prefill"].replicas, roles["decode"].tp, roles["decode"].replicas))
+        assert candidate.evaluations[0].status == "succeeded"
+        assert candidate.evaluations[0].coefficient_provenance["kernel"].keys() == {"prefill", "decode"}
+    assert layouts == sorted(layouts)
+    assert len(set(layouts)) == 16
+    assert all(call.workload == disagg_request.workload and call.run == disagg_request.run for call in calls)
+    assert all(call.configuration.router_settings == disagg_request.configuration.router_settings for call in calls)
+    assert disagg_request.model_dump() == before
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_limit", [False, True])
+async def test_disaggregated_search_charges_static_refusals_to_one_global_budget(
+    disagg_request, bundle_profile, topology_executor, tmp_path, server_limit
+):
+    calls, _ = topology_executor
+    disagg_request.space.prefill_tensor_parallel = [64, 1]
+    disagg_request.space.prefill_replicas = [1]
+    disagg_request.space.decode_tensor_parallel = [1]
+    disagg_request.space.decode_replicas = [2, 1]
+    if not server_limit:
+        disagg_request.budget.max_evaluations = 3
+    result = await _search_disaggregated(
+        disagg_request,
+        bundle_profile,
+        tmp_path,
+        asyncio.Event(),
+        limits=_SearchLimits(max_evaluations=3 if server_limit else 256),
+    )
+    assert not result.search_complete
+    assert result.termination_reason.code == "evaluation_budget_exhausted"
+    assert [candidate.evaluations[0].status for candidate in result.candidates] == [
+        "succeeded",
+        "succeeded",
+        "unsupported",
+    ]
+    assert len(calls) == len(result.ranked_fingerprints) == 2
+    assert result.execution_counts["unsupported"] == 1
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["grid", "cross_evaluations", "profile", "mode"])
+async def test_disaggregated_search_refuses_unsupported_search_before_execution(
+    disagg_request, bundle_profile, tmp_path, monkeypatch, case
+):
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    if case == "cross_evaluations":
+        disagg_request.budget.cross_evaluations = 1
+    elif case == "profile":
+        bundle_profile.disagg_enabled = False
+    elif case == "mode":
+        disagg_request.configuration = bundle_profile.verified_request.configuration.model_copy(deep=True)
+    result = await _search_disaggregated(
+        disagg_request,
+        bundle_profile,
+        tmp_path,
+        asyncio.Event(),
+        limits=_SearchLimits(max_grid_size=1) if case == "grid" else None,
+    )
+    assert isinstance(result, Problem)
+    assert (
+        result.code
+        == {
+            "grid": "search_grid_too_large",
+            "cross_evaluations": "cross_evaluation_not_supported",
+            "profile": "mode_not_supported",
+            "mode": "search_mode_not_supported",
+        }[case]
+    )
+    execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("case", ["duplicates", "empty", "load_grid"])
+def test_disaggregated_search_rejects_ambiguous_grids(disagg_request, case):
+    payload = disagg_request.model_dump()
+    if case == "load_grid":
+        payload["space"]["request_rates"] = [1, 2]
+    else:
+        payload["space"]["prefill_replicas"] = [1, 1] if case == "duplicates" else []
+    with pytest.raises(ValidationError):
+        _DisaggSearchRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    ["objective", "constraint", "unknown_constraint", "incomplete", "length_capped", "kernel", "router", "handoff"],
+)
+async def test_disaggregated_search_does_not_rank_unproven_candidates(
+    disagg_request, bundle_profile, topology_executor, tmp_path, case
+):
+    _, template = topology_executor
+    disagg_request.constraints.require_complete = False
+    if case == "objective":
+        disagg_request.objective.metric.unit = "s"
+    elif case in ("constraint", "unknown_constraint"):
+        metric = disagg_request.objective.metric.model_dump()
+        if case == "unknown_constraint":
+            metric["unit"] = "s"
+        disagg_request.constraints.metrics = [MetricConstraint(metric=metric, comparison="le", threshold=0)]
+    elif case == "incomplete":
+        template["requests"].update(completed=7, still_running=1)
+        template["window"]["requests"] = 7
+        template["metrics"]["request_throughput"] = 1.75
+    elif case == "length_capped":
+        template["requests"]["length_capped"] = 1
+    elif case == "kernel":
+        template["kernel"]["colocated"] = None
+    elif case == "router":
+        template["router"] = {"requirements": {"Disaggregates": False}}
+    else:
+        template["breakdowns"] = {"pd": {}}
+    result = await _search_disaggregated(disagg_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert all(candidate.evaluations[0].status == "succeeded" for candidate in result.candidates)
+    assert result.ranked_fingerprints == []
+    if case in ("kernel", "router", "handoff"):
+        assert all(candidate.evaluations[0].constraint_assessment == "unknown" for candidate in result.candidates)
+        assert all(candidate.evaluations[0].evidence_maturity == "unknown" for candidate in result.candidates)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["missing_override", "wrong_count", "duplicate_override", "wrong_role"])
+async def test_disaggregated_search_rejects_unattributable_role_evidence(
+    disagg_request, bundle_profile, topology_executor, tmp_path, monkeypatch, case
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    original = blis._execute_bundle
+    disagg_request.space = disagg_request.space.model_validate(
+        {name: [1] for name in disagg_request.space.model_dump()}
+    )
+
+    async def execute(request, profile, destination, *args, **kwargs):
+        execution = await original(request, profile, destination, *args, **kwargs)
+        output = destination / "stdout.log"
+        payload = json.loads(output.read_bytes())
+        if case == "wrong_role":
+            payload["input"]["deployment"]["pools"][0]["role"] = "colocated"
+        else:
+            override = next(item for item in payload["overrides"] if item["setting"] == "prefill-instances")
+            if case == "missing_override":
+                payload["overrides"].remove(override)
+            elif case == "wrong_count":
+                override["run"] = "999"
+            else:
+                payload["overrides"].append(deepcopy(override))
+        output.write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis, "_execute_bundle", execute)
+    result = await _search_disaggregated(disagg_request, bundle_profile, tmp_path, asyncio.Event())
+    evaluation = result.candidates[0].evaluations[0]
+    assert evaluation.status == "failed"
+    assert evaluation.error.code == "result_input_mismatch"
+    assert result.ranked_fingerprints == []
+    assert len(result.execution_diagnostics) == 1
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grid", ["request_rates", "concurrencies"])
+async def test_capacity_sweep_preserves_load_points_and_fixed_topology(
+    topology_request, bundle_profile, tmp_path, topology_executor, grid
+):
+    calls, _ = topology_executor
+    topology_request.space = topology_request.space.model_validate({"mode": "find_capacity", grid: [4, 2]})
+    load_kind = "request_rate" if grid == "request_rates" else "concurrency"
+    before = topology_request.model_dump()
+    result = await _sweep_capacity(topology_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert [getattr(point.workload, load_kind) for point in result.points] == [2, 4]
+    assert result.feasible_loads == [2, 4]
+    assert result.highest_feasible_load == 4
+    assert result.load_kind == load_kind
+    assert len({point.evaluation.configuration_fingerprint for point in result.points}) == 1
+    assert all(call.configuration == topology_request.configuration for call in calls)
+    assert all(call.run == topology_request.run for call in calls)
+    assert all(
+        call.workload.model_dump(exclude={"request_rate", "concurrency"})
+        == topology_request.workload.model_dump(exclude={"request_rate", "concurrency"})
+        for call in calls
+    )
+    assert all(point.evaluation.strategy == "managed_sweep" for point in result.points)
+    assert all(point.evaluation.coefficient_provenance for point in result.points)
+    assert topology_request.model_dump() == before
+    assert "not an untested capacity bound" in result.warnings[0]
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.fixture
+def capacity_request(topology_request):
+    topology_request.space = topology_request.space.model_validate(
+        {"mode": "find_capacity", "request_rates": [8, 2, 4]}
+    )
+    return topology_request
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_preserves_business_load_under_latency_targets(
+    topology_request, bundle_profile, tmp_path, topology_executor
+):
+    calls, _ = topology_executor
+    request = _JointSweepRequest.model_validate(
+        {
+            **topology_request.model_dump(exclude={"space", "objective"}),
+            "space": {
+                "tensor_parallel": [2, 1],
+                "replicas": [2, 1],
+                "ttft_target_ms": 25,
+                "tpot_target_ms": 3,
+                "ttft_statistic": "mean",
+                "tpot_statistic": "mean",
+            },
+            "budget": {"max_evaluations": 8, "parallelism": 2, "wall_duration_s": 5},
+        }
+    )
+    before = request.model_dump()
+    result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 4
+    assert len(calls) == 5
+    assert len({point.fingerprint for point in result.points}) == 4
+    assert len(result.recommendations) == 1
+    assert result.validation_complete
+    assert len(result.validation_points) == 1
+    assert result.execution_counts == {"succeeded": 4, "unsupported": 0, "failed": 0, "timed_out": 0, "cancelled": 0}
+    assert result.constraint_counts == {"satisfied": 4, "not_satisfied": 0, "unknown": 0}
+    best = result.recommendations[0]
+    assert best.effective_configuration.configuration.roles[0].tp == 1
+    assert best.effective_configuration.configuration.roles[0].replicas == 1
+    assert best.measured_throughput == 2
+    assert all(call.workload.input_tokens == request.workload.input_tokens for call in calls)
+    assert all(call.workload.output_tokens == request.workload.output_tokens for call in calls)
+    assert all(call.workload == request.workload for call in calls)
+    assert request.model_dump() == before
+    assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.fixture
+def joint_request(topology_request):
+    return _JointSweepRequest.model_validate(
+        {
+            **topology_request.model_dump(exclude={"space", "objective"}),
+            "space": {
+                "tensor_parallel": [1, 2],
+                "replicas": [1, 2],
+                "ttft_target_ms": 25,
+                "tpot_target_ms": 3,
+                "ttft_statistic": "mean",
+                "tpot_statistic": "mean",
+            },
+            "budget": {"max_evaluations": 8, "parallelism": 2, "wall_duration_s": 5},
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_requires_long_validation_before_recommending(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    calls, _ = topology_executor
+    execute = blis_service._execute_bundle
+    validation_calls = []
+
+    async def fail_validation(request, *args, **kwargs):
+        if request.run.horizon_s == 2000:
+            validation_calls.append(request)
+            return Problem(code="execution_timed_out", message="Validation exceeded its execution limit")
+        return await execute(request, *args, **kwargs)
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", fail_validation)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(calls) == 4
+    assert validation_calls
+    assert result.recommendations == []
+    assert not result.validation_complete
+    assert all(point.evaluation.status == "timed_out" for point in result.validation_points)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["economic", "performance"])
+@pytest.mark.parametrize("validation_fails", [False, True])
+async def test_disaggregated_joint_requires_256_screening_and_horizon_validation(
+    disagg_request, bundle_profile, topology_executor, tmp_path, monkeypatch, mode, validation_fails
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    calls, _ = topology_executor
+    payload = disagg_request.model_dump()
+    payload["run"].pop("num_requests")
+    payload["space"] = {name: [1] for name in payload["space"]}
+    payload["mode"] = mode
+    request = _DisaggJointSweepRequest.model_validate(payload)
+    before = request.model_dump()
+    execute = blis_service._execute_bundle
+
+    async def checked_execute(current, *args, **kwargs):
+        if current.run.num_requests == 0 and validation_fails:
+            return Problem(code="execution_timed_out", message="Formal P/D validation timed out")
+        return await execute(current, *args, **kwargs)
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", checked_execute)
+    result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
+    assert calls[0].run.num_requests == 256
+    assert len(result.points) == len(result.validation_points) == 1
+    assert result.validation_horizon_s == 2000
+    assert result.validation_complete is not validation_fails
+    assert bool(result.recommendations) is not validation_fails
+    if not validation_fails:
+        assert calls[1].run.num_requests == 0
+        assert calls[1].run.horizon_s == 2000
+        assert calls[1].configuration == calls[0].configuration
+        assert calls[1].workload == calls[0].workload
+        assert not calls[1].constraints.require_complete
+        assert len(result.recommendations[0].effective_configuration.configuration.roles) == 2
+    assert request.model_dump() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [2, 4])
+async def test_disaggregated_joint_never_promotes_failed_or_unvalidated_screening_winners(
+    disagg_request, bundle_profile, topology_executor, tmp_path, monkeypatch, budget
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    payload = disagg_request.model_dump()
+    payload["space"] = {name: [1] for name in payload["space"]}
+    payload["space"]["decode_tensor_parallel"] = [1, 2]
+    payload["budget"]["max_evaluations"] = budget
+    payload["run"]["num_requests"] = 256
+    request = _DisaggJointSweepRequest.model_validate(payload)
+    execute = blis_service._execute_bundle
+
+    async def reject_small_validation(current, *args, **kwargs):
+        decode = next(role for role in current.configuration.roles if role.role == "decode")
+        if current.run.num_requests == 0 and decode.tp == 1:
+            return Problem(code="execution_timed_out", message="The cheapest P/D candidate is unverified")
+        return await execute(current, *args, **kwargs)
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", reject_small_validation)
+    result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(result.points) == 2
+    assert not result.validation_complete
+    if budget == 2:
+        assert not result.validation_points
+        assert not result.recommendations
+        assert result.validation_termination_reason.code == "validation_budget_exhausted"
+    else:
+        assert len(result.validation_points) == 2
+        assert len(result.recommendations) == 1
+        assert result.recommendations[0].device_count == 3
+
+
+@pytest.mark.asyncio
+async def test_disaggregated_joint_keeps_managed_profile_gate(
+    disagg_request, bundle_profile, tmp_path, monkeypatch
+):
+    bundle_profile.disagg_enabled = False
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    request = _DisaggJointSweepRequest.model_validate(disagg_request.model_dump())
+    result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.code == "mode_not_supported"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_joint_validation_allows_normal_inflight_work_without_drain(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    joint_request.space.tensor_parallel = [1]
+    joint_request.space.replicas = [1]
+    execute = blis_service._execute_bundle
+
+    async def with_inflight(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        if request.run.num_requests == 0:
+            payload = json.loads((destination / "stdout.log").read_text())
+            payload["requests"].update(completed=3980, still_running=20)
+            payload["window"]["requests"] = 3980
+            payload["metrics"]["request_throughput"] = 3980 / 2000
+            payload["metrics"]["e2e_mean_ms"] = 10000
+            payload["metric_defs"]["e2e_mean_ms"] = {
+                **payload["metric_defs"]["ttft_mean_ms"],
+                "formula": "e2el",
+            }
+            (destination / "stdout.log").write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", with_inflight)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.validation_complete
+    assert len(result.recommendations) == 1
+    point = result.validation_points[0]
+    assert point.run.num_requests == 0
+    assert point.run.horizon_s == 2000
+    assert point.evaluation.request_accounting["still_running"] == 20
+    assert result.recommendations[0].point_fingerprint == point.fingerprint
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["throughput", "timeout", "latency", "short_window"])
+async def test_joint_validation_rejects_short_run_false_positives(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch, case
+):
+    from llm_d_lens.estimate_tools.blis import service as blis_service
+
+    joint_request.space.tensor_parallel = [1]
+    joint_request.space.replicas = [1]
+    execute = blis_service._execute_bundle
+
+    async def invalid_validation(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        if request.run.num_requests == 0:
+            payload = json.loads((destination / "stdout.log").read_text())
+            if case == "throughput":
+                payload["requests"].update(completed=2000, still_running=2000)
+                payload["window"]["requests"] = 2000
+            elif case == "timeout":
+                payload["requests"].update(completed=3999, timed_out=1)
+                payload["window"]["requests"] = 3999
+            elif case == "latency":
+                payload["metrics"]["ttft_mean_ms"] = 26
+            else:
+                payload["window"]["duration_s"] = 10
+            payload["metrics"]["request_throughput"] = payload["window"]["requests"] / payload["window"]["duration_s"]
+            (destination / "stdout.log").write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis_service, "_execute_bundle", invalid_validation)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.points[0].evaluation.constraint_assessment == "satisfied"
+    assert result.recommendations == []
+    assert len(result.validation_points) == 1
+    assert result.validation_points[0].evaluation.constraint_assessment == (
+        "unknown" if case == "short_window" else "not_satisfied"
+    )
+    assert result.validation_complete == (case != "short_window")
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_generates_budgeted_topologies_and_checks_latency(
+    joint_request, bundle_profile, tmp_path, topology_executor
+):
+    calls, template = topology_executor
+    template["metrics"]["e2e_mean_ms"] = 30
+    template["metric_defs"]["e2e_mean_ms"] = {
+        **template["metric_defs"]["ttft_mean_ms"],
+        "formula": "e2el",
+    }
+    payload = joint_request.model_dump()
+    payload["space"] = {
+        "ttft_target_ms": 25,
+        "tpot_target_ms": 3,
+        "latency_target_ms": 40,
+        "ttft_statistic": "mean",
+        "tpot_statistic": "mean",
+        "latency_statistic": "mean",
+    }
+    payload["workload"] = {"input_tokens": 128, "output_tokens": 32, "concurrency": 4}
+    payload["budget"]["max_evaluations"] = 128
+    request = _JointSweepRequest.model_validate(payload)
+    before = request.model_dump()
+    result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert result.mode == "economic"
+    assert len(result.points) == 10
+    assert len(calls) == 11
+    assert all(call.configuration.roles[0].device_count <= request.hardware.device_count for call in calls)
+    assert {call.configuration.roles[0].tp for call in calls} == {1, 2, 4, 8}
+    assert {call.workload.concurrency for call in calls} == {4}
+    assert result.recommendations[0].device_count == 1
+    assert any(metric.name == "e2e_mean_ms" for metric in result.recommendations[0].metrics)
+    assert request.model_dump() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["ttft", "tpot", "missing_tpot", "missing_tail", "wrong_window", "length_capped", "incomplete"]
+)
+async def test_joint_sweep_never_recommends_unproven_latency_or_completions(
+    joint_request, bundle_profile, tmp_path, topology_executor, case
+):
+    _, template = topology_executor
+    joint_request.constraints.require_complete = False
+    if case == "ttft":
+        joint_request.space.ttft_target_ms = 9
+    elif case == "tpot":
+        joint_request.space.tpot_target_ms = 1
+    elif case == "missing_tpot":
+        template["metrics"].pop("itl_mean_ms")
+        template["metric_defs"].pop("itl_mean_ms")
+    elif case == "missing_tail":
+        joint_request.space.tpot_statistic = "p99"
+    elif case == "wrong_window":
+        template["window"]["stop"] = "simulation_end"
+    elif case == "length_capped":
+        template["requests"]["length_capped"] = 1
+    else:
+        template["requests"].update(completed=7, still_running=1)
+        template["window"]["requests"] = 7
+        template["metrics"]["request_throughput"] = 1.75
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 4
+    assert all(point.evaluation.status == "succeeded" for point in result.points)
+    assert result.recommendations == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["economic", "performance"])
+async def test_joint_sweep_ranks_measured_throughput_not_offered_load(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch, mode
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    joint_request.mode = mode
+    joint_request.workload.request_rate = None
+    joint_request.workload.concurrency = 4
+    execute = blis._execute_bundle
+
+    async def measured_execute(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        payload = json.loads((destination / "stdout.log").read_text())
+        throughput = 1 + 0.5 * (request.configuration.roles[0].tp - 1)
+        payload["metrics"]["request_throughput"] = throughput
+        if request.run.num_requests == 0:
+            count = int(throughput * request.run.horizon_s)
+            payload["requests"].update(generated=count, injected=count, completed=count)
+            payload["window"]["requests"] = count
+            payload["input"]["run"]["num_requests"] = count
+        else:
+            payload["window"]["duration_s"] = 8 / throughput
+        (destination / "stdout.log").write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis, "_execute_bundle", measured_execute)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(result.recommendations) == (4 if mode == "performance" else 1)
+    best = result.recommendations[0]
+    assert best.workload.concurrency == 4
+    assert best.effective_configuration.configuration.roles[0].tp == (2 if mode == "performance" else 1)
+    assert best.effective_configuration.configuration.roles[0].replicas == 1
+    assert result.mode == mode
+    assert all(point.workload == joint_request.workload for point in result.points)
+    scores = [
+        -recommendation.measured_throughput if mode == "performance" else recommendation.device_count
+        for recommendation in result.recommendations
+    ]
+    assert scores == sorted(scores)
+
+
+@pytest.mark.asyncio
+async def test_performance_breaks_equal_throughput_by_latency(
+    joint_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    joint_request.mode = "performance"
+    execute = blis._execute_bundle
+
+    async def measured_execute(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        payload = json.loads((destination / "stdout.log").read_text())
+        role = request.configuration.roles[0]
+        payload["metrics"]["ttft_mean_ms"] = 20 / (role.tp * role.replicas)
+        (destination / "stdout.log").write_text(json.dumps(payload))
+        return execution
+
+    monkeypatch.setattr(blis, "_execute_bundle", measured_execute)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(result.recommendations) == 4
+    assert result.recommendations[0].device_count == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["satisfied", "violated", "missing", "wrong_statistic"])
+async def test_joint_sweep_uses_native_end_to_end_latency(
+    joint_request, bundle_profile, tmp_path, topology_executor, case
+):
+    _, template = topology_executor
+    joint_request.space.latency_target_ms = 30
+    joint_request.space.latency_statistic = "mean"
+    if case != "missing":
+        template["metrics"]["e2e_mean_ms"] = 31 if case == "violated" else 30
+        template["metric_defs"]["e2e_mean_ms"] = {
+            **template["metric_defs"]["ttft_mean_ms"],
+            "formula": "e2el",
+        }
+    if case == "wrong_statistic":
+        joint_request.space.latency_statistic = "p99"
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert all(point.evaluation.status == "succeeded" for point in result.points)
+    assert bool(result.recommendations) == (case == "satisfied")
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_budget_defaults_and_latency_only_target(
+    joint_request, bundle_profile, tmp_path, topology_executor
+):
+    _, template = topology_executor
+    template["metrics"]["e2e_mean_ms"] = 30
+    template["metric_defs"]["e2e_mean_ms"] = {
+        **template["metric_defs"]["ttft_mean_ms"],
+        "formula": "e2el",
+    }
+    payload = joint_request.model_dump(exclude={"budget", "run"})
+    payload["space"].update(ttft_target_ms=None, tpot_target_ms=None, latency_target_ms=30, latency_statistic="mean")
+    request = _JointSweepRequest.model_validate(payload)
+    result = await _search_joint(request, bundle_profile, tmp_path, asyncio.Event())
+    assert request.budget.max_evaluations == 256
+    assert result.search_complete
+    assert result.recommendations
+    assert all(point.run.num_requests == 256 and point.run.horizon_s == 900 for point in result.points)
+    assert all(point.run.num_requests == 0 and point.run.horizon_s == 2000 for point in result.validation_points)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["device_budget", "grid_cap", "node_boundary"])
+async def test_joint_sweep_auto_generation_obeys_request_and_server_budgets(
+    joint_request, bundle_profile, tmp_path, topology_executor, case
+):
+    calls, _ = topology_executor
+    joint_request.space.tensor_parallel = []
+    joint_request.space.replicas = []
+    joint_request.budget.max_evaluations = 128
+    limits = _SearchLimits()
+    if case == "device_budget":
+        joint_request.constraints.max_devices = 3
+    elif case == "grid_cap":
+        limits.max_grid_size = 1
+    elif case == "node_boundary":
+        joint_request.hardware.nodes = 3
+        joint_request.hardware.devices_per_node = 3
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event(), limits=limits)
+    if case == "grid_cap":
+        assert isinstance(result, Problem)
+        assert result.code == "search_grid_too_large"
+        assert calls == []
+    else:
+        assert result.search_complete
+        assert all(call.workload == joint_request.workload for call in calls)
+        maximum = joint_request.constraints.max_devices or joint_request.hardware.device_count
+        assert all(call.configuration.roles[0].device_count <= maximum for call in calls)
+        assert any(call.configuration.roles[0].device_count == maximum for call in calls)
+        if case == "node_boundary":
+            assert {3, 6}.issubset({call.configuration.roles[0].tp for call in calls})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dimension", ["fabric", "offload", "engine"])
+async def test_joint_sweep_unapproved_dimensions_consume_global_budget(
+    joint_request, bundle_profile, tmp_path, monkeypatch, dimension
+):
+    joint_request.budget.max_evaluations = 1
+    joint_request.space.tensor_parallel = [1]
+    if dimension == "fabric":
+        joint_request.space.fabrics = ["unknown-fabric"]
+    elif dimension == "offload":
+        joint_request.space.offloads = [KVOffload.model_validate({"tiers": [{"bytes": 1024}]})]
+    else:
+        joint_request.space.engine_settings = [{"unknown_engine_setting": True}]
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert len(result.points) == 1
+    assert result.termination_reason.code == "evaluation_budget_exhausted"
+    assert result.recommendations == []
+    expected = {
+        "fabric": "hardware_mapping_missing",
+        "offload": "offload_not_supported",
+        "engine": "engine_settings_not_supported",
+    }[dimension]
+    assert all(point.evaluation.error.code == expected for point in result.points)
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_grid_limit_is_entire_cartesian_product(joint_request, bundle_profile, tmp_path, monkeypatch):
+    joint_request.space.engine_settings = [{"block_size": 16}, {"block_size": 32}]
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    result = await _search_joint(
+        joint_request, bundle_profile, tmp_path, asyncio.Event(), limits=_SearchLimits(max_grid_size=7)
+    )
+    assert isinstance(result, Problem)
+    assert result.code == "search_grid_too_large"
+    execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"tensor_parallel": [0]},
+        {"tensor_parallel": [True]},
+        {"replicas": [1, 1]},
+        {"request_rates": [2, 4]},
+        {"request_rates": [0]},
+        {"concurrencies": [1]},
+        {"request_rates": [float("inf")]},
+        {"fabrics": ["fabric", "fabric"]},
+        {"engine_settings": [{"block_size": 16}, {"block_size": 16}]},
+        {"offloads": [None, None]},
+        {"ttft_target_ms": 0},
+        {"tpot_target_ms": float("nan")},
+        {"tpot_statistic": "p95"},
+        {"latency_target_ms": 0},
+        {"ttft_target_ms": None, "tpot_target_ms": None, "latency_target_ms": None},
+    ],
+)
+def test_joint_sweep_rejects_ambiguous_or_invalid_grids(joint_request, changes):
+    payload = joint_request.model_dump()
+    payload["space"].update(changes)
+    with pytest.raises(ValidationError):
+        _JointSweepRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize("mode", ["economic", "performance"])
+def test_recommendation_requires_explicit_business_load(joint_request, mode):
+    payload = joint_request.model_dump()
+    payload["mode"] = mode
+    payload["workload"] = {"input_tokens": 128, "output_tokens": 32}
+    with pytest.raises(ValidationError, match="explicit load target"):
+        _JointSweepRequest.model_validate(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["one_token", "trace", "disagg", "cross_evaluation", "duplicate_effective"])
+async def test_joint_sweep_preflight_guards(joint_request, bundle_profile, tmp_path, monkeypatch, case):
+    if case == "one_token":
+        joint_request.workload.output_tokens = 1
+    elif case == "trace":
+        joint_request.workload = Workload(distribution="trace", trace_artifact="registered-trace")
+    elif case == "disagg":
+        joint_request.configuration = joint_request.configuration.model_validate(
+            {"mode": "disagg", "roles": [{"role": "prefill"}, {"role": "decode"}]}
+        )
+    elif case == "cross_evaluation":
+        joint_request.budget.cross_evaluations = 1
+    else:
+        joint_request.configuration.engine_settings["block_size"] = 16
+        joint_request.space.engine_settings = [{}, {"block_size": 16}]
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert isinstance(result, Problem)
+    assert (
+        result.code
+        == {
+            "one_token": "tpot_not_observable",
+            "trace": "distribution_not_supported",
+            "disagg": "search_mode_not_supported",
+            "cross_evaluation": "cross_evaluation_not_supported",
+            "duplicate_effective": "duplicate_configuration",
+        }[case]
+    )
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_engine_variants_and_concurrency_preserve_attribution(
+    joint_request, bundle_profile, tmp_path, topology_executor
+):
+    calls, _ = topology_executor
+    joint_request.workload.request_rate = None
+    joint_request.workload.concurrency = 2
+    bundle_profile.verified_request.configuration.engine_settings["block_size"] = 16
+    joint_request.space.engine_settings = [{"block_size": 32}, {"block_size": 16}]
+    joint_request.budget.max_evaluations = 16
+    before = joint_request.model_dump()
+    result = await _search_joint(joint_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 8
+    assert len(calls) == 10
+    assert len(result.recommendations) == 2
+    assert len({point.fingerprint for point in result.points}) == 8
+    assert all(call.workload.request_rate is None for call in calls)
+    assert {call.workload.concurrency for call in calls} == {2}
+    assert {call.configuration.engine_settings["block_size"] for call in calls} == {16, 32}
+    assert joint_request.model_dump() == before
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_automatic_topologies_with_locked_runtime(tmp_path, monkeypatch):
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).absolute(), inputs=Path(inputs).absolute())
+    request = _JointSweepRequest.model_validate(
+        {
+            **profile.verified_request.model_dump(exclude={"operation"}),
+            "workload": {"input_tokens": 128, "output_tokens": 32, "concurrency": 2},
+            "space": {
+                "ttft_target_ms": 100000,
+                "tpot_target_ms": 100000,
+                "latency_target_ms": 100000,
+                "ttft_statistic": "mean",
+                "tpot_statistic": "mean",
+                "latency_statistic": "mean",
+            },
+            "budget": {"max_evaluations": 64, "parallelism": 2, "wall_duration_s": 60},
+        }
+    )
+    no_aic = AsyncMock(side_effect=AssertionError("Joint BLIS search must not invoke AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", no_aic)
+    result = await _search_joint(request, profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 10
+    assert all(point.workload == request.workload for point in result.points)
+    assert result.recommendations
+    assert sum(result.execution_counts.values()) == len(result.points)
+    assert sum(result.constraint_counts.values()) == result.execution_counts["succeeded"]
+    failures = [point for point in result.points if point.evaluation.status == "failed"]
+    assert failures
+    assert all(
+        point.execution is not None
+        and point.execution.returncode != 0
+        and point.execution.stderr_tail
+        and point.evaluation.error.code == "process_failed"
+        and point.evaluation.constraint_assessment == "unknown"
+        for point in failures
+    )
+    assert [recommendation.device_count for recommendation in result.recommendations] == sorted(
+        recommendation.device_count for recommendation in result.recommendations
+    )
+    assert all(
+        recommendation.device_count <= request.hardware.device_count
+        and any(metric.name == "e2e_mean_ms" for metric in recommendation.metrics)
+        for recommendation in result.recommendations
+    )
+    assert all(
+        point.evaluation.coefficient_provenance["kernel"]
+        for point in result.points
+        if point.evaluation.status == "succeeded"
+    )
+    no_aic.assert_not_awaited()
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_joint_sweep_with_locked_runtime(topology_request, tmp_path, monkeypatch):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).absolute(), inputs=Path(inputs).absolute())
+    profile.fabric_mappings = {"ib-400g": "ib-400g"}
+    profile.cpu_offload_enabled = True
+    request = _JointSweepRequest.model_validate(
+        {
+            **profile.verified_request.model_dump(exclude={"operation"}),
+            "space": {
+                "tensor_parallel": [8, 4],
+                "replicas": [1, 2],
+                "fabrics": ["roce-200g", "ib-400g"],
+                "offloads": [None, {"tiers": [{"bytes": 1073741824}]}],
+                "ttft_target_ms": 100000,
+                "tpot_target_ms": 100000,
+                "ttft_statistic": "mean",
+                "tpot_statistic": "mean",
+            },
+            "budget": {"max_evaluations": 32, "parallelism": 2, "wall_duration_s": 60},
+        }
+    )
+    no_aic = AsyncMock(side_effect=AssertionError("Joint BLIS search must not invoke AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", no_aic)
+    execute = blis._execute_bundle
+
+    async def checked_execute(request, profile, destination, *args, **kwargs):
+        execution = await execute(request, profile, destination, *args, **kwargs)
+        assert not isinstance(execution, Problem), execution
+        assert execution.returncode == 0, (destination / "stderr.log").read_text()
+        return execution
+
+    monkeypatch.setattr(blis, "_execute_bundle", checked_execute)
+    scratch = tmp_path / "sweep"
+    scratch.mkdir()
+    result = await _search_joint(request, profile, scratch, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 16
+    assert all(point.workload == request.workload for point in result.points)
+    assert result.execution_counts == {"succeeded": 12, "unsupported": 4, "failed": 0, "timed_out": 0, "cancelled": 0}
+    assert result.constraint_counts == {"satisfied": 12, "not_satisfied": 0, "unknown": 0}
+    for point in result.points:
+        role = point.effective_configuration.configuration.roles[0]
+        if role.device_count > request.hardware.device_count:
+            assert point.evaluation.status == "unsupported"
+            assert point.evaluation.error.code == "invalid_configuration"
+            continue
+        assert point.evaluation.status == "succeeded", point.evaluation.error
+        assert point.evaluation.constraint_assessment == "satisfied", point.evaluation.warnings
+        assert point.evaluation.request_accounting["completed"] == 8
+        assert point.evaluation.coefficient_provenance["kernel"]
+    assert result.validation_complete
+    assert len(result.validation_points) == len(result.recommendations) == 4
+    assert len({candidate.device_count for candidate in result.recommendations}) == 1
+    assert len({point.fingerprint for point in result.points}) == 16
+    assert not list(scratch.iterdir())
+    no_aic.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["incomplete", "length_capped", "unknown", "violated", "missing_kernel"])
+async def test_capacity_sweep_requires_complete_feasible_evidence(
+    capacity_request, bundle_profile, tmp_path, topology_executor, case
+):
+    _, template = topology_executor
+    capacity_request.constraints.require_complete = False
+    if case == "incomplete":
+        template["requests"].update(completed=7, still_running=1)
+        template["window"]["requests"] = 7
+        template["metrics"]["request_throughput"] = 1.75
+    elif case == "length_capped":
+        template["requests"]["length_capped"] = 1
+    elif case == "missing_kernel":
+        template.pop("kernel")
+    else:
+        metric = capacity_request.objective.metric.model_dump()
+        if case == "unknown":
+            metric["unit"] = "s"
+        capacity_request.constraints.metrics = [MetricConstraint(metric=metric, comparison="le", threshold=0)]
+    result = await _sweep_capacity(capacity_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 3
+    assert all(point.evaluation.status == "succeeded" for point in result.points)
+    assert result.feasible_loads == []
+    assert result.highest_feasible_load is None
+
+
+@pytest.mark.asyncio
+async def test_capacity_sweep_keeps_nonmonotonic_evidence(
+    capacity_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    execute = blis._execute_bundle
+
+    async def fail_middle(request, *args, **kwargs):
+        if request.workload.request_rate == 4:
+            return Problem(code="fixture_failure", message="The middle point failed")
+        return await execute(request, *args, **kwargs)
+
+    monkeypatch.setattr(blis, "_execute_bundle", fail_middle)
+    result = await _sweep_capacity(capacity_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert [point.evaluation.status for point in result.points] == ["succeeded", "failed", "succeeded"]
+    assert result.feasible_loads == [2, 8]
+    assert result.highest_feasible_load == 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", ["request", "server", "static_refusal"])
+async def test_capacity_sweep_global_attempt_budget(capacity_request, bundle_profile, tmp_path, monkeypatch, limit):
+    execute = AsyncMock(return_value=Problem(code="fixture_failure", message="Fixture execution failed"))
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    if limit == "server":
+        limits = _SearchLimits(max_evaluations=1)
+    else:
+        limits = None
+        capacity_request.budget.max_evaluations = 1
+    if limit == "static_refusal":
+        capacity_request.run.seed = None
+    result = await _sweep_capacity(capacity_request, bundle_profile, tmp_path, asyncio.Event(), limits=limits)
+    assert not result.search_complete
+    assert result.termination_reason.code == "evaluation_budget_exhausted"
+    assert len(result.points) == 1
+    assert result.points[0].workload.request_rate == 2
+    assert result.points[0].evaluation.status == ("unsupported" if limit == "static_refusal" else "failed")
+    assert execute.await_count == (0 if limit == "static_refusal" else 1)
+    assert result.highest_feasible_load is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["topology", "disagg", "trace", "native_mean", "grid", "cross_evaluations"])
+async def test_capacity_sweep_refuses_unsupported_search(capacity_request, bundle_profile, tmp_path, monkeypatch, case):
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    limits = None
+    if case == "topology":
+        capacity_request.space = capacity_request.space.model_validate(
+            {"mode": "find_configuration", "tensor_parallel": [1], "replicas": [1]}
+        )
+    elif case == "disagg":
+        capacity_request.configuration = capacity_request.configuration.model_validate(
+            {"mode": "disagg", "roles": [{"role": "prefill"}, {"role": "decode"}]}
+        )
+    elif case == "trace":
+        capacity_request.workload = Workload(distribution="trace", trace_artifact="registered-trace")
+    elif case == "native_mean":
+        capacity_request.workload.distribution = "native_mean"
+    elif case == "grid":
+        limits = _SearchLimits(max_grid_size=2)
+    else:
+        capacity_request.budget.cross_evaluations = 1
+    result = await _sweep_capacity(capacity_request, bundle_profile, tmp_path, asyncio.Event(), limits=limits)
+    assert isinstance(result, Problem)
+    assert (
+        result.code
+        == {
+            "topology": "search_mode_not_supported",
+            "disagg": "search_mode_not_supported",
+            "trace": "distribution_not_supported",
+            "native_mean": "distribution_not_supported",
+            "grid": "search_grid_too_large",
+            "cross_evaluations": "cross_evaluation_not_supported",
+        }[case]
+    )
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_capacity_sweep_concurrency_prefix_refusals_consume_budget(
+    capacity_request, bundle_profile, tmp_path, monkeypatch
+):
+    capacity_request.space = capacity_request.space.model_validate({"mode": "find_capacity", "concurrencies": [1, 2]})
+    capacity_request.workload.prefix_tokens = 1
+    execute = AsyncMock()
+    monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
+    result = await _sweep_capacity(capacity_request, bundle_profile, tmp_path, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 2
+    assert all(point.evaluation.error.code == "concurrency_prefix_not_supported" for point in result.points)
+    assert result.feasible_loads == []
+    execute.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_topology_search_counts_failed_and_invalid_candidates(
     topology_request, bundle_profile, tmp_path, monkeypatch
@@ -85,8 +1161,94 @@ async def test_topology_search_counts_failed_and_invalid_candidates(
         "unsupported",
     ]
     assert execute.await_count == 2
+    assert result.execution_counts == {"succeeded": 0, "unsupported": 2, "failed": 2, "timed_out": 0, "cancelled": 0}
+    assert result.constraint_counts == {"satisfied": 0, "not_satisfied": 0, "unknown": 0}
     assert result.ranked_fingerprints == []
     assert not list(tmp_path.glob("blis-search-*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sweep", [_search_topologies, _sweep_capacity, _search_joint])
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "kernelmodel: No available memory for the cache blocks; no room for KV",
+        "fatal: unknown kernel failure mentioning memory; not a capacity verdict",
+    ],
+)
+async def test_sweep_retains_failure_diagnostics_without_guessing_feasibility(
+    topology_request,
+    capacity_request,
+    joint_request,
+    bundle_profile,
+    tmp_path,
+    topology_executor,
+    monkeypatch,
+    sweep,
+    diagnostic,
+):
+    from llm_d_lens.estimate_tools.blis import service as blis
+
+    request = joint_request if sweep is _search_joint else capacity_request
+    if sweep is _search_topologies:
+        request = topology_request.model_copy(deep=True)
+        request.space = request.space.model_validate(
+            {"mode": "find_configuration", "tensor_parallel": [1, 16], "replicas": [1, 2]}
+        )
+    calls, _ = topology_executor
+    execute = blis._execute_bundle
+
+    async def failing_execute(*args, **kwargs):
+        await execute(*args, **kwargs)
+        return _ExecutionResult(
+            status="failed",
+            returncode=7,
+            stdout_bytes=1,
+            stderr_bytes=len(diagnostic.encode()),
+            output_truncated=False,
+            stderr_tail=diagnostic,
+        )
+
+    monkeypatch.setattr(blis, "_execute_bundle", failing_execute)
+    result = await sweep(request, bundle_profile, tmp_path, asyncio.Event())
+    evaluations = (
+        [candidate.evaluations[0] for candidate in result.candidates]
+        if sweep is _search_topologies
+        else [point.evaluation for point in result.points]
+    )
+    diagnostics = (
+        list(result.execution_diagnostics.values())
+        if sweep is _search_topologies
+        else [point.execution for point in result.points]
+    )
+    assert result.search_complete
+    assert result.execution_counts["failed"] == len(calls)
+    assert sum(result.execution_counts.values()) == len(evaluations)
+    assert sum(result.constraint_counts.values()) == 0
+    assert all(evaluation.constraint_assessment == "unknown" for evaluation in evaluations)
+    assert all(evaluation.error.code == "process_failed" for evaluation in evaluations if evaluation.status == "failed")
+    assert all(execution.stderr_tail == diagnostic and execution.returncode == 7 for execution in diagnostics)
+    assert len(diagnostics) == len(calls)
+    assert not list(tmp_path.glob("blis-search-*"))
+    if sweep is _search_topologies:
+        assert result.ranked_fingerprints == []
+    elif sweep is _sweep_capacity:
+        assert result.feasible_loads == []
+    else:
+        assert result.recommendations == []
+        point = result.points[0]
+        expected = hashlib.sha256(
+            json.dumps(
+                point.model_dump(mode="json", exclude={"evaluation", "execution", "measured_duration_s"}),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        assert point.fingerprint == expected
+        point.execution.stderr_tail = "Different diagnostic"
+        point.execution.returncode = 9
+        assert point.fingerprint == expected
 
 
 @pytest.mark.asyncio
@@ -112,16 +1274,47 @@ def topology_executor(result_case, monkeypatch):
         assert not isinstance(bundle, Problem), bundle
         payload = deepcopy(template)
         payload["metrics"]["ttft_mean_ms"] = request.configuration.roles[0].tp * 10
+        if request.run.num_requests == 0:
+            count = int(request.run.horizon_s * (request.workload.request_rate or 2))
+            payload["requests"].update(generated=count, injected=count, completed=count)
+            payload["window"].update(duration_s=request.run.horizon_s, requests=count)
+            payload["metrics"]["request_throughput"] = count / request.run.horizon_s
+        elif request.run.num_requests != template["input"]["run"]["num_requests"]:
+            count = request.run.num_requests
+            payload["requests"].update(generated=count, injected=count, completed=count)
+            payload["window"].update(duration_s=count / 2, requests=count)
+            payload["metrics"]["request_throughput"] = 2
+        payload["input"]["run"].update(
+            num_requests=max(payload["requests"]["generated"], 1)
+            if request.run.num_requests == 0
+            else request.run.num_requests,
+            horizon_s=request.run.horizon_s,
+        )
         scenario, deployment = yaml.safe_load_all((destination / "inputs/scenarios/deployment.yaml").read_text())
         payload["input"].update(scenario=scenario, deployment=deployment)
+        payload["input"]["run"]["load"] = (
+            {"concurrency": request.workload.concurrency}
+            if request.workload.concurrency is not None
+            else {"request_rate": request.workload.request_rate}
+        )
         payload["overrides"][0]["run"] = f"sha256:{file_digest(destination / 'inputs/workload.yaml')}"
         payload["overrides"].append(
             {
                 "setting": "num-instances",
-                "run": str(request.configuration.roles[0].replicas),
+                "run": str(sum(role.replicas for role in request.configuration.roles)),
                 "source": "--num-instances",
             }
         )
+        if request.configuration.mode == "disagg":
+            payload["overrides"].extend(
+                {"setting": f"{role.role}-instances", "run": str(role.replicas), "source": f"--{role.role}-instances"}
+                for role in request.configuration.roles
+            )
+            payload["kernel"] = {
+                role.role: deepcopy(payload["kernel"]["colocated"]) for role in request.configuration.roles
+            }
+            payload.setdefault("router", {"requirements": {"Disaggregates": True}})
+            payload.setdefault("breakdowns", {"pd": {"disaggregated_requests": payload["requests"]["injected"]}})
         (destination / "stdout.log").write_text(json.dumps(payload))
         return _ExecutionResult(status="exited", returncode=0, stdout_bytes=1, stderr_bytes=0, output_truncated=False)
 
@@ -228,11 +1421,21 @@ async def test_topology_search_server_evaluation_ceiling(topology_request, bundl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sweep", [_search_topologies, _sweep_capacity, _search_joint, _search_disaggregated])
 @pytest.mark.parametrize("stop", ["event", "deadline", "task"])
-async def test_topology_search_bounds_concurrency_and_cleans_interrupted_work(
-    topology_request, bundle_profile, tmp_path, monkeypatch, stop
+async def test_managed_sweep_bounds_concurrency_and_cleans_interrupted_work(
+    topology_request, joint_request, disagg_request, bundle_profile, tmp_path, monkeypatch, stop, sweep
 ):
-    topology_request.space.tensor_parallel = [1, 2]
+    if sweep is _search_joint:
+        topology_request = joint_request
+    if sweep is _search_disaggregated:
+        topology_request = disagg_request
+    else:
+        topology_request.space.tensor_parallel = [1, 2]
+    if sweep is _sweep_capacity:
+        topology_request.space = topology_request.space.model_validate(
+            {"mode": "find_capacity", "request_rates": [1, 2, 4, 8]}
+        )
     topology_request.budget.parallelism = 4
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -252,7 +1455,7 @@ async def test_topology_search_bounds_concurrency_and_cleans_interrupted_work(
 
     monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
     task = asyncio.create_task(
-        _search_topologies(
+        sweep(
             topology_request,
             bundle_profile,
             tmp_path,
@@ -273,53 +1476,97 @@ async def test_topology_search_bounds_concurrency_and_cleans_interrupted_work(
         status = "cancelled" if stop == "event" else "timed_out"
         assert result.termination_reason.code == f"search_{status}"
         assert not result.search_complete
-        assert len(result.candidates) == 2
-        assert all(candidate.evaluations[0].status == status for candidate in result.candidates)
+        evaluations = (
+            [point.evaluation for point in result.points]
+            if sweep not in (_search_topologies, _search_disaggregated)
+            else [candidate.evaluations[0] for candidate in result.candidates]
+        )
+        assert len(evaluations) == 2
+        assert all(evaluation.status == status for evaluation in evaluations)
     assert calls == 2
     assert active == 0
     assert not list(tmp_path.glob("blis-search-*"))
 
 
 @pytest.mark.asyncio
-async def test_topology_search_pre_cancelled_does_not_launch(topology_request, bundle_profile, tmp_path, monkeypatch):
+@pytest.mark.parametrize("sweep", [_search_topologies, _sweep_capacity, _search_joint, _search_disaggregated])
+async def test_managed_sweep_pre_cancelled_does_not_launch(
+    topology_request, joint_request, disagg_request, bundle_profile, tmp_path, monkeypatch, sweep
+):
+    if sweep is _search_joint:
+        topology_request = joint_request
+    elif sweep is _search_disaggregated:
+        topology_request = disagg_request
+    if sweep is _sweep_capacity:
+        topology_request.space = topology_request.space.model_validate({"mode": "find_capacity", "concurrencies": [1]})
     execute = AsyncMock()
     monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
     cancelled = asyncio.Event()
     cancelled.set()
-    result = await _search_topologies(topology_request, bundle_profile, tmp_path, cancelled)
-    assert result.candidates == []
+    result = await sweep(topology_request, bundle_profile, tmp_path, cancelled)
+    assert (result.candidates if sweep in (_search_topologies, _search_disaggregated) else result.points) == []
     assert result.termination_reason.code == "search_cancelled"
     execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_topology_search_retains_completed_candidates_when_cancelled(
-    topology_request, bundle_profile, tmp_path, topology_executor, monkeypatch
+@pytest.mark.parametrize("sweep", [_search_topologies, _sweep_capacity, _search_joint, _search_disaggregated])
+async def test_managed_sweep_retains_completed_evidence_when_cancelled(
+    topology_request, joint_request, disagg_request, bundle_profile, tmp_path, topology_executor, monkeypatch, sweep
 ):
     from llm_d_lens.estimate_tools.blis import service as blis
 
+    if sweep is _sweep_capacity:
+        topology_request.space = topology_request.space.model_validate(
+            {"mode": "find_capacity", "request_rates": [1, 2]}
+        )
+    elif sweep is _search_joint:
+        topology_request = joint_request
+    elif sweep is _search_disaggregated:
+        topology_request = disagg_request
     original = blis._execute_bundle
     cancelled = asyncio.Event()
 
     async def execute(request, *args, **kwargs):
-        if request.configuration.roles[0].replicas == 1:
+        if (
+            request.workload.request_rate == 1
+            if sweep is _sweep_capacity
+            else request.configuration.roles[0].replicas == 1
+        ):
             return await original(request, *args, **kwargs)
         cancelled.set()
         await asyncio.Event().wait()
         raise AssertionError("Blocked evaluation must be cancelled")
 
     monkeypatch.setattr(blis, "_execute_bundle", execute)
-    result = await _search_topologies(topology_request, bundle_profile, tmp_path, cancelled)
+    result = await sweep(topology_request, bundle_profile, tmp_path, cancelled)
     assert not result.search_complete
-    assert [candidate.evaluations[0].status for candidate in result.candidates] == ["succeeded", "cancelled"]
-    assert result.ranked_fingerprints == [result.candidates[0].effective_configuration.fingerprint]
+    if sweep is _search_joint:
+        assert [point.evaluation.status for point in result.points] == ["succeeded", "cancelled"]
+        assert result.recommendations == []
+        assert not result.validation_complete
+        assert result.points[0].workload.request_rate == 2
+    elif sweep is _sweep_capacity:
+        assert [point.evaluation.status for point in result.points] == ["succeeded", "cancelled"]
+        assert result.feasible_loads == [1]
+        assert result.highest_feasible_load == 1
+    else:
+        assert [candidate.evaluations[0].status for candidate in result.candidates] == ["succeeded", "cancelled"]
+        assert result.ranked_fingerprints == [result.candidates[0].effective_configuration.fingerprint]
     assert not list(tmp_path.glob("blis-search-*"))
 
 
 @pytest.mark.asyncio
-async def test_topology_search_repeated_task_cancellation_waits_for_cleanup(
-    topology_request, bundle_profile, tmp_path, monkeypatch
+@pytest.mark.parametrize("sweep", [_search_topologies, _sweep_capacity, _search_joint, _search_disaggregated])
+async def test_managed_sweep_repeated_task_cancellation_waits_for_cleanup(
+    topology_request, joint_request, disagg_request, bundle_profile, tmp_path, monkeypatch, sweep
 ):
+    if sweep is _search_joint:
+        topology_request = joint_request
+    elif sweep is _search_disaggregated:
+        topology_request = disagg_request
+    if sweep is _sweep_capacity:
+        topology_request.space = topology_request.space.model_validate({"mode": "find_capacity", "concurrencies": [1]})
     started = asyncio.Event()
     cleaning = asyncio.Event()
     release = asyncio.Event()
@@ -336,7 +1583,7 @@ async def test_topology_search_repeated_task_cancellation_waits_for_cleanup(
             cleaned.set()
 
     monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)
-    task = asyncio.create_task(_search_topologies(topology_request, bundle_profile, tmp_path, asyncio.Event()))
+    task = asyncio.create_task(sweep(topology_request, bundle_profile, tmp_path, asyncio.Event()))
     await asyncio.wait_for(started.wait(), 2)
     task.cancel()
     await asyncio.wait_for(cleaning.wait(), 2)
@@ -359,6 +1606,48 @@ async def test_executor_search_deadline_blocks_compilation_and_launch(bundle_pro
     assert result.code == "execution_timed_out"
     compile_bundle.assert_not_called()
     assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["request_rates", "concurrencies", "horizon"])
+async def test_capacity_sweep_with_locked_runtime(topology_request, tmp_path, monkeypatch, case):
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).absolute(), inputs=Path(inputs).absolute())
+    request = OptimizeRequest.model_validate(
+        {
+            **topology_request.model_dump(),
+            **profile.verified_request.model_dump(exclude={"operation"}),
+            "space": {"mode": "find_capacity", "concurrencies" if case == "concurrencies" else "request_rates": [4, 2]},
+            "budget": {"max_evaluations": 2, "parallelism": 2, "wall_duration_s": 60},
+        }
+    )
+    if case == "horizon":
+        request.run.horizon_s = 0.000001
+        request.constraints.require_complete = False
+    before = request.model_dump()
+    no_aic = AsyncMock(side_effect=AssertionError("BLIS capacity sweep must not invoke AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", no_aic)
+    scratch = tmp_path / "sweep"
+    scratch.mkdir()
+    result = await _sweep_capacity(request, profile, scratch, asyncio.Event())
+    assert result.search_complete
+    assert len(result.points) == 2
+    assert result.load_kind == ("concurrency" if case == "concurrencies" else "request_rate")
+    assert result.feasible_loads == ([] if case == "horizon" else [2, 4])
+    assert result.highest_feasible_load == (None if case == "horizon" else 4)
+    for point in result.points:
+        evaluation = point.evaluation
+        assert evaluation.status == "succeeded", evaluation.error
+        assert evaluation.request_accounting["completed"] == (0 if case == "horizon" else 8)
+        assert evaluation.coefficient_provenance["kernel"]
+        assert point.effective_configuration == EffectiveConfiguration.from_request(request)
+        assert evaluation.configuration_fingerprint == point.effective_configuration.fingerprint
+    assert len({point.evaluation.resolved_input_digest for point in result.points}) == 2
+    assert request.model_dump() == before
+    no_aic.assert_not_awaited()
+    assert not list(scratch.iterdir())
 
 
 @pytest.mark.asyncio
@@ -889,8 +2178,25 @@ async def test_executor_uses_compiled_argv_isolated_environment_and_retained_log
     assert (destination / "stderr.log").read_bytes() == b"diagnostic\xff"
     assert result.stdout_bytes == (destination / "stdout.log").stat().st_size
     assert result.stderr_bytes == len(b"diagnostic\xff")
+    assert result.stderr_tail == b"diagnostic\xff".decode("utf-8", errors="replace")
+    assert not result.stderr_tail_truncated
     assert not result.output_truncated
     assert not any(capability.enabled for capability in availability(profile).capabilities)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [0, 4095, 4096, 8192])
+async def test_executor_bounds_diagnostic_tail_without_changing_execution(executable_profile, tmp_path, size):
+    profile = executable_profile(f"import sys\nsys.stderr.buffer.write(b'x' * {size} + b'\\xff')\nsys.exit(7)\n")
+    destination = tmp_path / "bundle"
+    result = await _execute_bundle(profile.verified_request, profile, destination, asyncio.Event())
+    assert not isinstance(result, Problem), result
+    assert result.status == "failed"
+    assert result.returncode == 7
+    assert result.stderr_bytes == size + 1
+    assert result.stderr_tail == (b"x" * size + b"\xff")[-4096:].decode("utf-8", errors="replace")
+    assert result.stderr_tail_truncated == (size + 1 > 4096)
+    assert not result.output_truncated
 
 
 @pytest.mark.asyncio
@@ -1086,6 +2392,231 @@ def test_deployment_documents_use_native_fields_and_preserve_layout(profile):
     assert not isinstance(second_documents, Problem)
     assert second_documents[0]["cluster"] != scenario["cluster"]
     assert _deployment_documents(request, profile) == documents
+
+
+def test_disaggregated_bundle_preserves_roles_and_native_instance_counts(bundle_profile, tmp_path):
+    profile = bundle_profile.model_copy(update={"disagg_enabled": True})
+    payload = profile.verified_request.model_dump()
+    payload["hardware"].update(nodes=3, devices_per_node=8)
+    payload["configuration"].update(
+        mode="disagg",
+        roles=[{"role": "prefill", "tp": 8, "replicas": 2}, {"role": "decode", "tp": 8}],
+        router_settings={"endpoint_picker_config": "router/epp.yaml"},
+    )
+    request = EstimateRequest.model_validate(payload)
+    before = request.model_dump()
+    destination = tmp_path / "pd-bundle"
+    bundle = _compile_bundle(request, profile, destination)
+    assert not isinstance(bundle, Problem)
+    _, deployment = yaml.safe_load_all((destination / "inputs/scenarios/deployment.yaml").read_text())
+    pools = {pool["role"]: pool for pool in deployment["pools"]}
+    assert {role: pool["nodes"] for role, pool in pools.items()} == {"prefill": 2, "decode": 1}
+    assert all(pool["parallel"]["tp"] == 8 for pool in pools.values())
+    assert deployment["pd_transfer"] == {"connector": "NixlConnector"}
+    arguments = dict(zip(bundle.arguments[::2], bundle.arguments[1::2], strict=True))
+    assert arguments["--num-instances"] == "3"
+    assert arguments["--prefill-instances"] == "2"
+    assert arguments["--decode-instances"] == "1"
+    assert request.model_dump() == before
+    relocated = tmp_path / "relocated-pd-bundle"
+    shutil.move(destination, relocated)
+    router = deployment["router"]
+    assert (relocated / "inputs/scenarios" / router["endpoint_picker_config"]).read_text() == "kind: Fixture\n"
+    assert bundle.input_digest == tree_digest(relocated / "inputs")
+
+
+@pytest.mark.parametrize(
+    "case,code",
+    [
+        ("profile", "mode_not_supported"),
+        ("router", "router_required"),
+        ("fabric", "fabric_required"),
+        ("dp", "parallelism_not_supported"),
+        ("fragmentation", "placement_impossible"),
+        ("cross_node_tp", "placement_not_supported"),
+        ("unsafe_router", "bundle_compilation_failed"),
+    ],
+)
+def test_disaggregated_compilation_refuses_unsupported_inputs(disagg_request, bundle_profile, tmp_path, case, code):
+    request = EstimateRequest.model_validate(
+        disagg_request.model_dump(exclude={"operation", "space", "objective", "budget"})
+    )
+    if case == "profile":
+        bundle_profile.disagg_enabled = False
+    elif case == "router":
+        request.configuration.router_settings = {}
+    elif case == "fabric":
+        request.hardware.fabric = None
+    elif case == "dp":
+        request.configuration.roles[0].dp = 2
+    elif case == "fragmentation":
+        request.hardware.nodes = 1
+        for role in request.configuration.roles:
+            role.tp = 3
+    elif case == "cross_node_tp":
+        request.configuration.roles[0].tp = 12
+    else:
+        request.configuration.router_settings = {"endpoint_picker_config": "../outside.yaml"}
+    destination = tmp_path / "refused-bundle"
+    result = _compile_bundle(request, bundle_profile, destination)
+    assert isinstance(result, Problem)
+    assert result.code == code
+    assert not destination.exists()
+
+
+@pytest.fixture
+def locked_disagg_case():
+    binary, inputs = os.environ.get("LENS_TEST_BLIS_BINARY"), os.environ.get("LENS_TEST_BLIS_INPUTS")
+    if not binary or not inputs:
+        pytest.skip("Set LENS_TEST_BLIS_BINARY and LENS_TEST_BLIS_INPUTS for the opt-in locked runtime test")
+    profile = baseline_profile(binary=Path(binary).absolute(), inputs=Path(inputs).absolute())
+    profile.disagg_enabled = True
+    payload = profile.verified_request.model_dump()
+    payload["hardware"]["nodes"] = 2
+    payload["configuration"].update(
+        mode="disagg",
+        roles=[
+            {"role": "prefill", "tp": 8, "expert_parallel": True},
+            {"role": "decode", "tp": 8, "expert_parallel": True},
+        ],
+        router_settings={
+            "epp_flags": [
+                "--endpoint-selector=llm-d.ai/inference-serving=true",
+                "--endpoint-target-ports=8000",
+                "--config-text="
+                + dedent("""\
+                apiVersion: llm-d.ai/v1
+                kind: EndpointPickerConfig
+                plugins:
+                - type: prefill-filter
+                - type: decode-filter
+                - type: max-score-picker
+                - type: always-disagg-pd-decider
+                - type: disagg-profile-handler
+                  parameters:
+                    deciders:
+                      prefill: always-disagg-pd-decider
+                schedulingProfiles:
+                - name: prefill
+                  plugins:
+                  - pluginRef: prefill-filter
+                  - pluginRef: max-score-picker
+                - name: decode
+                  plugins:
+                  - pluginRef: decode-filter
+                  - pluginRef: max-score-picker
+                """),
+            ]
+        },
+    )
+    request = EstimateRequest.model_validate(payload)
+    request.configuration.engine_settings["max_model_len"] = 4096
+    return request, profile
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["qps", "concurrency", "replicas", "heterogeneous_tp", "dp"])
+async def test_disaggregated_execution_with_locked_runtime(locked_disagg_case, tmp_path, monkeypatch, case):
+    request, profile = locked_disagg_case
+    roles = {role.role: role for role in request.configuration.roles}
+    if case == "concurrency":
+        request.workload = Workload.model_validate(
+            {**request.workload.model_dump(), "request_rate": None, "concurrency": 2}
+        )
+    elif case == "replicas":
+        request.hardware.nodes = 3
+        roles["prefill"].replicas = 2
+    elif case == "heterogeneous_tp":
+        request.hardware.nodes = 3
+        roles["prefill"].tp = 16
+    elif case == "dp":
+        request.hardware.nodes = 4
+        roles["prefill"].dp = roles["decode"].dp = 2
+    no_aic = AsyncMock(side_effect=AssertionError("P/D must not invoke AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", no_aic)
+    destination = tmp_path / "pd-bundle"
+    execution = await _execute_bundle(request, profile, destination, asyncio.Event())
+    if case == "dp":
+        assert isinstance(execution, Problem)
+        assert execution.code == "parallelism_not_supported"
+        assert not destination.exists()
+        no_aic.assert_not_awaited()
+        return
+    assert not isinstance(execution, Problem), execution
+    assert execution.status == "exited", execution.stderr_tail
+    raw = json.loads((destination / "stdout.log").read_bytes())
+    evaluation = _parse_result(request, profile, destination, json.dumps(raw))
+    assert evaluation.status == "succeeded", evaluation.error
+    assert evaluation.constraint_assessment == "satisfied", evaluation.warnings
+    assert evaluation.request_accounting["completed"] == 8
+    assert set(raw["kernel"]) >= {"prefill", "decode"}
+    assert raw["breakdowns"]["pd"]["disaggregated_requests"] == 8
+    assert raw["breakdowns"]["pd"]["kv_transfer_mean_ms"] > 0
+    assert evaluation.coefficient_provenance["pd"]["breakdowns"] == raw["breakdowns"]["pd"]
+    assert evaluation.coefficient_provenance["pd"]["router"] == raw["router"]
+    assert not any(capability.enabled for capability in availability(profile).capabilities)
+    no_aic.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["search", "native_refusal"])
+async def test_disaggregated_search_with_locked_runtime(
+    locked_disagg_case, topology_request, tmp_path, monkeypatch, case
+):
+    request, profile = locked_disagg_case
+    request.hardware.nodes = 6
+    if case == "native_refusal":
+        for role in request.configuration.roles:
+            role.pp = 2
+    search = _DisaggSearchRequest.model_validate(
+        {
+            **request.model_dump(exclude={"operation"}),
+            "objective": topology_request.objective.model_dump(),
+            "budget": {"max_evaluations": 4, "parallelism": 2, "wall_duration_s": 120},
+            "space": {
+                "prefill_tensor_parallel": [8, 16] if case == "search" else [8],
+                "prefill_replicas": [1, 2] if case == "search" else [1],
+                "decode_tensor_parallel": [8],
+                "decode_replicas": [1],
+            },
+        }
+    )
+    no_aic = AsyncMock(side_effect=AssertionError("P/D search must not invoke AISimulate"))
+    monkeypatch.setattr(adapter, "estimate", no_aic)
+    result = await _search_disaggregated(search, profile, tmp_path, asyncio.Event())
+    assert not isinstance(result, Problem), result
+    assert result.search_complete
+    if case == "native_refusal":
+        assert len(result.candidates) == 1
+        evaluation = result.candidates[0].evaluations[0]
+        assert evaluation.status == "failed"
+        assert evaluation.constraint_assessment == "unknown"
+        assert result.ranked_fingerprints == []
+        diagnostic = result.execution_diagnostics[evaluation.configuration_fingerprint]
+        assert diagnostic.status == "failed"
+        assert diagnostic.returncode != 0
+        assert "hybrid KV cache layout" in diagnostic.stderr_tail
+    else:
+        assert len(result.candidates) == len(result.ranked_fingerprints) == 4
+        digests = set()
+        values = {}
+        for candidate in result.candidates:
+            evaluation = candidate.evaluations[0]
+            assert evaluation.status == "succeeded", evaluation.error
+            assert evaluation.constraint_assessment == "satisfied", evaluation.warnings
+            assert evaluation.request_accounting["completed"] == 8
+            assert evaluation.coefficient_provenance["pd"]["breakdowns"]["disaggregated_requests"] == 8
+            assert evaluation.coefficient_provenance["pd"]["breakdowns"]["kv_transfer_mean_ms"] > 0
+            assert set(evaluation.coefficient_provenance["kernel"]) >= {"prefill", "decode"}
+            digests.add(evaluation.resolved_input_digest)
+            values[evaluation.configuration_fingerprint] = next(
+                metric.value for metric in evaluation.metrics if metric.name == "ttft_mean_ms"
+            )
+        assert len(digests) == 4
+        assert [values[fingerprint] for fingerprint in result.ranked_fingerprints] == sorted(values.values())
+    assert not list(tmp_path.glob("blis-search-*"))
+    assert not any(capability.enabled for capability in availability(profile).capabilities)
+    no_aic.assert_not_awaited()
 
 
 def test_deployment_documents_reject_fragmented_capacity(profile):
