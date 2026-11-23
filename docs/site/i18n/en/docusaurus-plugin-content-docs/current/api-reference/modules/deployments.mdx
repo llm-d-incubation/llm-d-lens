@@ -964,18 +964,33 @@ AISimulate recommendations, including replica counts outside the ordinary candid
   <TabItem value="rest-api" label="REST API">
     **`POST /api/v1/aic/search`**
 
-    `mean_input_tokens` defaults to `4000` and `mean_output_tokens` to `1000`, matching
-    the AISimulate compatibility API's search/recommend defaults. Supply either positive `target_concurrency` or
-    `target_request_rate` (requests/second), or omit both for fixed-GPU search.
+    Search and recommendation use AISimulate's engine replay Sweeper exclusively;
+    analytical search/recommendation and replica/throughput extrapolation are removed.
+    `mean_input_tokens` defaults to `4000` and `mean_output_tokens` to `1000`.
+    Supply either positive integer `target_concurrency` or positive
+    `target_request_rate` (Poisson arrivals, requests/second). Omitting both runs
+    fixed-budget search at concurrency `1`, not a saturation-capacity prediction.
     Supplying both is rejected with an explanation that this AISimulate API does not support joint
     load targets. Agentic maps `planning_facts.workload_profile.concurrency` and
     `.request_rate` to these fields; QPS and request rate are the same quantity.
 
-    With a load target, `gpu_count` is an acceptance budget, not a native recommend
-    input. Lens scales the recommended worker pools and accepts only configurations
-    within that budget and the TTFT/TPOT targets (native defaults `2000`/`30` ms).
-    Unavailable predictions, insufficient capacity or unmet SLOs return an explicit
-    error instead of silently selecting a prediction without a load target.
+    `gpu_count` bounds the native search space. With a load target, candidates rank
+    by GPU count then replay output throughput; without one they rank by replay
+    output throughput. Only complete replays within the GPU budget and mean
+    TTFT/TPOT limits (defaults `2000`/`30` ms) are accepted. TPOT is not ITL.
+    QPS search additionally requires native goodput of at least the requested QPS.
+    `num_requests` defaults to `32`; concurrency replay uses at least twice the
+    concurrency. `max_evaluations` defaults to `32`, accepts `1` through `256`,
+    and each evaluation has a `20` second limit. Evaluations use one worker.
+    No accepted candidate returns an explicit error without analytical fallback;
+    a bounded search failure does not prove that no feasible configuration exists.
+    Responses identify `execution_mode: "engine_replay"` and runtime profile
+    `aisimulate-engine-replay-v1`, report `evaluated_candidates`, and mark
+    `search_complete: false`. Each candidate carries its native `replay_metrics`
+    and `engine_configuration`; reproduce those engine settings with the topology.
+    Percentile SLOs, global optimality and real-world accuracy are not established.
+    The separately named legacy `/experiments` YAML API is unchanged and is not
+    used by estimate or recommendation.
     Agentic forwards that reason to the frontend error alert for request-rate targets.
     When AIC cannot predict a concurrency target, Agentic and Manual planning continue
     with deterministic candidates whose serving replicas are sized from per-replica
@@ -994,7 +1009,7 @@ AISimulate recommendations, including replica counts outside the ordinary candid
     ```
 
     Use `target_concurrency` instead of `target_request_rate` for a concurrent-request
-    target. Leave both unset to retain the existing fixed-GPU search.
+    target. Leave both unset for fixed-budget replay search at concurrency `1`.
   </TabItem>
 </Tabs>
 
@@ -1037,7 +1052,7 @@ AISimulate recommendations, including replica counts outside the ordinary candid
     fallback. Estimates do not prove SLO compliance or real-world accuracy.
     The shared Python estimate uses runtime profile `aisimulate-engine-replay-v1`,
     accepts workload concurrency/request rate and `run.num_requests`, and rejects
-    the old `aisimulate-native` profile for estimates. Search is unchanged in this stage.
+    the old `aisimulate-native` profile for estimates and recommendations.
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

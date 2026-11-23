@@ -770,17 +770,26 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
   <TabItem value="rest-api" label="REST API">
     **`POST /api/v1/aic/search`**
 
-    `mean_input_tokens` 默认 `4000`，`mean_output_tokens` 默认 `1000`，与 AIC 原生
-    search/recommend 一致。可以提供正数 `target_concurrency` 或 `target_request_rate`
-    （每秒请求数），二选一；两项均不提供时保留固定 GPU 数搜索。
+    搜索和推荐仅使用 AISimulate engine replay Sweeper，不再调用分析型搜索或推荐，
+    也不再按比例外推副本或吞吐。`mean_input_tokens` 默认 `4000`，`mean_output_tokens`
+    默认 `1000`。可以提供正整数 `target_concurrency` 或正数 `target_request_rate`
+    （泊松到达，每秒请求数），二选一；均省略时使用并发 `1` 的固定预算搜索，不表示饱和容量。
     同时提供会被拒绝，错误中会明确说明 AIC 不支持联合负载目标。
     Agentic 将 `planning_facts.workload_profile.concurrency` 和 `.request_rate`
     映射到这些字段；QPS 和 request rate 是同一项。
 
-    存在负载目标时，`gpu_count` 是 Lens 的验收预算，不传给原生 recommend。
-    Lens 会扩展推荐的各 worker 池，只接受所需 GPU 不超预算且满足 TTFT/TPOT 目标
-    （原生默认 `2000`/`30` 毫秒）的配置。预测不可用、容量不足或 SLO 无法满足时，
-    会明确报错，不会悄悄选择没有负载目标的预测。对请求速率目标，Agentic 会将原因传到前端错误提示区。
+    `gpu_count` 直接限制原生搜索空间。提供负载目标时，先按 GPU 数、再按 replay 输出吞吐排序；
+    无负载目标时按 replay 输出吞吐排序。只接受完整完成、不超 GPU 预算且满足均值
+    TTFT/TPOT 目标（默认 `2000`/`30` 毫秒）的配置。TPOT 不等于 ITL。
+    QPS 搜索额外要求原生 goodput 不低于目标 QPS。`num_requests` 默认 `32`，并发 replay
+    至少使用并发数两倍的请求。`max_evaluations` 默认 `32`，范围 `1` 到 `256`；
+    单次评估限时 `20` 秒，使用一个评估 worker。
+    找不到可接受候选时明确报错，不回退分析方式；有界搜索失败不代表不存在可行配置。
+    响应标记 `execution_mode: "engine_replay"`、运行配置 `aisimulate-engine-replay-v1`、
+    `evaluated_candidates` 及 `search_complete: false`。候选包含原生 `replay_metrics` 和
+    `engine_configuration`，复现时需同时采用这些引擎设置和拓扑。不表示满足分位数 SLO、
+    全局最优或真实精度认证。独立命名的旧版 `/experiments` YAML API 不变，
+    estimate 和 recommend 都不会调用它。对请求速率目标，Agentic 会将失败原因传到前端错误提示区。
     AIC 无法预测并发目标时，Agentic 与 Manual 规划继续使用确定性候选，并按单副本 KV 容量和
     `max_num_seqs` 计算服务副本数；`planning_facts.objective`（`balanced`、`latency`、
     `throughput`、`cost` 或 `reliability`）取自 `requirements.objective`。
@@ -797,7 +806,7 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
     ```
 
     要指定目标并发请求数，使用 `target_concurrency` 替代 `target_request_rate`。
-    两项都不设置则保持原来的固定 GPU 数搜索。
+    两项均省略时执行并发 `1` 的固定预算 replay 搜索。
   </TabItem>
 </Tabs>
 
@@ -836,7 +845,7 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
     `replay_metrics` 包含完成数、样本数和 `duration_ms`。报告不完整或无效时明确失败，
     不回退到分析方式。模拟结果不能证明符合 SLO，也不代表真实部署精度认证。
     共享 Python estimate 使用 `aisimulate-engine-replay-v1` 运行配置，接受工作负载并发或
-    QPS 及 `run.num_requests`，拒绝旧的 `aisimulate-native` estimate 配置。本阶段搜索不变。
+    QPS 及 `run.num_requests`；估算和推荐均拒绝旧的 `aisimulate-native` 运行配置。
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

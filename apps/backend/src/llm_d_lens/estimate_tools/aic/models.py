@@ -29,6 +29,8 @@ class AICRequest(BaseModel):
     aic_backend_name: str = Field(default="vllm", min_length=1)
     aic_database_mode: str = Field(default="SILICON", min_length=1)
     max_candidates: int = Field(default=10, ge=1, le=50)
+    num_requests: int = Field(default=32, ge=1, le=100000)
+    max_evaluations: int = Field(default=32, ge=1, le=256)
 
     @model_validator(mode="after")
     def validate_load_target(self) -> Self:
@@ -87,6 +89,11 @@ class AICSupportResponse(BaseModel):
 class AICSearchResponse(BaseModel):
     configs: list[dict[str, Any]] = Field(default_factory=list)
     chosen_mode: str | None = None
+    execution_mode: Literal["engine_replay"] = "engine_replay"
+    runtime_profile: str = "aisimulate-engine-replay-v1"
+    search_complete: bool = False
+    evaluated_candidates: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AICExperimentResponse(BaseModel):

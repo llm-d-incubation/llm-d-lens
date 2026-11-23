@@ -51,36 +51,70 @@ def estimate_request(**kwargs):
     return service.AICEstimateRequest(aic_system_name="test-system", **kwargs)
 
 
-@pytest.mark.parametrize("target", ["target_concurrency", "target_request_rate"])
-def test_search_routes_load_target_to_recommend_and_scales_replicas(monkeypatch, target):
-    import pandas as pd
-    from aisimulate.legacy_cli import api
+def test_recommend_uses_engine_sweeper_without_replica_scaling(monkeypatch):
+    from aisimulate.sweeper import Sweeper
 
-    captured = {}
+    captured = []
 
-    def recommend(**kwargs):
-        captured.update(kwargs)
+    def sweep(sweeper, config, **kwargs):
+        captured.append(config)
         return SimpleNamespace(
-            chosen_exp="agg",
-            best_configs={
-                "agg": pd.DataFrame(
-                    [{"tp": 2, "num_total_gpus": 2, "replicas_needed": 3, "tokens/s": 100, "ttft": 100, "tpot": 10}]
+            candidates=[
+                SimpleNamespace(
+                    candidate_id="candidate-000001",
+                    status="feasible",
+                    used_gpus=4,
+                    config={"deployment_mode": "agg", "tp": 2, "replicas": 2},
+                    metrics={
+                        "mean_ttft_ms": 100,
+                        "mean_tpot_ms": 10,
+                        "output_throughput_tok_s": 200,
+                        "num_requests": 32,
+                        "completed_requests": 32,
+                        "duration_ms": 5000,
+                        "num_ttft_samples": 32,
+                        "num_tpot_samples": 32,
+                    },
                 )
-            },
+            ],
+            views=SimpleNamespace(top_n=["candidate-000001"]),
         )
 
-    monkeypatch.setattr(api, "cli_recommend", recommend)
-    monkeypatch.setattr(service, "_cli", lambda: (lambda **kwargs: pytest.fail("default called"), None, None))
+    monkeypatch.setattr(Sweeper, "run", sweep)
+    monkeypatch.setattr(service, "_cli", lambda: pytest.fail("No analytical recommendation"))
+    result = service.search_sync(
+        service.AICRequest(
+            model_name="Qwen/Qwen3-8B",
+            aic_system_name="h100_sxm",
+            gpu_count=8,
+            target_concurrency=8,
+        )
+    )
+    assert len(captured) == 1
+    assert captured[0].search_space.gpu_budget == 8
+    assert captured[0].workload.concurrency == 8
+    assert result.configs[0]["replicas"] == 2
+    assert result.configs[0]["num_total_gpus"] == 4
+    assert result.configs[0]["throughput_tokens_per_sec"] == 200
+    assert result.configs[0]["execution_mode"] == "engine_replay"
+
+
+@pytest.mark.parametrize("target", ["target_concurrency", "target_request_rate"])
+def test_search_routes_explicit_load_to_engine_sweeper(monkeypatch, target):
+    captured = sweep_stub(monkeypatch)
     result = service.search_sync(
         service.AICRequest(model_name="Qwen/Qwen3-8B", aic_system_name="test-system", gpu_count=8, **{target: 10})
     )
-    assert captured[target] == 10
-    assert captured["isl"] == 4000
-    assert captured["osl"] == 1000
-    assert "total_gpus" not in captured
-    assert result.configs[0]["replicas"] == 3
-    assert result.configs[0]["num_total_gpus"] == 6
-    assert result.configs[0]["throughput_tokens_per_sec"] == 300
+    config = captured[0]
+    assert getattr(config.workload, "concurrency" if target == "target_concurrency" else "request_rate") == 10
+    assert config.workload.isl == 4000
+    assert config.workload.osl == 1000
+    assert config.goal.target == "min_gpus"
+    assert config.sweep.parallel_evals == 1
+    assert config.sweep.max_trials == 32
+    assert result.configs[0]["replicas"] == 2
+    assert result.configs[0]["num_total_gpus"] == 4
+    assert result.configs[0]["throughput_tokens_per_sec"] == 200
 
 
 def test_search_rejects_joint_load_targets():
@@ -93,32 +127,24 @@ def test_search_rejects_joint_load_targets():
         )
 
 
-def test_search_defaults_match_native_search_and_recommend():
-    from inspect import signature
-
-    from aisimulate.legacy_cli.api import cli_default, cli_recommend
-
+def test_search_replay_defaults_are_explicit():
     request = service.AICRequest(model_name="Qwen/Qwen3-8B", aic_system_name="test-system")
-    for operation in (cli_default, cli_recommend):
-        assert request.mean_input_tokens == signature(operation).parameters["isl"].default
-        assert request.mean_output_tokens == signature(operation).parameters["osl"].default
+    assert request.mean_input_tokens == 4000
+    assert request.mean_output_tokens == 1000
+    assert request.num_requests == 32
+    assert request.max_evaluations == 32
 
 
-def test_search_without_load_target_keeps_default_search(monkeypatch):
-    captured = {}
-
-    def default(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(best_configs={}, chosen_exp=None)
-
-    monkeypatch.setattr(service, "_cli", lambda: (default, None, None))
+def test_search_without_load_target_uses_replay_throughput_objective(monkeypatch):
+    captured = sweep_stub(monkeypatch)
     service.search_sync(service.AICRequest(model_name="model", aic_system_name="system", gpu_count=4))
-    assert captured["total_gpus"] == 4
-    assert "target_concurrency" not in captured
-    assert "target_request_rate" not in captured
+    assert captured[0].search_space.gpu_budget == 4
+    assert captured[0].goal.target == "throughput"
+    assert captured[0].workload.concurrency == 1
+    assert captured[0].workload.request_rate is None
 
 
-def test_search_scales_both_pd_worker_pools():
+def test_legacy_experiment_normalization_scales_both_pd_worker_pools():
     result = service._candidate(
         "disagg",
         {
@@ -138,19 +164,8 @@ def test_search_scales_both_pd_worker_pools():
 
 
 def test_search_rejects_closest_recommendation_that_exceeds_slo(monkeypatch):
-    import pandas as pd
-    from aisimulate.legacy_cli import api
-
-    monkeypatch.setattr(service, "_cli", lambda: (None, None, None))
-    monkeypatch.setattr(
-        api,
-        "cli_recommend",
-        lambda **kwargs: SimpleNamespace(
-            chosen_exp="agg",
-            best_configs={"agg": pd.DataFrame([{"tp": 1, "num_total_gpus": 1, "ttft": 3000, "tpot": 50}])},
-        ),
-    )
-    with pytest.raises(service.AICError, match="no configuration meeting the TTFT/TPOT"):
+    sweep_stub(monkeypatch, mean_tpot_ms=50)
+    with pytest.raises(service.AICError, match="no complete configuration meeting the TTFT/TPOT"):
         service.search_sync(
             service.AICRequest(
                 model_name="model",
@@ -162,25 +177,94 @@ def test_search_rejects_closest_recommendation_that_exceeds_slo(monkeypatch):
 
 
 def test_search_rejects_recommendation_above_capacity(monkeypatch):
-    import pandas as pd
-    from aisimulate.legacy_cli import api
-
-    monkeypatch.setattr(service, "_cli", lambda: (None, None, None))
-    monkeypatch.setattr(
-        api,
-        "cli_recommend",
-        lambda **kwargs: SimpleNamespace(
-            chosen_exp="agg",
-            best_configs={"agg": pd.DataFrame([{"tp": 2, "num_total_gpus": 2, "replicas_needed": 3}])},
-        ),
-    )
-    with pytest.raises(service.AICError, match="Minimum recommended GPUs: 6"):
+    sweep_stub(monkeypatch, used_gpus=6)
+    with pytest.raises(service.AICError, match="4-GPU budget"):
         service.search_sync(
             service.AICRequest(
                 model_name="Qwen/Qwen3-8B",
                 aic_system_name="test-system",
                 gpu_count=4,
                 target_request_rate=10,
+            )
+        )
+
+
+def sweep_stub(monkeypatch, *, used_gpus=4, topology=None, status="feasible", **metrics):
+    from aisimulate.sweeper import Sweeper
+
+    captured = []
+
+    def sweep(sweeper, config, **kwargs):
+        captured.append(config)
+        return SimpleNamespace(
+            candidates=[
+                SimpleNamespace(
+                    status=status,
+                    used_gpus=used_gpus,
+                    config=topology or {"deployment_mode": "agg", "tp": 2, "replicas": 2},
+                    metrics={
+                        "mean_ttft_ms": 100,
+                        "mean_tpot_ms": 10,
+                        "output_throughput_tok_s": 200,
+                        "num_requests": config.workload.request_count,
+                        "completed_requests": config.workload.request_count,
+                        "duration_ms": 5000,
+                        "num_ttft_samples": 32,
+                        "num_tpot_samples": 32,
+                        **metrics,
+                    },
+                )
+            ]
+        )
+
+    monkeypatch.setattr(Sweeper, "run", sweep)
+    monkeypatch.setattr(service, "_cli", lambda: pytest.fail("No analytical fallback"))
+    return captured
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"mean_ttft_ms": float("inf")},
+        {"completed_requests": 31},
+        {"num_ttft_samples": 0},
+        {"duration_ms": 0},
+        {"status": "failed"},
+        {"topology": {"deployment_mode": "agg", "tp": 1, "replicas": 1, "attention_dp": 4}},
+    ],
+)
+def test_recommend_rejects_unverifiable_candidates(monkeypatch, changes):
+    sweep_stub(monkeypatch, **changes)
+    with pytest.raises(service.AICError, match="bounded search"):
+        service.search_sync(service.AICRequest(model_name="model", aic_system_name="system"))
+
+
+def test_recommend_preserves_pd_worker_allocation(monkeypatch):
+    sweep_stub(
+        monkeypatch,
+        used_gpus=5,
+        topology={
+            "deployment_mode": "disagg",
+            "prefill_tp": 1,
+            "prefill_replicas": 2,
+            "decode_tp": 1,
+            "decode_replicas": 3,
+        },
+    )
+    result = service.search_sync(service.AICRequest(model_name="model", aic_system_name="system"))
+    assert result.configs[0]["prefill_replicas"] == 2
+    assert result.configs[0]["decode_replicas"] == 3
+    assert result.configs[0]["throughput_tokens_per_sec"] == 200
+
+
+def test_recommend_rejects_fractional_concurrency(monkeypatch):
+    sweep_stub(monkeypatch)
+    with pytest.raises(service.AICError, match="integer concurrency"):
+        service.search_sync(
+            service.AICRequest(
+                model_name="model",
+                aic_system_name="system",
+                target_concurrency=1.5,
             )
         )
 

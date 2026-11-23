@@ -1,4 +1,4 @@
-"""Translate fixed deployments to engine replay and retain native search separately."""
+"""Translate fixed deployments and recommendations to AISimulate engine replay."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from ..models import (
 from . import service
 from .models import AICEstimateRequest, AICExperimentRequest, AICRequest
 
-PROFILE_ID = "aisimulate-native"
+PROFILE_ID = "aisimulate-engine-replay-v1"
 REPLAY_PROFILE_ID = "aisimulate-engine-replay-v1"
 
 
