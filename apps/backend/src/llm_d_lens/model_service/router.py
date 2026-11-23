@@ -37,6 +37,7 @@ from llm_d_lens.auth.contracts import Principal, ResourceRef
 from llm_d_lens.auth.policy import authorize
 from llm_d_lens.cluster.registry import extract_url_host, gateway_lock
 from llm_d_lens.core.exceptions import ForbiddenError
+from llm_d_lens.deploy.usage import register_usage_probe
 from llm_d_lens.model_service.contracts import (
     AuthorizeRequest,
     GroupCreateRequest,
@@ -84,6 +85,17 @@ from llm_d_lens.model_service.usage_sync import GatewayUsageSync
 logger = logging.getLogger(__name__)
 _service = default_service()
 _gateway_ops = GatewayOpsService()
+
+
+def _deployment_usage_reason(execution_id: str) -> str | None:
+    """Keep published deployment records and workloads available until unpublished."""
+    for member in _service.list_members():
+        if member.execution_id == execution_id:
+            return f"deployment is published in model service {member.group_id}; unpublish it first"
+    return None
+
+
+register_usage_probe("model-service", _deployment_usage_reason)
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 

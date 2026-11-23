@@ -886,3 +886,22 @@ async def test_execute_owned_e20cf405_fallback_standup_cm_cleanup_and_gaie_prese
     env_map = {item["name"]: item["value"] for item in json.loads(override.split("=", 1)[1])}
     decoded_epp = yaml.safe_load(base64.b64decode(env_map["LLMDBENCH_VLLM_MODELSERVICE_GAIE_PRESETS_CONFIG"]).decode())
     assert decoded_epp["plugins"] == [{"type": "queue-scorer"}]
+
+
+def test_a_case_that_failed_by_exception_does_not_block_its_own_cleanup(monkeypatch):
+    from llm_d_lens.deploy import usage
+
+    workflow = {
+        "id": "w1",
+        "status": "running",
+        "cases": [{"id": "c1", "status": "benchmarking", "execution_id": "e1"}],
+    }
+    monkeypatch.setattr(router, "_records", lambda kind: [workflow] if kind == "workflow" else [])
+    monkeypatch.setattr(usage, "_probes", {"evaluate": router._deployment_usage_reason})
+    # The failure status is only written after the cleanup in `finally` has run.
+    with pytest.raises(usage.DeploymentInUseError):
+        usage.require_unused("e1")
+    with router._deployment_cleanup_guard("e1"):
+        usage.require_unused("e1")
+    with pytest.raises(usage.DeploymentInUseError):
+        usage.require_unused("e1")
