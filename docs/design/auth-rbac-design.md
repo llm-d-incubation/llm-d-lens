@@ -926,7 +926,7 @@ The table below is the core of “refined permissions”. `R` = read-like, `W` =
 | `remote-deploy:deploy:execute` | start/status/logs | `POST /api/remote-deploy/start`, `/status`, `/logs` |
 | `remote-deploy:deploy:teardown` | teardown | `POST /api/remote-deploy/teardown` |
 | `config:runtime:read` | Read frontend runtime config | `GET /api/config` (public, allowlisted fields only) |
-| `mcp:tool:invoke` | Invoke MCP directly | `POST /api/mcp` (guarded by both session + tool-level risk). **Implementation correction**: `/api/mcp` also accepts `playground:chat:use` (the Playground assistant loops back with the current user's signed internal identity); the actual action of each tool is still enforced by the target-route permissions, so this does not create privilege escalation |
+| `mcp:tool:invoke` | Invoke MCP directly | `POST /api/assistant/mcp` (guarded by both session + tool-level risk). **Implementation correction**: `/api/assistant/mcp` also accepts `playground:chat:use` (the Playground assistant loops back with the current user's signed internal identity); the actual action of each tool is still enforced by the target-route permissions, so this does not create privilege escalation |
 
 ### 6.4 Page → permission mapping
 
@@ -1410,13 +1410,13 @@ app.use('/api/v1/auth', authProxyRouter);   // Cookie/Set-Cookie pass-through
 
 The Node-side registry table covers: `/api/config`, `/api/remote-deploy/*`,
 `/api/guide-planning/*`, `/api/candidate-*`, `/api/configurations/*`,
-`/api/playground/chat`, `/api/mcp`. Only after validation does the Node native executor (SSH/kubectl)
+`/api/playground/chat`, `/api/assistant/mcp`. Only after validation does the Node native executor (SSH/kubectl)
 get invoked.
 
 - `/api/config` returns only the de-sensitized allowlist (keep existing `server/server.js:66-80` behavior) and stays public.
 - For `/api/playground/chat`, `readOnly` voice turns still require `playground:chat:use`;
   write/approve tier tools require additional permissions per §6.3.10.
-- `/api/mcp` requires a session; its internal loopback tool calls use the internal token in §9.2 and do not re-authenticate.
+- `/api/assistant/mcp` requires a session; its internal loopback tool calls use the internal token in §9.2 and do not re-authenticate.
 
 ### 9.5 Introspection cache
 
