@@ -9,7 +9,11 @@ import sys
 
 class _ProbeFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname != "vllm.v1.core.kv_cache_manager":
+        hooks = {
+            "vllm.v1.core.kv_cache_manager": "install",
+            "vllm.distributed.kv_transfer.kv_connector.v1.nixl.pull_worker": "install_transfer",
+        }
+        if fullname not in hooks:
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is None or spec.loader is None:
@@ -23,9 +27,9 @@ class _ProbeFinder(importlib.abc.MetaPathFinder):
             def exec_module(self, module):
                 original.exec_module(module)
                 try:
-                    from prism_kv_engine import install
+                    import prism_kv_engine
 
-                    install(module)
+                    getattr(prism_kv_engine, hooks[fullname])(module)
                 except Exception:  # noqa: S110 - failed instrumentation leaves collection unavailable
                     pass  # No ready marker means collection is unavailable.
 

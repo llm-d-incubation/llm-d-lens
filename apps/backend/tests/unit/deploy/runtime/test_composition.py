@@ -430,6 +430,24 @@ def test_restricted_kubectl_allows_disaggregatedset_readiness_and_stop(tmp_path:
         runner._validate(["kubectl", "wait", "deployment/other", "--namespace", namespace])
 
 
+def test_restricted_kubectl_allows_only_prepared_namespace_commands(tmp_path: Path):
+    runner = RestrictedKubectlRunner(tmp_path / "kubectl", "llm-d-bench-")
+    owned = tmp_path / "owned.yaml"
+    owned.write_text("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: llm-d-bench-pd-test\n", encoding="utf-8")
+    runner._validate(["kubectl", "create", "--filename", str(owned)])
+    runner._validate(["kubectl", "get", "namespace", "llm-d-bench-pd-test", "--ignore-not-found=true", "-o", "json"])
+
+    other = tmp_path / "other.yaml"
+    other.write_text("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: kube-system\n", encoding="utf-8")
+    role = tmp_path / "role.yaml"
+    role.write_text("apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: x\n")
+    for path in (other, role):
+        with pytest.raises(RuntimeConfigurationError, match="outside the configured allowlist"):
+            runner._validate(["kubectl", "create", "--filename", str(path)])
+    with pytest.raises(RuntimeConfigurationError, match="outside the configured allowlist"):
+        runner._validate(["kubectl", "get", "namespace", "kube-system", "--ignore-not-found=true", "-o", "json"])
+
+
 def test_structured_startup_diagnostics_remain_namespace_scoped(tmp_path: Path):
     runner = RestrictedKubectlRunner(tmp_path / "kubectl", "llm-d-bench-")
     runner._validate(["kubectl", "get", "pods", "--namespace", "llm-d-bench-pd-test", "-o", "json"])

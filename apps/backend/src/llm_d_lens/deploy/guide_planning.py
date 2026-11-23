@@ -11,10 +11,17 @@ import time
 from copy import deepcopy
 
 import yaml
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from llm_d_lens.configuration.disaggregated_set import (
+    apply_disaggregated_set,
+    normalize_disaggregated_set,
+    validate_disaggregated_sets,
+    workload_summary,
+)
 from llm_d_lens.configuration.manifest_facts import _invocation_tokens, workload_roles
+from llm_d_lens.configuration.optimization_policy import resolve_optimization_policy
 from llm_d_lens.core.exceptions import DomainError
 from llm_d_lens.hardware.registry import all_profiles
 from llm_d_lens.hardware.resolver import resolve_by_accelerator_key, resolve_by_device_class, resolve_by_resource
@@ -260,6 +267,8 @@ def validate_manifest_capacity(documents: list[dict], budget: float, basis: str,
             * float(workload.get("slices", 1))
             * max(max(regular + persistent, peak) + claim_demand, model_tp)
         )
+    if any(workload["document"].get("kind") == "DisaggregatedSet" for workload in workload_roles(documents)):
+        demand = accelerator_total(workload_summary(documents)["resourceRequests"])
     errors[:] = [error for error in errors if not error.startswith("Insufficient resources:")]
     if not math.isfinite(demand) or demand > budget or (budget == 0 and demand == 0):
         label = "physical" if basis == "total" else "currently available"
@@ -955,6 +964,80 @@ def deployment_contract(documents: list[dict], guide: str) -> dict:
     }
 
 
+async def source_response(operation):
+    try:
+        return await operation
+    except GuideError as error:
+        logger.warning("Source composition rejected: %s", error)
+        return JSONResponse({"error": error.public_message}, status_code=error.status)
+    except (OSError, TimeoutError, ValueError):
+        logger.exception("Source composition failed")
+        return JSONResponse({"error": "Source composition failed; inspect server logs."}, status_code=502)
+
+
+@router.get(
+    "/source-catalog",
+    operation_id="get_deployment_source_catalog",
+    summary="Inspect the selected cluster's pinned Guide sources",
+    description="Return Guide recipes, source units, parameters and the full optimization catalog for clusterId. "
+    "Requires cluster access and a clean downloaded source revision. Does not run Guide scripts or deploy resources.",
+)
+async def source_catalog(request: Request, cluster_id: str = Query(alias="clusterId")):
+    from .source_catalog import authorized_inventory
+
+    async def load():
+        _, result = await authorized_inventory(request, {"clusterId": cluster_id})
+        return result
+
+    return await source_response(load())
+
+
+@router.post(
+    "/source-preview",
+    operation_id="preview_deployment_source",
+    summary="Render one pinned source component for parameter editing",
+    description="Provide clusterId, commit and unit to render a selected resource, Kustomize component or chart. "
+    "Return rendered documents and observed optimization flags without deploying. Reject a changed revision "
+    "or inputs outside the authorized source catalog.",
+)
+async def source_preview(request: Request, body: dict):
+    from .source_catalog import authorized_inventory
+    from .source_composition import render_unit, rendered_optimizations
+
+    async def preview():
+        if not re.fullmatch(r"[a-f0-9]{40}", body.get("commit", "")):
+            raise GuideError("Pin the catalog commit before previewing.")
+        root, inventory = await authorized_inventory(request, body)
+        if not isinstance(body.get("unit"), dict):
+            raise GuideError("Select a source unit.")
+        rendered = await render_unit(root, inventory, body["unit"])
+        return {**rendered, "optimizations": rendered_optimizations(rendered["documents"], inventory["commit"])}
+
+    return await source_response(preview())
+
+
+@router.post(
+    "/compose",
+    operation_id="compose_deployment_sources",
+    summary="Compose selected Guide sources and edited parameters",
+    description="Render 1-60 pinned source units and router values for an authorized cluster and ready model cache. "
+    "Validate parameters, resource conflicts and current device limits; optionally run an admission dry-run. "
+    "DRA sizing supports generated ExactCount ResourceClaimTemplates and one matching cluster hardware profile; "
+    "external claims and ambiguous allocations are rejected. Device demand includes replicas and autoscaler ceilings. "
+    "Automatic hard P/D slice placement restricts role Pods to capacity-fitting topology domains, reported in "
+    "sliceLayout.recommended.eligibleDomains; this does not reserve devices. "
+    "Explicit placement policies are preserved. "
+    "Managed source deployment permits only Router ClusterRoles creating TokenReviews/SubjectAccessReviews and "
+    "bindings to the deployment's EPP ServiceAccount; arbitrary cluster-scoped provisioning remains unsupported. "
+    "Return deployment YAML, provenance and effective optimization evidence. Never deploy or mutate existing "
+    "workloads. Stale source/final-edit checksums return 409; invalid inputs and compatibility failures return 400.",
+)
+async def source_compose(request: Request, body: dict):
+    from .source_composition import compose
+
+    return await source_response(compose(request, body))
+
+
 @router.get("/catalog")
 async def catalog(request: Request):
     from .guide_sources import catalog_from_paths, load_guide_paths
@@ -976,7 +1059,185 @@ async def catalog(request: Request):
         return JSONResponse({"error": "Guide catalog could not be loaded"}, status_code=502)
 
 
-@router.post("/prepare")
+def _content_slices(content: dict) -> int | None:
+    slices = (content.get("disaggregatedSet") or {}).get("slices")
+    if isinstance(slices, int):
+        return slices
+    manifest = (content.get("officialGuide") or {}).get("renderedManifest")
+    if not isinstance(manifest, str) or "DisaggregatedSet" not in manifest:
+        return None
+    try:
+        return validate_disaggregated_sets([item for item in yaml.safe_load_all(manifest) if isinstance(item, dict)])[
+            "slices"
+        ]
+    except (ValueError, yaml.YAMLError):
+        return None
+
+
+def _evidence_profile(benchmark: dict, targets: dict) -> tuple[str, str]:
+    """Readable workload label and a key that groups runs with the same request shape and SLO targets."""
+    shared = benchmark.get("shared_prefix") or {}
+    if shared:
+        fields = ("num_groups", "num_prompts_per_group", "system_prompt_len", "question_len", "output_len")
+        shape = {key: shared.get(key) for key in (*fields, "enable_multi_turn_chat")}
+        label = (
+            f"shared-prefix {shared.get('num_groups')}x{shared.get('num_prompts_per_group')}, "
+            f"prompt {shared.get('system_prompt_len')}+{shared.get('question_len')}, output {shared.get('output_len')}"
+        )
+    elif benchmark.get("matrix"):
+        points = [[point.get("isl"), point.get("osl")] for point in benchmark["matrix"] if isinstance(point, dict)]
+        shape = {"matrix": points}
+        label = "matrix ISL/OSL " + ", ".join(f"{isl}/{osl}" for isl, osl in points)
+    else:
+        shape = {"workload": benchmark.get("workload"), "yaml": benchmark.get("workload_yaml")}
+        label = str(benchmark.get("workload") or "custom workload")
+    return label, json.dumps({"shape": shape, "slo": targets}, sort_keys=True)
+
+
+def _evaluation_history(model: str, cluster_id: str, guide: str) -> list[dict]:
+    """Recent measured Slice configurations for this model and cluster; evidence, never a capacity claim."""
+    from llm_d_lens.infrastructure.storage.paths import storage_path
+
+    if not model or not cluster_id:
+        return []
+    results = []
+    for path in sorted(storage_path("data", "metadata", "evaluations", "workflows").glob("*.json")):
+        try:
+            workflow = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(workflow, dict) or workflow.get("cluster_id") != cluster_id:
+            continue
+        for case in workflow.get("cases") or []:
+            if not isinstance(case, dict) or case.get("status") != "succeeded" or case.get("kind") != "guide":
+                continue
+            embedded = case.get("deployment_configuration")
+            if not isinstance(embedded, dict) or embedded.get("provider_ref") != guide:
+                continue
+            content = embedded.get("content")
+            if not isinstance(content, dict):
+                continue
+            if str((content.get("model") or {}).get("name") or "").strip().lower() != model.strip().lower():
+                continue
+            metrics = case.get("metrics") or {}
+            throughput = metrics.get("throughput_tps")
+            stable = metrics.get("maximum_stable_qps")
+            if not isinstance(throughput, (int, float)) and not isinstance(stable, (int, float)):
+                continue
+            settings = content.get("disaggregatedSet") or {}
+            decode = content.get("decode") or content.get("serving") or {}
+            prefill = content.get("prefill") or {}
+            source = (content.get("officialGuide") or {}).get("source") or {}
+            slices = _content_slices(content)
+            shape = [
+                prefill.get("replicaCount"),
+                prefill.get("tensorParallelSize"),
+                decode.get("replicaCount"),
+                decode.get("tensorParallelSize"),
+            ]
+            per_slice = shape[0] * shape[1] + shape[2] * shape[3] if all(isinstance(v, int) for v in shape) else None
+            targets = case.get("sla_targets") or {}
+            workload_label, evidence_key = _evidence_profile(case.get("benchmark") or {}, targets)
+            results.append(
+                {
+                    "workflowId": workflow.get("id"),
+                    "caseId": case.get("id"),
+                    "finishedAt": case.get("finished_at") or workflow.get("finished_at"),
+                    "throughputTps": throughput if isinstance(throughput, (int, float)) else None,
+                    "maximumStableQps": stable if isinstance(stable, (int, float)) else None,
+                    "slaTargets": targets,
+                    "workload": (case.get("benchmark") or {}).get("workload"),
+                    "workloadLabel": workload_label,
+                    "evidenceKey": evidence_key,
+                    "accelerator": source.get("accelerator"),
+                    "guideCommit": source.get("commit"),
+                    "slices": slices,
+                    "placementPolicy": settings.get("placementPolicy"),
+                    "sliceRouting": settings.get("sliceRouting", "inherit"),
+                    "prefillReplicas": shape[0],
+                    "prefillTensorParallelSize": shape[1],
+                    "decodeReplicas": shape[2],
+                    "decodeTensorParallelSize": shape[3],
+                    "accelerators": slices * per_slice if slices and per_slice else None,
+                }
+            )
+    results.sort(key=lambda item: str(item["finishedAt"] or ""), reverse=True)
+    return results[:20]
+
+
+async def _cluster_slice_capacity(documents: list[dict], cluster_id: str) -> dict:
+    from .slice_capacity import inventory, slice_capacity
+
+    return slice_capacity(documents, await inventory(cluster_id, "nodes"), await inventory(cluster_id, "pods"))
+
+
+async def _slice_recommendation(documents: list[dict], cluster_id: str, model: str, guide: str) -> dict:
+    """Capacity ceilings and evidence for the Slice panel; Slice counts are never chosen from throughput alone."""
+    from llm_d_lens.configuration.disaggregated_set import disaggregated_sets
+
+    from .slice_capacity import HOSTNAME_LABEL
+
+    workloads = disaggregated_sets(documents)
+    spec = (workloads[0].get("spec") or {}) if workloads else {}
+    result = {
+        "source": "unavailable",
+        "guideDefault": {
+            "slices": spec.get("slices", 1),
+            "placementPolicy": spec.get("placementPolicy") or {"type": "None"},
+        },
+        "history": _evaluation_history(model, cluster_id, guide),
+        "capacity": None,
+        "topologyKeys": [],
+        "reasons": [],
+    }
+    if not cluster_id:
+        result["reasons"] = ["No cluster selected; capacity estimation is unavailable"]
+        return result
+    try:
+        capacity = await _cluster_slice_capacity(documents, cluster_id)
+    except (ValueError, TimeoutError, OSError):
+        result["reasons"] = ["Cluster inventory is unavailable"]
+        return result
+    result.update(source="capacity", capacity=capacity, topologyKeys=capacity["topologyKeys"])
+    suggested = next(
+        (item for item in capacity["topologyKeys"] if item["key"] != HOSTNAME_LABEL and item["feasibleDomains"]), None
+    )
+    if suggested:
+        result["placementPolicy"] = {"type": "ExclusiveSlice", "topology": suggested["key"]}
+        result["maxSlices"] = suggested["feasibleDomains"]
+        result["reasons"] = [
+            f"{suggested['feasibleDomains']} domains under {suggested['key']} can each fit one Slice",
+            "Keeps P/D KV transfer inside one domain; Slices do not share domains",
+            "Source: capacity estimate from current free resources, not a reservation",
+        ]
+    else:
+        count = capacity["maxSlices"]["None"]
+        result["placementPolicy"] = {"type": "None"}
+        result["maxSlices"] = count
+        result["reasons"] = [
+            "No node label key forms two or more domains that each fit one Slice",
+            f"Current free capacity fits up to {count} Slice(s)"
+            if count
+            else "Current free capacity cannot fit one Slice",
+            "Source: capacity estimate from current free resources, not a reservation",
+        ]
+    return result
+
+
+@router.post(
+    "/prepare",
+    summary="Inspect a pinned official Guide source",
+    description=(
+        "Accept guide, accelerator and modelServer selections; resolve a full commit and render from its isolated "
+        "snapshot. Return ready, commit and capabilities, including disaggregatedSet support. For DS sources, "
+        "recommendation carries the Guide default Slice settings, per-placement Slice ceilings and discovered "
+        "topology keys estimated from current free resources for the Guide default roles (not a reservation; "
+        "capacity.unmodeled lists demands such as DRA claims that the estimate does not count), a "
+        "suggested placementPolicy with reasons, and recent same-model measured history on this cluster. It never "
+        "chooses a Slice count. Downloads source but does not create Kubernetes resources. Missing selections "
+        "return 400; unavailable preparation returns 502."
+    ),
+)
 async def prepare(request: Request):
     from .guide_runtime import guide_settings_capabilities
     from .guide_sources import load_manifests
@@ -988,11 +1249,29 @@ async def prepare(request: Request):
         manifest = await load_manifests(request, body)
         documents = [document for document in yaml.safe_load_all(manifest["rendered"]) if isinstance(document, dict)]
         profile = profile_for_key(body["accelerator"])
-        return {
+        response = {
             "ready": True,
             "commit": manifest["source"]["commit"],
             "capabilities": guide_settings_capabilities(documents, profile.dranet_device_class if profile else None),
         }
+        if response["capabilities"].get("disaggregatedSet"):
+            try:
+                response["recommendation"] = await _slice_recommendation(
+                    documents,
+                    str(body.get("clusterId") or "").strip(),
+                    str(body.get("model") or "").strip(),
+                    body["guide"],
+                )
+            except Exception:
+                logger.exception("Slice recommendation failed")
+                response["recommendation"] = {
+                    "source": "unavailable",
+                    "reasons": ["Recommendation could not be computed"],
+                    "history": [],
+                    "capacity": None,
+                    "topologyKeys": [],
+                }
+        return response
     except DomainError:
         raise
     except Exception:
@@ -1000,8 +1279,25 @@ async def prepare(request: Request):
         return JSONResponse({"error": "Guide preparation failed; retry when generating configuration"}, status_code=502)
 
 
-@router.post("/plan")
+@router.post(
+    "/plan",
+    summary="Render a configuration from selected Guide inputs",
+    description=(
+        "Render official, local or remote Guide inputs and validate resource and runtime settings. Optional "
+        "disaggregatedSet selects slices, placementPolicy and soft sliceRouting. Official expectedSourceCommit "
+        "rejects source drift. Returns rendered manifests, saved Router inputs and workloadSummary; DS plans with "
+        "a cluster session also return sliceCapacity, per-placement Slice ceilings for the rendered roles (an "
+        "estimate, null when inventory is unavailable). This is a reusable configuration, not an executable "
+        "reviewed deployment plan. No Kubernetes resources are created. "
+        "Unsupported DS settings or conflicting patches return 422."
+    ),
+)
 async def plan(request: Request):
+    return await plan_resources(request, await request.json())
+
+
+async def plan_resources(request: Request, body: dict):
+    """Render the same source-bound resources for interactive and deployment-plan callers."""
     from .guide_bundle import build_guide_deployment_bundle
     from .guide_sources import (
         discover_local_cluster,
@@ -1029,7 +1325,6 @@ async def plan(request: Request):
             timings[name] = round((time.monotonic() - began) * 1000)
 
     try:
-        body = await request.json()
         guide, accelerator, model_server, model = (
             str(body.get(key) or "").strip() for key in ("guide", "accelerator", "modelServer", "model")
         )
@@ -1039,8 +1334,7 @@ async def plan(request: Request):
         mode = environment.get("kubernetesMode")
         mode = mode if mode in {"auto", "required", "disabled"} else "auto"
         session_id = str(body.get("clusterSessionId") or "").strip()
-        if session_id:
-            await validate_planning_session(request, session_id)
+        session = await validate_planning_session(request, session_id) if session_id else None
         remote = (
             await discover_remote_environment(environment.get("target"), environment.get("credentials"))
             if environment.get("mode") == "remote"
@@ -1071,6 +1365,57 @@ async def plan(request: Request):
         render_started = time.monotonic()
         documents = [document for document in yaml.safe_load_all(manifest["rendered"]) if document]
         planned = plan_documents(documents, model, machine, detected_cluster, body)
+        try:
+            body, optimization_decisions = resolve_optimization_policy(body, planned["documents"])
+        except ValueError as error:
+            raise GuideError(str(error)) from error
+        composition = body.get("guideComposition")
+        if composition:
+            from llm_d_lens.configuration.guide_composition import compose_native_cpu_cache
+
+            if not isinstance(composition, dict) or set(composition) != {"nativeCpuCacheGiB"}:
+                raise GuideError("Unknown Guide composition; select a supported CPU cache composition.")
+            if body.get("modelServer") != "vllm" or (body.get("source") or {}).get("mode", "official") != "official":
+                raise GuideError("Guide composition requires a pinned official vLLM source.")
+            donor_request = {
+                **body,
+                "guide": "tiered-prefix-cache",
+                "guideVariant": "native/cpu",
+                "source": {"mode": "official"},
+            }
+            try:
+                donor = await load_selected_manifests(request, donor_request)
+            except GuideError as error:
+                if error.status != 404:
+                    raise
+                donor = await load_selected_manifests(request, {**donor_request, "guideVariant": "native/cpu/base"})
+            if donor["source"]["commit"] != manifest["source"]["commit"]:
+                raise GuideError("Composed Guides must come from the same source revision.")
+            try:
+                planned["documents"] = compose_native_cpu_cache(
+                    planned["documents"],
+                    list(yaml.safe_load_all(donor["rendered"])),
+                    guide=guide,
+                    capacity_gib=composition["nativeCpuCacheGiB"],
+                )
+            except (ValueError, TypeError) as error:
+                raise GuideError(str(error)) from error
+            optimization_decisions = [item for item in optimization_decisions if item["id"] != "tiered-prefix-cache"]
+            optimization_decisions.append(
+                {
+                    "id": "tiered-prefix-cache",
+                    "label": "Native CPU KV cache",
+                    "status": "composed",
+                    "reason": (
+                        f"Composed from the same source revision; {composition['nativeCpuCacheGiB']} GiB of "
+                        "additional host memory requested per model replica. Performance awaits measurement; "
+                        "NIXL P/D uses ordered transport and per-role local cache connectors, checked in the "
+                        "runtime image before startup."
+                    ),
+                }
+            )
+        ds_settings = normalize_disaggregated_set(body.get("disaggregatedSet"))
+        apply_disaggregated_set(planned["documents"], ds_settings)
         if accelerator != resolved:
             planned["validation"]["warnings"].append(
                 f'Guide accelerator variant corrected from "{accelerator}" to "{resolved}" '
@@ -1080,6 +1425,18 @@ async def plan(request: Request):
         applied = apply_custom_patches(
             planned["documents"], patches, planned["validation"]["errors"], planned["validation"]["warnings"]
         )
+        if composition:
+            from llm_d_lens.configuration.guide_settings import validate_configuration_extensions
+
+            try:
+                validate_configuration_extensions(
+                    {"officialGuide": {"source": {"guide": guide}}, "guideComposition": composition},
+                    yaml.safe_dump_all(planned["documents"]),
+                )
+            except (ValueError, TypeError) as error:
+                planned["validation"]["errors"].append(str(error))
+        validate_disaggregated_sets(planned["documents"], ds_settings)
+        facts = workload_summary(planned["documents"])
         planned["summary"]["requestedAccelerators"] = validate_manifest_capacity(
             planned["documents"],
             planned["summary"]["availableAccelerators"],
@@ -1105,17 +1462,22 @@ async def plan(request: Request):
                 len(block_sizes) != len(servers) or len(set(block_sizes)) != 1
             ):
                 raise ValueError("Precise routing requires matching block sizes on all model servers.")
-            bundle = await measure(
-                "bundle",
-                build_guide_deployment_bundle(
-                    guide,
-                    manifest,
-                    model,
-                    resolved,
-                    block_sizes[0] if block_sizes else None,
-                    settings.get("routerValues", ""),
-                ),
-            )
+            try:
+                bundle = await measure(
+                    "bundle",
+                    build_guide_deployment_bundle(
+                        guide,
+                        manifest,
+                        model,
+                        resolved,
+                        block_sizes[0] if block_sizes else None,
+                        settings.get("routerValues", ""),
+                        prefix_routing=body.get("prefixRouting"),
+                        slice_routing=ds_settings.get("sliceRouting", "inherit"),
+                    ),
+                )
+            except (TypeError, ValueError) as error:
+                raise GuideError(str(error)) from error
         timings["render"] = round((time.monotonic() - render_started) * 1000)
         response = {
             "status": "VERIFIED"
@@ -1140,6 +1502,7 @@ async def plan(request: Request):
             "machineProfile": machine,
             "clusterProfile": detected_cluster,
             "modelConfig": planned["summary"]["modelEstimate"],
+            "optimizationDecisions": optimization_decisions,
             "planningPatch": planned["planningPatch"],
             "appliedCustomPatches": applied,
             "plannedDeployment": {
@@ -1151,15 +1514,26 @@ async def plan(request: Request):
             "deployment": deployment,
             "validation": validation,
             "summary": planned["summary"],
+            "workloadSummary": facts,
+            "disaggregatedSet": ds_settings,
         }
         if bundle is not None:
             response["deploymentBundle"] = bundle
+        if facts["disaggregatedSet"] and session is not None and not validation["errors"]:
+            try:
+                response["sliceCapacity"] = await measure(
+                    "slice_capacity", _cluster_slice_capacity(planned["documents"], session.server_id)
+                )
+            except (ValueError, TimeoutError, OSError):
+                response["sliceCapacity"] = None
         return finish(response)
     except DomainError:
         raise
     except (GuideError, RemoteError) as error:
         logger.warning("Guide planning request failed", exc_info=True)
         return finish({"error": error.public_message}, error.status)
+    except ValueError as error:
+        return finish({"error": str(error)}, 422)
     except Exception:
         logger.exception("Guide planning failed")
         return finish({"error": "Guide planning failed"}, 500)

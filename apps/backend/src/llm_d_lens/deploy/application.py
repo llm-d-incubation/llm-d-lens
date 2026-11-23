@@ -114,6 +114,14 @@ class DeploymentRunManager:
         return task is not None and not task.done()
 
     async def start_run(self, request: DeploymentRunCreateRequest, *, owner_user_id: str | None = None):
+        from llm_d_lens.deploy.prepared_plans import consume, requires_prepared_plan
+
+        if any(key.startswith("_prepared") for key in request.provenance):
+            raise ValueError("Prepared execution metadata is server-owned")
+        if request.prepared_plan_id:
+            return await consume(self, request, owner_user_id=owner_user_id)
+        if requires_prepared_plan(request.configurations):
+            raise ValueError("DisaggregatedSet deployment requires a reviewed prepared plan and digest")
         session_id = request.provenance.get("cluster_session_id")
         session = None
         if session_id:

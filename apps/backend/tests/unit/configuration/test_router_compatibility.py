@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from llm_d_lens.configuration.guide_settings import validate_guide_settings
-from llm_d_lens.configuration.router_compatibility import compatible_router_values
+from llm_d_lens.configuration.router_compatibility import compatible_router_values, compose_prefix_routing
 from llm_d_lens.deploy.providers.deployment_bundle import install_deployment_bundle, text_checksum
 
 
@@ -36,6 +36,77 @@ def _values():
             }
         }
     }
+
+
+def _affinity_source():
+    return {
+        "router": {
+            "epp": {
+                "pluginsConfigFile": "affinity.yaml",
+                "pluginsCustomConfig": {
+                    "affinity.yaml": yaml.safe_dump(
+                        {
+                            "plugins": [
+                                {"type": "approx-prefix-cache-producer"},
+                                {"type": "inflight-load-producer"},
+                                {"type": "prefix-cache-affinity-filter", "parameters": {"peakPrefillThroughput": 100}},
+                            ],
+                            "schedulingProfiles": [
+                                {"name": "default", "plugins": [{"pluginRef": "prefix-cache-affinity-filter"}]}
+                            ],
+                        }
+                    )
+                },
+            }
+        }
+    }
+
+
+def test_affinity_composes_with_pd_without_replacing_transport_or_decode():
+    original = _values()
+    donor = _affinity_source()
+    before, source_before = deepcopy(original), deepcopy(donor)
+    result = compose_prefix_routing(original, donor, True)
+    config = yaml.safe_load(result["router"]["epp"]["pluginsCustomConfig"]["pd.yaml"])
+    assert original == before
+    assert donor == source_before
+    assert (
+        config["plugins"][:4] == yaml.safe_load(original["router"]["epp"]["pluginsCustomConfig"]["pd.yaml"])["plugins"]
+    )
+    assert config["schedulingProfiles"][0]["plugins"] == [
+        {"pluginRef": "prefill-filter"},
+        {"pluginRef": "prefix-cache-affinity-filter"},
+    ]
+    assert compose_prefix_routing(result, donor, True) == result
+    disabled = compose_prefix_routing(result, None, False)
+    disabled_config = yaml.safe_load(disabled["router"]["epp"]["pluginsCustomConfig"]["pd.yaml"])
+    assert disabled_config["schedulingProfiles"][0]["plugins"] == [{"pluginRef": "prefill-filter"}]
+    assert any(plugin["type"] == "disagg-profile-handler" for plugin in disabled_config["plugins"])
+
+
+def test_affinity_rejects_incompatible_images_and_missing_dependencies():
+    donor = _affinity_source()
+    donor["router"]["epp"]["image"] = {"tag": "other"}
+    with pytest.raises(ValueError, match="identical"):
+        compose_prefix_routing(_values(), donor, True)
+    with pytest.raises(ValueError, match="dependencies"):
+        compose_prefix_routing(_values(), _values(), True)
+
+
+def test_composed_routing_round_trip_requires_exact_source_and_effective_values():
+    bundle = _bundle()
+    donor = _affinity_source()
+    asset = {"name": "router-prefix-source.yaml", "content": yaml.safe_dump(donor)}
+    asset["checksum"] = text_checksum(asset["content"])
+    bundle["helm"]["values"].insert(-1, asset)
+    effective = bundle["helm"]["values"][-1]
+    effective["content"] = yaml.safe_dump(compose_prefix_routing(_values(), donor, True))
+    effective["checksum"] = text_checksum(effective["content"])
+    content = {"prefixRouting": True, "officialGuide": {"deploymentBundle": bundle}}
+    validate_guide_settings(content, "", "pd-disaggregation")
+    effective["content"] = yaml.safe_dump(_values())
+    with pytest.raises(ValueError, match="do not match"):
+        validate_guide_settings(content, "", "pd-disaggregation")
 
 
 def test_compatibility_preserves_pd_routing_source_and_unrelated_configuration():

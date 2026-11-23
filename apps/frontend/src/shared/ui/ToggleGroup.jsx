@@ -13,11 +13,12 @@
 // limitations under the License.
 
 import React from 'react';
+import { Check } from 'lucide-react';
 import { cn } from '../lib/cn';
 
 // Segmented control for metric/mode selectors (e.g. TTFT | TPOT | E2E).
 // options: [{ value, label, disabled? }]
-export function ToggleGroup({ options, value, onChange, size = 'sm', fullWidth = false, className, activeClassName }) {
+export function ToggleGroup({ options, value, onChange, size = 'sm', fullWidth = false, className, activeClassName, showSelectionIndicator = false }) {
     return (
         <div
             role="group"
@@ -40,6 +41,8 @@ export function ToggleGroup({ options, value, onChange, size = 'sm', fullWidth =
                             'rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50',
                             size === 'xs' ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-xs',
                             fullWidth && 'flex-1',
+                            showSelectionIndicator && 'inline-flex items-center justify-center gap-2',
+                            showSelectionIndicator && isActive && 'ring-2 ring-inset ring-[var(--brand-accent)]',
                             isActive
                                 ? cn('bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm', activeClassName)
                                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200',
@@ -47,6 +50,7 @@ export function ToggleGroup({ options, value, onChange, size = 'sm', fullWidth =
                         )}
                     >
                         {opt.label}
+                        {showSelectionIndicator && <Check aria-hidden="true" size={14} className={cn('shrink-0', !isActive && 'invisible')} />}
                     </button>
                 );
             })}

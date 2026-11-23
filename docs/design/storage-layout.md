@@ -151,6 +151,8 @@ Root directories prefer `LENS_*`; when unset, XDG rules and the defaults above a
 | llm-d source used for development startup | `CACHE/llm-d/` | Default location for `hack/lens-local.sh`; `LLM_D_ROOT` can specify an existing directory, and if absent a prompt is shown to prepare the source |
 | Repository download feature | `CACHE/repos/<repo>/<url-hash>/<commit>/` | Cache llm-d and llm-d-benchmark by source URL and resolved commit |
 | Guide planning cache | `CACHE/guide-planning/` | Save manifests and rendered results used for planning |
+| Guide Helm charts | `CACHE/helm-charts/<chart-version-hash>/` | One pulled archive per pinned OCI chart and version, reused by Guide composition; safe to delete |
+| Guide source checkouts | `CACHE/guide-sources/<source-commit-hash>/source/` | Read-only extraction of one pinned llm-d commit for Kustomize renders; request inputs are written to scratch copies; safe to delete |
 | Remote deployment source | Remote host `CACHE/deploy-repos/<org>/<repo>/` | A GitHub URL triggers cloning; if an existing path is specified, use that path |
 | Kubespray | `CACHE/kubespray/` | Cluster-installation tool cache |
 | Simulation backends | `CACHE/backends/` | Downloaded runner tools |

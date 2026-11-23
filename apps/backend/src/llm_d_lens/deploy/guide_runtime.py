@@ -283,4 +283,10 @@ def guide_settings_capabilities(documents: list[dict], device_class: str | None 
         if document.get("kind") == "ResourceClaimTemplate"
         for request in document.get("spec", {}).get("spec", {}).get("devices", {}).get("requests", [])
     )
-    return {"cacheCpuGiB": cpu, "rdmaNicCount": nic}
+    return {
+        "cacheCpuGiB": cpu,
+        "rdmaNicCount": nic,
+        "disaggregatedSet": any(
+            workload["document"].get("kind") == "DisaggregatedSet" for workload in workload_roles(documents)
+        ),
+    }

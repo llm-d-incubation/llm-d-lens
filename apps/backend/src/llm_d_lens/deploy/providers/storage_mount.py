@@ -105,7 +105,8 @@ async def require_cached_model(
         raise ValueError(
             "Deployment requires a cluster and a Model Cache storage volume; download the model in Model Cache first"
         )
-    if runtime.get("modelSource") not in (None, "auto-cache"):
+    readonly_composition = provider_id == "source-composition" and runtime.get("modelSource") == "cached-readonly"
+    if runtime.get("modelSource") not in (None, "auto-cache") and not readonly_composition:
         raise ValueError("Deployment modelSource must be auto-cache; download the model in Model Cache first")
     custom = overrides.get("customParameters") or []
     if admin_managed_environment_names(custom):
@@ -132,7 +133,7 @@ async def require_cached_model(
         raise ValueError(f"selected model/tokenizer revision is not ready in Model Cache: {missing}")
     if await cache.compute_pending_sync(selected):
         raise ValueError("selected model cache is missing on cluster nodes; sync it in Model Cache before deployment")
-    runtime["modelSource"] = "auto-cache"
+    runtime["modelSource"] = "cached-readonly" if readonly_composition else "auto-cache"
     runtime["cacheOffline"] = True
     runtime.pop("mountPath", None)
     runtime.pop("pvcName", None)

@@ -6,6 +6,29 @@ description: Benchmark a model service or compare deployment configurations, the
 Use **Evaluation** to measure response speed and throughput.
 For a first run, benchmark a published model service with a small workload.
 
+For DS deployment configurations, **New Task** prepares every deployment case and
+checks frozen manifests before execution, without an extra review dialog. When all
+checks pass, the sequential Evaluation starts directly using the captured plan digests.
+Failures and unknown constraints appear inline under **Deployment checks**; unknown
+constraints still require explicit acknowledgment. **Deployment resources** expands
+the frozen manifests and checksums. Canceling these checks leaves the workflow in
+`awaiting_review`; it does not deploy in the background. Open task details and select
+**Review deployment plans** to resume the inline checks.
+Retry retains succeeded cases and reusable Ready executions; cases needing a new
+deployment receive new plans and require confirmation again. Failed preparation does
+not replace the historical workflow. Changing configuration inputs requires a new task.
+Before each reviewed deployment benchmark, Lens records readiness/topology and a bounded
+request probe. Failed readiness or placement blocks the case. Supported vLLM 0.26.0
+NIXL pull evidence can prove that probe's P/D transfer, not every benchmark request;
+unsupported or incomplete evidence remains unknown.
+Open **Deployments** in task details to view the four independent **Runtime verification**
+verdicts, their reasons and **Recorded evidence**. HTTP success alone does not prove KV transfer.
+Automatic independent baselines match actual rendered accelerator requests across all
+Slices, role replicas and leader/worker Pods, not legacy replica-times-TP arithmetic.
+The final rendered baseline is checked against that device budget. CPU, memory and
+Pod counts are not declared equal. DRA or unknown resource identity requires explicit
+replicas instead of an inferred equal-device claim.
+
 The standalone Optimization prototype (`optimization-workspace`, `opt-define`,
 `opt-search`, `opt-deploy`, `opt-benchmark`, `opt-performance`) and the
 `optimization-deploy` workspace have been removed. Old links now open your first
@@ -63,6 +86,30 @@ physical total is insufficient, reduce replicas / TP before generating YAML.
 **View YAML** lets you inspect a saved configuration. Editing its YAML saves a new
 configuration and keeps the original.
 
+### Compare Slice counts
+
+For a DisaggregatedSet Guide, **Slice Configuration** in the configuration editor has a
+**Slices** slider and a **Slice sweep** option. Turn on the sweep and drag **From** and **To**
+to choose a range of at least two Slice counts, up to the current **Max feasible**. Each count
+is listed with its accelerator total and marked if it was measured before. Each count is saved
+as a separate configuration with the same per-Slice P/D replicas, TP, placement and routing;
+the Evaluation deploys, benchmarks and removes them one at a time. Up to 16 combinations are
+allowed, including any replica/TP variants.
+
+A Slice sweep requires the **Prefix cache reuse** workload with at least two request-rate stages
+and a TTFT or TPOT target, because candidates are compared by their highest SLO-stable request
+rate. When a sweep is selected, **Benchmark settings** defaults to 1–32 req/s stages with
+TTFT p99 ≤ 500 ms and TPOT p99 ≤ 30 ms; adjust them as needed. More Slices also add accelerators, so
+the comparison shows capacity scaling, not topology effects at an equal accelerator budget.
+
+In task results, **Slice optimization** groups cases that differ only by Slice count and shows
+accelerators, SLO-stable request rate, rate per accelerator and throughput. Enter a target load
+to get the fewest-accelerator Slice count that meets it; without a recorded SLO-stable rate no
+recommendation is made. **Use Recommended Configuration** opens that configuration for direct
+deployment, where Lens re-checks the current Slice ceiling and placement during plan review.
+The results remain with the Evaluation and appear as evidence in the Deploy Slice panel for the
+same model, Guide and cluster.
+
 Evaluation deployments and generated baselines use the selected configuration's
 hardware profile and accelerator request type (DRA or extended resource). The
 profile also supplies benchmark device metrics, labels, scaling and allocation
@@ -88,6 +135,11 @@ Some entry points open **New Benchmark Task** rather than the compact task dialo
 5. Continue to **Execution plan**, check the target list and execution order, and click **Start Evaluation**.
 
 Existing-service runs skip configuration design and do not create a deployment.
+
+The **Configurations** editor keeps its Guide selection, replica / TP sweeps,
+YAML preview and **Optimization comparisons** tree. Select the serving scenarios
+to benchmark; each selected scenario runs for each topology. These evaluation
+controls are separate from Model Catalog's Manual / Agentic deployment workflow.
 
 ## Estimate workload time
 

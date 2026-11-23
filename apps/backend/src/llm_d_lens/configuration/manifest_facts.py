@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from .disaggregated_set import validate_disaggregated_sets
 from .managed_environment import admin_managed_environment_names
 
 
@@ -382,13 +383,15 @@ def _validate_storage(
     host_path = runtime.get("mountPath")
     pvc_name = runtime.get("modelPvcClaimName") or runtime.get("pvcName")
     storage_id = runtime.get("storageVolumeId")
-    storage_declared = source in {"shared-path", "auto-cache"} or any(
+    storage_declared = source in {"shared-path", "auto-cache", "cached-readonly"} or any(
         isinstance(value, str) and value for value in (host_path, pvc_name, storage_id)
     )
     if not storage_declared:
         return
-    if source not in {"shared-path", "auto-cache"}:
-        raise ValueError("configuration storage requires runtime.modelSource shared-path or auto-cache")
+    if source not in {"shared-path", "auto-cache", "cached-readonly"}:
+        raise ValueError(
+            "configuration storage requires runtime.modelSource shared-path, auto-cache or cached-readonly"
+        )
     mounts = container.get("volumeMounts") or []
     pod = pod or (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {})
     volumes = pod.get("volumes") or []
@@ -402,8 +405,8 @@ def _validate_storage(
     if len(backing) != 1:
         raise ValueError(f"model server {deployment_name} storage volume is absent or ambiguous")
     volume = backing[0]
-    if source == "shared-path" and mount.get("readOnly") is not True:
-        raise ValueError(f"model server {deployment_name} shared-path storage must be read-only")
+    if source in {"shared-path", "cached-readonly"} and mount.get("readOnly") is not True:
+        raise ValueError(f"model server {deployment_name} {source} storage must be read-only")
     if source == "auto-cache" and mount.get("readOnly") is True:
         raise ValueError(f"model server {deployment_name} auto-cache storage must be writable")
     if isinstance(pvc_name, str) and pvc_name:
@@ -450,6 +453,7 @@ def _validate_kv_topic(tokens: list[str], deployment_name: str, expected_model: 
 
 def validate_manifest_facts(configuration_content: dict[str, Any], manifest: str) -> None:
     """Reject explicit Configuration facts that the rendered manifest does not prove."""
+    validate_disaggregated_sets(_documents(manifest), configuration_content.get("disaggregatedSet"))
     model = configuration_content.get("model")
     expected_model = model.get("name") if isinstance(model, dict) else None
     if not isinstance(expected_model, str) or not expected_model:
@@ -492,7 +496,6 @@ def validate_manifest_facts(configuration_content: dict[str, Any], manifest: str
             expected_replicas = _positive_int(component["replicaCount"], f"{role} replica count")
             actual_replicas = sum(
                 _positive_int(workload.get("replicas", 1), f"{name} replica count")
-                * _positive_int(workload.get("slices", 1), f"{name} slice count")
                 for workload, _container, name, _role_name, _tokens in role_workloads
             )
             if actual_replicas != expected_replicas:

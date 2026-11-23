@@ -9,7 +9,11 @@ import httpx
 import yaml
 
 from llm_d_lens.configuration.guide_settings import _mapping, _merge
-from llm_d_lens.configuration.router_compatibility import compatible_router_values
+from llm_d_lens.configuration.router_compatibility import (
+    compatible_router_values,
+    compose_prefix_routing,
+    configure_slice_routing,
+)
 from llm_d_lens.versions import router_chart, router_chart_version
 
 from .guide_planning import profile_for_key
@@ -52,7 +56,14 @@ def _needs_render_service(values: dict) -> bool:
 
 
 async def build_guide_deployment_bundle(
-    guide: str, manifest: dict, model: str, accelerator: str, block_size=None, router_values=""
+    guide: str,
+    manifest: dict,
+    model: str,
+    accelerator: str,
+    block_size=None,
+    router_values="",
+    prefix_routing=None,
+    slice_routing="inherit",
 ) -> dict:
     if guide not in ROUTER_PATHS:
         raise ValueError("This Guide does not have a supported deployment bundle.")
@@ -66,17 +77,17 @@ async def build_guide_deployment_bundle(
             github_content_url(source["repository"], path, source["commit"]), "application/vnd.github.raw+json"
         )
 
-    async def read_router():
+    async def read_router(selected_guide=guide):
         profile = profile_for_key(accelerator)
         topology = (profile.deployment.router_topology if profile else None) or "single-host"
         try:
-            return await read_source(f"guides/{guide}/router/{topology}/{ROUTER_PATHS[guide]}")
+            return await read_source(f"guides/{selected_guide}/router/{topology}/{ROUTER_PATHS[selected_guide]}")
         except httpx.HTTPStatusError as error:
             if error.response.status_code != 404:
                 raise
-            return await read_source(f"guides/{guide}/router/{ROUTER_PATHS[guide]}")
+            return await read_source(f"guides/{selected_guide}/router/{ROUTER_PATHS[selected_guide]}")
         except (OSError, ValueError):
-            return await read_source(f"guides/{guide}/router/{ROUTER_PATHS[guide]}")
+            return await read_source(f"guides/{selected_guide}/router/{ROUTER_PATHS[selected_guide]}")
 
     base_text, guide_text = await asyncio.gather(read_source("guides/recipes/router/base.values.yaml"), read_router())
     values = _merge(_mapping(base_text), _mapping(guide_text))
@@ -104,7 +115,18 @@ async def build_guide_deployment_bundle(
         epp["pluginsCustomConfig"][key] = yaml.safe_dump(plugins, sort_keys=False)
         if epp.get("replicas", 1) != 1:
             raise ValueError("Precise token-load routing currently requires one EPP replica.")
+    routing_assets = []
+    if prefix_routing is not None:
+        if not isinstance(prefix_routing, bool):
+            raise ValueError("Prefix routing must be enabled or disabled.")
+        donor = None
+        if prefix_routing:
+            donor_text = await read_router("optimized-baseline")
+            routing_assets.append(asset("router-prefix-source.yaml", donor_text))
+            donor = _merge(_mapping(base_text), _mapping(donor_text))
+        values = compose_prefix_routing(values, donor, prefix_routing)
     values = compatible_router_values(values, router_chart_version())
+    values = configure_slice_routing(values, slice_routing, router_chart_version())
     bundle = {
         "schemaVersion": "guide-deployment-bundle.v1",
         "guide": guide,
@@ -116,6 +138,7 @@ async def build_guide_deployment_bundle(
             "values": [
                 asset("router-base.yaml", base_text),
                 asset("router-guide.yaml", guide_text),
+                *routing_assets,
                 asset("router-effective.yaml", yaml.safe_dump(values, sort_keys=False)),
             ],
         },

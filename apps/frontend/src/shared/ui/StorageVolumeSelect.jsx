@@ -110,7 +110,7 @@ export function StorageVolumeSelect({
                 <span className="flex min-w-0 items-center gap-2">
                     {selected && <StorageStatusDot status={selected.status} />}
                     {selected && <StorageKindIcon kind={selected.kind} />}
-                    <span className={cn('truncate', !selected && 'text-slate-500')}>{volumes.length ? label : emptyLabel}</span>
+                    <span className={cn('truncate', !selected && 'text-slate-500')}>{volumes.length || loading ? label : emptyLabel}</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1">
                     {clearable && selected && <span role="button" tabIndex={0} aria-label="Clear storage selection" onClick={(event) => { event.stopPropagation(); choose(''); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); choose(''); } }} className="rounded p-0.5 text-slate-500 hover:bg-slate-800 hover:text-slate-200"><X size={14} /></span>}

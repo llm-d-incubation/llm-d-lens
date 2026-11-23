@@ -1,132 +1,87 @@
+import { lazy, Suspense, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Box, CheckCircle2, ChevronDown, Circle, Cpu, Download, HardDrive, Info, Layers, Maximize2, Rocket, ScrollText, Server, ShieldCheck, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Badge, Button, EmptyState, LoadingState, Modal, ModulePage, Panel, Select, Spinner, SummaryStrip, WorkspaceHeader } from '../../../shared/ui';
+import { downloadBlob } from '../../../shared/lib/download';
+import { cn } from '../../../shared/lib/cn';
+import { FormError } from '../../../shared/ui/FormError';
 import { requestJson } from '../../../shared/api/httpClient';
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft, CheckCircle2, ChevronDown, Cpu, FileStack, LoaderCircle, RotateCcw, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
-import { Badge, StatusChip } from '../../../shared/ui/Badge';
-import { Button } from '../../../shared/ui/Button';
-import { EmptyState } from '../../../shared/ui/EmptyState';
-import { ModuleHeader } from '../../../shared/ui/ModuleHeader';
-import { ModulePage } from '../../../shared/ui/ModulePage';
-import { Select } from '../../../shared/ui/FormControls';
-import PodPlacementControl from '../../../shared/ui/PodPlacementControl';
-import { listDeploymentNodeLabels } from '../../optimization';
+import { usePolling } from '../../../shared/lib/usePolling';
+import { historicalBenchmarkLabel, publicRagMatchSummary, retrievalBranchSummaries } from '../lib/agenticPresentation';
+import { useAuth } from '../../auth';
+import { getLocalDeploymentRun } from '../../optimization';
+import { DeploymentPodsLogsModal } from './DeploymentManagement/DeploymentPodsLogsModal';
+import { formatTimestamp } from '../../../shared/lib/formatTimestamp';
 import { listAIProviders } from '../../ai-providers';
-import { streamAgenticRecommendation, streamAgenticRefinement } from '../api/agenticDeploymentBackend';
-import { candidateAnalysis, generatorLabel, historicalBenchmarkLabel, historicalEvidenceSummary, planningEvidenceLabel, publicRagMatchSummary, relaxedAicCandidates, retrievalBranchSummaries } from '../lib/agenticPresentation';
+import { DeploymentRequirementsForm, PlanningProviderSelect } from './DeploymentRequirementsForm';
+import { DeploymentPlanReview } from './DeploymentPlanReview';
+import { MeasuredOptimizationControls } from './MeasuredOptimizationControls';
+import { OptimizationTable } from './OptimizationTable';
+import { optimizationRows } from '../model/deploymentPlan';
+import { candidateEvidence, candidateLabel, defaultRequirements, deploymentPlanningRequest, OPTIMIZATION_CONTROLS, requirementsFromRun, streamAgenticRecommendation } from '../api/agenticDeploymentBackend';
+import { catalogCapability, deploymentEditorSnapshot, deploymentPlanManifest, renderDeploymentPlan, requirementCapability } from '../model/inference-designer/deploymentPlanning';
+import { defaultInferenceEndpoint } from '../model/inference-designer/compositionDeployment';
+import { PLANNING_STEPS, planningTimeline, rememberPlanningDurations } from '../model/planningSteps';
 
-function api(path, options = {}) {
-    return requestJson(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+const InferenceDesigner = lazy(() => import('./inference-designer/InferenceDesigner').then(module => ({ default: module.InferenceDesigner })));
+
+/** Clickable planning steps: each one reveals what runs internally and the events it reported. */
+export function PlanningTimeline({ events, live = false }) {
+    const [now, setNow] = useState(() => Date.now());
+    const [open, setOpen] = useState(null);
+    useEffect(() => { if (!live) return undefined; const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, [live]);
+    const steps = planningTimeline(events, live ? now : events.at(-1)?.at ?? now);
+    const current = open ?? (live ? steps.findIndex(step => step.state === 'active') : null);
+    const step = current == null || current < 0 ? null : steps[current];
+    const started = events[0]?.at;
+    return <div className="space-y-3">
+        <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{steps.map((item, index) => <li key={item.label}>
+            <button type="button" className="plan-step-button" aria-expanded={current === index} onClick={() => setOpen(current === index ? -1 : index)}>
+                <span className={cn('plan-step-icon', item.state === 'done' && 'is-done', item.state === 'active' && live && 'is-active')}>{item.state === 'done' || (!live && item.state === 'active') ? <CheckCircle2 size={16} /> : item.state === 'active' ? <Spinner size="sm" /> : <Circle size={14} />}</span>
+                <span className="min-w-0 flex-1"><span className={cn('block text-sm', item.state === 'active' && 'font-semibold')}>{item.label}</span>
+                    <span className="block text-xs tabular-nums text-theme-muted">{item.seconds != null ? `${item.seconds}s${item.state === 'active' && live ? ` of ~${item.estimate}s` : ''}` : `~${item.estimate}s ${item.measured ? 'typical' : 'est.'}`}{item.events.length ? ` · ${item.events.length} events` : ''}</span></span>
+                <ChevronDown size={14} className={cn('shrink-0 text-theme-muted transition', current === index && 'rotate-180')} aria-hidden="true" />
+            </button>
+        </li>)}</ol>
+        {step && <div className="rounded-xl border border-theme-border p-4 text-sm" aria-label={`${step.label} details`}>
+            <p className="font-semibold">{step.label}</p>
+            <p className="mt-1 text-xs leading-relaxed text-theme-muted">{step.detail}</p>
+            {step.events.length ? <ol className="mt-3 max-h-64 divide-y divide-theme-border overflow-auto rounded-lg border border-theme-border text-xs">{step.events.map((event, index) => <li key={index} className="space-y-1 px-3 py-2">
+                <span className="flex items-center gap-2"><Badge size="xxs" tone={event.status === 'complete' ? 'success' : event.status === 'failed' ? 'danger' : 'neutral'}>{event.phase.replaceAll('_', ' ')}</Badge><span className="ml-auto tabular-nums text-theme-muted">{started && event.at ? `+${Math.round((event.at - started) / 1000)}s` : ''}</span></span>
+                {String(event.message || '').length > 160
+                    ? <details className="group/message"><summary className="cursor-pointer list-none break-words leading-relaxed"><span className="group-open/message:hidden">{event.message.slice(0, 150).replace(/\s+\S*$/, '')}… <span className="text-theme-muted underline">More</span></span><span className="hidden whitespace-pre-wrap group-open/message:inline">{event.message}</span></summary></details>
+                    : <p className="break-words leading-relaxed">{event.message}</p>}
+            </li>)}</ol> : <p className="mt-3 text-xs text-theme-muted">{step.state === 'pending' ? 'Not started yet.' : 'No separate events were reported for this step.'}</p>}
+        </div>}
+    </div>;
 }
 
-const DEFAULT_REQUIREMENTS = {
-    ttftSloMs: '', tpotSloMs: '',
-    hardwareCapacityMode: 'free', customGpuCount: '',
-    useCase: 'general-chat', inputTokens: '', outputTokens: '', concurrency: '', requestRate: '',
-};
-
-const GENERATION_STAGES = [
-    { id: 'generation', label: 'Generating candidate', phases: ['initialization', 'validation', 'generation', 'ai', 'tools'], completionPhase: 'generation' },
-    { id: 'candidate_validation', label: 'Validate candidate list', phases: ['candidate_validation'], completionPhase: 'candidate_validation' },
-    { id: 'scoring', label: 'Scoring candidate', phases: ['scoring'], completionPhase: 'scoring' },
-];
-
-function GenerationProgress({ events }) {
-    const [expandedStageId, setExpandedStageId] = useState(null);
-    const stageEvents = GENERATION_STAGES.map((stage) => ({
-        ...stage,
-        events: events.filter((event) => stage.phases.includes(event.phase)),
-    }));
-    const latestStartedIndex = stageEvents.reduce(
-        (latest, stage, index) => stage.events.length ? index : latest, 0,
-    );
-
-    return (
-        <div role="status" aria-live="polite" className="mt-4 overflow-hidden border-t border-slate-800 pt-4">
-            <div className="flex items-center gap-2 border-b border-slate-800 px-4 py-3">
-                <LoaderCircle size={15} className="animate-spin text-cyan-300" />
-                <h3 className="text-xs font-semibold text-slate-200">Generating recommendation</h3>
-            </div>
-            <div className="grid grid-cols-3 gap-2 bg-slate-950/45 px-4 py-4" role="progressbar" aria-label="Recommendation generation progress">
-                {stageEvents.map((stage, index) => {
-                    const started = stage.events.length > 0;
-                    const finished = index < latestStartedIndex || stage.events.some((event) => (
-                        event.phase === stage.completionPhase && (event.status === 'complete' || event.status === 'success' || event.status === 'fallback')
-                    ));
-                    const fallback = stage.events.some((event) => event.status === 'fallback');
-                    const expanded = expandedStageId === stage.id;
-                    return <button key={stage.id} type="button" disabled={!started} aria-expanded={expanded} onClick={() => setExpandedStageId(expanded ? null : stage.id)} className="min-w-0 text-left disabled:cursor-default">
-                        <span className={`block h-1.5 overflow-hidden rounded-full ${fallback ? 'bg-amber-400' : finished ? 'bg-emerald-400/80' : 'bg-slate-800'}`}>
-                            {started && !finished && !fallback && <span className="benchmark-progress block h-full w-1/3 rounded-full bg-cyan-400" />}
-                        </span>
-                        <span className={`mt-1 block text-[9px] leading-4 ${fallback ? 'text-amber-300' : expanded || started && !finished ? 'text-cyan-300' : finished ? 'text-emerald-300' : 'text-slate-500'}`}>{stage.label}</span>
-                    </button>;
-                })}
-            </div>
-            {expandedStageId && (() => {
-                const stage = stageEvents.find((item) => item.id === expandedStageId);
-                return <div className="max-h-56 space-y-2 overflow-y-auto border-t border-slate-800 bg-slate-950/70 px-4 py-3">
-                    {stage.events.map((event, index) => (
-                        <div key={`${event.phase}-${event.round || 0}-${index}`} className="border-l border-slate-700 pl-3">
-                            <p className={`text-[11px] leading-4 ${event.status === 'fallback' ? 'text-amber-200' : 'text-slate-300'}`}>{event.message}</p>
-                            {(event.round || event.duration_ms !== undefined) && <p className="mt-0.5 text-[10px] text-slate-500">{event.round ? `AI round ${event.round}` : ''}{event.round && event.duration_ms !== undefined ? ' · ' : ''}{event.duration_ms !== undefined ? `${event.duration_ms} ms` : ''}</p>}
-                        </div>
-                    ))}
-                </div>;
-            })()}
+/** Stepped progress for one planning request; evidence steps without events are treated as passed once later steps start. */
+export function PlanningProgress({ events, onCancel }) {
+    const [seconds, setSeconds] = useState(0);
+    useEffect(() => { const timer = setInterval(() => setSeconds(value => value + 1), 1000); return () => clearInterval(timer); }, []);
+    const steps = planningTimeline(events);
+    const reached = Math.max(0, steps.findIndex(step => step.state === 'active'));
+    const percent = Math.min(96, Math.round(((reached + 0.5) / PLANNING_STEPS.length) * 100));
+    const remaining = Math.max(0, steps.slice(reached).reduce((sum, step) => sum + step.estimate, 0) - (steps[reached]?.seconds || 0));
+    return <Panel className="shadow-none" aria-label="Planning progress">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+            <div role="status"><p className="text-lg font-semibold">Building your deployment plan</p><p className="mt-1 text-sm text-theme-muted">{events.at(-1)?.message || 'Starting…'}</p></div>
+            <div className="flex items-center gap-3"><span className="text-sm tabular-nums text-theme-muted">{percent}% · {seconds}s{remaining > 0 ? ` · ~${remaining}s left` : ''}</span>{onCancel && <Button size="sm" variant="secondary" onClick={onCancel}>Cancel</Button>}</div>
         </div>
-    );
+        <div className="plan-progress-track mt-4"><div className="plan-progress-fill" style={{ width: `${percent}%` }} /><div className="plan-progress-indeterminate" /></div>
+        <div className="mt-5"><PlanningTimeline events={events} live /></div>
+    </Panel>;
 }
 
-function CandidateRow({ candidate, selected, analysis, onDeploy, deploying, canDeploy }) {
-    const prefill = candidate.prefill_replicas
-        ? `Prefill ${candidate.prefill_replicas} x TP ${candidate.prefill_tensor_parallel_size}`
-        : null;
-    const historicalEvidence = historicalEvidenceSummary(candidate.historical_benchmarks);
+const api = (path, body) => requestJson(path, body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+});
 
-    return (
-        <div className={`grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-slate-800/70 px-4 py-3 last:border-b-0 ${selected ? 'bg-emerald-500/8' : ''}`}>
-            <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate text-xs font-semibold text-slate-100">{candidate.provider_ref}</span>
-                    {selected && <Badge tone="success" size="xs">Recommended</Badge>}
-                    {candidate.score !== null && candidate.score !== undefined && <Badge tone="info" size="xs">{candidate.score_source === 'openai-compatible' ? 'AI score' : 'Deterministic score'}: {Math.round(candidate.score * 100)}/100</Badge>}
-                    <Badge tone={candidate.slo_status === 'satisfied' ? 'success' : candidate.slo_status === 'not_satisfied' ? 'danger' : 'neutral'} size="xs">
-                        SLO {candidate.slo_status === 'not_satisfied' ? 'not met' : candidate.slo_status} ({Math.round((candidate.slo_confidence || 0) * 100)}%)
-                    </Badge>
-                </div>
-                <p className="mt-1 truncate font-mono text-[10px] text-slate-500">{candidate.id}</p>
-            </div>
-            <div className="text-right text-[11px] text-slate-400">
-                <div>{candidate.replicas} decode x TP {candidate.tensor_parallel_size}</div>
-                {prefill && <div className="mt-1 text-slate-500">{prefill}</div>}
-                <div className="mt-1 font-mono text-slate-300">{candidate.required_gpus} GPU</div>
-                {candidate.allocatable_kv_cache_gib !== undefined && candidate.allocatable_kv_cache_gib !== null && (
-                    <div className="mt-1 text-[10px] text-emerald-400 font-mono">
-                        KV: {candidate.allocatable_kv_cache_gib} GiB{candidate.max_concurrent_requests ? ` · Max ${candidate.max_concurrent_requests} req` : ''}
-                    </div>
-                )}
-                {canDeploy && <Button variant={selected ? 'primary' : 'outline'} size="xs" className="mt-2" onClick={() => onDeploy(candidate.id)} isLoading={deploying}><CheckCircle2 size={13} />Deploy recommendation</Button>}
-            </div>
-            <details className="col-span-full border-t border-slate-800/70 pt-2">
-                <summary className="cursor-pointer text-[11px] text-slate-400">Why this option</summary>
-                <div className="mt-2 space-y-1 text-[11px] leading-4 text-slate-400">
-                    <p>{analysis.performance}</p>
-                    <p>{analysis.resources}</p>
-                    {candidate.allocatable_kv_cache_gib !== undefined && candidate.allocatable_kv_cache_gib !== null && (
-                        <p className="text-cyan-300/90 font-mono text-[10px]">
-                            Capacity: {candidate.allocatable_kv_cache_gib} GiB KV Cache allocatable{candidate.per_request_kv_cache_gib ? ` (${candidate.per_request_kv_cache_gib} GiB/req)` : ''}{candidate.max_concurrent_requests ? `, max ~${candidate.max_concurrent_requests} concurrent requests` : ''}.
-                        </p>
-                    )}
-                    <p className="text-slate-500">{analysis.ranking}</p>
-                    {historicalEvidence && <div className="border-t border-slate-800/70 pt-2">
-                        <p className="font-medium text-slate-300">Historical benchmarks: {historicalEvidence.sampleCount} record(s), {historicalEvidence.successfulCount} succeeded, {historicalEvidence.failedCount} failed.</p>
-                        <ul className="mt-1 space-y-1 font-mono text-[10px] text-slate-500">
-                            {candidate.historical_benchmarks.map((sample) => <li key={sample.benchmark_id}>{historicalBenchmarkLabel(sample)}</li>)}
-                        </ul>
-                    </div>}
-                </div>
-            </details>
-        </div>
-    );
+function slaSummary(run) {
+    const targets = run.request?.requirements?.performance_targets || {};
+    if (!targets.ttftMs && !targets.tpotMs) return 'Performance not benchmarked';
+    const status = run.candidates?.find(item => item.id === run.selected_candidate?.id)?.slo_status;
+    return status === 'satisfied' ? 'SLA met by AIC estimate' : status === 'not_satisfied' ? 'SLA not met by AIC estimate' : 'SLA not evaluated by AIC';
 }
 
 export function RetrievalEvidenceSources({ run }) {
@@ -192,265 +147,429 @@ export function RetrievalEvidenceSources({ run }) {
     });
 }
 
-function fallbackSummary(reason) {
-    if (reason === 'rate_limit') return 'The external planner is rate limited.';
-    if (reason === 'timeout') return 'The external planner did not respond in time.';
-    if (reason === 'transport') return 'The external planner could not be reached.';
-    if (reason === 'invalid_response') return 'The external planner returned an invalid response.';
-    return 'The external planner is unavailable, so Prism used its built-in ranking.';
+export function DeploymentSummary({ run, draft, deploymentRun, busy, locked, deployBlocked, editing, cleanupRequired, onDeploy, onCheck, onRequirements, onOpen, endpoint, onEndpointChange, confirmLabel = 'Deploy' }) {
+    const plan = run.configuration_plan;
+    const checked = Boolean(deploymentPlanManifest(plan)) && plan?.validation?.status === 'resources_checked';
+    const submitted = Boolean(run.deployment_run_id);
+    const ready = deploymentRun?.status === 'succeeded' && Boolean(deploymentRun.cases?.length) && deploymentRun.cases.every(item => item.status === 'ready');
+    const needsAttention = ['failed', 'partially_succeeded', 'cancelled', 'cleaned'].includes(deploymentRun?.status);
+    const title = submitted ? ready ? 'Deployment ready' : needsAttention ? 'Review deployment status' : 'Deployment submitted'
+        : cleanupRequired ? 'Clean up test resources' : busy ? 'Updating your plan' : editing ? 'Finish editing to continue' : checked ? 'Ready for your confirmation' : 'Resource checks required';
+    const candidate = run.selected_candidate;
+    const resources = plan?.resource_estimate || {};
+    const runtime = plan?.source_draft?.runtimeConfiguration;
+    const required = resources.accelerators ?? (candidate ? candidate.replicas * candidate.tensor_parallel_size + (candidate.prefill_replicas || 0) * (candidate.prefill_tensor_parallel_size || 0) : null);
+    const tone = submitted ? ready ? 'success' : needsAttention ? 'danger' : 'info' : cleanupRequired ? 'danger' : checked && !editing ? 'success' : 'warning';
+    const HeroIcon = tone === 'success' ? ShieldCheck : tone === 'info' ? Rocket : AlertTriangle;
+    const metrics = [
+        [<Cpu key="cpu" size={16} />, 'Accelerators', required == null ? 'Unknown' : `${required}${resources.available_accelerators != null ? ` / ${resources.available_accelerators}` : ''}`, resources.available_accelerators != null ? 'required / available' : 'required', required != null && resources.available_accelerators != null && required > resources.available_accelerators ? 'danger' : 'info'],
+        [<Layers key="layers" size={16} />, candidate?.prefill_replicas ? 'Prefill / Decode' : 'Serving', candidate ? candidate.prefill_replicas ? `${candidate.prefill_replicas}×TP${candidate.prefill_tensor_parallel_size} / ${candidate.replicas}×TP${candidate.tensor_parallel_size}` : `${candidate.replicas} × TP${candidate.tensor_parallel_size}` : 'Unknown', runtime?.slices > 1 ? `${runtime.slices} slices` : 'replicas × tensor parallel', 'info'],
+        [<Server key="server" size={16} />, 'Cluster', draft.clusterName || draft.clusterId, resources.checked_at ? `checked ${formatTimestamp(resources.checked_at)}` : 'capacity re-checked on deploy', 'info'],
+        [<HardDrive key="cache" size={16} />, 'Model cache', draft.storageVolumeName || draft.storageVolumeId, candidate?.native_cpu_cache_gib ? `CPU KV cache ${candidate.native_cpu_cache_gib} GiB / replica` : run.request?.placement_replicas ? `placement: ${run.request.placement_replicas}${run.request.placement_node_label ? ` (${run.request.placement_node_label.value})` : ''}` : '', 'info'],
+    ];
+    const checks = [
+        [checked, checked ? 'Configuration and resource checks passed' : 'Configuration and resource checks pending'],
+        [submitted ? ready : null, ready ? 'Serving components ready' : submitted ? 'Startup in progress; see the Deployments list' : 'Cluster admission and startup happen after confirmation'],
+        [null, 'Readiness does not verify workload performance'],
+    ];
+    const endpointMissing = checked && Boolean(plan.source_bundle) && !plan.endpoints?.some(item => item.value === endpoint);
+    const enabledOptimizations = plan?.decisions?.length ? optimizationRows(plan, candidate).filter(row => row.state === 'Enabled') : null;
+    // The Deploy button and readiness checks already say a checked plan awaits confirmation.
+    const showHero = submitted || cleanupRequired || busy || editing || !checked;
+    return <section id="deployment-summary" className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_300px]" aria-label="Deployment summary">
+        <div className="min-w-0 space-y-4">
+            {showHero && <div className={cn('deployment-hero', `deployment-tone-${tone}`)}>
+                <span className="deployment-hero-icon"><HeroIcon size={22} /></span>
+                <div className="min-w-0 flex-1"><p role="status" className="text-lg font-semibold text-theme-text">{title}</p>
+                    <p className="text-sm text-theme-muted">{submitted ? ready ? 'Open the deployment for endpoints, monitoring and evaluation.' : 'Submission alone does not mean the model is ready.' : 'Confirm the footprint below. Capacity is checked again on deploy.'}</p></div>
+            </div>}
+            <div className="grid gap-3 sm:grid-cols-2">{metrics.map(([icon, label, value, detail, metricTone]) => <div key={label} className={cn('deployment-metric', `deployment-tone-${metricTone}`)}>
+                <div className="flex items-start gap-3"><span className="deployment-metric-icon">{icon}</span><div className="min-w-0"><p className="text-xs text-theme-muted">{label}</p><p className="truncate text-base font-semibold" title={String(value)}>{value}</p>{detail && <p className="truncate text-xs text-theme-muted" title={detail}>{detail}</p>}</div></div>
+            </div>)}</div>
+            {enabledOptimizations && <div aria-label="Enabled optimizations" className="rounded-xl border border-theme-border p-3">
+                <p className="text-xs text-theme-muted">Enabled in this YAML ({enabledOptimizations.length})</p>
+                {enabledOptimizations.length ? <ul className="mt-2 flex flex-wrap gap-1.5">{enabledOptimizations.map(row => <li key={row.id}><Badge tone="info" size="md">{row.label}</Badge></li>)}</ul>
+                    : <p className="mt-1 text-sm">No optimizations are enabled.</p>}
+            </div>}
+            <ul className="grid gap-2" aria-label="Deployment readiness">{checks.map(([state, label]) => <li key={label} className={cn('deployment-check', `deployment-tone-${state ? 'success' : state === null ? 'neutral' : 'warning'}`)}>
+                {state ? <CheckCircle2 size={16} aria-hidden="true" /> : state === null ? <Info size={16} aria-hidden="true" /> : <Circle size={16} aria-hidden="true" />}<span>{label}</span>
+            </li>)}</ul>
+            {plan?.validation?.warnings?.length > 0 && <div className="deployment-check deployment-tone-warning flex-col"><p className="flex items-center gap-2 font-medium"><AlertTriangle size={16} />{plan.validation.warnings.length} configuration warning{plan.validation.warnings.length === 1 ? '' : 's'}</p><ul className="list-disc space-y-1 pl-6 text-theme-muted">{plan.validation.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
+            {run.error && <p role="alert" className="text-sm">{run.error}</p>}
+            {cleanupRequired && <p role="alert" className="text-sm">Clean up interrupted benchmark resources before revising or deploying.</p>}
+        </div>
+        <aside className="h-fit space-y-3 rounded-xl border border-theme-border bg-theme-bg/40 p-4">
+            {!submitted && plan?.source_bundle && (plan.endpoints?.length === 1 && endpoint === plan.endpoints[0].value
+                ? <div className="text-sm"><p className="font-medium">Inference Service</p><p className="mt-1 break-all font-mono text-xs">{endpoint}</p><p className="mt-1 text-xs text-theme-muted">Kubernetes Service that receives requests and is probed for readiness.</p></div>
+                : <label className="block text-sm font-medium">Inference Service
+                <Select className="mt-1" aria-label="Inference Service" value={endpoint || ''} disabled={locked || editing} onChange={event => onEndpointChange?.(event.target.value)}>
+                    <option value="">Select the traffic entry Service</option>{plan.endpoints?.map(item => <option key={item.value} value={item.value}>{item.value}</option>)}
+                </Select><span className="mt-1 block text-xs font-normal text-theme-muted">The Kubernetes Service that receives requests and is probed for readiness. Lens picks the router entry. The other choices are every port of every generated Service (for example EPP control or metrics ports); picking one can fail the readiness probe or bypass routing.</span>
+            </label>)}
+            {submitted ? onOpen && <Button size="md" className="w-full" onClick={onOpen}>Open deployment</Button> : <>
+                <Button size="md" className="w-full" disabled={locked || editing || !plan || endpointMissing || (checked && deployBlocked)} isLoading={busy} onClick={checked ? onDeploy : onCheck}>{checked ? confirmLabel : 'Retry checks'}</Button>
+                {checked && <Button variant="secondary" className="w-full" disabled={locked || editing || busy} onClick={onCheck}>Recheck resources</Button>}
+                <Button variant="ghost" className="w-full" disabled={locked || editing} onClick={onRequirements}>Change workload &amp; limits</Button>
+                <p className="text-xs leading-relaxed text-theme-muted">Deploys exactly this configuration.</p>
+            </>}
+        </aside>
+    </section>;
 }
 
-function generatorFallbackSummary(reason) {
-    if (reason === 'all_ai_candidates_invalid') return 'Every AI-generated candidate failed deterministic validation.';
-    if (reason === 'mcp_unavailable') return 'The MCP planning tools could not be reached.';
-    if (reason === 'invalid_response') return 'The AI generator returned an invalid candidate response.';
-    return 'The configured AI generator could not be reached.';
-}
-
-export default function AgenticDeploymentWorkspace({ draft, embedded = false, onBack, onDeploymentStarted, vllmParameterControls }) {
-    const [run, setRun] = useState(null);
-    const [creating, setCreating] = useState(false);
-    const [deployingCandidateId, setDeployingCandidateId] = useState('');
-    const [error, setError] = useState('');
-    const [requirements, setRequirements] = useState(DEFAULT_REQUIREMENTS);
-    const [placementReplicas, setPlacementReplicas] = useState('prefer-same-node');
-    const [placementNodeName, setPlacementNodeName] = useState('');
-    const [plannerPrompt, setPlannerPrompt] = useState('');
-    const [aiProviders, setAiProviders] = useState([]);
-    const [aiProviderId, setAiProviderId] = useState('');
-    const [refinementPrompt, setRefinementPrompt] = useState('');
-    const [refining, setRefining] = useState(false);
-    const [generationEvents, setGenerationEvents] = useState([]);
-    const [refinementEvents, setRefinementEvents] = useState([]);
-    const updateRequirement = (name) => (event) => setRequirements((current) => ({ ...current, [name]: event.target.value }));
-    const numeric = (value) => (value ? Number(value) : null);
-
-    useEffect(() => { setPlacementNodeName(''); }, [draft?.clusterId]);
-
+export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, onBack, onDeploymentStarted, onSwitchToManual, onRestorePlan, restoreLabel = 'Return to previous plan' }) {
+    const { can } = useAuth();
+    const permitted = can('deployment:run:create');
+    const [run, setRun] = useState(null), [requirements, setRequirements] = useState(() => ({ ...defaultRequirements(), objective: draft?.initialObjective || 'balanced', ...draft?.initialRequirements }));
+    const [busy, setBusy] = useState(false), [building, setBuilding] = useState(false), [error, setError] = useState(''), [events, setEvents] = useState([]);
+    const [reviewTab, setReviewTab] = useState('summary'), [logOpen, setLogOpen] = useState(false);
+    const [providers, setProviders] = useState([]), [provider, setProvider] = useState(draft?.initialProvider || '');
+    const [focus, setFocus] = useState('');
+    const [restoring, setRestoring] = useState(true), [approval, setApproval] = useState(null);
+    const [editing, setEditing] = useState(false);
+    const [endpoint, setEndpoint] = useState('');
+    const [sourceProfiles, setSourceProfiles] = useState([]), [profileId, setProfileId] = useState('');
+    const [workspaceView, setWorkspaceView] = useState('review');
+    const [primaryPanel, setPrimaryPanel] = useState('optimizations'), [flowToggle, setFlowToggle] = useState(null);
+    const [changingRequirements, setChangingRequirements] = useState(false);
+    const [trialBusy, setTrialBusy] = useState(false);
+    const [deploymentRun, setDeploymentRun] = useState(null), [logsDeployment, setLogsDeployment] = useState(null);
+    const requestVersion = useRef(0);
+    const abort = useRef(null), mounted = useRef(true);
+    const autoStarted = useRef(null);
+    const key = `lens-deployment-plan:${mode}:${draft?.clusterId}:${draft?.model}:${draft?.deploymentName}:${draft?.storageVolumeId}${draft?.initialObjective ? `:${draft.initialObjective}` : ''}${draft?.planningAttemptId ? `:${draft.planningAttemptId}` : ''}`;
     useEffect(() => {
-        let cancelled = false;
-        listAIProviders().then((items) => {
-            if (cancelled) return;
-            setAiProviders(items);
-            // Auto-select the first saved provider so the operator doesn't have
-            // to manually pick one to get AI-assisted ranking by default.
-            setAiProviderId((current) => current || (items[0]?.id ?? ''));
-        }).catch(() => {});
-        return () => { cancelled = true; };
+        mounted.current = true;
+        return () => { mounted.current = false; abort.current?.abort(); };
     }, []);
-
-    const createPlan = async () => {
-        if (numeric(requirements.concurrency) !== null && numeric(requirements.requestRate) !== null) {
-            setError('AIC accepts only one load target: Concurrent requests or Request rate (QPS). Both were provided; choose one and clear the other because AIC does not support joint load targets.');
-            return;
-        }
-        if (!draft?.storageVolumeId) {
-            setError('Select a model cache storage before creating an Agentic recommendation.');
-            return;
-        }
-        setCreating(true);
-        setError('');
-        setGenerationEvents([{ phase: 'initialization', status: 'running', message: 'Connecting to the recommendation service.' }]);
+    useEffect(() => {
+        let active = true;
+        requestVersion.current += 1; abort.current?.abort();
+        setRun(null); setDeploymentRun(null); setLogsDeployment(null); setApproval(null); setRestoring(true); setBusy(false); setError(''); setEvents([]); setChangingRequirements(false);
+        setRequirements({ ...defaultRequirements(), objective: draft?.initialObjective || 'balanced', ...draft?.initialRequirements }); setProvider(draft?.initialProvider || '');
+        const id = draft?.resumeRunId || sessionStorage.getItem(key);
+        if (!id) { setRestoring(false); return undefined; }
+        api(`/api/agentic-deployments/${encodeURIComponent(id)}`).then(value => {
+            if (active) {
+                setRequirements(requirementsFromRun(value));
+                setProvider(value.request.ai_provider_id || '');
+                setRun(value);
+                setWorkspaceView(value.deployment_run_id ? 'execution' : value.status === 'optimizing' ? 'trials' : 'review');
+            }
+        }).catch(failure => { if (active) setError(`Unable to restore the saved plan: ${failure.message}`); })
+            .finally(() => { if (active) setRestoring(false); });
+        return () => { active = false; };
+    }, [key, draft?.contextLength, draft?.initialObjective, draft?.initialRequirements, draft?.initialProvider, draft?.resumeRunId, mode]);
+    useEffect(() => {
+        if (mode !== 'agentic') return undefined;
+        let active = true;
+        listAIProviders().then(items => { if (active) { setProviders(items); setProvider(current => current || items[0]?.id || ''); } })
+            .catch(failure => { if (active) setError(`Unable to load AI providers: ${failure.message}`); });
+        return () => { active = false; };
+    }, [mode]);
+    const accept = (value, keepReview = false) => {
+        if (!mounted.current) return;
+        setRun(value);
+        setApproval(current => keepReview && current ? { runId: value.id, checksum: value.configuration_plan?.configuration?.checksum } : null);
+        const endpoints = value.configuration_plan?.endpoints || [];
+        setEndpoint(current => endpoints.some(item => item.value === current) ? current : defaultInferenceEndpoint(endpoints));
+        sessionStorage.setItem(key, value.id);
+    };
+    const active = run?.status === 'optimizing' || run?.status === 'deploying';
+    usePolling(async () => {
+        if (!run) return;
+        const version = requestVersion.current;
+        try {
+            const value = await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}`);
+            if (mounted.current && version === requestVersion.current) setRun(value);
+            if (value.deployment_run_id) {
+                const execution = await getLocalDeploymentRun(value.deployment_run_id);
+                if (mounted.current && version === requestVersion.current) setDeploymentRun(execution);
+            }
+        } catch (failure) { if (mounted.current && version === requestVersion.current) setError(failure.message); }
+    }, { enabled: Boolean(run) && !busy && !trialBusy, intervalMs: active ? 5000 : 15000, immediate: true });
+    const generate = async value => {
+        const version = ++requestVersion.current;
+        setBusy(true); setBuilding(true); setError(''); setApproval(null); setEvents([]);
+        const controller = new AbortController();
+        abort.current = controller;
         try {
             const session = await api(`/api/cluster/session?clusterId=${encodeURIComponent(draft.clusterId)}`);
-            const clusterSessionId = session.sessionId || session.session_id;
-            if (!clusterSessionId) throw new Error('The selected cluster did not return an active session');
-            const payload = {
-                model: draft.model, deployment_name: draft.deploymentName, description: draft.description || '',
-                cluster_session_id: clusterSessionId, replicas: 1, tensor_parallel_size: 1,
-                storage_type: 'model-cache', storage_volume_id: draft.storageVolumeId,
-                max_model_len: draft.contextLength, gpu_memory_utilization: draft.gpuMemoryUtilization,
-                max_num_seqs: draft.maxNumSeqs, max_num_batched_tokens: draft.maxNumBatchedTokens,
-                vllm_arguments: draft.vllmArguments || [],
-                placement_replicas: placementReplicas,
-                placement_node_label: placementReplicas === 'same-node' && placementNodeName ? { key: 'kubernetes.io/hostname', value: placementNodeName } : null,
-                planning_facts: {
-                    model_weight_gib: draft.modelWeightGiB, vram_per_gpu_gib: 1, free_gpu_count: 0,
-                    hardware_capacity_mode: requirements.hardwareCapacityMode,
-                    custom_gpu_count: requirements.hardwareCapacityMode === 'custom' ? numeric(requirements.customGpuCount) : null,
-                    context_length: draft.contextLength, use_case: requirements.useCase,
-                    ttft_slo_ms: numeric(requirements.ttftSloMs), tpot_slo_ms: numeric(requirements.tpotSloMs),
-                    workload_profile: {
-                        mean_input_tokens: numeric(requirements.inputTokens),
-                        mean_output_tokens: numeric(requirements.outputTokens),
-                        concurrency: numeric(requirements.concurrency),
-                        request_rate: numeric(requirements.requestRate),
-                    },
-                },
-                planner_prompt: plannerPrompt.trim() || null,
-                ai_provider_id: aiProviderId || null,
-            };
-            let created = null;
+            const payload = deploymentPlanningRequest(run ? {
+                ...draft, contextLength: run.request.max_model_len, gpuMemoryUtilization: run.request.gpu_memory_utilization,
+                maxNumSeqs: run.request.max_num_seqs, maxNumBatchedTokens: run.request.max_num_batched_tokens,
+            } : draft, value, session.sessionId || session.session_id, mode, provider);
+            let result;
             await streamAgenticRecommendation(payload, (type, data) => {
-                if (type === 'progress') setGenerationEvents((current) => [...current.slice(-59), data]);
-                if (type === 'complete') created = data;
-                if (type === 'error') throw new Error(data.message || 'Unable to generate an Agentic recommendation');
-            });
-            if (!created) throw new Error('Recommendation stream ended before returning a result');
-            setRun(created);
-        } catch (failure) {
-            setError(failure.message || 'Unable to generate an Agentic recommendation');
-        } finally {
-            setCreating(false);
-        }
-    };
-
-    const refinePlan = async () => {
-        if (!run || !refinementPrompt.trim()) return;
-        setRefining(true);
-        setError('');
-        setRefinementEvents([{ phase: 'initialization', status: 'running', message: 'Connecting to the recommendation service.' }]);
-        try {
-            let refined = null;
-            await streamAgenticRefinement(run.id, { planner_prompt: refinementPrompt.trim() }, (type, data) => {
-                if (type === 'progress') setRefinementEvents((current) => [...current.slice(-59), data]);
-                if (type === 'complete') refined = data;
-                if (type === 'error') throw new Error(data.message || 'Unable to recalculate the recommendation');
-            });
-            if (!refined) throw new Error('Recalculation stream ended before returning a result');
-            setRun(refined);
-            setRefinementPrompt('');
-        } catch (failure) {
-            setError(failure.message || 'Unable to recalculate the recommendation');
-        } finally {
-            setRefining(false);
-        }
-    };
-
-    const reset = () => {
-        setRun(null);
-        setRequirements(DEFAULT_REQUIREMENTS);
-        setPlannerPrompt('');
-        setRefinementPrompt('');
-        setGenerationEvents([]);
-        setRefinementEvents([]);
-        setError('');
-    };
-
-    const deployCandidate = async (candidateId) => {
-        if (!run) return;
-        setDeployingCandidateId(candidateId);
-        setError('');
-        try {
-            if (run.selected_candidate?.id !== candidateId) {
-                const updated = await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/select`, {
-                    method: 'POST', body: JSON.stringify({ candidate_id: candidateId }),
-                });
-                setRun(updated);
+                if (type === 'progress' && mounted.current && version === requestVersion.current) setEvents(current => [...current.slice(-79), { ...data, at: Date.now() }]);
+                if (type === 'complete') result = data;
+                if (type === 'error') throw new Error(data.message || 'Planning failed.');
+            }, controller.signal);
+            if (!result) throw new Error('Planning ended without a validated configuration.');
+            if (!mounted.current || version !== requestVersion.current) return;
+            accept(result); setRequirements(requirementsFromRun(result)); setChangingRequirements(false); setWorkspaceView('review');
+            {
+                const progress = message => { if (mounted.current && version === requestVersion.current) setEvents(current => [...current, { phase: 'resources', status: 'running', message, at: Date.now() }]); };
+                try {
+                    const rendered = await renderDeploymentPlan(result, { compare: true, profileId, onProgress: progress });
+                    if (!mounted.current || version !== requestVersion.current) return;
+                    accept(rendered);
+                    setEvents(current => { const next = [...current, { phase: 'resources', status: 'complete', message: 'Configuration checked. Ready for review.', at: Date.now() }]; rememberPlanningDurations(next); return next; });
+                } catch (failure) {
+                    if (failure.profiles && mounted.current) setSourceProfiles(failure.profiles);
+                    if (mounted.current && version === requestVersion.current) setError(`The recommendation is preserved, but source resource checks failed: ${failure.message}. Resolve the source requirements and retry; deployment remains blocked.`);
+                }
             }
-            await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/approve`, { method: 'POST' });
-            onDeploymentStarted();
+            return true;
         } catch (failure) {
-            setError(failure.message || 'Unable to start deployment');
-        } finally {
-            setDeployingCandidateId('');
-        }
+            if (mounted.current && version === requestVersion.current) setError(controller.signal.aborted ? 'Planning cancelled. No deployment was started.' : failure.message);
+            return false;
+        } finally { if (mounted.current && version === requestVersion.current) { setBusy(false); setBuilding(false); abort.current = null; } }
     };
-
-    const input = (label, name, props = {}) => (
-        <label className="text-xs text-slate-400">{label}
-            <input className="mt-1 h-9 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 text-sm text-slate-200 placeholder:text-theme-muted" type="number" placeholder="Optional" value={requirements[name]} onChange={updateRequirement(name)} {...props} />
-        </label>
-    );
-    const hasAicPrediction = run?.planning_evidence?.some((item) => item.id === 'aic:search' && item.status === 'available');
-    const canDeploy = run?.status === 'awaiting_approval';
-    const aicConfigs = run?.planning_evidence?.find((item) => item.id === 'aic:search')?.details?.candidates?.candidates || [];
-    const relaxedConfigs = relaxedAicCandidates(run);
-    const clusterDetails = run?.planning_evidence?.find((item) => item.id.startsWith('cluster-overview:'))?.details;
-    const usedAiProviderName = aiProviders.find((provider) => provider.id === run?.request?.ai_provider_id)?.name;
-    const ragHardware = run?.planning_evidence?.find((item) => item.source === 'public-benchmark-rag')?.details?.target_hardware;
-
-    const content = (
-        <>
-            {!embedded && <ModuleHeader icon={Sparkles} title="Agentic deployment recommendation" description="Prism chooses a supported guide from the model, live cluster capacity, AIC, and prior evidence." actions={<div className="flex gap-2"><Button variant="secondary" onClick={reset}><RotateCcw size={15} />Reset</Button><Button variant="secondary" onClick={onBack}><ArrowLeft size={15} />Model details</Button></div>} />}
-            {embedded && <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold text-white">Agentic deployment plan</h2><p className="mt-1 text-sm text-slate-400">Prism chooses a supported guide from live cluster capacity and available evidence.</p></div><Button variant="secondary" onClick={reset}><RotateCcw size={15} />Reset</Button></div>}
-            <div className="rounded-lg border border-slate-800 bg-slate-900/45 p-3">
-                <label className="block text-xs font-semibold text-slate-300">AI provider <span className="font-normal text-slate-500">(optional; powers the external planner used to rank candidates)</span></label>
-                <Select className="mt-1.5" value={aiProviderId} onChange={(event) => setAiProviderId(event.target.value)}>
-                    <option value="">Default (no external AI provider)</option>
-                    {aiProviders.map((provider) => (
-                        <option key={provider.id} value={provider.id}>{provider.name}</option>
-                    ))}
-                </Select>
-                {aiProviders.length === 0 && (
-                    <p className="mt-1.5 text-xs text-slate-500">No AI providers configured yet. Add one under Resources → External providers.</p>
-                )}
+    const autoGenerate = mode === 'manual' || Boolean(draft?.initialObjective);
+    const startPlanning = useEffectEvent(() => generate({ ...defaultRequirements(), objective: draft?.initialObjective || 'balanced', ...draft?.initialRequirements }));
+    useEffect(() => {
+        if (autoGenerate && !restoring && !run && !error && permitted && autoStarted.current !== key) {
+            autoStarted.current = key;
+            startPlanning();
+        }
+    }, [autoGenerate, restoring, run, error, permitted, key]);
+    const mutate = async (action, body, checkResources = false) => {
+        const version = ++requestVersion.current;
+        setBusy(true); setError('');
+        try {
+            const url = `/api/agentic-deployments/${encodeURIComponent(run.id)}/${action}`;
+            let value = await api(url, body);
+            if (!mounted.current || version !== requestVersion.current) return null;
+            const prepared = value.configuration_plan?.validation?.preparedDeployment;
+            if (action === 'approve' && !body.prepared_plan_id && !value.deployment_run_id && prepared?.preflight.status === 'pass') {
+                value = await api(url, { ...body, prepared_plan_id: prepared.id, expected_plan_digest: prepared.digest, acknowledge_unknown: false });
+                if (!mounted.current || version !== requestVersion.current) return null;
+            }
+            accept(value);
+            if (checkResources) {
+                try {
+                    const checkedRun = value.configuration_plan?.source_bundle ? value : await renderDeploymentPlan(value, { profileId });
+                    if (!mounted.current || version !== requestVersion.current) return null;
+                    accept(checkedRun);
+                    return checkedRun;
+                } catch (failure) {
+                    if (mounted.current && version === requestVersion.current) setError(`The change is saved, but resource checks failed: ${failure.message}. Deployment is blocked until checks pass.`);
+                }
+            }
+            return value;
+        } catch (failure) {
+            if (mounted.current && version === requestVersion.current) setError(failure.message);
+            throw failure;
+        } finally { if (mounted.current && version === requestVersion.current) setBusy(false); }
+    };
+    const choose = async id => { try { if (await mutate('select', { candidate_id: id }, true)) setWorkspaceView('review'); } catch { /* mutate presents the error. */ } };
+    const renderSource = async ({ draft: editedDraft, compare = false } = {}) => {
+        const version = ++requestVersion.current;
+        setBusy(true); setError('');
+        try {
+            const value = await renderDeploymentPlan(run, { editedDraft, compare, profileId });
+            if (mounted.current && version === requestVersion.current) { accept(value, true); setEditing(false); }
+            return value;
+        } catch (failure) {
+            if (mounted.current && version === requestVersion.current) { setError(failure.message); if (failure.profiles) setSourceProfiles(failure.profiles); }
+            throw failure;
+        } finally { if (mounted.current && version === requestVersion.current) setBusy(false); }
+    };
+    const render = async () => { try { await renderSource(); } catch { /* The source error remains visible; no legacy fallback is deployed. */ } };
+    const edit = ({ node, patch }) => mutate('select', {
+        candidate_id: run.selected_candidate.id, role: node.role === 'prefill' ? 'prefill' : 'decode',
+        replicas: patch.replicas, tensor_parallel_size: patch.tensorParallelSize,
+        max_model_len: patch.max_model_len, gpu_memory_utilization: patch.gpu_memory_utilization,
+        max_num_seqs: patch.max_num_seqs, max_num_batched_tokens: patch.max_num_batched_tokens,
+        native_cpu_cache_gib: patch.native_cpu_cache_gib,
+    }, true);
+    const deploy = async () => {
+        if (!approval || approval.runId !== run.id || approval.checksum !== run.configuration_plan?.configuration?.checksum) {
+            setApproval(null); setError('The configuration changed. Review the current plan before deploying.'); return;
+        }
+        try {
+            const result = await mutate('approve', { configuration_checksum: approval.checksum, ...(plan.source_bundle ? { endpoint } : {}), ...(approval.prepared ? {
+                prepared_plan_id: approval.prepared.id, expected_plan_digest: approval.prepared.digest, acknowledge_unknown: approval.prepared.preflight.status === 'unknown',
+            } : {}) });
+            const prepared = result?.configuration_plan?.validation?.preparedDeployment;
+            if (prepared && !result.deployment_run_id) {
+                setApproval({ runId: result.id, checksum: approval.checksum, prepared });
+                return;
+            }
+            if (!result?.deployment_run_id) return;
+            setApproval(null);
+            // Execution status lives in the Deployments job list, not inside the plan.
+            if (onDeploymentStarted) onDeploymentStarted(result); else setWorkspaceView('execution');
+        }
+        catch { /* mutate presents the error. */ }
+    };
+    const reset = () => { setChangingRequirements(true); setApproval(null); setError(''); setEvents([]); };
+    const toggleOptimization = (id, enabled) => generate({
+        ...requirements,
+        requiredFeatures: requirements.requiredFeatures.filter(item => item !== id),
+        forbiddenFeatures: enabled ? requirements.forbiddenFeatures.filter(item => item !== id) : [...new Set([...requirements.forbiddenFeatures, id])],
+    });
+    const toggleRow = async (id, enabled) => {
+        const requirement = OPTIMIZATION_CONTROLS.some(([control]) => control === id) ? id : requirementCapability(catalogCapability(id));
+        if (requirement) return toggleOptimization(requirement, enabled);
+        setFlowToggle({ id: catalogCapability(id), enabled, at: Date.now() });
+        return true;
+    };
+    const plan = run?.configuration_plan;
+    const manifest = deploymentPlanManifest(plan);
+    const checked = Boolean(manifest) && plan?.validation?.status === 'resources_checked';
+    const cleanupRequired = ['interrupted', 'cleanup_failed'].includes(run?.optimization?.status);
+    const locked = busy || trialBusy || cleanupRequired || active || !permitted || (run && run.status !== 'awaiting_approval');
+    const reviewBlocked = !run ? '' : !permitted ? 'Deployment permission required.'
+        : busy ? 'Updating the plan…' : trialBusy ? 'Benchmark tests are starting.'
+            : cleanupRequired ? 'Clean up interrupted test resources first.'
+                : active ? `Plan is ${run.status === 'optimizing' ? 'running benchmark tests' : 'deploying'}.`
+                    : run.status !== 'awaiting_approval' ? `Plan status: ${String(run.status).replaceAll('_', ' ')}.`
+                        : editing ? 'Apply or discard your changes first.' : !plan ? 'No configuration generated yet.' : '';
+    const enabled = plan?.decisions?.filter(item => ['enabled', 'dependency'].includes(item.status)) || [];
+    const sourceReview = Boolean(plan?.source_bundle && plan.source_draft);
+    const frozenPlan = approval?.prepared;
+    const preflightStatus = frozenPlan?.preflight.status;
+    const summary = run && <>
+        {frozenPlan && <section className="space-y-2 text-sm">
+            <strong>{preflightStatus === 'unknown' ? 'Deployment not started: scheduling constraints need review' : `Deployment preflight: ${preflightStatus}`}</strong>
+            {preflightStatus === 'unknown' && <ul className="list-disc pl-5">{frozenPlan.preflight.unmodeled?.map(reason => <li key={reason}>{reason}</li>)}</ul>}
+            <code className="block break-all">{frozenPlan.digest}</code>
+            <details><summary>Frozen resources and placement checks</summary><pre className="max-h-80 overflow-auto">{JSON.stringify({ cases: frozenPlan.cases, preflight: frozenPlan.preflight }, null, 2)}</pre></details>
+            {preflightStatus === 'fail' && <ul role="alert" className="list-disc pl-5">{frozenPlan.preflight.errors?.map((error, index) => <li key={index}>{error.message || error.code}</li>)}</ul>}
+        </section>}
+        <DeploymentSummary run={run} draft={draft} deploymentRun={deploymentRun} busy={busy} locked={locked || approval?.checksum !== plan?.configuration?.checksum} deployBlocked={Boolean(frozenPlan) && !['unknown', 'pass'].includes(preflightStatus)} editing={editing} cleanupRequired={cleanupRequired} endpoint={endpoint}
+            onEndpointChange={value => { setEndpoint(value); if (frozenPlan) setApproval({ runId: run.id, checksum: approval.checksum }); }} onDeploy={deploy} confirmLabel={preflightStatus === 'unknown' ? 'Accept risks and deploy' : 'Confirm deployment'} onCheck={render} onRequirements={reset} />
+        {error && <p role="alert" className="mt-3 text-sm">{error}</p>}
+    </>;
+    const reviewFooter = <div className="flex w-full flex-wrap justify-between gap-2">
+        <Button variant="ghost" disabled={busy} onClick={() => setApproval(null)}><ArrowLeft size={15} />Back to edit</Button>
+        {manifest && <Button variant="secondary" onClick={() => downloadBlob(new Blob([manifest], { type: 'text/yaml' }), `${draft.deploymentName}.yaml`)}><Download size={15} />Download YAML</Button>}
+    </div>;
+    const content = <section className="space-y-5">
+        <WorkspaceHeader title={draft.modelTitle || draft.model?.split('/').at(-1) || 'New deployment'} icon={<Box size={20} />}
+            badge={<Badge tone={mode === 'manual' ? 'info' : 'violet'} size="md">{mode === 'manual' ? <SlidersHorizontal size={12} /> : <Sparkles size={12} />}{mode === 'manual' ? 'Manual' : 'Agentic'} plan</Badge>}
+            subtitle={<><Server size={12} aria-hidden="true" /><span className="truncate">{draft.clusterName || draft.clusterId}</span>{draft.deploymentName && <><span aria-hidden="true">·</span><span className="truncate font-mono">{draft.deploymentName}</span></>}</>}
+            backAction={onBack && <Button variant="ghost" size="sm" aria-label="Change setup" title={trialBusy ? 'Benchmark tests are starting; wait before leaving.' : 'Change setup'} disabled={trialBusy || (busy && Boolean(approval))} onClick={() => { if (editing && !window.confirm('Discard unapplied changes and return to setup?')) return; onBack(run?.deployment_run_id ? null : run); }}><ArrowLeft size={16} /></Button>}
+            actions={<>{onRestorePlan && !run?.deployment_run_id && <Button variant="secondary" size="sm" disabled={trialBusy || (busy && Boolean(approval))} onClick={() => { if (editing && !window.confirm('Discard unapplied changes?')) return; onRestorePlan(run); }}><ArrowLeft size={14} />{restoreLabel}</Button>}
+                {!building && events.length > 0 && <Button variant="ghost" size="sm" onClick={() => setLogOpen(true)}><ScrollText size={14} />Planning log</Button>}
+                {run?.deployment_run_id ? onDeploymentStarted && <Button onClick={() => onDeploymentStarted(run)}>Open deployment</Button> : run && <>
+                    {reviewBlocked && <span className="max-w-xs text-xs text-theme-muted" role="status">{reviewBlocked}{editing && <> <Button size="xs" variant="link" onClick={() => { setPrimaryPanel('flow'); document.getElementById('deployment-unapplied')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}>Show</Button></>}</span>}
+                    <Button id="deployment-review" size="md" disabled={Boolean(reviewBlocked)} title={reviewBlocked || undefined} onClick={() => { setWorkspaceView('review'); setReviewTab(sourceReview ? 'overview' : 'summary'); setApproval({ runId: run.id, checksum: plan.configuration?.checksum }); }}>Review &amp; deploy<ArrowRight size={15} /></Button></>}</>} />
+        {run && !building && <SummaryStrip id="deployment-plan-summary" items={[
+            { icon: Layers, tone: 'info', label: 'Topology', value: run.selected_candidate?.prefill_replicas ? 'Prefill / Decode' : 'Combined serving', detail: run.selected_candidate?.prefill_replicas
+                ? `Prefill ${run.selected_candidate.prefill_replicas} × TP ${run.selected_candidate.prefill_tensor_parallel_size || 1} · Decode ${run.selected_candidate.replicas || 1} × TP ${run.selected_candidate.tensor_parallel_size || 1}${plan?.source_draft?.runtimeConfiguration?.slices > 1 ? ` · ${plan.source_draft.runtimeConfiguration.slices} slices` : ''}`
+                : `${run.selected_candidate?.replicas || 1} serving replicas · TP ${run.selected_candidate?.tensor_parallel_size || 1}` },
+            { icon: Cpu, tone: 'brand', label: 'Accelerators', value: `${plan?.resource_estimate?.accelerators ?? '?'} of ${plan?.resource_estimate?.available_accelerators ?? '?'} free`, detail: draft.clusterName || draft.clusterId },
+            { icon: Sparkles, tone: 'violet', label: 'Optimizations', value: `${enabled.length} enabled`, detail: mode === 'manual' ? 'Compatible defaults' : `Objective: ${requirements.objective}` },
+            { icon: editing ? AlertTriangle : checked ? ShieldCheck : AlertTriangle, tone: editing || !checked ? 'warning' : 'success', label: 'Status', value: editing ? 'Unapplied changes' : checked ? 'Ready to deploy' : 'Checks pending', detail: slaSummary(run) },
+        ]} />}
+        {error && <div className="space-y-2"><p className="text-sm font-semibold text-theme-text">{run?.deployment_run_id ? 'Deployment update needs attention' : run ? 'Your saved plan is preserved' : 'Unable to prepare the deployment plan'}</p><FormError message={error} /><p className="text-sm text-theme-muted">{run?.deployment_run_id ? 'The deployment may still be running. Check its execution status before taking further action.' : run ? 'Review the message, retry resource checks or adjust the workload and limits. No deployment starts without confirmation.' : 'Check the target and inputs, then build the plan again.'}</p>{mode === 'agentic' && onSwitchToManual && !run?.deployment_run_id && <Button variant="secondary" disabled={busy} onClick={onSwitchToManual}><SlidersHorizontal size={14} />Use Manual plan</Button>}</div>}
+        {!permitted && <EmptyState title="Deployment permission required" message="Ask an administrator for deployment-create access to this cluster." />}
+        {restoring ? <LoadingState label="Restoring deployment plan" /> : ((!run && ((!autoGenerate && mode === 'agentic') || (!busy && error))) || changingRequirements) && <DeploymentRequirementsForm mode={mode} initialValue={requirements} runtime={run?.request} resourceEstimate={plan?.resource_estimate} onSubmit={generate} disabled={busy || !permitted} aiProviderConfigured={Boolean(provider)}>
+            <PlanningProviderSelect provider={provider} providers={providers} onChange={setProvider} />
+        </DeploymentRequirementsForm>}
+        {changingRequirements && <Button variant="secondary" disabled={busy} onClick={() => { setRequirements(requirementsFromRun(run)); setProvider(run.request.ai_provider_id || ''); setChangingRequirements(false); }}>Keep existing plan</Button>}
+        {building && <PlanningProgress events={events} onCancel={!run ? () => abort.current?.abort() : undefined} />}
+        <Modal isOpen={logOpen} onClose={() => setLogOpen(false)} title="Planning log" subtitle="Select a step to see what ran and what it reported." size="xl"><PlanningTimeline events={events} /></Modal>
+        {run && !changingRequirements && !building && <>
+            {run.request.requirements?.workload?.interpretationSource === 'ai_goal' && <p className="text-sm text-theme-muted">AI workload interpretation: shared prompts {run.request.requirements.workload.prefixReuse == null ? 'unknown' : run.request.requirements.workload.prefixReuse ? 'yes' : 'no'}; long inputs with short answers {run.request.requirements.workload.prefillHeavy == null ? 'unknown' : run.request.requirements.workload.prefillHeavy ? 'yes' : 'no'}. Correct these in Deployment settings.</p>}
+            {cleanupRequired && <Panel title="Test resources require cleanup"><p role="alert" className="text-sm">Resolve the interrupted or failed cleanup in Real benchmark tests before revising or deploying this plan.</p><Button className="mt-3" variant="secondary" disabled={busy || trialBusy || editing} onClick={() => setWorkspaceView('trials')}>Open test cleanup</Button></Panel>}
+            {(() => {
+                const views = [
+                    ["review", run.deployment_run_id ? 'Submitted plan' : 'Plan', ''],
+                    ...(mode === 'agentic' && !run.deployment_run_id && run.candidates.length > 1 ? [["compare", `Alternatives (${run.candidates.length})`, 'Other plans the recommender produced; compare their resources and evidence and switch to one.']] : []),
+                    ...(mode === 'agentic' && (!run.deployment_run_id || run.optimization) ? [["trials", 'Benchmark tests', 'Optional: temporarily deploy candidates and measure them on the cluster to pick a winner.']] : []),
+                    ...(run.deployment_run_id ? [["execution", 'Deployment execution', 'Live component status of the submitted deployment.']] : [])];
+                const blocked = editing ? 'Apply or discard your changes first.' : busy || trialBusy ? 'Wait for the current update to finish.' : '';
+                if (views.length === 1) return null;
+                return <nav className="flex flex-wrap items-center gap-x-3 gap-y-2" aria-label="Planning workspace">
+                    <div className="flex flex-wrap gap-1 rounded-lg border border-theme-border p-1">{views.map(([id, label, hint]) => <Button key={id} size="sm" variant={workspaceView === id ? 'secondary' : 'ghost'} aria-pressed={workspaceView === id} title={blocked || hint || undefined} disabled={Boolean(blocked) && workspaceView !== id} onClick={() => setWorkspaceView(id)}>{label}</Button>)}</div>
+                    <span className="text-xs text-theme-muted">{blocked || views.find(([id]) => id === workspaceView)?.[2]}</span>
+                </nav>;
+            })()}
+            <div className="grid min-w-0 items-start gap-5">
+            <div className="min-w-0 space-y-4">
+            {workspaceView === 'review' && (sourceReview
+                ? (() => {
+                    const pip = !run.deployment_run_id, flowSmall = pip && primaryPanel === 'optimizations';
+                    const table = compact => <OptimizationTable compact={compact} plan={plan} candidate={run.selected_candidate} mode={mode} disabled={locked || editing}
+                        onToggle={sourceReview ? toggleRow : toggleOptimization} onOpen={id => { setPrimaryPanel('flow'); setFocus(catalogCapability(id)); }} onExpand={() => setPrimaryPanel('optimizations')} />;
+                    return <div className="relative">
+                        <div className={flowSmall ? 'relative mb-3 h-44 w-72 overflow-hidden rounded-xl border border-theme-border bg-theme-card shadow-lg ring-1 ring-[color-mix(in_srgb,var(--brand-accent)_25%,transparent)] lg:absolute lg:right-0 lg:top-0 lg:z-10 lg:mb-0' : undefined}>
+                            <div inert={flowSmall} style={flowSmall ? { width: '400%', transform: 'scale(0.25)', transformOrigin: 'top left' } : undefined}>
+                                <Suspense fallback={<LoadingState label="Loading deployment designer" />}><InferenceDesigner key={`${run.id}:${run.revision}:${plan.configuration?.checksum}`} initialDraft={deploymentEditorSnapshot(run).draft} initialResult={deploymentEditorSnapshot(run).result} clusterName={draft.clusterName || draft.clusterId} disabled={locked} onReview={renderSource} onEditingChange={setEditing} focus={focus} onFocusOpened={() => setFocus('')}
+                                    configuredCount={enabled.length} onToggleRequirement={toggleOptimization} toggleRequest={flowToggle} onToggleHandled={() => setFlowToggle(null)} flowOverlay={pip && !flowSmall ? table(true) : null} review={{ open: Boolean(approval), tab: reviewTab, onTab: setReviewTab, onClose: () => setApproval(null), overview: summary, footer: reviewFooter }} /></Suspense>
+                            </div>
+                            {flowSmall && <button type="button" className="group absolute inset-0 flex cursor-zoom-in items-start justify-between bg-gradient-to-b from-[var(--bg-card)] via-transparent to-transparent p-2 text-left" aria-label="Show serving flow in the center" title="Show serving flow" onClick={() => setPrimaryPanel('flow')}>
+                                <span className="inline-flex items-center gap-1.5 rounded-md bg-theme-card/90 px-2 py-1 text-xs font-semibold shadow-sm">Serving flow</span>
+                                <span className="rounded-md bg-theme-card/90 p-1 text-theme-muted shadow-sm group-hover:text-theme-text"><Maximize2 size={13} aria-hidden="true" /></span>
+                            </button>}
+                        </div>
+                        {flowSmall && <div className="lg:min-h-44 lg:pr-[19.5rem]">{table(false)}</div>}
+                    </div>;
+                })()
+                : <>
+                    {!run.deployment_run_id && <OptimizationTable plan={plan} candidate={run.selected_candidate} mode={mode} disabled={locked || editing} onToggle={toggleOptimization} onOpen={id => setFocus(catalogCapability(id))} />}
+                    <Panel title="Source-backed Guide editor">
+                        <p className="text-sm text-theme-muted">Load this cluster's pinned source catalog to open the 2D optimization flow and edit its parameters. A legacy plan is not evidence that every Guide can be composed.</p>
+                        {sourceProfiles.length > 0 && <label className="mt-3 block text-sm">Accelerator profile<Select value={profileId} onChange={event => setProfileId(event.target.value)}><option value="">Choose discovered hardware</option>{sourceProfiles.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</Select></label>}
+                        <Button className="mt-3" disabled={locked || editing} onClick={render}>Load Guides and build source configuration</Button>
+                    </Panel>
+                    <details><summary className="cursor-pointer text-sm text-theme-muted">Legacy plan preview</summary><DeploymentPlanReview content={manifest} candidate={run.selected_candidate} model={draft.model} mode={mode} decisions={plan?.decisions || []} onEdit={edit} onEditingChange={setEditing} onRequirementsChange={value => generate({ ...requirements, ...value })} onCheck={render} onBenchmark={mode === 'agentic' ? () => setWorkspaceView('trials') : undefined} onWorkload={reset} requirements={requirements} disabled={locked} validation={plan?.validation} revision={run.revision} runtime={run.request} maxAccelerators={plan?.requirements?.hard_constraints?.maxAccelerators} resourceEstimate={plan?.resource_estimate} evidence={candidateEvidence(run)} rationale={run.decision?.rationale} /></details>
+                </>)}
+            {(run.generator_fallback_reason || run.planner_fallback_reason) && <details className="text-sm text-theme-muted"><summary className="cursor-pointer">Rules were used for part of this recommendation</summary><p role="status" className="mt-2">An AI step was unavailable. Resource checks and confirmation are still required; this is not a performance guarantee.</p><p className="mt-2">{run.generator_fallback_reason || run.planner_fallback_reason}</p></details>}
+            {workspaceView === 'compare' && <section aria-label="Candidate comparison" className="space-y-4">
+                <div><h3 className="text-lg font-semibold">Compare deployment plans</h3><p className="mt-1 text-sm text-theme-muted">Compare resource needs and evidence, not just the number of optimizations. Selecting a plan automatically reruns its resource checks.</p></div>
+                <fieldset disabled={locked || editing} className="grid min-w-0 gap-4 lg:grid-cols-3">
+                    {run.candidates.map((item, index) => <Panel key={item.id} title={`Plan ${index + 1}`} className="flex min-w-0 flex-col shadow-none" actions={run.selected_candidate.id === item.id && <Badge tone="info">Selected</Badge>}>
+                        <h4 className="text-base font-semibold">{plan?.source_candidates?.[item.id] ? 'Source-composed configuration' : candidateLabel(item)}</h4>
+                        <p className="my-4 text-2xl font-semibold">{item.required_gpus} <span className="text-sm font-normal text-theme-muted">accelerators</span></p>
+                        <p className="text-sm text-theme-muted">{item.replicas} serving replicas / TP {item.tensor_parallel_size}{item.prefill_replicas ? `; prefill ${item.prefill_replicas} / TP ${item.prefill_tensor_parallel_size}` : ''}</p>
+                        {item.native_cpu_cache_gib && <p className="mt-2 text-sm text-theme-muted">CPU KV cache: {item.native_cpu_cache_gib} GiB per replica</p>}
+                        <p className="my-4 text-sm">{item.slo_status === 'satisfied' ? 'Targets supported by prediction or history; not verified for this deployment.' : item.slo_status === 'not_satisfied' ? 'Available evidence does not meet your targets.' : 'Performance for your targets is not established.'}</p>
+                        <details className="mb-5 text-sm"><summary className="cursor-pointer text-theme-muted">Technical details and evidence</summary>
+                            <p className="mt-3 break-all">{plan?.source_candidates?.[item.id] ? 'Identity and optimizations come from the reviewed source resources.' : item.provider_ref}</p>
+                            <p className="mt-2 text-theme-muted">{item.performance_estimate_source || 'No performance prediction'}</p>
+                            {item.performance_estimate && <dl className="mt-2 space-y-2">{[['TTFT (ms)', 'ttft_ms'], ['TPOT (ms)', 'tpot_ms'], ['Throughput (tokens/s)', 'throughput_tokens_per_sec']].map(([label, field]) => <div key={field}><dt className="inline text-theme-muted">{label}: </dt><dd className="inline">{Number.isFinite(item.performance_estimate[field]) ? item.performance_estimate[field].toFixed(2) : 'Unknown'}</dd></div>)}</dl>}
+                            {item.historical_benchmarks?.length > 0 && <ul aria-label="Historical measurements" className="mt-3 space-y-2">{item.historical_benchmarks.map(sample => <li key={sample.benchmark_id}>{historicalBenchmarkLabel(sample)}</li>)}</ul>}
+                        </details>
+                        <Button variant="secondary" className="mt-auto w-full" disabled={locked || run.selected_candidate.id === item.id} onClick={() => choose(item.id)}>{run.selected_candidate.id === item.id ? 'Selected' : `Review plan ${index + 1}`}</Button>
+                    </Panel>)}
+                </fieldset>
+                {run.rejected_candidates?.length > 0 && <details className="mt-3 text-sm"><summary>Excluded candidates ({run.rejected_candidates.length})</summary><ul className="mt-2 space-y-2">{run.rejected_candidates.map(item => <li key={item.id}>{item.provider_ref}: {item.rejection_reasons.join('; ')}</li>)}</ul></details>}
+                <details className="mt-4"><summary className="cursor-pointer text-sm font-semibold">Planning evidence ({run.planning_evidence?.length || 0})</summary>{retrievalBranchSummaries(run).length > 0 && <div className="mt-3 divide-y divide-theme-border rounded border border-theme-border"><RetrievalEvidenceSources run={run} /></div>}<ul className="mt-3 space-y-3">{run.planning_evidence?.map(item => <li key={item.id} className="rounded border border-theme-border p-3 text-sm"><div className="flex flex-wrap gap-2"><strong>{item.source}</strong><Badge tone="neutral">{item.status}</Badge><Badge tone="neutral">{run.decision_evidence_ids?.includes(item.id) ? 'Used in decision' : 'Context'}</Badge></div><p className="mt-1 break-all text-xs text-theme-muted">{item.id}</p></li>)}</ul></details>
+                <div className="mt-4 flex justify-end"><Button disabled={locked || editing} onClick={() => setWorkspaceView('review')}>Review selected configuration</Button></div>
+            </section>}
+            {workspaceView === 'execution' && run.deployment_run_id && <Panel title="Live deployment execution" actions={<Badge tone="neutral">{deploymentRun?.status || 'Loading execution'}</Badge>}>
+                {deploymentRun ? <>
+                    <dl className="mb-4 grid gap-3 text-sm md:grid-cols-3">{[['Created', deploymentRun.created_at], ['Started', deploymentRun.started_at], ['Finished', deploymentRun.finished_at]].map(([label, value]) => <div key={label}><dt className="text-xs text-theme-muted">{label}</dt><dd>{value ? formatTimestamp(value) : 'Not yet reported'}</dd></div>)}</dl>
+                    <div className="overflow-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-theme-border"><th className="p-2">Component</th><th className="p-2">Provider</th><th className="p-2">Reported status</th><th className="p-2">Attempt</th><th className="p-2">Diagnostics</th></tr></thead><tbody>{deploymentRun.cases?.map(item => <tr key={item.id} className="border-b border-theme-border"><td className="p-2">{item.component}</td><td className="p-2">{item.provider_ref}</td><td className="p-2"><Badge tone={item.status === 'ready' ? 'success' : item.status === 'failed' ? 'danger' : 'neutral'}>{item.status}</Badge></td><td className="p-2">{item.attempt}</td><td className="p-2">{item.failure && <p role="alert">{item.failure.title}: {item.failure.detail}</p>}{item.execution_id ? <Button size="sm" variant="secondary" onClick={() => setLogsDeployment({ execution_id: item.execution_id, name: run.request.deployment_name, cluster_id: draft.clusterId })}>View Pods &amp; Logs</Button> : <span className="text-theme-muted">Waiting for execution record</span>}</td></tr>)}</tbody></table></div>
+                    <p className="mt-3 text-xs text-theme-muted">States are reported by Deploy and refreshed automatically. Readiness does not establish workload performance. Open the deployment to monitor metrics or run Evaluate.</p>
+                </> : <LoadingState label="Reading deployment execution" />}
+            </Panel>}
+            {mode === 'agentic' && workspaceView === 'trials' && !run.request.execution_policy.allow_trials && !run.optimization && <Panel title="Optional benchmark tests">
+                <p className="text-sm text-theme-muted">Prepare a test-enabled plan, then choose the workload and resource budget. Tests require a separate confirmation before using cluster resources.</p>
+                <Button className="mt-3" disabled={locked || editing} onClick={async () => { if (await generate({ ...requirements, allowTrial: true })) setWorkspaceView('trials'); }}>Prepare benchmark plan</Button>
+            </Panel>}
+            {mode === 'agentic' && (run.request.execution_policy.allow_trials || run.optimization) && <div hidden={workspaceView !== 'trials'}><MeasuredOptimizationControls key={run.id} onBusyChange={setTrialBusy} run={run} onUpdate={value => { requestVersion.current += 1; accept(value); }} onReview={choose} onCheckCandidates={async () => { try { await renderSource({ compare: true }); } catch { /* Workflow reports source errors. */ } }} disabled={busy || !permitted || editing} /></div>}
             </div>
-            {error && <div role="alert" className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"><TriangleAlert size={15} />{error}</div>}
-            {!run && <section className="flex flex-col gap-4">
-                <div className="rounded-lg border border-slate-800 bg-slate-900/45 p-5">
-                    <div className="grid gap-3">
-                        <label className="text-xs text-slate-400">Use case
-                            <Select className="mt-1" value={requirements.useCase} onChange={updateRequirement('useCase')}>
-                                <option value="general-chat">General chat</option>
-                                <option value="code-generation">Code generation</option>
-                                <option value="long-inputs">Long-input analysis</option>
-                                <option value="summarization">Document summarization</option>
-                            </Select>
-                        </label>
-                        <label className="text-xs text-slate-400">GPU capacity for planning
-                            <Select className="mt-1" value={requirements.hardwareCapacityMode} onChange={updateRequirement('hardwareCapacityMode')}>
-                                <option value="free">Currently free GPUs</option>
-                                <option value="all">All cluster GPUs</option>
-                                <option value="custom">Custom GPU count</option>
-                            </Select>
-                        </label>
-                        {requirements.hardwareCapacityMode === 'custom' && input('Custom GPU count', 'customGpuCount', { min: '1', step: '1', required: true })}
-                    </div>
-                    <details open className="mt-4 border-t border-slate-800 pt-3">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />SLO <span className="font-normal text-slate-500">Optional target.</span></summary>
-                        <div className="mt-3 grid grid-cols-2 gap-3">
-                            {input('TTFT SLO (ms)', 'ttftSloMs', { min: '1', placeholder: 'e.g. 2000' })}
-                            {input('TPOT SLO (ms)', 'tpotSloMs', { min: '1', placeholder: 'e.g. 30' })}
-                        </div>
-                    </details>
-                    <details open className="mt-4 border-t border-slate-800 pt-3">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />Preference <span className="font-normal text-slate-500">Optional deployment preference.</span></summary>
-                        <textarea className="mt-3 min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-200" value={plannerPrompt} onChange={(event) => setPlannerPrompt(event.target.value)} maxLength={2000} placeholder="Describe your deployment preference." />
-                    </details>
-                    <details open className="mt-4 border-t border-slate-800 pt-3">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />Workload estimate <span className="font-normal text-slate-500">Optional request shape and demand.</span></summary>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            {input('Mean input tokens per request', 'inputTokens', { min: '1', step: '1', placeholder: 'e.g. 4000' })}
-                            {input('Mean output tokens per request', 'outputTokens', { min: '1', step: '1', placeholder: 'e.g. 1000' })}
-                            {input('Concurrent requests', 'concurrency', { min: '1', step: '1' })}
-                            {input('Request rate (QPS)', 'requestRate', { min: '0.01', step: 'any' })}
-                        </div>
-                    </details>
-                    {vllmParameterControls && <details className="mt-4 border-t border-slate-800 pt-3">
-                        <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} />vLLM parameters</summary>
-                        <div className="mt-3 grid gap-3">{vllmParameterControls}</div>
-                    </details>}
-                    <PodPlacementControl compact className="mt-4 border-t border-slate-800 pt-3" value={placementReplicas} onChange={setPlacementReplicas} clusterId={draft?.clusterId} nodeName={placementNodeName} onNodeChange={setPlacementNodeName} listNodeLabels={listDeploymentNodeLabels} />
-                    {creating && <GenerationProgress events={generationEvents} />}
-                    <div className="mt-5 flex justify-end"><Button onClick={createPlan} isLoading={creating}><Sparkles size={16} />Generate recommendation</Button></div>
+
+            </div>
+        </>}
+        <Modal isOpen={Boolean(approval) && !sourceReview} onClose={() => setApproval(null)} closeOnBackdrop={!busy} closeOnEscape={!busy} title="Review & deploy" size="xxl" footer={reviewFooter}>
+            {run && <div className="space-y-4">
+                <div role="tablist" aria-label="Review views" className="deployment-tabs">
+                    {[['summary', 'Overview'], ['yaml', 'YAML']].map(([id, label]) => <Button key={id} role="tab" size="sm" variant="ghost" aria-selected={reviewTab === id} onClick={() => setReviewTab(id)}>{label}</Button>)}
                 </div>
-            </section>}
-            {run && <section className="flex flex-col gap-5">
-                <div className="rounded-lg border border-slate-800 bg-slate-900/65 p-5"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold text-white">{run.selected_candidate?.provider_ref}</h2><StatusChip status={run.status} label={run.status.replaceAll('_', ' ')} /><Badge tone={run.generator === 'ai-mcp' ? 'info' : 'neutral'} size="xs">{generatorLabel(run.generator)}</Badge></div><p className="mt-2 text-xs text-slate-400">Recommended for {draft.model}</p><p className="mt-2 text-xs leading-5 text-slate-300">{run.decision?.rationale}</p></div>
-                {run.generator_fallback_reason && <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100"><span className="font-semibold">Built-in candidate generation used.</span> {generatorFallbackSummary(run.generator_fallback_reason)}</div>}
-                {run.planner_fallback_reason && <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100"><span className="font-semibold">Built-in ranking used.</span> {fallbackSummary(run.planner_fallback_reason)}</div>}
-                <div className="grid gap-4">
-                    <div className="overflow-hidden rounded-lg border border-slate-800 bg-slate-900/45"><div className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/55 px-4 py-3"><Cpu size={15} className="text-cyan-300" /><h3 className="text-xs font-semibold text-slate-200">Validated alternatives</h3></div>{run.candidates?.map((candidate, index) => <CandidateRow key={candidate.id} candidate={candidate} selected={candidate.id === run.selected_candidate?.id} analysis={candidateAnalysis(candidate, index, aicConfigs, relaxedConfigs, clusterDetails)} onDeploy={deployCandidate} deploying={deployingCandidateId === candidate.id} canDeploy={canDeploy && !ragHardware?.simulation} />)}{canDeploy && <div className="border-t border-slate-800 p-3"><textarea className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-xs text-slate-200" value={refinementPrompt} onChange={(event) => setRefinementPrompt(event.target.value)} maxLength={2000} placeholder="Describe unmet needs. The external planner can choose and score up to ten validated candidates." />{refining && <GenerationProgress events={refinementEvents} />}<div className="mt-2 flex justify-end"><Button size="xs" variant="secondary" onClick={refinePlan} isLoading={refining} disabled={!refinementPrompt.trim()}>Recalculate selection</Button></div></div>}</div>
-                    <div className="rounded-lg border border-slate-800 bg-slate-900/45"><div className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/55 px-4 py-3"><FileStack size={15} className="text-cyan-300" /><h3 className="text-xs font-semibold text-slate-200">Decision evidence</h3></div><div className="divide-y divide-slate-800/70">
-                        <RetrievalEvidenceSources run={run} />
-                        {run.decision_metadata && <div className="p-3"><p className="text-xs font-semibold text-slate-200">{run.decision_metadata.planner === 'openai-compatible' ? 'External planner' : 'Prism deterministic planner'}</p><p className="mt-1 text-[11px] text-slate-400">Candidates: {run.generator === 'ai-mcp' ? 'AI-generated with MCP evidence' : 'Prism deterministic generator'}</p>{usedAiProviderName && <p className="mt-1 text-[11px] text-slate-400">AI provider: {usedAiProviderName}</p>}{run.generator_model && <p className="mt-1 text-[11px] text-slate-400">Generator model: {run.generator_model}</p>}{run.decision_metadata.planner_model && <p className="mt-1 text-[11px] text-slate-400">Scoring model: {run.decision_metadata.planner_model}</p>}<p className="mt-2 text-[11px] leading-4 text-slate-400">{run.decision_metadata.selection_method}</p><p className="mt-2 text-[11px] leading-4 text-slate-500">{run.decision_metadata.score_method}</p></div>}
-                        {run.planning_evidence?.length ? run.planning_evidence.map((item) => {
-                            const label = planningEvidenceLabel(item, hasAicPrediction);
-                            if (!label) return null;
-                            const used = (run.decision_evidence_ids || []).includes(item.id);
-                            return <div key={`${item.source}:${item.id}`} className="p-3">
-                                <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs text-slate-200">{label}</span>
-                                    <Badge tone={used ? 'success' : 'neutral'} size="xs">{used ? 'used for selection' : 'context only'}</Badge>
-                                </div>
-                                {item.id === 'aic:search' && <p className="mt-1 text-[10px] text-slate-500">Support was verified before the prediction search.</p>}
-                            </div>;
-                        }) : <EmptyState icon={<ShieldCheck size={24} />} title="No evidence available" message="The recommendation remains constrained by the live cluster checks." />}
-                    </div></div>
-                </div>
-            </section>}
-        </>
-    );
-    return embedded ? <section className="flex flex-col gap-5">{content}</section> : <ModulePage contentClassName="flex flex-col gap-5">{content}</ModulePage>;
+                {reviewTab === 'summary' ? summary : <pre className="max-h-[60vh] overflow-auto rounded-lg bg-theme-bg p-4 text-xs">{manifest || 'Generate and check the source configuration first.'}</pre>}
+            </div>}
+        </Modal>
+        {logsDeployment && <DeploymentPodsLogsModal deployment={logsDeployment} onClose={() => setLogsDeployment(null)} />}
+    </section>;
+    return embedded ? content : <ModulePage>{content}</ModulePage>;
+}
+
+export default function AgenticDeploymentWorkspace(props) {
+    return <DeploymentWorkflow {...props} mode="agentic" />;
 }

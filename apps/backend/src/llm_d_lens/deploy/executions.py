@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from llm_d_lens.configuration.manifest_facts import workload_roles
+from llm_d_lens.configuration.manifest_facts import vllm_argument_value, workload_roles
 from llm_d_lens.deploy.application import deployment_run_manager
 from llm_d_lens.deploy.contracts import (
     DeploymentMetadata,
@@ -195,6 +196,54 @@ def _isoformat(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
+def _rendered_serving_metadata(execution) -> dict[str, Any]:
+    if execution is None:
+        return {}
+    try:
+        workloads = workload_roles(_execution_manifest_documents(execution))
+    except (OSError, DeploymentScaleError):
+        return {}
+    metadata: dict[str, Any] = {}
+    for workload in workloads:
+        role = workload["role"]
+        if role not in {"serving", "decode", "prefill"}:
+            continue
+        for container in workload["pod"].get("containers") or []:
+            if container.get("name") != "modelserver":
+                continue
+            try:
+                values = {
+                    field: vllm_argument_value(container, {"--" + field.replace("_", "-")}, workload["name"])
+                    for field in (
+                        "tensor_parallel_size",
+                        "max_model_len",
+                        "gpu_memory_utilization",
+                        "max_num_seqs",
+                        "max_num_batched_tokens",
+                        "enable_prefix_caching",
+                    )
+                }
+                for field in ("tensor_parallel_size", "max_model_len"):
+                    if values[field] is not None:
+                        values[field] = int(values[field])
+                prefix_caching = values["enable_prefix_caching"]
+                values["enable_prefix_caching"] = (
+                    {"": True, "true": True, "false": False}.get(prefix_caching.lower())
+                    if prefix_caching is not None
+                    else None
+                )
+                if vllm_argument_value(container, {"--no-enable-prefix-caching"}, workload["name"]) is not None:
+                    values["enable_prefix_caching"] = False
+            except ValueError:
+                continue
+            if role == "prefill":
+                metadata["prefill_replicas"] = workload["replicas"]
+            elif "replicas" not in metadata:
+                metadata.update(values)
+                metadata.update(backend="vLLM", image=container.get("image"), replicas=workload["replicas"])
+    return metadata
+
+
 def serving_metadata(case, execution) -> dict[str, Any]:
     """Read serving details out of a case's rendered configuration artifact.
 
@@ -248,7 +297,7 @@ def serving_metadata(case, execution) -> dict[str, Any]:
         if isinstance(runtime, dict)
         else None
     )
-    return {
+    metadata = {
         "name": deployment_name or None,
         "guide": provider_ref or None,
         "backend": backend,
@@ -268,6 +317,10 @@ def serving_metadata(case, execution) -> dict[str, Any]:
         "max_num_batched_tokens": params_map.get("max-num-batched-tokens"),
         "custom_parameters": custom_params,
     }
+    for field, value in _rendered_serving_metadata(execution).items():
+        if metadata.get(field) is None:
+            metadata[field] = value
+    return metadata
 
 
 def _manifest_disaggregated_set_slices(execution: Any | None) -> int | None:
@@ -631,6 +684,91 @@ def get_execution_context(execution_id: str) -> DeploymentExecutionContext:
     if context is None:
         raise DeploymentExecutionNotFoundError(f"deployment execution not found: {execution_id}")
     return context
+
+
+def execution_deployment_plan(context: DeploymentExecutionContext) -> dict[str, Any]:
+    """Return the stored configuration plan and rendered manifest of one execution."""
+    case = _store.get_case(context.run_id, context.case_id) if context.run_id and context.case_id else None
+    artifacts = case.create_request.configuration_artifacts if case and case.create_request else []
+    execution = None if context.execution_id.startswith("pending:") else _store.get_execution(context.execution_id)
+    manifest = None
+    if execution is not None:
+        reference = Path(getattr(execution.artifact, "manifest_ref", None) or "")
+        if reference.is_dir():
+            reference = reference / "manifest.yaml"
+        if reference.is_file():
+            manifest = _redact_manifest_secrets(reference.read_text(encoding="utf-8"))
+    return {
+        "execution_id": context.execution_id,
+        "namespace": context.namespace,
+        "configuration_artifacts": [
+            {
+                "artifact_id": artifact.artifact_id,
+                "kind": artifact.kind,
+                "provider_ref": artifact.provider_ref,
+                "schema_version": artifact.schema_version,
+                "media_type": artifact.media_type,
+                "content": _redact_artifact_content(artifact.content),
+            }
+            for artifact in artifacts
+        ],
+        "manifest": manifest,
+    }
+
+
+def _redact_manifest_secrets(manifest: str) -> str | None:
+    """Redact Secret values, including Secrets nested in ``List.items``; None when unparsable."""
+    try:
+        documents = list(yaml.safe_load_all(manifest))
+    except yaml.YAMLError:
+        return None
+    redacted = False
+    for document in documents:
+        redacted = _redact_secret_values(document) or redacted
+    if not redacted:
+        return manifest
+    return yaml.safe_dump_all([document for document in documents if document is not None], sort_keys=False)
+
+
+def _redact_secret_values(document: Any) -> bool:
+    if not isinstance(document, dict):
+        return False
+    redacted = False
+    if document.get("kind") == "Secret":
+        for field in ("data", "stringData"):
+            if isinstance(document.get(field), dict) and document[field]:
+                document[field] = dict.fromkeys(document[field], "<redacted>")
+                redacted = True
+    items = document.get("items")
+    if isinstance(items, list):
+        for item in items:
+            redacted = _redact_secret_values(item) or redacted
+    return redacted
+
+
+def _redact_artifact_content(content: str | None) -> str | None:
+    if not content or "Secret" not in content:
+        return content
+    try:
+        value = json.loads(content)
+    except json.JSONDecodeError:
+        return _redact_manifest_secrets(content) if _is_secret_text(content) else content
+    return json.dumps(_redact_embedded_manifests(value))
+
+
+def _redact_embedded_manifests(value: Any) -> Any:
+    if isinstance(value, dict):
+        _redact_secret_values(value)
+        return {key: _redact_embedded_manifests(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_embedded_manifests(item) for item in value]
+    if isinstance(value, str) and _is_secret_text(value):
+        return _redact_manifest_secrets(value) or "<redacted>"
+    return value
+
+
+def _is_secret_text(value: str) -> bool:
+    return re.search(r"\bkind['\"]?\s*:\s*['\"]?Secret\b", value) is not None
 
 
 def _execution_cluster_id(execution) -> str | None:

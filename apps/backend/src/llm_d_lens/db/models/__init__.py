@@ -16,6 +16,7 @@ from llm_d_lens.db.models import configuration_artifact as configuration_artifac
 from llm_d_lens.db.models import deployment_batch as deployment_batch  # noqa: F401
 from llm_d_lens.db.models import deployment_evidence as deployment_evidence  # noqa: F401
 from llm_d_lens.db.models import deployment_job as deployment_job  # noqa: F401
+from llm_d_lens.db.models import deployment_plan as deployment_plan  # noqa: F401
 from llm_d_lens.db.models import evaluate_run as evaluate_run  # noqa: F401
 from llm_d_lens.db.models import evaluate_workflow as evaluate_workflow  # noqa: F401
 from llm_d_lens.db.models import group as group  # noqa: F401

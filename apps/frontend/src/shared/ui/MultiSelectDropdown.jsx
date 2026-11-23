@@ -14,9 +14,12 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronDown, Check, Search } from 'lucide-react';
+import { Button } from './Button';
+import { Input } from './FormControls';
+import { cn } from '../lib/cn';
 
-export const MultiSelectDropdown = ({ label, options, selected = new Set(), onChange, counts, formatLabel, labelSuffix, emptyLabel = 'All', clearLabel, className = '', searchable = false, searchPlaceholder = 'Search…' }) => {
-    const [isOpen, setIsOpen] = useState(false);
+export const MultiSelectDropdown = ({ label, options, selected = new Set(), onChange, counts, formatLabel, labelSuffix, emptyLabel = 'All', clearLabel, className = '', searchable = false, searchPlaceholder = 'Search…', disabledOptions, optionDescription, optionGroup, inlineMenu = false, defaultOpen = false }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
     const [query, setQuery] = useState('');
     const containerRef = useRef(null);
 
@@ -48,71 +51,71 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
 
     return (
         <div className="relative" ref={containerRef}>
-            <button 
+            <Button variant="ghost"
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
-                className={`w-full bg-white dark:bg-[#0b0f17] border border-[#cbd5e1] dark:border-slate-800/40 text-[#33475b] dark:text-slate-300 text-xs rounded-xl px-3 py-2 flex items-center justify-between hover:border-[#94a3b8] dark:hover:border-slate-700/45 hover:bg-[#e6f6fe] dark:hover:bg-[#101622] transition-all duration-200 ${className}`}
+                aria-expanded={isOpen}
+                className={cn('w-full border border-theme-border text-theme-text text-xs rounded-xl px-3 py-2 flex items-center justify-between', className)}
                 title={`${label}: ${selectedCount > 0 ? [...safeSelected].join(', ') : 'All'}`}
             >
                 <div className="flex items-center gap-2 truncate pr-2">
-                    <span className="font-semibold text-slate-500">{label}</span>
+                    <span className="font-semibold text-theme-muted">{label}</span>
                     {labelSuffix}
-                    <span className="truncate text-slate-200">
+                    <span className="truncate text-theme-text">
                         {selectedCount === 0 ? emptyLabel : `${selectedCount} selected`}
                     </span>
                 </div>
-                <ChevronDown size={12} className={`text-slate-500 transition-transform duration-350 ${isOpen ? 'rotate-180 text-cyan-400' : ''}`} />
-            </button>
+                <ChevronDown size={12} className={cn('text-theme-muted transition-transform', isOpen && 'rotate-180')} />
+            </Button>
 
             {isOpen && (
-                <div className="absolute top-full left-0 mt-2 w-72 max-h-80 overflow-y-auto bg-white/95 dark:bg-[#0b0f17]/95 border border-[#cbd5e1] dark:border-slate-700 rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5 backdrop-blur-md">
+                <div role="group" aria-label={`${label} options`} className={cn('mt-2 max-h-80 overflow-y-auto bg-theme-card border border-theme-border rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5', inlineMenu ? 'relative w-full' : 'absolute top-full left-0 w-72')}>
                     {searchable && (
                         <div className="relative mb-1">
                             <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                            <input
+                            <Input aria-label={`Search ${label}`}
                                 type="text"
                                 value={query}
                                 onChange={(event) => setQuery(event.target.value)}
                                 placeholder={searchPlaceholder}
                                 autoFocus
-                                className="w-full rounded-lg border border-[#cbd5e1] dark:border-slate-800/40 bg-white dark:bg-slate-950 py-1.5 pl-7 pr-2 text-xs text-[#051c2c] dark:text-slate-200 placeholder:text-[#5f7284] dark:placeholder:text-slate-600 focus:border-[#037ffc] dark:focus:border-cyan-500/50 focus:outline-none"
+                                className="w-full py-1.5 pl-7 pr-2 text-xs"
                             />
                         </div>
                     )}
-                    <div 
-                        className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer hover:bg-[#e6f6fe] dark:hover:bg-slate-800/80 transition-all ${selectedCount === 0 ? 'bg-[#e6f6fe] text-[#0773c4] dark:bg-cyan-500/10 dark:text-cyan-400 font-semibold' : 'text-[#33475b] dark:text-slate-300 hover:text-[#0f172a] dark:hover:text-slate-200'}`}
+                    <Button type="button" variant="ghost" className="w-full flex items-center gap-2 text-xs"
                         onClick={() => { onChange(''); setIsOpen(false); }}
                     >
-                         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${selectedCount === 0 ? 'bg-[#037ffc] border-[#037ffc] text-white dark:bg-cyan-500 dark:border-cyan-500' : 'border-[#cbd5e1] bg-white dark:border-slate-800/40 dark:bg-slate-950'}`}>
-                            {selectedCount === 0 && <Check size={10} className="text-white" strokeWidth={3} />}
-                         </div>
                          <span className="text-xs">{clearLabel || `All ${label}`}</span>
                          <span className="text-[10px] text-slate-500 ml-auto font-mono">{options.length}</span>
-                    </div>
+                    </Button>
                     
                     <div className="h-px bg-slate-800/30 my-1.5 mx-1" />
 
                     {visibleOptions.length === 0 && (
                         <p className="px-2.5 py-2 text-xs text-slate-500">No matches</p>
                     )}
-                    {visibleOptions.map(opt => {
+                    {visibleOptions.map((opt, index) => {
                         const count = (counts && counts[opt]) || 0;
                         const isSelected = safeSelected.has(opt);
+                        const description = optionDescription?.(opt);
                         return (
-                            <div 
-                                key={opt} 
-                                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-all ${hasCounts && count === 0 ? 'opacity-45 hover:bg-[#e6f6fe] dark:hover:bg-slate-800/30' : 'hover:bg-[#e6f6fe] dark:hover:bg-slate-800/80'} ${isSelected ? 'bg-[#e6f6fe] text-[#0773c4] dark:bg-cyan-500/10 dark:text-cyan-400 font-semibold' : 'text-[#33475b] dark:text-slate-300 hover:text-[#0f172a] dark:hover:text-slate-200'}`}
+                            <React.Fragment key={opt}>
+                            {optionGroup && (index === 0 || optionGroup(opt) !== optionGroup(visibleOptions[index - 1])) && <p className="text-xs font-semibold text-theme-muted">{optionGroup(opt)}</p>}
+                            <Button type="button" variant="ghost" role="checkbox" aria-checked={isSelected} disabled={disabledOptions?.has(opt)} aria-label={formatLabel ? formatLabel(opt) : opt}
+                                className={cn('w-full h-auto flex items-start gap-2 px-2.5 py-2 rounded-lg text-left whitespace-normal', hasCounts && count === 0 && 'opacity-45', isSelected && 'bg-theme-bg font-semibold')}
                                 onClick={() => onChange(opt)}
-                                title={formatLabel ? formatLabel(opt) : opt}
+                                title={description || (formatLabel ? formatLabel(opt) : opt)}
                             >
-                                 <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-[#037ffc] border-[#037ffc] text-white dark:bg-cyan-500 dark:border-cyan-500' : 'border-[#cbd5e1] bg-white dark:border-slate-800/40 dark:bg-slate-950'}`}>
-                                    {isSelected && <Check size={10} className="text-white" strokeWidth={3} />}
-                                 </div>
-                                 <span className={`text-xs truncate flex-1 ${isSelected ? 'text-[#055693] dark:text-cyan-400 font-semibold' : 'text-[#33475b] dark:text-slate-300'}`}>
+                                 <span className="w-3.5 h-3.5 shrink-0 rounded border border-theme-border flex items-center justify-center">
+                                    {isSelected && <Check size={10} strokeWidth={3} />}
+                                 </span>
+                                 <span className="text-xs flex-1 min-w-0 text-theme-text">
                                      {formatLabel ? formatLabel(opt) : opt}
+                                     {description && <small className="block mt-1 font-normal text-theme-muted">{description}</small>}
                                  </span>
                                  {hasCounts && <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono ml-auto">{count}</span>}
-                            </div>
+                            </Button></React.Fragment>
                         );
                     })}
                 </div>

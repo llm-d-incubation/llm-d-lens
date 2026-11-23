@@ -6,6 +6,22 @@ description: 压测模型服务或比较部署配置，查看并导出结果。
 使用 **Evaluation（评估）**测量模型的响应速度和吞吐量。
 第一次建议对已发布的模型服务运行一个小负载，先确认流程可用。
 
+对于 DS 部署配置，**New Task（新建任务）**会为各部署用例准备冻结清单并在执行前检查，不再打开额外审核弹窗。
+所有检查通过时，直接使用已获取的计划摘要启动串行 Evaluation。失败和未知约束显示在页面内的
+**Deployment checks（部署检查）** 中；未知约束仍需明确确认。**Deployment resources（部署资源）**
+可展开查看冻结清单和校验和。取消这些检查会让工作流保留在 `awaiting_review`，不会后台部署。
+打开任务详情，选择 **Review deployment plans（审核部署计划）** 即可继续页内检查。
+重试保留已成功用例及可复用的 Ready 执行；需要新部署的用例生成新计划并再次确认。
+准备失败不会替换历史工作流；修改配置输入仍需新建任务。
+每个已审核部署的基准测试前会记录就绪、拓扑及一次有界请求探测。就绪或放置失败阻止该用例。
+受支持的 vLLM 0.26.0 NIXL pull 证据可证明该探测请求的 P/D 传输，不代表全部基准请求；
+不支持或不完整的证据保持未知。
+在任务详情的 **Deployments（部署）**页签查看 **Runtime verification（运行时验证）**的四项独立
+状态、原因及 **Recorded evidence（已记录证据）**。HTTP 成功本身不能证明 KV 传输成功。
+自动独立基线按全部 Slice、角色副本及 leader/worker Pod 的实际加速器请求匹配预算，不再
+使用旧的副本数乘 TP 算法，并检查最终基线清单的设备请求总量。不声称 CPU、内存或 Pod 数相等。
+DRA 或未知资源身份需显式指定副本数，不推断等设备预算。
+
 独立的 Optimization 原型（`optimization-workspace`、`opt-define`、
 `opt-search`、`opt-deploy`、`opt-benchmark`、`opt-performance`）及
 `optimization-deploy` 工作区已移除。旧链接现在会打开当前用户有权限访问的
@@ -48,6 +64,24 @@ description: 压测模型服务或比较部署配置，查看并导出结果。
 
 点击 **View YAML** 可检查保存的配置。编辑 YAML 会保存为新配置，原配置保留。
 
+### 比较 Slice 数量
+
+对 DisaggregatedSet Guide，配置编辑器中的 **Slice Configuration** 提供 **Slices** 滑块和 **Slice sweep（Slice 扫描）**。
+开启扫描后拖动 **From** 和 **To** 选择至少两个 Slice 数的范围，上限为当前 **Max feasible**。每个数量显示
+加速器总量，并标注是否已实测过。每个数量保存为独立配置，每 Slice P/D 副本数、TP、放置和路由保持不变；
+Evaluation 逐个部署、压测并删除。包括副本/TP 变体在内，最多 16 个组合。
+
+Slice 扫描要求使用 **Prefix cache reuse** 负载，至少两个请求速率阶段，并设置 TTFT 或 TPOT 目标，
+因为候选按满足 SLO 的最高稳定请求率比较。选中扫描配置后，**Benchmark settings** 默认使用
+1–32 req/s 阶段，并设置 TTFT p99 ≤ 500 ms、TPOT p99 ≤ 30 ms，可按需调整。Slice 越多加速器也越多，因此该对比
+反映容量扩展，而不是等加速器预算下的拓扑效果。
+
+任务结果中的 **Slice optimization（Slice 优化）**将仅 Slice 数不同的用例归为一组，显示加速器数、
+SLO 稳定请求率、单加速器请求率和吞吐量。输入目标负载后，给出满足目标且加速器最少的 Slice 数；
+未记录 SLO 稳定请求率时不给推荐。**Use Recommended Configuration（使用推荐配置）**会打开该配置直接部署，
+计划审核时 Lens 会重新检查当前 Slice 上限和放置。结果随 Evaluation 保存，并作为同模型、同 Guide、
+同集群的证据显示在 Deploy 的 Slice 面板中。
+
 ## 使用完整的评估向导
 
 部分入口会打开 **New Benchmark Task（新建基准测试任务）**，而不是简短的任务弹窗。
@@ -59,6 +93,11 @@ description: 压测模型服务或比较部署配置，查看并导出结果。
 5. 进入 **Execution plan（执行计划）**，核对目标及执行顺序，点击 **Start Evaluation（开始评估）**。
 
 测试已有服务时会跳过配置设计，不创建部署。
+
+**Configurations（配置）**编辑器保留 Guide 选择、副本数 / TP 扫描、
+YAML 预览和 **Optimization comparisons（优化对比）**树。选择需要压测的
+服务场景，每个选中的场景都会在各个拓扑上运行。这些评测控件独立于
+模型目录中的 Manual / Agentic 部署工作流。
 
 ## 查看和比较结果
 

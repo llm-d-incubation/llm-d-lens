@@ -7,7 +7,7 @@ import pytest
 
 from llm_d_lens.agentic import router
 from llm_d_lens.agentic.facts import PlanningEvidence
-from llm_d_lens.auth.contracts import Principal, RoleBinding
+from llm_d_lens.auth.contracts import Principal, RoleBinding, cluster_binding
 from llm_d_lens.core.exceptions import ForbiddenError
 
 
@@ -44,7 +44,7 @@ async def test_progress_precedes_one_complete_event(monkeypatch, mode):
         ("create", ValueError("invalid"), "invalid"),
         ("refine", ValueError("invalid"), "invalid"),
         ("refine", KeyError("missing"), "'missing'"),
-        ("create", KeyError("missing"), "Unable to generate an Agentic recommendation."),
+        ("create", KeyError("missing"), "Unable to generate a deployment plan."),
         ("refine", RuntimeError("internal detail"), "Unable to recalculate the Agentic recommendation."),
     ],
 )
@@ -99,13 +99,19 @@ async def test_stream_preserves_the_actual_principal_for_public_rag(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_public_rag_plans_are_not_an_alternate_unauthorized_corpus_read(monkeypatch):
+    plan_request = SimpleNamespace(requirements=SimpleNamespace(cluster_id="cluster-a"))
     enriched = SimpleNamespace(
         id="enriched",
+        request=plan_request,
         planning_evidence=[PlanningEvidence(id="public-rag:query", source="public-benchmark-rag", status="available")],
     )
-    ordinary = SimpleNamespace(id="ordinary", planning_evidence=[])
+    ordinary = SimpleNamespace(id="ordinary", request=plan_request, planning_evidence=[])
     monkeypatch.setattr(router, "service", SimpleNamespace(list=lambda: [enriched, ordinary], get=lambda _id: enriched))
-    reader = SimpleNamespace(state=SimpleNamespace(principal=Principal("reader", "reader")))
+    reader = SimpleNamespace(
+        state=SimpleNamespace(
+            principal=Principal("reader", "reader", bindings=(cluster_binding("reader", "cluster-a"),))
+        )
+    )
     assert await router.list_agentic_deployments(reader) == [ordinary]
     with pytest.raises(ForbiddenError):
         await router.get_agentic_deployment("enriched", reader)
@@ -121,6 +127,7 @@ async def test_internal_case_plans_use_case_authorization_without_public_corpus_
     case = {"origins": ["agentic:evaluate"], "experiment_ids": ["benchmark-1"]}
     run = SimpleNamespace(
         id="internal",
+        request=SimpleNamespace(requirements=SimpleNamespace(cluster_id="cluster-a")),
         planning_evidence=[
             PlanningEvidence(
                 id="configuration-cases:query",
@@ -130,7 +137,7 @@ async def test_internal_case_plans_use_case_authorization_without_public_corpus_
             )
         ],
     )
-    principal = Principal("reader", "reader")
+    principal = Principal("reader", "reader", bindings=(cluster_binding("reader", "cluster-a"),))
     request = SimpleNamespace(state=SimpleNamespace(principal=principal))
     checked = []
 
@@ -143,3 +150,19 @@ async def test_internal_case_plans_use_case_authorization_without_public_corpus_
     assert await router.list_agentic_deployments(request) == [run]
     assert await router.get_agentic_deployment("internal", request) is run
     assert checked == [(case,), (case,)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cluster_id", ["cluster-b", None])
+async def test_plan_reads_reject_foreign_or_unknown_cluster(monkeypatch, cluster_id):
+    run = SimpleNamespace(
+        id="restricted",
+        request=SimpleNamespace(requirements=SimpleNamespace(cluster_id=cluster_id)),
+        planning_evidence=[],
+    )
+    principal = Principal("reader", "reader", bindings=(cluster_binding("reader", "cluster-a"),))
+    request = SimpleNamespace(state=SimpleNamespace(principal=principal))
+    monkeypatch.setattr(router, "service", SimpleNamespace(list=lambda: [run], get=lambda _id: run))
+    assert await router.list_agentic_deployments(request) == []
+    with pytest.raises(ForbiddenError, match="cluster"):
+        await router.get_agentic_deployment(run.id, request)

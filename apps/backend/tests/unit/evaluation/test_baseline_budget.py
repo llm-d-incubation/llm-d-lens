@@ -101,6 +101,42 @@ def test_non_pd_baseline_keeps_decode_replica_default():
     assert baseline.content["decode"]["replicaCount"] == 2
 
 
+def test_ds_budget_uses_rendered_requests_slices_and_group_size():
+    import yaml
+
+    source = pd_configuration()
+    source.content.pop("hardware_profile")
+    document = {
+        "kind": "DisaggregatedSet",
+        "spec": {
+            "slices": 2,
+            "roles": [
+                {
+                    "name": role,
+                    "spec": {
+                        "replicas": 1,
+                        "leaderWorkerTemplate": {
+                            "size": 2,
+                            "leaderTemplate": {
+                                "spec": {"containers": [{"resources": {"requests": {"nvidia.com/gpu": 1}}}]}
+                            },
+                            "workerTemplate": {
+                                "spec": {"containers": [{"resources": {"requests": {"nvidia.com/gpu": 2}}}]}
+                            },
+                        },
+                    },
+                }
+                for role in ("prefill", "decode")
+            ],
+        },
+    }
+    source.content["officialGuide"] = {"renderedManifest": yaml.safe_dump(document)}
+    baseline = router._baseline_configuration(source, "direct-vllm", ["plan"], "artifact")
+    assert baseline.content["decode"]["replicaCount"] == 12
+    assert baseline.content["comparisonBudget"]["sourcePodCount"] == 8
+    assert baseline.content["comparisonBudget"]["scope"] == "accelerator-request-only"
+
+
 def test_pd_baseline_manifest_requests_four_single_card_replicas(monkeypatch):
     monkeypatch.setattr("llm_d_lens.deploy.providers.baseline_vllm.gpu_device_selectors", lambda **_: [])
     baseline = router._baseline_configuration(pd_configuration(), "direct-vllm", ["plan"], "artifact")

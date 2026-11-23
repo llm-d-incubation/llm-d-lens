@@ -1,5 +1,5 @@
 export { default as EvaluationDashboardEntry } from './ui/EvaluationDashboardEntry';
-export { default as EvaluationTaskWizard } from './ui/EvaluationTaskWizard';
+export { default as EvaluationTaskWizard, DeploymentPlanReview } from './ui/EvaluationTaskWizard';
 export { default as OptimizationEvaluationDetails } from './ui/OptimizationEvaluationDetails';
 export { default as ResourceBasisControl } from './ui/evaluation/ResourceBasisControl';
 export { default as OptimizationComparisonTree } from './ui/evaluation/OptimizationComparisonTree';

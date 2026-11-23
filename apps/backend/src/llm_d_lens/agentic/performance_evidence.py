@@ -11,6 +11,7 @@ from .benchmark_evidence import (
     BenchmarkQuery,
     BenchmarkRecord,
     CandidateConfiguration,
+    composition_markers,
     historical_query_context,
 )
 from .benchmark_store import JsonBenchmarkRecordStore
@@ -52,7 +53,8 @@ class BenchmarkPerformanceEvidence:
                     decode_replicas=candidate.replicas,
                     prefill_tp=candidate.prefill_tensor_parallel_size,
                     prefill_replicas=candidate.prefill_replicas,
-                    optimizations=(candidate.guide_variant or "",),
+                    optimizations=(candidate.guide_variant or "",)
+                    + composition_markers(candidate.native_cpu_cache_gib, candidate.prefix_routing),
                 ),
             )
             candidate_records = (
@@ -139,7 +141,8 @@ class BenchmarkPerformanceEvidence:
                     decode_replicas=candidate.replicas,
                     prefill_tp=candidate.prefill_tensor_parallel_size,
                     prefill_replicas=candidate.prefill_replicas,
-                    optimizations=(candidate.guide_variant or "",),
+                    optimizations=(candidate.guide_variant or "",)
+                    + composition_markers(candidate.native_cpu_cache_gib, candidate.prefix_routing),
                 ),
             )
             candidate_records = (

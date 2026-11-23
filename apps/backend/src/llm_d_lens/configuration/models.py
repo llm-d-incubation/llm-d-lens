@@ -74,6 +74,12 @@ class CandidateConfig(BaseModel):
     network: dict[str, Any] | None = None
     performance: dict[str, Any] | None = None
     runtime: dict[str, Any] | None = None
+    disaggregated_set: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "DS Slice count, placementPolicy and soft sliceRouting intent; validated against the rendered manifest."
+        ),
+    )
 
 
 class ResolveResult(BaseModel):
@@ -100,7 +106,15 @@ class GuideSource(BaseModel):
 
     repository: str = Field(min_length=1)
     requested_ref: str = Field(min_length=1, alias="requestedRef")
-    commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    commit: str = Field(
+        pattern=r"^[0-9a-f]{40}$",
+        description=(
+            "Full Git commit or the first 40 characters of the content snapshot SHA-256 "
+            "when revisionKind is content-snapshot."
+        ),
+    )
+    snapshot_checksum: str | None = Field(default=None, alias="snapshotChecksum", pattern=r"^sha256:[0-9a-f]{64}$")
+    revision_kind: Literal["git-commit", "content-snapshot"] | None = Field(default=None, alias="revisionKind")
     guide: str = Field(min_length=1)
     accelerator: str = Field(min_length=1)
     model_server: str = Field(min_length=1, alias="modelServer")

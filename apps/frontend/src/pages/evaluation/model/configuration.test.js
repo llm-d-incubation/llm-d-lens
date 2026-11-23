@@ -11,6 +11,54 @@ test('topology parsing rejects malformed, nonpositive and over-limit expanded sw
     for (const pdTopologyVariants of ['0:1', '1:x', '1:1,1:2']) assert.throws(() => configuration.expandConfigurationTopologies({ ...base, pdTopologyVariants }));
     assert.throws(() => configuration.expandConfigurationTopologies({ ...base, guide: 'optimized-baseline', tensorParallelVariants: '1,bad' }));
 });
+test('Slice ceilings follow the selected placement policy and stay unknown for undiscovered keys', () => {
+    const capacity = { maxSlices: { None: 3 }, topologyKeys: [{ key: 'zone', feasibleDomains: 2, exclusiveTopologyDomains: 1 }] };
+    assert.equal(configuration.maxFeasibleSlices(capacity, undefined), 3);
+    assert.equal(configuration.maxFeasibleSlices(capacity, { type: 'ExclusiveSlice', topology: 'zone' }), 2);
+    assert.equal(configuration.maxFeasibleSlices(capacity, { type: 'ExclusiveTopology', topology: 'zone' }), 1);
+    assert.equal(configuration.maxFeasibleSlices(capacity, { type: 'ExclusiveSlice', topology: 'rack' }), null);
+    assert.equal(configuration.maxFeasibleSlices(null, undefined), null);
+});
+test('Slice recommendation needs a target and picks the fewest feasible Slices with the same per-Slice shape', () => {
+    const shape = { prefillReplicas: 1, prefillTp: 2, decodeReplicas: 1, decodeTp: 2, accelerator: 'gpu' };
+    const run = (slices, maximumStableQps, extra = {}) => ({ caseId: `s${slices}-${maximumStableQps}`, slices, maximumStableQps, prefillReplicas: 1, prefillTensorParallelSize: 2, decodeReplicas: 1, decodeTensorParallelSize: 2, accelerator: 'gpu', ...extra });
+    const history = [run(1, 5), run(2, 10), run(3, 14), run(1, 50, { decodeReplicas: 3 })];
+    assert.equal(configuration.sliceRecommendation(history, shape).status, 'needs-target');
+    assert.equal(configuration.sliceRecommendation(history, shape).matched.length, 3);
+    assert.equal(configuration.sliceRecommendation(history, shape, { targetRps: 8 }).entry.slices, 2);
+    assert.equal(configuration.sliceRecommendation(history, shape, { targetRps: 12, maxSlices: 2 }).status, 'exceeds-capacity');
+    assert.equal(configuration.sliceRecommendation(history, shape, { targetRps: 20 }).status, 'unmet');
+    assert.equal(configuration.sliceRecommendation([run(2, null)], shape, { targetRps: 1 }).status, 'no-evidence');
+    assert.equal(configuration.sliceRecommendation(history, { ...shape, accelerator: 'other' }).matched.length, 0);
+    const profiled = [run(1, 9, { evidenceKey: 'a', finishedAt: '2026-01-02' }), run(2, 20, { evidenceKey: 'b', finishedAt: '2026-01-01', workloadLabel: 'w', slaTargets: { ttft_ms: 300 } })];
+    assert.equal(configuration.sliceRecommendation(profiled, shape, { targetRps: 8, evidenceKey: 'b' }).entry.slices, 2);
+    assert.deepEqual(configuration.sliceEvidenceProfiles(profiled).map(item => item.key), ['a', 'b']);
+    assert.equal(configuration.sliceEvidenceProfiles(profiled)[1].label, 'w · TTFT ≤ 300 ms');
+});
+test('Slice sweep expansion multiplies topologies by Slice counts within the limit', () => {
+    const rows = [{ replicaCount: 1 }, { replicaCount: 2 }];
+    assert.deepEqual(configuration.expandSliceVariants(rows, []).map(row => row.slices), [null, null]);
+    assert.deepEqual(configuration.expandSliceVariants(rows, [2, 1, 2]).map(row => [row.replicaCount, row.slices]), [[1, 1], [1, 2], [2, 1], [2, 2]]);
+    assert.throws(() => configuration.expandSliceVariants(Array(9).fill({}), [1, 2]), /16 combinations/);
+});
+test('Evaluation cases that differ only by Slice count form a group with a cost-based recommendation', () => {
+    const entry = (id, slices, maximum_stable_qps, extra = {}) => ({ case: {
+        id, kind: 'guide', status: 'succeeded', configuration_artifact_id: `artifact-${id}`, scenario_id: 's', sla_targets: { ttft_ms: 500 },
+        metrics: { maximum_stable_qps, throughput_tps: 100 * slices },
+        deployment_configuration: { provider_ref: 'pd-disaggregation', content: {
+            model: { name: 'm' }, disaggregatedSet: { slices }, prefill: { replicaCount: 1, tensorParallelSize: 2 }, decode: { replicaCount: 1, tensorParallelSize: 3 }, ...extra,
+        } },
+    } });
+    const groups = configuration.sliceOptimizationGroups([entry('a', 2, 10), entry('b', 1, 5), entry('c', 1, 50, { decode: { replicaCount: 2, tensorParallelSize: 3 } })]);
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groups[0].rows.map(row => [row.slices, row.accelerators]), [[1, 5], [2, 10]]);
+    assert.equal(configuration.sliceGroupRecommendation(groups[0], '').status, 'needs-target');
+    assert.equal(configuration.sliceGroupRecommendation(groups[0], 8).row.artifactId, 'artifact-a');
+    assert.equal(configuration.sliceGroupRecommendation(groups[0], 4).row.slices, 1);
+    assert.equal(configuration.sliceGroupRecommendation(groups[0], 11).status, 'unmet');
+    const unmeasured = configuration.sliceOptimizationGroups([entry('a', 2, undefined), entry('b', 1, undefined)]);
+    assert.equal(configuration.sliceGroupRecommendation(unmeasured[0], 1).status, 'no-slo-rate');
+});
 test('loading custom rows and changing one preserves the other saved overrides', () => {
     const rows = configuration.configurationCustomRows({ customParameters: [
         { target: 'both', kind: 'argument', name: 'block-size', value: '64' },

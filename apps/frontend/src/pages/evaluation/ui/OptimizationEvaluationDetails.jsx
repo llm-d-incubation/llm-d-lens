@@ -1,5 +1,8 @@
 import { downloadBlob } from '../../../shared/lib/download';
-import { evaluationApi as api } from '../model/client';
+import { evaluationApi as api, confirmEvaluationPlans, evaluationPlanReview } from '../model/client';
+import { DeploymentPlanReview } from './EvaluationTaskWizard';
+import { Badge, Button } from '../../../shared/ui';
+import { useAuth } from '../../auth';
 import { TERMINAL_EVALUATION_STATUSES as terminalStatuses, evaluationStatusTone } from '../model/domain';
 import { usePolling } from '../../../shared/lib/usePolling';
 import { confirmDelete } from "../../../shared/ui/confirmDelete";
@@ -12,6 +15,10 @@ import { benchmarkDetails } from "./benchmark-results/benchmarkDetails.js";
 import BenchmarkLiveFlow from "./benchmark-results/BenchmarkLiveFlow.jsx";
 import BenchmarkTiming from "./evaluation/BenchmarkTiming.jsx";
 import GuideResultExplorer from "./benchmark-results/GuideResultExplorer.jsx";
+import SliceOptimizationResults from "./SliceOptimizationResults.jsx";
+import { sliceOptimizationGroups } from "../model/configuration";
+import { storeEvaluationIntent } from "../model/transfer";
+import { Layers } from "lucide-react";
 import { buildResultReport } from "./benchmark-results/resultReport.js";
 import { resolveExplorerGuide } from "./benchmark-results/resultExplorer.js";
 import { Activity, AlertTriangle, ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, Cpu, Download, FileText, Gauge, RefreshCw, RotateCcw, Send, Server, Square, Terminal, Trash2 } from "lucide-react";
@@ -33,6 +40,33 @@ function comparisonName(type) {
 function DiagnosticBlock({ title, value }) {
     if (!value) return null;
     return <div className="min-w-0 max-w-full border-t border-slate-800 pt-3"><h3 className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><Terminal className="h-3.5 w-3.5 text-cyan-300" />{title}</h3><pre className="max-h-64 max-w-full overflow-auto bg-theme-bg dark:bg-black/30 p-3 text-[11px] leading-5 text-theme-text dark:text-slate-400">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre></div>;
+}
+
+export function RuntimeVerificationResults({ report }) {
+    if (!report) return null;
+    return <section aria-label="Runtime verification" className="min-w-0 border-t border-theme-border py-3 text-theme-text">
+        <h3 className="text-sm font-semibold">Runtime verification</h3>
+        {report.observedAt && <p className="mt-1 break-all text-xs text-theme-muted">{report.observedAt}</p>}
+        <dl className="mt-3 divide-y divide-theme-border">
+            {[
+                ['kubernetes', 'Kubernetes readiness'],
+                ['placement', 'Slice placement'],
+                ['routing', 'P/D routing'],
+                ['kvTransfer', 'KV transfer'],
+            ].map(([key, label]) => {
+                const evidence = report[key];
+                const status = evidence?.status || 'unknown';
+                return <div key={key} className="grid gap-2 py-2 sm:grid-cols-[160px_minmax(0,1fr)]">
+                    <dt className="text-xs font-medium">{label}</dt>
+                    <dd className="min-w-0 space-y-1">
+                        <Badge tone={status === 'pass' ? 'success' : status === 'fail' ? 'danger' : 'warning'}>{status === 'pass' ? 'Passed' : status === 'fail' ? 'Failed' : 'Unknown'}</Badge>
+                        {(evidence?.reasons || []).map((reason, index) => <p key={index} className="break-words text-xs text-theme-muted">{reason}</p>)}
+                    </dd>
+                </div>;
+            })}
+        </dl>
+        <details className="mt-2 text-xs"><summary>Recorded evidence</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(report, null, 2)}</pre></details>
+    </section>;
 }
 
 function modelFromText(value) {
@@ -178,6 +212,18 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
     const [caseStatusFilter, setCaseStatusFilter] = useState("all");
     const [showCaseHistory, setShowCaseHistory] = useState(false);
     const [casePage, setCasePage] = useState(1);
+    const [preparedReview, setPreparedReview] = useState(null);
+    const [reviewBusy, setReviewBusy] = useState(false);
+    const [reviewError, setReviewError] = useState('');
+    const [acknowledgeUnknown, setAcknowledgeUnknown] = useState(false);
+    const { can } = useAuth();
+    async function confirmReview() {
+        setReviewBusy(true);
+        setReviewError('');
+        try { await confirmEvaluationPlans(preparedReview.workflow, acknowledgeUnknown); setPreparedReview(null); await loadDetails(); }
+        catch (failure) { setReviewError(failure.message); }
+        finally { setReviewBusy(false); }
+    }
 
     const refreshDeployments = useCallback(async (currentDetails) => {
         const refreshes = deploymentCases(currentDetails)
@@ -241,6 +287,25 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
     const activeSection = requestedSection === "live" && !hasMonitoring ? "overview" : requestedSection;
     const benchmarks = useMemo(() => details ? extractBenchmarks(details) : [], [details]);
     const guideType = useMemo(() => resolveGuideType(details), [details]);
+    const sliceGroups = useMemo(() => sliceOptimizationGroups(details?.cases || []), [details]);
+    const openSliceConfiguration = (row) => {
+        const runtime = details.cases.find((entry) => entry.case.id === row.caseId)?.case.deployment_configuration?.content?.runtime || {};
+        storeEvaluationIntent({
+            entrySource: 'model-market',
+            operation: 'create-evaluation',
+            initial_step: 'configurations',
+            initial_artifact_id: row.artifactId,
+            return_target: 'optimization-evaluate',
+            cluster_id: details.workflow.cluster_id,
+            workloads: [{ model: row.model, guide: row.guide }],
+            runtime: {
+                model_server: runtime.modelServer || 'vllm',
+                model_source: runtime.storageVolumeId ? 'auto-cache' : 'huggingface',
+                storage_volume_id: runtime.storageVolumeId || '',
+            },
+        });
+        onNavigate('optimization-evaluate-new');
+    };
     const guideProfile = useMemo(() => guideResultProfile(guideType), [guideType]);
     const caseSummary = useMemo(() => ({
         failed: cases.filter((item) => ["failed", "cancelled"].includes(item.status)).length,
@@ -311,6 +376,12 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
         setCaseActions((current) => ({ ...current, [key]: action }));
         setCaseActionErrors((current) => ({ ...current, [key]: "" }));
         try {
+            if (action === 'restart' && item.evaluationCase?.prepared_plan_id) {
+                const workflow = await api(`/api/v1/evaluate/workflow-runs/${encodeURIComponent(evaluationId)}/retry`, { method: 'POST' });
+                if (workflow.status === 'awaiting_review') { setAcknowledgeUnknown(false); setReviewError(''); setPreparedReview(evaluationPlanReview(workflow)); }
+                await loadDetails();
+                return;
+            }
             const clusterSessionId = sessionStorage.getItem("prism_cluster_session_id");
             if (clusterSessionId) {
                 await api(`/api/v1/deployments/runs/${encodeURIComponent(item.deploymentRunId)}/cluster-session`, {
@@ -336,6 +407,8 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
     };
     return <section className="evaluation-details-page mx-auto flex w-full min-w-0 max-w-[1560px] flex-col gap-4 px-4 py-6 text-slate-100 sm:px-6 lg:px-12 lg:py-10">
         <PageHeading title={details?.workflow.name || details?.workflow.id || evaluationId || "Benchmark details"} subtitle="Benchmark" />
+        <DeploymentPlanReview preparedReview={preparedReview} busy={reviewBusy} error={reviewError} acknowledgeUnknown={acknowledgeUnknown} setAcknowledgeUnknown={setAcknowledgeUnknown} onClose={() => setPreparedReview(null)} onConfirm={confirmReview} />
+        {details?.workflow.status === 'awaiting_review' && can('evaluate:workflow:create') && <div className="flex gap-2"><Button onClick={() => { setAcknowledgeUnknown(false); setReviewError(''); setPreparedReview(evaluationPlanReview(details.workflow)); }}><FileText className="h-4 w-4" />Review deployment plans</Button></div>}
         <Panel padding="none" className="rounded-b-none border-b-0 shadow-none">
         <header className="grid gap-4 border-b border-theme-border p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
             <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -364,11 +437,12 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
         <nav aria-label="Benchmark detail sections" className="sticky top-0 z-30 -mt-4 flex gap-0 overflow-x-auto rounded-b-xl border border-theme-border bg-theme-card p-1">{[
             ["overview", "Benchmark results", <Gauge key="overview-icon" className="h-3.5 w-3.5" />],
             ["compare", "Compare", <Gauge key="compare-icon" className="h-3.5 w-3.5" />],
+            ["slices", "Slice optimization", <Layers key="slices-icon" className="h-3.5 w-3.5" />],
             ["live", hasLiveDeployment ? "Live monitoring" : "Recorded monitoring", <Activity key="live-icon" className="h-3.5 w-3.5" />],
             ["resources", "Resources", <Cpu key="resources-icon" className="h-3.5 w-3.5" />],
             ["logs", "Benchmark logs", <Activity key="logs-icon" className="h-3.5 w-3.5" />],
             ["deployments", "Deployments", <Server key="deployments-icon" className="h-3.5 w-3.5" />],
-        ].filter(([key]) => key !== "live" || hasMonitoring).map(([key, label, icon]) => <button key={key} aria-current={activeSection === key ? "page" : undefined} onClick={() => setActiveSection(key)} className={`inline-flex h-9 min-w-max items-center gap-2 rounded-lg px-3 text-[11px] font-semibold transition ${activeSection === key ? "bg-cyan-500/10 text-cyan-300 shadow-[inset_0_0_0_1px_rgba(34,211,238,.25)]" : "text-slate-500 hover:bg-slate-800/60 hover:text-slate-300"}`}>{icon}{label}</button>)}</nav>
+        ].filter(([key]) => (key !== "live" || hasMonitoring) && (key !== "slices" || sliceGroups.length > 0)).map(([key, label, icon]) => <button key={key} aria-current={activeSection === key ? "page" : undefined} onClick={() => setActiveSection(key)} className={`inline-flex h-9 min-w-max items-center gap-2 rounded-lg px-3 text-[11px] font-semibold transition ${activeSection === key ? "bg-cyan-500/10 text-cyan-300 shadow-[inset_0_0_0_1px_rgba(34,211,238,.25)]" : "text-slate-500 hover:bg-slate-800/60 hover:text-slate-300"}`}>{icon}{label}</button>)}</nav>
         {error && <div className="flex gap-2 border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"><AlertTriangle className="h-4 w-4" />{error}</div>}
         {loading && !details ? <p className="text-sm text-slate-500">Loading evaluation details...</p> : details && <>
 
@@ -384,8 +458,13 @@ export default function OptimizationEvaluationDetails({ onNavigate }) {
                 </div>
             </section>)}
             </div>}
-            <div hidden={["deployments", "live", "logs"].includes(activeSection)}><GuideResultExplorer key={evaluationId} details={details} guideType={guideType} view={["deployments", "live", "logs"].includes(activeSection) ? "overview" : activeSection} onViewChange={setActiveSection} /></div>
+            <div hidden={["deployments", "live", "logs", "slices"].includes(activeSection)}><GuideResultExplorer key={evaluationId} details={details} guideType={guideType} view={["deployments", "live", "logs", "slices"].includes(activeSection) ? "overview" : activeSection} onViewChange={setActiveSection} /></div>
+            {activeSection === "slices" && <SliceOptimizationResults groups={sliceGroups} canDeploy={can("deployment:run:create")} onUseConfiguration={openSliceConfiguration} />}
             {activeSection === "deployments" && <section className="min-w-0 space-y-4">
+                {(details.cases || []).filter(entry => entry.case.runtime_verification).map(entry => <section key={entry.case.id} aria-label={`Verification for ${entry.case.id}`}>
+                    <h2 className="break-all text-sm font-semibold text-theme-text">{entry.case.configuration?.display_name || entry.case.id}</h2>
+                    <RuntimeVerificationResults report={entry.case.runtime_verification} />
+                </section>)}
                 <div className="rounded-2xl border border-slate-800/80 bg-[#090e18] p-4 shadow-xl"><div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between"><div><h2 className="flex items-center gap-2 text-sm font-semibold"><Server className="h-4 w-4 text-emerald-300" />Deployment cases</h2><p className="mt-1 text-[10px] text-slate-500">Latest attempts · Open a case’s logs to inspect deployment progress.</p></div><div className="flex flex-wrap items-center gap-2">{[["all", "All", cases.length, "text-slate-300"], ["failed", "Failed", caseSummary.failed, "text-red-300"], ["active", "Active", caseSummary.active, "text-cyan-300"], ["ready", "Ready", caseSummary.ready, "text-emerald-300"]].map(([key, label, count, color]) => <button key={key} onClick={() => setCaseStatusFilter(key)} className={`case-filter-chip inline-flex h-8 items-center gap-2 rounded-lg border px-3 text-[10px] font-semibold transition ${caseStatusFilter === key ? 'case-filter-chip-active border-cyan-500/35 bg-cyan-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-700'} ${color}`}>{label}<span className="rounded bg-black/25 px-1.5 py-0.5">{count}</span></button>)}<button title={showCaseHistory ? "Hide older retry attempts and keep only the latest attempt" : "Include older retry attempts for each deployment case"} onClick={() => setShowCaseHistory((current) => !current)} className={`h-8 rounded-lg border px-3 text-[10px] ${showCaseHistory ? "border-violet-500/35 bg-violet-500/10 text-violet-200" : "border-slate-800 bg-slate-950 text-slate-400"}`}>{showCaseHistory ? "Hide history" : "Retry history"}</button></div></div></div>
                 {visibleCases.length ? pagedCases.map((item) => {
                     const key = `${item.deploymentRunId}:${item.id}`;

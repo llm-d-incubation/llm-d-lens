@@ -17,6 +17,7 @@ import {
     updateDeploymentMetadata,
 } from '../../../optimization';
 import { manageDeploymentMonitoring } from '../../../clusters';
+import { createBenchmarkRun } from '../../../evaluation/model/client';
 import { MultiSelectDropdown } from '../../../../shared/ui/MultiSelectDropdown';
 import { EmptyState } from '../../../../shared/ui/EmptyState';
 import { Button, RefreshButton } from '../../../../shared/ui/Button';
@@ -37,8 +38,10 @@ import { Toast } from '../../../../shared/ui/Toast';
 import { useAuth } from '../../../auth';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import {
+    BENCHMARK_PRESETS,
     STATUS_FILTER_OPTIONS,
     clusterOptions,
+    deploymentBenchmarkRequest,
     deploymentTitle,
     errorMessage,
     statusLabel,
@@ -49,6 +52,7 @@ const SEARCH_DEBOUNCE_MS = 300;
 const DEPLOYMENT_REFRESH_INTERVAL_MS = 5000;
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 const DEFAULT_PAGE_SIZE = 20;
+export const HIGHLIGHT_DEPLOYMENT_KEY = 'lens-deployment-highlight';
 
 function StatCard({ label, value, tone = 'text-white' }) {
     return (
@@ -169,6 +173,52 @@ function ScaleDeploymentModal({ deployment, onCancel, onScale }) {
     );
 }
 
+function BenchmarkDeploymentModal({ deployment, onCancel, onStart }) {
+    const [preset, setPreset] = useState('chat');
+    const [ttftMs, setTtftMs] = useState(''), [tpotMs, setTpotMs] = useState('');
+    const { pending, error, run } = useSubmission('Failed to start benchmark', { keepPendingOnSuccess: true });
+    if (!deployment) return null;
+    const invalid = [ttftMs, tpotMs].some(value => value !== '' && !(Number(value) > 0));
+    const submit = async (event) => {
+        event.preventDefault();
+        if (invalid || pending) return;
+        await run(() => onStart(deploymentBenchmarkRequest(deployment, { preset, ttftMs, tpotMs })));
+    };
+    const selected = BENCHMARK_PRESETS[preset];
+    return (
+        <Modal
+            isOpen
+            onClose={pending ? undefined : onCancel}
+            title="Run benchmark"
+            subtitle={deploymentTitle(deployment)}
+            closeOnBackdrop={!pending}
+            closeOnEscape={!pending}
+            footer={(
+                <>
+                    <Button variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button>
+                    <Button variant="sky" type="submit" form="benchmark-deployment-form" isLoading={pending} disabled={invalid}>Start benchmark</Button>
+                </>
+            )}
+        >
+            <form id="benchmark-deployment-form" onSubmit={submit} className="flex flex-col gap-4">
+                <div>
+                    <Label htmlFor="benchmark-preset">Workload</Label>
+                    <Select id="benchmark-preset" value={preset} onChange={(event) => setPreset(event.target.value)} disabled={pending}>
+                        {Object.entries(BENCHMARK_PRESETS).map(([id, item]) => <option key={id} value={id}>{item.label}</option>)}
+                    </Select>
+                    <p className="mt-1 text-[11px] text-theme-muted">{selected.isl.toLocaleString()} input / {selected.osl} output tokens at concurrency {selected.concurrency.join(', ')}.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div><Label htmlFor="benchmark-ttft">P95 TTFT target (ms)</Label><Input id="benchmark-ttft" type="number" min="1" value={ttftMs} placeholder="No target" onChange={(event) => setTtftMs(event.target.value)} disabled={pending} /></div>
+                    <div><Label htmlFor="benchmark-tpot">P95 TPOT target (ms)</Label><Input id="benchmark-tpot" type="number" min="1" value={tpotMs} placeholder="No target" onChange={(event) => setTpotMs(event.target.value)} disabled={pending} /></div>
+                </div>
+                <p className="text-[11px] text-theme-muted">Runs an in-cluster harness against this deployment. Standalone and shared-Gateway deployments are routed automatically; the deployment is not changed.</p>
+                <FormError message={error} />
+            </form>
+        </Modal>
+    );
+}
+
 export function DeploymentManagementPage({ onNavigate, initialSearch = '', initialClusterId = '' } = {}) {
     const [searchInput, setSearchInput] = useState(initialSearch);
     const query = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
@@ -178,11 +228,20 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
     const [selected, setSelected] = useState(null);
     const { can } = useAuth();
     const canScale = can('deployment:execution:scale');
+    const canBenchmark = can('evaluate:run:create');
     const [mutatingId, setMutatingId] = useState(null);
     const [connectingEndpointId, setConnectingEndpointId] = useState('');
     const [notice, setNotice] = useNotice();
     const [page, setPage] = useState(0);
     const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+    const [podsById, setPodsById] = useState({});
+    const [highlightName] = useState(() => {
+        try {
+            const value = sessionStorage.getItem(HIGHLIGHT_DEPLOYMENT_KEY) || '';
+            sessionStorage.removeItem(HIGHLIGHT_DEPLOYMENT_KEY);
+            return value;
+        } catch { return ''; }
+    });
 
     // Cluster choices come from the unfiltered list so narrowing by cluster
     // never removes the option the user just picked.
@@ -210,7 +269,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
 
 
 
-    const summary = useMemo(() => summarizeStatuses(items), [items]);
+    const summary = useMemo(() => summarizeStatuses(items, podsById), [items, podsById]);
     const clusters = useMemo(() => {
         const merged = new Set([...knownClusters, ...clusterOptions(items)]);
         if (clusterId) merged.add(clusterId);
@@ -288,6 +347,12 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
         }
     };
 
+    const handleBenchmark = async (request) => {
+        const created = await createBenchmarkRun(request);
+        closeDialog();
+        onNavigate?.('optimization-evaluation-details', { evaluationId: created.id, runKind: 'benchmark' });
+    };
+
     const handleConnectLocalEndpoint = async (item) => {
         if (!item?.execution_id) return;
         setConnectingEndpointId(item.execution_id);
@@ -332,10 +397,11 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                 description="Track active model serving deployments, inspect endpoints, and update or remove existing services."
             />
             <StatCardRow>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                     <StatCard label="Total" value={summary.total} />
-                    <StatCard label="Ready" value={summary.Ready} />
-                    <StatCard label="In progress" value={summary['In progress']} />
+                    <StatCard label="Ready" value={summary.Ready} tone={summary.Ready > 0 ? 'text-emerald-400' : 'text-white'} />
+                    <StatCard label="In progress" value={summary['In progress']} tone={summary['In progress'] > 0 ? 'text-sky-400' : 'text-white'} />
+                    <StatCard label="Degraded" value={summary.Degraded} tone={summary.Degraded > 0 ? 'text-amber-400' : 'text-white'} />
                     <StatCard label="Failed" value={summary.Failed} tone={summary.Failed > 0 ? 'text-rose-500 font-extrabold' : 'text-white'} />
                     <StatCard label="Cleaned" value={summary.Cleaned} />
                 </div>
@@ -440,6 +506,8 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                         connectingEndpointId={connectingEndpointId}
                         clusterNameById={clusterNameById}
                         canScale={canScale}
+                        highlightName={highlightName}
+                        onPodsChange={setPodsById}
                         onInspect={openDialog('details')}
                         onViewPodsLogs={openDialog('pods-logs')}
                         onEdit={openDialog('edit')}
@@ -447,6 +515,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                         onNavigate={onNavigate}
                         onConnectLocalEndpoint={handleConnectLocalEndpoint}
                         onScale={openDialog('scale')}
+                        onBenchmark={canBenchmark ? openDialog('benchmark') : undefined}
                     />
                     <PaginationControls className="mt-2" page={currentPage} totalPages={totalPages} onPageChange={setPage}
                         total={items.length} pageStart={pageStart} pageEnd={pageEnd} itemLabel="deployments"
@@ -460,6 +529,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
             {dialog === 'details' && <DeploymentDetailsModal deployment={selected} clusterNameById={clusterNameById} onClose={closeDialog} onViewPodsLogs={openDialog('pods-logs')} />}
             {dialog === 'edit' && <EditDeploymentModal deployment={selected} onCancel={closeDialog} onSave={handleSave} />}
             {dialog === 'scale' && <ScaleDeploymentModal deployment={selected} onCancel={closeDialog} onScale={handleScale} />}
+            {dialog === 'benchmark' && <BenchmarkDeploymentModal deployment={selected} onCancel={closeDialog} onStart={handleBenchmark} />}
             {dialog === 'delete' && <DeleteDeploymentModal deployment={selected} clusterNameById={clusterNameById} onCancel={closeDialog} onDelete={handleDelete} />}
             {dialog === 'pods-logs' && <DeploymentPodsLogsModal deployment={selected} onClose={closeDialog} />}
             <Toast

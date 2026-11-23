@@ -12,6 +12,20 @@ from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
 router = importlib.import_module("llm_d_lens.evaluation.router")
 
 
+@pytest.mark.parametrize("guide", [None, "baseline-vllm", "source-composition", "pd-disaggregation"])
+def test_endpoint_benchmark_specification_defaults(guide):
+    expected = "guides/pd-disaggregation" if guide == "pd-disaggregation" else "guides/optimized-baseline"
+    assert router._guide_benchmark_specification(guide) == expected
+
+
+def test_source_benchmark_specification_preserves_environment_override(monkeypatch):
+    monkeypatch.setattr(router, "_embedded_configuration", lambda _: SimpleNamespace(provider_ref="source-composition"))
+    monkeypatch.delenv("LLM_D_BENCH_SPECIFICATION_FILE", raising=False)
+    assert router._benchmark_specification({"kind": "candidate"}) == "guides/optimized-baseline"
+    monkeypatch.setenv("LLM_D_BENCH_SPECIFICATION_FILE", "custom/spec")
+    assert router._benchmark_specification({"kind": "candidate"}) == "custom/spec"
+
+
 def test_xpumd_metrics_use_compute_engine_utilization():
     from llm_d_lens.hardware.registry import get_profile
 

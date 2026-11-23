@@ -11,6 +11,24 @@ original part-local context; use the links below for unambiguous navigation.
 | [Table schemas](#5-database-schema-design-including-foreign-key-relationships) | Field definitions, relationships and indexes. |
 | [DTO and transaction rules](#6-dto--dao-mapping-mechanism) | Mapping, session ownership and concurrency. |
 
+## Prepared Deployment Plan Storage
+
+The additive `deployment_plans` table, approved by the user on 2026-11-18, is owned by
+`db.models.deployment_plan` / `db.dao.deployment_plan`. It stores UUID identity,
+cluster ID, owner user/group references, immutable JSON payload and digest, recorded
+preflight JSON, creation time, `prepared`/`consumed` status, a unique related Run ID
+and optimistic `version_id`. Owner references use SET NULL; the Run ID is not a foreign
+key. Retrieval remains owner-bound and the payload is never updated after preparation.
+
+`DeploymentPlanDao.consume` locks the plan row and creates the Run and cases in the
+same transaction that marks the plan consumed. Repeated consumption returns its original
+Run ID. PostgreSQL concurrency behavior still requires integration coverage; SQLite
+tests do not establish row-lock semantics. Revision
+`814f033eb959_add_deployment_plans` descends from `7f2a9c4d1e80` without merging unrelated
+existing heads. Validate upgrade, schema comparison, downgrade and re-upgrade against
+isolated prior model metadata, not a live database. The historical empty baseline does not provide
+a complete from-zero migration path.
+
 <!-- design-part: data-access -->
 
 ## Data access architecture

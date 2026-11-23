@@ -67,7 +67,7 @@ def test_hidden_migrated_routes_participate_in_startup_validation(monkeypatch):
         "/api/guide-planning",
     )
     expected = {(entry.method, entry.path) for entry in routes.ROUTE_PERMISSIONS if entry.path.startswith(prefixes)}
-    assert len(expected) == 21
+    assert len(expected) == 24
     assert expected <= routes.app_route_table(app)
     assert routes.validate_route_registry(app) == []
     monkeypatch.setattr(
@@ -464,6 +464,14 @@ def test_cluster_and_storage_visibility_is_scope_filtered(monkeypatch):
         bob_ids = {cluster["id"] for cluster in clusters_response.json()["items"]}
         guide_response = client.get("/api/guide-planning/catalog", params={"clusterId": cluster_b.id})
         assert guide_response.status_code == 403, guide_response.text
+        source_response = client.get("/api/guide-planning/source-catalog", params={"clusterId": cluster_b.id})
+        assert source_response.status_code == 403, source_response.text
+        for path, body in [
+            ("source-preview", {"clusterId": cluster_b.id, "commit": "a" * 40, "unit": {"path": "guides/model"}}),
+            ("compose", {"clusterId": cluster_b.id, "commit": "a" * 40, "namespace": "cache"}),
+        ]:
+            response = client.post(f"/api/guide-planning/{path}", json=body, headers=_csrf_headers(client))
+            assert response.status_code == 403, response.text
         assert bob_ids == {cluster_a.id}
 
         volumes_response = client.get("/api/v1/storage/volumes")

@@ -46,7 +46,7 @@ export function DeleteDeploymentModal({ deployment, clusterNameById = {}, onCanc
             <div className="flex gap-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-300" aria-hidden="true" />
                 <p className="text-xs leading-relaxed text-rose-100">
-                    Prism uninstalls deployment monitoring and permanently removes this deployment record.
+                    Lens uninstalls deployment monitoring and permanently removes this deployment record.
                     This action cannot be undone.
                 </p>
             </div>
@@ -82,7 +82,7 @@ export function DeleteDeploymentModal({ deployment, clusterNameById = {}, onCanc
                     label="Also delete the Kubernetes namespace"
                 />
                 <p className="mt-1.5 pl-6 text-[11px] leading-relaxed text-slate-400">
-                    When checked, Prism also deletes namespace{' '}
+                    When checked, Lens also deletes namespace{' '}
                     <span className="font-mono text-slate-300">{deployment.namespace || '—'}</span> and all
                     resources in it. Leave unchecked to remove only this record and keep the namespace intact.
                 </p>

@@ -115,7 +115,7 @@ async def resolve_resource(api, resource: str) -> Resource:
     because a preferred version can omit a resource (for example a CRD served
     only at v1alpha2 once a sibling CRD in the same group serves v1).
     """
-    name, _, group = resource.partition(".")
+    name, _, group = resource.lower().partition(".")
     builtin = _BUILTINS.get(_ALIASES.get(name, name))
     if builtin:
         builtin_group = builtin.prefix.split("/")[2] if builtin.prefix.startswith("/apis/") else ""

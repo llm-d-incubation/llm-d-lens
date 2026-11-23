@@ -26,6 +26,47 @@ def test_failure_detail_reports_invalid_hugging_face_model() -> None:
     )
 
 
+def test_restart_preserves_retry_eligibility_until_new_attempt_is_created(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, Mock
+
+    import pytest
+
+    from llm_d_lens.deploy.contracts import DeploymentCaseStatus, DeploymentStatus
+    from llm_d_lens.deploy.plan_service import DeploymentPlanService
+
+    async def check():
+        for cleanup_status in [DeploymentStatus.FAILED, DeploymentStatus.CLEANED, DeploymentStatus.CLEANED_UP]:
+            case = SimpleNamespace(id="original", status=DeploymentCaseStatus.FAILED)
+            retry = SimpleNamespace(id="retry", status=DeploymentCaseStatus.QUEUED)
+            run = SimpleNamespace(id="run", cases=[case], provenance={})
+            store = SimpleNamespace(get_run=lambda _, run=run: run, save_run=Mock(), save_execution=Mock())
+            service = SimpleNamespace(clean=AsyncMock(return_value=SimpleNamespace(status=cleanup_status)))
+            worker = DeploymentRunWorker(store, service)
+            worker._require_active_cluster_session = Mock()
+            worker._case_execution = Mock(return_value=(run, case, SimpleNamespace()))
+            worker._execute_retry = AsyncMock()
+
+            def create_retry(self, run_id, case_id, case=case, run=run, retry=retry):
+                assert case.status == DeploymentCaseStatus.FAILED
+                run.cases.append(retry)
+                return retry
+
+            monkeypatch.setattr(DeploymentPlanService, "retry_case", create_retry)
+            if cleanup_status == DeploymentStatus.FAILED:
+                with pytest.raises(ValueError, match="could not be cleaned"):
+                    await worker.restart_case("run", "original")
+                assert run.cases == [case]
+                continue
+            assert await worker.restart_case("run", "original") is retry
+            await asyncio.sleep(0)
+            assert case.status == DeploymentCaseStatus.CLEANED
+            assert run.cases == [case, retry]
+            worker._execute_retry.assert_awaited_once_with("run", "retry", None)
+
+    asyncio.run(check())
+
+
 def test_failure_detail_reports_gated_hugging_face_model() -> None:
     execution = SimpleNamespace(
         diagnostics=SimpleNamespace(

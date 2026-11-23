@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from llm_d_lens.configuration.disaggregated_set import validate_disaggregated_sets
 from llm_d_lens.configuration.manifest_facts import vllm_argument_value
 from llm_d_lens.core.hashing import stable_hash
 from llm_d_lens.deploy.providers.deployment_bundle import validate_deployment_bundle
@@ -344,38 +345,8 @@ def prepare_graceful_shutdown_manifest(manifest: str) -> tuple[str, dict[str, An
 
 
 def prepare_single_slice_disaggregated_set_manifest(manifest: str) -> tuple[str, dict[str, Any]]:
-    documents = list(yaml.safe_load_all(manifest))
-    disaggregated_sets = 0
-    adjusted = 0
-
-    def visit(document: Any) -> None:
-        nonlocal disaggregated_sets, adjusted
-        if not isinstance(document, dict):
-            return
-        if document.get("kind") == "List":
-            for item in document.get("items") or []:
-                visit(item)
-            return
-        if document.get("kind") != "DisaggregatedSet":
-            return
-        disaggregated_sets += 1
-        spec = document.get("spec")
-        if not isinstance(spec, dict):
-            return
-        if spec.get("slices") != 1:
-            spec["slices"] = 1
-            adjusted += 1
-
-    for document in documents:
-        visit(document)
-    report = {
-        "slices": 1,
-        "disaggregatedSets": disaggregated_sets,
-        "adjusted": adjusted,
-    }
-    if not adjusted:
-        return manifest, report
-    return yaml.safe_dump_all(documents, sort_keys=False), report
+    """Validate DS manifests without changing their declared topology."""
+    return manifest, validate_disaggregated_sets(list(yaml.safe_load_all(manifest)))
 
 
 def prepare_single_slice_disaggregated_set(
@@ -470,7 +441,7 @@ class ConfigurationManifestAdapter:
 
     def __init__(
         self,
-        delegate: GuideAdapter,
+        delegate: GuideAdapter | None,
         command_runner,
         namespace_prefix: str,
         readiness_timeout_seconds: int,
@@ -524,6 +495,18 @@ class ConfigurationManifestAdapter:
                 overrides, definition.guide_id
             )
             deployment_contract = dict(deployment)
+            if definition.guide_id == "source-composition":
+                reviewed = manifest
+                if overrides.get("_placement") is not None:
+                    reviewed, _ = apply_placement(reviewed, overrides["_placement"])
+                target = configured_target_node()
+                if target:
+                    from .target_node import pin_manifest_to_node
+
+                    reviewed, _ = pin_manifest_to_node(reviewed, target)
+                if list(yaml.safe_load_all(reviewed)) != list(yaml.safe_load_all(manifest)):
+                    raise ValueError("Placement changed after review; regenerate the source configuration.")
+                deployment_contract["placementApplied"] = True
             bundle = (overrides.get("officialGuide") or {}).get("deploymentBundle")
             if bundle is not None:
                 validate_deployment_bundle(bundle, definition.guide_id, str(source.get("commit") or ""))
@@ -576,6 +559,66 @@ class ConfigurationManifestAdapter:
                 artifact,
                 manifest_ref=str(isolated),
                 artifact_hash=stable_hash({"provider_artifact": artifact.artifact_hash, "overlay": str(isolated)}),
+            )
+        composition = overrides.get("guideComposition")
+        if composition and not self._is_exact(overrides):
+            from llm_d_lens.configuration.guide_composition import compose_native_cpu_cache
+            from llm_d_lens.deploy.guide_planning import GuideError, select_manifest_paths
+
+            if not isinstance(composition, dict) or set(composition) != {"nativeCpuCacheGiB"}:
+                raise ValueError("Unknown Guide composition")
+            policy = getattr(self._delegate, "_policy", None)
+            root = getattr(self._delegate, "_guide_root", None) or getattr(policy, "guide_root", None)
+            if root is None:
+                raise ValueError("This provider cannot resolve a source-bound composition")
+            root = Path(root)
+            accelerator = (
+                overrides.get("hardware_profile")
+                or getattr(self._delegate, "_accelerator", None)
+                or getattr(policy, "accelerator", None)
+            )
+            paths = [
+                str(path.relative_to(root))
+                for path in (root / "guides/tiered-prefix-cache").rglob("*")
+                if path.is_file()
+            ]
+            try:
+                selected = select_manifest_paths(paths, "tiered-prefix-cache", accelerator, "vllm", "native/cpu")
+            except GuideError:
+                selected = select_manifest_paths(paths, "tiered-prefix-cache", accelerator, "vllm", "native/cpu/base")
+            status, donor, stderr = await self._runner(["kubectl", "kustomize", str(root / selected["guidePath"])])
+            if status or not donor.strip():
+                raise ValueError("Unable to render the native CPU cache source for composition")
+            reference = Path(artifact.manifest_ref or "")
+            path = reference / "manifest.yaml" if reference.is_dir() else reference
+            documents = compose_native_cpu_cache(
+                list(yaml.safe_load_all(path.read_text())),
+                list(yaml.safe_load_all(donor)),
+                guide=definition.guide_id,
+                capacity_gib=composition["nativeCpuCacheGiB"],
+            )
+            rendered = yaml.safe_dump_all(documents, sort_keys=False)
+            checksum = text_checksum(rendered)
+            if reference.is_dir():
+                path.write_text(rendered)
+            else:
+                directory = self._output_root / checksum.removeprefix("sha256:")
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / "manifest.yaml"
+                path.write_text(rendered)
+                register_artifacts(
+                    directory,
+                    owner_type="deployment-manifest",
+                    owner_id=checksum.removeprefix("sha256:"),
+                    retention_class="configuration",
+                )
+            artifact = replace(
+                artifact,
+                manifest_ref=str(reference if reference.is_dir() else path),
+                manifest_checksum=checksum,
+                artifact_hash=stable_hash(
+                    {"provider": artifact.artifact_hash, "composition": composition, "manifest": checksum}
+                ),
             )
         artifact = prepare_graceful_shutdown(artifact, self._output_root)
         artifact = prepare_single_slice_disaggregated_set(artifact, self._output_root)
@@ -692,7 +735,62 @@ class ConfigurationManifestAdapter:
             manifest_checksum=manifest_checksum,
         )
 
-    async def deploy(self, artifact: GuideDeploymentArtifact, execution_context: dict[str, Any]) -> dict[str, Any]:
+    async def prepare_router(self, artifact: GuideDeploymentArtifact, context: dict) -> GuideDeploymentArtifact:
+        from llm_d_lens.deploy.data_plane import router_data_plane_effective_values
+        from llm_d_lens.deploy.providers.deployment_bundle import freeze_deployment_bundle
+
+        bundle = artifact.deployment_contract.get("deploymentBundle")
+        if bundle is None and artifact.guide_id == "source-composition":
+            return artifact
+        if bundle is None:
+            raise ValueError("Prepared deployment requires a saved Router deployment bundle")
+        runner = getattr(self._delegate, "_bundle_command_runner", None)
+        if runner is None:
+            raise ValueError("This provider does not support frozen Router plans")
+        base = bundle["helm"]["values"][-1]["content"]
+        profile = artifact.deployment_contract.get("routerProfile", "optimized-baseline")
+        if profile != "optimized-baseline":
+            transform = getattr(self._delegate, "_profiled_router_values_content", None)
+            if transform is None:
+                raise ValueError("This Router profile cannot be prepared immutably")
+            base = transform(base, profile)
+        frozen = await freeze_deployment_bundle(
+            bundle,
+            guide=artifact.guide_id,
+            source_commit=str(artifact.source_ref or ""),
+            namespace=context["namespace"],
+            command_runner=runner,
+            effective_values=router_data_plane_effective_values(base, context),
+        )
+        return replace(artifact, deployment_contract={**artifact.deployment_contract, "deploymentBundle": frozen})
+
+    async def validate_prepared_router(self, artifact: GuideDeploymentArtifact, namespace: str) -> None:
+        from llm_d_lens.deploy.providers.deployment_bundle import validate_frozen_bundle
+
+        if artifact.guide_id == "source-composition" and "deploymentBundle" not in artifact.deployment_contract:
+            return
+        await validate_frozen_bundle(
+            artifact.deployment_contract["deploymentBundle"],
+            guide=artifact.guide_id,
+            source_commit=str(artifact.source_ref or ""),
+            namespace=namespace,
+            command_runner=self._delegate._bundle_command_runner,
+        )
+
+    async def _create_namespace(self, artifact, namespace):
+        prepared_namespace = artifact.deployment_contract.get("preparedNamespace")
+        if prepared_namespace:
+            namespace_path = Path(artifact.manifest_ref).parent / "namespace.yaml"
+            namespace_path.write_text(yaml.safe_dump(prepared_namespace, sort_keys=False), encoding="utf-8")
+            status, stdout, stderr = await self._runner(["kubectl", "create", "--filename", str(namespace_path)])
+        else:
+            status, stdout, stderr = await self._runner(["kubectl", "create", "namespace", namespace])
+        if status != 0 and (prepared_namespace or "alreadyexists" not in (stdout + stderr).lower()):
+            raise RuntimeError((stderr or stdout or "namespace creation failed").strip())
+
+    async def deploy(
+        self, artifact: GuideDeploymentArtifact, execution_context: dict[str, Any], *, namespace_created=False
+    ) -> dict[str, Any]:
         if not {"readinessDeployments", "endpoint"} <= artifact.deployment_contract.keys():
             return await self._delegate.deploy(artifact, execution_context)
         if Path(artifact.manifest_ref or "").is_dir():
@@ -700,9 +798,8 @@ class ConfigurationManifestAdapter:
             # rather than an immutable Configuration manifest file.
             return await self._delegate.deploy(artifact, execution_context)
         namespace = self._namespace(execution_context)
-        status, stdout, stderr = await self._runner(["kubectl", "create", "namespace", namespace])
-        if status != 0 and "alreadyexists" not in (stdout + stderr).lower():
-            raise RuntimeError((stderr or stdout or "namespace creation failed").strip())
+        if not namespace_created:
+            await self._create_namespace(artifact, namespace)
         manifest = Path(artifact.manifest_ref or "").read_text(encoding="utf-8")
         model_token = execution_context.get("model_token")
         if "name: llm-d-hf-token" in manifest and model_token:
@@ -748,6 +845,15 @@ class ConfigurationManifestAdapter:
             # manifest, which would otherwise skip this and leave the Pod
             # referencing a PVC that doesn't exist in its own namespace.
             volume = await get_ready_volume(storage_volume_id, cluster_id=cluster_id or None)
+            if "preparedStorage" in artifact.deployment_contract:
+                from llm_d_lens.storage.service import _satellite_pv_manifest, _satellite_pvc_manifest
+
+                current = [
+                    _satellite_pv_manifest(volume, namespace=namespace),
+                    _satellite_pvc_manifest(volume, namespace=namespace),
+                ]
+                if current != artifact.deployment_contract["preparedStorage"]:
+                    raise ValueError("Storage resources changed after plan review")
             await ensure_mount_in_namespace(volume, namespace=namespace, cluster_id=cluster_id)
         if callable(install_router):
             await install_router(artifact, execution_context)
@@ -824,7 +930,7 @@ class ConfigurationManifestAdapter:
 
     async def diagnostics(self, execution: dict[str, Any]) -> dict[str, Any]:
         artifact = execution.get("_artifact")
-        if (
+        if self._delegate is not None and (
             not isinstance(artifact, GuideDeploymentArtifact)
             or not artifact.deployment_contract
             or self._uses_delegate_lifecycle(artifact)
@@ -883,6 +989,7 @@ class ConfigurationManifestAdapter:
         return diagnostics
 
     async def stop(self, execution, artifact):
+        await self._check_prepared_namespace(execution, artifact)
         if not artifact.deployment_contract:
             return await self._delegate.stop(execution, artifact)
         if self._uses_delegate_lifecycle(artifact):
@@ -901,15 +1008,33 @@ class ConfigurationManifestAdapter:
         return await self.stop(execution, artifact)
 
     async def cleanup(self, execution, artifact, *, force: bool = False):
-        if not artifact.deployment_contract:
-            return await self._delegate.cleanup(execution, artifact, force=force)
-        if self._uses_delegate_lifecycle(artifact):
+        await self._check_prepared_namespace(execution, artifact)
+        if self._delegate is not None and (not artifact.deployment_contract or self._uses_delegate_lifecycle(artifact)):
             return await self._delegate.cleanup(execution, artifact, force=force)
         namespace = self._namespace(execution)
         status, stdout, stderr = await self._runner(
             ["kubectl", "delete", "namespace", namespace, "--ignore-not-found=true"]
         )
         return {"cleaned_up": status == 0, "output": stdout, "error": stderr or None}
+
+    async def _check_prepared_namespace(self, execution, artifact):
+        expected = artifact.deployment_contract.get("preparedNamespace")
+        if expected is None:
+            return
+        namespace = self._namespace(execution)
+        status, stdout, stderr = await self._runner(
+            ["kubectl", "get", "namespace", namespace, "--ignore-not-found=true", "-o", "json"]
+        )
+        if status:
+            raise ValueError("Cannot verify prepared namespace ownership; cleanup was not attempted")
+        if not stdout.strip():
+            return
+        actual = json.loads(stdout)
+        if (
+            actual.get("metadata", {}).get("labels", {}).get("lens.io/prepared-request")
+            != expected["metadata"]["labels"]["lens.io/prepared-request"]
+        ):
+            raise ValueError("Namespace is not owned by this prepared execution; cleanup was not attempted")
 
     @staticmethod
     def _is_exact(overrides: dict[str, Any]) -> bool:
@@ -934,3 +1059,428 @@ class ConfigurationManifestAdapter:
             or not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace)
         ):
             raise ValueError("deployment namespace is outside the configured allowlist")
+
+
+class SourceCompositionAdapter(ConfigurationManifestAdapter):
+    """Deploy the reviewed source snapshot without a second Guide router installation."""
+
+    managed_resource_kinds = frozenset(
+        {
+            "Deployment",
+            "LeaderWorkerSet",
+            "DisaggregatedSet",
+            "Service",
+            "ConfigMap",
+            "Secret",
+            "ServiceAccount",
+            "Role",
+            "RoleBinding",
+            "ClusterRole",
+            "ClusterRoleBinding",
+            "ResourceClaimTemplate",
+            "ResourceClaim",
+            "InferencePool",
+            "HTTPRoute",
+            "Gateway",
+            "PodMonitor",
+            "ServiceMonitor",
+            "HorizontalPodAutoscaler",
+            "ScaledObject",
+            "TriggerAuthentication",
+            "NetworkPolicy",
+            "PodDisruptionBudget",
+        }
+    )
+
+    def __init__(self, command_runner, namespace_prefix, readiness_timeout_seconds, **kwargs):
+        super().__init__(None, command_runner, namespace_prefix, readiness_timeout_seconds, **kwargs)
+
+    def discover(self):
+        return GuideDefinition("source-composition", "generated", "source-composition.v1", "experimental")
+
+    @staticmethod
+    def router_rbac(documents, namespace=None, *, standalone=False):
+        if any(not isinstance(doc, dict) for doc in documents):
+            raise ValueError("Router RBAC resources must be mappings.")
+        resources = [doc for doc in documents if doc.get("kind") in {"ClusterRole", "ClusterRoleBinding"}]
+        if not resources:
+            return []
+        if any(
+            not isinstance(doc.get("metadata"), dict) or not isinstance(doc["metadata"].get("name"), str)
+            for doc in resources
+        ):
+            raise ValueError("Router RBAC resources require explicit names.")
+        roles = {doc["metadata"]["name"] for doc in resources if doc["kind"] == "ClusterRole"}
+        accounts = {
+            doc["metadata"]["name"]: doc["metadata"].get("namespace")
+            for doc in documents
+            if doc.get("kind") == "ServiceAccount"
+        }
+        router_accounts = {
+            pod.get("serviceAccountName")
+            for doc in documents
+            for pod in _pod_specs(doc)
+            if any(container.get("name") == "epp" for container in pod.get("containers", []))
+        }
+        allowed = {
+            ("authentication.k8s.io", "tokenreviews"),
+            ("authorization.k8s.io", "subjectaccessreviews"),
+        }
+        for doc in resources:
+            if doc.get("apiVersion") != "rbac.authorization.k8s.io/v1":
+                raise ValueError("Router RBAC requires rbac.authorization.k8s.io/v1.")
+            if namespace and not re.fullmatch(
+                re.escape(namespace) + r"-router-auth-[a-f0-9]{12}", doc["metadata"]["name"]
+            ):
+                raise ValueError("Router RBAC identity must belong to this deployment namespace.")
+            if not standalone and doc["metadata"].get("ownerReferences"):
+                raise ValueError("Router RBAC ownership is assigned from the deployment namespace, not source input.")
+            if doc["kind"] == "ClusterRole":
+                rules = doc.get("rules") or []
+                if (
+                    doc.get("aggregationRule")
+                    or not isinstance(rules, list)
+                    or not rules
+                    or any(
+                        not isinstance(rule, dict)
+                        or set(rule) != {"apiGroups", "resources", "verbs"}
+                        or rule["verbs"] != ["create"]
+                        or not isinstance(rule["apiGroups"], list)
+                        or not isinstance(rule["resources"], list)
+                        or len(rule["apiGroups"]) != 1
+                        or len(rule["resources"]) != 1
+                        or not isinstance(rule["apiGroups"][0], str)
+                        or not isinstance(rule["resources"][0], str)
+                        or (rule["apiGroups"][0], rule["resources"][0]) not in allowed
+                        for rule in rules
+                    )
+                ):
+                    raise ValueError("Router ClusterRole may only create TokenReviews and SubjectAccessReviews.")
+            else:
+                ref = doc.get("roleRef") or {}
+                subjects = doc.get("subjects") or []
+                if (
+                    not isinstance(ref, dict)
+                    or not isinstance(subjects, list)
+                    or ref.get("apiGroup") != "rbac.authorization.k8s.io"
+                    or ref.get("kind") != "ClusterRole"
+                    or not isinstance(ref.get("name"), str)
+                    or (not standalone and ref.get("name") not in roles)
+                    or (
+                        namespace and not re.fullmatch(re.escape(namespace) + r"-router-auth-[a-f0-9]{12}", ref["name"])
+                    )
+                    or len(subjects) != 1
+                    or not isinstance(subjects[0], dict)
+                    or subjects[0].get("kind") != "ServiceAccount"
+                    or subjects[0].get("apiGroup", "") != ""
+                    or not isinstance(subjects[0].get("name"), str)
+                    or (not standalone and subjects[0].get("name") not in accounts)
+                    or (not standalone and subjects[0].get("name") not in router_accounts)
+                    or (
+                        not standalone
+                        and accounts.get(subjects[0].get("name"))
+                        and subjects[0].get("namespace") != accounts[subjects[0]["name"]]
+                    )
+                    or (namespace and subjects[0].get("namespace") != namespace)
+                ):
+                    raise ValueError("Router binding must target its reviewed role and deployment ServiceAccount.")
+        return resources
+
+    def validate_inputs(self, definition, cluster_snapshot, overrides):
+        if not self._is_exact(overrides):
+            return ValidationResult(False, ["Source composition requires a rendered manifest."])
+        result = super().validate_inputs(definition, cluster_snapshot, overrides)
+        if not result.accepted:
+            return result
+        official = overrides["officialGuide"]
+        if official.get("deploymentBundle"):
+            return ValidationResult(False, ["Source composition requires rendered router resources, not Helm inputs."])
+        documents = list(yaml.safe_load_all(official["renderedManifest"]))
+        try:
+            self.router_rbac(documents)
+        except ValueError as error:
+            return ValidationResult(False, [str(error)])
+        unsupported = sorted(
+            {
+                str(doc.get("kind"))
+                for doc in documents
+                if isinstance(doc, dict) and doc.get("kind") not in self.managed_resource_kinds
+            }
+        )
+        if unsupported:
+            return ValidationResult(
+                False, ["Managed composition lifecycle does not support: " + ", ".join(unsupported)]
+            )
+        runtime = overrides.get("runtime") or {}
+        if runtime.get("modelSource") != "cached-readonly":
+            return ValidationResult(False, ["Source compositions require a read-only model cache."])
+        try:
+            from llm_d_lens.configuration.manifest_facts import validate_manifest_facts
+
+            validate_manifest_facts(overrides, official["renderedManifest"])
+        except ValueError as error:
+            return ValidationResult(False, [str(error)])
+        return result
+
+    async def render(self, definition, overrides):
+        validation = self.validate_inputs(definition, {}, overrides)
+        if not validation.accepted:
+            raise ValueError(" ".join(validation.reasons))
+        artifact = await super().render(definition, overrides)
+        documents = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text(encoding="utf-8")))
+        rbac = self.router_rbac(documents)
+        if rbac:
+            namespace = str(overrides.get("_deployment_namespace") or "")
+            self._validate_namespace(namespace)
+            roles = {}
+            for doc in rbac:
+                original = doc["metadata"]["name"]
+                suffix = stable_hash({"kind": doc["kind"], "name": original}).removeprefix("sha256:")[:12]
+                doc["metadata"]["name"] = f"{namespace}-router-auth-{suffix}"
+                doc["metadata"].pop("namespace", None)
+                doc["metadata"].pop("ownerReferences", None)
+                if doc["kind"] == "ClusterRole":
+                    roles[original] = doc["metadata"]["name"]
+            for doc in rbac:
+                if doc["kind"] == "ClusterRoleBinding":
+                    doc["roleRef"]["name"] = roles[doc["roleRef"]["name"]]
+                    doc["subjects"][0]["namespace"] = namespace
+            self.router_rbac(documents, namespace)
+            content = yaml.safe_dump_all(documents, sort_keys=False)
+            checksum = text_checksum(content)
+            directory = self._output_root / checksum.removeprefix("sha256:")
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "source-router-scoped.yaml"
+            path.write_text(content, encoding="utf-8")
+            artifact = replace(
+                artifact,
+                manifest_ref=str(path),
+                manifest_checksum=checksum,
+                artifact_hash=stable_hash({"source": artifact.artifact_hash, "routerNamespace": namespace}),
+                deployment_contract={
+                    **artifact.deployment_contract,
+                    "routerRbac": [{"kind": doc["kind"], "name": doc["metadata"]["name"]} for doc in rbac],
+                },
+            )
+            register_artifacts(
+                path.parent,
+                owner_type="deployment-manifest",
+                owner_id=artifact.manifest_checksum.removeprefix("sha256:"),
+                source_version=artifact.source_ref,
+                retention_class="configuration",
+            )
+        labels = (overrides.get("runtime") or {}).get("namespaceLabels") or {}
+        if not isinstance(labels, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) for k, v in labels.items()
+        ):
+            raise ValueError("Namespace labels must be string pairs.")
+        return replace(
+            artifact,
+            artifact_hash=stable_hash({"manifest": artifact.artifact_hash, "namespaceLabels": labels}),
+            deployment_contract={**artifact.deployment_contract, "namespaceLabels": labels},
+        )
+
+    async def deploy(self, artifact, execution_context):
+        namespace = self._namespace(execution_context)
+        documents = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text(encoding="utf-8")))
+        if artifact.deployment_contract.get("preparedNamespace"):
+            content = Path(artifact.manifest_ref).read_text(encoding="utf-8")
+            if text_checksum(content) != artifact.manifest_checksum:
+                raise ValueError("Prepared workload checksum changed before deployment")
+            directory = self._output_root / artifact.manifest_checksum.removeprefix("sha256:")
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "source-workload.yaml"
+            path.write_text(content, encoding="utf-8")
+            artifact = replace(artifact, manifest_ref=str(path))
+        rbac = self.router_rbac(documents, namespace)
+        if rbac:
+            await self._create_namespace(artifact, namespace)
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "get", "namespace", namespace, "--namespace", namespace, "-o", "json"]
+            )
+            if status:
+                raise RuntimeError(stderr or stdout or "Cannot establish the Router RBAC namespace owner")
+            uid = json.loads(stdout).get("metadata", {}).get("uid")
+            if not isinstance(uid, str) or not uid:
+                raise ValueError("Namespace UID is required for Router RBAC ownership.")
+            owner = {"apiVersion": "v1", "kind": "Namespace", "name": namespace, "uid": uid}
+            for doc in rbac:
+                resource = f"{doc['kind'].lower()}/{doc['metadata']['name']}"
+                status, stdout, stderr = await self._runner(
+                    ["kubectl", "get", resource, "--namespace", namespace, "--ignore-not-found=true", "-o", "json"]
+                )
+                if status:
+                    raise RuntimeError(stderr or stdout or f"Could not inspect {resource}")
+                if stdout.strip():
+                    existing = json.loads(stdout)
+                    try:
+                        self.router_rbac([existing], namespace, standalone=True)
+                    except ValueError as error:
+                        raise ValueError(f"Refusing to overwrite changed Router RBAC: {resource}") from error
+                    fields = ("rules",) if doc["kind"] == "ClusterRole" else ("roleRef",)
+                    owners = existing.get("metadata", {}).get("ownerReferences") or []
+                    subjects_match = doc["kind"] != "ClusterRoleBinding" or [
+                        {**subject, "apiGroup": subject.get("apiGroup", "")} for subject in existing.get("subjects", [])
+                    ] == [{**subject, "apiGroup": subject.get("apiGroup", "")} for subject in doc["subjects"]]
+                    if (
+                        len(owners) != 1
+                        or any(owners[0].get(key) != value for key, value in owner.items())
+                        or not subjects_match
+                        or any(existing.get(key) != doc.get(key) for key in fields)
+                    ):
+                        raise ValueError(f"Refusing to overwrite unowned or changed Router RBAC: {resource}")
+                    continue
+                doc["metadata"]["ownerReferences"] = [owner]
+                path = Path(artifact.manifest_ref).with_name(f"{doc['kind'].lower()}-{doc['metadata']['name']}.yaml")
+                path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+                register_artifacts(
+                    path.parent,
+                    owner_type="deployment-manifest",
+                    owner_id=artifact.manifest_checksum.removeprefix("sha256:"),
+                    source_version=artifact.source_ref,
+                    retention_class="configuration",
+                )
+                status, stdout, stderr = await self._runner(
+                    ["kubectl", "create", "--namespace", namespace, "--filename", str(path)]
+                )
+                if status:
+                    raise RuntimeError(stderr or stdout or f"Could not create {resource}")
+            content = yaml.safe_dump_all([doc for doc in documents if doc not in rbac], sort_keys=False)
+            checksum = text_checksum(content)
+            directory = self._output_root / checksum.removeprefix("sha256:")
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / "source-namespaced.yaml"
+            path.write_text(content, encoding="utf-8")
+            artifact = replace(artifact, manifest_ref=str(path), manifest_checksum=checksum)
+            register_artifacts(
+                path.parent,
+                owner_type="deployment-manifest",
+                owner_id=artifact.manifest_checksum.removeprefix("sha256:"),
+                source_version=artifact.source_ref,
+                retention_class="configuration",
+            )
+        labels = artifact.deployment_contract.get("namespaceLabels")
+        if labels:
+            namespace = self._namespace(execution_context)
+            path = Path(artifact.manifest_ref).with_name(f"{namespace}-namespace.yaml")
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Namespace",
+                        "metadata": {"name": namespace, "labels": labels},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            register_artifacts(
+                path.parent,
+                owner_type="deployment-manifest",
+                owner_id=artifact.manifest_checksum.removeprefix("sha256:"),
+                source_version=artifact.source_ref,
+                retention_class="configuration",
+            )
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "apply", "--namespace", namespace, "--filename", str(path)]
+            )
+            if status:
+                raise RuntimeError(stderr or stdout or "Namespace labels could not be applied")
+        return await super().deploy(artifact, execution_context, namespace_created=bool(rbac))
+
+    async def cleanup(self, execution, artifact, *, force=False):
+        result = await super().cleanup(execution, artifact, force=force)
+        if not result["cleaned_up"]:
+            return result
+        namespace = self._namespace(execution)
+        for resource in artifact.deployment_contract.get("routerRbac", []):
+            name = f"{resource['kind'].lower()}/{resource['name']}"
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "get", name, "--namespace", namespace, "--ignore-not-found=true", "-o", "json"]
+            )
+            if not status and stdout.strip():
+                status, stdout, stderr = await self._runner(
+                    [
+                        "kubectl",
+                        "wait",
+                        name,
+                        "--namespace",
+                        namespace,
+                        "--for=delete",
+                        f"--timeout={self._readiness_timeout_seconds}s",
+                    ]
+                )
+            if status and (
+                ("(NotFound)" in stderr and resource["name"] in stderr)
+                or stderr.strip() == "error: no matching resources found"
+            ):
+                status = 0
+            if status:
+                return {"cleaned_up": False, "error": stderr or stdout or f"Router RBAC cleanup pending: {name}"}
+        return result
+
+    @staticmethod
+    def _resources(artifact, kinds):
+        return [
+            doc
+            for doc in yaml.safe_load_all(Path(artifact.manifest_ref).read_text(encoding="utf-8"))
+            if isinstance(doc, dict) and doc.get("kind") in kinds
+        ]
+
+    async def readiness(self, execution):
+        result = await super().readiness(execution)
+        if not result.accepted:
+            return result
+        for doc in self._resources(execution["_artifact"], {"LeaderWorkerSet", "DisaggregatedSet"}):
+            resource = f"{doc['kind'].lower()}/{doc['metadata']['name']}"
+            status, stdout, stderr = await self._runner(
+                [
+                    "kubectl",
+                    "wait",
+                    resource,
+                    "--namespace",
+                    execution["namespace"],
+                    "--for=condition=Available",
+                    f"--timeout={self._readiness_timeout_seconds}s",
+                ]
+            )
+            if status:
+                return ValidationResult(False, [(stderr or stdout or f"{resource} not available").strip()])
+        return result
+
+    async def stop(self, execution, artifact):
+        namespace = self._namespace(execution)
+        # Remove reconcilers first; reapplying the reviewed snapshot restores them.
+        for doc in self._resources(artifact, {"ScaledObject", "HorizontalPodAutoscaler"}):
+            resource = f"{doc['kind'].lower()}/{doc['metadata']['name']}"
+            status, stdout, stderr = await self._runner(
+                ["kubectl", "delete", resource, "--namespace", namespace, "--ignore-not-found=true"]
+            )
+            if status:
+                return {"stopped": False, "error": stderr or stdout or f"Could not stop {resource}"}
+        result = await super().stop(execution, artifact)
+        for doc in self._resources(artifact, {"LeaderWorkerSet", "DisaggregatedSet"}):
+            resource = f"{doc['kind'].lower()}/{doc['metadata']['name']}"
+            command = ["kubectl", "scale", resource, "--namespace", execution["namespace"], "--replicas=0"]
+            if doc["kind"] == "DisaggregatedSet":
+                patch = [
+                    {"op": "add", "path": f"/spec/roles/{index}/spec/replicas", "value": 0}
+                    for index, _ in enumerate(doc["spec"]["roles"])
+                ]
+                command = [
+                    "kubectl",
+                    "patch",
+                    resource,
+                    "--namespace",
+                    execution["namespace"],
+                    "--type=json",
+                    "--patch",
+                    json.dumps(patch),
+                ]
+            status, stdout, stderr = await self._runner(command)
+            if status:
+                result["stopped"] = False
+                result["error"] = stderr or stdout or f"Could not stop {resource}"
+        return result
+
+    def _uses_delegate_lifecycle(self, artifact):
+        return False

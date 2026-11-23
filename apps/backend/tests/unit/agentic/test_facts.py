@@ -932,7 +932,7 @@ def test_resolver_uses_measured_workload_for_aic_and_normalizes_predictions(monk
     assert resolved.facts.aic_predictions[0].ttft_ms == 300
 
 
-@pytest.mark.parametrize("load_target", [True, False])
+@pytest.mark.parametrize("load_target", ["request_rate", "concurrency", None])
 @pytest.mark.parametrize("empty", [True, False])
 def test_load_prediction_failure_is_not_silently_discarded(monkeypatch, load_target, empty):
     from llm_d_lens.agentic.facts import _supplementary_evidence
@@ -954,12 +954,13 @@ def test_load_prediction_failure_is_not_silently_discarded(monkeypatch, load_tar
     async def resolve():
         return await _supplementary_evidence(
             "model",
-            PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(request_rate=10 if load_target else None)),
+            PlanningFacts(8, 32, 4, workload_profile=WorkloadProfile(**({load_target: 10} if load_target else {}))),
             4,
             {"accelerators": [{"id": "nvidia", "models": ["NVIDIA A100 PCIe", "ampere"]}]},
         )
 
-    if load_target:
+    # Concurrency falls back to KV-capacity replica sizing; a request rate needs AIC.
+    if load_target == "request_rate":
         with pytest.raises(ValueError, match="AIC load-target prediction failed"):
             asyncio.run(resolve())
     else:

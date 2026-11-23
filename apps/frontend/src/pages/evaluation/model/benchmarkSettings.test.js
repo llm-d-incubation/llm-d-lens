@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyBenchmarkPreset, benchmarkIssues, benchmarkSummary, benchmarkScenario } from './benchmarkSettings.js';
+import { applyBenchmarkPreset, benchmarkIssues, benchmarkSummary, benchmarkScenario, sliceSweepIssues } from './benchmarkSettings.js';
+
+test('Slice sweeps require request-rate stages and a latency SLO', () => {
+ const sweep = [{ deployable_configuration: { provenance: { slice_sweep: { group: 'g', slices: 2 } } } }];
+ const rates = { shared_prefix: { stages: [{ rate: 1, duration: 30 }, { rate: 4, duration: 30 }] } };
+ assert.deepEqual(sliceSweepIssues([{ deployable_configuration: {} }], {}, {}), []);
+ assert.equal(sliceSweepIssues(sweep, { matrix: [{ isl: 1, osl: 1 }] }, { ttft_ms: 500 }).length, 1);
+ assert.match(sliceSweepIssues(sweep, rates, {})[0], /TTFT or TPOT/);
+ assert.deepEqual(sliceSweepIssues(sweep, rates, { tpot_ms: 50 }), []);
+});
 
 test('preset values remain editable and execution options survive preset changes', () => {
  const benchmark = applyBenchmarkPreset('throughput', {parallelism:2, wait_timeout_seconds:321});

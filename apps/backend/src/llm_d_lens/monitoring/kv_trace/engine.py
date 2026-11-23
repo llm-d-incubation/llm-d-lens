@@ -44,6 +44,8 @@ def engines():
 def command(action, session):
     if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", session):
         raise ValueError("invalid trace session")
+    if action.startswith("transfer-"):
+        return transfer_command(action, session)
     with locked():
         active = ROOT / "active.json"
         if action == "begin":
@@ -183,6 +185,161 @@ def install(module):
         return original_free(self, request, *args, **kwargs)
 
     cls.__init__, cls.free, cls._prism_kv_trace = init, free, True
+
+
+def transfer_engines():
+    result = []
+    for path in sorted(ROOT.glob("transfer-engine-*.json")):
+        item = json.loads(path.read_text())
+        try:
+            os.kill(item["pid"], 0)
+        except ProcessLookupError:
+            continue
+        result.append(item)
+    return result
+
+
+def transfer_command(action, session):
+    with locked():
+        active = ROOT / "transfer-active.json"
+        if action == "transfer-begin":
+            if active.exists():
+                previous = json.loads(active.read_text())
+                if time.time() - previous["start"] <= 300:
+                    raise ValueError("another transfer capture is active")
+                (ROOT / f"transfer-{previous['session']}.jsonl").unlink(missing_ok=True)
+                active.unlink()
+            current = transfer_engines()
+            if not current or any(not item["supported"] for item in current):
+                raise ValueError("vLLM 0.26.0 NIXL pull probe is unavailable")
+            control = {"session": session, "start": time.time(), "engines": current}
+            (ROOT / f"transfer-{session}.jsonl").write_text("")
+            active.write_text(json.dumps(control))
+            return control
+        if action != "transfer-end" or not active.exists():
+            raise ValueError("transfer capture is not active")
+        control = json.loads(active.read_text())
+        if control["session"] != session:
+            raise ValueError("transfer capture session mismatch")
+        if time.time() - control["start"] > 300:
+            control["incomplete"] = True
+        active.unlink()
+        path = ROOT / f"transfer-{session}.jsonl"
+        try:
+            return {
+                **control,
+                "end": time.time(),
+                "engines_end": transfer_engines(),
+                "events": [json.loads(line) for line in path.read_text().splitlines()],
+            }
+        finally:
+            path.unlink(missing_ok=True)
+
+
+def transfer_event(worker, event, request_id, **values):
+    if not (ROOT / "transfer-active.json").exists():
+        return
+    try:
+        with locked():
+            active = ROOT / "transfer-active.json"
+            if not active.exists():
+                return
+            control = json.loads(active.read_text())
+            if time.time() - control["start"] > 300:
+                return
+            path = ROOT / f"transfer-{control['session']}.jsonl"
+            if path.stat().st_size >= min(MAX_BYTES, 2 * 1024 * 1024):
+                control["incomplete"] = True
+                active.write_text(json.dumps(control))
+                return
+            row = {
+                "event": event,
+                "request_id": request_id,
+                "timestamp": time.time(),
+                "engine_id": worker.engine_id,
+                "rank": worker.tp_rank,
+                "world_size": worker.world_size,
+                **values,
+            }
+            with path.open("a") as output:
+                output.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except Exception:  # noqa: S110
+        pass
+
+
+def install_transfer(module):
+    cls = module.NixlPullConnectorWorker
+    if getattr(cls, "_lens_transfer_probe", False):
+        return
+    original_init = cls.__init__
+    original_finished = cls.get_finished
+    original_failure = cls._handle_failed_transfer
+    original_notifs = cls._get_new_notifs
+
+    @functools.wraps(original_init)
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self._lens_failed_transfers = set()
+        try:
+            engine_version = version("vllm")
+            with locked():
+                (ROOT / f"transfer-engine-{os.getpid()}-{self.tp_rank}.json").write_text(
+                    json.dumps(
+                        {
+                            "pid": os.getpid(),
+                            "instance": str(time.time_ns()),
+                            "engine_id": self.engine_id,
+                            "rank": self.tp_rank,
+                            "world_size": self.world_size,
+                            "vllm_version": engine_version,
+                            "supported": engine_version.split("+")[0] == "0.26.0",
+                            "probe_version": 1,
+                        }
+                    )
+                )
+        except Exception:  # noqa: S110
+            pass
+
+    @functools.wraps(original_failure)
+    def failed(self, req_id, *args, **kwargs):
+        self._lens_failed_transfers.add(req_id)
+        transfer_event(self, "failed", req_id)
+        return original_failure(self, req_id, *args, **kwargs)
+
+    @functools.wraps(original_notifs)
+    def notified(self, *args, **kwargs):
+        result = original_notifs(self, *args, **kwargs)
+        for request_id in result:
+            transfer_event(self, "send-acknowledged", request_id)
+        return result
+
+    @functools.wraps(original_finished)
+    def finished(self, *args, **kwargs):
+        observing = (ROOT / "transfer-active.json").exists()
+        metadata = dict(self._recving_metadata) if observing else {}
+        active = (
+            {request_id for request_id, handles in self._recving_transfers.items() if handles} if observing else set()
+        )
+        result = original_finished(self, *args, **kwargs)
+        for request_id in result[1]:
+            meta = metadata.get(request_id)
+            if request_id in self._lens_failed_transfers:
+                transfer_event(self, "failed", request_id)
+                self._lens_failed_transfers.discard(request_id)
+            elif request_id in active and meta and meta.remote:
+                transfer_event(
+                    self,
+                    "received",
+                    request_id,
+                    remote_engine_id=meta.remote.engine_id,
+                    remote_request_id=meta.remote.request_id,
+                    blocks=sum(len(group) for group in meta.local_block_ids),
+                )
+        return result
+
+    cls.__init__, cls.get_finished = init, finished
+    cls._handle_failed_transfer, cls._get_new_notifs = failed, notified
+    cls._lens_transfer_probe = True
 
 
 if __name__ == "__main__":

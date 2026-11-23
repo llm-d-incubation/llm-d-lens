@@ -1084,7 +1084,7 @@ lens_local_main() {
     case "$action" in
         check|start|restart)
             export TARGET_NODE PRISM_K8S_TARGET_NODE="$TARGET_NODE"
-            [[ ! -v KUBECONFIG ]] || export KUBECONFIG
+            [[ -z "${KUBECONFIG+x}" ]] || export KUBECONFIG
             ;;
     esac
     case "$action" in

@@ -31,6 +31,25 @@ export function createEvaluation(request) {
     return evaluationApi("/api/v1/evaluate/evaluations", { method: "POST", body: JSON.stringify(request) });
 }
 
+export function confirmEvaluationPlans(workflow, acknowledgeUnknown) {
+    return evaluationApi(`/api/v1/evaluate/evaluations/${encodeURIComponent(workflow.id)}/confirm`, {
+        method: 'POST', body: JSON.stringify({ plan_digests: Object.fromEntries(workflow.prepared_plans.map(plan => [plan.id, plan.digest])), acknowledge_unknown: acknowledgeUnknown }),
+    });
+}
+
+export function evaluationPlanReview(workflow) {
+    const plans = workflow.prepared_plans || [];
+    return { workflow, plan: {
+        digest: plans.map(plan => plan.digest).join('\n'),
+        cases: plans.flatMap(plan => plan.cases),
+        preflight: {
+            status: plans.some(plan => plan.preflight.status === 'fail') ? 'fail' : plans.some(plan => plan.preflight.status === 'unknown') ? 'unknown' : 'pass',
+            errors: plans.flatMap(plan => plan.preflight.errors || []),
+            unmodeled: [...new Set(plans.flatMap(plan => plan.preflight.unmodeled || []))],
+        },
+    } };
+}
+
 export function createBenchmarkRun(request) {
     return evaluationApi("/api/v1/evaluate/runs", { method: "POST", body: JSON.stringify(request) });
 }

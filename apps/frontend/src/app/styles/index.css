@@ -1579,6 +1579,46 @@ html:not(.dark) .simulation-rate-range::-moz-range-thumb {
   background: #037ffc;
 }
 
+/* Slice sweep: two transparent range inputs share one drawn track; only the thumbs take pointer input. */
+.slice-span-range {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  pointer-events: none;
+}
+.slice-span-range:focus { outline: none; }
+.slice-span-range::-webkit-slider-runnable-track { height: 100%; background: transparent; }
+.slice-span-range::-moz-range-track { background: transparent; }
+.slice-span-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 2px solid #6ee7b7;
+  border-radius: 9999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.15);
+  cursor: grab;
+}
+.slice-span-range::-moz-range-thumb {
+  pointer-events: auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #6ee7b7;
+  border-radius: 9999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.15);
+  cursor: grab;
+}
+.slice-span-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgb(110 231 183 / 0.4); }
+.slice-span-range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgb(110 231 183 / 0.4); }
+.dark .slice-span-range::-webkit-slider-thumb { background: #e2e8f0; border-color: #34d399; }
+.dark .slice-span-range::-moz-range-thumb { background: #e2e8f0; border-color: #34d399; }
+
 /* Light mode: Load & Backend cards use white surfaces and gray borders. */
 html:not(.dark) .simulation-task-dialog .simulation-load-card {
   background-color: #ffffff !important;
@@ -2090,3 +2130,13 @@ html:not(.dark) .simulation-empty-icon {
 html:not(.dark) .welcome-page .cluster-scope-chip[aria-pressed="true"] {
   color: #ffffff !important;
 }
+
+/* Deployment planning progress: determinate fill plus an indeterminate shimmer while a step runs. */
+.plan-progress-track { position: relative; height: 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--brand-accent) 14%, transparent); }
+.plan-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand-accent), #22d3ee); transition: width .6s ease; box-shadow: 0 0 12px color-mix(in srgb, var(--brand-accent) 60%, transparent); }
+.plan-progress-indeterminate { position: absolute; inset: 0 auto 0 0; width: 35%; border-radius: inherit; background: linear-gradient(90deg, transparent, var(--brand-accent), #22d3ee, transparent); animation: plan-progress-slide 1.4s ease-in-out infinite; }
+@keyframes plan-progress-slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+.plan-step-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; border: 1px solid var(--border-color); flex: none; }
+.plan-step-icon.is-active { border-color: var(--brand-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand-accent) 18%, transparent); animation: status-glow-pulse 1.6s ease-in-out infinite; }
+.plan-step-icon.is-done { border-color: #10b981; background: color-mix(in srgb, #10b981 15%, transparent); color: #10b981; }
+@media (prefers-reduced-motion: reduce) { .plan-progress-indeterminate, .plan-step-icon.is-active { animation: none; } }

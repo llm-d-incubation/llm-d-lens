@@ -30,3 +30,13 @@ test('overview leads with saved scenario configuration and offers every scenario
     assert.ok(html.indexOf('Benchmark scenario') < html.indexOf('Result analysis views'));
     assert.doesNotMatch(html, />Performance frontier<|>Experiment map<\/button>/);
 });
+
+test('a running matrix benchmark reports its requested lengths instead of the default workload file', async () => {
+    const { benchmarkDetails } = await import('./benchmarkDetails.js');
+    const details = benchmarkDetails({ id: 'r', status: 'running', model: 'm', guide: 'optimized-baseline',
+        benchmark: { workload: 'sanity_random.yaml', matrix: [{ isl: 1024, osl: 256 }], concurrency_stages: [{ concurrency: 8, num_requests: 40 }] } });
+    const html = renderToStaticMarkup(<GuideResultExplorer details={details} guideType="optimized-baseline"/>);
+    assert.match(html, /1024 \/ 256/);
+    assert.match(html, /Fixed input \/ output lengths/);
+    assert.doesNotMatch(html, /sanity_random\.yaml/);
+});

@@ -1,8 +1,8 @@
 import { useClipboard } from '../../../../shared/lib/useClipboard';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, ChevronRight, Copy, FileText, Info, Link2, Loader2, Menu, Pencil, Scaling, Trash2 } from 'lucide-react';
-import { Button } from '../../../../shared/ui';
+import { Check, ChevronDown, ChevronRight, Copy, FileText, Gauge, Info, Link2, Loader2, Menu, Pencil, Scaling, Trash2 } from 'lucide-react';
+import { Badge, Button } from '../../../../shared/ui';
 import { cn } from '../../../../shared/lib/cn';
 import {
     deploymentKind,
@@ -12,6 +12,7 @@ import {
     effectiveStatusLabel,
     statusDotClassForGroup,
     statusGroup,
+    successfulPagePods,
 } from './deploymentPresentation';
 import { getDeploymentExecutionPods } from '../../../optimization';
 import { DeploymentMonitoringButton } from './DeploymentMonitoringButton';
@@ -74,7 +75,7 @@ function RowActionItem({ icon, label, onClick, disabled = false, danger = false,
     );
 }
 
-function RowActions({ item, busy, connecting, canScale, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint, onScale }) {
+function RowActions({ item, busy, connecting, canScale, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint, onScale, onBenchmark }) {
     const name = deploymentTitle(item);
     const isInProgress = statusGroup(item.status) === 'In progress';
     const localEndpoint = deploymentLocalEndpoint(item);
@@ -179,6 +180,14 @@ function RowActions({ item, busy, connecting, canScale, onInspect, onViewPodsLog
                                 disabled={busy}
                             />
                         )}
+                        {onBenchmark && !item.pending && item.status === 'ready' && (
+                            <RowActionItem
+                                icon={<Gauge size={14} />}
+                                label="Run benchmark"
+                                onClick={() => select(() => onBenchmark(item))}
+                                disabled={busy}
+                            />
+                        )}
                         <RowActionItem
                             icon={<FileText size={14} />}
                             label="View pods & logs"
@@ -267,13 +276,17 @@ function ExpandToggle({ expanded, onToggle, name }) {
     );
 }
 
-export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', clusterNameById = {}, canScale = false, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint, onScale }) {
+export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', clusterNameById = {}, canScale = false, highlightName = '', onPodsChange, onInspect, onViewPodsLogs, onEdit, onDelete, onNavigate, onConnectLocalEndpoint, onScale, onBenchmark }) {
     const { copiedValue: copiedEndpoint, copy: copyEndpoint } = useClipboard();
     const [expandedId, setExpandedId] = useState('');
     const [podsById, setPodsById] = useState({});
     const [podsLoadingId, setPodsLoadingId] = useState('');
     const [podsErrorById, setPodsErrorById] = useState({});
     const pollTimerRef = useRef(null);
+    const executionIdsKey = items.filter((item) => !item.pending && item.execution_id)
+        .map((item) => item.execution_id).join('|');
+    useEffect(() => { onPodsChange?.(successfulPagePods(executionIdsKey.split('|'), podsById, podsErrorById)); }, [executionIdsKey, podsById, podsErrorById, onPodsChange]);
+    const highlighted = (item) => Boolean(highlightName) && [item.name, item.display_name, item.namespace].some((value) => value && String(value).includes(highlightName));
 
     const fetchPodsFor = async (executionId, silent = false) => {
         if (!executionId) return;
@@ -300,8 +313,6 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
 
     // Poll pods for the visible page so the status dot reflects live service
     // availability and reduced capacity, not only the slower backend record.
-    const executionIdsKey = items.filter((item) => !item.pending && item.execution_id)
-        .map((item) => item.execution_id).join('|');
     useEffect(() => {
         if (pollTimerRef.current) clearInterval(pollTimerRef.current);
         const executionIds = executionIdsKey ? executionIdsKey.split('|') : [];
@@ -341,7 +352,8 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                 <Fragment key={item.execution_id}>
                                 <tr
                                     aria-busy={busy}
-                                    className="align-top transition-colors hover:bg-[#037ffc0d] dark:hover:bg-slate-800/40"
+                                    data-highlighted={highlighted(item) || undefined}
+                                    className={cn('align-top transition-colors hover:bg-[#037ffc0d] dark:hover:bg-slate-800/40', highlighted(item) && 'bg-emerald-500/5 ring-1 ring-inset ring-emerald-500/30')}
                                 >
                                     <td className="max-w-[260px] px-4 py-3 text-left">
                                         <div className="flex items-start gap-2">
@@ -353,7 +365,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                             </div>
                                             <div className="min-w-0 text-left">
                                                 <span className="block truncate text-sm font-semibold text-slate-100" title={deploymentTitle(item)}>
-                                                    {deploymentTitle(item)}
+                                                    {deploymentTitle(item)}{highlighted(item) && <Badge tone="success" size="xs" className="ml-2 align-middle">New</Badge>}
                                                 </span>
                                                 <div className="mt-0.5 line-clamp-2 text-left text-[11px] text-slate-500" title={item.description || ''}>
                                                     {item.description || 'No description'}
@@ -385,7 +397,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                         )}
                                     </td>
                                     <td className="px-4 py-3">
-                                        <RowActions item={item} busy={busy} connecting={connecting} canScale={canScale} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} onScale={onScale} />
+                                        <RowActions item={item} busy={busy} connecting={connecting} canScale={canScale} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} onScale={onScale} onBenchmark={onBenchmark} />
                                     </td>
                                 </tr>
                                 {expanded && (
@@ -418,7 +430,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                         <div
                             key={item.execution_id}
                             aria-busy={busy}
-                            className="rounded-xl border border-slate-800/60 bg-slate-950/40 p-3"
+                            className={cn('rounded-xl border border-slate-800/60 bg-slate-950/40 p-3', highlighted(item) && 'border-emerald-500/50')}
                         >
                             <div className="flex items-start justify-between gap-2">
                                 <div className="flex min-w-0 flex-1 items-start gap-2">
@@ -454,7 +466,7 @@ export function DeploymentTable({ items, mutatingId, connectingEndpointId = '', 
                                 </div>
                             </dl>
                             <div className="mt-3 border-t border-slate-200 pt-2 dark:border-slate-800/60">
-                                <RowActions item={item} busy={busy} connecting={connecting} canScale={canScale} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} onScale={onScale} />
+                                <RowActions item={item} busy={busy} connecting={connecting} canScale={canScale} onInspect={onInspect} onViewPodsLogs={onViewPodsLogs} onEdit={onEdit} onDelete={onDelete} onNavigate={onNavigate} onConnectLocalEndpoint={onConnectLocalEndpoint} onScale={onScale} onBenchmark={onBenchmark} />
                             </div>
                             {expanded && (
                                 <div className="mt-3 rounded-lg border border-slate-800/60 bg-slate-950/60">

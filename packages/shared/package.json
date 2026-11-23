@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test src/evaluation/*.test.js"
+    "test": "node --test src/evaluation/*.test.js src/inference/*.test.js"
   },
   "exports": {
     "./catalog": "./src/catalog/modelCatalog.js",
+    "./inference/optimizations": "./src/inference/optimizations.js",
     "./hardware/profiles": "./src/hardware/profiles.js",
     "./evaluation/guide-settings": "./src/evaluation/guideSettings.js",
     "./evaluation/managed-environment": "./src/evaluation/managedEnvironment.js"

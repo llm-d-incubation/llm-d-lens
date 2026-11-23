@@ -6,12 +6,478 @@ description: Lens 部署功能背后的主要部署运行、执行和用例 API�
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+## DisaggregatedSet 审核计划
+
+DS、资源预算及推断等设备预算的基线配置必须先准备计划，再明确确认摘要。准备过程不会创建 Run 或 Kubernetes 资源。
+计划绑定所有者和集群，保存最终工作负载 YAML、命名空间、Router values 及校验过的本地 Chart 包；
+消耗计划与创建 Run 在同一事务中完成。重复成功确认返回原 Run。修改配置、运行参数或集群
+必须重新准备；仅更新同一集群的会话不改变计划身份。
+
+<Tabs>
+<TabItem value="rest" label="REST API">
+
+| 端点 | 契约 |
+| --- | --- |
+| `POST /api/v1/deployments/plans` | 接收 `DeploymentRunCreateRequest`。要求创建权限、有效目标会话和集群访问权。返回 `id`、`digest`、`clusterId`、`status`、`createdAt`、`runId`、`preflight`、`cases`；无效输入返回 422。 |
+| `GET /api/v1/deployments/plans/{plan_id}` | 要求读取权限、本人所有权和集群访问权。返回已保存的审核视图，不刷新预检；不可用计划返回 404。不返回 Chart 包字节或本地路径。 |
+| `POST /api/v1/deployments/executions/{execution_id}/restart-plan` | 要求创建运行权限、用例执行范围及集群访问权。可选请求 `{"cluster_session_id":"SESSION_ID"}` 在具有会话重绑权限时续期同集群会话。已停止/失败的审核执行返回 `{"status":"awaiting_review","plan":{...},"request":{...}}`；不支持或属于 Evaluation 的执行返回 409。不清理资源、不执行部署。 |
+| `POST /api/v1/deployments/runs` | 在原始请求上增加 `prepared_plan_id`、`expected_plan_digest`、`acknowledge_unknown`。重新预检；绑定变化、约束失败或未确认未知项返回 409。 |
+| `GET /api/v1/deployments/topology?cluster_id=ID` | 要求创建权限和集群访问权。返回节点标签、可分配资源、状态和污点，以及 Pod 节点、阶段和有效 `resourceRequests`。读取失败或不完整返回 503。 |
+| `POST /api/v1/deployments/executions/{execution_id}/verify` | 要求用例执行权限和集群访问权。请求 `{"smoke":false}` 只读取证据；`true` 还发送有界推理请求，可能建立端口转发。返回独立的 `kubernetes`、`placement`、`routing`、`kvTransfer`、`pods`、`observedAt` 和可选 `inference`。不支持的执行返回 409；集群证据不可用返回 503。 |
+
+准备后保留原始部署请求，仅添加以下字段：
+
+```json
+{
+  "prepared_plan_id": "准备接口返回的 ID",
+  "expected_plan_digest": "sha256:准备接口返回的摘要",
+  "acknowledge_unknown": true
+}
+```
+
+每个审核用例包含 `manifest`、`namespaceManifest`、`manifestChecksum`、`namespace`、
+`routerManifest`、`routerValues`、`chartChecksum`、辅助 `resources` 和 `sourceCommit`。`preflight.status`
+为 `pass`、`fail` 或 `unknown`。找到模型内的放置方案并不等于资源预留：准入、配额、
+并发调度、滚动升级额外资源和未建模约束仍为未知。确认未知风险不会覆盖失败约束。
+放置策略使用拓扑键时，`preflight.assignments` 条目包含 `domain`。`preflight.slicePreview` 为每个
+DisaggregatedSet 用例给出 `caseIndex`、`workload`、`slices`、`maxFeasibleSlices`（按该用例策略基于空闲资源
+的估算，未知时为 `null`）、`placementPolicy`、`sliceRouting`（冻结的 Router values 包含亲和评分器时为
+`prefer`）、`roles`、`sliceRequests`、`acceleratorResources` 和 `placement`（每 Slice 的模拟 Pod 放置，含节点和域）。
+
+`storageResources` 包含已审核的附属 PV/PVC 清单；存储定义变化或已有 PV 同名冲突会被拒绝。
+`secretReference` 标识凭据来源，不含凭据字节，也不冻结凭据轮换。准备阶段拒绝将 dynamic-pvc
+镜像到新的部署命名空间。
+
+用例还包含可选的 `comparisonBudget`。既有用例重试接口
+对审核部署返回同样的审核响应，拒绝内联模型令牌，需轮换已配置的 Secret 来源。将返回的
+`request` 加上新计划 ID/摘要提交到 `POST /runs`；旧资源保持不变。
+主动探测还返回 `captureErrors`、`after` 和包含不可覆盖报告校验和的 `artifact` 清单；
+被动读取在存在历史探测时返回 `lastProbe`。
+verify 请求还接受 `metrics_only`（与 `smoke` 互斥）：不发送任何推理请求、不持久化报告，
+仅读取各 Pod 当前模型服务指标计数，返回按 Pod 名组织的 `metrics` 和 `metricsCollectedAt`。
+计数值是采集时刻的快照，不是速率。
+
+</TabItem>
+<TabItem value="python" label="Python API">
+
+`llm_d_lens.deploy.prepared_plans` 提供 `prepare(manager, request, owner_user_id=...)`、
+`public_plan(plan)` 和 `consume(manager, request, owner_user_id=...)`。内部调用者必须先完成
+动作权限与集群访问检查。
+
+```python
+from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest
+from llm_d_lens.deploy.prepared_plans import prepare, public_plan, consume
+
+async def prepare_for_review(manager, request_body, owner_user_id):
+  request = DeploymentRunCreateRequest.model_validate(request_body)
+  plan = await prepare(manager, request, owner_user_id=owner_user_id)
+  return public_plan(plan)
+
+async def execute_reviewed(manager, original_body, reviewed_plan, owner_user_id):
+  request = DeploymentRunCreateRequest.model_validate({
+    **original_body,
+    "prepared_plan_id": reviewed_plan["id"],
+    "expected_plan_digest": reviewed_plan["digest"],
+    "acknowledge_unknown": True,
+  })
+  return await consume(manager, request, owner_user_id=owner_user_id)
+```
+
+带认证上下文的路由函数也支持准备重试与验证：
+
+```python
+from llm_d_lens.deploy.router import (
+  prepare_execution_restart, verify_deployment_execution, RuntimeVerificationRequest,
+)
+
+async def review_restart(execution_id, authenticated_request):
+  return await prepare_execution_restart(execution_id, authenticated_request)
+
+async def probe_execution(execution_id, authenticated_request):
+  return await verify_deployment_execution(
+    execution_id, RuntimeVerificationRequest(smoke=True), authenticated_request,
+  )
+```
+
+</TabItem>
+</Tabs>
+
+验证反映实际所有权和节点拓扑，不认证物理互连。HTTP 成功或聚合指标增量不能证明单个请求
+的 P/D 路由与 KV 传输；没有关联证据时，这些维度保持未知。冻结执行跳过 Helm CRD 安装和
+hooks，兼容控制器与 CRD 需单独安装。审核仅接受已分类的命名空间级资源，拒绝嵌入的 Secret
+对象（包括嵌套 List）及其他命名空间。命名空间所有权标记防止清理已有或被替换的命名空间。
+计划唯一单独生成的集群级资源是经过审核的存储附属 PV；不接受任意集群级 YAML。
+
+对于已注入探针的 vLLM 0.26.0 NIXL pull worker，通过判定要求：响应与 decode 请求唯一对应、
+远端 prefill 请求身份明确、全部 TP rank 的非空接收完成及发送端确认、Pod/引擎身份稳定、
+DS 所有权与 revision 匹配，且未观察到失败后重算。证据记录实际 Pod UID、同 Slice/域情况
+及块数。跨 Slice 是可观测结果，不违反软路由偏好。其他版本/连接器、缺失 rank、只有全缓存
+命中通知而没有传输，或采集不完整时保持未知。判定仅覆盖本次有界探测请求。
+
+### Guide 配置输入
+
+仅供 UI 使用的 `POST /api/guide-planning/prepare` 接收 `guide`、`accelerator`、`modelServer`，
+返回 `ready`、完整 `commit` 和 `capabilities.disaggregatedSet`。
+对带可选 `clusterId` 和 `model` 的 DS 来源，`recommendation` 包含 `guideDefault`（`slices`、`placementPolicy`）、
+`capacity`（`sliceRequests`、`acceleratorResources`、`podsPerSlice`、`maxSlices.None`、`schedulableNodes`，以及
+含各域 `domainDetails`、`feasibleDomains`、`exclusiveTopologyDomains` 的 `topologyKeys`，以及 `unmodeled`：
+Slice Pod 通过 ResourceClaim 申请加速器而估算未计入时列出 `DRA`）、建议的 `placementPolicy`
+及其 `maxSlices` 和 `reasons`，以及该集群上同模型近期成功 Evaluation 用例的 `history`（`slices`、P/D 形态、
+`accelerators`、`maximumStableQps`、`throughputTps`、`accelerator`、`guideCommit`、`slaTargets`、`workloadLabel`，以及按请求形态和
+SLO 目标分组、与速率阶段无关的 `evidenceKey`）。它从不选定 Slice 数；容量按
+Guide 默认角色估算，不是预留。
+`POST /api/guide-planning/plan` 还接受官方源的 `expectedSourceCommit` 及 `disaggregatedSet`：
+
+```json
+{"disaggregatedSet":{"slices":2,"placementPolicy":{"type":"ExclusiveSlice","topology":"topology.kubernetes.io/zone"},"sliceRouting":"prefer"}}
+```
+
+规划返回 `disaggregatedSet` 和含展开 Pod 数与资源请求的 `workloadSummary`。带集群会话的 DS 规划还返回
+`sliceCapacity`（与 `recommendation.capacity` 结构相同，按渲染后的角色计算；无法读取清单时为 `null`）。角色副本数是
+**每 Slice 的数量**；group size 展开 leader/worker Pod，需求由资源请求而非 TP 值计算。
+合法多 Slice 不会被改写为 1；多 Slice 与 External 扩缩容组合被拒绝。`sliceRouting`
+为 `inherit` 或 `prefer`；后者要求受支持的 llm-d Router 1.0 单 EPP profile，添加 prefill
+软亲和评分器，不保证严格同 Slice 路由。官方和远程自定义源从固定 Git 快照渲染；外部
+Kustomize 依赖必须纳入源码。本地输入及引用文件先复制再渲染，来源标记
+`revisionKind="content-snapshot"`、`snapshotChecksum`（SHA-256），`commit` 为该哈希前 40 位，
+不是脏工作树的 Git HEAD。
+`POST /api/v1/configurations/render` 接收 `candidate_config.disaggregated_set`，
+保存为 `content.disaggregatedSet`。`workloadSummary` 还包含用于自定义来源能力识别的
+`disaggregatedSet` 布尔值。Python 使用 `llm_d_lens.configuration.models` 的
+`CandidateConfig`/`GuideSource`，以及 `llm_d_lens.configuration.service` 的
+`render_configuration(RenderRequest.model_validate(request_body))`，字段和验证规则相同。
+
+Python 路由函数是 `llm_d_lens.deploy.guide_planning.prepare(request)` 和 `plan(request)`，
+参数为携带 JSON 请求体和既有集群/会话上下文的 Starlette `Request`；这些 UI 专用接口建议
+通过浏览器流程使用。
+
 在为部署规划指定操作者偏好时，请使用英文，例如
 `prefer prefix cache`（偏好前缀缓存）、`more GPU for performance`（更多 GPU 以提升性能）
 或 `use fewer GPU resources`（使用更少的 GPU 资源）。确定性规划器只匹配英文偏好关键词；
 不再支持中文关键词别名。
 
 ## Python 领域契约
+
+### Manual / Agentic 共享规划
+
+新的创建界面在两种决策模式下都使用现有 Agentic 运行生命周期。
+不携带 `requirements` 的旧请求保留兼容行为。
+
+<Tabs>
+<TabItem value="rest-api" label="REST API">
+
+**`POST /api/agentic-deployments`** 返回 `201` 和 `AgenticDeploymentRun`。
+浏览器使用的 `/stream` 通过 SSE 返回进度及相同的完成结果。两者都不会部署资源。
+
+除了 Standard 服务参数和有效会话字段，还支持：
+
+- `planning_mode`：`manual` 或默认的 `agentic`。Manual 是基于规则的规划器，不初始化外部 AI 规划器。
+  Agentic 需要可用的 AI 提供方（`ai_provider_id` 或服务端环境配置的提供方），否则返回 `422`；
+  AI 候选生成或排序失败时请求直接失败，不回退到规则。
+- `requirements`：模型、集群、目标、`hard_constraints.maxAccelerators`、
+  负载、性能目标、必须 / 禁止机制 ID 和未知字段。
+  保留原机制 ID `pd_disaggregation`、`prefix_routing`、`external_kv_cache`、
+  `prefix_cache` 和 `chunked_prefill`。源码组合还支持目录中的 `index`（精确路由）、
+  `load-routing`、`wide-ep` 和 `speculation` 等机制，必须由最终资源验证，而非仅记录用户意图。
+  `affinity` 与 `index` 是不同机制。目标默认 `balanced`，
+  仍支持 latency、throughput、cost、reliability；缺失负载字段保持未知。
+- `requirements.hard_constraints.providerRef`：可选的显式部署方式，支持
+  `optimized-baseline`、`pd-disaggregation`、`precise-prefix-cache-routing` 和
+  `tiered-prefix-cache`。其他方式被拒绝；规划、修订及审批会排除不匹配的候选。
+- `requirements.workload.p95InputTokens`：可选正数，表示输入长度的 P95，
+  与平均值 `inputTokens` 独立；省略时保持未知。
+- `requirements.performance_targets.e2eMs`：可选正整数，表示端到端 P95 延迟目标，
+  单位毫秒，与 `ttftMs` 和 `tpotMs` 并列。测试排名要求每次完整重复均满足所设目标。
+- `planner_prompt`：可选 AI 目标。显式选择 `ai_provider_id` 后，可以从任意语言的明确陈述中
+  补充未知的 `prefixReuse` 和 `prefillHeavy`，结构化值优先。
+  补充后设置 `workload.interpretationSource=ai_goal`；解析失败返回 `422`。
+  数值限制不会自动推测。Manual 不调用外部 AI 提供方。
+- `planning_facts.max_candidates`：Agentic 保留候选数量上限，1–10。
+  Manual 即使收到较小上限，也保留各个不同的已支持能力族。
+  实际空闲资源优先于客户端提交的硬件数据。
+- `execution_policy.max_total_duration_minutes`：规划截止时间，1–180 分钟。
+- `execution_policy.allow_trials`：默认 false；启用后允许另行审批 `/optimize`，
+  不会在规划期间自动开始测试。
+
+```json
+{
+  "model": "Qwen/Qwen3-8B",
+  "deployment_name": "reviewed-model",
+  "cluster_session_id": "00000000-0000-0000-0000-000000000001",
+  "storage_type": "model-cache",
+  "storage_volume_id": "registered-cache-id",
+  "replicas": 1,
+  "tensor_parallel_size": 1,
+  "planning_mode": "manual",
+  "planning_facts": {
+    "model_weight_gib": 16,
+    "vram_per_gpu_gib": 1,
+    "free_gpu_count": 0,
+    "max_candidates": 3
+  },
+  "requirements": {
+    "model": "Qwen/Qwen3-8B",
+    "cluster_id": "registered-cluster-id",
+    "objective": "throughput",
+    "hard_constraints": {"maxAccelerators": 4},
+    "workload": {"prefixReuse": null, "prefillHeavy": null},
+    "performance_targets": {"ttftMs": null, "tpotMs": null},
+    "required_features": [],
+    "forbidden_features": ["external_kv_cache"]
+  },
+  "execution_policy": {"mode": "approval_required", "allow_trials": false}
+}
+```
+
+将示例 ID 替换为有效会话、对应集群和就绪模型缓存。身份不匹配、不支持的约束、
+必须机制不受支持或资源上限不可行时返回 `422`；负载未知本身不会排除技术兼容候选。
+
+响应增加 `configuration_plan`、`revision` 和可选 `parent_run_id`。
+共享方案保留需求、机制决策、资源估算、准确的可部署 `configuration`，
+以及分别列出的已检查 / 待检查项。`planning_checked` 不代表资源清单、准入或性能已通过。
+
+`configuration_plan.optimization_choices` 列出五个可勾选优化
+（`prefix_routing`、`prefix_cache`、`chunked_prefill`、`external_kv_cache`、
+`pd_disaggregation`），包含 `checked`（出现在 `forbidden_features` 中时为 false）、`auto`、
+`intended` 和 `reason`。已勾选但最终决策未启用的优化即为降级。至少有两个可用加速器时 P/D 默认开启。
+Manual 收到平均 `inputTokens` 和 `outputTokens` 时，比较 AIC 对 P/D 与合并服务的最佳预测（先看是否满足
+`ttftMs`/`tpotMs`，再看吞吐），并将结果写入 `requirements.workload.aicPrefillDecode` 和
+`aicPrefillDecodeReason`；没有 AIC 结果时 P/D 保持开启。Manual 还会根据同一拓扑的 AIC 预测设置每个候选的
+`slo_status`，先按 SLA 状态、再按 P/D 决策、再按勾选的优化排序；不满足 SLA 的候选排在最后而不是报错，
+且不会选择 `precise-prefix-cache-routing`。提供负载目标时，两种模式在 AIC 支持当前模型与硬件时都用 AIC 确定拓扑规模。
+
+**`POST /api/agentic-deployments/optimizations/preview`** 根据 `requirements` 请求体和可选的
+调用方上报 `available_accelerators` 返回相同的 `optimization_choices`。该接口为纯计算，
+不访问集群，需要 `deployment:agentic:read` 权限。
+
+两种模式携带结构化需求时，都会展开原生 CPU KV 缓存与基线、精确路由和 P/D 的适配组合。
+独立分层缓存通过 `guideSettings.cacheCpuGiB` 设置容量，组合通过
+`guideComposition.nativeCpuCacheGiB` 设置容量。每个服务副本最多 8 GiB，
+缓存总量不超过已观察空闲主机内存的 25%；内存未知时不自动分配缓存。
+`resource_estimate.cpu_cache_gib` 记录合计容量。计划缓存决策在源码绑定渲染成功前保持
+`unknown`。Manual 存在模型 / 显存并发容量估算时，序列数受其约束。
+
+候选的可空布尔字段 `prefix_routing` 独立控制前缀亲和路由：
+`true` 将源码声明的亲和插件组合到 default/prefill 调度配置，`false` 移除亲和但保留负载路由，
+`null` 保留旧提供方行为。生成配置携带 `prefixRouting`，共享 Guide 渲染器也消费此选项。
+部署包保留 `router-prefix-source.yaml`，校验最终参数与源码一致，并保留 P/D 处理器和 decode 调度配置。
+
+Manual 即使设置了并发目标也始终枚举全部已注册提供方拓扑；AIC 负载目标推荐仅用于 Agentic。
+Manual 先排除已知不满足 SLO 的候选，再依次比较机制覆盖、副本能否承载并发目标和偏好：吞吐优先 P/D，其次前缀路由；
+低延迟优先前缀路由；成本优先较少加速器；可靠性优先多个服务副本。
+默认 `balanced` 及最终平局均优先较少加速器。保留候选优先覆盖不同方案 / 缓存组合。
+保留候选也覆盖独立路由选择。选择说明公开此规则，而不宣称实测最优。
+缓存与路由组合不继承未组合拓扑的性能证据。
+
+#### 全量 Guide 源码组合
+
+集成编辑器使用所选集群固定版本的源码，而不是五个写死的优化开关：
+
+- **`GET /api/guide-planning/source-catalog?clusterId=...`** 返回 `commit`、
+  `guides`、可选 `assets`、源码参数和 `optimizations.items`。目录包含共享机制定义及额外发现的
+  Guide；出现在目录中不代表已兼容或已有可执行适配器。
+  `environment` 保留 `guides/env.sh` 中的字面量直接赋值和 `${VAR:-default}` 字面量默认值，
+  包括固定的 Chart 版本；不会执行 Shell 命令或动态表达式。
+- **`POST /api/guide-planning/source-preview`** 接收 `clusterId`、`commit` 和
+  `unit`（包含目录 `path` 和可选的类型化修改），返回渲染后的资源及观察到的优化标志。
+- **`POST /api/guide-planning/compose`** 接收固定的 `commit`、`clusterId`、
+  `clusterSessionId`、`namespace`、`modelCacheEntryId`、`units`（1–60 项），以及可选
+  `router`、`guideSelection`、`deploymentIntent`、`finalConfiguration`。
+  `finalConfiguration` 使用前一版本的 `baseChecksum` 绑定编辑后的 YAML。
+  返回 `files`（`deployment.yaml`、`provenance.json`）、有效 `optimizations`、
+  `compositionChecksum` 和分别记录的资源 / 准入校验。可选 `validateCluster` 仅执行服务端准入试运行，
+  不会部署。
+  DRA 大小调整支持生成的 `ResourceClaimTemplate` 及其 `ExactCount` 请求。
+  设备数量按各角色的张量并行度、副本数及自动扩缩容上限计算，非加速器请求保持不变；
+  可用数量使用匹配集群硬件配置的可用设备清单。外部 Claim、含糊的分配方式及混合硬件配置
+  下无法区分的可用数量会被拒绝；设备选择器、网卡及放置仍需准入和运行时验证。
+  自动硬 P/D slice 放置会为能容纳完整 slice 的域添加强制节点亲和性，域列表位于
+  `sliceLayout.recommended.eligibleDomains`。保留已有亲和性，不替换显式 slice 策略；
+  此检查不预留设备，可用容量变化后应重新生成方案。
+- **`POST /api/agentic-deployments/{run_id}/composition`** 将组合结果保存到空闲部署方案。
+  提交当前 `revision`、`compare` 和 `candidates`；每项包含 `candidate_id`、
+  用于恢复编辑器的 `draft` 和 `composition` 组合输入，也可携带明确的 `error`。
+  `compare=true` 必须覆盖全部保留候选。Manual 在通过校验的候选中选择最终清单覆盖最多的方案；
+  Agentic 保留有效的已选推荐，否则明确报告已验证的替代方案。
+
+成功组合后递增 `revision`，使旧审批和性能证据失效，并在 `configuration_plan` 中保存
+`source_bundle`、`source_draft`、`source_request`、`source_candidates` 和可选 Service
+`endpoints`。`configuration.checksum` 是生成部署 YAML 的审核令牌。
+优化决策同时携带 `catalog_id` 和兼容旧接口的 `capability_id`。
+
+源码接口要求 `guide:plan:execute` 和对应集群访问权限；方案组合另要求
+`deployment:agentic:create`。模型缓存和存储读取保留现有权限检查，不执行 Guide shell 脚本。
+过期源码 / 编辑版本返回 `409`，无效组合输入返回 `400`；方案比较失败返回 `409` 且不替换旧方案，
+方案组合超时返回 `504`。
+
+审批还要求 `endpoint`，必须是已审核 `configuration_plan.endpoints` 中的精确值：
+
+```json
+{
+  "configuration_checksum": "sha256:reviewed-deployment-yaml-checksum",
+  "endpoint": "reviewed-inference-service:8000"
+}
+```
+
+审批重新检查缓存绑定、可用设备、内存和必须 / 禁止机制，然后复用现有受管部署生命周期。
+源码快照使用 `runtime.modelSource=cached-readonly`，普通 `auto-cache` 行为不变。
+多节点模型角色及尚无受管生命周期的集群级资源创建仍会明确阻止，不会部分部署。
+唯一受限例外是 Router 认证 RBAC：ClusterRole 只允许创建 TokenReview 和 SubjectAccessReview，
+并绑定到生成的 EPP ServiceAccount。运行时名称按部署隔离，创建时绑定命名空间 UID 所有权，
+不会覆盖其他所有者或已被修改的对象。清理命名空间会通过垃圾回收删除这些精确资源并等待完成；
+回收未完成会报告清理失败。其他集群级授权仍被阻止。
+停止源码部署时，会先移除其 HPA/KEDA 自动扩缩容资源，再将模型控制器缩容到零；
+重新部署已审核快照时会恢复这些自动扩缩容资源。
+源码方案的 `/optimize` 还需提供以候选 ID 为键的 `endpoints`，测试使用已审核的源码候选资源，
+不会换成基础模板。
+
+**旧版 `POST /api/agentic-deployments/{run_id}/select`** 返回 `200`：
+
+- `{"candidate_id":"..."}` 选择已有合法候选。
+  对源码方案，这会恢复该候选已审核的精确资源和编辑参数、递增修订号并清除端点选择，
+  同时保留已完成的试验结果。未审核的候选及尚未结束的试验会阻止切换。
+  源码方案的参数修改和生成必须使用 `/composition`；旧版编辑字段不能覆盖已审核的源码快照。
+- `{"candidate_id":"...","role":"decode","replicas":2}` 创建实时校验后的用户修订。
+  `role` 为 `decode` 或 `prefill`；可选 `tensor_parallel_size` 和 `replicas` 范围为 1–128。
+  运行参数支持 `max_model_len`（256–1048576）、`gpu_memory_utilization`（0.5–0.98）、
+  `max_num_seqs`（1–4096）和 `max_num_batched_tokens`（256–131072），作用于所有服务角色。
+- `{"candidate_id":"...","native_cpu_cache_gib":4}` 修改已选 CPU KV 缓存的每模型副本 GiB 容量，
+  大于零且不超过 1024；总量必须在当前发现的空闲主机内存的 25% 内。
+- `{"candidate_id":"...","render_resources":true}` 通过与 Configuration 相同的渲染器生成固定源码版本的
+  YAML 并检查一致性。会读取集群 / 存储并可能获取官方源码，但不会安装资源。不能与修改同时提交。
+
+修改保留原运行，设置 `parent_run_id`、递增 `revision`，并使旧资源检查和性能证据失效。
+失败的编辑返回 `409`；渲染错误保留对应状态，并发改变的选中方案会被拒绝。
+成功生成后设置 `validation.status=resources_checked`，清单位于
+`configuration_plan.configuration.content.officialGuide.renderedManifest`。
+旧渲染器仍兼容原来的五个机制 ID；更完整的目录约束必须使用 `/composition`。
+Manual 保留不同已支持方案 / 缓存能力族并调用
+`{"candidate_id":"...","render_resources":true,"compare_combinations":true}`。
+此选项仅供 Manual 使用，检查保留候选的固定源码，不发布中间选择；
+返回被排除候选，选择源码校验后实际启用能力覆盖最多的组合，覆盖相同才按规划顺序取舍。
+`validation.coverage` 包含 `enabled`、`available_in_other_combinations` 和 `complete`。
+缺少适配器标为 `unsupported` 而非 `conflict`；Agentic 未选择的可行方案可标为 `alternative`。
+全部失败时返回 `409`，
+保留原推荐并阻止审批。权限错误和意外服务错误直接传播，不作为方案不兼容处理。
+不启用 `compare_combinations` 时，渲染保留用户显式选择的候选。
+固定源码有效启用的前缀缓存和分块预填充即使继承自 Guide，
+也记录为启用。Manual 对源码声明支持的运行参数自动启用，即使负载收益未知。
+直接调用 vLLM 的源码未显式配置这些开关时，会添加使用选定镜像的强制 CLI 能力检查；
+检查失败会阻止模型启动，不代表运行就绪或性能已经验证。
+必须运行参数及显式禁用项在发布已检查配置前均需验证。
+禁用引擎前缀缓存会排除依赖它的路由和卸载候选。
+容量明确的 CPU 缓存方案所需前缀缓存记录为 `dependency`。
+拓扑修订保留每副本缓存容量，显式缓存编辑可修改容量；两者均重新检查 25% 主机内存预算，
+审批会再次刷新这一预算。
+准入、就绪和负载性能仍待检查。
+
+**`POST /api/agentic-deployments/{run_id}/approve`** 返回 `202`。
+新的共享方案必须先生成并审阅资源，否则返回 `409`。
+提交 `{"configuration_checksum":"<reviewed configuration checksum>"}`；
+缺失或过期的校验和也返回 `409`。审批期间会拒绝重复审批及候选修改。
+提交前会刷新资源容量。对 DisaggregatedSet 配置，首次审批返回 `configuration_plan.validation.preparedDeployment`，不会启动部署。
+审阅其中的资源与预检结果后，再次提交相同的审批请求（源码组合需保留所选 `endpoint`），将 `prepared_plan_id` 设为返回的 `id`，`expected_plan_digest` 设为返回的 `digest`。
+预检结果未知时须显式提交 `acknowledge_unknown: true`；预检失败不可执行。启动成功后返回 `deployment_run_id`。
+生成成功不保证准入或就绪，旧审批行为保持兼容。
+
+共享方案对旧的纯提示词 `/refine` 操作返回 `409`，应修改结构化需求并创建新计划。
+已完成的新运行 / 修订可通过现有 `GET /api/agentic-deployments/{run_id}` 从快照恢复。
+
+**`POST /api/v1/configurations/plan`** 保留为只检查意图的兼容接口，
+不读取集群，不返回可执行候选、拓扑或已启用机制。
+负载适用信号在真实规划前保持未知，不再伪造候选排名。
+
+</TabItem>
+<TabItem value="python-api" label="Python API">
+
+两种规划模式共享源码渲染。`authorized_inventory(request, selection)` 返回已授权的源码根目录
+和目录数据；`render_unit(root, catalog, unit)` 预览组件。`compose(request, body)`
+校验并返回组合包，不保存部署；`render_source_plan(service, run_id, payload, request)`
+校验并保存审核后的方案修订。必须传入经过认证的请求上下文，不得伪造身份。
+`compose` 对自动硬 slice 放置应用相同的容量域约束，并在 `sliceLayout.recommended` 中返回可用域。
+
+```python
+from llm_d_lens.agentic.service import service
+from llm_d_lens.agentic.source_plan import SourcePlanRequest, render_source_plan
+from llm_d_lens.deploy.source_catalog import authorized_inventory
+from llm_d_lens.deploy.source_composition import render_unit, compose
+
+async def preview_component(http_request, cluster_id: str, unit: dict):
+    root, catalog = await authorized_inventory(http_request, {"clusterId": cluster_id})
+    return await render_unit(root, catalog, unit)
+
+async def review_composition(http_request, run_id: str, proposals: list[dict]):
+    run = service.get(run_id)
+    if run is None:
+        raise KeyError("Deployment plan not found")
+    return await render_source_plan(
+        service, run_id,
+        SourcePlanRequest(revision=run.revision, compare=True, candidates=proposals),
+        http_request,
+    )
+
+async def preview_bundle(http_request, composition_inputs: dict):
+    return await compose(http_request, composition_inputs)
+```
+
+HTTP 端点验证审核校验和后，源码审批使用 `service.approve(run_id, owner_user_id=...,
+http_request=..., source_endpoint=...)`。`deploy.providers.configuration_manifest`
+中的 `SourceCompositionAdapter` 复用现有的命名空间隔离部署、缓存预检查、就绪检查和清理。
+
+`OpenAICompatiblePlanner.interpret_workload(goal)` 仅返回布尔或 null 类型的
+`prefixReuse` 与 `prefillHeavy`；响应无效或提供方失败时抛出 `OpenAIPlannerError`。
+共享 `create` 只补充原来未知的特征，不覆盖明确需求，也不推测资源数量。
+
+```python
+from llm_d_lens.agentic.planner import OpenAICompatiblePlanner
+
+async def interpret_goal(provider_id: str):
+    planner = OpenAICompatiblePlanner.from_provider_id(provider_id)
+    if planner is None:
+        raise ValueError("Select a configured AI provider")
+    return await planner.interpret_workload("Requests repeat the same long document with short answers.")
+```
+
+`DeploymentRequirements` 接受 REST 契约中相同的可选字典字段 `providerRef`、
+`p95InputTokens` 和 `e2eMs`。`create` 保留独立百分位，将端到端目标归一到规划事实，
+并在排名前按显式部署方式过滤候选。
+
+`AgenticDeploymentService.create` 负责共享决策规划；
+`revise_candidate` 重新校验修改并保留原方案。
+`planning_resource_request` 将选中配置映射到
+`llm_d_lens.deploy.guide_planning.plan_resources(request, body)` 的现有认证渲染契约；
+`accept_rendered_plan` 校验并记录成功结果。`approve` 委托 Deploy；
+HTTP 调用方必须使用审批端点来执行资源审阅门禁。
+
+```python
+from llm_d_lens.agentic.models import (
+    AgenticCandidateSelectionRequest,
+    AgenticDeploymentCreateRequest,
+)
+from llm_d_lens.agentic.service import service
+
+async def create_and_revise(payload: dict):
+    # payload contains an active session and ready cache, as in the REST example.
+    request = AgenticDeploymentCreateRequest.model_validate(payload)
+    original = await service.create(request)
+    revised = await service.revise_candidate(
+        original.id,
+        AgenticCandidateSelectionRequest(
+            candidate_id=original.selected_candidate.id,
+            role="decode",
+            replicas=2,
+        ),
+    )
+    assert revised.parent_run_id == original.id
+    assert revised.configuration_plan.validation["status"] == "planning_checked"
+    return revised
+```
+
+纯兼容函数为 `llm_d_lens.configuration.decision_engine.build_plan(PlanRequest(...))`，
+只检查意图，不会创建可执行部署。
+
+</TabItem>
+</Tabs>
 
 `llm_d_lens.deploy.contracts` 中的模型与
 `llm_d_lens.deploy.service.DeploymentService` 协议定义 Configuration 到 Deploy
@@ -314,7 +780,10 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
     存在负载目标时，`gpu_count` 是 Lens 的验收预算，不传给原生 recommend。
     Lens 会扩展推荐的各 worker 池，只接受所需 GPU 不超预算且满足 TTFT/TPOT 目标
     （原生默认 `2000`/`30` 毫秒）的配置。预测不可用、容量不足或 SLO 无法满足时，
-    会明确报错，不会悄悄选择没有负载目标的预测。Agentic 会将原因传到前端错误提示区。
+    会明确报错，不会悄悄选择没有负载目标的预测。对请求速率目标，Agentic 会将原因传到前端错误提示区。
+    AIC 无法预测并发目标时，Agentic 与 Manual 规划继续使用确定性候选，并按单副本 KV 容量和
+    `max_num_seqs` 计算服务副本数；`planning_facts.objective`（`balanced`、`latency`、
+    `throughput`、`cost` 或 `reliability`）取自 `requirements.objective`。
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
@@ -906,6 +1375,11 @@ deployment_run_manager.rebind_cluster_session(
 
 列出部署执行，不会创建新的端口转发。
 
+列表和单次执行响应都会从已存储的最终 vLLM manifest 补齐缺失的服务字段。
+平铺运行参数描述 Decode 角色（或合并式服务），不是 Prefill。显式配置值仍然优先；
+未设置或无法解析的参数保持 `null`。Python 的 `list_execution_contexts` 和
+`find_execution_context` 投影使用相同规则。
+
 该接口读取的是已存储的记录，不会直接查询集群。后台对账任务会持续更新这些记录，重新核对
 所有处于运行中、成功、部分成功或**失败**状态的 run（失败的发布若其 Pod 之后恢复，会被改回
 `ready`；若命名空间已不存在，则改为 `cleaned`）。只有已清理和已取消的 run 才是终态。
@@ -1017,6 +1491,54 @@ from llm_d_lens.deploy.executions import find_execution_context
 context = find_execution_context("execution-ready")
 if context is not None:
     print(context.execution_id, context.namespace, context.endpoint)
+```
+  </TabItem>
+</Tabs>
+
+### 获取执行的部署方案与 YAML
+
+返回执行创建时使用的配置方案以及 Lens 实际应用的渲染后 Kubernetes manifest，便于回溯部署方案或通过 `kubectl apply -f` 再次部署。部署管理页面在 **View details** 的 **Deployment Plan & YAML** 区域展示这些内容，并提供复制和下载操作。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/deployments/executions/{execution_id}/plan`**
+
+    请求：无请求体。
+    - 路径参数：`execution_id`（`string`，必需）
+
+    响应：
+
+    ```json
+    {
+      "execution_id": "execution-ready",
+      "namespace": "qwen-ready",
+      "configuration_artifacts": [
+        {
+          "artifact_id": "artifact-1",
+          "kind": "helm-values",
+          "provider_ref": "optimized-baseline",
+          "schema_version": "v1",
+          "media_type": "application/yaml",
+          "content": "{\"model\": {\"name\": \"Qwen/Qwen3-0.6B\"}}"
+        }
+      ],
+      "manifest": "apiVersion: apps/v1\nkind: Deployment\n..."
+    }
+    ```
+
+    - 执行仍处于 pending 状态或渲染文件已不再保存时，`manifest` 为 `null`。
+    - `manifest` 中 Secret 的 `data` 和 `stringData` 值会被替换为 `<redacted>`。
+    - 执行不存在时返回 `404`。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.deploy.executions import execution_deployment_plan, find_execution_context
+
+context = find_execution_context("execution-ready")
+if context is not None:
+    plan = execution_deployment_plan(context)
+    print(plan["manifest"])
 ```
   </TabItem>
 </Tabs>
@@ -2515,3 +3037,55 @@ def revoke_model_grant(model_id: str, binding_id: str, principal) -> None:
 通用绑定创建方法也会拒绝已退役的 `deployment_run` 和 `deployment_execution` 资源类型。
   </TabItem>
 </Tabs>
+
+## Agentic 实测优化
+
+源码候选的 `resource_estimate.available_accelerators`、`checked_at`、`cluster_id`
+和 `source` 保存资源检查时的容量快照。切换候选恢复对应快照；它不是资源预留，
+也不是实时容量。审批仍会刷新容量，旧快照可能没有这些字段。
+
+`POST /api/agentic-deployments/{run_id}/optimize` 返回 HTTP 202 和更新后的方案。
+需要 Agentic 批准权限、压测创建权限、集群访问权限和有效会话。
+`POST /api/agentic-deployments/{run_id}/optimize/cancel` 停止任务并清理其测试部署。
+通过现有 `GET /api/agentic-deployments/{run_id}` 的 `optimization` 字段读取进度。
+
+```json
+{"candidate_ids":["candidate-a","candidate-b"],"objective":"throughput","max_gpu_count":8,"max_duration_minutes":60,"max_benchmark_runs":5,"repetitions":2,"confirmation_runs":1,"max_error_rate":0,"benchmark":{"matrix":[{"isl":512,"osl":128}],"concurrency_stages":[{"concurrency":4,"num_requests":100}]}}
+```
+
+Python 请求类型为 `llm_d_lens.agentic.optimization.OptimizationRequest`。
+目标支持 `throughput`、`latency` 和 `throughput_per_gpu`。
+可选 `native_cpu_cache_gib` 增加组合变体，其重复测试同样计入运行次数预算。
+预算范围为 1–1024 GPU、1–180 分钟、1–30 次运行、每候选重复 1–3 次。
+预算无效或不足时，在执行前返回 422。结果包含 `samples`、`ranking`、
+`best_candidate_id`、状态和适用范围。仅完成、可比较且满足 SLO 和错误率上限的
+测量进入排名；清理失败会明确显示并阻止批准部署。
+
+矩阵和共享前缀测试必须收齐所有请求阶段。每轮采用各阶段中最高的 P95 延迟和错误率、
+最低的 token 吞吐量作为保守边界，不将不同负载合并为总体 P95 或平均值。
+缺失指标继续保持未知。
+
+`confirmation_runs` 范围为 1–3，默认 1。候选比较结束后重新部署领先候选，
+使用相同负载独立复测。`max_benchmark_runs` 默认 5，必须覆盖全部比较次数及复测。
+独立复测记录保存于 `optimization.confirmation`，包含 `candidate_id`、`status`
+和 `samples`。仅当复测满足 SLO、错误率上限且清理成功时才设置 `best_candidate_id`，
+否则保持 null。复测失败时仍保留比较排名，但排名不代表已经确认的优胜方案。
+外部 AI 可选，不能代替实测证据。
+
+```python
+from llm_d_lens.agentic.optimization import OptimizationRequest
+
+request = OptimizationRequest(
+  candidate_ids=["candidate-a", "candidate-b"],
+  max_gpu_count=2,
+  max_benchmark_runs=5,
+  repetitions=2,
+  confirmation_runs=1,
+  benchmark={"matrix": [{"isl": 512, "osl": 128}]},
+)
+payload = request.model_dump(mode="json")
+```
+
+清理中断任务时，取消端点接受可选查询参数 `cluster_session_id`，必须指向原测试集群；其他集群会返回 HTTP 409。
+
+`guideComposition.nativeCpuCacheGiB` 支持两种角色均使用内置 NixlConnector/kv_both 的 `pd-disaggregation`。适配器生成有序 MultiConnector 子连接器及相同镜像的能力检查初始化容器，保存的清单必须保留两者。实测优化中的 `native_cpu_cache_gib` 也会添加 P/D 变体。缺少适配器、镜像不匹配、角色缺失或缓存预算被修改均会校验失败。能力检查不能替代负载正确性测试和基准测试。

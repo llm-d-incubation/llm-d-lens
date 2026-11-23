@@ -1,6 +1,30 @@
 // Deployment API client shared by configuration, monitoring and task pages.
 
 import { requestJson, postJson as post } from '../../../../shared/api/httpClient';
+import { loadAll } from 'js-yaml';
+
+export function deploymentRequiresReview(configurations) {
+    const containsDs = document => document?.kind === 'DisaggregatedSet' || (document?.kind === 'List' && document.items?.some(containsDs));
+    return configurations.some(configuration => Boolean(configuration.content?.comparisonBudget) || Boolean(configuration.content?.disaggregatedSet && Object.keys(configuration.content.disaggregatedSet).length)
+        || loadAll(configuration.content?.officialGuide?.renderedManifest || '').some(containsDs));
+}
+
+export async function prepareLocalDeployment(request) {
+    return post('/api/v1/deployments/plans', request);
+}
+
+export async function executePreparedDeployment(request, plan, acknowledgeUnknown) {
+    return post('/api/v1/deployments/runs', { ...request, prepared_plan_id: plan.id, expected_plan_digest: plan.digest, acknowledge_unknown: acknowledgeUnknown });
+}
+
+export async function verifyDeploymentExecution(executionId, smoke = false, metricsOnly = false) {
+    return post(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/verify`, { smoke, metrics_only: metricsOnly });
+}
+
+export async function prepareDeploymentRestart(executionId) {
+    const clusterSessionId = sessionStorage.getItem('prism_cluster_session_id');
+    return post(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/restart-plan`, clusterSessionId ? { cluster_session_id: clusterSessionId } : null);
+}
 
 async function rebindLocalDeploymentRun(runId) {
     const clusterSessionId = sessionStorage.getItem('prism_cluster_session_id');
@@ -115,6 +139,10 @@ export async function getDeploymentExecution(executionId) {
 export async function getDeploymentExecutionPods(executionId) {
     const payload = await requestJson(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/pods`);
     return payload;
+}
+
+export async function getDeploymentExecutionPlan(executionId, { signal } = {}) {
+    return requestJson(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/plan`, { signal });
 }
 
 export async function getDeploymentExecutionPodLogs(executionId, podName, { container, tail = 200, previous = false } = {}) {

@@ -114,6 +114,24 @@ const categoryFor = (modelType) => {
     return 'Text';
 };
 
+// vLLM tool-call parsers verified for these model families; unlisted models keep tool calling off.
+const TOOL_PARSERS = {
+    'Qwen/Qwen3-0.6B': 'hermes',
+    'Qwen/Qwen3-8B': 'hermes',
+    'Qwen/Qwen3-14B': 'hermes',
+    'Qwen/Qwen3-32B': 'hermes',
+    'Qwen/Qwen3-30B-A3B': 'hermes',
+    'Qwen/Qwen3-30B-A3B-FP8': 'hermes',
+    'Qwen/Qwen3-30B-A3B-GPTQ-Int4': 'hermes',
+    'Qwen/Qwen3-Next-80B-A3B-Instruct': 'hermes',
+    'Qwen/Qwen3-Next-80B-A3B-Thinking': 'hermes',
+    'Qwen/Qwen3-coder-30B-A3B-Instruct': 'qwen3_coder',
+    'Qwen/QwQ-32B': 'hermes',
+    'openai/gpt-oss-20b': 'openai',
+    'openai/gpt-oss-120b': 'openai',
+    'internlm/internlm3-8b-instruct': 'internlm',
+};
+
 export const MODELS = rows.split('\n').map((row) => {
     const [releaseDate, repository, dtype, modelType] = row.split('|');
     const details = metadata[repository] || {};
@@ -130,6 +148,7 @@ export const MODELS = rows.split('\n').map((row) => {
         context: details.contextLength ? String(details.contextLength) : 'Not listed',
         weightGiB: details.weightGiB,
         contextLength: details.contextLength,
+        toolParser: TOOL_PARSERS[repository],
         vllmSupported: true,
     };
 });

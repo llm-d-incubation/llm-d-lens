@@ -1,11 +1,14 @@
 import { useClipboard } from '../../../../shared/lib/useClipboard';
-import { createElement } from 'react';
+import { downloadBlob } from '../../../../shared/lib/download';
+import { createElement, useEffect, useState } from 'react';
 import {
     AlertTriangle,
     Check,
     Clock,
     Copy,
     Cpu,
+    Download,
+    FileCode,
     FileText,
     Globe,
     HardDrive,
@@ -15,6 +18,8 @@ import {
     Sliders,
 } from 'lucide-react';
 import { Modal } from '../../../../shared/ui/Modal';
+import { YamlPreview } from '../../../evaluation';
+import { getDeploymentExecutionPlan } from '../../../optimization';
 import {
     deploymentEndpoint,
     deploymentKind,
@@ -67,12 +72,89 @@ function SectionCard({ icon, title, children }) {
     );
 }
 
+function prettyContent(content) {
+    try {
+        return JSON.stringify(JSON.parse(content), null, 2);
+    } catch {
+        return content;
+    }
+}
+
+function DeploymentPlanSection({ deployment }) {
+    const executionId = deployment.pending ? '' : deployment.execution_id;
+    const [state, setState] = useState({ loading: true, plan: null, error: '' });
+    const { copied, copy } = useClipboard();
+
+    useEffect(() => {
+        if (!executionId) return undefined;
+        const controller = new AbortController();
+        getDeploymentExecutionPlan(executionId, { signal: controller.signal })
+            .then(plan => setState({ loading: false, plan, error: '' }))
+            .catch(error => {
+                if (!controller.signal.aborted) setState({ loading: false, plan: null, error: error.message || 'Failed to load deployment plan' });
+            });
+        return () => controller.abort();
+    }, [executionId]);
+
+    const manifest = state.plan?.manifest || '';
+    const artifacts = state.plan?.configuration_artifacts || [];
+    const fileName = `${deployment.name || deployment.execution_id}.yaml`;
+    const buttonClass = 'inline-flex items-center gap-1 rounded-md border border-slate-700/80 px-2 py-1 text-[11px] text-slate-300 transition hover:border-emerald-500/40 hover:text-slate-100';
+
+    return (
+        <SectionCard icon={FileCode} title="Deployment Plan & YAML">
+            {!executionId ? (
+                <p className="text-slate-500">The rendered YAML is available once the execution record is created.</p>
+            ) : state.loading ? (
+                <p className="text-slate-500">Loading deployment plan...</p>
+            ) : state.error ? (
+                <p role="alert" className="text-rose-300">{state.error}</p>
+            ) : (
+                <>
+                    {manifest ? (
+                        <>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <p className="min-w-0 flex-1 text-[11px] text-slate-500">
+                                    Rendered manifest applied to namespace <span className="font-mono text-slate-300">{state.plan.namespace || '—'}</span>. To redeploy, change the namespace and names if needed, then run <span className="font-mono text-slate-300">kubectl apply -f {fileName}</span>.
+                                </p>
+                                <button type="button" className={buttonClass} onClick={() => copy(manifest)}>
+                                    {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}Copy YAML
+                                </button>
+                                <button type="button" className={buttonClass} onClick={() => downloadBlob(new Blob([manifest], { type: 'application/yaml' }), fileName)}>
+                                    <Download className="h-3 w-3" />Download YAML
+                                </button>
+                            </div>
+                            {manifest.includes('<redacted>') && (
+                                <p role="note" className="text-[11px] text-amber-300">
+                                    Secret values are shown as &lt;redacted&gt;. Restore the real values or remove those Secret objects before applying this file; otherwise existing credentials are overwritten with placeholders.
+                                </p>
+                            )}
+                            <YamlPreview content={manifest} title="Rendered deployment YAML" defaultOpen={false} />
+                        </>
+                    ) : (
+                        <p className="text-slate-500">The rendered manifest for this execution is no longer stored.</p>
+                    )}
+                    {artifacts.filter(artifact => artifact.content).map(artifact => (
+                        <YamlPreview
+                            key={artifact.artifact_id}
+                            content={prettyContent(artifact.content)}
+                            title={`Configuration plan: ${artifact.kind} / ${artifact.provider_ref}`}
+                            defaultOpen={false}
+                        />
+                    ))}
+                </>
+            )}
+        </SectionCard>
+    );
+}
+
 export function DeploymentDetailsModal({ deployment, clusterNameById = {}, onClose, onViewPodsLogs }) {
     if (!deployment) return null;
 
     const isFailed = deployment.status === 'failed' || Boolean(deployment.failure);
     const failure = deployment.failure;
     const scaleSlices = Number(deployment.scale?.slices) || 1;
+    const runtimeRole = deployment.scale?.prefillReplicas != null ? ' (Decode)' : '';
     const customParams = Array.isArray(deployment.custom_parameters) ? deployment.custom_parameters : [];
 
     const storageDetail = deployment.storage_volume_id
@@ -165,12 +247,12 @@ export function DeploymentDetailsModal({ deployment, clusterNameById = {}, onClo
                                 : deployment.replicas}
                         />
                         {scaleSlices > 1 && <Fact label="Slices" value={scaleSlices} />}
-                        <Fact label="Tensor Parallel Size" value={deployment.tensor_parallel_size} />
-                        <Fact label="Max Model Length" value={deployment.max_model_len} />
-                        <Fact label="GPU Memory Utilization" value={deployment.gpu_memory_utilization} />
-                        <Fact label="Prefix Caching" value={prefixCachingLabel} />
-                        <Fact label="Max Sequences" value={deployment.max_num_seqs} />
-                        <Fact label="Max Batched Tokens" value={deployment.max_num_batched_tokens} />
+                        <Fact label={`Tensor Parallel Size${runtimeRole}`} value={deployment.tensor_parallel_size} />
+                        <Fact label={`Max Model Length${runtimeRole}`} value={deployment.max_model_len} />
+                        <Fact label={`GPU Memory Utilization${runtimeRole}`} value={deployment.gpu_memory_utilization} />
+                        <Fact label={`Prefix Caching${runtimeRole}`} value={prefixCachingLabel} />
+                        <Fact label={`Max Sequences${runtimeRole}`} value={deployment.max_num_seqs} />
+                        <Fact label={`Max Batched Tokens${runtimeRole}`} value={deployment.max_num_batched_tokens} />
                     </dl>
                 </SectionCard>
 
@@ -227,6 +309,8 @@ export function DeploymentDetailsModal({ deployment, clusterNameById = {}, onClo
                         </div>
                     </SectionCard>
                 )}
+
+                <DeploymentPlanSection key={deployment.execution_id} deployment={deployment} />
 
                 {/* Section 6: Audit & Timeline */}
                 <SectionCard icon={Clock} title="Audit & Timeline">

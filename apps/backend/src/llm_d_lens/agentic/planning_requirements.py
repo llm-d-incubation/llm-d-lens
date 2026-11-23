@@ -122,6 +122,9 @@ class PlanningRequirements(RequirementModel):
 
 def normalize_hardware(value: str | None, *, device_count: int | None = None) -> HardwareIdentity:
     """Split explicit count, memory and form factor; never infer missing variants."""
+    # Zero free devices is a capacity shortfall reported by the planner, not a hardware identity.
+    if device_count is not None and device_count < 1:
+        device_count = None
     if not value:
         return HardwareIdentity(device_count=device_count)
     raw = value.strip()

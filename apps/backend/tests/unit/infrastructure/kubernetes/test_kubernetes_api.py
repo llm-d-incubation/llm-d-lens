@@ -102,6 +102,10 @@ async def test_strict_query_does_not_swallow_forbidden(cluster_api):
         ("networkpolicy", "/apis/networking.k8s.io/v1/namespaces/selected/networkpolicies"),
         ("storageclass", "/apis/storage.k8s.io/v1/storageclasses"),
         ("deployment.apps", "/apis/apps/v1/namespaces/selected/deployments"),
+        ("Deployment.apps", "/apis/apps/v1/namespaces/selected/deployments"),
+        ("ServiceAccount", "/api/v1/namespaces/selected/serviceaccounts"),
+        ("PersistentVolumeClaim", "/api/v1/namespaces/selected/persistentvolumeclaims"),
+        ("ClusterRole", "/apis/rbac.authorization.k8s.io/v1/clusterroles"),
     ],
 )
 async def test_builtin_singular_aliases(cluster_api, alias, path):

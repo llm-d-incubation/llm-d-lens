@@ -42,7 +42,10 @@ async function metadataFor(repository) {
     } catch {
         // Some repositories do not publish a config file. Keep their catalog entry usable.
     }
-    const totalBytes = Number(api?.safetensors?.total);
+    const bytesPerParameter = { BOOL: 1, U8: 1, I8: 1, F8_E4M3: 1, F8_E5M2: 1, F8_E4M3FN: 1, BF16: 2, F16: 2, I16: 2, U16: 2, F32: 4, I32: 4, U32: 4, F64: 8, I64: 8, U64: 8 };
+    const parameters = Object.entries(api?.safetensors?.parameters || {});
+    const totalBytes = parameters.length ? parameters.reduce((total, [dtype, count]) =>
+        total + Number(count) * (bytesPerParameter[dtype] ?? NaN), 0) : NaN;
     return {
         weightGiB: Number.isFinite(totalBytes) && totalBytes > 0 ? Number((totalBytes / 1024 ** 3).toFixed(1)) : null,
         contextLength: contextLength(config),

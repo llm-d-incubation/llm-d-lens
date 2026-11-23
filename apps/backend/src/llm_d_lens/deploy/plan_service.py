@@ -32,6 +32,9 @@ class DeploymentPlanService:
         self._planner = planner or DeploymentConfigurationPlanner()
 
     def create_run(self, request: DeploymentRunCreateRequest) -> DeploymentRun:
+        return self._store.create_run(self.build_run(request))
+
+    def build_run(self, request: DeploymentRunCreateRequest) -> DeploymentRun:
         for configuration in request.configurations:
             self._reject_admin_managed_environment(configuration.content)
         if request.runtime_binding is not None:
@@ -64,7 +67,7 @@ class DeploymentPlanService:
             },
         )
         run.cases = self._planner.plan(configurations, run_id=run.id, provenance=run.provenance)
-        return self._store.create_run(run)
+        return run
 
     @staticmethod
     def _reject_admin_managed_environment(content: object) -> None:

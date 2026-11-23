@@ -6,6 +6,71 @@ description: Benchmark-run and evaluation-workflow APIs behind Lens Evaluate.
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+## DS plan confirmation
+
+Creating an Evaluation with deployable DisaggregatedSet cases now returns
+`status="awaiting_review"` and `prepared_plans` instead of starting deployment.
+Each case retains its frozen configuration, plan ID and digest. Existing endpoint
+benchmarks retain their previous start behavior.
+
+<Tabs>
+<TabItem value="rest" label="REST API">
+
+`POST /api/v1/evaluate/evaluations/{workflow_id}/confirm` requires
+`evaluate:workflow:create`, exact workflow ownership and target cluster access. Submit the exact mapping of
+**all** plan IDs to their reviewed digests:
+
+```json
+{"plan_digests":{"PLAN_ID":"sha256:REVIEWED_DIGEST"},"acknowledge_unknown":true}
+```
+
+Success returns HTTP 202 and the workflow in `queued` state. The existing sequential
+executor consumes each frozen plan, rechecks preflight and records runtime evidence
+plus a bounded request probe before benchmarking. Supported vLLM 0.26.0 NIXL pull
+evidence proves only that probe, not the entire benchmark. Failed readiness/placement blocks the case; unknown
+evidence is not a KV-transfer pass. A missing workflow returns 404; wrong status,
+missing/changed plans, digest mismatch, failed preflight or unacknowledged unknowns
+return 409. This is not resource reservation. No Slice Sweep is introduced.
+
+`POST /api/v1/evaluate/workflow-runs/{workflow_id}/retry` returns HTTP 202. Succeeded
+cases and reusable Ready executions are retained. Cases needing new reviewed deployments
+receive fresh `prepared_plans` and status `awaiting_review`, not immediate execution.
+Preparation failure returns 409 without overwriting the historical workflow. Otherwise
+the workflow is queued. Task details expose the saved review for confirmation.
+DS-derived automatic baselines record `content.comparisonBudget` with
+`scope="accelerator-request-only"`, `resource`, `quantity`, `sourceRequests` and
+`sourcePodCount`; the final baseline render must match that device quantity. Resource
+budgets are preserved, but equal CPU/memory/Pod counts are not implied.
+
+</TabItem>
+<TabItem value="python" label="Python API">
+
+The route callable is `llm_d_lens.evaluation.router.confirm_evaluation_plans` and
+the body model is `llm_d_lens.evaluation.models.EvaluationPlanConfirmation`:
+
+The retry callable is `await llm_d_lens.evaluation.router.retry_workflow_run(workflow_id)`
+inside the established authenticated/owned workflow context. Inspect its returned
+`status` and confirm new `prepared_plans` using the same function below.
+
+```python
+from llm_d_lens.evaluation.models import EvaluationPlanConfirmation
+from llm_d_lens.evaluation.router import confirm_evaluation_plans
+
+async def confirm_review(workflow_id, reviewed_plans, authenticated_request):
+  body = EvaluationPlanConfirmation(
+    plan_digests={plan["id"]: plan["digest"] for plan in reviewed_plans},
+    acknowledge_unknown=True,
+  )
+  return await confirm_evaluation_plans(workflow_id, body, authenticated_request)
+```
+
+`authenticated_request` must carry the normal authenticated principal; internal
+calls must not bypass route-level action/cluster authorization. The workflow control
+lock protects confirmation from concurrent control actions.
+
+</TabItem>
+</Tabs>
+
 Benchmark execution records may include `harness_pod_label` (the current CLI
 invocation's unique app label) and `harness_pods` (Pod names mapped to UID, phase
 and container states). The existing execution path in
@@ -297,6 +362,12 @@ this behavior.
     - `accelerator_profile` (optional registered hardware identifier, for example `intel-xpu` or `nvidia`; must match the deployment), `storage_class_name`, `matrix`, `concurrency_stages`, `warmup_requests`, `shared_prefix`
     - `sla_targets` (`BenchmarkSlaTargets`)
     - `specification_file`, `http_proxy`, `https_proxy`, `no_proxy`, `benchmark_source`, `use_baseline_endpoint`
+
+    When `specification_file` is omitted, source-composed and direct-vLLM deployments
+    use `guides/optimized-baseline` for existing-endpoint benchmarking. This does not
+    replace their deployed configuration. Other Guides retain their matching specification;
+    an explicit request value takes precedence over `LLM_D_BENCH_SPECIFICATION_FILE`.
+    Source-backed evidence derives topology from the checksum-verified rendered manifest.
 
     ```json
     {

@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from .manifest_facts import _invocation_tokens, _option
-from .router_compatibility import compatible_router_values
+from .router_compatibility import compatible_router_values, compose_prefix_routing, configure_slice_routing
 
 
 def _rdma_device_class(content: dict) -> str | None:
@@ -101,6 +101,8 @@ def validate_guide_settings(content: dict[str, Any], manifest: str, guide: str) 
         raise ValueError("Router values must be YAML text")
     bundle = (content.get("officialGuide") or {}).get("deploymentBundle")
     if not bundle:
+        if content.get("prefixRouting") is not None:
+            raise ValueError("Independent prefix routing requires a saved deployment bundle.")
         if router_values.strip():
             raise ValueError("Router settings require a saved deployment bundle")
         return
@@ -134,8 +136,21 @@ def validate_guide_settings(content: dict[str, Any], manifest: str, guide: str) 
                 raise ValueError("Precise token-load routing requires one EPP replica")
         except (KeyError, StopIteration, TypeError) as error:
             raise ValueError("Precise router plugins are incomplete") from error
+    routing = content.get("prefixRouting")
+    if routing is not None:
+        if not isinstance(routing, bool):
+            raise ValueError("Prefix routing must be enabled or disabled.")
+        donor = None
+        if routing:
+            if "router-prefix-source.yaml" not in layers:
+                raise ValueError("Prefix routing requires its saved pinned plugin source.")
+            donor = _merge(_mapping(layers["router-base.yaml"]), _mapping(layers["router-prefix-source.yaml"]))
+        expected = compose_prefix_routing(expected, donor, routing)
     effective = _mapping(layers["router-effective.yaml"])
     expected = compatible_router_values(expected, bundle["helm"]["version"])
+    expected = configure_slice_routing(
+        expected, (content.get("disaggregatedSet") or {}).get("sliceRouting", "inherit"), bundle["helm"]["version"]
+    )
     effective = compatible_router_values(effective, bundle["helm"]["version"])
     # Nested plugin YAML may be serialized differently by js-yaml and PyYAML.
     for values in (expected, effective):
@@ -156,3 +171,42 @@ def validate_configuration_extensions(content: dict[str, Any], manifest: str) ->
 
         validate_deployment_bundle(bundle, source.get("guide"), source.get("commit"))
     validate_guide_settings(content, manifest, source.get("guide", ""))
+    composition = content.get("guideComposition")
+    if composition:
+        from kubernetes.utils.quantity import parse_quantity
+
+        from .guide_composition import composed_cache_config, composition_servers, runtime_probe
+
+        if (
+            not isinstance(composition, dict)
+            or set(composition) != {"nativeCpuCacheGiB"}
+            or source.get("guide") not in {"optimized-baseline", "precise-prefix-cache-routing", "pd-disaggregation"}
+        ):
+            raise ValueError("Unsupported Guide composition")
+        capacity = composition["nativeCpuCacheGiB"]
+        if (
+            isinstance(capacity, bool)
+            or not isinstance(capacity, (float, int))
+            or not math.isfinite(capacity)
+            or not 0 < capacity <= 1024
+        ):
+            raise ValueError("Invalid composed CPU cache budget")
+        servers = composition_servers(list(yaml.safe_load_all(manifest)))
+        pd = source.get("guide") == "pd-disaggregation"
+        if pd and {w["role"] for w, _ in servers} != {"prefill", "decode"}:
+            raise ValueError("P/D composition requires both prefill and decode roles")
+        if not servers:
+            raise ValueError("Composed configuration requires model servers")
+        for workload, server in servers:
+            connector = json.loads(
+                _option(_invocation_tokens(server, "composition"), {"--kv-transfer-config"}, "composition") or "{}"
+            )
+            cache = composed_cache_config(connector, pd=pd)
+            if pd and runtime_probe(server, connector) not in workload["pod"].get("initContainers", []):
+                raise ValueError("P/D composition requires a matching runtime capability probe")
+            if cache.get("kv_connector_extra_config", {}).get("cpu_bytes_to_use") != int(capacity * 1024**3):
+                raise ValueError("Composed cache does not match the saved manifest")
+            if parse_quantity(str(server.get("resources", {}).get("requests", {}).get("memory", "0"))) < int(
+                capacity * 1024**3
+            ):
+                raise ValueError("Composed cache host memory is not reserved")

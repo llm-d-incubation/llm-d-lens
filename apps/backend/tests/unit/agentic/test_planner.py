@@ -642,6 +642,45 @@ def test_planner_selects_the_smallest_feasible_standard_vllm_topology():
     assert decision.candidate_id == "optimized-baseline-tp1-r1"
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        '{"prefixReuse": true, "prefillHeavy": null}',
+        '{"prefixReuse": null, "prefillHeavy": false}',
+    ],
+)
+def test_goal_interpretation_preserves_explicit_traits_and_unknowns(monkeypatch, result):
+    class Client:
+        async def complete(self, **kwargs):
+            assert kwargs["user_content"] == "The user goal"
+            assert kwargs["json_schema"]["additionalProperties"] is False
+            return result
+
+    monkeypatch.setattr("llm_d_lens.agentic.planner.client_for", lambda **_kwargs: Client())
+    planner = OpenAICompatiblePlanner("https://example.test", "test")
+    assert asyncio.run(planner.interpret_workload("The user goal")) == json.loads(result)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        '{"prefixReuse": "yes", "prefillHeavy": false}',
+        '{"prefixReuse": 1, "prefillHeavy": false}',
+        '{"prefixReuse": true, "prefillHeavy": null, "maxAccelerators": 100}',
+        "not JSON",
+    ],
+)
+def test_goal_interpretation_rejects_unvalidated_facts(monkeypatch, result):
+    class Client:
+        async def complete(self, **_kwargs):
+            return result
+
+    monkeypatch.setattr("llm_d_lens.agentic.planner.client_for", lambda **_kwargs: Client())
+    planner = OpenAICompatiblePlanner("https://example.test", "test")
+    with pytest.raises(OpenAIPlannerError, match="interpret"):
+        asyncio.run(planner.interpret_workload("Goal"))
+
+
 def test_planners_exclude_legacy_direct_vllm_candidates_from_ranking():
     facts = PlanningFacts(model_weight_gib=8, vram_per_gpu_gib=32, free_gpu_count=4)
     planner = DeterministicPlanner()
@@ -955,6 +994,36 @@ def test_planner_maps_resource_preference_to_economic_and_performance_tendencies
 
     assert economic[0].required_gpus == 1
     assert performance[0].required_gpus == 2
+
+
+def test_structured_objective_changes_the_deterministic_topology():
+    planner = DeterministicPlanner()
+    common = {"model_weight_gib": 8, "vram_per_gpu_gib": 32, "free_gpu_count": 4}
+
+    def selected(objective):
+        facts = PlanningFacts(**common, objective=objective, operator_preference=f"{objective} priority.")
+        decision = planner.decide(facts, planner.candidates(facts))
+        return next(item for item in planner.candidates(facts) if item.id == decision.candidate_id)
+
+    balanced, latency, throughput = selected("balanced"), selected("latency"), selected("throughput")
+    assert balanced.required_gpus == 1
+    assert latency.tensor_parallel_size == 4
+    assert throughput.replicas == 4 and throughput.tensor_parallel_size == 1
+
+
+def test_concurrency_target_sizes_serving_replicas():
+    planner = DeterministicPlanner()
+    common = {"model_weight_gib": 8, "vram_per_gpu_gib": 32, "free_gpu_count": 8, "max_num_seqs": 8}
+    target = 8 * 2 + 1
+    facts = PlanningFacts(**common, objective="throughput", workload_profile=WorkloadProfile(concurrency=target))
+    candidates = planner.candidates(facts)
+    assert any(item.id == "optimized-baseline-tp1-r3" for item in candidates)
+
+    decision = planner.decide(facts, candidates)
+    chosen = next(item for item in candidates if item.id == decision.candidate_id)
+    assert chosen.replicas * 8 >= target
+    assert chosen.required_gpus == 3
+    assert "sized for the concurrency target" in decision.rationale
 
 
 def test_planner_combines_more_gpu_and_distributed_preferences():
@@ -2420,3 +2489,17 @@ def test_from_provider_id_returns_none_when_the_provider_no_longer_exists(monkey
     monkeypatch.setattr(ai_providers_service, "default_service", lambda: svc)
 
     assert OpenAICompatiblePlanner.from_provider_id("missing-provider") is None
+
+
+def test_ttft_prediction_cannot_establish_an_unmeasured_end_to_end_slo():
+    facts = PlanningFacts(
+        model_weight_gib=8,
+        vram_per_gpu_gib=32,
+        free_gpu_count=4,
+        ttft_slo_ms=100,
+        end_to_end_latency_slo_ms=2000,
+        aic_predictions=(AICCandidatePrediction(mode="agg", tensor_parallel_size=1, replicas=1, ttft_ms=20),),
+    )
+    planner = DeterministicPlanner()
+    candidate = next(item for item in planner.candidates(facts) if item.id == "optimized-baseline-tp1-r1")
+    assert planner._slo_assessment(facts, candidate) == ("unknown", 0)

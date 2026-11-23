@@ -37,6 +37,22 @@ def cached_model(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_source_composition_keeps_readonly_cache_and_shared_preflight(cached_model):
+    overrides = {
+        "model": {"name": "org/model"},
+        "runtime": {"storageVolumeId": "volume", "modelSource": "cached-readonly"},
+    }
+    with pytest.raises(ValueError, match="auto-cache"):
+        await require_cached_model(deepcopy(overrides), cluster_id="cluster", provider_id="optimized-baseline")
+    await require_cached_model(overrides, cluster_id="cluster", provider_id="source-composition")
+    assert overrides["runtime"]["modelSource"] == "cached-readonly"
+    assert overrides["runtime"]["cacheOffline"] is True
+    cached_model[0].compute_pending_sync.return_value = {"entry": ["new-node"]}
+    with pytest.raises(ValueError, match="sync"):
+        await require_cached_model(overrides, cluster_id="cluster", provider_id="source-composition")
+
+
+@pytest.mark.asyncio
 async def test_require_cached_model_normalizes_offline_source(cached_model):
     overrides = {
         "model": {"name": "org/model"},

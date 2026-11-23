@@ -163,9 +163,17 @@ def render_configuration(request: RenderRequest) -> RenderResponse:
     guide_variant = getattr(candidate, "guide_variant", None)
     if isinstance(guide_variant, str) and guide_variant:
         content["guideVariant"] = guide_variant
+    composition = getattr(candidate, "guide_composition", None)
+    if composition is not None:
+        content["guideComposition"] = composition
     guide_settings = getattr(candidate, "guide_settings", None)
     if guide_settings is not None:
         content["guideSettings"] = guide_settings
+    disaggregated_set = getattr(candidate, "disaggregated_set", None)
+    if disaggregated_set is not None:
+        from .disaggregated_set import normalize_disaggregated_set
+
+        content["disaggregatedSet"] = normalize_disaggregated_set(disaggregated_set)
     rendered_manifest = request.render.rendered_manifest
     content["officialGuide"] = {
         "source": request.render.guide_source.model_dump(mode="json", by_alias=True),

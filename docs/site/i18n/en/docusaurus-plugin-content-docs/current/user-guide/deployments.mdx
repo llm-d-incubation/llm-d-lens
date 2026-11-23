@@ -5,12 +5,317 @@ description: Find deployments, check readiness, view logs and remove unused serv
 
 Open **Deployments** to check whether a model is ready, inspect a failure, or manage an existing deployment.
 
+## DisaggregatedSet review
+
+When a selected Guide supports DisaggregatedSet, configuration exposes the real API
+fields: `spec.slices`, `spec.placementPolicy.type`/`.topology`, and **EPP Topology Affinity**
+(`topology-affinity-scorer` or `topology-affinity-filter`).
+Prefill and decode replicas are per Slice. The resource summary expands all Slices
+and leader/worker Pods; TP is not treated as an accelerator resource count.
+
+In both Deploy and Evaluation, P/D configuration always shows **Slice Configuration**
+below the topology settings. Controls remain disabled until
+the source is recognized as DS. Loading, preparation errors and a Guide without DS
+are shown explicitly; **Recheck Slice support** repeats the official-source check, and
+the header shows the pinned Guide commit.
+Choosing P/D alone does not convert a Deployment-based Guide into a DisaggregatedSet.
+
+Slice count and placement start from the Guide defaults; EPP Topology Affinity defaults to Scorer:
+
+- **Max feasible** is estimated from current free resources for the selected
+  placement policy: packing for `None`, domains that each fit one Slice for
+  `ExclusiveSlice`, and such domains not used by another DisaggregatedSet for
+  `ExclusiveTopology`. Before **Generate YAML** the estimate uses the Guide default roles;
+  afterwards it uses the generated roles. It is not a reservation.
+- **Recommended** appears only with matching evidence: succeeded Evaluation
+  cases for the same model, Guide, cluster, accelerator and per-Slice P/D replicas and TP
+  that recorded an SLO-stable rate. Enter a **Target load** to get the fewest Slices whose
+  measured rate meets it within the current ceiling. When runs used different workloads or SLO
+  targets, choose one under **Evidence**; runs are never mixed across them.
+  Otherwise the panel shows
+  `No verified recommendation — Guide default: N`. Throughput alone never selects a count.
+- **Selected** multiply per-Slice requests by the selected Slice count, and the
+  accelerator total checked before generation includes all Slices.
+- **Placement** selects the placement type, picks the topology key from
+  discovered node labels (or another key), and shows each domain's nodes, free
+  accelerators and whether it fits a Slice. When the Guide requests accelerators
+  through DRA claims, which the estimate does not count, domains show free CPU and
+  memory instead and a note marks the ceilings as CPU, memory and Pod based only.
+  Custom labels are marked because Lens cannot
+  verify that they reflect physical topology; node labels are changed by cluster
+  administrators, not from this page. A discovered placement is offered as
+  **Suggested**.
+- **EPP Topology Affinity** offers **Scorer** and **Filter** only. Scorer adds a
+  same-Slice score; Filter keeps same-Slice candidates when available. Missing peer
+  topology or no matching candidate leaves all candidates eligible, so Filter is not
+  a strict same-Slice guarantee. Unset or legacy inherited settings become Scorer
+  when generating a configuration; an existing Filter selection is preserved.
+- **Evaluation evidence** lists recent measured runs, marks those with the same per-Slice
+  shape, and **Apply** copies a run's Slices, placement and P/D values.
+
+Deploying a DS configuration runs preflight checks in the existing deployment flow,
+without an additional review dialog. Passed checks proceed directly to deployment;
+failures and unknown constraints appear inline under **Deployment checks**.
+In Manual and Agentic plan review, **Confirm deployment** submits the plan when preflight finds a placement and no errors. Conditions outside the placement model remain advisory. Incomplete inventory or an inconclusive search still prompts **Accept risks and deploy**.
+Its **Slice deployment preview**
+shows selected versus feasible Slices, the roles per Slice, total accelerator requests,
+placement, EPP routing and the modeled Slice-to-domain and Pod-to-node placement (the real
+scheduler may choose other nodes). Check workload YAML, Router
+values and checksums under **Deployment resources** when inspecting the preflight evidence. Failed constraints block
+execution, including a Slice count with no feasible placement. An inconclusive result requires explicit acknowledgment. A feasible placement does not reserve resources or guarantee admission.
+Changing cluster or deployment inputs requires another review. The final plan freezes
+rendered inputs and Chart bytes; it does not install missing DS/LWS controllers or CRDs.
+Official Guide snapshots require vendored Kustomize dependencies.
+
+Local sources freeze referenced resources, patches, generator inputs and Router
+values with a content checksum, not a claim that dirty files match Git HEAD.
+Remote custom Kustomize sources render from an exact commit snapshot; external
+dependencies and escaping paths must be vendored before planning.
+For a stopped or failed independently deployed DS, the **restart-plan API** prepares
+a new digest without deleting old resources. Confirm the new plan to start a new
+run. Evaluation-owned deployments use the Evaluation workflow's retry action.
+
+Evaluation automatically records a bounded inference probe before benchmarking a reviewed
+DS deployment. In Evaluation details, open **Deployments** to inspect **Runtime verification**:
+Kubernetes readiness, Slice placement, P/D routing and KV transfer have independent verdicts
+and reasons. **Recorded evidence** exposes the captured Pod/Node and request evidence.
+The deployment verification API also supports an explicit smoke request and read-only metric
+snapshots. A metric snapshot is not a live rate. Slice count changes require a new reviewed configuration.
+For instrumented vLLM 0.26.0 NIXL pull workers, it correlates the response ID with
+receive completion and producer acknowledgements across all TP ranks, verifies
+Pod/engine stability and P/D revision identity, and excludes transfer-failure fallback.
+The report records actual P/D Pods, same-Slice/domain results and transferred block
+counts. Reports persist as checksummed deployment evidence and remain visible after
+reopening details. Unsupported versions/connectors or incomplete evidence remain unknown.
+Ready Pods, HTTP success, same-Slice labels and aggregate KV counters are not proof of
+request-specific transfer. Routing/KV results remain unknown without correlated evidence.
+These checks do not certify physical network bandwidth or safe online rollout.
+
 P/D deployments using Router 0.11 automatically adapt legacy plugin settings when
 created or retried. The original configuration is retained, and deployment
 diagnostics record the effective Router values. A legacy `disagg-headers-handler`
 entry is replaced by the profile handler's built-in header handling; the saved
 prefill/decode decision is preserved. A conflicting old and new decider setting
 must be corrected before deployment.
+
+
+## Configure and review Manual or Agentic plans
+
+The deployment setup card is shown first: cluster, deployment name, model cache and
+Pod placement. Lens preselects a ready cluster when available, generates the
+deployment name and checks the selected model cache. All four fields are edited
+directly in the card; a badge shows the model cache state. An unavailable model
+cache offers **Prepare model cache**.
+Then choose **Manual** or **Agentic** under **Planning mode**. **Workload & limits**
+is always visible and optional; placeholders show the computed defaults (model
+context length, all free accelerators, full-context KV sizing) and blank fields keep them.
+**Reset to defaults** clears every override.
+Neither mode asks for hardware specifications or a Guide before planning.
+
+**Generate plan** (Manual) enables the checked core optimizations when compatible,
+including Prefill / Decode separation, which is on by default and decided by AIC when a
+request shape is given, and opens the reviewed
+configuration. **Optimize for** offers Balanced, Low latency and
+High throughput to both modes on the same entry screen: Manual uses it to choose the
+topology, and Agentic also uses
+it to rank optimizations. **Generate plan with AI** (Agentic) opens the generated plan
+directly, with no intermediate questionnaire. Keep Balanced to continue without parameters. A restored plan preserves other supported objectives.
+Agentic requires an AI provider; without one the Agentic option is disabled. If an AI
+request fails, planning stops with the reason and **Use Manual plan** builds a Manual
+plan from the same inputs. Neither path establishes a measured optimum.
+
+Resource limits, workload, request sizes and latency targets are collapsed optional
+sections. Both modes accept mean input/output tokens and P95 TTFT/TPOT SLA
+targets; the **Load target** switch chooses concurrency or QPS (QPS is an Agentic input). Shared-prompt and long-input hints are inferred by
+the AI from the goal and can be corrected after planning in Deployment settings. Manual also has an
+**Optimizations** checklist; unchecked items become forbidden features. Blank inputs remain unspecified;
+saved constraints remain visible when reopened.
+
+The generated plan prominently retains **Manual plan** or **Agentic plan** alongside
+the model and cluster. **Change setup** returns to the setup page; existing
+backend plans remain saved under their original mode and target.
+The **Serving flow** shows a horizontal Request → Endpoint selection → Prefill → Decode → Response path.
+Combined serving places both compute phases inside one Model server boundary; P/D uses separate boundaries.
+Cache indexing, KV cache, compute configuration and service management connect to the stages they affect.
+These are logical processing and configuration relationships, not live traffic or measured placement.
+
+Every functional group is visible, with configured counts and a short summary. Select a group to expand
+its optimizations inside the diagram, including off and unavailable entries. Each group has its own pages
+of up to four settings; expanding another group collapses the previous one. Select an optimization to open
+its source, router or runtime parameters in a configuration drawer. **Stage parameters** inside an expanded group opens broader settings such as replicas, when declared by the source. Supported toggles and detailed editors
+use the existing compatibility checks. Unavailable settings explain their status and remain read-only.
+There is no separate Stage configuration table or global All settings visibility switch.
+Apply edited parameters and check resources before reviewing deployment. Closing the drawer keeps unapplied
+changes visible in the plan; discard them explicitly if needed. Narrow screens can scroll the diagram horizontally.
+Each optimization has a colored status: Enabled, Required, Disabled, Conflict (cannot be combined with the
+current selection or needs a prerequisite), Recipe setting (changed through recipe parameters) and Unavailable
+(no deployable implementation in this source revision). Parameter lists are grouped by section and searchable.
+
+While a plan builds, a stepped progress view replaces the partial plan. Each step
+shows its elapsed time and an estimate (measured from earlier runs on this browser,
+otherwise a default). Select a step to see what runs internally and the events it
+reported. **Compose Guides and check resources** is usually the longest step: for
+each candidate the server renders the pinned Guide sources with Kustomize, pulls and
+templates their Helm charts, binds the model cache and checks devices and memory.
+After it finishes, **Planning log** in the plan header reopens the same timeline.
+
+Manual and Agentic are separate: a Manual plan has no Agentic entry. To use Agentic, go
+back to setup and choose it under **Planning mode**; the previous plan is kept and can be
+restored from the setup page. Recommendations still require resource checks
+and explicit deployment confirmation; no performance result is implied.
+
+The **Guides** tab in **Review & deploy** contains the complete
+Guide index from the cluster's pinned llm-d revision.
+Unavailable, external-operation and unadapted Guides retain their explanations:
+being listed does not promise that a Guide or arbitrary combination can deploy.
+Selected Guides expose their compatibility choices and source variables with
+readable names, for example **Model server**, **Monitoring** and **Infrastructure provider**.
+The flow includes independent prefix affinity and precise cache indexing.
+The configuration drawer exposes only the selected node's source/router or runtime fields,
+including per-replica native CPU cache capacity. Source variants remain editable.
+The **Parameters** and **YAML** tabs edit the complete rendered configuration directly.
+They open instantly from the reviewed snapshot; a server render is needed only after
+the optimization selection changes.
+
+Automatic additions retain each candidate's sized serving topology. Precise cache
+indexing and flow control may replace the serving recipe because they keep the same
+role shape; the sized replicas and TP are reapplied, and generation falls back to the
+sized recipe if the replacement fails source checks. A prefill/decode change is
+compared as a separate candidate or enabled explicitly in the editor, which then
+sizes both roles. Inventory controller installation requires explicit selection.
+Unsupported transport/cache combinations remain excluded without blocking compatible
+alternatives; required user selections are never silently dropped.
+The Router's narrowly scoped authentication RBAC is managed with the deployment
+namespace. Cleanup also waits for these resources to be garbage-collected; an
+ownership conflict is an error, never permission to replace an existing grant.
+
+Manual enables every compatible source optimization without using workload benefit
+as a gate, in a fixed priority: prefix caching, chunked prefill, prefix affinity,
+load routing, precise cache indexing, CPU KV cache, flow control. When two are mutually
+exclusive, the higher-priority one stays on and the other explains which optimization
+blocks it; disable that one to switch. Explicit exclusions and edits are preserved.
+External prerequisites, unresolved choices and resource checks still constrain
+generation. Agentic enables only optimizations expected to help the selected
+objective; other compatible ones remain available with that reason. Neither mode
+installs external prerequisites automatically. A compatible optimization that is off
+offers **Enable and edit parameters**. **Apply changes and check resources**
+creates a new reviewed source snapshot; unapplied edits block deployment. Changing
+selections preserves unrelated final parameter edits by reconciling them with the
+newly rendered resources. Conflicting edits block application with an explicit
+error instead of silently disappearing; undo the conflicting selection or use
+**Discard direct edits** in the Parameters or YAML tab. Legacy snapshots without
+an edit baseline require explicit resolution when their base configuration changes.
+Disabling native CPU cache retains its capacity for re-enabling.
+A changed source revision requires an
+explicit decision to discard source edits and adopt the current revision.
+
+Rejected numeric edits restore the last accepted value and display the validation error.
+Clearing an explicit **Slices** count returns to automatic sizing while preserving total
+Prefill and Decode replicas. A layout is **Recommended** only when both role counts,
+slice count and placement policy match the recommendation.
+Pod placement and target-node selectors are included before the source snapshot is reviewed;
+selected-node capacity is checked rather than relying only on total cluster capacity.
+A later placement change requires regenerating the reviewed configuration.
+Source-plan evidence requires an identifiable source recipe and a representable CPU-cache
+capacity; ambiguous recipes or differing role cache capacities are rejected rather than
+treated as baseline/cache-free evidence. Prefix affinity is detected from mounted,
+profile-referenced router configuration, and enabling it leaves Decode profiles unchanged.
+
+A compact strip above the serving flow summarizes topology, accelerators, optimization
+count and status. **Review & deploy** opens one dialog with **Overview**, **Parameters**
+and **YAML** tabs. Overview shows accelerators, topology, cluster,
+model cache, the optimizations enabled in the final YAML, checks, warnings and
+**Confirm deployment**. Lens selects the **Inference Service** automatically, preferring gateway/router
+Services over generic inference-model Services and excluding EPP control and metrics ports.
+Equally ranked entries require an explicit choice; with a single choice it is shown read-only.
+A Service named `epp` can still supply the HTTP entry on port 80 or 443;
+change it only if needed. **Parameters** shows one card per Guide recipe (Guide-level variables
+such as the model server; adding or removing Guides is under an advanced disclosure) and one card
+per workload with only replicas, container images, resources, engine flags and environment
+variable values, named by container and flag; everything else is edited in the YAML tab.
+Edits in any tab must be applied and checked before
+confirming; the dialog stays open while they are applied. Approval binds the
+selected endpoint and exact configuration checksum and rechecks capacity; editing
+does not provide a separate deploy path. Legacy saved plans expose **Load Guides
+and build source configuration** and retain their old preview in a disclosure.
+If the source catalog is unavailable, the error remains visible instead of
+silently presenting legacy templates as a fully supported source composition.
+The plan view shows the serving flow with a compact **Optimizations** panel floating in the diagram's
+empty top-right area, so it never covers stages or reduces the diagram width. Each entry has a
+settings button that opens its parameters in place. Select the
+expand button to swap: the full table moves to the center and the flow becomes a corner thumbnail
+(select it to swap back). The table lists every optimization with a checkbox; checking or
+unchecking a supported switch rebuilds and rechecks the plan. Recipe-controlled settings such
+as quantization and pipeline parallelism have disabled checkboxes; use their settings button
+to edit the owning source configuration. Enabling or disabling a supported optimization in
+the flow does the same, so the flow and the table stay in sync. Checked optimizations the plan does not apply
+show a status and the reason on their row. The table also lists optimizations that come with the
+Guide recipe (for example the token load scorer, or the KV transport used by Prefill / Decode
+separation) with a short description; they are checked, configured and counted the same way.
+Unchecking the KV transport turns off Prefill / Decode separation; other Guide optimizations are
+toggled in the source flow and applied immediately.
+Agentic plans also show **Plan**, **Alternatives** and **Benchmark tests** tabs. Alternatives compares reviewed source configurations and evidence.
+
+For Agentic plans, **Benchmark tests** is a separate optional view. Prepare a
+test-enabled plan there before selecting the workload and confirming tests.
+Its accelerator ceiling starts from the planning constraint or discovered capacity;
+unknown capacity requires an explicit value. Saved tests restore their recorded
+workload and budget. The form checks required repetitions, resource ceilings and
+numeric limits before submission. Interrupted or failed cleanup must be resolved
+before starting more tests; submitted deployments cannot start another trial.
+Trial evidence displays measured TTFT, TPOT, end-to-end latency, throughput and
+error fraction, with missing values left unknown.
+For source-backed plans, **Check all source candidates** renders each candidate
+before testing, and each selected candidate requires its reviewed inference
+Service. Cache variants must be edited and rendered in the Guide configuration;
+tests do not silently add an unreviewed native-cache variant. Choosing a measured
+winner restores its exact reviewed source configuration.
+
+The budget includes **Winner confirmation repetitions** (default 1): after the
+comparison, the leading candidate is redeployed and independently measured with
+the same workload. Two candidates with two repetitions plus one confirmation
+require five benchmark runs. A failed confirmation retains the comparison evidence
+but does not establish a confirmed winner. The latency planning objective defaults
+the test objective to lowest P95 end-to-end latency.
+
+The accelerator figure is the planning snapshot (required / available), not reserved or
+current capacity. Use **Recheck resources** before approval to refresh the reviewed snapshot;
+approval also rechecks capacity.
+
+### Verify optimization mechanisms
+
+Guide availability, compatible configuration, runtime behavior and measured benefit
+are distinct evidence levels. Unsupported combinations must retain their reasons;
+enabling more flags is not evidence of better performance. Validate the pinned
+source revision, runtime image, hardware and workload together.
+
+| Mechanism | Required runtime evidence |
+| --- | --- |
+| Multi-replica routing | EPP processing, per-backend request counts and cache hits for shared-prefix traffic, followed by distinct-prefix load on both replicas. HTTP 200 alone is insufficient. |
+| Prefill/decode separation | Both roles process requests and KV transfer metrics or correlated transfer logs increase. Exclude ordinary combined-serving fallback. |
+| CPU KV readback | Write KV to CPU, evict only device KV in an isolated test, repeat the prefix and observe CPU-to-device transfer plus external cache hits. CPU writes alone do not prove readback. |
+
+Prefer a bounded device KV budget and normal traffic for eviction tests. Do not
+enable production development/RPC endpoints merely to reset a cache. Keep test
+deployments isolated, record failures and clean up only their owned resources.
+
+**Change workload & limits** shows the discovered capacity and current context setting
+without inventing traffic values. Accelerator limits can change which combinations
+fit; request sizes and concurrency refine capacity estimates; QPS and latency set
+performance targets. Blank fields impose no additional constraint.
+Use **Rebuild plan** to apply overrides. Manual has no redundant single **Plan** navigation button.
+The current plan remains available until a replacement is
+created; **Keep existing plan** returns to it. A new configuration revision requires
+new review. **Back to edit** returns to the plan.
+Use **Confirm deployment** to submit; a changed checksum requires a fresh review.
+After confirmation, Lens opens the full Deployments list with the new job marked
+**New**. Its status stays in progress until live Pods confirm readiness, so the list,
+the summary cards and the status dot always agree. The **Degraded** card counts
+deployments with fewer ready model-server Pods than requested.
+A deployment is ready only when Deploy succeeds and every
+component reports ready; planning status alone is not readiness. Workload
+performance still requires measurement.
+
 
 ## Hardware profiles and guide variants
 
@@ -44,11 +349,28 @@ are no longer supported.
 
 ## Open the deployment creation flow
 
-In **Agentic** mode, TTFT and TPOT SLOs and input/output tokens per request (ISL/OSL)
-start unset (`null` when submitted empty). Gray example placeholders are references,
-not submitted defaults. The **SLO** section (**Optional target.**) is expanded by
-default, with TTFT and TPOT side by side. **Workload estimate** appears directly below **Preference**
-and is expanded by default; **vLLM parameters** follows it and is collapsed by default.
+Manual proceeds directly to **Deployment plan**; Agentic first offers an objective,
+with all numeric parameters optional.
+No request lengths, prefix reuse or workload shape are invented. These are benefit
+hints, not compatibility gates. Agentic
+can interpret explicitly stated qualitative workload traits from a goal when an
+AI provider is selected; the interpretation is displayed and editable. Without AI,
+use structured inputs. Numeric resource and performance limits are never inferred.
+
+Manual ranks supported combinations by SLA status, then the P/D decision, then the greatest
+source-verified capability coverage, not the first Guide that renders; on equal coverage a P/D combination wins.
+Manual limits `--max-num-seqs` only when you declare request sizes; otherwise vLLM
+admits requests by free KV cache. It does not maximize resource use
+or claim a measured performance optimum. Unsupported combinations remain explicit.
+**Ready for your confirmation** is a compact conclusion; failed checks block deployment and
+provide **Retry checks**. Deployment confirmation rechecks current capacity.
+
+Prefix-affinity routing, P/D separation and CPU KV offload can be combined independently.
+Routing composition retains the P/D profiles and uses affinity plugins from the same
+pinned source revision; incompatible plugins or images are reported explicitly.
+Basic attention KV caching is distinct from cross-request prefix caching and CPU
+offload. Missing explicit vLLM flags can be configured with a mandatory startup
+capability probe in the selected image; this is not a claim of verified runtime support.
 
 Deployment creation requires models registered in [Model Cache](/user-guide/model-cache).
 Select a registered cache volume containing the ready model and its revision on the
@@ -81,7 +403,30 @@ not a network isolation boundary.
 2. In the page header, click **Create**.
 3. Follow [Create a deployment](/user-guide/model-market). The new deployment appears in this list after submission.
 
-In **Manual**, open **Advanced settings** in the configuration editor and select **Replica placement**. The default prefers one node but can use others when necessary. The presets group all model-server Pods in the same rendered deployment manifest, including separate Prefill and Decode Deployments; router Pods are excluded. **Require one node** keeps the group on the same node; optionally select a live Node label to restrict eligible nodes. **Distribute evenly across nodes** balances the group across eligible nodes using hostname topology spread (up to one Pod of skew); Pods may remain Pending if the balance cannot be maintained with available capacity. **Require separate nodes** needs one eligible node per Pod in the group and leaves extra Pods Pending if there are not enough nodes. Neither distribution preset supports LeaderWorkerSet workloads. The label list comes from the selected cluster. Agentic deployments use the soft same-node replica preference without an affinity selector in their forms. Tensor-parallel devices are requested by each model-server Pod, so TP stays within that Pod; multi-Pod LeaderWorkerSet workers prefer the same node but can spread when necessary.
+Choose **Pod placement** on the setup card before building a plan: prefer one node
+(default), require one node (optionally a specific node), distribute evenly or
+require separate nodes. The choice applies to Deployment, LeaderWorkerSet and
+DisaggregatedSet model servers. Existing deployment APIs and the separate
+Configuration editor retain their placement controls. TP devices are requested by
+each model-server Pod; planned placement is not shown as actual cluster placement
+before deployment.
+
+For P/D, the Prefill, Decode and KV transfer settings include **P/D slices and
+placement**: slice count, per-slice Prefill/Decode replicas and TP, the slice
+placement policy (`None`, `ExclusiveSlice`, `ExclusiveTopology`) and its node-label
+topology key. Lens recommends values from current free devices per topology domain,
+narrowest domain first (node, then rack-like labels, zone, region). It splits role
+replicas into the fewest equal slices that each fit one domain, so KV transfer stays
+local. Latency and reliability objectives use `ExclusiveTopology` when enough
+unshared domains exist. If no domain fits a whole slice, placement stays `None`.
+Automatic hard placement also constrains role Pods to the domains that can fit a
+whole slice, preventing the first Pod from locking the slice onto a smaller node.
+This does not reserve devices; regenerate the plan if available capacity changes.
+Reviewed values are pinned in the plan and remain editable; non-`None` policies are
+hard scheduling rules and Pods stay Pending if no domain can hold a slice. The
+recommendation respects Pod placement: distribute evenly or separate nodes exclude
+node-scoped slices, and require one node keeps one slice. The slice panel disables
+conflicting topology keys, and an explicit conflict is reported when you apply changes.
 
 ## RuntimeClass Policy
 
@@ -110,7 +455,13 @@ The **Cluster** and **Namespace** columns each include a copy button.
 
 Wait for **Ready** before calling the deployment. For **In progress**, check the pod logs for startup progress. For **Failed**, read the failure banner and the affected pod's logs.
 
-The status dot also reflects live model-server Pods. A yellow dot means fewer ready model-server Pods than requested, so serving capacity is reduced. A red dot means no ready model-server Pods remain, so the service is unavailable. These conditions are also reported under **Needs attention**.
+Missing runtime details are read from the stored rendered vLLM manifest. For P/D
+deployments, flat runtime fields are labeled **(Decode)**. Unspecified values remain
+unknown rather than being filled with assumed defaults.
+
+Normal Pending or Running-but-not-ready Pods keep a starting deployment **In progress**.
+Explicit Pod failures, including image pull failures and OOM, still show **Failed**.
+For deployments already marked Ready, the status dot also reflects live model-server Pods. A yellow dot means fewer ready model-server Pods than requested, so serving capacity is reduced. A red dot means no ready model-server Pods remain, so the service is unavailable. These conditions are also reported under **Needs attention**.
 
 **Failed** is not final. A rollout that ran past its progress deadline is recorded
 as failed, but the workload often recovers on its own -- a pod that kept crashing
@@ -199,7 +550,22 @@ Lens creates model-server Pods with a **120-second** termination grace period an
 2. For a P/D deployment, set **Prefill replicas** and **Decode replicas**. For an aggregated deployment, set **Replicas**.
 3. Click **Scale deployment**.
 
-Manual scaling changes live Kubernetes model-server replicas only. Restarting the deployment restores its configured replica count. DisaggregatedSet deployments are created with `slices: 1`; manual scaling changes role replicas and never changes `spec.slices`. For a P/D deployment, scale down Decode before Prefill; Prefill scale-down can interrupt in-flight KV transfers, but Lens configures `kv_load_failure_policy=recompute` whenever a `--kv-transfer-config` is present.
+Manual scaling changes live Kubernetes model-server replicas only. Restarting the deployment restores its configured replica count. DisaggregatedSet deployments are created with the declared `spec.slices`; manual scaling changes role replicas and never changes `spec.slices`. For a P/D deployment, scale down Decode before Prefill; Prefill scale-down can interrupt in-flight KV transfers, but Lens configures `kv_load_failure_policy=recompute` whenever a `--kv-transfer-config` is present.
+
+## Run a benchmark against a ready deployment
+
+1. In a ready deployment's row, open the actions menu and select **Run benchmark**.
+   The action requires the `evaluate:run:create` permission.
+2. Choose a workload: **Short chat** (1,024 input / 256 output tokens at concurrency
+   1, 8 and 32), **Long input, short output** (8,192 / 256 at 1, 8 and 16) or
+   **High concurrency** (1,024 / 256 at 32, 64 and 128).
+3. Optionally enter P95 TTFT and TPOT targets, then click **Start benchmark**.
+
+The benchmark runs an in-cluster harness against this deployment through
+`POST /api/v1/evaluate/runs` with its `deployment_execution_id`. You do not choose
+Standalone or Gateway routing: the server targets the deployment's own router or, for
+a deployment served through the shared Gateway, the Gateway. The deployment is not
+changed. Lens opens the benchmark result page after the run is queued.
 
 ## Open deployment monitoring and profiling
 
@@ -288,3 +654,52 @@ metrics require kubelet-reported, profile-recognized device identities; an
 exporter alone cannot establish which devices belong to the workload. Profile
 file edits require restarting the development services and refreshing the page;
 this is not a live JSON editor. Existing saved results are not recollected.
+
+## Review a generated deployment
+
+Manual uses the source-backed editor described above. Prefix caching and chunked
+prefill can be explicitly excluded without inventing workload characteristics.
+Completion only changes source-supported settings; unavailable options retain
+their reasons in the Guide and optimization inventory. Explicit runtime controls
+remain authoritative. Guide composition supports optimized baseline, precise routing, and NIXL P/D plus native CPU KV cache from the same pinned official source. Runtime images must match. P/D wraps the original NixlConnector first and OffloadingConnector second in MultiConnector on both Prefill and Decode, preserving transport settings and reserving local host memory per model pod. A same-image init container checks connector imports and configuration schemas before startup; it rejects the known vLLM 0.19.0 offloading defect (upstream issues #39500/#39617). This check does not establish GPU correctness or performance. Unsupported transports produce an adapter-specific error; arbitrary connector stacking is not supported. Composition alone does not prove optimal performance.
+
+The P/D CPU-cache adapter currently requires `NixlConnector` with `kv_both` on both roles.
+Sources using `kv_producer` and `kv_consumer` remain eligible for P/D without CPU KV offload;
+only the added cache combination is rejected. Lens does not rewrite these transport roles or
+silently remove an explicitly requested cache requirement.
+
+Use node parameter actions or **All deployment parameters**, then **Apply changes
+and check resources**. Manual and Agentic both preserve the reviewed source bundle;
+the editor does not silently send parameter changes to an LLM or substitute another
+candidate. Explicitly rebuilding workload requirements requests a new recommendation.
+Selecting an alternative is not deployment; **Review & deploy** still requires confirmation.
+
+## Measure and compare Agentic candidates
+
+Open **Verify with real benchmarks**, select candidates, set the GPU ceiling,
+maximum minutes, benchmark-run budget and repetitions, then choose throughput,
+P95 end-to-end latency or throughput per accelerator as the objective. Source-backed
+candidates require reviewed inference Services and rendered cache variants. Only
+legacy plans retain the optional CPU-cache budget that adds trial variants; include
+those repetitions in their budget. Synthetic load starts from the plan's mean input/output lengths and concurrency;
+missing values default to 512 input tokens, 128 output tokens and concurrency 4,
+with 100 requests. A restored test uses its recorded workload. Expand
+**Test workload** to change these values or supply representative inference-perf
+YAML, such as a shared-prefix workload for cache experiments.
+
+**Start deployment and benchmark tests** provisions actual cluster resources.
+Each candidate is deployed, tested with the same workload and cleaned up before
+the next candidate. Complete repetitions must satisfy every configured latency
+SLO and the error limit. Missing metrics and failed trials never count as proof
+of superiority. Results include benchmark IDs and a ranking of completed trials;
+review the best measured candidate before confirming its final deployment.
+
+Use **Stop and clean up** to cancel. Cleanup may outlast the measurement budget;
+a cleanup failure blocks further deployment until resolved. Progress is audited
+with the candidate configuration and workload. After a service interruption,
+the recorded test task is marked interrupted and offers explicit cleanup; it
+never automatically resumes deployment. Browser refresh restores the current
+plan in the same session. This is bounded candidate search, not an unbounded
+self-modifying optimization loop or a claim of global optimality.
+
+The Overview and 3D tabs show each role’s transport and local CPU cache separately. Agentic CPU-cache trials include eligible P/D candidates and compare them with their original configuration using the same workload. The default NIXL-first order prioritizes transport when multiple connectors report a hit; it does not guarantee fewer network transfers. Confirm workload correctness and performance with real measurements.

@@ -149,6 +149,8 @@ async def _execute(pos, opts, kubeconfig, timeout):
                 )
             except ApiException as error:
                 if error.status == 404 and opts.get("ignore_not_found"):
+                    if name:
+                        return ""
                     result = {"items": []}
                 else:
                     raise

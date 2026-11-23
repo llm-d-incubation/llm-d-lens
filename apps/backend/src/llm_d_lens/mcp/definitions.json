@@ -1847,6 +1847,7 @@
     "POST /api/v1/capacity/estimate",
     "POST /api/v1/clusters/{cluster_id}/access",
     "POST /api/v1/configurations/render",
+    "POST /api/v1/configurations/plan",
     "POST /api/v1/configurations/resolve",
     "POST /api/v1/configurations/save",
     "POST /api/v1/groups",

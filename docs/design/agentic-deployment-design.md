@@ -11,6 +11,54 @@ original part-local context; use the links below for unambiguous navigation.
 | [AI candidate generation](#agentic-deployment-ai-candidate-generation-and-scoring-design) | Generator, scorer, tool allowlist and fallback contracts. |
 | [Planning evidence and RAG](#agentic-deploy-evidence) | Evidence authority, similarity and remaining work. |
 
+## DisaggregatedSet Implementation Boundary
+
+The legacy Deploy/Evaluation implementation now separates reusable Configuration
+from an owner-bound prepared deployment plan. `deploy.prepared_plans` freezes final
+workload YAML, a generated namespace identity, Router values and Chart bytes; its
+digest binds the original configuration/runtime request. Confirmation rechecks cluster
+inventory, atomically creates the Run with plan consumption, and execution materializes
+the stored inputs instead of rendering a new candidate. Helm hooks and automatic CRD
+installation are disabled for this path. Cleanup requires the prepared namespace marker.
+
+`configuration.disaggregated_set` preserves legal Slice counts and interprets role
+replicas per Slice. Demand expands leader/worker groups using Kubernetes resource
+requests, native init-sidecar peaks and overhead, not TP. `placement_preflight` models
+Node readiness, selectors, taints, required node affinity, resource fragmentation,
+RuntimeClass scheduling/overhead and exclusive Slice domains with bounded search.
+It does not reserve resources or simulate admission, quota, concurrent scheduling or
+rollout surge. Missing inventory/search exhaustion remains unknown rather than pass.
+
+Evaluation DS cases persist in `awaiting_review` until the owner confirms every exact
+plan digest. Before benchmarking, evidence follows DS/LWS/StatefulSet/Pod UID
+ownership, observed generations and actual Node labels. Bounded inference
+records before/after metrics and replacement/restart checks. Routing/KV transfer
+remains unknown without request-correlated evidence; aggregate counters are not proof.
+
+Storage-derived PV/PVC manifests are included in the digest and review; changes to
+their defining storage record are rejected before materialization and before mount
+creation. Existing PV name collisions fail preflight. Secret source references are
+shown without credential bytes; credential rotation is not frozen by this contract.
+
+Request-attributed evidence now observes vLLM 0.26.0 NIXL pull receive completion,
+failure/recompute callbacks and producer acknowledgements. Positive verdicts require
+complete TP-rank coverage, response/remote-request correlation and stable ownership,
+revision and engine identities. Unsupported connectors/versions remain unknown. Reports
+are persisted as deployment evidence artifacts; a bounded probe is not benchmark-wide proof.
+Task details reopen persisted review. Retry prepares new digests for new deployments,
+preserving reusable Ready executions. Automatic DS baselines match final rendered
+accelerator requests across all Slices, not CPU/memory/Pod parity. Local sources use
+copied dependency closures and content fingerprints; remote custom sources use pinned
+Git snapshots, with unvendored dependencies rejected. No live migration, real-cluster
+acceptance, engine migration or alpha online rollout guarantee is claimed. Slice Sweep
+remains an Evaluation configuration and result-comparison capability.
+
+Pinned contracts were checked against `kubernetes-sigs/lws` v1.0.0
+`api/disaggregatedset/v1/disaggregatedset_types.go` and `llm-d/llm-d-router` v1.0.0
+`pkg/epp/framework/plugins/{datalayer/extractor/topology,scheduling/scorer/topologyaffinity}`.
+The routing preference is a weighted soft scorer on the prefill profile. Slice labels
+are logical identity, not proof of fabric locality or revision-safe P/D pairing.
+
 <!-- design-part: architecture -->
 
 ## Agentic Deployment Architecture and Workflow
@@ -136,19 +184,86 @@ decode TP/replica dimensions; changing prefill cannot remain an exact measured m
 
 ### UI inputs and interaction
 
-The UI is only the input and review surface for the workflow above. The entry points are
-`src/components/ModelMarketPage.jsx` and
-`src/components/AgenticDeploymentWorkspace.jsx`:
+The entry is `apps/frontend/src/pages/model-market/ui/ModelMarketPage.jsx`.
+`DeploymentWorkflow` in `pages/deployment/ui/AgenticDeploymentWorkspace.jsx` owns
+both modes; `ManualDeploymentWorkspace.jsx` selects deterministic mode.
 
-- Model Cache storage sits directly below Cluster in Model Market and is shared by Manual and
-  Agentic; users can enter Agentic mode first, and required-field validation runs only when
-  generating a recommendation.
-- The Agentic workspace provides Use case, optional SLO/workload/preference inputs, plus
-  alternatives, score-source, and evidence display.
-- The initial response shows the top three scored candidates; the external planner also returns
-  at most three candidates.
-- Users may only choose an existing deployable candidate; they cannot submit a new provider, TP,
-  replica count, or CLI parameters through the UI or prompt.
+- Model, cluster and ready model cache precede optional business needs.
+  Request lengths and traffic volume remain unset; workload traits default to
+  independent general-chat requests and remain editable. Cluster inventory is backend-discovered. Manual builds
+  immediately without Notes or a workload questionnaire. Workload traits guide
+  benefits and tuning, never exclude technically compatible combinations.
+  An explicitly selected AI provider can interpret missing prefix-reuse and
+  prefill-heavy traits from a goal in any language; structured facts take precedence.
+  The interpretation is displayed and editable, never used to invent numeric limits.
+  Interpretation failure is explicit rather than a silently ignored goal.
+- Manual can pin `requirements.hard_constraints.providerRef`; candidate filtering,
+  revision checks and approval enforce it without substituting another provider.
+  Mean input length and optional P95 input length remain independent. TTFT, TPOT
+  and end-to-end targets are normalized from shared requirements. AI preference
+  text is preserved alongside the hard constraints.
+- New requests carry `planning_mode` and structured `requirements`. Manual never
+  calls external AI. Both modes independently combine prefix-affinity routing and
+  source-bound CPU cache on aggregated or P/D serving topologies. Source guides are
+  implementation inputs, not mutually exclusive optimization bundles. Routing
+  composition preserves P/D profiles and pins its donor plugins in the deployment bundle.
+  Manual preserves each capability family, maximizes supported coverage and uses
+  the optional objective for ties; `balanced` defaults to smaller resource use.
+  Agentic selectively recommends among compatible combinations. Cache capacity is
+  initially at most 8 GiB per serving replica and 25% of observed free host memory in total;
+  source compatibility remains pending until rendering. No uncomposed performance
+  evidence is inherited by cache or routing variants.
+- Both modes use the existing candidate validator, configuration builder,
+  source-pinned resource renderer and deployment approval lifecycle. The old
+  `/configurations/plan` compatibility helper inspects intent only; it cannot
+  fabricate executable topologies or ranked candidates.
+- Both modes automatically render/check resources after planning or editing.
+  Manual compares retained combinations and chooses the greatest actual enabled
+  capability coverage after source checks, using planning order for ties.
+  The coverage report includes capabilities available only in other combinations.
+  Missing adapters are `unsupported`, not proven conflicts; Agentic omissions can
+  be `alternative`. If no combination passes, the recommendation remains and
+  deployment is blocked. Explicit candidate rendering never changes the choice.
+- One workbench shows resource use and the full optimization workflow in 2D,
+  including unsupported and disabled nodes. Supported nodes expose Edit/Disable.
+  Supporting Kubernetes objects remain in Resources/YAML rather than crowding the
+  default graph. A settings icon opens optimization controls or component edits.
+  The source-backed 2D flow is the default editor: optimizations attach to their
+  stages, combined serving shares one node, and P/D expands into separate stages.
+  Clicking a point opens only its parameters in a side panel, with explicit enable/
+  disable actions and dependency or unsupported explanations. Guide selection and
+  complete YAML editing live in Technical details; 3D remains an optional technical
+  view. Compatible source additions are considered in both modes without installing
+  external prerequisites or replacing a sized serving topology.
+  Unrelated final parameter edits are rebased onto fresh source output using a saved
+  baseline; conflicting edits block application instead of being silently dropped.
+  Legacy final edits without a baseline require explicit resolution when their base
+  changes. Native cache capacity survives disabling and re-enabling.
+  Runtime fields apply to every serving role.
+  Cache edits can revise per-replica capacity and recheck host memory. Source-declared
+  runtime flags are completed in Manual even when potential workload benefit is
+  unknown; required flags and disabled dependencies are enforced during rendering.
+  Direct vLLM sources with omitted flags use a mandatory startup CLI capability
+  probe in the selected image. Configured flags are not described as runtime-verified.
+  Checks provides a rerun action and explains admission, startup and benchmark follow-up.
+- Applied edits are live-revalidated new runs linked by `parent_run_id`, with
+  incremented `revision`. Original recommendations remain intact; YAML checks
+  and performance evidence do not carry over.
+- Source rendering records the exact manifest under the shared configuration.
+  Approval refreshes capacity before passing that manifest to Deploy. Admission,
+  readiness and performance remain separate pending checks. A single deployment
+  confirmation binds to the displayed run and checksum; the separate "review
+  confirmed" click is removed. A changed plan cannot reuse that confirmation.
+- New workflow snapshots retain complete runs for restoration. Trials are
+  disabled by default and require an independently confirmed bounded workload.
+  A measured ranking entry is not labelled the winner unless it is the recorded
+  best candidate of a completed comparison.
+
+The existing planner/scorer details below still describe legacy API behavior.
+Structured shared workflows reject prompt-only refinement; changed requirements
+produce a new plan. The currently supported provider combinations are not an
+exhaustive optimization catalog. Unknown mechanisms, dependency-install policy,
+and unrestricted YAML round-trip editing must not be presented as implemented.
 
 ### Implementation details and constraints
 

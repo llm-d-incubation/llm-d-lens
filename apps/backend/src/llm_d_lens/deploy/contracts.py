@@ -162,6 +162,24 @@ class DeploymentRunCreateRequest(BaseModel):
     failure_policy: str = Field(default="continue", pattern="^(stop|continue)$")
     provenance: dict[str, Any] = Field(default_factory=dict)
     runtime_binding: RuntimeBinding | None = None
+    prepared_plan_id: str | None = Field(default=None, description="Reviewed immutable plan to execute.")
+    expected_plan_digest: str | None = Field(default=None, description="SHA-256 of the reviewed plan.")
+    acknowledge_unknown: bool = Field(
+        default=False, description="Explicitly acknowledge listed unmodeled scheduling risks."
+    )
+
+
+class DeploymentPreparedPlan(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    cluster_id: str
+    owner_user_id: str | None = None
+    owner_group_id: str | None = None
+    digest: str
+    payload: dict[str, Any]
+    preflight: dict[str, Any]
+    created_at: datetime = Field(default_factory=utcnow)
+    status: Literal["prepared", "consumed"] = "prepared"
+    run_id: str | None = None
 
 
 class ConfigurationArtifact(BaseModel):

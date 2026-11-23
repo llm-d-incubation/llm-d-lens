@@ -16,7 +16,7 @@ import {
 import EvaluationConfigurationEditor from "./EvaluationConfigurationEditor";
 import BenchmarkInputs from "./evaluation/BenchmarkInputs";
 import EvaluationPlan from "./evaluation/EvaluationPlan";
-import { benchmarkIssues, benchmarkScenario, configurationContextLimit } from "../model/benchmarkSettings";
+import { benchmarkIssues, benchmarkScenario, configurationContextLimit, SLICE_SWEEP_SHARED_PREFIX, SLICE_SWEEP_SLO, sliceSweepIssues } from "../model/benchmarkSettings";
 import { Badge, Button, Modal } from "../../../shared/ui";
 import { PageHeading } from "../../../shared/ui/PageHeader";
 import { StorageVolumeSelect } from "../../../shared/ui/StorageVolumeSelect";
@@ -24,10 +24,10 @@ import { listStorageVolumes } from "../../storage";
 import { listModelCacheEntries } from "../../model-cache";
 import { loadCluster, loadClusterOverview, loadClusters, selectCluster } from "../../optimization";
 import { deleteConfigurationArtifact, loadConfigurationArtifacts, loadConfigurationCapabilities, saveConfiguration } from "../../optimization";
-import { startLocalDeployment } from "../../optimization";
+import { startLocalDeployment, prepareLocalDeployment, executePreparedDeployment, deploymentRequiresReview } from "../../optimization";
 import { listModelNames } from "../../model-service";
 import { loadGuideCatalog } from "../../optimization";
-import { createBenchmarkRun, createEvaluation } from "../model/client";
+import { createBenchmarkRun, createEvaluation, confirmEvaluationPlans, evaluationPlanReview } from "../model/client";
 import {
     applyRecommendedWorkload, benchmarkWorkloadMode, configurationSummary,
 } from "../model/capabilities";
@@ -249,6 +249,74 @@ function configurationFacts(artifact, provider) {
     };
 }
 
+const SLICE_PLACEMENT_FAILURES = new Set(['NO_FEASIBLE_PLACEMENT', 'NO_NODE_FITS_POD', 'REQUIRED_CRD_UNAVAILABLE']);
+
+export function SliceDeploymentPreview({ preview, preflight }) {
+    const policy = preview.placementPolicy || { type: 'None' };
+    const overCapacity = preview.maxFeasibleSlices != null && preview.slices > preview.maxFeasibleSlices;
+    const failed = (preflight.errors || []).some(item => SLICE_PLACEMENT_FAILURES.has(item.code));
+    const verdict = failed ? ['danger', 'Fail'] : overCapacity ? ['warning', 'Warning'] : preflight.modeledConstraints === 'pass' ? [preflight.status === 'pass' ? 'success' : 'warning', preflight.status === 'pass' ? 'Pass' : 'Pass · unverified constraints'] : ['neutral', 'Unknown'];
+    const quantity = (resource, value) => Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
+    const rows = [
+        ['Slices', `Selected ${preview.slices} / Max feasible ${preview.maxFeasibleSlices ?? 'unknown'}`],
+        ['Workload per Slice', (preview.roles || []).map(role => `${role.replicas} ${role.name}${role.groupSize > 1 ? ` (${role.groupSize} Pods each)` : ''}`).join(' + ')],
+        ...(preview.acceleratorResources || []).map(resource => [resource, `${quantity(resource, (preview.sliceRequests?.[resource] || 0) * preview.slices)} requested (${quantity(resource, preview.sliceRequests?.[resource] || 0)} per Slice)`]),
+        ['Placement', policy.type === 'None' ? 'None' : `${policy.type} · ${policy.topology}`],
+        ['EPP Topology Affinity', preview.sliceRouting === 'filter' ? 'Filter' : preview.sliceRouting === 'prefer' ? 'Scorer' : 'Default'],
+    ];
+    return <section data-slice-preview className="rounded-lg border border-theme-border p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="break-all text-sm font-semibold">{`Slice deployment preview · ${preview.workload}`}</h3>
+            <Badge tone={verdict[0]}>{verdict[1]}</Badge>
+        </div>
+        <dl className="mt-2 grid gap-x-4 gap-y-1 text-xs sm:grid-cols-[max-content_1fr]">
+            {rows.map(([label, value]) => <div key={label} className="contents"><dt className="break-all text-theme-muted">{label}</dt><dd className="break-all">{value}</dd></div>)}
+        </dl>
+        {overCapacity && <p role="alert" className="mt-2 text-xs text-amber-600 dark:text-amber-300">{`The current free-resource estimate fits ${preview.maxFeasibleSlices} Slice(s) for this placement policy.`}</p>}
+        {preview.placement?.length > 0 ? <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {preview.placement.map(entry => <div key={entry.slice} className="rounded-md bg-slate-100 p-2 text-xs dark:bg-slate-900/60">
+                <p className="font-semibold">{`Slice ${entry.slice}${entry.pods[0]?.domain ? ` → ${entry.pods[0].domain}` : ''}`}</p>
+                <ul className="mt-1 space-y-0.5 text-theme-muted">{entry.pods.map(pod => <li key={`${pod.role}-${pod.group}-${pod.rank}`} className="break-all">{`${pod.role} ${pod.group}${pod.rank ? `.${pod.rank}` : ''} → ${pod.node}`}</li>)}</ul>
+            </div>)}
+        </div> : <p className="mt-2 text-xs text-theme-muted">No modeled placement was found for this case.</p>}
+        <p className="mt-2 text-[10px] text-theme-muted">Modeled from current free resources. The Kubernetes scheduler may choose different nodes, and nothing is reserved.</p>
+    </section>;
+}
+
+export function DeploymentPlanReview({ preparedReview, busy, error, acknowledgeUnknown, setAcknowledgeUnknown, onClose, onConfirm }) {
+    const plan = preparedReview?.plan;
+    const checksRef = useRef(null);
+    useEffect(() => {
+        if (plan) checksRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, [plan]);
+    if (!plan) return null;
+    return <section ref={checksRef} aria-label="Deployment checks" className="space-y-4 border-y border-theme-border py-4 text-theme-text">
+            <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-semibold">Deployment checks</h2><Badge tone={plan.preflight.status === 'fail' ? 'danger' : plan.preflight.status === 'pass' ? 'success' : 'warning'}>{plan.preflight.status}</Badge></div>
+            {plan.preflight.errors?.map((item, index) => <p key={index} className="text-sm">{item.code}: {item.message || item.field}</p>)}
+            {plan.preflight.unmodeled?.map(item => <p key={item} className="text-xs text-theme-muted">{item}</p>)}
+            {(plan.preflight.slicePreview || []).map(preview => <SliceDeploymentPreview key={`${preview.caseIndex}-${preview.workload}`} preview={preview} preflight={plan.preflight} />)}
+            <details><summary className="cursor-pointer text-sm">Deployment resources</summary>
+            <code className="block break-all text-xs">{plan.digest}</code>
+            {plan.cases.map((item, index) => <section key={index} className="border-t border-theme-border pt-3">
+                <h3 className="break-all text-sm font-semibold">{item.namespace}</h3>
+                {[
+                    ['Namespace', JSON.stringify(item.namespaceManifest, null, 2)],
+                    ['Comparison budget', item.comparisonBudget ? JSON.stringify(item.comparisonBudget, null, 2) : null],
+                    ['Storage PV/PVC', item.storageResources?.length ? JSON.stringify(item.storageResources, null, 2) : null],
+                    ['Secret source reference', item.secretReference?.mode !== 'none' ? JSON.stringify(item.secretReference, null, 2) : null],
+                    ['Workload YAML', item.manifest],
+                    ['Router YAML and values', `${item.routerManifest}\n${item.routerValues}`],
+                    ...(item.resources || []).map(resource => [resource.name, resource.content]),
+                ].filter(([, content]) => content).map(([label, content]) => <details key={label} className="mt-2"><summary>{label}</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{content}</pre></details>)}
+                <code className="block break-all text-xs">{item.manifestChecksum}</code><code className="block break-all text-xs">{item.chartChecksum}</code>
+            </section>)}
+            </details>
+            {plan.preflight.status === 'unknown' && <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={acknowledgeUnknown} onChange={event => setAcknowledgeUnknown(event.target.checked)} />I accept the listed unverified constraints and the absence of a resource reservation.</label>}
+            {error && <p role="alert" className="text-sm">{error}</p>}
+            <div className="flex justify-end gap-2"><Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button><Button isLoading={busy} disabled={busy || plan.preflight.status === 'fail' || (plan.preflight.status === 'unknown' && !acknowledgeUnknown)} onClick={onConfirm}><Play className="h-4 w-4" />Deploy</Button></div>
+    </section>;
+}
+
 export default function EvaluationTaskWizard({ onNavigate }) {
     // Snapshot the hand-off once. The hidden Evaluation task list mounted by App
     // consumes the same session key after this screen renders; reading it again on
@@ -322,6 +390,8 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const apiTokenValid = /^lens-mk-\S+$/.test(apiToken.trim());
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
+    const [preparedReview, setPreparedReview] = useState(null);
+    const [acknowledgeUnknown, setAcknowledgeUnknown] = useState(false);
     const [error, setError] = useState("");
 
     const [hardwareRequest] = useState(createLatestResourceRequest);
@@ -418,8 +488,9 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 setTargetId(services?.[0]?.id || "");
                 setTemplate((current) => guides.some((guide) => guide.id === current) ? current : guides[0]?.id || "");
                 if (startWithConfiguration) {
-                    const guideId = returningIntent?.workloads?.[0]?.guide || guides[0]?.id || "";
-                    setConfigurationEditor({ guideId, mode: "defaults", artifact: null, key: `model-market-${Date.now()}` });
+                    const initialArtifact = (savedArtifacts || []).find((item) => item.artifact_id === returningIntent?.initial_artifact_id) || null;
+                    const guideId = initialArtifact?.deployable_configuration?.provider_ref || returningIntent?.workloads?.[0]?.guide || guides[0]?.id || "";
+                    setConfigurationEditor({ guideId, mode: initialArtifact ? "clone" : "defaults", artifact: initialArtifact, key: `model-market-${Date.now()}` });
                 }
                 setError(catalogError);
             })
@@ -550,7 +621,10 @@ export default function EvaluationTaskWizard({ onNavigate }) {
     const recommendedBenchmark = benchmarkFor(provider);
     const effectiveBenchmark = customBenchmark || recommendedBenchmark;
     const tests = [benchmarkScenario(effectiveBenchmark, slaTargets)];
-    const benchmarkErrors = benchmarkIssues(effectiveBenchmark, slaTargets, configurationContextLimit(selectedArtifacts));
+    const benchmarkErrors = [
+        ...benchmarkIssues(effectiveBenchmark, slaTargets, configurationContextLimit(selectedArtifacts)),
+        ...(targetMode === "configurations" ? sliceSweepIssues(selectedArtifacts, effectiveBenchmark, slaTargets) : []),
+    ];
     const selectionFor = artifact => optimizationSelections[artifact.artifact_id] || ['full'];
     const combinationErrors = selectedArtifacts.flatMap(artifact => {
         try { selectedOptimizationPlan(artifact.deployable_configuration.provider_ref, selectionFor(artifact)); return []; }
@@ -572,6 +646,21 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         setCustomBenchmark(next);
         setWorkloadMode(benchmarkWorkloadMode(next));
     }, [step, customBenchmark, recommendedBenchmark, provider]);
+
+    const sliceSweepSelected = targetMode === "configurations" && selectedArtifacts.some(artifact => artifact.deployable_configuration?.provenance?.slice_sweep);
+    const applySliceSweepDefaults = () => {
+        if (!sliceSweepSelected) return;
+        if ((effectiveBenchmark?.shared_prefix?.stages || []).length < 2) {
+            const next = { ...structuredClone(effectiveBenchmark || recommendedBenchmark), workload: "sanity_random.yaml", matrix: [], concurrency_stages: [], workload_yaml: null, shared_prefix: structuredClone(SLICE_SWEEP_SHARED_PREFIX) };
+            setCustomBenchmark(next);
+            setWorkloadMode("shared-prefix");
+        }
+        setSlaTargets(current => ({
+            ...current,
+            ttft_ms: current.ttft_ms === "" || current.ttft_ms == null ? SLICE_SWEEP_SLO.ttft_ms : current.ttft_ms,
+            tpot_ms: current.tpot_ms === "" || current.tpot_ms == null ? SLICE_SWEEP_SLO.tpot_ms : current.tpot_ms,
+        }));
+    };
 
     const selectedClusters = new Set(selectedArtifacts.map((item) => artifactCluster(item).session_id).filter(Boolean));
     const setupIssues = [
@@ -613,7 +702,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             // reconstruct ~/.cache paths in the browser: the API returns the
             // resolved absolute path for the version downloaded for this cluster.
             const latestCluster = await loadCluster(clusterId);
-            await startLocalDeployment(configurations, {
+            const provenance = {
                 cluster_session_id: cluster.session_id || sessionStorage.getItem("prism_cluster_session_id") || undefined,
                 cluster_server_id: clusterId,
                 deployment_source: {
@@ -624,7 +713,19 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 deployment_name: deploymentName.trim(),
                 description: deploymentDescription.trim(),
                 model_market: { deployment_name: deploymentName.trim() },
-            }, configurations[0].provenance?.placement || { replicas: 'prefer-same-node' });
+            };
+            const placement = configurations[0].provenance?.placement || { replicas: 'prefer-same-node' };
+            if (deploymentRequiresReview(configurations)) {
+                const request = { configurations, provenance, runtime_binding: { placement } };
+                const plan = await prepareLocalDeployment(request);
+                setAcknowledgeUnknown(false);
+                setPreparedReview({ request, plan });
+                if (plan.preflight.status !== 'pass') return;
+                await executePreparedDeployment(request, plan, false);
+                setPreparedReview(null);
+            } else {
+                await startLocalDeployment(configurations, provenance, placement);
+            }
             clearEvaluationIntent();
             onNavigate("optimization-deployments");
         } catch (nextError) {
@@ -634,6 +735,26 @@ export default function EvaluationTaskWizard({ onNavigate }) {
         } finally {
             setBusy(false);
         }
+    }
+
+    async function confirmPreparedDeployment() {
+        if (busy || !preparedReview) return;
+        setBusy(true);
+        setError('');
+        try {
+            if (preparedReview.workflow) {
+                if (preparedReview.workflow.cluster_id !== selectedClusterId) throw new Error('Selected cluster changed; prepare a new Evaluation.');
+                await confirmEvaluationPlans(preparedReview.workflow, acknowledgeUnknown);
+                onNavigate('optimization-evaluate');
+                return;
+            }
+            if (preparedReview.request.provenance.cluster_server_id !== selectedClusterId) throw new Error('Selected cluster changed; prepare a new plan.');
+            await executePreparedDeployment(preparedReview.request, preparedReview.plan, acknowledgeUnknown);
+            clearEvaluationIntent();
+            onNavigate('optimization-deployments');
+        } catch (nextError) {
+            setError(nextError.message || 'Prepared deployment could not be started');
+        } finally { setBusy(false); }
     }
 
     const acceptPublishedConfiguration = ({ artifacts: publishedArtifacts, advance = false, optimizationSelection }) => {
@@ -697,6 +818,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
             if (!configurationEditor && !retainedIds.length) openConfiguration(template);
             return;
         }
+        if (step === 1) applySliceSweepDefaults();
         setStep((current) => current + 1);
     };
 
@@ -821,6 +943,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
 
     const create = async () => {
         if (busy) return;
+        if (preparedReview?.workflow) return confirmPreparedDeployment();
         if (targetMode === "existing" && !apiTokenValid) {
             setError("Model access token must start with lens-mk-.");
             return;
@@ -867,7 +990,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     },
                 },
             }));
-            const createdWorkflow = await createEvaluation({
+            let createdWorkflow = await createEvaluation({
                 name: name.trim(),
                 cluster_session_id: cluster.session_id,
                 runtime: {},
@@ -883,6 +1006,14 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     scenarios: tests,
                 })),
             });
+            if (createdWorkflow.status === 'awaiting_review') {
+                setAcknowledgeUnknown(false);
+                const review = evaluationPlanReview(createdWorkflow);
+                setPreparedReview(review);
+                if (review.plan.preflight.status !== 'pass') return;
+                createdWorkflow = await confirmEvaluationPlans(createdWorkflow, false);
+                setPreparedReview(null);
+            }
             window.dispatchEvent(new CustomEvent("prism:evaluation-created", { detail: { workflow: createdWorkflow } }));
             onNavigate("optimization-evaluate");
         } catch (nextError) {
@@ -928,6 +1059,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 </Button>
             )}
         </div></div>}
+        <fieldset disabled={Boolean(preparedReview)} className="min-w-0 space-y-5">
         {!deployOnly && <ol className="grid grid-cols-4 gap-2 rounded-2xl border border-slate-800/60 bg-white p-2 shadow-inner dark:bg-slate-950/30" aria-label="Task creation progress">{STEPS.map((label, index) => <li key={label}><button disabled={editorBusy || index > step || (targetMode === "existing" && index === 1)} onClick={() => setStep(index)} className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition disabled:cursor-not-allowed ${index === step ? "bg-[#037ffc] shadow-sm ring-0 dark:bg-cyan-500/10 dark:ring-1 dark:ring-cyan-400/25" : index < step ? "hover:bg-slate-800/50" : "opacity-55"}`}><span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${index < step ? "bg-emerald-400/15 text-emerald-300" : index === step ? "bg-white text-[#037ffc] shadow-none dark:bg-cyan-400 dark:text-slate-950 dark:shadow-[0_0_14px_rgba(34,211,238,.35)]" : "bg-slate-800 text-slate-500"}`}>{index < step ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className={`hidden truncate text-[9px] font-bold uppercase tracking-wide sm:block lg:text-[10px] ${index === step ? "not-dark:text-white dark:text-cyan-200" : index < step ? "text-slate-300" : "text-slate-500"}`}>{label}</span></button></li>)}</ol>}
         {loading ? <div className="flex min-h-80 items-center justify-center"><RefreshCw className="h-6 w-6 animate-spin text-cyan-400" /></div> : <div>
             <main className="rounded-3xl border border-slate-800/70 bg-white p-5 dark:bg-[#080d17]/95 shadow-[0_24px_80px_rgba(2,6,23,.32)] backdrop-blur-sm lg:p-6">
@@ -1023,6 +1155,7 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                     targetCount={runCount} summary={artifactSummaries.map(item => `${item.guide} · ${item.model} · ${item.topology}`).join("; ")}
                     issues={benchmarkErrors} recommendedBenchmark={recommendedBenchmark}
                     fullBenchmark={provider?.evaluation?.full_workload?.shared_prefix}
+                    sliceSweep={sliceSweepSelected}
                 />}
 
                 {!deployOnPublish && step === 3 && <EvaluationPlan
@@ -1046,10 +1179,12 @@ export default function EvaluationTaskWizard({ onNavigate }) {
                 />}
             </main>
         </div>}
+        </fieldset>
+        <DeploymentPlanReview preparedReview={preparedReview} busy={busy} error={error} acknowledgeUnknown={acknowledgeUnknown} setAcknowledgeUnknown={setAcknowledgeUnknown} onClose={() => setPreparedReview(null)} onConfirm={confirmPreparedDeployment} />
         <Modal isOpen={Boolean(yamlArtifact)} onClose={() => setYamlArtifact(null)} title="Deployment Configuration YAML" subtitle="YAML editing supports annotations and formatting. Use Edit configuration for model, topology, runtime or storage changes." size="xl" footer={<>{yamlArtifact?.deployable_configuration?.content?.officialGuide?.deploymentBundle && <a className="mr-auto text-xs text-cyan-300 hover:underline" href={`/api/v1/configurations/artifacts/${encodeURIComponent(yamlArtifact.artifact_id)}/bundle`}>Download deployment bundle</a>}<Button variant="secondary" onClick={() => setYamlArtifact(null)}>Cancel</Button><Button disabled={yamlLoading || yamlSaving || !yamlText.trim()} onClick={saveEditedYaml}>{yamlSaving ? "Saving…" : "Save YAML"}</Button></>}>
             {yamlLoading ? <div className="flex h-72 items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-cyan-300" /></div> : <textarea aria-label="Editable deployment YAML" value={yamlText} onChange={(event) => setYamlText(event.target.value)} spellCheck={false} className="h-[60vh] w-full resize-none rounded-xl border border-slate-700 bg-black/35 p-4 font-mono text-[10px] leading-5 text-slate-300 outline-none focus:border-cyan-500" />}
         </Modal>
-        {!deployOnly && !(step === 1 && (configurationEditor || deployOnPublish)) && <footer className="grid grid-cols-1 items-center gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
+        {!preparedReview && !deployOnly && !(step === 1 && (configurationEditor || deployOnPublish)) && <footer className="grid grid-cols-1 items-center gap-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto]">
             <p className={`min-w-0 break-words text-xs leading-5 ${error ? "text-rose-300" : busy ? "text-cyan-300" : "text-amber-300"}`}>{error ? "Review the issue above, then retry." : (busy ? "Creating evaluation and scheduling deployment…" : step === 0 ? (!canContinue && (targetMode === "existing" ? "Select an endpoint" : `Required: ${setupIssues.join(" · ")}`)) : step === 1 ? ((!canContinue || combinationErrors.length > 0) && (combinationErrors[0] || "Add or select a valid configuration")) : step === 2 ? (canContinue ? `${tests.length ? runCount / tests.length : 0} targets × ${tests.length} tests = ${runCount} runs · Sequential` : benchmarkErrors[0] || "Benchmark Plan has no selected tests") : null)}</p>
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 sm:max-w-lg">
             {step > 0 && <button onClick={() => setStep((current) => targetMode === "existing" && current === 2 ? 0 : current - 1)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-700 px-4 text-xs"><ChevronLeft className="h-4 w-4" />Back</button>}

@@ -33,6 +33,10 @@ const VARIANTS = {
         'bg-transparent text-red-600 dark:text-rose-400 border border-red-300 dark:border-rose-500/40 hover:bg-red-50 dark:hover:bg-rose-500/10',
     link:
         'bg-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 underline underline-offset-2 border border-transparent px-0 py-0',
+    catalogCard:
+        'border border-[#b7d4e6] bg-white hover:border-[#037ffc99] hover:bg-linear-to-br hover:from-white hover:via-[#037ffc05] hover:to-[#037ffc0d] focus-visible:ring-[#037ffc] dark:border-slate-800 dark:bg-slate-900 dark:bg-linear-to-br dark:from-slate-900 dark:via-slate-900/70 dark:to-slate-950 dark:shadow-none dark:hover:border-cyan-400/60 dark:hover:from-slate-900 dark:hover:via-slate-900/70 dark:hover:to-slate-900 dark:focus-visible:ring-cyan-400',
+    catalogTab:
+        'border border-slate-700 bg-transparent text-theme-muted hover:border-slate-500 aria-selected:border-[#037ffc] aria-selected:bg-[#037ffc] aria-selected:text-white dark:aria-selected:border-cyan-400 dark:aria-selected:bg-cyan-400/10 dark:aria-selected:text-cyan-200',
 };
 
 const SIZES = {

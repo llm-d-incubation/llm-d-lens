@@ -109,6 +109,75 @@ def _execution(execution_id: str, status: DeploymentStatus, namespace: str) -> D
     )
 
 
+@pytest.mark.parametrize(
+    "prefix_args,expected_prefix",
+    [
+        ([], None),
+        (["--enable-prefix-caching"], True),
+        (["--no-enable-prefix-caching"], False),
+        (["--enable-prefix-caching=false"], False),
+        (["--enable-prefix-caching=unknown"], None),
+    ],
+)
+def test_serving_metadata_reads_rendered_source_composition_parameters(tmp_path, prefix_args, expected_prefix):
+    case = _case("run-source", 1, "execution-source", DeploymentCaseStatus.READY)
+    case.provider_ref = "source-composition"
+    execution = _execution("execution-source", DeploymentStatus.READY, "serving")
+    documents = []
+    for role, replicas, parallelism in [("prefill", 1, 4), ("decode", 2, 2)]:
+        documents.append(
+            {
+                "kind": "Deployment",
+                "metadata": {"name": role},
+                "spec": {
+                    "replicas": replicas,
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "modelserver",
+                                    "image": "ghcr.io/llm-d/llm-d-xpu:v1.0.0",
+                                    "command": ["vllm", "serve"],
+                                    "args": [
+                                        "Qwen/Qwen3-14B",
+                                        f"--tensor-parallel-size={parallelism}",
+                                        "--max-model-len=8192",
+                                        "--max-num-seqs",
+                                        "32",
+                                        "--gpu-memory-utilization=0.9",
+                                        *prefix_args,
+                                        "--max-num-batched-tokens=8192",
+                                    ],
+                                }
+                            ]
+                        }
+                    },
+                },
+            }
+        )
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("\n---\n".join(json.dumps(document) for document in documents))
+    execution.artifact.manifest_ref = str(manifest)
+
+    metadata = executions.serving_metadata(case, execution)
+
+    assert metadata["tensor_parallel_size"] == 2
+    assert metadata["max_model_len"] == 8192
+    assert metadata["max_num_seqs"] == "32"
+    assert metadata["gpu_memory_utilization"] == "0.9"
+    assert metadata["enable_prefix_caching"] is expected_prefix
+    assert metadata["max_num_batched_tokens"] == "8192"
+    assert metadata["image"] == "ghcr.io/llm-d/llm-d-xpu:v1.0.0"
+    assert metadata["replicas"] == 2
+    assert metadata["prefill_replicas"] == 1
+
+    case.create_request.configuration_artifacts[0].content = json.dumps({"decode": {"maxModelLen": 16384}})
+    assert executions.serving_metadata(case, execution)["max_model_len"] == 16384
+    manifest.write_text("invalid: [")
+    assert executions.serving_metadata(case, execution)["max_model_len"] == 16384
+    assert executions.serving_metadata(case, execution)["max_num_seqs"] is None
+
+
 @pytest.mark.parametrize("conflicts", [1, 2, 3])
 def test_execution_save_reloads_after_concurrent_metadata_update(tmp_path, conflicts: int) -> None:
     """Retry rolled-back writes with fresh metadata, but bound persistent conflicts."""
@@ -146,6 +215,16 @@ def test_execution_save_reloads_after_concurrent_metadata_update(tmp_path, confl
     assert len(updates) == conflicts
     assert persisted.metadata.display_name == updates[-1]
     assert persisted.status == (DeploymentStatus.DEPLOYING if conflicts == 3 else DeploymentStatus.READY)
+
+
+def test_execution_provenance_patch_keeps_cluster_session(tmp_path) -> None:
+    store = JsonDeploymentRunStore(tmp_path)
+    execution = _execution("execution-patch", DeploymentStatus.READY, "serving")
+    store.save_execution(execution)
+    store.update_execution_provenance(execution.execution_id, {"runtime_verification": {"status": "pass"}})
+    provenance = store.get_execution(execution.execution_id).provenance
+    assert provenance["cluster_session_id"] == "session-1"
+    assert provenance["runtime_verification"] == {"status": "pass"}
 
 
 def test_execution_save_does_not_retry_other_persistence_errors(tmp_path) -> None:
@@ -310,6 +389,47 @@ async def test_list_filters_by_multiple_statuses_and_limit(deployment_store):
     assert len(both["items"]) == 2
     assert [item["execution_id"] for item in ready_only["items"]] == ["execution-ready"]
     assert len(limited["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_returns_configuration_and_redacted_manifest(deployment_store, tmp_path):
+    manifest = tmp_path / "rendered" / "manifest.yaml"
+    manifest.parent.mkdir()
+    manifest.write_text(
+        "apiVersion: v1\nkind: Secret\nmetadata:\n  name: token\nstringData:\n  HF_TOKEN: hf_secret\n"
+        "---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: vllm\n"
+    )
+    execution = deployment_store.get_execution("execution-ready")
+    execution.artifact.manifest_ref = str(manifest.parent)
+    deployment_store.save_execution(execution)
+
+    plan = await router.get_execution_plan("execution-ready")
+
+    assert plan["namespace"] == "qwen-ready"
+    assert json.loads(plan["configuration_artifacts"][0]["content"])["model"]["name"] == "Qwen/Qwen3-0.6B"
+    assert "hf_secret" not in plan["manifest"]
+    assert "HF_TOKEN: <redacted>" in plan["manifest"]
+    assert "kind: Deployment" in plan["manifest"]
+    assert (await router.get_execution_plan("execution-cleaned"))["manifest"] is None
+
+
+def test_plan_redaction_covers_list_items_embedded_manifests_and_parse_failures():
+    from llm_d_lens.deploy import executions
+
+    listed = "kind: List\nitems:\n- kind: Secret\n  data:\n    token: c2VjcmV0\n- kind: Service\n"
+    redacted = executions._redact_manifest_secrets(listed)
+    assert "c2VjcmV0" not in redacted and "token: <redacted>" in redacted
+    assert executions._redact_manifest_secrets("items: [broken") is None
+
+    manifest = "kind: Secret\nstringData:\n  HF_TOKEN: hf_secret\n"
+    combined = executions._redact_manifest_secrets(manifest + "---\n" + listed)
+    assert "hf_secret" not in combined and "c2VjcmV0" not in combined
+    assert combined.count("<redacted>") == 2
+    content = json.dumps({"officialGuide": {"renderedManifest": manifest}, "model": {"name": "m"}})
+    result = json.loads(executions._redact_artifact_content(content))
+    assert "hf_secret" not in result["officialGuide"]["renderedManifest"]
+    assert result["model"] == {"name": "m"}
+    assert executions._redact_artifact_content('{"model": "plain"}') == '{"model": "plain"}'
 
 
 @pytest.mark.asyncio

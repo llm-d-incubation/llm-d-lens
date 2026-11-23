@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from llm_d_lens.auth.access import (
     current_principal,
     owner_for_create,
+    require_cluster_access,
     resource_readable,
 )
 from llm_d_lens.cluster import deployment_runtime_overrides, require_active_session, sessions
@@ -75,6 +76,7 @@ from llm_d_lens.evaluation.models import (
     EvaluateRunRequest,
     EvaluateWorkflowRequest,
     EvaluationCreateRequest,
+    EvaluationPlanConfirmation,
     SharedPrefixWorkloadSpec,
     WorkloadMatrixPoint,
     validate_inline_workload,
@@ -296,6 +298,29 @@ def _baseline_configuration(
             raise ValueError("PD baseline GPU budget requires positive integer P/D replicas and tensor parallel sizes")
         prefill_replicas, prefill_tp, decode_replicas, decode_tp, baseline_tp = dimensions
         total_gpus = prefill_replicas * prefill_tp + decode_replicas * decode_tp
+        from llm_d_lens.configuration.disaggregated_set import disaggregated_sets, workload_summary
+
+        documents = list(yaml.safe_load_all((source_content.get("officialGuide") or {}).get("renderedManifest") or ""))
+        if disaggregated_sets(documents):
+            summary = workload_summary(documents)
+            binding = baseline_content.get("hardware_request") or {}
+            resource = binding.get("resource_name")
+            if summary["unmodeled"] or binding.get("request_model") != "extended-resource" or not resource:
+                raise ValueError(
+                    "DS baseline accelerator budget cannot be inferred for DRA or unknown resource identity; "
+                    "set explicit replicas"
+                )
+            total = summary["resourceRequests"].get(resource, 0)
+            if not total or not float(total).is_integer():
+                raise ValueError("DS baseline GPU budget requires a positive integral rendered accelerator request")
+            total_gpus = int(total)
+            baseline_content["comparisonBudget"] = {
+                "scope": "accelerator-request-only",
+                "resource": resource,
+                "quantity": total_gpus,
+                "sourceRequests": summary["resourceRequests"],
+                "sourcePodCount": summary["podCount"],
+            }
         replicas, remainder = divmod(total_gpus, baseline_tp)
         if remainder or not 1 <= replicas <= 32:
             raise ValueError(
@@ -652,6 +677,10 @@ def _rebind_retry_session(workflow: dict) -> None:
     workflow["cluster_session_id"] = session.id
 
 
+def _guide_benchmark_specification(guide: str | None) -> str:
+    return "guides/optimized-baseline" if guide in {None, "baseline-vllm", "source-composition"} else f"guides/{guide}"
+
+
 def _benchmark_specification(case: dict) -> str:
     configured = os.environ.get("LLM_D_BENCH_SPECIFICATION_FILE")
     if configured:
@@ -660,11 +689,11 @@ def _benchmark_specification(case: dict) -> str:
         return "guides/optimized-baseline"
     embedded = _embedded_configuration(case)
     if embedded is not None:
-        return f"guides/{embedded.provider_ref}"
+        return _guide_benchmark_specification(embedded.provider_ref)
     artifact = get_configuration_artifact(case.get("configuration_artifact_id", ""))
     if artifact is not None:
-        return f"guides/{artifact.deployable_configuration.provider_ref}"
-    return f"guides/{case['spec']['guide']}"
+        return _guide_benchmark_specification(artifact.deployable_configuration.provider_ref)
+    return _guide_benchmark_specification(case["spec"]["guide"])
 
 
 def _configuration_facts(case: dict) -> dict:
@@ -1757,10 +1786,58 @@ async def _execute_shared_pods_baseline_case(workflow: dict, case: dict) -> None
                 _save(workflow)
 
 
+def _evaluation_deployment_request(workflow: dict, case: dict) -> DeploymentRunCreateRequest:
+    return DeploymentRunCreateRequest(
+        configurations=[_case_configuration(workflow, case)],
+        runtime_binding=_runtime_binding(workflow),
+        prepared_plan_id=case.get("prepared_plan_id"),
+        expected_plan_digest=case.get("prepared_plan_digest"),
+        acknowledge_unknown=bool(workflow.get("acknowledge_unknown")),
+        provenance={
+            "cluster_session_id": workflow["cluster_session_id"],
+            "cluster_server_id": workflow.get("cluster_id"),
+            "deployment_source": {"kind": "evaluation-cluster-source"},
+            "evaluate_workflow": True,
+            "evaluation_id": workflow["id"],
+            "evaluation_case_id": case["id"],
+            "preserve_deployment": bool(case.get("preserve_deployment")),
+        },
+    )
+
+
+async def _prepare_evaluation_plans(workflow: dict) -> None:
+    from llm_d_lens.deploy.prepared_plans import prepare, public_plan, requires_prepared_plan
+
+    reviewed = []
+    for case in workflow["cases"]:
+        if (
+            case.get("baseline_type") == "kubernetes-service"
+            or case.get("status") == "succeeded"
+            or case.get("status") == "benchmarking"
+            and case.get("execution_id")
+        ):
+            continue
+        configuration = _case_configuration(workflow, case)
+        if not requires_prepared_plan([configuration]):
+            continue
+        case["deployment_configuration"] = configuration.model_dump(mode="json")
+        plan = await prepare(
+            deployment_run_manager,
+            _evaluation_deployment_request(workflow, case),
+            owner_user_id=workflow.get("owner_user_id"),
+        )
+        case.update(prepared_plan_id=plan.id, prepared_plan_digest=plan.digest)
+        reviewed.append({"case_id": case["id"], **public_plan(plan)})
+    if reviewed:
+        workflow.update(status="awaiting_review", prepared_plans=reviewed, acknowledge_unknown=False)
+    else:
+        workflow.pop("prepared_plans", None)
+
+
 @owned_execution("workflow")
 async def _execute_evaluation(workflow_id: str) -> None:
     workflow = _get("workflow", workflow_id)
-    if workflow is None or workflow.get("status") in _TERMINAL_EVALUATE_STATUSES:
+    if workflow is None or workflow.get("status") in {*_TERMINAL_EVALUATE_STATUSES, "awaiting_review"}:
         return
     current_task = asyncio.current_task()
     registered_task = _workflow_tasks.get(workflow_id)
@@ -1832,22 +1909,8 @@ async def _execute_evaluation(workflow_id: str) -> None:
             _save(workflow)
             try:
                 if ready_case is None:
-                    configuration = _case_configuration(workflow, case)
                     deployment = await deployment_run_manager.start_run(
-                        DeploymentRunCreateRequest(
-                            configurations=[configuration],
-                            runtime_binding=_runtime_binding(workflow),
-                            provenance={
-                                "cluster_session_id": workflow["cluster_session_id"],
-                                # DeploymentRunManager resolves the actual checkout
-                                # from this session's durable cluster record.
-                                "deployment_source": {"kind": "evaluation-cluster-source"},
-                                "evaluate_workflow": True,
-                                "evaluation_id": workflow["id"],
-                                "evaluation_case_id": case["id"],
-                                "preserve_deployment": bool(case.get("preserve_deployment")),
-                            },
-                        ),
+                        _evaluation_deployment_request(workflow, case),
                         owner_user_id=workflow.get("owner_user_id"),
                     )
                     owns_deployment = True
@@ -1865,6 +1928,20 @@ async def _execute_evaluation(workflow_id: str) -> None:
                         endpoint_kind="direct" if ready_case.provider_ref == "baseline-vllm" else "routed",
                     )
                 _save(workflow)
+                if case.get("prepared_plan_id"):
+                    from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+                    from llm_d_lens.deploy.executions import find_execution_context
+                    from llm_d_lens.deploy.prepared_plans import plan_documents
+                    from llm_d_lens.deploy.runtime_verification import verify_execution
+
+                    prepared = DeploymentPlanDao().get(case["prepared_plan_id"])
+                    evidence = await verify_execution(
+                        find_execution_context(ready_case.execution_id), plan_documents(prepared), smoke=True
+                    )
+                    case["runtime_verification"] = evidence
+                    _save(workflow)
+                    if any(evidence[dimension]["status"] == "fail" for dimension in ("kubernetes", "placement")):
+                        raise ValueError("Actual deployment readiness or Slice placement failed verification")
                 await _run_case_benchmark(workflow, case, ready_case.execution_id)
                 benchmark_succeeded = True
             finally:
@@ -4046,9 +4123,8 @@ async def create_run(request: EvaluateRunRequest, http_request: Request = None) 
         _run_api_keys[run["id"]] = request.api_key
     _hydrate_benchmark_context(run)
     if "specification_file" not in request.model_fields_set:
-        guide = run.get("guide")
-        run["specification_file"] = os.environ.get("LLM_D_BENCH_SPECIFICATION_FILE") or (
-            f"guides/{guide}" if guide and guide != "baseline-vllm" else "guides/optimized-baseline"
+        run["specification_file"] = os.environ.get("LLM_D_BENCH_SPECIFICATION_FILE") or _guide_benchmark_specification(
+            run.get("guide")
         )
     run["benchmark"]["specification_file"] = run["specification_file"]
     _save(run)
@@ -4138,6 +4214,8 @@ async def create_workflow_run(request: EvaluateWorkflowRequest, http_request: Re
     ),
     description=(
         "Queue deployment, benchmarking and comparison of published configuration artifacts. Independently deployed "
+        "DS cases instead return awaiting_review with frozen prepared_plans; "
+        "confirm their exact digests before any deployment starts. "
         "PD baselines default to the total prefill plus decode GPU budget divided by the effective baseline TP "
         "(source decode TP unless overridden). Explicit baseline replicas take precedence, including unequal budgets; "
         "same-pod Kubernetes Service comparisons do not create replicas. Returns 409 before queueing if an automatic "
@@ -4218,10 +4296,71 @@ async def create_evaluation(request: EvaluationCreateRequest, http_request: Requ
             raise HTTPException(status_code=409, detail=str(error)) from error
         case["deployment_configuration"] = baseline.model_dump(mode="json")
     try:
+        await _prepare_evaluation_plans(workflow)
         _save(workflow)
-        _workflow_tasks[workflow["id"]] = asyncio.create_task(_execute_evaluation(workflow["id"]))
+        if workflow["status"] != "awaiting_review":
+            _workflow_tasks[workflow["id"]] = asyncio.create_task(_execute_evaluation(workflow["id"]))
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         raise HTTPException(status_code=503, detail=f"evaluation could not be queued: {error}") from error
+    return workflow
+
+
+@router.post(
+    "/evaluations/{workflow_id}/confirm",
+    status_code=202,
+    operation_id="confirm_evaluation_plans",
+    summary="Confirm frozen Evaluation deployment plans",
+    description=(
+        "Confirm all reviewed plan digests for an owner-accessible awaiting_review Evaluation. Explicitly acknowledge "
+        "unknown scheduling constraints. Queues the existing sequential workflow; every deployment rechecks its "
+        "frozen plan before cluster mutation. Missing, changed or failed plans return 409. "
+        "This does not reserve resources or certify KV transfer."
+    ),
+    response_model=EvaluationWorkflowResponse,
+    response_model_exclude_unset=True,
+    responses=evaluation_problem_responses(401, 403, 404, 409, 422),
+)
+@owned_control("workflow")
+async def confirm_evaluation_plans(workflow_id: str, request: EvaluationPlanConfirmation, http_request: Request):
+    from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+
+    workflow = _get("workflow", workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    principal = current_principal(http_request)
+    if workflow.get("owner_user_id") != owner_for_create(principal):
+        raise HTTPException(status_code=403, detail="Only the plan owner can confirm this Evaluation")
+    require_cluster_access(principal, workflow.get("cluster_id"))
+    _require_evaluate_record(
+        principal,
+        workflow,
+        permission="evaluate:workflow:create",
+        resource_type="evaluate_workflow",
+        detail="Evaluation is not accessible",
+    )
+    if workflow["status"] != "awaiting_review":
+        raise HTTPException(status_code=409, detail="Evaluation is not awaiting plan review")
+    required = {item["id"]: item["digest"] for item in workflow.get("prepared_plans", [])}
+    if not required or request.plan_digests != required:
+        raise HTTPException(status_code=409, detail="Reviewed Evaluation plan digests do not match")
+    for plan_id, digest in required.items():
+        plan = DeploymentPlanDao().get(plan_id)
+        if (
+            plan is None
+            or plan.digest != digest
+            or plan.owner_user_id != workflow.get("owner_user_id")
+            or plan.cluster_id != workflow.get("cluster_id")
+        ):
+            raise HTTPException(status_code=409, detail="Prepared Evaluation plan is unavailable")
+        if (
+            plan.preflight["status"] == "fail"
+            or plan.preflight["status"] == "unknown"
+            and not request.acknowledge_unknown
+        ):
+            raise HTTPException(status_code=409, detail="Preflight failed or unknown constraints were not acknowledged")
+    workflow.update(status="queued", acknowledge_unknown=request.acknowledge_unknown)
+    _save(workflow)
+    _workflow_tasks[workflow_id] = asyncio.create_task(_execute_evaluation(workflow_id))
     return workflow
 
 
@@ -4231,7 +4370,9 @@ async def create_evaluation(request: EvaluationCreateRequest, http_request: Requ
     summary="Retry a failed or cancelled multi-workload evaluation workflow.",
     description=(
         "Retry a failed or cancelled multi-workload evaluation workflow. "
-        "Use this after fixing a transient cluster or runtime problem."
+        "Retain succeeded cases and reusable Ready executions. Cases needing a new reviewed deployment receive "
+        "fresh plans and return in awaiting_review; confirm their exact digests before execution. Otherwise the "
+        "workflow is queued. Preparation failure returns 409 without replacing the historical workflow."
     ),
     operation_id="retry_evaluation_workflow",
     responses=evaluation_problem_responses(401, 403, 404, 409, 422),
@@ -4240,7 +4381,7 @@ async def create_evaluation(request: EvaluationCreateRequest, http_request: Requ
 )
 @owned_control("workflow")
 async def retry_workflow_run(workflow_id: str) -> dict:
-    workflow = _get("workflow", workflow_id)
+    workflow = deepcopy(_get("workflow", workflow_id))
     if workflow is None:
         raise HTTPException(status_code=404, detail="evaluate workflow run not found")
     if workflow.get("status") not in {"failed", "cancelled"} or "cases" not in workflow:
@@ -4328,8 +4469,13 @@ async def retry_workflow_run(workflow_id: str) -> dict:
                 endpoint=None,
             )
     workflow.update(status="queued", error=None, report=None, finished_at=None)
+    try:
+        await _prepare_evaluation_plans(workflow)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=f"Evaluation retry requires a new plan: {error}") from error
     _save(workflow)
-    _workflow_tasks[workflow_id] = asyncio.create_task(_execute_evaluation(workflow_id))
+    if workflow["status"] != "awaiting_review":
+        _workflow_tasks[workflow_id] = asyncio.create_task(_execute_evaluation(workflow_id))
     return workflow
 
 

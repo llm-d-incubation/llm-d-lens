@@ -1,5 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { deploymentRequiresReview, prepareLocalDeployment, executePreparedDeployment } from './remoteDeployBackend.js';
+
+test('DS plans require review and execution preserves the reviewed digest', async t => {
+    assert.equal(deploymentRequiresReview([{ content: { officialGuide: { renderedManifest: 'kind: List\nitems:\n- kind: DisaggregatedSet\n' } } }]), true);
+    assert.equal(deploymentRequiresReview([{ content: { officialGuide: { renderedManifest: 'kind: Deployment\n' } } }]), false);
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options) => {
+        calls.push([url, JSON.parse(options.body)]);
+        return Response.json({ id: 'plan', digest: 'sha256:reviewed' });
+    });
+    const request = { configurations: [{ content: { disaggregatedSet: { slices: 2 } } }], provenance: { cluster_server_id: 'cluster' } };
+    const plan = await prepareLocalDeployment(request);
+    await executePreparedDeployment(request, plan, true);
+    assert.equal(calls[0][0], '/api/v1/deployments/plans');
+    assert.equal(calls[1][1].expected_plan_digest, 'sha256:reviewed');
+    assert.equal(calls[1][1].acknowledge_unknown, true);
+    assert.deepEqual(calls[1][1].configurations, request.configurations);
+});
 import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution } from './remoteDeployBackend.js';
 
 test('Advanced deployment binds placement and loads labels for the selected cluster', async (t) => {

@@ -2,6 +2,10 @@
 // GET /api/v1/deployments/executions. Kept free of JSX and network code so the
 // same rules can be reused by the table, the detail modal and the stat cards.
 
+export function successfulPagePods(executionIds, podsById, errorsById) {
+    return Object.fromEntries(executionIds.filter(id => id && !errorsById[id] && Object.hasOwn(podsById, id)).map(id => [id, podsById[id]]));
+}
+
 export const STATUS_GROUPS = {
     ready: 'Ready',
     succeeded: 'Ready',
@@ -166,9 +170,12 @@ export function expectedModelPodCount(item) {
 export function effectiveStatusGroup(item, pods) {
     const backendGroup = statusGroup(item?.status);
     if (backendGroup === 'Cleaned') return backendGroup;
+    // A Ready record is not shown as Ready until live Pods confirm it.
+    if (backendGroup === 'Ready' && (pods === undefined || item?.pending)) return 'In progress';
     if (Array.isArray(pods) && pods.length === 0 && backendGroup === 'Ready') return 'Failed';
     const podGroup = derivePodStatusGroup(pods, expectedModelPodCount(item));
     if (!podGroup) return backendGroup;
+    if (backendGroup === 'In progress' && !pods.some(isFailingPod)) return backendGroup;
     if (podGroup === 'Failed') return 'Failed';
     if (podGroup === 'In progress' && backendGroup === 'Ready') return 'Degraded';
     return backendGroup;
@@ -183,6 +190,7 @@ export function effectiveStatusLabel(item, pods) {
         return `${statusLabel(item?.status)} · ${podError ? 'POD ERROR' : 'POD UNAVAILABLE'}`;
     }
     if (effective === 'Degraded') return `${statusLabel(item?.status)} · CAPACITY REDUCED`;
+    if (effective === 'In progress' && backendGroup === 'Ready') return `${statusLabel(item?.status)} · ${pods === undefined ? 'CHECKING PODS' : 'STARTING'}`;
     return statusLabel(item?.status);
 }
 
@@ -227,10 +235,12 @@ export function isDeletionInProgressStatus(item) {
     return IN_PROGRESS_STATUSES.has(item?.status);
 }
 
-export function summarizeStatuses(items) {
-    const summary = { total: items.length, Ready: 0, 'In progress': 0, Failed: 0, Cleaned: 0 };
+export function summarizeStatuses(items, podsById = {}) {
+    const summary = { total: items.length, Ready: 0, 'In progress': 0, Degraded: 0, Failed: 0, Cleaned: 0 };
     for (const item of items) {
-        const group = statusGroup(item?.status);
+        // Only the visible page is polled; other rows keep their backend status.
+        const polled = Object.hasOwn(podsById, item?.execution_id ?? '');
+        const group = polled || item?.pending ? effectiveStatusGroup(item, podsById[item?.execution_id]) : statusGroup(item?.status);
         if (group in summary) {
             summary[group] += 1;
         } else {
@@ -242,6 +252,25 @@ export function summarizeStatuses(items) {
 
 export function clusterOptions(items) {
     return [...new Set(items.map((item) => item?.cluster_id).filter(Boolean))].sort();
+}
+
+export const BENCHMARK_PRESETS = {
+    chat: { label: 'Short chat', isl: 1024, osl: 256, concurrency: [1, 8, 32] },
+    'long-input': { label: 'Long input, short output', isl: 8192, osl: 256, concurrency: [1, 8, 16] },
+    'high-concurrency': { label: 'High concurrency', isl: 1024, osl: 256, concurrency: [32, 64, 128] },
+};
+
+/** A benchmark run against one ready execution; the server routes standalone or Gateway deployments itself. */
+export function deploymentBenchmarkRequest(deployment, { preset, ttftMs, tpotMs }) {
+    const { isl, osl, concurrency } = BENCHMARK_PRESETS[preset];
+    const target = (value) => (Number(value) > 0 ? Number(value) : null);
+    return {
+        deployment_execution_id: deployment.execution_id,
+        matrix: [{ isl, osl }],
+        concurrency_stages: concurrency.map((value) => ({ concurrency: value, num_requests: Math.max(20, value * 5) })),
+        warmup_requests: 2,
+        sla_targets: { ttft_ms: target(ttftMs), ttft_percentile: 'p95', tpot_ms: target(tpotMs), tpot_percentile: 'p95' },
+    };
 }
 
 export { errorMessage } from '../../../../shared/lib/errorMessage';

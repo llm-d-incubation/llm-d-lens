@@ -11,6 +11,7 @@ class LifecycleError(ValueError):
 
 
 class WorkflowStatus(StrEnum):
+    AWAITING_REVIEW = "awaiting_review"
     QUEUED = "queued"
     DEPLOYING = "deploying"
     RUNNING = "running"
@@ -40,6 +41,9 @@ class BenchmarkStatus(StrEnum):
 
 
 WORKFLOW_TRANSITIONS: Mapping[WorkflowStatus, frozenset[WorkflowStatus]] = {
+    WorkflowStatus.AWAITING_REVIEW: frozenset(
+        {WorkflowStatus.QUEUED, WorkflowStatus.CANCELLING, WorkflowStatus.CANCELLED, WorkflowStatus.FAILED}
+    ),
     WorkflowStatus.QUEUED: frozenset(
         {WorkflowStatus.DEPLOYING, WorkflowStatus.RUNNING, WorkflowStatus.CANCELLING, WorkflowStatus.FAILED}
     ),

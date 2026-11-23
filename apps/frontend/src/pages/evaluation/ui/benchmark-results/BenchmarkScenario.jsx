@@ -14,6 +14,13 @@ export default function BenchmarkScenario({ details, runs, selected, onCaseSelec
     const benchmark = config.benchmark || {};
     const serving = config.decode || config.serving || {};
     const infra = config.infrastructure || {};
+    const matrix = Array.isArray(benchmark.matrix) ? benchmark.matrix : [];
+    // Before results exist, the requested matrix is the only record of the lengths.
+    const lengths = selected.isl != null || selected.osl != null || !matrix.length
+        ? `${valueText(selected.isl)} / ${valueText(selected.osl)}`
+        : matrix.map(point => `${point.isl} / ${point.osl}`).join(', ');
+    const workloadSource = benchmark.workload_yaml ? 'Custom YAML' : benchmark.shared_prefix ? 'Shared prefixes'
+        : matrix.length ? 'Fixed input / output lengths' : benchmark.workload;
     const groups = [
         ['Infra layer', [
             ['Provider / machine type', [infra.provider || config.provider, infra.machineType || config.machineType].filter(Boolean).join(' / ')],
@@ -29,9 +36,9 @@ export default function BenchmarkScenario({ details, runs, selected, onCaseSelec
         ]],
         ['Workload', [
             ['Test harness', benchmark.harness || 'inference-perf'],
-            ['Input / output tokens', `${valueText(selected.isl)} / ${valueText(selected.osl)}`],
+            ['Input / output tokens', lengths],
             ['Selected load', selected.load == null ? 'Full run' : `${selected.load} ${selected.loadKind === 'rate' ? 'req/s' : 'concurrent requests'}`],
-            ['Workload source', benchmark.workload || (benchmark.workload_yaml ? 'Custom YAML' : benchmark.shared_prefix ? 'Shared prefixes' : benchmark.matrix ? 'Fixed input / output lengths' : null)],
+            ['Workload source', workloadSource],
         ]],
     ];
     return <div className="space-y-4">

@@ -26,6 +26,7 @@ from llm_d_lens.auth.access import current_principal, filter_by_cluster, require
 from llm_d_lens.core.exceptions import DomainError
 from llm_d_lens.deploy.capabilities import deployment_capabilities
 
+from .decision_engine import build_plan
 from .errors import ConfigurationError
 from .models import (
     ConfigurationArtifactRecord,
@@ -36,6 +37,7 @@ from .models import (
     SaveRequest,
     SaveResponse,
 )
+from .plan_models import ConfigurationPlan, PlanRequest
 from .service import (
     delete_configuration_artifact,
     get_configuration_artifact,
@@ -109,6 +111,22 @@ async def capabilities() -> dict:
 
 
 @router.post(
+    "/plan",
+    response_model=ConfigurationPlan,
+    summary="Build a Manual or Agentic deployment decision plan.",
+    description=(
+        "Inspect deployment intent without accessing a cluster. Applicability signals remain unknown until live "
+        "provider and resource validation; this compatibility endpoint returns no executable candidates, topology "
+        "or enabled mechanisms. Use the deployment planning workflow for a live-validated configuration. "
+        "This endpoint does not deploy resources or claim performance validation."
+    ),
+    operation_id="build_configuration_plan",
+)
+async def plan(request: PlanRequest) -> ConfigurationPlan:
+    return build_plan(request)
+
+
+@router.post(
     "/resolve",
     response_model=ResolveResponse,
     summary="Resolve source configurations into validated candidates.",
@@ -131,7 +149,10 @@ async def resolve(request: ResolveRequest) -> ResolveResponse:
     summary="Render a candidate into a deployable configuration.",
     description=(
         "Render a candidate configuration using the supplied render options and return the deployable configuration "
-        "and metadata. Use the save endpoint to publish the result. Configuration and value errors return 400; "
+        "and metadata. candidate_config accepts disaggregated_set intent. "
+        "Local guide_source may include revisionKind=content-snapshot "
+        "and snapshotChecksum; its commit is a content fingerprint, not Git HEAD. "
+        "Use the save endpoint to publish the result. Configuration and value errors return 400; "
         "unexpected failures return 500 with Unable to render configuration. Shared domain errors retain their "
         "status and code."
     ),

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import re
+import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,203 @@ class MaterializedDeploymentBundle:
     effective_values: Path
     resources: tuple[Path, ...]
     calibration: Path | None
+
+
+_METRICS_AUTH_RULES = {
+    ("authentication.k8s.io", "tokenreviews"),
+    ("authorization.k8s.io", "subjectaccessreviews"),
+}
+
+
+def _flatten(documents: list) -> list:
+    flat = []
+    for document in documents:
+        if isinstance(document, dict) and document.get("kind") == "List":
+            flat.extend(_flatten(document.get("items") or []))
+        else:
+            flat.append(document)
+    return flat
+
+
+def _is_metrics_auth_role(document: dict) -> bool:
+    """The EPP chart's metrics-auth ClusterRole: only TokenReview/SubjectAccessReview create."""
+    rules = document.get("rules") or []
+    return (
+        document.get("apiVersion") == "rbac.authorization.k8s.io/v1"
+        and document.get("kind") == "ClusterRole"
+        and not document.get("aggregationRule")
+        and bool(rules)
+        and all(
+            rule.get("verbs") == ["create"]
+            and not rule.get("resourceNames")
+            and not rule.get("nonResourceURLs")
+            and {(group, resource) for group in rule.get("apiGroups") or [] for resource in rule.get("resources") or []}
+            <= _METRICS_AUTH_RULES
+            for rule in rules
+        )
+    )
+
+
+def _is_metrics_auth_binding(document: dict, namespace: str, roles: set[str]) -> bool:
+    subjects = document.get("subjects") or []
+    role_ref = document.get("roleRef") or {}
+    return (
+        document.get("apiVersion") == "rbac.authorization.k8s.io/v1"
+        and document.get("kind") == "ClusterRoleBinding"
+        and role_ref.get("kind") == "ClusterRole"
+        and role_ref.get("name") in roles
+        and bool(subjects)
+        and all(item.get("kind") == "ServiceAccount" and item.get("namespace") == namespace for item in subjects)
+    )
+
+
+def validate_review_resources(documents: list[dict], namespace: str) -> None:
+    allowed = {
+        "v1": {"Pod", "Service", "ServiceAccount", "ConfigMap", "PersistentVolumeClaim", "Endpoints"},
+        "apps/v1": {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"},
+        "batch/v1": {"Job", "CronJob"},
+        "rbac.authorization.k8s.io/v1": {"Role", "RoleBinding"},
+        "policy/v1": {"PodDisruptionBudget"},
+        "networking.k8s.io/v1": {"NetworkPolicy", "Ingress"},
+        "discovery.k8s.io/v1": {"EndpointSlice"},
+        "gateway.networking.k8s.io/v1": {"Gateway", "HTTPRoute", "GRPCRoute"},
+        "gateway.networking.k8s.io/v1beta1": {"ReferenceGrant", "Gateway", "HTTPRoute"},
+        "inference.networking.k8s.io/v1": {"InferencePool"},
+        "inference.networking.x-k8s.io/v1alpha2": {"InferencePool", "InferenceModel"},
+        "disaggregatedset.x-k8s.io/v1": {"DisaggregatedSet"},
+        "leaderworkerset.x-k8s.io/v1": {"LeaderWorkerSet"},
+        "resource.k8s.io/v1": {"ResourceClaimTemplate", "ResourceClaim"},
+        "resource.k8s.io/v1beta2": {"ResourceClaimTemplate", "ResourceClaim"},
+        "resource.k8s.io/v1beta1": {"ResourceClaimTemplate", "ResourceClaim"},
+    }
+    documents = _flatten(documents)
+    metrics_roles = {
+        (document.get("metadata") or {}).get("name")
+        for document in documents
+        if isinstance(document, dict) and _is_metrics_auth_role(document)
+    }
+    for document in documents:
+        if not isinstance(document, dict):
+            raise ValueError("Prepared resources must be Kubernetes objects")
+        kind = document.get("kind")
+        if kind == "Secret":
+            raise ValueError("Prepared plans must reference existing Secrets, not embed Secret payloads")
+        if _is_metrics_auth_role(document) or _is_metrics_auth_binding(document, namespace, metrics_roles):
+            continue
+        if kind not in allowed.get(document.get("apiVersion"), set()):
+            raise ValueError(f"Prepared plans do not support cluster-scoped or unclassified resources: {kind}")
+        if document.get("metadata", {}).get("namespace", namespace) != namespace:
+            raise ValueError("Prepared resource namespace differs from the reviewed namespace")
+
+
+async def freeze_deployment_bundle(
+    bundle: dict,
+    *,
+    guide: str,
+    source_commit: str,
+    namespace: str,
+    command_runner: CommandRunner,
+    effective_values: str,
+) -> dict:
+    from copy import deepcopy
+
+    saved = deepcopy(bundle)
+    saved["helm"]["values"][-1] = {
+        "name": "router-effective.yaml",
+        "content": effective_values,
+        "checksum": text_checksum(effective_values),
+    }
+    materialized = materialize_deployment_bundle(saved, guide, source_commit)
+    with tempfile.TemporaryDirectory(prefix="chart-", dir=materialized.effective_values.parent) as directory:
+        status, stdout, stderr = await command_runner(
+            [
+                "helm",
+                "pull",
+                materialized.chart,
+                "--version",
+                materialized.version,
+                "--destination",
+                directory,
+            ]
+        )
+        if status:
+            raise ValueError(f"Router chart could not be frozen: {(stderr or stdout).strip()}")
+        archives = list(Path(directory).glob("*.tgz"))
+        if len(archives) != 1 or archives[0].stat().st_size > 20 * 1024 * 1024:
+            raise ValueError("Router plan requires one chart archive no larger than 20 MiB")
+        archive = archives[0].read_bytes()
+        status, rendered, stderr = await command_runner(
+            [
+                "helm",
+                "template",
+                materialized.release_name,
+                str(archives[0]),
+                "--namespace",
+                namespace,
+                "--values",
+                str(materialized.effective_values),
+            ]
+        )
+        if status or not rendered.strip():
+            raise ValueError(f"Router chart render failed: {stderr.strip()}")
+    validate_review_resources([item for item in yaml.safe_load_all(rendered) if item is not None], namespace)
+    for resource in saved["resources"]:
+        validate_review_resources(
+            [item for item in yaml.safe_load_all(resource["content"]) if item is not None], namespace
+        )
+    saved["frozen"] = {
+        "archive": base64.b64encode(archive).decode("ascii"),
+        "chartChecksum": "sha256:" + hashlib.sha256(archive).hexdigest(),
+        "namespace": namespace,
+        "manifest": rendered,
+        "manifestChecksum": text_checksum(rendered),
+    }
+    return saved
+
+
+def frozen_chart(bundle: dict, directory: Path, namespace: str) -> Path:
+    frozen = bundle["frozen"]
+    if frozen["namespace"] != namespace or text_checksum(frozen["manifest"]) != frozen["manifestChecksum"]:
+        raise ValueError("Prepared Router namespace or manifest changed")
+    archive = base64.b64decode(frozen["archive"], validate=True)
+    if "sha256:" + hashlib.sha256(archive).hexdigest() != frozen["chartChecksum"]:
+        raise ValueError("Prepared Router chart checksum changed")
+    path = directory / "router-frozen.tgz"
+    if path.exists() and path.read_bytes() != archive:
+        raise ValueError("Prepared Router chart file changed")
+    path.write_bytes(archive)
+    return path
+
+
+async def validate_frozen_bundle(
+    bundle: dict, *, guide: str, source_commit: str, namespace: str, command_runner: CommandRunner
+) -> None:
+    materialized = materialize_deployment_bundle(bundle, guide, source_commit)
+    archive = frozen_chart(bundle, materialized.effective_values.parent, namespace)
+    status, stdout, stderr = await command_runner(
+        [
+            "helm",
+            "install",
+            materialized.release_name,
+            str(archive),
+            "--namespace",
+            namespace,
+            "--values",
+            str(materialized.effective_values),
+            "--dry-run=server",
+            "--skip-crds",
+            "--output",
+            "json",
+        ]
+    )
+    if status:
+        raise ValueError(f"Prepared Router server dry run failed: {(stderr or stdout).strip()}")
+    release = json.loads(stdout)
+    if release.get("hooks"):
+        raise ValueError("Prepared deployments do not execute unreviewed Helm hooks")
+    actual = release.get("manifest", "")
+    if list(yaml.safe_load_all(actual)) != list(yaml.safe_load_all(bundle["frozen"]["manifest"])):
+        raise ValueError("Router server render differs from the reviewed plan; prepare a new plan")
 
 
 def subprocess_bundle_runner(
@@ -189,6 +388,10 @@ async def install_deployment_bundle(
     if compatible_values != original_values:
         effective_values_content = yaml.safe_dump(compatible_values, sort_keys=False)
     if effective_values_content is not None:
+        if bundle.get("frozen") and original_values != _yaml_mapping(
+            materialized.effective_values.read_text(), "Frozen Router values"
+        ):
+            raise ValueError("Router values changed after plan review")
         if not _SAFE_ASSET_NAME.fullmatch(effective_values_name):
             raise ValueError("Derived Router values require a safe file name")
         _yaml_mapping(effective_values_content, "Derived Router values")
@@ -204,9 +407,15 @@ async def install_deployment_bundle(
         "--values",
         str(effective_values),
     ]
+    if bundle.get("frozen"):
+        helm_common[1] = str(frozen_chart(bundle, effective_values.parent, namespace))
     status, rendered, stderr = await command_runner(["helm", "template", *helm_common])
     if status != 0:
         raise RuntimeError((stderr or rendered or "saved Router Helm render failed").strip())
+    if bundle.get("frozen") and list(yaml.safe_load_all(rendered)) != list(
+        yaml.safe_load_all(bundle["frozen"]["manifest"])
+    ):
+        raise ValueError("Router render differs from the reviewed plan")
     for resource in materialized.resources:
         status, stdout, stderr = await command_runner(
             [
@@ -220,7 +429,8 @@ async def install_deployment_bundle(
         )
         if status != 0:
             raise RuntimeError((stderr or stdout or "saved Guide resource apply failed").strip())
-    status, stdout, stderr = await command_runner(["helm", "upgrade", "--install", *helm_common])
+    frozen_options = ["--skip-crds", "--no-hooks"] if bundle.get("frozen") else []
+    status, stdout, stderr = await command_runner(["helm", "upgrade", "--install", *helm_common, *frozen_options])
     if status != 0:
         raise RuntimeError((stderr or stdout or "saved Router deployment failed").strip())
     status, rendered, stderr = await command_runner(

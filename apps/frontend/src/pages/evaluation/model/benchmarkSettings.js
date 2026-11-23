@@ -83,6 +83,22 @@ export function configurationContextLimit(artifacts) {
     return limits.length ? Math.min(...limits) : 0;
 }
 
+// Defaults applied when a Slice sweep is benchmarked: rising open-loop rates and a moderate interactive SLO.
+export const SLICE_SWEEP_SHARED_PREFIX = {
+    num_groups: 16, num_prompts_per_group: 4, system_prompt_len: 1024, question_len: 256, output_len: 256,
+    enable_multi_turn_chat: false, stages: [1, 2, 4, 8, 16, 32].map(rate => ({ rate, duration: 60 })),
+};
+export const SLICE_SWEEP_SLO = { ttft_ms: 500, tpot_ms: 30 };
+
+// A Slice sweep is only comparable by SLO-stable rate, which requires open-loop rate stages and a latency SLO.
+export function sliceSweepIssues(artifacts, benchmark, slo = {}) {
+    if (!artifacts.some(artifact => artifact.deployable_configuration?.provenance?.slice_sweep)) return [];
+    const issues = [];
+    if ((benchmark?.shared_prefix?.stages || []).length < 2) issues.push('Slice sweep: choose the "Prefix cache reuse" workload with at least two request-rate stages, so each Slice count gets a maximum stable request rate.');
+    if (![slo.ttft_ms, slo.tpot_ms].some(value => value !== '' && value != null)) issues.push('Slice sweep: set a TTFT or TPOT target under Performance targets; the stable rate is measured against it.');
+    return issues;
+}
+
 export function benchmarkIssues(b, slo = {}, context = 0) {
     const issues = [];
     const number = (value, min, max, label, integer = true) => {

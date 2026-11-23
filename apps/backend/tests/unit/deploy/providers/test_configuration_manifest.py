@@ -1333,15 +1333,15 @@ def _disaggregated_set(slices):
     }
 
 
-def test_single_slice_disaggregated_set_manifest_forces_slices_to_one():
+def test_single_slice_disaggregated_set_manifest_preserves_slices():
     manifest = yaml.safe_dump_all([_disaggregated_set(2)], sort_keys=False)
 
     rendered, report = configuration_manifest.prepare_single_slice_disaggregated_set_manifest(manifest)
 
     document = yaml.safe_load(rendered)
-    assert document["spec"]["slices"] == 1
+    assert document["spec"]["slices"] == 2
     assert report["disaggregatedSets"] == 1
-    assert report["adjusted"] == 1
+    assert report["adjusted"] == 0
 
 
 def test_single_slice_disaggregated_set_manifest_leaves_other_kinds_unchanged():
@@ -1361,12 +1361,12 @@ def test_single_slice_disaggregated_set_manifest_is_idempotent():
     second, second_report = configuration_manifest.prepare_single_slice_disaggregated_set_manifest(first)
 
     assert second == first
-    assert first_report["adjusted"] == 1
+    assert first_report["adjusted"] == 0
     assert second_report["adjusted"] == 0
 
 
 @pytest.mark.asyncio
-async def test_render_enforces_single_slice_disaggregated_set(monkeypatch, tmp_path):
+async def test_render_preserves_single_slice_disaggregated_set_contract(monkeypatch, tmp_path):
     manifest = yaml.safe_dump_all([_disaggregated_set(2)], sort_keys=False)
     source = tmp_path / "manifest.yaml"
     source.write_text(manifest, encoding="utf-8")
@@ -1385,6 +1385,67 @@ async def test_render_enforces_single_slice_disaggregated_set(monkeypatch, tmp_p
 
     artifact = await adapter.render(GuideDefinition("pd-disaggregation", "source", "hash", "stable"), {})
 
-    document = yaml.safe_load(Path(artifact.manifest_ref).read_text())
-    assert document["spec"]["slices"] == 1
-    assert artifact.deployment_contract["disaggregatedSet"]["slices"] == 1
+    documents = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text()))
+    assert any(item["kind"] == "ConfigMap" and "prism_kv_engine.py" in item["data"] for item in documents)
+    document = next(item for item in documents if item["kind"] == "DisaggregatedSet")
+    assert document["spec"]["slices"] == 2
+    assert artifact.deployment_contract["disaggregatedSet"]["slices"] == 2
+
+
+@pytest.mark.asyncio
+async def test_native_cpu_cache_composition_renders_before_deploy(monkeypatch, tmp_path):
+    from llm_d_lens.deploy import guide_planning
+
+    base = {
+        "kind": "Deployment",
+        "metadata": {"name": "model"},
+        "spec": {
+            "template": {"spec": {"containers": [{"name": "modelserver", "image": "runtime:1", "args": ["model"]}]}}
+        },
+    }
+    source = tmp_path / "base.yaml"
+    source.write_text(yaml.safe_dump(base))
+    donor = json.loads(json.dumps(base))
+    donor["spec"]["template"]["spec"]["containers"][0]["args"] += [
+        "--kv-transfer-config",
+        json.dumps(
+            {
+                "kv_connector": "OffloadingConnector",
+                "kv_role": "kv_both",
+                "kv_connector_extra_config": {"cpu_bytes_to_use": 1024**3},
+            }
+        ),
+    ]
+    runner = AsyncMock(return_value=(0, yaml.safe_dump(donor), ""))
+    monkeypatch.setattr(guide_planning, "select_manifest_paths", lambda *args: {"guidePath": "guides/cache"})
+    delegate = SimpleNamespace(
+        _guide_root=tmp_path,
+        _accelerator="gpu",
+        render=AsyncMock(
+            return_value=GuideDeploymentArtifact(
+                guide_id="optimized-baseline", artifact_hash="base", manifest_ref=str(source)
+            )
+        ),
+    )
+    adapter = ConfigurationManifestAdapter(delegate, runner, "test-", 5, tmp_path / "output")
+    artifact = await adapter.render(
+        GuideDefinition("optimized-baseline", "revision", "hash", "stable"),
+        {"guideComposition": {"nativeCpuCacheGiB": 4}},
+    )
+    rendered = Path(artifact.manifest_ref).read_text()
+    assert "OffloadingConnector" in rendered
+    assert str(4 * 1024**3) in rendered
+    assert "OffloadingConnector" not in source.read_text()
+    deployment = next(
+        document
+        for document in yaml.safe_load_all(rendered)
+        if document.get("kind") == "Deployment" and document["metadata"]["name"] == "model"
+    )
+    pod = deployment["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    assert pod["terminationGracePeriodSeconds"] == 120
+    assert "--shutdown-timeout=90" in container["args"]
+    assert container["lifecycle"]["preStop"]["exec"]["command"] == ["/bin/sh", "-c", "sleep 5"]
+    kv_config = json.loads(container["args"][container["args"].index("--kv-transfer-config") + 1])
+    assert kv_config["kv_load_failure_policy"] == "recompute"
+    runner.assert_awaited_once()

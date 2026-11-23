@@ -6,6 +6,63 @@ description: Lens Evaluate 背后的基准测试运行与评估工作流 API。
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+## DS 计划确认
+
+创建包含可部署 DisaggregatedSet 用例的 Evaluation 时，返回 `status="awaiting_review"`
+和 `prepared_plans`，不会立即部署。每个用例保留冻结配置、计划 ID 和摘要。
+已有端点基准测试仍按原有方式启动。
+
+<Tabs>
+<TabItem value="rest" label="REST API">
+
+`POST /api/v1/evaluate/evaluations/{workflow_id}/confirm` 要求 `evaluate:workflow:create`
+和工作流本人所有权及目标集群访问权。提交**全部**计划 ID 到已审核摘要的精确映射：
+
+```json
+{"plan_digests":{"PLAN_ID":"sha256:REVIEWED_DIGEST"},"acknowledge_unknown":true}
+```
+
+成功返回 HTTP 202，工作流进入 `queued`。既有串行执行器逐个消耗冻结计划，重新预检，并在
+基准测试前记录运行证据及一次有界请求探测。受支持的 vLLM 0.26.0 NIXL pull 证据只证明该
+探测请求，不代表整个基准测试。就绪或放置失败阻止该用例；未知证据不是 KV 传输通过。
+工作流不存在返回 404；状态不符、计划缺失/变化、摘要不符、预检失败或未确认未知项返回 409。
+这不是资源预留，也未引入 Slice Sweep。
+
+`POST /api/v1/evaluate/workflow-runs/{workflow_id}/retry` 返回 HTTP 202，保留成功用例和可复用的
+Ready 执行。需要新审核部署的用例获得新的 `prepared_plans`，状态为 `awaiting_review`，不会
+立即执行。准备失败返回 409，不覆盖历史工作流；其他情况进入 queued。任务详情提供恢复审核入口。
+DS 派生的自动基线记录 `content.comparisonBudget`，包含 `scope="accelerator-request-only"`、
+`resource`、`quantity`、`sourceRequests`、`sourcePodCount`，最终基线清单必须匹配该设备数量。
+资源预算会保留，但不隐含 CPU、内存或 Pod 数量相同。
+
+</TabItem>
+<TabItem value="python" label="Python API">
+
+路由函数为 `llm_d_lens.evaluation.router.confirm_evaluation_plans`，请求模型为
+`llm_d_lens.evaluation.models.EvaluationPlanConfirmation`：
+
+重试函数是在既有认证及工作流所有权上下文中调用
+`await llm_d_lens.evaluation.router.retry_workflow_run(workflow_id)`；检查返回 `status`，并用
+下面同一确认函数处理新的 `prepared_plans`。
+
+```python
+from llm_d_lens.evaluation.models import EvaluationPlanConfirmation
+from llm_d_lens.evaluation.router import confirm_evaluation_plans
+
+async def confirm_review(workflow_id, reviewed_plans, authenticated_request):
+  body = EvaluationPlanConfirmation(
+    plan_digests={plan["id"]: plan["digest"] for plan in reviewed_plans},
+    acknowledge_unknown=True,
+  )
+  return await confirm_evaluation_plans(workflow_id, body, authenticated_request)
+```
+
+`authenticated_request` 必须携带正常认证主体；内部调用不能绕过路由动作权限和集群访问检查。
+工作流控制锁避免确认与其他控制动作并发冲突。
+
+</TabItem>
+</Tabs>
+
 ## Harness 代理兼容性
 
 Lens 保留用于外部下载的 HTTP(S) 代理，同时通过 `NO_PROXY` 传递集群地址和
@@ -157,6 +214,12 @@ prefix caching、单个 FullAttention cache group 和 `parallelism=1`。
     - `accelerator_profile`、`storage_class_name`、`matrix`、`concurrency_stages`、`warmup_requests`、`shared_prefix`
     - `sla_targets`（`BenchmarkSlaTargets`）
     - `specification_file`、`http_proxy`、`https_proxy`、`no_proxy`、`benchmark_source`、`use_baseline_endpoint`
+
+    省略 `specification_file` 时，源码组合部署和直接 vLLM 部署使用
+    `guides/optimized-baseline` 对现有端点进行压测，不会替换已部署配置。
+    其他 Guide 使用对应规格；请求中显式提供的值优先于
+    `LLM_D_BENCH_SPECIFICATION_FILE` 环境变量。
+    源码部署的证据拓扑从校验和验证通过的最终渲染清单提取。
 
     ```json
     {

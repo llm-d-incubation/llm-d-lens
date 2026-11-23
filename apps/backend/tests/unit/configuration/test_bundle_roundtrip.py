@@ -109,9 +109,13 @@ def setup_service(monkeypatch, tmp_path):
 def test_router_settings_and_inputs_survive_render_save_reload(monkeypatch, tmp_path):
     setup_service(monkeypatch, tmp_path)
     request = request_payload()
+    request["render"]["guide_source"].update(revisionKind="content-snapshot", snapshotChecksum="sha256:" + "a" * 64)
     rendered = service.render_configuration(RenderRequest.model_validate(request))
     saved = service.save_configuration(SaveRequest(deployable_configuration=rendered.deployable_configuration))
     restored = service.get_configuration_artifact(saved.artifact.artifact_id)
+    assert (
+        restored.deployable_configuration.content["officialGuide"]["source"]["snapshotChecksum"] == "sha256:" + "a" * 64
+    )
     assert restored.deployable_configuration.content["guideSettings"] == {
         "routerValues": "router:\n  epp:\n    replicas: 2"
     }

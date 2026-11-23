@@ -29,4 +29,4 @@ fi
 export PRISM_MCP_URL="${PRISM_MCP_URL:-$SCHEME://127.0.0.1:$BACKEND_PORT/api/mcp}"
 exec "$PYTHON" -m uvicorn llm_d_lens.api:app \
   --host "${BACKEND_HOST:-${SERVER_HOST:-${HOST:-0.0.0.0}}}" \
-  --port "$BACKEND_PORT" "${TLS_ARGS[@]}"
+  --port "$BACKEND_PORT" ${TLS_ARGS[@]+"${TLS_ARGS[@]}"}

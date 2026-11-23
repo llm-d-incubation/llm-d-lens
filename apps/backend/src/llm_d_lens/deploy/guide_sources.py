@@ -9,10 +9,13 @@ import json
 import os
 import re
 import shlex
+import tarfile
+import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
+import yaml
 
 from llm_d_lens.auth.access import current_principal, require_cluster_access
 from llm_d_lens.auth.context import require_route_permission
@@ -24,6 +27,7 @@ from llm_d_lens.hardware.resolver import resolve_by_device_class, resolve_by_res
 from llm_d_lens.infrastructure.hostos import current_host
 from llm_d_lens.infrastructure.kubernetes import run_kubectl
 from llm_d_lens.infrastructure.process import ShellClient
+from llm_d_lens.infrastructure.storage.paths import prism_temp_root
 
 from .guide_planning import GuideError, overlay_root, quantity_number, select_manifest_paths
 from .remote_deploy import execute_remote_inspection
@@ -125,12 +129,119 @@ def catalog_from_paths(paths: list[str]) -> list[dict]:
     ]
 
 
+async def snapshot_guide_source(root: Path, commit: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise GuideError("Guide source requires a full immutable commit", 409)
+    cache = prism_temp_root("guide-source-snapshots")
+    cache.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix=commit + "-", dir=cache))
+    archive = directory / "source.tar"
+    result = await ShellClient().run(
+        ["git", "-C", str(root), "archive", "--format=tar", "--output", str(archive), commit], timeout=30
+    )
+    if not result.ok:
+        raise GuideError("Could not snapshot the pinned Guide commit", 409)
+    snapshot = directory / "source"
+    snapshot.mkdir()
+    with tarfile.open(archive) as source:
+        source.extractall(snapshot, filter="data")
+    archive.unlink()
+    return snapshot
+
+
+def validate_kustomize_dependencies(root: Path, target: Path, visited=None, files=None) -> dict:
+    visited = set() if visited is None else visited
+    files = {} if files is None else files
+    logical = Path(os.path.abspath(target))
+    target = target.resolve()
+    if logical != target or not logical.is_relative_to(root.resolve()):
+        raise GuideError("Guide dependency escapes its snapshot or uses an unvendored symbolic link", 409)
+    if not target.is_relative_to(root.resolve()) or target in visited:
+        if target in visited:
+            return files
+        raise GuideError("Guide dependency escapes its pinned source snapshot", 409)
+    visited.add(target)
+    if not target.is_dir():
+        if not target.is_file() or target.stat().st_size > 20 * 1024 * 1024:
+            raise GuideError("Guide dependency is missing or exceeds 20 MiB", 409)
+        files[logical.relative_to(root.resolve())] = target.read_bytes()
+        return files
+    manifest = next(
+        (
+            target / name
+            for name in ("kustomization.yaml", "kustomization.yml", "Kustomization")
+            if (target / name).is_file()
+        ),
+        None,
+    )
+    if manifest is None:
+        raise GuideError("Guide dependency directory has no Kustomization", 409)
+    files[logical.relative_to(root.resolve()) / manifest.name] = manifest.read_bytes()
+    content = yaml.safe_load(manifest.read_text()) or {}
+    if content.get("helmCharts"):
+        raise GuideError("Kustomize Helm dependencies must be vendored into the pinned source", 409)
+    references = []
+    for field in (
+        "resources",
+        "bases",
+        "components",
+        "configurations",
+        "crds",
+        "generators",
+        "transformers",
+        "patchesStrategicMerge",
+    ):
+        references.extend(content.get(field, []))
+    for field in ("patches", "patchesJson6902", "replacements"):
+        references.extend(item["path"] for item in content.get(field, []) if isinstance(item, dict) and "path" in item)
+    if content.get("openapi", {}).get("path"):
+        references.append(content["openapi"]["path"])
+    for field in ("configMapGenerator", "secretGenerator"):
+        for generator in content.get(field, []):
+            references.extend(item.partition("=")[-1] for item in generator.get("files", []))
+            references.extend(generator.get("envs", []))
+            if generator.get("env"):
+                references.append(generator["env"])
+    for reference in references:
+        if not isinstance(reference, str):
+            raise GuideError("Kustomize resource references must be strings", 409)
+        if "\n" in reference:
+            continue
+        if "://" in reference or reference.startswith(("github.com/", "git::", "git@")):
+            raise GuideError(
+                "Remote Kustomize dependencies must be vendored into the pinned source for recursive reproducibility",
+                409,
+            )
+        validate_kustomize_dependencies(root, logical / reference, visited, files)
+    return files
+
+
+def snapshot_local_source(root: Path, target: Path, extra_files=()) -> tuple[Path, str]:
+    files = validate_kustomize_dependencies(root, target)
+    for path in extra_files:
+        validate_kustomize_dependencies(root, path, files=files)
+    cache = prism_temp_root("guide-source-snapshots")
+    cache.mkdir(parents=True, exist_ok=True)
+    snapshot = Path(tempfile.mkdtemp(prefix="local-", dir=cache))
+    fingerprints = {}
+    for relative, content in files.items():
+        destination = snapshot / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        fingerprints[str(relative)] = hashlib.sha256(content).hexdigest()
+    digest = hashlib.sha256(json.dumps(fingerprints, sort_keys=True).encode()).hexdigest()
+    return snapshot, digest
+
+
 async def load_manifests(request, body: dict) -> dict:
     source = await load_guide_paths(request, body)
     selected = select_manifest_paths(
         source["paths"], body["guide"], body["accelerator"], body["modelServer"], str(body.get("guideVariant") or "")
     )
-    root = Path(source["localRoot"])
+    if body.get("expectedSourceCommit") and body["expectedSourceCommit"] != source["commit"]:
+        raise GuideError("Guide source changed since preparation; refresh source capabilities before planning", 409)
+    root = await snapshot_guide_source(Path(source["localRoot"]), source["commit"])
+    validate_kustomize_dependencies(root, root / selected["guidePath"])
     rendered = await command_output(["kubectl", "kustomize", str(root / selected["guidePath"])], 60)
     if not rendered:
         raise GuideError("Could not render the selected official guide with kubectl kustomize", 502)
@@ -194,25 +305,36 @@ async def load_selected_manifests(request, body: dict) -> dict:
         input_file = kustomization or requested
         if not input_file.is_file() or input_file.suffix.lower() not in {".yaml", ".yml"}:
             raise GuideError("Local source must be a YAML file or a directory containing kustomization.yaml")
-        content = input_file.read_text()
+        allowed_root = max((root for root in roots if requested.is_relative_to(root)), key=lambda root: len(root.parts))
+        git_root = await command_output(["git", "-C", str(input_file.parent), "rev-parse", "--show-toplevel"])
+        source_root = Path(git_root).resolve() if git_root else input_file.parent
+        if not source_root.is_relative_to(allowed_root) or not input_file.is_relative_to(source_root):
+            source_root = input_file.parent
+        router_files = list((source_root / "guides" / str(body.get("guide", "")) / "router").rglob("*.yaml"))
+        base_values = source_root / "guides/recipes/router/base.values.yaml"
+        if base_values.is_file():
+            router_files.append(base_values)
+        snapshot, digest = snapshot_local_source(
+            allowed_root, input_file.parent if kustomization else input_file, router_files
+        )
+        frozen_file = snapshot / input_file.relative_to(allowed_root)
+        content = frozen_file.read_text()
         rendered = (
-            await command_output(["kubectl", "kustomize", str(input_file.parent)], 60) if kustomization else content
+            await command_output(["kubectl", "kustomize", str(frozen_file.parent)], 60) if kustomization else content
         )
-        root, commit = await asyncio.gather(
-            command_output(["git", "-C", str(input_file.parent), "rev-parse", "--show-toplevel"]),
-            command_output(["git", "-C", str(input_file.parent), "rev-parse", "HEAD"]),
-        )
-        if not re.fullmatch(r"[0-9a-f]{40}", commit):
-            commit = hashlib.sha1(rendered.encode(), usedforsecurity=False).hexdigest()
+        if not rendered:
+            raise GuideError("Could not render the frozen local source", 409)
         return {
             "variant": "custom-local",
-            "localRoot": root or str(input_file.parent),
+            "localRoot": str(snapshot / source_root.relative_to(allowed_root)),
             "files": [{"path": str(input_file), "content": content}],
             "rendered": rendered,
             "source": {
-                "repository": root or str(input_file.parent),
+                "repository": str(allowed_root),
                 "requestedRef": str(source.get("ref") or "working-tree"),
-                "commit": commit,
+                "commit": digest[:40],
+                "snapshotChecksum": "sha256:" + digest,
+                "revisionKind": "content-snapshot",
             },
         }
     if mode != "remote":
@@ -236,15 +358,27 @@ async def load_selected_manifests(request, body: dict) -> dict:
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise GuideError("Remote branch/ref could not be resolved to a commit", 404)
     content = await fetch_source(github_content_url(repository, path, commit), "application/vnd.github.raw+json")
-    rendered = (
-        await command_output(
-            ["kubectl", "kustomize", f"https://github.com/{repository}//{str(Path(path).parent)}?ref={commit}"], 60
-        )
-        if Path(path).name.lower() in {"kustomization.yaml", "kustomization.yml"}
-        else content
-    )
+    snapshot = None
+    rendered = content
+    if Path(path).name.lower() in {"kustomization.yaml", "kustomization.yml", "kustomization"}:
+        cache = prism_temp_root("guide-source-snapshots")
+        cache.mkdir(parents=True, exist_ok=True)
+        checkout = Path(tempfile.mkdtemp(prefix="remote-", dir=cache))
+        for arguments in (
+            ["git", "init", str(checkout)],
+            ["git", "-C", str(checkout), "fetch", "--depth=1", f"https://github.com/{repository}.git", commit],
+        ):
+            result = await ShellClient().run(arguments, timeout=120)
+            if not result.ok:
+                raise GuideError("Could not fetch the immutable custom Guide commit", 409)
+        snapshot = await snapshot_guide_source(checkout, commit)
+        validate_kustomize_dependencies(snapshot, (snapshot / path).parent)
+        rendered = await command_output(["kubectl", "kustomize", str((snapshot / path).parent)], 60)
+        if not rendered:
+            raise GuideError("Could not render the frozen remote source", 409)
     return {
         "variant": "custom-remote",
+        **({"localRoot": str(snapshot)} if snapshot else {}),
         "files": [{"path": path, "content": content}],
         "rendered": rendered,
         "source": {"repository": repository, "requestedRef": ref, "commit": commit},

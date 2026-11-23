@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluationApi, resolveEvaluationTarget } from './client.js';
+import { evaluationApi, resolveEvaluationTarget, evaluationPlanReview, confirmEvaluationPlans } from './client.js';
+
+test('resumed review confirms exactly the captured plan digests', async (t) => {
+    const workflow = { id: 'workflow', prepared_plans: [{ id: 'plan', digest: 'sha256:reviewed', cases: [], preflight: { status: 'pass' } }] };
+    const review = evaluationPlanReview(workflow);
+    assert.equal(review.plan.preflight.status, 'pass');
+    t.mock.method(globalThis, 'fetch', async (_url, options) => {
+        assert.deepEqual(JSON.parse(options.body), { plan_digests: { plan: 'sha256:reviewed' }, acknowledge_unknown: false });
+        return Response.json({ status: 'queued' });
+    });
+    await confirmEvaluationPlans(review.workflow, false);
+});
 
 test('evaluation adapter preserves validation-array details and field labels', async (t) => {
     const detail = [{loc:['body','name'],msg:'Required'}];

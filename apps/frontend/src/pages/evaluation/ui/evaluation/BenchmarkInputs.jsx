@@ -14,14 +14,14 @@ function IconButton({ label, onClick }) {
 }
 function Section({ title, children, action }) { return <section className={/^0[123]/.test(title) ? "min-w-0 rounded-xl border border-slate-700/70 bg-slate-950/25 p-5" : "min-w-0 py-4"}><div className="mb-5 flex items-center justify-between gap-3"><h3 className="text-base font-semibold text-slate-100">{title}</h3>{action}</div>{children}</section>; }
 
-export default function BenchmarkInputs({ benchmark, setBenchmark, workloadMode, selectWorkloadMode, slaTargets, setSlaTargets, targetCount, issues = [], recommendedBenchmark, fullBenchmark }) {
+export default function BenchmarkInputs({ benchmark, setBenchmark, workloadMode, selectWorkloadMode, slaTargets, setSlaTargets, targetCount, issues = [], recommendedBenchmark, fullBenchmark, sliceSweep = false }) {
     const patch = values => setBenchmark(current => ({ ...(current || benchmark), ...values }));
     const prefix = benchmark.shared_prefix || {};
     const prefixPatch = values => patch({ shared_prefix: { ...prefix, ...values } });
     const editList = (key,index,field,value) => patch({ [key]: benchmark[key].map((row,i) => i === index ? {...row,[field]:value} : row) });
     const rateEdit = (index,field,value) => prefixPatch({stages:prefix.stages.map((s,i)=>i===index?{...s,[field]:value}:s)});
     const counts = benchmarkSummary(benchmark,targetCount);
-    const showPrefixReuse = Boolean(recommendedBenchmark?.shared_prefix) || workloadMode === 'shared-prefix';
+    const showPrefixReuse = sliceSweep || Boolean(recommendedBenchmark?.shared_prefix) || workloadMode === 'shared-prefix';
     const workloadTypes = [['custom', 'Customize'], ['matrix', 'Fixed input / output lengths'], ...(showPrefixReuse ? [['shared-prefix', 'Prefix cache reuse']] : [])];
     const hasLoadStages = workloadMode === 'matrix' || workloadMode === 'shared-prefix';
     return <div className="space-y-5">

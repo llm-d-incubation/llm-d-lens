@@ -1,105 +1,229 @@
 ---
 title: Model Catalog
-description: Choose a model and create a manual or AI-assisted deployment.
+description: Create a requirements-driven Manual or Agentic deployment and review one configuration before approval.
 ---
 
-Open **Model Catalog** to choose a model and deploy it to a cluster.
-For your first deployment, use **Manual** mode.
+Open **Model Catalog** and choose a model. Search combines with category filters,
+ignores case, and requires every search word to match the model metadata.
+**Clear filters** resets both filters.
 
-Use the compact **Search models** field beside the category tabs to filter by model name, publisher,
-repository, model type, category, or precision. Search ignores case and combines
-with the selected category; multiple words must all match. The model count updates
-as you type. Use **Clear filters** to reset both search and category.
+## One workflow, two decision modes
 
-## Choose a deployment mode
-
-In **One-click deployment**, the **Model Catalog** back button sits in the
-content area above the deployment configuration, not in the global top bar.
-
-| Mode | Choose it when |
+| Mode | Decision rule |
 | --- | --- |
-| **Manual** | You want to choose an llm-d Guide template, configure resources or review generated YAML |
-| **Agentic** (Experimental) | You want Lens to recommend a configuration for a workload and performance target |
+| **Manual** | Rule-based quick deployment. Checked optimizations (prefix-aware routing, engine prefix cache, chunked prefill, KV cache offload, Prefill / Decode separation) are enabled when compatible. With a request shape, AIC decides Prefill / Decode separation and checks the SLA. Unchecked optimizations are never enabled. No LLM is called. |
+| **Agentic** | Requires a configured AI provider. The AI proposes and ranks validated candidates against the objective, workload and evidence. If an AI request fails, planning stops instead of falling back to rules; **Use Manual plan** builds a Manual plan from the same inputs. |
 
-Deployment setup uses the model card's **Context** metadata as its initial maximum
-context length, including Agentic recommendations. For example, Qwen3-0.6B starts
-with `40960`, not `4096`. Only models with no listed context use the `4096`
-default. Standard and Agentic requests accept `256` through `1048576` tokens
-without silently shortening the card value; resource and model compatibility
-checks still apply. Existing plans and deployments are not rewritten.
+Both use **Target → Deployment plan → Deploy and observe**. The API mode names remain
+`manual` and `agentic`. Existing deployments,
+legacy APIs and previously recorded plans are not deleted.
 
-## Create a manual deployment
+“More mechanisms” does not mean “maximum parameters” or “best performance”.
+Unknown prerequisites remain **unknown**. Missing composition adapters are
+**unsupported**, not claimed to be real incompatibilities. The current adapters
+do not establish every possible Guide combination.
 
-1. Open **Model Catalog**, use **Model categories** to narrow the list, and click a model card.
-2. In **One-click deployment**, enter **Deployment name** and choose a ready **Cluster**.
-3. Choose **Model cache storage** containing this model. Wait for **This model is ready in the selected cache.** Model cache storage is optional in **Manual** mode.
-4. Keep **Mode** on **Manual** and click **Configure deployment**. Review the prefilled model and deployment settings; use **Edit setup** if needed.
-5. Check the runtime image, replicas, and tensor parallel size.
-6. Under **Guide template**, choose **Guide** and **Accelerator**. Use [Choose an evaluation Guide](/evaluation/guides) to compare the options.
-7. For a P/D or tiered-cache Guide, choose a variant from the displayed list. Keep the supplied defaults for the first run.
-8. Click **Generate YAML**. If available cards are insufficient but the physical total is sufficient, review the Pending warning and click **Continue & generate**. If the physical total is insufficient, reduce replicas / TP.
-9. Review **Generated deployable configuration**. Correct any highlighted errors, then click **Deploy**.
-10. On **Deployments**, wait for **Ready**. The deployment is retained without running a benchmark; stop or clean it up explicitly when no longer needed.
+## Choose the target
 
-YAML generation supports both device-plugin and DRA clusters. Missing DRA device
-details do not prevent hardware variant detection from registered Kubernetes
-accelerator resources; normal capacity and configuration checks still apply.
+1. Select a model. The deployment setup card at the top shows cluster, deployment
+   name, model cache and Pod placement as directly editable fields. A ready cluster
+   is preselected when available; the deployment name is generated. With no cluster,
+   choose **Connect cluster**.
+2. Choose **Manual** or **Agentic** under **Planning mode**. Agentic is unavailable until
+   an AI provider exists; its card then shows **Add AI provider**, which opens
+   **External providers**. When a provider exists, the **AI planner** section links
+   to **External providers** to add, edit or test one. **Workload & limits** is
+   visible and optional; placeholders show the computed defaults.
+3. Choose **Optimize for**: Balanced, Low latency or High throughput. Both modes use
+   it. Manual uses the goal to choose the topology; Agentic
+   also uses it to choose optimizations. **Generate plan** (Manual) or
+   **Generate plan with AI** (Agentic) opens the generated plan directly. No numeric parameters are required.
 
-Use **Back to model card** to return to the selected model.
-To measure performance, see [Run an evaluation](/user-guide/evaluation).
+Use **Prepare model cache** when files are missing. See
+[Model Cache](/user-guide/model-cache) and [Storage](/user-guide/storage).
 
-No cluster or cache available? [Add a cluster](/user-guide/clusters),
-[create cache storage](/user-guide/storage), and [download the model](/user-guide/model-cache).
-If the model is missing from the selected cache, download it there before returning.
+The initial context length is the model card's exact `contextLength`, with `4096`
+used only when absent. Supported values are `256` through `1048576`; no silent
+shortening occurs. Runtime images come from the target hardware profile.
+Replicas, TP and runtime parameters are edited after generation, not required as
+initial deployment inputs.
 
-Open **Manage model cache** from a selected model to open **Download a model**
-directly in **Model cache**. The selected cluster, Hugging Face repository ID, and
-storage volume are prefilled and remain editable. After closing the dialog,
-use **Back to model** to return
-to the selected model with your deployment settings intact. Browser Back also
-preserves the selection. Storage choices and model download status refresh when
-you return.
+## Enter requirements
 
-Change the runtime image only when you have an image compatible with the selected
-hardware. After changing the cluster or Guide source, check the variant selection
-again. A resource or network error during generation must be resolved before deployment.
+Use **Generate plan** or **Generate plan with AI**; there is no Guide selector.
+The optional **Workload & limits** fields start unspecified and are the same in both
+modes: the context length, an accelerator usage ceiling, a **Load target** that
+switches between **Concurrency** and **QPS** (one value only), mean input and output tokens,
+and P95 TTFT/TPOT **SLA targets**. Shared prompts and
+prefill-heavy traffic are not asked up front: Manual derives prefill-heaviness from the
+mean input and output tokens, and Agentic also infers both from the written goal. You
+can correct them after planning under **Deployment settings**.
+Model context is not treated as observed input length. The backend discovers hardware
+and chooses runtime settings. In Manual, when AIC supports the model and hardware, it
+checks each candidate topology against the TTFT and TPOT targets; the plan header shows whether the
+selected topology meets them. These are AIC estimates, not measurements.
 
-## Get an AI-assisted recommendation
+**Optimizations** (Manual) lists the core llm-d optimizations, all checked by default.
+Each row previews whether the plan will try to enable it and why. A checked
+optimization is enabled when the topology, hardware and pinned source support it;
+otherwise the plan notes that it is not used, with the reason. Unchecking one forbids
+it. Prefill / Decode separation is on by default with at least two usable accelerators.
+With mean input and output tokens, AIC compares its best P/D and combined-serving
+predictions, preferring the one that meets the SLA and then higher throughput; when AIC
+cannot evaluate the model and hardware, P/D stays on. Topologies that miss the SLA are
+ranked last. Manual does not use precise prefix-cache routing; prefix-aware routing is
+used instead.
 
-1. Open a model and fill in the deployment name, cluster and cache storage.
-2. Set **Mode** to **Agentic**.
-3. Choose **Use case** and **GPU capacity for planning**, then review the workload and performance-target fields. **Mean input tokens per request** (ISL), **Mean output tokens per request** (OSL), **TTFT SLO (ms)** and **TPOT SLO (ms)** start blank. Their placeholder examples (`4000`, `1000`, `2000` and `30`) are not submitted as requirements. Mean input length is not copied into P95. There is no end-to-end latency input. In the planning prompt, TPOT targets can also use per-token units: `TPOT <= 20 ms/token` and `TPOT <= 0.02 s/token` both mean 20 milliseconds per token.
-4. Leave **AI provider** on **Default (no external AI provider)**, or select a configured provider to help rank the options.
-5. Optional: expand **Preference** and enter an English preference, such as `use fewer GPU resources` or `prefer prefix cache`.
-6. Click **Generate recommendation**.
-7. Under **Validated alternatives**, expand **Why this option** to compare resource use and estimated performance.
-8. Click **Deploy recommendation** on the option you choose. Track startup on **Deployments**.
+| Goal | Topology preference when no measured or AIC evidence exists |
+| --- | --- |
+| Balanced | Fewest accelerators that fit the model |
+| Low latency | Widest tensor parallelism within the limit, then more replicas |
+| High throughput | Most serving replicas within the limit; with a concurrency target, the fewest accelerators that admit it |
 
-Agentic recommendation generation and recalculation skip model-file presence and
-download-readiness checks. A valid registered model-cache storage volume is still
-required. You can plan before downloading the model; deployment approval checks
-that the model is ready in the selected storage and resolves its current credential
-policy. Missing or incomplete models block deployment, not recommendation generation.
-Manual and Standard deployment checks are unchanged.
+With measured or AIC evidence, Low latency compares TTFT and TPOT first and High
+throughput compares throughput first. Hard limits and latency targets are always
+applied before the goal.
 
-Optionally, expand **Pod placement** before generating a recommendation to choose
-where the deployment runs.
+A concurrency target sizes serving replicas: Lens estimates the requests one replica
+admits from free KV cache (scaled by the declared request size in Agentic) and
+`--max-num-seqs`, then prefers topologies whose replicas admit the target. In both
+modes, when AIC supports the model and hardware, its load-target recommendations size
+the topologies instead; when it does not, planning continues with this KV-capacity
+sizing. A request rate (QPS, Agentic only) still requires AIC support.
 
-Agentic generation and selection offer `optimized-baseline` instead of direct
-`baseline-vllm`, including built-in fallback and AIC recommendations. Historical
-direct-vLLM configurations are not reintroduced as candidates. Existing plans
-and manual Standard vLLM deployments are unchanged.
+Catalog models with a known tool-call parser (for example Qwen3 with `hermes`) are
+deployed with `--enable-auto-tool-choice` and `--tool-call-parser`, so OpenAI-compatible
+requests that send `tools` work; requests without tools are unaffected. **vLLM options**
+takes other engine arguments, one `name=value` per line, for example `reasoning-parser`
+or a different `tool-call-parser`, which replaces the catalog default. Context, batching,
+memory and parallelism arguments are set by the plan and are edited after it is built.
 
-For load-based sizing, enter either **Concurrent requests** or **Request rate (QPS)**,
-not both. These are optional and have no prefilled target. A provided target selects
-native AIC recommendation mode; leaving both blank keeps the fixed-GPU search.
-Lens validates the exact recommended topology against the selected GPU capacity and
-deployment constraints. Joint inputs, unavailable predictions, insufficient capacity
-or unmet latency SLOs produce an error in the Agentic workspace with the reason and
-next action, rather than silently falling back to predictions without a load target.
+Manual needs no workload questionnaire or LLM. Agentic shows the objective first;
+expand **Describe a goal** for an optional natural-language goal. The **AI provider**
+is required and defaults to the first configured provider. Saved goals keep this
+section expanded. It extracts only
+explicit qualitative workload traits, displays the interpretation and preserves
+structured values over AI guesses. Numeric limits are not inferred.
+Unknown or low expected reuse does not block compatible optimization combinations.
+The default tradeoff is **Balanced**, not throughput. Existing saved inputs
+remain intact. Agentic retains three recommendations by default; planning has a
+60-minute deadline and no automatic trials.
 
-To change the recommendation, enter your revised preference below the alternatives
-and click **Recalculate selection**. This also works without an external AI provider.
+The accelerator ceiling and required/forbidden mechanisms are enforced by the
+backend. Live free capacity remains authoritative. Required mechanisms with
+unverified technical support, incompatible required combinations or insufficient
+resources fail explicitly. A latency target is not considered met merely because
+the configuration fits in memory.
+
+Manual preserves distinct supported capability families for source checks.
+Both modes independently combine prefix-affinity routing and CPU KV-cache with
+combined or P/D serving; precise routing and standalone tiered cache remain
+supported implementations. These are planning candidates,
+not proof that the selected source version supports the combination. CPU cache
+is capped at 8 GiB per serving replica and 25% of discovered free host memory
+across both P/D roles; unknown memory does not authorize offloading.
+The source renderer checks connectors, matching images, pinned revisions and
+placement before enabling a planned cache. Sequence count is bounded by the
+selected model/VRAM capacity estimate when available.
+
+After maximizing compatible capability coverage, known target misses and the
+objective break ties: throughput prefers P/D then prefix routing;
+latency prefers prefix routing; cost prefers fewer accelerators;
+reliability prefers multiple serving replicas. Remaining ties prefer fewer
+accelerators. Without a preference, fewer accelerators break coverage ties. The selection rationale exposes this policy;
+it is not a measured latency/throughput claim. Unsupported combinations are not
+silently overlaid.
+
+Load-target planning currently uses native AIC recommendations and accepts only
+one of concurrency or request rate. Missing compatible load predictions are
+reported as errors, not silently replaced by unconstrained estimates.
+
+## Review and edit
+
+- One header identifies **Manual plan** or **Agentic plan**, model and cluster.
+  **Change setup** returns to the setup page.
+  A compact strip summarizes topology, accelerators, optimizations and status.
+  **Planning log** reopens the step timeline, including what ran in each step.
+- The **Serving flow** shows a horizontal Request → Endpoint selection → Prefill → Decode → Response path.
+  Combined serving places both compute phases inside one Model server boundary; P/D uses separate boundaries.
+  Cache indexing, KV cache, compute configuration and service management connect to the stages they affect.
+  These are logical processing and configuration relationships, not live traffic or measured placement.
+
+  Every functional group is visible, with configured counts and a short summary. Select a group to expand
+  its optimizations inside the diagram, including off and unavailable entries. Each group has its own pages
+  of up to four settings; expanding another group collapses the previous one. Select an optimization to open
+  its source, router or runtime parameters in a configuration drawer. **Stage parameters** inside an expanded group opens broader settings such as replicas, when declared by the source. Supported toggles and detailed editors
+  use the existing compatibility checks. Unavailable settings explain their status and remain read-only.
+  There is no separate Stage configuration table or global All settings visibility switch.
+  Apply edited parameters and check resources before reviewing deployment. Closing the drawer keeps unapplied
+  changes visible in the plan; discard them explicitly if needed. Narrow screens can scroll the diagram horizontally.
+  Colored statuses distinguish Enabled, Required, Disabled, Conflict, Recipe setting and Unavailable.
+
+  Manual and Agentic are separate: a Manual plan has no Agentic entry. To use Agentic,
+  go back to setup and choose it under **Planning mode**; the kept plan can be restored there.
+  Recommendations still require resource checks
+  and explicit deployment confirmation; no performance result is implied.
+- The **Guides** tab in **Review & deploy** contains the complete
+  pinned Guide index, including unsupported entries and their reasons. Selected
+  Guides retain their choices and variables, shown with readable names. Prefix
+  affinity and precise indexing remain separate optimization points.
+- The selected optimization opens its source, router or runtime fields in the graph-owned drawer.
+  The optional 3D view retains a side inspector.
+  The **Parameters** and **YAML** tabs in **Review & deploy** edit the final configuration directly.
+  Unrelated final edits survive optimization changes; conflicting edits block
+  application instead of silently disappearing. Undo the conflict or explicitly
+  discard final parameter edits. Legacy snapshots without an edit baseline require
+  explicit resolution after base changes. Native CPU cache retains its capacity
+  when disabled and re-enabled. No independent deploy action is added.
+- **Apply changes and check resources** persists and validates a new snapshot.
+  Unapplied edits block deployment; explicit choices survive automatic recommendations.
+  Manual seeks compatible coverage, while external prerequisites, unresolved
+  choices and resource ceilings remain enforced. Agentic uses the same editor;
+  both modes consider compatible source additions beyond workload presets.
+
+If source loading fails, the workflow shows the actual reason and a retry action.
+Legacy runs can **Load Guides and build source configuration** rather than being
+restricted to their old preview. A changed source revision requires explicit
+adoption before edits can be applied. **Change workload & limits** still rebuilds
+requirements without modifying a live deployment. The plan view shows the serving flow with a compact
+**Optimizations** panel floating in the diagram's empty top-right area; each settings button opens that optimization's
+parameters in place. Expand the list to swap it with the flow; select the flow thumbnail to swap
+back. The full table has a checkbox per optimization; checking or unchecking it, or enabling or
+disabling it in the flow, rebuilds and rechecks the plan. Optimizations the plan does not apply show a status and reason on their
+row. Agentic plans also show **Plan**, **Alternatives**
+and **Benchmark tests** tabs. Alternatives compares reviewed source configurations without claiming unmeasured performance.
+
+## Generate, check and deploy
+
+1. Both modes automatically generate/check YAML. Manual completes supported
+   runtime flags and compares actual capability coverage after source rendering,
+   rather than selecting the first passing Guide. If none pass, it preserves the
+   recommendation and blocks deployment. Use **Retry checks** after resolving
+   failures. Explicit candidate selection is never silently replaced.
+2. Review warnings, dependencies and pending checks. Rendering does not install
+   resources. Admission, readiness and workload performance remain pending.
+3. Lens selects the traffic entry **Inference Service** automatically, never EPP or
+   metrics; change it only if needed. **Review & deploy** opens Overview, Parameters,
+   Guides and YAML tabs. **Ready for your confirmation**
+   summarizes the result; **Confirm deployment** approves the exact configuration
+   checksum and selected endpoint. A changed snapshot requires a new review. Approval refreshes
+   capacity and submits the manifest through the common deployment lifecycle.
+4. After confirmation Lens opens the full **Deployments** list with the new job marked
+   **New**; it shows component states, logs, endpoints, monitoring and evaluation. A deployment is ready only when
+   the execution has succeeded and all its components report ready. Readiness is not
+   proof of workload performance. See
+   [Manage deployments](/user-guide/deployments).
+
+Namespace binding, registered storage mounting and other deployment-time
+adaptations still follow the existing Deploy contract. A successful planning
+check does not guarantee cluster admission or successful startup.
+
+## Evidence and controlled trials
+
+The UI distinguishes **recommendation**, **predicted performance**, a measured
+candidate, and the **best verified candidate within the tested workload and
+budget**. Merely appearing in a measurement ranking does not make a candidate
+the winner. No result claims a global optimum.
 
 Every new recommendation and recalculation queries published public SQL experiments
 before AIC planning, using the selected model. With an external AI provider, relevant
@@ -118,7 +242,7 @@ treated as `vllm` for retrieval and planning context. Explicitly reported other
 backends are preserved and do not match a vLLM plan. This corpus default does not
 infer runtime versions or rewrite original evidence.
 
-Under **Decision evidence**, review **Public SQL measured observations** for
+Under **Planning evidence**, review **Public SQL measured observations** for
 the retrieval outcome, original values and units, source path, revision and checksum.
 No matches, query failures or missing authenticated global `benchmark-rag:query:read`
 permission are explicitly reported, and planning continues with existing evidence.
@@ -129,43 +253,25 @@ become deterministic performance predictions or change the displayed SLO assessm
 Internal SQL experiments are listed separately. Agentic planning uses SQL evidence
 and does not require a document search service or independent search page.
 
-With an external AI provider, both generation and selection prompts put your full
-preference before the planning context. Explicit requirements such as one GPU or no
-P/D separation take precedence over candidate diversity and performance suggestions,
-subject to platform and hardware validity. This is AI guidance, not a guarantee that
-arbitrary natural-language requirements are mechanically enforced.
+Use **Benchmark tests** to prepare a test-enabled Agentic plan. Trial controls require another explicit action,
+a fixed workload, candidate selection, resource/time/run budgets and repetitions.
+Trials use the existing bounded Deploy/Evaluate executor and clean up their own
+deployments. They do not automatically modify an existing deployment. Interrupted
+trials retain records for explicit cleanup.
+Source-backed tests require **Check all source candidates** and an explicitly
+reviewed inference Service for each selected candidate. Configure and render
+cache variants in the Guide editor; testing never substitutes unreviewed provider
+templates or silently adds a native-cache variant. Selecting a measured winner
+restores its reviewed source configuration.
 
-New planning audits retain the full preference and each actual AI request/response,
-including tools and retries. They exclude provider authentication headers and API keys.
-Treat these audit files as private data; old decisions cannot recover previously
-unrecorded exchanges.
+New workflow runs and revisions are persisted with their planning snapshots.
+Refreshing restores the saved plan; an expired cluster session must be resolved
+before further actions. Changing requirements creates another plan.
 
-**AI score** ranks the alternatives; it is not a measured performance result or
-a probability of success. Treat **SLO not met** as a reason to revise the target
-or resources. [Run an evaluation](/user-guide/evaluation) to measure the deployed model.
-
-## Adjust optional settings
-
-| Goal | Where to change it |
-| --- | --- |
-| Change context length or batching | **Advanced settings** in the Manual configuration editor |
-| Enable tool calling | **Enable automatic tool choice**, then choose **Tool call parser** |
-| Use a deployment-specific proxy | **Deployment environment** |
-| Change replicas or accelerator count | **Replicas** and **Tensor parallelism** / **TP** |
-
-If startup reports insufficient KV-cache capacity, lower the maximum context
-length or allocate more resources in a new configuration.
-
-For deployments using the NVIDIA device plugin, generated model-server Pods select
-the `nvidia` RuntimeClass declared by their hardware access mode unless the source
-already specifies a RuntimeClass. This applies to baseline, optimized baseline,
-P/D disaggregation, tiered prefix cache and precise prefix cache routing. This
-RuntimeClass must exist on the target cluster. GPU requests alone do not inject
-devices when the node's default container runtime is `runc`. If vLLM reports
-`Failed to infer device type`, check the Pod's RuntimeClass and device access;
-`VLLM_LOGGING_LEVEL=DEBUG` only adds diagnostics. Existing Pods and saved manifests
-are not rewritten by a Lens update; generate a new deployment to apply the fix.
-
-If **Your role cannot create deployments.** appears, ask an administrator for
-deployment access to the target cluster. **Open Deployments** still lets you view
-deployments you can access.
+The current catalog does not establish every requested optimization or arbitrary
+combination. Availability comes from the selected source revision and its composition
+adapters; unsupported, external and unadapted entries explain their limits rather
+than disappearing. Missing source evidence is not treated as verified. Direct vLLM flag completion
+can use a mandatory runtime capability probe rather than pretending support is verified.
+Unsupported adapters are not enabled. Real-cluster and workload
+measurements remain necessary to validate the final deployment.

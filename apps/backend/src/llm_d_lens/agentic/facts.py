@@ -81,7 +81,14 @@ class PlanningHardwareSnapshot:
             self._task = asyncio.create_task(build_overview(registry.require_cluster(cluster_id)))
         if self._task.cancelled():
             raise TimeoutError("Planning hardware discovery was cancelled; no snapshot is available")
-        return deepcopy(await self._task)
+        from kubernetes.aio.config.config_exception import ConfigException
+
+        try:
+            return deepcopy(await self._task)
+        except ConfigException as error:
+            raise ValueError(
+                "Cannot read hardware from the selected cluster. Check its kubeconfig and authentication, then retry."
+            ) from error
 
 
 def _hardware_model_key(model: str, profile: HardwareProfile) -> tuple[str, ...]:
@@ -643,6 +650,8 @@ async def resolve_planning_facts(
             configuration_cases=requested.configuration_cases,
             configuration_case_status=requested.configuration_case_status,
             requirements=requested.requirements,
+            objective=requested.objective,
+            max_num_seqs=requested.max_num_seqs,
         )
     )
     discovered = _public_rag_hardware(overview)
@@ -754,7 +763,7 @@ async def _supplementary_evidence(
             target_request_rate=facts.workload_profile.request_rate if facts.workload_profile else None,
             ttft_target_ms=facts.ttft_slo_ms,
             tpot_target_ms=facts.tpot_slo_ms,
-            max_candidates=3,
+            max_candidates=max(1, min(int(facts.max_candidates or 3), 10)),
         )
         aic_details = {
             "reason": "aic_support_unavailable",
@@ -784,16 +793,13 @@ async def _supplementary_evidence(
                     details=prediction_data,
                 )
             )
-        elif facts.workload_profile and (
-            facts.workload_profile.concurrency is not None or facts.workload_profile.request_rate is not None
-        ):
+        elif facts.workload_profile and facts.workload_profile.request_rate is not None:
             raise ValueError(
                 "AIC does not support this model and hardware. Choose a supported source or clear the load target."
             )
     except (AICError, ValueError) as error:
-        if facts.workload_profile and (
-            facts.workload_profile.concurrency is not None or facts.workload_profile.request_rate is not None
-        ):
+        # Concurrency can still size replicas from KV capacity; a request rate has no AIC-free model.
+        if facts.workload_profile and facts.workload_profile.request_rate is not None:
             raise ValueError(f"AIC load-target prediction failed: {error}") from error
         evidence.append(
             PlanningEvidence(

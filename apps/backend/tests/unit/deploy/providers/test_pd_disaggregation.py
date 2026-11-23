@@ -256,7 +256,9 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
 
     resolve.assert_awaited_once_with(overrides["runtime"], cluster_id="cluster-id", namespace="deployment-namespace")
     rendered = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text(encoding="utf-8")))
-    for deployment in rendered:
+    probe = next((item for item in rendered if item["kind"] == "ConfigMap"), None)
+    assert bool(probe) is not read_only
+    for deployment in (item for item in rendered if item["kind"] == "Deployment"):
         pod_spec = deployment["spec"]["template"]["spec"]
         container = pod_spec["containers"][0]
         assert pod_spec.get("runtimeClassName") is None
@@ -265,6 +267,8 @@ async def test_render_mounts_selected_cache_volume_for_both_roles(
         if not read_only:
             expected_volumes.append({"name": "lens-shm", "emptyDir": {"medium": "Memory", "sizeLimit": "4Gi"}})
             expected_mounts.append({"name": "lens-shm", "mountPath": "/dev/shm"})
+            expected_volumes.append({"name": "prism-kv-trace", "configMap": {"name": probe["metadata"]["name"]}})
+            expected_mounts.append({"name": "prism-kv-trace", "mountPath": "/opt/prism-kv-trace", "readOnly": True})
         assert pod_spec["volumes"] == expected_volumes
         assert container["volumeMounts"] == expected_mounts
         assert container["args"][0] == ("/model-cache" if read_only else "Qwen/Qwen3-8B")

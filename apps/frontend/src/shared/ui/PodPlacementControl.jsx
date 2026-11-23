@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { Select } from './FormControls';
+import { PickerSelect, Select } from './FormControls';
 import { cn } from '../lib/cn';
 
 const descriptions = {
@@ -10,7 +10,7 @@ const descriptions = {
     spread: 'Require a separate eligible node for each replica. Extra replicas remain Pending if there are too few nodes.',
 };
 
-export default function PodPlacementControl({ value, onChange, clusterId, nodeName, onNodeChange, listNodeLabels, className = '', compact = false }) {
+export default function PodPlacementControl({ value, onChange, clusterId, nodeName, onNodeChange, listNodeLabels, className = '', compact = false, defaultOpen = false, inline = false }) {
     const [nodeNames, setNodeNames] = useState([]);
     const [nodeError, setNodeError] = useState('');
     const [open, setOpen] = useState(false);
@@ -46,7 +46,20 @@ export default function PodPlacementControl({ value, onChange, clusterId, nodeNa
         <p className="text-xs leading-5 text-slate-400">{descriptions[value]}</p>
     </div>;
 
-    if (compact) return <details className={className}>
+    if (inline) return <div className={cn('grid gap-2', className)}>
+        <PickerSelect aria-label="Pod placement" title={descriptions[value]} value={value} onChange={(next) => { onChange(next); onNodeChange(''); }} options={[
+            { value: 'prefer-same-node', label: 'Prefer one node' },
+            { value: 'same-node', label: 'Require one node' },
+            { value: 'balanced', label: 'Distribute evenly' },
+            { value: 'spread', label: 'Require separate nodes' },
+        ]} />
+        {['balanced', 'spread'].includes(value) && <p className="text-xs text-amber-600 dark:text-amber-300">Not compatible with P/D slices: Prefill and Decode Pods are split across nodes.</p>}
+        {value === 'same-node' && <PickerSelect aria-label="Placement node" value={nodeName} onChange={onNodeChange} disabled={!clusterId || Boolean(nodeError)}
+            options={[{ value: '', label: 'Any eligible node' }, ...nodeNames.map((name) => ({ value: name, label: name }))]} />}
+        {nodeError && <span role="alert" className="text-xs text-red-300">Unable to load nodes: {nodeError}</span>}
+    </div>;
+
+    if (compact) return <details className={className} open={defaultOpen || undefined}>
         <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-semibold text-slate-300"><ChevronDown size={14} aria-hidden="true" />Pod placement</summary>
         {fields}
     </details>;

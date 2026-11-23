@@ -36,6 +36,7 @@ from llm_d_lens.deploy.executions import (
     DeploymentExecutionNotFoundError,
     DeploymentScaleError,
     ensure_execution_endpoint,
+    execution_deployment_plan,
     find_execution_context,
     list_execution_contexts,
     scale_deployment_execution,
@@ -81,6 +82,160 @@ class CleanOrphansRequest(BaseModel):
 
 class RestartCaseRequest(BaseModel):
     model_token: str | None = None
+
+
+class RuntimeVerificationRequest(BaseModel):
+    smoke: bool = Field(
+        default=False,
+        description=(
+            "Send one bounded inference request, collect version-supported request-correlated NIXL "
+            "evidence and metrics, and persist the report; may establish a port-forward."
+        ),
+    )
+    metrics_only: bool = Field(
+        default=False,
+        description=(
+            "Read current model-server metric counters for owned Pods without sending any inference "
+            "request or persisting a report. Mutually exclusive with smoke."
+        ),
+    )
+
+
+@router.post(
+    "/plans",
+    operation_id="prepare_deployment_plan",
+    summary="Freeze and preflight a deployment plan",
+    description=(
+        "Validate target-bound configurations and runtime settings, render final workloads and Router inputs, "
+        "and persist an owner-bound immutable plan. Downloads a pinned Chart but creates no Run or Kubernetes "
+        "resources. Returns digest, reviewable manifests and pass/fail/unknown preflight evidence. "
+        "Invalid or unsupported configurations return 422."
+    ),
+)
+async def prepare_deployment_plan(request: DeploymentRunCreateRequest, http_request: Request):
+    from llm_d_lens.deploy.prepared_plans import prepare, public_plan
+
+    require_cluster_access(current_principal(http_request), request.provenance.get("cluster_server_id"))
+    try:
+        return public_plan(
+            await prepare(
+                deployment_run_manager, request, owner_user_id=owner_for_create(current_principal(http_request))
+            )
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get(
+    "/plans/{plan_id}",
+    operation_id="get_deployment_plan",
+    summary="Read a persisted deployment plan",
+    description=(
+        "Return a plan's digest, frozen manifests, Router values and preflight evidence. Requires deployment "
+        "read permission, cluster access and ownership; unavailable plans return 404. Chart archive bytes and "
+        "local paths are not returned. Reading a plan does not refresh its recorded preflight."
+    ),
+)
+async def get_deployment_plan(plan_id: str, http_request: Request):
+    from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+    from llm_d_lens.deploy.prepared_plans import public_plan
+
+    plan = DeploymentPlanDao().get(plan_id)
+    principal = current_principal(http_request)
+    if plan is None or plan.owner_user_id != owner_for_create(principal):
+        raise HTTPException(status_code=404, detail="deployment plan not found")
+    require_cluster_access(principal, plan.cluster_id)
+    return public_plan(plan)
+
+
+@router.get(
+    "/topology",
+    operation_id="get_deployment_topology",
+    summary="Read raw cluster topology inventory",
+    description=(
+        "Return Node labels, allocatable resources, scheduling status and effective Pod requests from the selected "
+        "cluster. This is inventory, not plan-specific eligibility or a capacity reservation. Cluster access and "
+        "deployment-create permission are required. Incomplete or unavailable reads return 503, never an empty success."
+    ),
+)
+async def get_deployment_topology(cluster_id: str, http_request: Request):
+    from llm_d_lens.configuration.disaggregated_set import resource_requests
+    from llm_d_lens.deploy.prepared_plans import inventory
+
+    require_cluster_access(current_principal(http_request), cluster_id)
+    try:
+        nodes = await inventory(cluster_id, "nodes")
+        pods = await inventory(cluster_id, "pods")
+        return {
+            "clusterId": cluster_id,
+            "nodes": [
+                {
+                    "name": item["metadata"]["name"],
+                    "labels": item["metadata"].get("labels", {}),
+                    "allocatable": item.get("status", {}).get("allocatable", {}),
+                    "conditions": item.get("status", {}).get("conditions", []),
+                    "taints": item.get("spec", {}).get("taints", []),
+                    "unschedulable": item.get("spec", {}).get("unschedulable", False),
+                }
+                for item in nodes
+            ],
+            "pods": [
+                {
+                    "namespace": item["metadata"].get("namespace"),
+                    "name": item["metadata"]["name"],
+                    "node": item.get("spec", {}).get("nodeName"),
+                    "phase": item.get("status", {}).get("phase"),
+                    "resourceRequests": resource_requests(item.get("spec", {})),
+                }
+                for item in pods
+            ],
+        }
+    except (ValueError, TimeoutError, OSError) as error:
+        raise HTTPException(status_code=503, detail="Cluster topology inventory unavailable") from error
+
+
+@router.post(
+    "/executions/{execution_id}/verify",
+    operation_id="verify_deployment_execution",
+    summary="Verify actual DS placement and runtime evidence",
+    description=(
+        "Read DS, LWS, Pod ownership, observed generations and actual Node domains for a prepared execution. "
+        "Returns independent Kubernetes, placement, routing and KV-transfer evidence. Optional smoke sends one "
+        "bounded inference request, may establish a port-forward and records metric deltas plus vLLM 0.26.0 NIXL pull "
+        "completion/producer acknowledgements. HTTP success does not imply KV transfer. Smoke reports are persisted "
+        "as deployment artifacts; passive reads include lastProbe when available. Optional metrics_only reads "
+        "current per-Pod metric counters with a collection timestamp and sends no request. Requires case-execute "
+        "scope and cluster access. Unsupported executions return 409; "
+        "unavailable cluster evidence returns 503."
+    ),
+)
+async def verify_deployment_execution(execution_id: str, body: RuntimeVerificationRequest, http_request: Request):
+    import httpx
+
+    from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+    from llm_d_lens.deploy.prepared_plans import plan_documents
+    from llm_d_lens.deploy.runtime_verification import verify_execution
+
+    if body.smoke and body.metrics_only:
+        raise HTTPException(status_code=422, detail="smoke and metrics_only are mutually exclusive")
+    context = _require_execution(execution_id)
+    _require_execution_permission(current_principal(http_request), context, "deployment:case:execute")
+    require_cluster_access(current_principal(http_request), context.cluster_id)
+    run = _store.get_run(context.run_id) if context.run_id else None
+    plan = DeploymentPlanDao().get(run.provenance.get("_prepared_plan_id")) if run else None
+    if plan is None:
+        raise HTTPException(status_code=409, detail="Execution has no prepared DS plan")
+    index = next((index for index, case in enumerate(run.cases) if case.id == context.case_id), None)
+    if index is None:
+        raise HTTPException(status_code=409, detail="Prepared execution case is unavailable")
+    try:
+        return await verify_execution(
+            context, plan_documents(plan, index), smoke=body.smoke, metrics_only=body.metrics_only
+        )
+    except (httpx.HTTPError, KeyError, IndexError) as error:
+        raise HTTPException(status_code=503, detail="Runtime inference evidence unavailable") from error
+    except (ValueError, TimeoutError, OSError) as error:
+        raise HTTPException(status_code=503, detail="Runtime evidence is unavailable") from error
 
 
 def _ready_model_cache_entry(entries, model: str):
@@ -196,6 +351,8 @@ async def _validate_cluster_placement(placement: dict | None, cluster_id: str | 
     summary="Start a deployment run from one or more already-rendered deployable configurations.",
     description=(
         "Start a deployment run from one or more already-rendered deployable configurations. "
+        "DisaggregatedSet configurations require prepared_plan_id and expected_plan_digest from a reviewed plan; "
+        "unknown preflight constraints require acknowledge_unknown=true. Changed inputs or failed rechecks return 409. "
         "Use this when you want Lens Deploy to execute a configuration artifact or custom deployable payload. "
         "The run starts queued and its cases may show pods stuck Pending if the cluster currently lacks free "
         "resources to schedule them -- tell the user right away that it looks resource-constrained and queued, "
@@ -211,7 +368,7 @@ async def create_run(request: DeploymentRunCreateRequest, http_request: Request 
             request, owner_user_id=owner_for_create(current_principal(http_request))
         )
     except ValueError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.get(
@@ -516,6 +673,31 @@ async def list_deployments(request: Request = None, query: str = ""):
     return _list_runs(query, current_principal(request))
 
 
+@router.post(
+    "/executions/{execution_id}/restart-plan",
+    operation_id="prepare_deployment_execution_restart",
+    summary="Prepare a reviewed deployment restart",
+    description=(
+        "Prepare a new immutable plan for a stopped or failed prepared execution. Returns status=awaiting_review, "
+        "plan and request for digest-bound POST /runs confirmation. Does not clean resources or schedule execution. "
+        "Requires run-create permission, case-execute scope and cluster access. Optional cluster_session_id renews "
+        "the same-cluster session with session-rebind permission. Evaluation-owned executions require workflow retry. "
+        "Unsupported executions return 409."
+    ),
+)
+async def prepare_execution_restart(
+    execution_id: str, http_request: Request, request: RebindClusterSessionRequest | None = None
+):
+    context = _require_execution(execution_id)
+    _require_execution_permission(current_principal(http_request), context, "deployment:case:execute")
+    run = _store.get_run(context.run_id)
+    if run is None or not run.provenance.get("_prepared_plan_id"):
+        raise HTTPException(status_code=409, detail="Execution has no prepared deployment plan")
+    if request is not None:
+        await rebind_cluster_session(context.run_id, request, http_request)
+    return await restart_case(context.run_id, context.case_id, RestartCaseRequest(), http_request)
+
+
 @router.get(
     "/runs",
     summary="List deployment runs Lens has recorded.",
@@ -534,7 +716,9 @@ async def list_runs(request: Request = None, query: str = ""):
     summary="List deployment executions without creating new port-forwards.",
     description=(
         "List deployment executions without creating new port-forwards. Use this to discover execution ids, "
-        "readiness, cluster affinity, and endpoint metadata."
+        "readiness, cluster affinity, and endpoint metadata. Missing serving fields are supplemented from stored "
+        "rendered vLLM manifests; flat runtime parameters describe decode (or aggregated serving), not prefill. "
+        "Unspecified or unparseable parameters remain unknown."
     ),
     operation_id="list_deployment_executions",
 )
@@ -569,7 +753,9 @@ async def list_executions(
     summary="Get one deployment execution by execution id.",
     description=(
         "Get one deployment execution by execution id. Use this to inspect the current deployment status, namespace, "
-        "provenance, and endpoint metadata."
+        "provenance, and endpoint metadata. Missing serving fields are supplemented from stored rendered vLLM "
+        "manifests; flat runtime parameters describe decode (or aggregated serving), not prefill. "
+        "Unspecified or unparseable parameters remain unknown."
     ),
     operation_id="get_deployment_execution",
 )
@@ -580,6 +766,30 @@ async def get_execution(execution_id: str, request: Request = None):
         raise HTTPException(status_code=404, detail="deployment execution not found")
     _require_execution_permission(current_principal(request), context, "deployment:run:read")
     return context.api_payload()
+
+
+@router.get(
+    "/executions/{execution_id}/plan",
+    summary="Get the deployment plan and rendered Kubernetes YAML of one execution.",
+    description=(
+        "Get the deployment plan and rendered Kubernetes YAML of one execution. Returns the configuration "
+        "artifacts the deployment was created from (`configuration_artifacts`, each with its `kind`, "
+        "`provider_ref` and inline `content`) and the rendered multi-document manifest that Lens applied "
+        "(`manifest`), so the plan can be audited or re-applied with `kubectl apply -f`. `manifest` is null while "
+        "the execution is still pending or when the rendered file is no longer stored or cannot be parsed. Secret "
+        "`data` and `stringData` values, including Secrets in `List.items` and manifests embedded in artifact "
+        "content, are replaced with `<redacted>`; restore real values or remove those Secret objects before "
+        "re-applying the manifest. Returns 404 when the execution does not exist."
+    ),
+    operation_id="get_deployment_execution_plan",
+)
+async def get_execution_plan(execution_id: str, request: Request = None):
+    """Return the stored configuration plan and rendered manifest of one execution."""
+    context = find_execution_context(execution_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail="deployment execution not found")
+    _require_execution_permission(current_principal(request), context, "deployment:run:read")
+    return execution_deployment_plan(context)
 
 
 def _resolve_execution_cluster_id(context) -> str | None:
@@ -1152,7 +1362,11 @@ async def stop_case(run_id: str, case_id: str, request: Request = None):
     summary="Restart a deployment case.",
     description=(
         "Restart a deployment case. Optionally supply a model token override when the case needs a fresh secret or "
-        "different runtime credential during restart."
+        "different runtime credential during restart. Prepared DS cases instead return status=awaiting_review, "
+        "plan and request, without cleanup or execution; submit request with the reviewed plan ID/digest "
+        "to POST /runs. "
+        "Prepared retries use the configured Secret reference and reject inline token overrides. "
+        "Evaluation-owned DS cases must use workflow retry. Old resources are not removed during preparation."
     ),
     operation_id="restart_deployment_case",
 )
@@ -1161,6 +1375,18 @@ async def restart_case(run_id: str, case_id: str, request: RestartCaseRequest, h
     if run is not None:
         _require_run_permission(current_principal(http_request), run, "deployment:case:execute")
     try:
+        if run is not None and run.provenance.get("_prepared_plan_id"):
+            from llm_d_lens.deploy.prepared_plans import prepare, public_plan, restart_request
+
+            if request.model_token:
+                raise ValueError(
+                    "Prepared retry requires rotating the configured Secret reference, not an inline token"
+                )
+            principal = current_principal(http_request)
+            renewed = restart_request(run, case_id)
+            require_cluster_access(principal, renewed.provenance.get("cluster_server_id"))
+            plan = await prepare(deployment_run_manager, renewed, owner_user_id=owner_for_create(principal))
+            return {"status": "awaiting_review", "plan": public_plan(plan), "request": renewed.model_dump(mode="json")}
         case = await deployment_run_manager.worker_for_run(run_id).restart_case(
             run_id, case_id, model_token=(request.model_token or "").strip() or None
         )

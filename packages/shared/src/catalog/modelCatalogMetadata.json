@@ -308,7 +308,7 @@
     "contextLength": 40960
   },
   "Qwen/Qwen3-14B": {
-    "weightGiB": 13.8,
+    "weightGiB": 27.5,
     "contextLength": 40960
   },
   "naver-hyperclovax/HyperCLOVAX-SEED-Vision-Instruct-3B": {

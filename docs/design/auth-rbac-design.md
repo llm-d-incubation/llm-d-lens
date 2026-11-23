@@ -35,6 +35,19 @@ these behaviors; other domains' ownership rules are unchanged.
 
 ## 0. High-Level Design
 
+### Prepared Deployment Plans
+
+Prepared DS plans reuse existing action permissions; no role or permission is added.
+Preparation/topology reads require `deployment:run:create`; saved plan reads require
+`deployment:run:read`. Plan retrieval and consumption additionally require exact owner
+identity and target cluster access. Plan sharing is not introduced. Runtime verification
+requires `deployment:case:execute` because optional smoke inference can establish a
+port-forward and consume model resources. Evaluation confirmation requires
+`evaluate:workflow:create`, exact workflow/plan ownership and cluster access; a shared
+reader cannot authorize the owner's deployment. Existing middleware continues to
+enforce authentication and CSRF. Server-owned `_prepared*` provenance is not a public
+authorization token.
+
 > In one sentence: Lens uses “**pluggable identity sources (local / external IdP) + revocable sessions**” to solve authentication,
 > and uses “**action permissions × resource scopes**” RBAC to solve authorization; defense in depth across frontend and backend, default deny.
 

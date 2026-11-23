@@ -57,6 +57,114 @@ export function expandConfigurationTopologies({ guide, replicaVariants, tensorPa
     }))));
 }
 
+// Reads slice_capacity output: null means the ceiling is unknown, not zero.
+export function maxFeasibleSlices(capacity, policy) {
+    if (!capacity) return null;
+    const type = policy?.type || 'None';
+    if (type === 'None') return capacity.maxSlices?.None ?? null;
+    const key = (capacity.topologyKeys || []).find(item => item.key === policy.topology);
+    if (!key) return null;
+    return type === 'ExclusiveTopology' ? key.exclusiveTopologyDomains : key.feasibleDomains;
+}
+
+export function sliceHistoryMatches(entry, shape) {
+    return entry.prefillReplicas === shape.prefillReplicas
+        && entry.prefillTensorParallelSize === shape.prefillTp
+        && entry.decodeReplicas === shape.decodeReplicas
+        && entry.decodeTensorParallelSize === shape.decodeTp
+        && (!entry.accelerator || !shape.accelerator || entry.accelerator === shape.accelerator);
+}
+
+// Fewest Slices whose measured SLO-stable rate meets the target, among runs with the same per-Slice shape.
+export function sliceRecommendation(history = [], shape, { targetRps, maxSlices, evidenceKey } = {}) {
+    const matched = history.filter(entry => sliceHistoryMatches(entry, shape));
+    const measured = matched.filter(entry => typeof entry.maximumStableQps === 'number' && entry.slices && (!evidenceKey || entry.evidenceKey === evidenceKey));
+    const target = Number(targetRps);
+    if (!(target > 0)) return { status: measured.length ? 'needs-target' : 'no-evidence', matched };
+    const meeting = measured.filter(entry => entry.maximumStableQps >= target);
+    const feasible = meeting
+        .filter(entry => maxSlices == null || entry.slices <= maxSlices)
+        .sort((a, b) => a.slices - b.slices || String(b.finishedAt || '').localeCompare(String(a.finishedAt || '')));
+    if (feasible.length) return { status: 'verified', entry: feasible[0], matched };
+    return { status: meeting.length ? 'exceeds-capacity' : measured.length ? 'unmet' : 'no-evidence', matched };
+}
+
+export function sloTargetsLabel(targets = {}) {
+    const parts = [];
+    if (targets.ttft_ms != null) parts.push(`TTFT ≤ ${targets.ttft_ms} ms`);
+    if (targets.tpot_ms != null) parts.push(`TPOT ≤ ${targets.tpot_ms} ms`);
+    if (targets.success_rate_min_percent != null) parts.push(`success ≥ ${targets.success_rate_min_percent}%`);
+    return parts.join(', ') || 'default success-rate SLO only';
+}
+
+// Distinct workload/SLO profiles among SLO-measured runs, newest first.
+export function sliceEvidenceProfiles(entries = []) {
+    const profiles = new Map();
+    for (const entry of [...entries].sort((a, b) => String(b.finishedAt || '').localeCompare(String(a.finishedAt || '')))) {
+        if (typeof entry.maximumStableQps !== 'number' || !entry.evidenceKey || profiles.has(entry.evidenceKey)) continue;
+        profiles.set(entry.evidenceKey, { key: entry.evidenceKey, label: `${entry.workloadLabel || 'workload'} · ${sloTargetsLabel(entry.slaTargets)}` });
+    }
+    return [...profiles.values()];
+}
+
+export function expandSliceVariants(variants, sliceCounts) {
+    const counts = [...new Set(sliceCounts || [])].filter(count => Number.isSafeInteger(count) && count >= 1).sort((a, b) => a - b);
+    if (!counts.length) return variants.map(variant => ({ ...variant, slices: null }));
+    if (variants.length * counts.length > 16) throw new Error('A configuration sweep is limited to 16 combinations including Slice counts.');
+    return variants.flatMap(variant => counts.map(slices => ({ ...variant, slices })));
+}
+
+function caseSliceFacts(entry) {
+    const evaluationCase = entry.case || entry;
+    const configuration = evaluationCase.deployment_configuration || {};
+    const content = configuration.content || {};
+    const settings = content.disaggregatedSet || {};
+    const prefill = content.prefill || {};
+    const decode = content.decode || content.serving || {};
+    const shape = [prefill.replicaCount, prefill.tensorParallelSize, decode.replicaCount, decode.tensorParallelSize];
+    const slices = settings.slices ?? configuration.provenance?.slice_sweep?.slices ?? null;
+    if (evaluationCase.kind !== 'guide' || !slices || !shape.every(Number.isInteger)) return null;
+    const metrics = evaluationCase.metrics || entry.evaluation?.metrics || {};
+    return {
+        caseId: evaluationCase.id,
+        status: evaluationCase.status,
+        artifactId: evaluationCase.configuration_artifact_id || null,
+        model: content.model?.name || '',
+        guide: configuration.provider_ref || '',
+        scenarioId: evaluationCase.scenario_id || '',
+        slaTargets: evaluationCase.sla_targets || {},
+        slices,
+        placementPolicy: settings.placementPolicy || null,
+        sliceRouting: settings.sliceRouting || 'inherit',
+        shape,
+        accelerators: slices * (shape[0] * shape[1] + shape[2] * shape[3]),
+        maximumStableQps: typeof metrics.maximum_stable_qps === 'number' ? metrics.maximum_stable_qps : null,
+        throughputTps: typeof metrics.throughput_tps === 'number' ? metrics.throughput_tps : null,
+    };
+}
+
+// Cases that differ only in Slice count form one comparison group.
+export function sliceOptimizationGroups(caseEntries = []) {
+    const groups = new Map();
+    for (const facts of caseEntries.map(caseSliceFacts).filter(Boolean)) {
+        const key = JSON.stringify([facts.model, facts.guide, facts.scenarioId, facts.shape, facts.placementPolicy, facts.sliceRouting]);
+        if (!groups.has(key)) groups.set(key, { key, model: facts.model, guide: facts.guide, shape: facts.shape, placementPolicy: facts.placementPolicy, sliceRouting: facts.sliceRouting, slaTargets: facts.slaTargets, rows: [] });
+        groups.get(key).rows.push(facts);
+    }
+    return [...groups.values()]
+        .map(group => ({ ...group, rows: group.rows.sort((a, b) => a.slices - b.slices) }))
+        .filter(group => new Set(group.rows.map(row => row.slices)).size > 1);
+}
+
+export function sliceGroupRecommendation(group, targetRps) {
+    const measured = group.rows.filter(row => row.status === 'succeeded' && row.maximumStableQps != null);
+    if (!measured.length) return { status: 'no-slo-rate' };
+    const target = Number(targetRps);
+    if (!(target > 0)) return { status: 'needs-target' };
+    const row = measured.filter(item => item.maximumStableQps >= target).sort((a, b) => a.accelerators - b.accelerators || a.slices - b.slices)[0];
+    return row ? { status: 'verified', row } : { status: 'unmet' };
+}
+
 export const RUNTIME_CONTROL_FIELDS = {
     maxModelLen: 'max-model-len', maxNumSeqs: 'max-num-seqs',
     gpuMemoryUtilization: 'gpu-memory-utilization', blockSize: 'block-size',

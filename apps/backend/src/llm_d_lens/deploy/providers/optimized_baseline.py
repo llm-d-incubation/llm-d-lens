@@ -206,7 +206,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
             saved_effective = bundle["helm"]["values"][-1]["content"]
             base_values = (
                 saved_effective
-                if profile == "optimized-baseline"
+                if profile == "optimized-baseline" or bundle.get("frozen")
                 else self._profiled_router_values_content(saved_effective, profile)
             )
             effective_values = router_data_plane_effective_values(base_values, execution_context)

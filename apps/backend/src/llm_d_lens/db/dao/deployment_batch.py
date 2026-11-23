@@ -201,7 +201,7 @@ class DeploymentEvidenceDao(BaseDao):
             if row is None:
                 raise DeploymentDaoError(f"deployment execution not found: {execution_id}")
             current = row.to_dto()
-            current.provenance = provenance
+            current.provenance = {**current.provenance, **provenance}
             current.updated_at = utcnow()
             row.sync_from_dto(current, cluster_id=_resolve_cluster_id(current.provenance))
             session.flush()

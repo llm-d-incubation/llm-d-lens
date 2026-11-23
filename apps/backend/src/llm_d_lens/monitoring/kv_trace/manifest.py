@@ -12,12 +12,27 @@ MOUNT = "/opt/prism-kv-trace"
 LABEL = "prism.llm-d.ai/kv-trace"
 
 
+def _templates(resource):
+    kind, spec = resource.get("kind"), resource.get("spec", {})
+    if kind == "List":
+        for item in resource.get("items", []):
+            yield from _templates(item)
+    elif kind == "DisaggregatedSet":
+        for role in spec.get("roles", []):
+            yield from _templates({"kind": "LeaderWorkerSet", "spec": role.get("spec", {})})
+    elif kind == "LeaderWorkerSet":
+        template = spec.get("leaderWorkerTemplate", {})
+        for name in ("leaderTemplate", "workerTemplate"):
+            if name in template:
+                yield template[name]
+    elif kind == "Pod":
+        yield resource
+    elif kind in {"Deployment", "StatefulSet", "DaemonSet"}:
+        yield spec.get("template", {})
+
+
 def instrument_manifest(artifact, output_root: Path):
-    if (
-        artifact.guide_id == "pd-disaggregation"
-        or not artifact.manifest_ref
-        or not Path(artifact.manifest_ref).is_file()
-    ):
+    if not artifact.manifest_ref or not Path(artifact.manifest_ref).is_file():
         return artifact
     documents = list(yaml.safe_load_all(Path(artifact.manifest_ref).read_text()))
     patched, namespaces = 0, set()
@@ -28,17 +43,14 @@ def instrument_manifest(artifact, output_root: Path):
     }
     probe_hash = stable_hash(data).removeprefix("sha256:")[:12]
     config_name = f"prism-kv-trace-{probe_hash}"
-    for resource in documents:
+    for resource, template in [
+        (document, pod_template)
+        for document in documents
+        if isinstance(document, dict)
+        for pod_template in _templates(document)
+    ]:
         if not isinstance(resource, dict):
             continue
-        kind = resource.get("kind")
-        template = (
-            resource
-            if kind == "Pod"
-            else resource.get("spec", {}).get("template", {})
-            if kind in {"Deployment", "StatefulSet", "DaemonSet"}
-            else {}
-        )
         pod_spec = template.get("spec", {})
         for container in pod_spec.get("containers", []):
             args = " ".join(str(x) for x in container.get("command", []) + container.get("args", []))

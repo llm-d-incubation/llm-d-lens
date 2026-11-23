@@ -257,6 +257,15 @@ class BenchmarkPlan(BaseModel):
         return self
 
 
+class EvaluationPlanConfirmation(BaseModel):
+    plan_digests: dict[str, str] = Field(
+        description="Exact plan ID to reviewed digest mapping returned by Evaluation creation."
+    )
+    acknowledge_unknown: bool = Field(
+        default=False, description="Acknowledge every listed unverified preflight constraint."
+    )
+
+
 class EvaluationCreateRequest(BaseModel):
     name: str = Field(default="Evaluation", min_length=1, max_length=200)
     cluster_session_id: str = Field(min_length=36, max_length=36)

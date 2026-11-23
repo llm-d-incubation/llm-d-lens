@@ -18,6 +18,8 @@ from llm_d_lens.agentic.benchmark_evidence import (
     HardwareDescriptor,
     ModelDescriptor,
     RuntimeFingerprint,
+    composition_markers,
+    source_recipe_identity,
 )
 from llm_d_lens.db.dao.agentic_benchmark_record import BenchmarkRecordDao, BenchmarkRecordDaoError
 from llm_d_lens.deploy.contracts import DeployableConfiguration
@@ -184,14 +186,61 @@ def configuration_snapshot(run: dict) -> tuple[DeployableConfiguration, Candidat
     content = configuration.content
     decode = content.get("decode") or content.get("serving") or {}
     prefill = content.get("prefill") or {}
+    topology = configuration.provider_ref
+    cpu_cache = (content.get("guideComposition") or {}).get("nativeCpuCacheGiB")
+    prefix_routing = content.get("prefixRouting")
+    if configuration.provider_ref == "source-composition":
+        import yaml
+
+        from llm_d_lens.configuration.manifest_facts import vllm_argument_value, workload_roles
+        from llm_d_lens.deploy.source_composition import rendered_optimizations
+
+        manifest = (content.get("officialGuide") or {}).get("renderedManifest")
+        if not isinstance(manifest, str) or not manifest.strip():
+            raise ValueError("Source evidence requires the saved rendered manifest")
+        roles = {}
+        cache_capacities = set()
+        parsed = list(yaml.safe_load_all(manifest))
+        for workload in workload_roles(parsed):
+            for container in workload["pod"].get("containers", []):
+                if container.get("name") != "modelserver":
+                    continue
+                role = "prefill" if workload["role"] == "prefill" else "decode"
+                if role in roles:
+                    raise ValueError("Source evidence requires one model workload per role")
+                tp = vllm_argument_value(container, {"--tensor-parallel-size"}, workload["name"])
+                roles[role] = {
+                    "tensorParallelSize": int(tp) if tp is not None else 1,
+                    # A DisaggregatedSet reports per-slice replicas; evidence uses the deployment-wide count.
+                    "replicaCount": int(workload["replicas"]) * int(workload.get("slices") or 1),
+                }
+                connector = json.loads(
+                    vllm_argument_value(container, {"--kv-transfer-config"}, workload["name"]) or "{}"
+                )
+                for child in connector.get("kv_connector_extra_config", {}).get("connectors", [connector]):
+                    if child.get("kv_connector") == "OffloadingConnector":
+                        cache_capacities.add(child["kv_connector_extra_config"]["cpu_bytes_to_use"] / 1024**3)
+        if len(cache_capacities) > 1:
+            raise ValueError("Source evidence cannot represent different CPU cache capacities across roles")
+        decode, prefill = roles.get("decode", {}), roles.get("prefill", {})
+        source = (content.get("officialGuide") or {}).get("source") or {}
+        topology = source_recipe_identity(source.get("files") or [], has_prefill=bool(prefill))
+        if topology is None:
+            raise ValueError("Source evidence requires an unambiguous source recipe matching the rendered roles")
+        cpu_cache = next(iter(cache_capacities)) if len(cache_capacities) == 1 else None
+        prefix_routing = any(
+            item["id"] == "affinity" and item["state"] == "configured"
+            for item in rendered_optimizations(parsed, source.get("commit", ""))["features"]
+        )
     candidate = CandidateConfiguration.model_validate(
         {
-            "topology": configuration.provider_ref,
+            "topology": topology,
             "decode_tp": decode.get("tensorParallelSize"),
             "decode_replicas": decode.get("replicaCount"),
             "prefill_tp": prefill.get("tensorParallelSize"),
             "prefill_replicas": prefill.get("replicaCount"),
-            "optimizations": tuple(filter(None, [content.get("guideVariant")])),
+            "optimizations": tuple(filter(None, [content.get("guideVariant")]))
+            + composition_markers(cpu_cache, prefix_routing),
         },
         strict=True,
     )

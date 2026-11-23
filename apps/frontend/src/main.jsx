@@ -15,6 +15,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './app/styles/index.css'
+import './pages/deployment/ui/inference-designer/inferenceDesigner.css'
 import App from './app/App.jsx'
 
 createRoot(document.getElementById('root')).render(

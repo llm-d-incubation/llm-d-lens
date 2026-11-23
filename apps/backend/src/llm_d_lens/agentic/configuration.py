@@ -70,6 +70,7 @@ def build_agentic_configuration(
         **({"hardware_profile": accelerator} if accelerator else {}),
         "decode": decode,
         "runtime": runtime,
+        **({"prefixRouting": candidate.prefix_routing} if candidate.prefix_routing is not None else {}),
         "customParameters": [
             {
                 "target": "both" if candidate.provider_ref == "pd-disaggregation" else "decode",
@@ -78,7 +79,7 @@ def build_agentic_configuration(
                 "value": str(request.gpu_memory_utilization),
             },
             {
-                "target": "decode",
+                "target": "both" if candidate.provider_ref == "pd-disaggregation" else "decode",
                 "kind": "argument",
                 "name": "max-num-batched-tokens",
                 "value": str(request.max_num_batched_tokens),
@@ -89,6 +90,10 @@ def build_agentic_configuration(
             ],
         ],
     }
+    if candidate.native_cpu_cache_gib is not None and candidate.provider_ref != "tiered-prefix-cache":
+        content["guideComposition"] = {"nativeCpuCacheGiB": candidate.native_cpu_cache_gib}
+    elif candidate.native_cpu_cache_gib is not None:
+        content["guideSettings"] = {"cacheCpuGiB": candidate.native_cpu_cache_gib}
     # Agentic plans must carry the same credential policy as the selected
     # Model Cache entry.  Cache readiness only proves that model files exist;
     # llm-d still requires its deployment Secret, and omitting this field
@@ -127,3 +132,75 @@ def build_agentic_configuration(
             "agentic_candidate_id": candidate.id,
         },
     )
+
+
+def planning_resource_request(run) -> dict:
+    """Translate a reviewed candidate into the existing source-bound renderer contract."""
+    plan = run.configuration_plan
+    if plan is None:
+        raise ValueError("This legacy plan must be regenerated before resource review.")
+    configuration = plan.configuration
+    content = configuration["content"]
+    source = run.request
+    selected = run.selected_candidate
+    accelerator = content.get("hardware_profile")
+    if not accelerator:
+        raise ValueError("The target cluster has no supported hardware profile; resource generation is blocked.")
+    body = {
+        "guide": configuration["provider_ref"],
+        "accelerator": accelerator,
+        "modelServer": "vllm",
+        "model": source.model,
+        "clusterSessionId": source.cluster_session_id,
+        "source": {"mode": "official"},
+        "environment": {"mode": "current", "kubernetesMode": "required"},
+        "modelSource": "auto-cache",
+        "runtimeImage": content["runtime"]["image"],
+        "replicas": selected.replicas,
+        "tensorParallelSize": selected.tensor_parallel_size,
+        "decodeReplicas": selected.replicas,
+        "decodeTensorParallelSize": selected.tensor_parallel_size,
+        "prefillReplicas": selected.prefill_replicas,
+        "prefillTensorParallelSize": selected.prefill_tensor_parallel_size,
+        "maxModelLen": source.max_model_len,
+        "maxNumSeqs": source.max_num_seqs,
+        "customParameters": content.get("customParameters", []),
+        "guideVariant": selected.guide_variant or "",
+        "resourceBasis": "available",
+        "recommendationGpuCount": plan.requirements.hard_constraints.get("maxAccelerators"),
+        "optimizationPolicy": {
+            "mode": source.planning_mode,
+            "prefixReuse": (
+                "unknown"
+                if plan.requirements.workload.get("prefixReuse") is None
+                else "yes"
+                if plan.requirements.workload["prefixReuse"]
+                else "no"
+            ),
+            "excluded": [
+                flag
+                for capability, flag in (("prefix_cache", "prefix"), ("chunked_prefill", "chunked"))
+                if capability in plan.requirements.forbidden_features
+            ],
+            "required": [
+                flag
+                for capability, flag in (("prefix_cache", "prefix"), ("chunked_prefill", "chunked"))
+                if capability in plan.requirements.required_features
+                or (
+                    capability == "prefix_cache"
+                    and (
+                        selected.native_cpu_cache_gib
+                        or selected.prefix_routing
+                        or selected.provider_ref in {"precise-prefix-cache-routing", "tiered-prefix-cache"}
+                    )
+                )
+            ],
+        },
+    }
+    if content.get("guideComposition"):
+        body["guideComposition"] = content["guideComposition"]
+    if content.get("guideSettings"):
+        body["guideSettings"] = content["guideSettings"]
+    if selected.prefix_routing is not None:
+        body["prefixRouting"] = selected.prefix_routing
+    return body

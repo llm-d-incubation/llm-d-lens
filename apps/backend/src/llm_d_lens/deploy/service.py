@@ -385,6 +385,67 @@ class GuideAdapterDeploymentService:
         self._executions: dict[str, DeploymentExecution] = {}
         self._provider_executions: dict[str, tuple[GuideAdapter, GuideDeploymentArtifact, dict[str, Any]]] = {}
 
+    async def prepare(self, request: DeploymentCreateRequest) -> tuple[GuideDeploymentArtifact, dict]:
+        from llm_d_lens.deploy.providers.storage_mount import require_cached_model
+
+        artifact_input = self._single_provider_artifact(request.configuration_artifacts)
+        adapter = self._catalog.get_adapter(artifact_input.provider_ref)
+        if adapter is None or not callable(getattr(adapter, "prepare_router", None)):
+            raise ValueError("Deployment provider does not support prepared plans")
+        definition = adapter.discover()
+        overrides = self._compatibility_overrides(artifact_input)
+        runtime = overrides.get("runtime")
+        if isinstance(runtime, dict) and isinstance(runtime.get("image"), str):
+            runtime["image"] = pin_runtime_image(runtime["image"])
+        validation = adapter.validate_inputs(
+            definition, request.cluster_snapshot.value if request.cluster_snapshot else {}, overrides
+        )
+        if not validation.accepted:
+            raise ValueError("; ".join(validation.reasons))
+        namespace = self._namespace_factory(request)
+        overrides.update(
+            {
+                "_deployment_namespace": namespace,
+                "_cluster_id": request.provenance.get("cluster_server_id"),
+                "_placement": request.deployment_policy.value.get("placement"),
+                "_runtime_class_policy": request.deployment_policy.value.get("runtime_class", {"mode": "auto"}),
+            }
+        )
+        await require_cached_model(
+            overrides, cluster_id=overrides["_cluster_id"], provider_id=artifact_input.provider_ref
+        )
+        artifact = await adapter.render(definition, overrides)
+        if not artifact.manifest_ref or not Path(artifact.manifest_ref).is_file():
+            raise ValueError("Prepared plans require a fully rendered Kubernetes manifest file")
+        data_plane, warning = await resolve_data_plane(
+            artifact.deployment_contract.get("data_plane_kind") or "external",
+            provenance=request.provenance,
+            cluster_id=overrides["_cluster_id"],
+        )
+        context = {
+            "namespace": namespace,
+            "data_plane": data_plane,
+            "data_plane_warning": warning,
+            "runtime": overrides.get("runtime") or {},
+            "provenance": request.provenance,
+            "deployment_policy": request.deployment_policy.value,
+        }
+        artifact = await adapter.prepare_router(artifact, context)
+        from dataclasses import replace
+
+        artifact = replace(
+            artifact,
+            deployment_contract={
+                **artifact.deployment_contract,
+                "preparedNamespace": {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": {"name": namespace, "labels": {"lens.io/prepared-request": request.request_id}},
+                },
+            },
+        )
+        return artifact, context
+
     async def create(
         self,
         request: DeploymentCreateRequest,
@@ -397,6 +458,11 @@ class GuideAdapterDeploymentService:
         artifact_input = self._single_provider_artifact(request.configuration_artifacts)
         adapter = self._catalog.get_adapter(artifact_input.provider_ref)
         artifact = self._deployment_artifact(request, artifact_input)
+        prepared_artifact, prepared_context = None, None
+        if request.provenance.get("_prepared_plan_id"):
+            from llm_d_lens.deploy.prepared_plans import execution_artifact
+
+            prepared_artifact, prepared_context = await execution_artifact(request)
         if adapter is None:
             return self._store(
                 DeploymentExecution(
@@ -414,16 +480,20 @@ class GuideAdapterDeploymentService:
                 )
             )
 
-        definition = adapter.discover()
+        definition = None if prepared_artifact else adapter.discover()
         overrides = self._compatibility_overrides(artifact_input)
         # The llm-d model-server image always follows the pinned stack version,
         # whatever tag a stored configuration carries (custom images are left as-is).
         runtime_overrides = overrides.get("runtime")
-        if isinstance(runtime_overrides, dict) and isinstance(runtime_overrides.get("image"), str):
+        if (
+            not prepared_artifact
+            and isinstance(runtime_overrides, dict)
+            and isinstance(runtime_overrides.get("image"), str)
+        ):
             runtime_overrides["image"] = pin_runtime_image(runtime_overrides["image"])
         cluster_snapshot = request.cluster_snapshot.value if request.cluster_snapshot else {}
-        validation = adapter.validate_inputs(definition, cluster_snapshot, overrides)
-        if not validation.accepted:
+        validation = None if prepared_artifact else adapter.validate_inputs(definition, cluster_snapshot, overrides)
+        if validation is not None and not validation.accepted:
             return self._store(
                 DeploymentExecution(
                     execution_id=execution_id,
@@ -442,7 +512,7 @@ class GuideAdapterDeploymentService:
 
         provider_artifact: GuideDeploymentArtifact | None = None
         provider_execution: dict[str, Any] | None = None
-        namespace: str | None = self._namespace_factory(request)
+        namespace: str | None = prepared_context["namespace"] if prepared_context else self._namespace_factory(request)
         try:
             from llm_d_lens.deploy.providers.storage_mount import require_cached_model
 
@@ -453,7 +523,9 @@ class GuideAdapterDeploymentService:
             await require_cached_model(
                 overrides, cluster_id=overrides["_cluster_id"], provider_id=artifact_input.provider_ref
             )
-            provider_artifact = await adapter.render(definition, overrides)
+            provider_artifact = prepared_artifact or await adapter.render(definition, overrides)
+            if prepared_context:
+                overrides["runtime"] = prepared_context["runtime"]
             # The framework resolves the data plane (shared Gateway vs the
             # deployment's own proxy) so providers do not inspect cluster state.
             data_plane, data_plane_warning = await resolve_data_plane(
@@ -461,6 +533,10 @@ class GuideAdapterDeploymentService:
                 provenance=request.provenance,
                 cluster_id=request.provenance.get("cluster_server_id"),
             )
+            if prepared_context:
+                if data_plane != prepared_context["data_plane"]:
+                    raise ValueError("Data plane changed after plan review; prepare a new plan")
+                await adapter.validate_prepared_router(provider_artifact, namespace)
             if data_plane_warning:
                 logger.warning("Deployment %s: %s", execution_id, data_plane_warning)
             artifact = self._deployment_artifact(request, artifact_input, provider_artifact)
@@ -483,7 +559,7 @@ class GuideAdapterDeploymentService:
             router_backed = data_plane in {"shared_gateway", "standalone_router"} or (
                 artifact_input.provider_ref in _ROUTER_PROVIDER_REFS
             )
-            if router_backed and cluster_id:
+            if router_backed and cluster_id and not prepared_artifact:
                 # The EPP registers the InferenceModelRewrite GVK at startup, so
                 # the pinned router CRDs must exist before the deployment runs.
                 # Fail closed: a missing/failed CRD install stops the deploy.
@@ -506,6 +582,8 @@ class GuideAdapterDeploymentService:
                             f"({router_crds.get('message') or 'unknown error'}); "
                             "install them from the cluster's CRDs action before deploying"
                         )
+            if prepared_artifact:
+                provider_execution = {"namespace": namespace, "_artifact": provider_artifact}
             provider_execution = await adapter.deploy(
                 provider_artifact,
                 {

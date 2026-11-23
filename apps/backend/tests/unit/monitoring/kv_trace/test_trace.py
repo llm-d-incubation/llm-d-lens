@@ -163,6 +163,68 @@ def test_manifest_injection_preserves_original_and_non_model_containers(tmp_path
     assert patched.deployment_contract == {}  # Do not change legacy lifecycle dispatch.
 
 
+def test_transfer_probe_distinguishes_native_failure_from_completion(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "ROOT", tmp_path)
+    monkeypatch.setattr(engine, "version", lambda _: "0.26.0")
+
+    class Worker:
+        def __init__(self):
+            self.engine_id, self.tp_rank, self.world_size = "decode", 0, 1
+            self._recving_metadata = {
+                "request": SimpleNamespace(
+                    remote=SimpleNamespace(engine_id="prefill", request_id="producer"), local_block_ids=[[1]]
+                )
+            }
+            self._recving_transfers = {"request": [123]}
+
+        def _handle_failed_transfer(self, req_id, handle):
+            return None
+
+        def _get_new_notifs(self):
+            return {"producer"}
+
+        def get_finished(self):
+            return self._get_new_notifs(), {"request"}
+
+    engine.install_transfer(SimpleNamespace(NixlPullConnectorWorker=Worker))
+    worker = Worker()
+    engine.command("transfer-begin", "success")
+    worker.get_finished()
+    events = engine.command("transfer-end", "success")["events"]
+    assert {row["event"] for row in events} == {"send-acknowledged", "received"}
+    assert events[-1]["remote_request_id"] == "producer"
+    engine.command("transfer-begin", "failure")
+    worker._handle_failed_transfer("request", None)
+    worker.get_finished()
+    assert "received" not in {row["event"] for row in engine.command("transfer-end", "failure")["events"]}
+
+
+def test_ds_instruments_both_templates_without_changing_original(tmp_path):
+    original = tmp_path / "ds.yaml"
+    template = {"spec": {"containers": [{"name": "modelserver", "image": "vllm:test"}]}}
+    document = {
+        "apiVersion": "disaggregatedset.x-k8s.io/v1",
+        "kind": "DisaggregatedSet",
+        "metadata": {"name": "pd", "namespace": "ns"},
+        "spec": {
+            "roles": [
+                {
+                    "name": "decode",
+                    "spec": {"leaderWorkerTemplate": {"leaderTemplate": template, "workerTemplate": template}},
+                }
+            ]
+        },
+    }
+    original.write_text(yaml.safe_dump(document))
+    artifact = GuideDeploymentArtifact("pd-disaggregation", "source", manifest_ref=str(original))
+    patched = instrument_manifest(artifact, tmp_path / "out")
+    config, ds = list(yaml.safe_load_all(Path(patched.manifest_ref).read_text()))
+    assert config["metadata"]["namespace"] == "ns"
+    for pod in ds["spec"]["roles"][0]["spec"]["leaderWorkerTemplate"].values():
+        assert any(item["name"] == "PRISM_KV_TRACE_NAMESPACE" for item in pod["spec"]["containers"][0]["env"])
+    assert yaml.safe_load(original.read_text()) == document
+
+
 def client_artifacts(root, identities):
     root.mkdir(parents=True, exist_ok=True)
     summary = root / "summary_lifecycle_metrics.json"

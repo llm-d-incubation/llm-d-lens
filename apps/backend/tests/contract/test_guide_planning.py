@@ -353,7 +353,8 @@ async def test_local_source_cannot_escape_allowed_root(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("kubernetes_mode", ["disabled", "required"])
-def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, tmp_path, kubernetes_mode):
+@pytest.mark.parametrize("completion", [False, True])
+def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, tmp_path, kubernetes_mode, completion):
     from unittest.mock import AsyncMock
 
     import yaml
@@ -364,7 +365,10 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
 
     monkeypatch.delenv("PRISM_GPU_PCI_ALLOWLIST", raising=False)
     manifest_path = tmp_path / "model.yaml"
-    manifest_path.write_text(yaml.safe_dump(deployment()))
+    source = deployment()
+    if completion:
+        source["spec"]["template"]["spec"]["containers"][0]["args"].append("--no-enable-prefix-caching")
+    manifest_path.write_text(yaml.safe_dump(source))
     router_root = tmp_path / "guides/optimized-baseline/router"
     router_root.mkdir(parents=True)
     (router_root / "optimized-baseline.values.yaml").write_text("router: {epp: {replicas: 1}}")
@@ -397,6 +401,7 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
     response = TestClient(app).post(
         "/api/guide-planning/plan",
         json={
+            "optimizationPolicy": {"mode": "manual", "prefixReuse": "yes"} if completion else None,
             "guide": "optimized-baseline",
             "accelerator": "gpu",
             "modelServer": "vllm",
@@ -415,8 +420,35 @@ def test_plan_route_emits_validated_bundle_and_preserves_response(monkeypatch, t
         assert result["summary"]["availableAccelerators"] == 4
     assert result["validation"]["errors"] == []
     assert result["plannedDeployment"]["format"] == "yaml"
+    if completion:
+        assert result["optimizationDecisions"][0]["status"] == "enabled"
+        assert "--enable-prefix-caching" in result["plannedDeployment"]["content"]
+        assert "--no-enable-prefix-caching" not in result["plannedDeployment"]["content"]
+    else:
+        assert result["optimizationDecisions"] == []
     assert "total;dur=" in response.headers["server-timing"]
     validate_deployment_bundle(result["deploymentBundle"], "optimized-baseline", result["source"]["commit"])
+    if kubernetes_mode == "disabled" and not completion:
+        monkeypatch.setattr(
+            guide_bundle,
+            "build_guide_deployment_bundle",
+            AsyncMock(side_effect=ValueError("Prefix routing plugin conflicts with the selected topology.")),
+        )
+        incompatible = TestClient(app).post(
+            "/api/guide-planning/plan",
+            json={
+                "guide": "optimized-baseline",
+                "accelerator": "gpu",
+                "modelServer": "vllm",
+                "model": "example/model",
+                "environment": {"kubernetesMode": "disabled"},
+                "replicas": 1,
+                "tensorParallelSize": 1,
+                "source": {"mode": "local", "path": str(manifest_path)},
+            },
+        )
+        assert incompatible.status_code == 400
+        assert incompatible.json()["error"] == "Prefix routing plugin conflicts with the selected topology."
 
 
 def test_plan_rejects_expired_explicit_session_with_discovery_disabled(monkeypatch):
@@ -609,3 +641,158 @@ def test_precise_render_url_still_needs_a_render_pool():
         }
     }
     assert guide_bundle._needs_render_service(values) is True
+
+
+def _recommendation_node(name, labels, devices=2):
+    return {
+        "metadata": {"name": name, "labels": {"kubernetes.io/hostname": name, **labels}},
+        "spec": {},
+        "status": {
+            "conditions": [{"type": "Ready", "status": "True"}],
+            "allocatable": {"cpu": "16", "memory": "64Gi", "pods": "110", "example.com/device": str(devices)},
+        },
+    }
+
+
+def _recommendation_workload():
+    document = disaggregated_set()
+    for role in document["spec"]["roles"]:
+        container = role["spec"]["leaderWorkerTemplate"]["workerTemplate"]["spec"]["containers"][0]
+        container["resources"] = {"limits": {"example.com/device": 1}}
+    return [document]
+
+
+def test_capacity_recommendation_prefers_standard_topology_key_over_hostname(monkeypatch, tmp_path):
+    import asyncio
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    nodes = [
+        _recommendation_node("n1", {"topology.kubernetes.io/zone": "a", "vendor.example/rack": "r1"}),
+        _recommendation_node("n2", {"topology.kubernetes.io/zone": "b", "vendor.example/rack": "r1"}),
+        _recommendation_node("n3", {"topology.kubernetes.io/zone": "c", "vendor.example/rack": "r2"}, devices=0),
+    ]
+
+    async def fake_inventory(cluster_id, resource, namespace=None):
+        return {"nodes": nodes, "pods": []}[resource]
+
+    monkeypatch.setattr("llm_d_lens.deploy.slice_capacity.inventory", fake_inventory)
+    result = asyncio.run(
+        guide._slice_recommendation(_recommendation_workload(), "cluster-1", "example/model", "pd-disaggregation")
+    )
+    assert result["source"] == "capacity"
+    assert result["placementPolicy"] == {"type": "ExclusiveSlice", "topology": "topology.kubernetes.io/zone"}
+    assert result["maxSlices"] == 2
+    assert "slices" not in result
+    assert result["guideDefault"] == {"slices": 1, "placementPolicy": {"type": "None"}}
+    keys = [item["key"] for item in result["topologyKeys"]]
+    assert keys == ["topology.kubernetes.io/zone", "vendor.example/rack", "kubernetes.io/hostname"]
+    zone = result["topologyKeys"][0]
+    assert zone["wellKnown"] is True and zone["feasibleDomains"] == 2 and zone["labeledNodes"] == 3
+    assert [item["value"] for item in zone["domainDetails"] if item["fitsSlice"]] == ["a", "b"]
+    assert result["capacity"]["sliceRequests"]["example.com/device"] == 2
+    assert result["capacity"]["acceleratorResources"] == ["example.com/device"]
+    assert result["capacity"]["maxSlices"] == {"None": 2}
+    assert any("not a reservation" in reason for reason in result["reasons"])
+
+
+def test_capacity_recommendation_falls_back_to_none_policy_with_packing_count(monkeypatch, tmp_path):
+    import asyncio
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    nodes = [_recommendation_node("n1", {}, devices=5)]
+
+    async def fake_inventory(cluster_id, resource, namespace=None):
+        return {"nodes": nodes, "pods": []}[resource]
+
+    monkeypatch.setattr("llm_d_lens.deploy.slice_capacity.inventory", fake_inventory)
+    result = asyncio.run(
+        guide._slice_recommendation(_recommendation_workload(), "cluster-1", "example/model", "pd-disaggregation")
+    )
+    assert result["source"] == "capacity"
+    assert result["placementPolicy"] == {"type": "None"}
+    assert result["maxSlices"] == 2
+    assert "slices" not in result
+    assert [item["key"] for item in result["topologyKeys"]] == ["kubernetes.io/hostname"]
+
+
+def test_history_is_evidence_and_never_selects_a_slice_count(monkeypatch, tmp_path):
+    import asyncio
+    import json as json_module
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    workflows = tmp_path / "metadata" / "evaluations" / "workflows"
+    workflows.mkdir(parents=True)
+    case = {
+        "id": "case-1",
+        "kind": "guide",
+        "status": "succeeded",
+        "finished_at": "2026-11-10T00:00:00Z",
+        "metrics": {"throughput_tps": 123.5},
+        "deployment_configuration": {
+            "provider_ref": "pd-disaggregation",
+            "content": {
+                "model": {"name": "example/model"},
+                "disaggregatedSet": {"slices": 2, "placementPolicy": {"type": "ExclusiveSlice", "topology": "zone"}},
+                "prefill": {"replicaCount": 1, "tensorParallelSize": 2},
+                "decode": {"replicaCount": 2, "tensorParallelSize": 2},
+            },
+        },
+    }
+    losing = {
+        **case,
+        "id": "case-2",
+        "metrics": {"throughput_tps": 50},
+        "deployment_configuration": {
+            **case["deployment_configuration"],
+            "content": {**case["deployment_configuration"]["content"], "disaggregatedSet": {"slices": 1}},
+        },
+    }
+    (workflows / "w1.json").write_text(
+        json_module.dumps({"id": "w1", "cluster_id": "cluster-1", "cases": [losing, case]}), encoding="utf-8"
+    )
+    (workflows / "other.json").write_text(
+        json_module.dumps({"id": "w2", "cluster_id": "other-cluster", "cases": [case]}), encoding="utf-8"
+    )
+
+    async def fake_inventory(cluster_id, resource, namespace=None):
+        raise ValueError("inventory should not block history")
+
+    monkeypatch.setattr("llm_d_lens.deploy.slice_capacity.inventory", fake_inventory)
+    result = asyncio.run(
+        guide._slice_recommendation(_recommendation_workload(), "cluster-1", "Example/Model", "pd-disaggregation")
+    )
+    assert result["source"] == "unavailable"
+    assert "slices" not in result
+    assert result["reasons"] == ["Cluster inventory is unavailable"]
+    assert [item["caseId"] for item in result["history"]] == ["case-2", "case-1"]
+    assert [item["accelerators"] for item in result["history"]] == [6, 12]
+    assert result["history"][1]["throughputTps"] == 123.5
+    assert {item["evidenceKey"] for item in result["history"]} == {result["history"][0]["evidenceKey"]}
+
+
+def test_evidence_profile_separates_workload_shape_and_slo_targets():
+    shared = {
+        "shared_prefix": {
+            "num_groups": 4,
+            "num_prompts_per_group": 2,
+            "system_prompt_len": 100,
+            "question_len": 10,
+            "output_len": 20,
+            "stages": [{"rate": 1, "duration": 10}],
+        }
+    }
+    label, key = guide._evidence_profile(shared, {"ttft_ms": 500})
+    assert label == "shared-prefix 4x2, prompt 100+10, output 20"
+    faster = {"shared_prefix": {**shared["shared_prefix"], "stages": [{"rate": 8, "duration": 10}]}}
+    assert guide._evidence_profile(faster, {"ttft_ms": 500})[1] == key
+    assert guide._evidence_profile(shared, {"ttft_ms": 200})[1] != key
+    assert guide._evidence_profile({"matrix": [{"isl": 1024, "osl": 128}]}, {})[0] == "matrix ISL/OSL 1024/128"
+
+
+def test_recommendation_without_cluster_is_explicitly_unavailable(monkeypatch, tmp_path):
+    import asyncio
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    result = asyncio.run(guide._slice_recommendation(_recommendation_workload(), "", "", "pd-disaggregation"))
+    assert result["source"] == "unavailable"
+    assert result["reasons"] == ["No cluster selected; capacity estimation is unavailable"]

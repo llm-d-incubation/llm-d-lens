@@ -5,17 +5,255 @@ description: 查找部署、确认就绪状态、查看日志并删除不再使�
 
 打开 **Deployments（部署）**，确认模型是否就绪、排查失败原因或管理已有部署。
 
+## DisaggregatedSet 审核
+
+所选 Guide 支持 DisaggregatedSet 时，配置直接暴露真实 API 字段：`spec.slices`、
+`spec.placementPolicy.type`/`.topology`，以及 **EPP Topology Affinity**
+（`topology-affinity-scorer` 或 `topology-affinity-filter` 插件）。Prefill 和 decode 副本数都是每 Slice 的数量。资源摘要展开全部 Slice
+和 leader/worker Pod，不把 TP 当作加速器资源数量。
+
+Deploy 和 Evaluation 的 P/D 配置都会在拓扑设置下方显示
+**Slice Configuration（Slice 配置）**。只有来源被识别为 DS 后才启用参数；加载中、准备失败和
+Guide 不包含 DS 时都会明确提示。**Recheck Slice support** 可重新检查官方来源，标题处显示固定的 Guide commit。
+仅选择 P/D 不会将基于 Deployment 的 Guide 自动转换为 DisaggregatedSet。
+
+Slice 数和放置策略从 Guide 默认值开始；EPP Topology Affinity 默认选择 Scorer：
+
+- **Max feasible（最大可行 Slice 数）**按所选放置策略根据当前空闲资源估算：`None` 按装箱计算，
+  `ExclusiveSlice` 统计可各容纳一个 Slice 的域，`ExclusiveTopology` 再排除已被其他 DisaggregatedSet
+  使用的域。点击 **Generate YAML** 之前按 Guide 默认角色估算，之后按生成的角色估算。这不是预留。
+- **Recommended（推荐 Slice 数）**只在有匹配证据时出现：同模型、同 Guide、同集群、同加速器、
+  每 Slice P/D 副本数与 TP 相同，且记录了 SLO 稳定速率的成功 Evaluation 用例。输入 **Target load（目标负载）**
+  后，取当前上限内实测速率满足目标的最少 Slice 数。实测使用了不同负载或 SLO 目标时，在
+  **Evidence（证据负载与 SLO）**中选择其一，不同组的结果不会混用；否则显示
+  `No verified recommendation — Guide default: N`。仅凭吞吐量永远不会选定 Slice 数。
+- **预估资源**按所选 Slice 数乘以每 Slice 请求量；预算检查使用的加速器总量包含全部 Slice。
+- **Placement（拓扑与放置）**选择放置类型，从已发现的节点标签中选择拓扑键（或填写其他键），
+  并展示每个域的节点、空闲加速器及能否容纳一个 Slice。Guide 通过 DRA claim 申请加速器时，估算不计入这部分，
+  域改为显示空闲 CPU 和内存，并提示上限只按 CPU、内存和 Pod 数计算。自定义标签会被标注，因为 Lens 无法验证其
+  是否反映物理拓扑；节点标签由集群管理员修改，本页不修改。发现的放置方案以 **Suggested（建议）**提供。
+- **EPP Topology Affinity** 只有 **Scorer** 和 **Filter** 两个选项。Scorer 为同 Slice 候选加分；
+  Filter 在存在匹配项时保留同 Slice 候选。缺少对端拓扑或没有匹配候选时会放行全部候选，
+  因此 Filter 并不保证严格的同 Slice 路由。生成配置时，未设置或旧的继承设置会转为 Scorer，
+  已有的 Filter 选择会保留。
+- **Evaluation evidence（评测证据）**列出近期实测结果，标注每 Slice 形态相同的记录，**Apply** 会复制该结果的
+  Slice 数、放置策略和 P/D 参数。
+
+部署 DS 配置会在原部署流程中运行预检，不再打开额外的审核弹窗。检查通过后直接部署；
+失败或未知约束显示在页面内的 **Deployment checks（部署检查）** 区域。
+其中的 **Slice deployment preview（Slice 部署预览）**显示所选与可行
+Slice 数、每 Slice 角色、加速器请求总量、放置策略、EPP 路由，以及模拟的 Slice→域、Pod→节点
+放置（实际调度器可能选择其他节点）。工作负载 YAML、Router values 和校验和可在 **Deployment resources（部署资源）** 中展开查看。
+失败约束阻止执行（包括找不到可行放置的 Slice 数）。预检无法得出结论时需要明确确认。可行放置并不预留资源或保证集群准入。修改集群或部署输入必须重新
+审核。最终计划冻结渲染输入和 Chart 字节，不安装缺失的 DS/LWS 控制器或 CRD。官方 Guide
+快照要求将 Kustomize 依赖纳入源码。
+
+本地来源会冻结资源、补丁、生成器输入和 Router values，并记录内容校验和，不将脏文件
+误报为 Git HEAD。远程自定义 Kustomize 从精确 commit 快照渲染；外部依赖和越界路径必须
+先纳入源码。独立部署的 DS 停止或失败后，可用 **restart-plan API（重试计划接口）**
+准备新摘要，不删除旧资源；确认后创建新运行。Evaluation 所有的部署通过工作流重试。
+
+Evaluation 在已审核的 DS 部署开始压测前自动执行有界推理探测。在评估详情的 **Deployments（部署）**
+页签中，**Runtime verification（运行时验证）**分别显示 Kubernetes 就绪、Slice 放置、P/D 路由及 KV
+传输的状态和原因。**Recorded evidence（已记录证据）**展示采集的 Pod/Node 与请求证据。
+部署验证 API 还支持显式推理探测和只读指标快照；指标快照不是实时速率。
+Pod 就绪、HTTP 成功、同 Slice 标签和聚合 KV 计数都不能证明单个
+请求的传输。缺少关联证据时，路由/KV 状态保持未知。这些检查不认证物理网络带宽或在线滚动升级安全。
+
+对于已注入探针的 vLLM 0.26.0 NIXL pull worker，验证会将响应 ID 与所有 TP rank 的接收完成、
+发送端确认关联，检查 Pod/引擎稳定性及 P/D revision，并排除传输失败后重算。报告记录实际
+P/D Pod、是否同 Slice/域及传输块数，以带校验和的部署证据持久化；重新打开详情仍可查看。
+不支持的版本、连接器或不完整证据保持未知。
+
+修改 Slice 数仍需新建配置并重新审核。
+
+## 配置和审阅 Manual 或 Agentic 方案
+
+页面最上方是部署设置卡片：集群、部署名称、模型缓存和 Pod 放置。
+存在就绪集群时会预选，部署名称自动生成，模型缓存自动检查。
+四项均可在卡片内直接编辑，徽标显示模型缓存状态；模型缓存未就绪时可点击 **Prepare model cache** 准备模型文件。
+然后在 **Planning mode** 中选择 **Manual** 或 **Agentic**。**Workload & limits** 始终可见且可选，
+占位符显示计算出的默认值（模型上下文长度、全部空闲加速卡、按完整上下文估算 KV），留空即使用默认值；
+**Reset to defaults** 清除全部覆盖值。
+两种模式都不要求先填写硬件规格或选择 Guide。
+
+**Generate plan**（Manual）在兼容时启用勾选的核心优化，其中 Prefill / Decode 分离默认开启，提供请求形态时由 AIC 决定，并进入配置审阅。
+**Optimize for** 在同一入口页为两种模式提供 Balanced、Low latency、High throughput：
+Manual 据此选择拓扑，Agentic 还会据此排序优化方案。
+点击 **Generate plan with AI**（Agentic）直接进入生成的方案，没有额外问卷页。保留 Balanced 即可不填参数继续；恢复已有方案时保留其他已支持目标。
+Agentic 需要 AI 提供方，没有时 Agentic 选项不可用。AI 请求失败时规划停止并显示原因，
+可点击 **Use Manual plan** 用相同输入生成 Manual 方案。两者都不代表已经获得实测最优解。
+
+资源限制、负载、请求长度和 SLA 目标默认收起且可选。两种模式都支持平均输入/输出 token 和 P95 TTFT/TPOT SLA 目标；
+**Load target（负载目标）**开关在并发与 QPS 之间二选一（QPS 属于 Agentic 输入）；共享提示词和长输入提示由 AI 从目标推断，规划后可在 Deployment settings 中修正。Manual 另有 **Optimizations（优化）**勾选列表，取消勾选的项会成为禁止的优化。
+留空保持未指定，重新编辑时已保存的约束会展开显示。
+
+方案标题突出 **Manual plan** 或 **Agentic plan**，同时显示模型和集群。
+**Change setup**返回设置，后端已有方案仍按原模式与目标保存。
+**Serving flow（服务流程）**使用横向 Request → Endpoint selection → Prefill → Decode → Response 主路径。
+聚合服务把两个计算阶段放入同一个 Model server 边界，P/D 使用独立边界。
+缓存索引、KV 缓存、计算配置和服务管理连接到实际作用的阶段。
+这些是逻辑处理与配置关系，不是实时流量或实测放置。
+
+所有功能组默认可见，显示已配置数量与摘要。点击分组，在图中展开内部优化，包括关闭与不可用项；
+每组每页最多四项，展开另一组时收起前一组。点击优化项，直接打开其源码、路由或运行参数配置抽屉。
+展开组内的 **Stage parameters** 可打开副本数等更完整的阶段参数（仅限源码声明的可配置内容）。受支持的开关和详细编辑器沿用现有兼容性检查，不可用项保留只读原因说明。
+不再设置独立 Stage configuration 表格或全局 All settings 可见性开关。
+编辑后先应用并检查资源，再审阅部署；关闭抽屉会保留待应用修改，如需放弃请明确丢弃。
+窄屏可横向滚动图形。每个优化项用颜色区分状态：Enabled、Required、Disabled、Conflict（与当前选择冲突或缺少前置条件）、
+Recipe setting（通过配方参数调整）和 Unavailable（该源码版本没有可部署实现）。参数列表按分组折叠并可搜索。
+
+生成方案期间显示分步进度，不再展示半成品内容。每一步显示已用时间和预估时间（优先使用本浏览器之前的实测时长，否则使用默认值）。
+点击任一步骤可查看其内部执行内容和上报的事件。**Compose Guides and check resources** 通常最慢：服务端会为每个候选
+用 Kustomize 渲染固定版本的 Guide 源码、拉取并模板化 Helm chart、绑定模型缓存，再检查设备与内存。
+完成后可通过方案标题栏的 **Planning log** 重新查看同一时间线。
+
+Manual 与 Agentic 相互独立：Manual 方案中没有 Agentic 入口。如需使用 Agentic，请返回设置页在 **Planning mode** 中选择；
+之前的方案会被保留，可在设置页恢复。
+新建议仍需资源检查和明确部署确认，不代表性能实测结果。
+
+**Review & deploy** 中的 **Guides** 标签页
+收纳集群固定 llm-d 版本的完整指南索引。
+不可用、外部操作和未适配指南仍显示原因；列在索引中不代表指南或任意组合可以部署。
+已选指南继续展示兼容性选项与源码变量，并使用易读名称，例如 **Model server**、**Monitoring** 和 **Infrastructure provider**。
+流程图包含相互独立的前缀亲和路由与精确缓存索引。
+配置抽屉只显示当前节点的源码、路由或运行参数，包括原生 CPU 缓存每副本容量，选定的变体也可修改。
+**Parameters** 和 **YAML** 标签页可直接编辑完整渲染配置；它们直接使用已审阅快照，立即打开，
+只有优化选择变化后才需要服务端重新渲染。
+
+自动添加优化时保留每个候选已确定参数的服务拓扑。精确缓存索引和流量控制会替换服务配方，
+但角色形态不变，因此会重新应用已确定的副本数与 TP；若替换后的配方未通过源码检查，生成会回退到原配方。
+P/D 变化作为独立候选比较，或在编辑器中明确启用，此时会为两个角色设置规模。Inventory 控制器安装需要明确选择。
+不支持的传输与缓存组合会被排除，但不阻止其他兼容候选；用户指定的必选项不会被悄悄取消。
+Router 的受限认证 RBAC 随部署命名空间管理，清理时也会等待这些资源被垃圾回收；
+所有权冲突会明确报错，不会覆盖已有授权。
+
+Manual 不以负载收益为门槛，按固定优先级启用所有兼容的源码优化：前缀缓存、分块预填充、前缀亲和、
+负载路由、精确缓存索引、CPU KV 缓存、流量控制。两项互斥时保留优先级更高的一项，另一项说明被哪项阻止；
+关闭该项即可切换。明确排除项和用户编辑会保留。外部前置条件、未确定的选项及资源检查仍会限制生成。
+Agentic 只启用预期有助于所选目标的优化，其余兼容项保持可用并说明原因。两种模式都不自动安装外部前置依赖。
+关闭但兼容的优化提供 **Enable and edit parameters（启用并编辑参数）**。
+**Apply changes and check resources（应用修改并检查资源）**生成新的已审阅源码快照；
+未应用修改会阻止部署。改变优化选择时，不相关的最终参数编辑会合并到新渲染资源中；
+冲突编辑会明确报错并阻止应用，不会静默丢弃。请撤销冲突选择，或在 Parameters / YAML 标签页使用
+**Discard direct edits（丢弃直接编辑）**。
+旧快照没有编辑基线时，基础配置变化需要明确处理。禁用原生 CPU 缓存会保留容量，供再次启用。
+源码版本变化后，
+必须明确选择丢弃源码编辑并采用当前版本，才能继续。
+
+数字编辑被拒绝时，输入框恢复最后接受的值并显示校验错误。
+清空显式 **Slices** 数量会恢复自动计算，同时保留 Prefill 和 Decode 的部署总副本数。
+只有两个角色的副本数、slice 数量和放置策略都匹配推荐时，才标记为 **Recommended**。
+Pod 放置和目标节点选择条件会在源码快照审阅前写入，并检查所选节点容量，而不只依赖全群总容量。
+审阅后改变放置条件需要重新生成配置。
+源码方案证据要求来源配方明确、CPU 缓存容量可表示；配方歧义或不同角色缓存容量不一致时会明确拒绝，
+不会当作 baseline 或无缓存证据使用。前缀亲和通过已挂载且被 scheduling profile 引用的路由配置识别，
+启用时不改变 Decode profile。
+
+流程图上方的横向摘要集中显示拓扑、加速卡、优化数量与状态。
+**Review & deploy** 打开一个窗口，包含 **Overview**、**Parameters** 和 **YAML** 标签页。
+Overview 显示加速卡、拓扑、集群、模型缓存、最终 YAML 中启用的优化、检查项、警告和 **Confirm deployment** 确认操作。
+在 Manual 和 Agentic 模式下，点击 **Confirm deployment** 后自动预检。找到可行放置且无错误时直接提交；未纳入放置模型的条件只作提示。集群信息不完整或搜索无法得出结论时才提示 **Accept risks and deploy**；明确失败仍会阻止部署。
+Lens 自动选择 **Inference Service（推理服务）**，优先 gateway/router Service 而非普通 inference-model Service，
+并排除 EPP 控制端口和指标端口。同分入口需要明确选择；只有一个选项时以只读方式显示。
+名称含 `epp` 的 Service 仍可通过 80 或 443 端口提供 HTTP 入口，仅在需要时修改。
+**Parameters** 为每个 Guide 配方显示一张卡片（Guide 级变量，如模型服务器；添加或移除 Guide 位于高级折叠区域），
+并为每个工作负载显示一张卡片，只列出副本数、容器镜像、资源、引擎参数和环境变量值，按容器和参数名命名；
+其余内容在 YAML 标签页编辑。
+任一标签页中的编辑都需应用并检查后才能确认，应用期间窗口保持打开。
+审批绑定所选端点和准确配置校验和，并重新检查容量；编辑器没有独立部署通道。
+旧计划提供 **Load Guides and build source configuration（加载指南并构建源码配置）**，
+原预览保留在折叠区域。源码目录不可用时显示真实错误，不会用旧模板冒充完整源码组合。
+方案视图显示服务流程图，精简的 **Optimizations（优化）**面板悬浮在流程图右上角的空白区域，不遮挡各阶段，也不压缩流程图宽度；每项带设置按钮，可原地打开参数。
+点击展开按钮可对调：完整表格移到中间，流程图缩为右上角缩略图（点击缩略图可换回）。
+表格每项前有勾选框，勾选或取消勾选受支持的开关会重建并重新检查方案。
+量化、流水线并行等由配方控制的项目禁用勾选框，请通过其设置按钮编辑所属源码配置。
+在流程图中启用或禁用受支持的优化效果相同，两者保持同步。
+已勾选但方案未应用的优化在所在行显示状态和原因。表格同时列出随 Guide 配方启用的优化（如 token 负载评分、P/D 分离使用的 KV 传输）并附简要说明，
+勾选、设置和计数方式相同。取消勾选 KV 传输会关闭 Prefill / Decode 分离；其他 Guide 优化在源码流程中切换并立即应用。
+Agentic 方案还显示 **Plan（方案）**、**Alternatives（候选方案）**和 **Benchmark tests（基准测试）**标签。候选方案比较已审阅的源码配置及证据。
+
+Agentic 提供独立可选的 **Benchmark tests（基准测试）** 视图，在此准备允许测试的计划，
+再选择负载并单独确认执行。加速器上限默认
+来自规划约束或发现的容量；容量未知时需要明确填写。已有测试恢复其记录的负载和预算。
+提交前检查重复次数所需预算、资源上限和数值范围。测试中断或清理失败时，必须先完成清理
+再开始新的测试；已提交正式部署的方案不能再次开始试验。测试证据展示实测 TTFT、TPOT、
+端到端延迟、吞吐和错误比例，缺失值保留未知。
+源码方案必须先使用 **Check all source candidates（检查全部源码候选）**渲染候选，
+并为每个已选候选选择其审阅过的推理 Service。缓存变体必须在指南配置中编辑并渲染，
+测试不会悄悄添加未经审阅的 native 缓存变体。选择实测优胜方案会恢复其准确源码配置。
+
+预算包含 **Winner confirmation repetitions（优胜方案复测次数）**，默认 1 次：
+比较结束后重新部署领先候选，使用相同负载独立测量。两个候选各重复两次、再复测一次，
+共需五次压测。复测失败仍保留比较证据，但不会产生已确认的优胜方案。
+低延迟规划目标默认对应最低 P95 端到端延迟的测试目标。
+
+加速卡数字（所需 / 可用）是规划时的快照，不代表资源预留或当前容量。
+审批前可使用 **Recheck resources（重新检查资源）**刷新审阅快照，审批本身也会重新检查容量。
+
+### 验证优化机制
+
+Guide 可用、配置兼容、运行机制有效和性能收益已验证是不同证据层级。
+不支持的组合必须保留原因，开启更多参数不等于性能更好。
+验证应绑定固定源码版本、运行镜像、硬件与负载。
+
+| 机制 | 必须具备的运行证据 |
+| --- | --- |
+| 多副本路由 | 共享前缀流量的 EPP 处理记录、各后端请求数与缓存命中，以及不同前缀负载在两个副本上的执行。仅 HTTP 200 不足以证明路由有效。 |
+| Prefill/decode 分离 | 两种角色实际处理请求，KV 传输指标或关联传输日志增长，并排除普通合并服务回退。 |
+| CPU KV 回读 | 先向 CPU 写入 KV，在隔离测试中仅驱逐设备 KV，重复前缀后观察 CPU 到设备的传输和外部缓存命中。仅 CPU 写入不能证明回读。 |
+
+优先通过受限设备 KV 预算和正常流量触发驱逐，不要仅为重置缓存而开启生产服务的开发或 RPC 接口。
+隔离测试部署、记录失败，并只清理这些测试拥有的资源。
+
+**Change workload & limits（修改负载与限制）** 显示发现的容量与当前上下文设置，不虚构流量值。
+加速器限制会影响哪些组合能够容纳；请求长度与并发用于细化容量估计；
+QPS 和延迟设置性能目标。留空不增加约束，点击 **Rebuild plan（重建方案）** 应用覆盖值。
+Manual 不再显示单独无意义的 **Plan** 导航按钮。
+在成功生成替代方案前保留当前方案；
+**Keep existing plan（保留现有方案）** 返回原方案。新配置修订需要重新审阅。
+**Back to edit** 返回方案。
+点击 **Confirm deployment**提交，校验和变化后必须重新审阅。确认后跳转到完整的部署列表，新任务带有 **New** 标记。
+在 Pod 实际就绪前状态保持进行中，因此列表、汇总卡片和状态点始终一致；**Degraded** 卡片统计就绪模型服务 Pod 少于期望值的部署。
+只有 Deploy 执行成功且所有组件报告就绪，部署才算就绪；
+规划状态不代表就绪，负载性能仍需测量。
+
 ## 打开部署创建流程
 
 1. 在左侧导航中，打开**部署**。
 2. 在页面标题栏，点击**创建**。
 3. 按[创建部署](/user-guide/model-market)完成操作。提交后，新部署会出现在列表中。
 
-在 **Agentic** 模式下，TTFT、TPOT SLO 和每请求输入/输出 token 数（ISL/OSL）
-默认均未设置，留空提交时为 `null`。灰色示例占位文字仅供参考，不会作为默认值提交。
-**SLO** 分组（**Optional target.**）默认展开，TTFT 与 TPOT 在同一行并排显示。
-**Workload estimate（工作负载估计）**位于 **Preference（偏好）**正下方，默认展开；
-**vLLM parameters（vLLM 参数）**位于工作负载下方，默认收起。
+Manual 直接进入部署方案；Agentic 先提供目标选项，所有数值参数都可选。不预设请求长度、前缀复用或负载形态，
+这些是收益参考而非兼容性门槛。Agentic 选择 AI 提供方后，
+可从自然语言目标提取明确表达的定性负载特征，提取结果可见、可修改。
+未使用 AI 时依赖结构化输入；数值资源上限和性能目标不会由 AI 推测。
+
+Manual 在已支持组合中依次按 SLA 状态、P/D 决策、源码校验后的优化覆盖排序，而非选第一个能渲染的 Guide；覆盖相同时优先 P/D 组合。
+Manual 仅在你填写请求长度时限制 `--max-num-seqs`，否则由 vLLM 按空闲 KV 缓存接纳请求。
+这不等于占满集群，也不代表实测最优。不支持的组合会明确说明。
+**Ready for your confirmation（等待确认）**给出简洁结论；检查失败时阻止部署并提供 **Retry checks（重试检查）**。
+部署确认会重新检查当前资源。
+
+前缀亲和路由、P/D 分离和 CPU KV 卸载可以独立组合。路由组合保留 P/D 调度配置，
+并使用同一固定源码版本中的亲和插件；插件或镜像不兼容会明确报错。
+基础注意力 KV 缓存与跨请求前缀缓存、CPU 卸载不是同一功能。
+vLLM 源码未显式配置的运行开关可在添加强制启动能力检查后配置；
+检查在选定镜像内执行，不代表运行时支持已验证。
+
+构建方案前，在设置卡片中选择 **Pod placement（Pod 放置）**：优先单节点（默认）、要求单节点（可指定节点）、
+跨节点均匀分布或要求分散到不同节点。该选择作用于 Deployment、LeaderWorkerSet 和 DisaggregatedSet 模型服务。已有部署 API 和独立 Configuration 编辑器
+保留放置控制。TP 设备由各模型服务 Pod 请求；部署前的计划放置不会显示为实际放置。
+
+P/D 的 Prefill、Decode 与 KV 传输设置包含 **P/D slices and placement**：slice 数量、每个 slice 的 Prefill/Decode 副本数与 TP、
+slice 放置策略（`None`、`ExclusiveSlice`、`ExclusiveTopology`）及其节点标签拓扑键。Lens 根据各拓扑域当前空闲设备给出推荐，
+优先最窄的域（节点，其次机架类标签、可用区、地域）：把角色副本拆分为最少的等份 slice，使每个 slice 能放进一个域，从而让 KV 传输保持本地。
+Low latency 与可靠性目标在空闲独占域足够时使用 `ExclusiveTopology`；没有域能容纳完整 slice 时放置保持 `None`。
+自动硬放置还会将角色 Pod 限定到能容纳完整 slice 的域，避免首个 Pod 将整个 slice 锁定到容量不足的节点。
+这不会预留设备；可用容量变化后应重新生成方案。
+已审阅的值固定在方案中，仍可编辑；非 `None` 策略是硬调度规则，没有域能容纳 slice 时 Pod 会保持 Pending。
+推荐会遵循 Pod 放置：选择均匀分布或分散到不同节点时不推荐按节点放置 slice，要求单节点时只保留一个 slice。
+slice 面板会禁用冲突的拓扑键，显式冲突会在应用修改时报错。
 
 ## Guide 入口选择
 
@@ -54,7 +292,12 @@ RuntimeClass 输入项。发现接口、策略模式和请求示例请参阅
 等待状态变为 **Ready（就绪）**后再调用。处于 **In progress（进行中）**时，
 打开 Pod 日志查看启动进度；处于 **Failed（失败）**时，结合失败提示和对应 Pod 的日志排查。
 
-状态灯同时反映模型服务器 Pod 的实时状态：黄色表示就绪的模型服务器 Pod 少于请求数量，
+缺失的运行详情从已存储的最终 vLLM manifest 读取。P/D 部署的平铺运行字段标注
+**(Decode)**；未设置的值保持未知，不会用推测的默认值填充。
+
+正常 Pending 或 Running 但尚未就绪的 Pod 会让启动中的部署保持 **In progress（进行中）**。
+镜像拉取失败、OOM 等明确 Pod 故障仍显示 **Failed（失败）**。
+对于已标记 Ready 的部署，状态灯同时反映模型服务器 Pod 的实时状态：黄色表示就绪的模型服务器 Pod 少于请求数量，
 服务能力下降；红色表示已没有就绪的模型服务器 Pod，服务不可用。这两种情况也会出现在 **Needs attention（需要关注）**中。
 
 **Failed（失败）**并非终态。发布超过进度期限会被记为失败，但工作负载往往会自行恢复——
@@ -126,7 +369,18 @@ Lens 为模型服务器 Pod 设置 **120 秒**终止宽限期和 **5 秒** preSt
 2. 对于 P/D 部署，设置 **Prefill replicas** 和 **Decode replicas**；对于聚合部署，设置 **Replicas**。
 3. 点击**扩缩容**。
 
-手动扩缩容只修改运行中的 Kubernetes 模型服务器副本。重启部署后会恢复配置中的副本数。DisaggregatedSet 部署创建时固定 `slices: 1`；手动扩缩容只修改角色副本数，永远不修改 `spec.slices`。对于 P/D 部署，请先缩容 Decode 再缩容 Prefill；Prefill 缩容可能中断进行中的 KV 传输，但只要存在 `--kv-transfer-config`，Lens 就会配置 `kv_load_failure_policy=recompute`。
+手动扩缩容只修改运行中的 Kubernetes 模型服务器副本。重启部署后会恢复配置中的副本数。DisaggregatedSet 部署按声明的 `spec.slices` 创建；手动扩缩容只修改角色副本数，永远不修改 `spec.slices`。对于 P/D 部署，请先缩容 Decode 再缩容 Prefill；Prefill 缩容可能中断进行中的 KV 传输，但只要存在 `--kv-transfer-config`，Lens 就会配置 `kv_load_failure_policy=recompute`。
+
+## 对就绪部署运行基准测试
+
+1. 在就绪部署行中打开操作菜单，选择 **Run benchmark（运行基准测试）**。该操作需要 `evaluate:run:create` 权限。
+2. 选择负载：**Short chat**（1,024 输入 / 256 输出 token，并发 1、8、32）、
+   **Long input, short output**（8,192 / 256，并发 1、8、16）或 **High concurrency**（1,024 / 256，并发 32、64、128）。
+3. 可选填写 P95 TTFT 和 TPOT 目标，然后点击 **Start benchmark**。
+
+基准测试通过 `POST /api/v1/evaluate/runs` 并携带该部署的 `deployment_execution_id`，在集群内运行测试程序。
+无需选择 Standalone 或 Gateway：服务端会访问部署自己的路由入口，若部署通过共享 Gateway 对外服务则访问 Gateway。
+部署本身不会被修改。任务排队后 Lens 会打开基准测试结果页。
 
 ## 打开部署监控与性能分析
 
@@ -171,3 +425,41 @@ Lens 为模型服务器 Pod 设置 **120 秒**终止宽限期和 **5 秒** preSt
 先清除搜索、状态和集群筛选。仍然找不到时，请管理员检查角色的部署管理权限和集群 scope。
 
 需要让应用调用已就绪的部署时，继续[发布模型服务](/tutorials/publish-a-model-service)。
+
+## 审阅生成的部署配置
+
+Manual 使用上文所述源码编辑器，可明确排除前缀缓存或分块预填充，不虚构负载特征。
+补全只修改源码支持的设置，不可用选项在指南和优化列表中保留原因。
+显式运行参数优先。跨 Guide 组合支持同一固定官方版本中的“优化基线、精确路由或 NIXL P/D + 原生 CPU KV 缓存”，要求运行镜像相同。P/D 的 Prefill 和 Decode 均使用 MultiConnector，按顺序保留原 NixlConnector 并添加 OffloadingConnector，保留传输设置并为每个模型 Pod 预留本地缓存内存。同镜像初始化容器在启动前检查连接器导入及配置结构，并拒绝已知存在卸载缺陷的 vLLM 0.19.0（上游 #39500/#39617）。该检查不代表 GPU 正确性或性能验证。不支持的传输返回具体适配器错误，不支持任意连接器叠加。生成组合配置不代表性能最优。
+
+P/D 的 CPU 缓存适配器目前要求两个角色均使用 `NixlConnector` 和 `kv_both`。
+使用 `kv_producer`、`kv_consumer` 的源码仍可用于不叠加 CPU KV 卸载的 P/D 候选；
+被拒绝的仅是额外缓存组合。Lens 不会改写这些传输角色，也不会静默删除用户明确要求的缓存功能。
+
+通过节点参数按钮或 **All deployment parameters（全部部署参数）**编辑，再点击
+**Apply changes and check resources（应用修改并检查资源）**。Manual 和 Agentic 均保留
+已审阅源码包；编辑器不会悄悄把参数修改交给 LLM 或替换为其他候选。
+只有明确重建负载需求时才请求新推荐。选择候选不是部署，**Review & deploy**仍需确认。
+
+## 实测比较 Agentic 候选
+
+打开 **Verify with real benchmarks**，选择候选，填写 GPU 上限、最长分钟数、
+压测运行次数和重复次数，再选择吞吐、P95 端到端延迟或每加速器吞吐作为目标。
+源码候选需要已审阅的推理 Service 和已渲染缓存变体。只有旧计划仍提供可选 CPU
+缓存预算来增加测试变体，其运行次数预算应包含额外测试。
+合成负载优先使用方案的平均输入 / 输出长度和并发；缺失时分别采用输入 512 token、
+输出 128 token、并发 4，请求数为 100。恢复的测试使用已记录的负载。展开
+**Test workload** 可修改，或填写代表真实业务的 inference-perf YAML；
+缓存实验建议使用能体现前缀复用的实际负载。
+
+**Start deployment and benchmark tests** 会创建真实集群资源。每个候选按相同
+负载重复压测，清理后再测试下一个。只有完成全部重复且满足延迟 SLO 和错误率
+约束的候选才进入排名；缺少指标和失败测试不会被当作优势证据。结果保留压测 ID，
+选择最佳已测候选后，仍需要审阅并确认最终部署。
+
+**Stop and clean up** 停止任务。清理可能超过测量预算；清理失败会阻止继续部署。
+任务审计保留配置、负载和进度。服务中断后，任务标为中断并提供显式清理入口，
+不会自动恢复部署。同一浏览器会话刷新页面可恢复当前方案。这是有预算的候选
+搜索，不是无限自主调整或全局最优证明。
+
+Overview 和 3D 分别展示每个角色的传输及本地 CPU 缓存。Agentic 的 CPU 缓存试验包含符合条件的 P/D 候选，使用相同负载比较原配置与组合配置。默认 NIXL 优先的顺序在多个连接器均命中时优先传输，不保证减少网络传输；正确性及性能仍需实际测量。

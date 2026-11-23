@@ -23,13 +23,30 @@ from llm_d_lens.ai_providers.client import AIProviderClientError, AIRequestRecor
 from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.capacity import ValidationParams, evaluate_capacity
 from llm_d_lens.cluster.sessions import require_active_session
+from llm_d_lens.configuration.decision_engine import (
+    AIC_PD_KEY,
+    AIC_PD_REASON_KEY,
+    PROVIDER_MECHANISMS,
+    RUNTIME_MECHANISMS,
+    aic_pd_preference,
+    aic_sla_status,
+    aic_topology_estimate,
+    candidate_requirement_errors,
+    manual_combinations,
+    rank_manual_candidates,
+    resolved_plan,
+    workload_applicability,
+)
+from llm_d_lens.configuration.manifest_facts import validate_manifest_facts
 from llm_d_lens.configuration.models import ModelSecretConfiguration
+from llm_d_lens.configuration.plan_models import DeploymentRequirements, OptimizationDecision
 from llm_d_lens.deploy.application import deployment_run_manager
-from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest, RuntimeBinding
+from llm_d_lens.deploy.contracts import DeployableConfiguration, DeploymentRunCreateRequest, RuntimeBinding
 from llm_d_lens.deploy.providers.hardware_profile import cluster_accelerator
 from llm_d_lens.deploy.providers.target_node import validate_placement
 from llm_d_lens.estimate_tools.aic.models import DEFAULT_INPUT_TOKENS, DEFAULT_OUTPUT_TOKENS, AICEstimateRequest
 from llm_d_lens.estimate_tools.aic.service import AICError, estimate
+from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum, text_checksum
 from llm_d_lens.infrastructure.kubernetes import list_resources
 
 from .benchmark_evidence import BenchmarkRecord
@@ -48,6 +65,7 @@ from .historical_candidate_seeds import HistoricalCandidateSeedRetriever
 from .models import (
     AgenticCandidate,
     AgenticCandidateRefinementRequest,
+    AgenticCandidateSelectionRequest,
     AgenticDecisionMetadata,
     AgenticDeploymentCreateRequest,
     AgenticDeploymentRun,
@@ -61,6 +79,7 @@ from .planner import (
     OpenAIPlannerError,
     PlannedCandidate,
     PlanningFacts,
+    WorkloadProfile,
     normalize_planning_facts,
     resolve_workload_signals,
 )
@@ -72,6 +91,24 @@ ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 RetrievalContext = tuple[PlanningFacts, PlanningEvidence, InternalCaseOutcome, CaseEvidenceBundle]
 
 
+def candidate_validation_message(candidates) -> str:
+    valid = [candidate for candidate in candidates if candidate.deployable]
+    reasons = sorted(
+        {reason for candidate in candidates if not candidate.deployable for reason in candidate.rejection_reasons}
+    )
+    message = (
+        f"Built {len(candidates)} layouts (Guide recipe × replicas × tensor parallelism × routing). "
+        f"{len(valid)} fit this cluster; {len(candidates) - len(valid)} were dropped"
+    )
+    message += f" ({'; '.join(reasons[:3])})." if reasons else "."
+    if valid:
+        counts: dict[str, int] = {}
+        for candidate in valid:
+            counts[candidate.provider_ref] = counts.get(candidate.provider_ref, 0) + 1
+        message += " Fitting layouts by recipe: " + ", ".join(f"{name} {count}" for name, count in counts.items()) + "."
+    return message
+
+
 class AgenticDeploymentService:
     """Retain Agentic orchestration state while delegating infrastructure work."""
 
@@ -81,6 +118,7 @@ class AgenticDeploymentService:
         snapshot_store: PlanningSnapshotStore | None = None,
     ) -> None:
         self._runs: dict[str, AgenticDeploymentRun] = {}
+        self._approving: set[str] = set()
         enabled = os.getenv("AGENTIC_BENCHMARK_SEEDS_ENABLED", "false").lower() in {"1", "true", "yes"}
         configured_mode = historical_seed_mode or (
             os.getenv("AGENTIC_HISTORICAL_SEEDS_MODE", "shadow") if enabled else "disabled"
@@ -92,6 +130,20 @@ class AgenticDeploymentService:
         self._snapshot_store = snapshot_store or PlanningSnapshotStore()
 
     async def create(
+        self,
+        request: AgenticDeploymentCreateRequest,
+        on_progress: ProgressCallback | None = None,
+        *,
+        principal_id: str | None = None,
+        principal: Principal | None = None,
+    ) -> AgenticDeploymentRun:
+        profile = request.planning_facts.workload_profile
+        if profile and profile.concurrency is not None and profile.request_rate is not None:
+            raise ValueError("Both load targets were provided; choose one and clear the other.")
+        async with asyncio.timeout(request.execution_policy.max_total_duration_minutes * 60):
+            return await self._create(request, on_progress, principal_id=principal_id, principal=principal)
+
+    async def _create(
         self,
         request: AgenticDeploymentCreateRequest,
         on_progress: ProgressCallback | None = None,
@@ -117,6 +169,101 @@ class AgenticDeploymentService:
             },
         )
         session = require_active_session(request.cluster_session_id)
+        provider = (
+            OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
+            if request.planning_mode == "agentic"
+            else None
+        )
+        if request.planning_mode == "agentic" and provider is None:
+            raise ValueError(
+                "Agentic planning requires a configured AI provider. Add one under AI Providers and select it, "
+                "or use Manual planning (planning_mode=manual) for rule-based recommendations."
+            )
+        if request.requirements is not None:
+            if request.requirements.model != request.model:
+                raise ValueError("Requirements must refer to the selected deployment model.")
+            if request.requirements.cluster_id != session.server_id:
+                raise ValueError("Requirements must refer to the active deployment cluster.")
+            if not 1 <= request.planning_facts.max_candidates <= 10:
+                raise ValueError("Candidate limit must be between 1 and 10.")
+            requirements = request.requirements
+            selected_provider = requirements.hard_constraints.get("providerRef")
+            if selected_provider is not None and selected_provider not in PROVIDER_MECHANISMS:
+                raise ValueError("Unsupported planning provider: " + selected_provider)
+            known_mechanisms = set().union(*PROVIDER_MECHANISMS.values()) | RUNTIME_MECHANISMS
+            unknown_mechanisms = (
+                set(requirements.required_features) | set(requirements.forbidden_features)
+            ) - known_mechanisms
+            if unknown_mechanisms:
+                raise ValueError("Unsupported capability controls: " + ", ".join(sorted(unknown_mechanisms)))
+            if (
+                request.planner_prompt
+                and request.ai_provider_id
+                and provider is not None
+                and any(requirements.workload.get(key) is None for key in ("prefixReuse", "prefillHeavy"))
+            ):
+                await self._emit_progress(
+                    on_progress,
+                    {
+                        "phase": "requirements",
+                        "status": "running",
+                        "message": "Interpreting the deployment goal.",
+                    },
+                )
+                try:
+                    interpreted = await provider.interpret_workload(request.planner_prompt)
+                except OpenAIPlannerError as error:
+                    raise ValueError(str(error)) from error
+                additions = {
+                    key: value
+                    for key, value in interpreted.items()
+                    if value is not None and requirements.workload.get(key) is None
+                }
+                if additions:
+                    requirements = requirements.model_copy(
+                        update={
+                            "workload": {**requirements.workload, **additions, "interpretationSource": "ai_goal"},
+                            "unknowns": [key for key in requirements.unknowns if key not in additions],
+                        }
+                    )
+                    request = request.model_copy(update={"requirements": requirements})
+            workload = requirements.workload
+            if workload.get("concurrency") is not None and workload.get("requestRate") is not None:
+                raise ValueError("Choose concurrency or request rate, not both.")
+            request = request.model_copy(
+                update={
+                    "planner_prompt": request.planner_prompt or f"{requirements.objective} priority.",
+                    "planning_facts": replace(
+                        request.planning_facts,
+                        hardware_capacity_mode="free",
+                        custom_gpu_count=None,
+                        objective=requirements.objective,
+                        max_num_seqs=request.max_num_seqs,
+                        cpu_buffer_gib=0,
+                        required_cpu_buffer_gib=0,
+                        ttft_slo_ms=requirements.performance_targets.get("ttftMs"),
+                        tpot_slo_ms=requirements.performance_targets.get("tpotMs"),
+                        end_to_end_latency_slo_ms=requirements.performance_targets.get("e2eMs"),
+                        use_case=(
+                            "long-inputs"
+                            if workload_applicability(requirements)["pd_disaggregation"] is True
+                            else "general-chat"
+                        ),
+                        shared_prefix_ratio=1 if workload.get("prefixReuse") is True else 0,
+                        prefill_heavy=workload_applicability(requirements)["pd_disaggregation"] is True,
+                        workload_profile=WorkloadProfile(
+                            mean_input_tokens=workload.get("inputTokens"),
+                            p95_input_tokens=workload.get("p95InputTokens"),
+                            mean_output_tokens=workload.get("outputTokens"),
+                            concurrency=workload.get("concurrency"),
+                            request_rate=workload.get("requestRate"),
+                            shared_prefix_ratio=None
+                            if workload.get("prefixReuse") is None
+                            else int(workload["prefixReuse"]),
+                        ),
+                    ),
+                }
+            )
         if request.execution_policy.mode == "automatic":
             raise ValueError("automatic Agentic execution is not enabled")
         model_secret = await self._validate_model_cache(request, session.server_id, require_model_ready=False)
@@ -134,7 +281,6 @@ class AgenticDeploymentService:
             gpu_memory_utilization=request.gpu_memory_utilization,
             operator_preference=request.planner_prompt or "",
         )
-        provider = OpenAICompatiblePlanner.from_provider_id(request.ai_provider_id)
         hardware_snapshot = PlanningHardwareSnapshot(session.server_id)
         planning_facts, public_rag, internal, cases = await self._retrieval_context(
             session.server_id,
@@ -153,7 +299,8 @@ class AgenticDeploymentService:
                 request.model,
                 planning_facts,
                 request.planner_prompt,
-                provider_requested=bool(request.ai_provider_id),
+                provider_requested=bool(request.ai_provider_id) and request.planning_mode == "agentic",
+                aic_load_target=True,
                 on_progress=on_progress,
                 principal_id=principal_id,
                 authorized_records=list(internal.records),
@@ -161,20 +308,29 @@ class AgenticDeploymentService:
             )
             resolved = with_public_rag_evidence(resolved, public_rag)
             resolved = self._with_cases(resolved, planning_facts, cases)
+        if provider is not None and generation["fallback_reason"]:
+            raise ValueError(self._ai_failure_message("candidate generation", generation["fallback_reason"]))
+        await self._emit_aic_summary(on_progress, resolved)
+        if request.requirements is not None:
+            candidates = manual_combinations(candidates, resolved.facts, request.requirements)
+            if request.planning_mode == "manual":
+                request, candidates = self._apply_aic_assessment(request, candidates, resolved.facts)
+            candidates = [
+                candidate.model_copy(
+                    update={
+                        "deployable": candidate.deployable
+                        and not candidate_requirement_errors(request.requirements, candidate),
+                        "rejection_reasons": [
+                            *candidate.rejection_reasons,
+                            *candidate_requirement_errors(request.requirements, candidate),
+                        ],
+                    }
+                )
+                for candidate in candidates
+            ]
         valid_candidate_count = sum(candidate.deployable for candidate in candidates)
         rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
-        rejection_reasons = sorted(
-            {reason for candidate in rejected_candidates for reason in candidate.rejection_reasons}
-        )
-        validation_message = (
-            f"Checked {len(candidates)} candidate(s): {valid_candidate_count} valid, "
-            f"{len(rejected_candidates)} rejected."
-        )
-        if rejection_reasons:
-            validation_message += " Rejection reasons: " + "; ".join(rejection_reasons[:3]) + "."
-        valid_candidate_ids = [candidate.id for candidate in candidates if candidate.deployable]
-        if valid_candidate_ids:
-            validation_message += " Valid candidates: " + ", ".join(valid_candidate_ids[:5]) + "."
+        validation_message = candidate_validation_message(candidates)
         await self._emit_progress(
             on_progress,
             {
@@ -230,32 +386,13 @@ class AgenticDeploymentService:
                     },
                 )
             except OpenAIPlannerError as error:
-                # Planning remains available when an optional provider is unavailable or invalid.
-                logger.warning("External candidate ranking fell back: %s", error)
-                decision = deterministic.decide(deterministic_facts, deterministic_candidates)
-                scored_candidates = deterministic.score(deterministic_facts, deterministic_candidates)[:3]
-                planner_fallback_reason = "invalid_response"
-                await self._emit_progress(
-                    on_progress,
-                    {
-                        "phase": "scoring",
-                        "status": "fallback",
-                        "message": "AI ranking was unavailable; deterministic ranking was used.",
-                    },
-                )
+                logger.warning("External candidate ranking failed: %s", error)
+                raise ValueError(self._ai_failure_message("candidate ranking", "invalid_response")) from error
             except Exception as error:
-                logger.warning("External candidate ranking fell back: %s", error)
-                decision = deterministic.decide(deterministic_facts, deterministic_candidates)
-                scored_candidates = deterministic.score(deterministic_facts, deterministic_candidates)[:3]
-                planner_fallback_reason = self._planner_failure_reason(error)
-                await self._emit_progress(
-                    on_progress,
-                    {
-                        "phase": "scoring",
-                        "status": "fallback",
-                        "message": "AI ranking was unavailable; deterministic ranking was used.",
-                    },
-                )
+                logger.warning("External candidate ranking failed: %s", error)
+                raise ValueError(
+                    self._ai_failure_message("candidate ranking", self._planner_failure_reason(error))
+                ) from error
         else:
             await self._emit_progress(
                 on_progress,
@@ -270,8 +407,51 @@ class AgenticDeploymentService:
             )
         if decision.action != "select_candidate" or decision.candidate_id is None:
             raise ValueError("no deployable Agentic candidate: " + "; ".join(decision.unmet_constraints))
+        if request.planning_mode == "manual":
+            manual_requirements = request.requirements or DeploymentRequirements(model=request.model)
+            ranked = rank_manual_candidates(deterministic_candidates, manual_requirements, deterministic_facts)
+            if not ranked:
+                raise ValueError("No Manual candidate satisfies the configured resource and performance targets.")
+            # Keep recipe diversity, not three sizes of the same mechanism set.
+            scored_candidates = []
+            seen = set()
+            for item in ranked:
+                signature = (item.provider_ref, item.prefix_routing, bool(item.native_cpu_cache_gib))
+                if signature not in seen:
+                    scored_candidates.append(item)
+                    seen.add(signature)
+            decision = decision.model_copy(
+                update={
+                    "candidate_id": scored_candidates[0].id,
+                    "rationale": (
+                        f"Combine applicable optimizations within current capacity. Compared {len(ranked)} "
+                        f"configurations; the {manual_requirements.objective} preference chooses the topology after "
+                        "capability coverage and the concurrency target. Source checks determine the final enabled set."
+                    ),
+                    "fallback_candidate_ids": [item.id for item in scored_candidates[1:]],
+                    "slo_status": scored_candidates[0].slo_status,
+                    "slo_confidence": scored_candidates[0].slo_confidence,
+                }
+            )
+        elif request.requirements is not None:
+            scored_candidates = scored_candidates[: max(1, min(request.planning_facts.max_candidates, 10))]
         selected = next(candidate for candidate in selected_candidates if candidate.id == decision.candidate_id)
         candidate = self._agentic_candidate(selected)
+        if (
+            request.requirements is not None
+            and request.planning_mode == "manual"
+            and selected.max_concurrent_requests is not None
+        ):
+            profile = request.planning_facts.workload_profile
+            tokens = (
+                ((profile.p95_input_tokens or profile.mean_input_tokens or 0) + (profile.mean_output_tokens or 0))
+                if profile
+                else 0
+            )
+            # Concurrency is sized for full-context requests; without a declared size vLLM admits by free KV.
+            if tokens:
+                cap = int(selected.max_concurrent_requests * request.max_model_len / min(tokens, request.max_model_len))
+                request = request.model_copy(update={"max_num_seqs": min(request.max_num_seqs, max(1, cap))})
         run = AgenticDeploymentRun(
             id=run_id,
             status=AgenticDeploymentStatus.AWAITING_APPROVAL,
@@ -305,11 +485,15 @@ class AgenticDeploymentService:
                 planner_fallback_reason,
             ),
             generator_candidate_proposals=generation["candidate_proposals"],
-            rejected_candidates=generation["rejected"],
+            rejected_candidates=list(
+                {item.id: item for item in [*generation["rejected"], *rejected_candidates]}.values()
+            ),
             planner=planner_name,
             planner_fallback_reason=planner_fallback_reason,
         )
         assert_case_access(planning_facts.configuration_cases, principal, check_public_sources=True)
+        if request.requirements is not None:
+            self._refresh_configuration_plan(run)
         snapshot = self._snapshot_store.save(run, decision_facts, event="created")
         run.planning_snapshot_id = snapshot.snapshot_id
         run.planning_snapshot_path = snapshot.relative_path
@@ -511,6 +695,34 @@ class AgenticDeploymentService:
         )
 
     @staticmethod
+    def _apply_aic_assessment(request, candidates, facts):
+        """Record AIC's P/D comparison on the requirements and mark each topology against the SLA."""
+        requirements = request.requirements
+        predictions = facts.aic_predictions
+        workload = requirements.workload
+        if workload.get("inputTokens") and workload.get("outputTokens"):
+            use_pd, reason = aic_pd_preference(predictions, requirements)
+            workload = {
+                **workload,
+                AIC_PD_REASON_KEY: reason or "AIC could not evaluate this model and hardware; P/D stays on by default.",
+                **({AIC_PD_KEY: use_pd} if use_pd is not None else {}),
+            }
+            requirements = requirements.model_copy(update={"workload": workload})
+            request = request.model_copy(update={"requirements": requirements})
+        assessed = []
+        for candidate in candidates:
+            status = aic_sla_status(aic_topology_estimate(predictions, candidate), requirements)
+            assessed.append(candidate.model_copy(update={"slo_status": status}) if status != "unknown" else candidate)
+        return request, assessed
+
+    @staticmethod
+    def _ai_failure_message(stage: str, reason: str) -> str:
+        return (
+            f"AI planning failed during {stage} ({reason.replace('_', ' ')}). Agentic planning does not fall back "
+            "to rules; retry, check the AI provider, or use Manual planning."
+        )
+
+    @staticmethod
     def _planner_failure_reason(error: Exception) -> str:
         if "context" in str(error).lower() and ("budget" in str(error).lower() or "window" in str(error).lower()):
             return "context_budget_exceeded"
@@ -554,6 +766,7 @@ class AgenticDeploymentService:
         operator_prompt: str | None,
         *,
         provider_requested: bool,
+        aic_load_target: bool = True,
         on_progress: ProgressCallback | None = None,
         principal_id: str | None = None,
         authorized_records: list[BenchmarkRecord] | None = None,
@@ -569,8 +782,15 @@ class AgenticDeploymentService:
             "rejected": [],
         }
         profile = facts.workload_profile
+        resolved = None
         if profile and (profile.concurrency is not None or profile.request_rate is not None):
             resolved = await resolve_planning_facts(cluster_id, model, facts, hardware_snapshot=hardware_snapshot)
+        # With a load target, both modes size topologies from AIC when it supports the model and hardware.
+        if (
+            aic_load_target
+            and resolved is not None
+            and (resolved.facts.aic_predictions or profile.request_rate is not None)
+        ):
             proposals = [
                 CandidateProposal(
                     provider_ref="pd-disaggregation" if prediction.mode == "disagg" else "optimized-baseline",
@@ -611,7 +831,9 @@ class AgenticDeploymentService:
                     "message": "Generating candidates with deterministic planning.",
                 },
             )
-            resolved = await resolve_planning_facts(cluster_id, model, facts, hardware_snapshot=hardware_snapshot)
+            resolved = resolved or await resolve_planning_facts(
+                cluster_id, model, facts, hardware_snapshot=hardware_snapshot
+            )
             candidates = DeterministicPlanner().candidates(resolved.facts)
             if provider_requested:
                 candidates, resolved.facts = await self._estimate_fallback_topologies(
@@ -881,6 +1103,8 @@ class AgenticDeploymentService:
             raise KeyError("agentic deployment run not found")
         if run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
             raise ValueError("only an awaiting approval Agentic deployment can be recalculated")
+        if run.request.requirements is not None:
+            raise ValueError("Change shared requirements and generate a new plan; the reviewed revision is immutable.")
         previous = run
         previous_updated_at = run.updated_at
         run = run.model_copy(deep=True)
@@ -919,6 +1143,7 @@ class AgenticDeploymentService:
                 planning_facts,
                 request.planner_prompt,
                 provider_requested=bool(run.request.ai_provider_id),
+                aic_load_target=run.request.planning_mode == "agentic",
                 on_progress=on_progress,
                 principal_id=principal_id,
                 authorized_records=list(internal.records),
@@ -926,20 +1151,8 @@ class AgenticDeploymentService:
             )
             refreshed = with_public_rag_evidence(refreshed, public_rag)
             refreshed = self._with_cases(refreshed, planning_facts, cases)
-        valid_candidate_count = sum(candidate.deployable for candidate in candidates)
-        rejected_candidates = [candidate for candidate in candidates if not candidate.deployable]
-        rejection_reasons = sorted(
-            {reason for candidate in rejected_candidates for reason in candidate.rejection_reasons}
-        )
-        validation_message = (
-            f"Checked {len(candidates)} candidate(s): {valid_candidate_count} valid, "
-            f"{len(rejected_candidates)} rejected."
-        )
-        if rejection_reasons:
-            validation_message += " Rejection reasons: " + "; ".join(rejection_reasons[:3]) + "."
-        valid_candidate_ids = [candidate.id for candidate in candidates if candidate.deployable]
-        if valid_candidate_ids:
-            validation_message += " Valid candidates: " + ", ".join(valid_candidate_ids[:5]) + "."
+        await self._emit_aic_summary(on_progress, refreshed)
+        validation_message = candidate_validation_message(candidates)
         await self._emit_progress(
             on_progress,
             {
@@ -1045,6 +1258,7 @@ class AgenticDeploymentService:
         run.planner_fallback_reason = planner_fallback_reason
         run.request = run.request.model_copy(update={"planner_prompt": request.planner_prompt})
         run.updated_at = datetime.now(UTC)
+        run.optimization = None
         if (
             self._runs.get(run_id) is not previous
             or previous.status != AgenticDeploymentStatus.AWAITING_APPROVAL
@@ -1080,7 +1294,10 @@ class AgenticDeploymentService:
         )
         planner = DeterministicPlanner()
         deterministic = [
-            planner._attach_performance_evidence(deterministic_facts, candidate) for candidate in candidates
+            candidate
+            if candidate.native_cpu_cache_gib or candidate.prefix_routing is not None
+            else planner._attach_performance_evidence(deterministic_facts, candidate)
+            for candidate in candidates
         ]
         deployable_ids = {candidate.id for candidate in deterministic if candidate.deployable}
         samples = evidence.historical_samples(model, facts, candidates, records=records)
@@ -1103,6 +1320,8 @@ class AgenticDeploymentService:
             prefill_replicas=selected.prefill_replicas,
             prefill_tensor_parallel_size=selected.prefill_tensor_parallel_size,
             guide_variant=selected.guide_variant,
+            native_cpu_cache_gib=selected.native_cpu_cache_gib,
+            prefix_routing=selected.prefix_routing,
             max_model_len=selected.max_model_len,
             gpu_memory_utilization=selected.gpu_memory_utilization,
             evidence=selected.evidence_ids,
@@ -1161,7 +1380,7 @@ class AgenticDeploymentService:
         await self._emit_progress(
             on_progress,
             {
-                "phase": "generation",
+                "phase": "public_rag",
                 "status": "running",
                 "message": (
                     "Resolving target cluster hardware and querying matching published benchmark SQL records "
@@ -1181,8 +1400,8 @@ class AgenticDeploymentService:
         await self._emit_progress(
             on_progress,
             {
-                "phase": "generation",
-                "status": "running" if evidence.status == "available" else "fallback",
+                "phase": "public_rag",
+                "status": "complete" if evidence.status == "available" else "fallback",
                 "message": evidence.details["message"],
             },
         )
@@ -1292,7 +1511,31 @@ class AgenticDeploymentService:
             branch_status=branches,
             deadline=deadline,
         )
+        await self._emit_progress(
+            on_progress,
+            {
+                "phase": "configuration_cases",
+                "status": "complete" if internal.status == "available" else "fallback",
+                "message": (
+                    f"Internal experiment records: {internal.status}, {internal.total} match(es). "
+                    f"Kept {len(bundle.cases)} configuration case(s) for planning."
+                ),
+            },
+        )
         return self._apply_case_selection(facts, public, internal, bundle, kept)
+
+    @classmethod
+    async def _emit_aic_summary(cls, on_progress: ProgressCallback | None, resolved: ResolvedPlanningFacts) -> None:
+        aic = {item.id: item for item in resolved.evidence if item.source == "aic"}
+        search, support = aic.get("aic:search"), aic.get("aic:support")
+        if search is not None and search.status == "available":
+            count = len(search.details.get("configs") or [])
+            status, message = "complete", f"AIConfigurator estimates: {count} predicted configuration(s)."
+        elif support is not None and support.status == "available" and not support.details.get("supported"):
+            status, message = "fallback", "AIConfigurator does not support this model and hardware; no estimates."
+        else:
+            status, message = "fallback", "AIConfigurator estimates are unavailable; planning continues without them."
+        await cls._emit_progress(on_progress, {"phase": "aic", "status": status, "message": message})
 
     @staticmethod
     def _apply_case_selection(
@@ -1324,9 +1567,330 @@ class AgenticDeploymentService:
         return sorted(self._runs.values(), key=lambda run: run.created_at, reverse=True)
 
     def get(self, run_id: str) -> AgenticDeploymentRun | None:
+        if run_id not in self._runs:
+            restored = self._snapshot_store.load_run(run_id)
+            if restored is not None:
+                self._runs[run_id] = restored
         return self._runs.get(run_id)
 
+    @staticmethod
+    def _refresh_configuration_plan(run: AgenticDeploymentRun) -> None:
+        selected = next(item for item in run.candidates if item.id == run.selected_candidate.id)
+        accelerator = cluster_accelerator(run.planning_cluster_snapshot.get("hardware") or {})
+        configuration = build_agentic_configuration(run.request, selected, run.model_secret, accelerator=accelerator)
+        run.configuration_plan = resolved_plan(run, configuration.model_dump(mode="json"))
+
+    async def compare_manual_resources(self, run_id, candidate_id, render):
+        """Check retained recipes in order without publishing intermediate selections."""
+        original = self.get(run_id)
+        if original is None:
+            raise KeyError("deployment plan not found")
+        if (
+            original.request.planning_mode != "manual"
+            or original.configuration_plan is None
+            or original.status != AgenticDeploymentStatus.AWAITING_APPROVAL
+            or run_id in self._approving
+            or original.selected_candidate.id != candidate_id
+        ):
+            raise ValueError("Source comparison requires the selected, idle Manual plan.")
+        expected_checksum = original.configuration_plan.configuration["checksum"]
+        accepted, rejected = [], []
+        winner = winner_payload = None
+        coverage = set()
+        async with asyncio.timeout(original.request.execution_policy.max_total_duration_minutes * 60):
+            for candidate in original.candidates:
+                trial = original.model_copy(deep=True)
+                trial.selected_candidate = self._agentic_candidate(candidate)
+                self._refresh_configuration_plan(trial)
+                try:
+                    payload = await render(trial)
+                    self.accept_rendered_plan(trial, payload, persist=False)
+                except ValueError as error:
+                    logger.warning("Manual source comparison rejected %s: %s", candidate.id, error)
+                    rejected.append(
+                        candidate.model_copy(
+                            update={
+                                "deployable": False,
+                                "rejection_reasons": [
+                                    *candidate.rejection_reasons,
+                                    f"Pinned source/resource check: {error}",
+                                ],
+                            }
+                        )
+                    )
+                    continue
+                accepted.append(candidate)
+                enabled = set(trial.configuration_plan.selected_capabilities)
+                coverage.update(enabled)
+                if winner is None or len(enabled) > len(winner.configuration_plan.selected_capabilities):
+                    winner, winner_payload = trial, payload
+        if (
+            self.get(run_id) is not original
+            or original.status != AgenticDeploymentStatus.AWAITING_APPROVAL
+            or run_id in self._approving
+            or original.selected_candidate.id != candidate_id
+            or original.configuration_plan.configuration["checksum"] != expected_checksum
+        ):
+            raise ValueError("The plan changed during source comparison. Retry from the current selection.")
+        if winner is None:
+            raise ValueError(
+                "No retained combination passed pinned source/resource checks: "
+                + "; ".join(f"{item.id}: {', '.join(item.rejection_reasons)}" for item in rejected)
+            )
+        winner.candidates = accepted
+        winner.rejected_candidates.extend(rejected)
+        selected = next(item for item in accepted if item.id == winner.selected_candidate.id)
+        winner.decision_evidence_ids = list(selected.evidence_ids)
+        winner.decision = winner.decision.model_copy(
+            update={
+                "candidate_id": winner.selected_candidate.id,
+                "evidence_ids": list(selected.evidence_ids),
+                "fallback_candidate_ids": [item.id for item in accepted if item.id != selected.id],
+                "rationale": (
+                    f"{len(accepted)} passed, {len(rejected)} excluded. "
+                    f"Enabled {len(winner.configuration_plan.selected_capabilities)} source-checked optimizations. "
+                    "Any remaining applicable capabilities are listed with their limitations."
+                ),
+                "slo_status": selected.slo_status,
+                "slo_confidence": selected.slo_confidence,
+            }
+        )
+        self._refresh_configuration_plan(winner)
+        self.accept_rendered_plan(winner, winner_payload, persist=False)
+        winner.configuration_plan.validation["coverage"] = {
+            "enabled": winner.configuration_plan.selected_capabilities,
+            "available_in_other_combinations": sorted(coverage - set(winner.configuration_plan.selected_capabilities)),
+            "complete": not any(
+                item.status in {"unknown", "unsupported", "resource_limited", "conflict"}
+                for item in winner.configuration_plan.decisions
+            ),
+        }
+        winner.configuration_plan.validation["checks"].append("retained combination pinned source/resource comparison")
+        self._snapshot_store.save(winner, winner.request.planning_facts, event="manual-combinations-checked")
+        self._runs[run_id] = winner
+        return winner
+
+    def accept_rendered_plan(
+        self, run: AgenticDeploymentRun, result: dict, *, persist: bool = True
+    ) -> AgenticDeploymentRun:
+        if run.id in self._approving or run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
+            raise ValueError("The plan is no longer available for resource edits.")
+        plan = run.configuration_plan
+        if plan is None:
+            raise ValueError("Regenerate this legacy plan before reviewing resources.")
+        if result.get("validation", {}).get("errors") or not result.get("plannedDeployment"):
+            raise ValueError("; ".join(result.get("validation", {}).get("errors") or ["Resource generation failed."]))
+        session = require_active_session(run.request.cluster_session_id)
+        configuration = DeployableConfiguration.model_validate(plan.configuration)
+        if result.get("source", {}).get("guide") != configuration.provider_ref:
+            raise ValueError("Rendered resources do not belong to the selected provider.")
+        content = dict(configuration.content)
+        manifest = result["plannedDeployment"]["content"]
+        official = {
+            "source": result["source"],
+            "renderedManifest": manifest,
+            "manifestChecksum": text_checksum(manifest),
+            "cluster": {
+                "id": session.server_id,
+                "name": session.server_id,
+                "session_id": session.id,
+                "connection": "managed-kubeconfig",
+            },
+            "deployment": result["deployment"],
+            "modelSecret": run.model_secret.model_dump(mode="json", by_alias=True),
+        }
+        if result.get("deploymentBundle"):
+            official["deploymentBundle"] = result["deploymentBundle"]
+        content["officialGuide"] = official
+        validate_manifest_facts(content, manifest)
+        from llm_d_lens.configuration.guide_settings import validate_configuration_extensions
+
+        validate_configuration_extensions(content, manifest)
+        configuration = configuration.model_copy(
+            update={"content": content, "checksum": configuration_checksum(content)}
+        )
+        runtime_decisions = {
+            {"prefix": "prefix_cache", "chunked": "chunked_prefill"}[item["id"]]: item
+            for item in result.get("optimizationDecisions", [])
+            if item.get("id") in {"prefix", "chunked"}
+        }
+        requirements = run.request.requirements
+        if requirements:
+            legacy_capabilities = {"pd_disaggregation", "prefix_routing", "external_kv_cache", *RUNTIME_MECHANISMS}
+            if (set(requirements.required_features) | set(requirements.forbidden_features)) - legacy_capabilities:
+                raise ValueError("Use source composition to validate the complete Guide optimization selection.")
+            for capability in RUNTIME_MECHANISMS:
+                effective = runtime_decisions.get(capability, {}).get("effective_enabled")
+                if capability in requirements.required_features and effective is not True:
+                    raise ValueError(f"Required optimization {capability} is not established by the rendered source.")
+                if capability in requirements.forbidden_features and effective is not False:
+                    raise ValueError(f"Cannot verify that the rendered source disables {capability}.")
+        plan.configuration = configuration.model_dump(mode="json")
+        plan.decisions = [
+            OptimizationDecision(
+                capability_id=item.capability_id,
+                label=item.label,
+                status=(
+                    "dependency"
+                    if item.capability_id == "prefix_cache"
+                    and run.selected_candidate.native_cpu_cache_gib
+                    and runtime_decisions[item.capability_id].get("effective_enabled") is True
+                    else "enabled"
+                    if runtime_decisions[item.capability_id].get("effective_enabled") is True
+                    else "user_disabled"
+                    if requirements and item.capability_id in requirements.forbidden_features
+                    else "excluded"
+                    if runtime_decisions[item.capability_id].get("effective_enabled") is False
+                    else "unknown"
+                ),
+                reason=runtime_decisions[item.capability_id]["reason"],
+            )
+            if item.capability_id in runtime_decisions
+            else item
+            for item in plan.decisions
+        ]
+        if run.selected_candidate.native_cpu_cache_gib:
+            plan.decisions = [
+                item.model_copy(
+                    update={
+                        "status": "enabled",
+                        "reason": (
+                            "The pinned source cache adapter and rendered resource budget passed; "
+                            "runtime readiness remains pending."
+                        ),
+                    }
+                )
+                if item.capability_id == "external_kv_cache"
+                else item
+                for item in plan.decisions
+            ]
+        plan.selected_capabilities = [
+            item.capability_id for item in plan.decisions if item.status in {"enabled", "dependency"}
+        ]
+        plan.validation = {
+            "status": "resources_checked",
+            "checks": [
+                "model memory",
+                "accelerator capacity",
+                "candidate requirements",
+                "rendered manifest consistency",
+            ],
+            "warnings": result["validation"].get("warnings", []),
+            "pending": ["cluster admission", "runtime readiness", "workload performance"],
+        }
+        if persist:
+            self._snapshot_store.save(run, run.request.planning_facts, event="resources-rendered")
+        return run
+
+    async def revise_candidate(self, run_id: str, request: AgenticCandidateSelectionRequest) -> AgenticDeploymentRun:
+        original = self.get(run_id)
+        if original is None:
+            raise KeyError("deployment plan not found")
+        if original.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
+            raise ValueError("Only an idle plan awaiting approval can be edited.")
+        if run_id in self._approving:
+            raise ValueError("Deployment approval is already in progress.")
+        selected = next((item for item in original.candidates if item.id == request.candidate_id), None)
+        if selected is None or not selected.deployable:
+            raise ValueError("Select a validated candidate before editing.")
+        if request.role == "prefill" and not selected.prefill_replicas:
+            raise ValueError("This candidate has no prefill role.")
+        runtime_updates = request.model_dump(
+            exclude_none=True,
+            include={
+                "max_model_len",
+                "gpu_memory_utilization",
+                "max_num_seqs",
+                "max_num_batched_tokens",
+            },
+        )
+        revised_request = AgenticDeploymentCreateRequest.model_validate(
+            {
+                **original.request.model_dump(mode="json"),
+                **runtime_updates,
+            }
+        )
+        session = require_active_session(original.request.cluster_session_id)
+        refreshed = await resolve_planning_facts(
+            session.server_id,
+            original.request.model,
+            self._planning_only_facts(
+                original.request.planning_facts,
+                max_model_len=revised_request.max_model_len,
+                gpu_memory_utilization=revised_request.gpu_memory_utilization,
+            ),
+            include_supplementary_evidence=False,
+        )
+        prefix = "prefill_" if request.role == "prefill" else ""
+        fields = {
+            key: getattr(selected, key)
+            for key in (
+                "provider_ref",
+                "replicas",
+                "tensor_parallel_size",
+                "prefill_replicas",
+                "prefill_tensor_parallel_size",
+            )
+        }
+        for key in ("replicas", "tensor_parallel_size"):
+            if getattr(request, key) is not None:
+                fields[prefix + key] = getattr(request, key)
+        proposal = CandidateProposal(
+            **fields, rationale="User topology revision; previous performance evidence is invalid."
+        )
+        validation = CandidateValidator().validate(refreshed.facts, [proposal])
+        if not validation.accepted:
+            raise ValueError("; ".join(reason for item in validation.rejected for reason in item.rejection_reasons))
+        updated = validation.accepted[0]
+        updated = updated.model_copy(update={"prefix_routing": selected.prefix_routing})
+        cache_gib = (
+            request.native_cpu_cache_gib if request.native_cpu_cache_gib is not None else selected.native_cpu_cache_gib
+        )
+        if request.native_cpu_cache_gib is not None and selected.native_cpu_cache_gib is None:
+            raise ValueError("Enable CPU KV cache before editing its capacity.")
+        if cache_gib is not None:
+            total_cache = cache_gib * (updated.replicas + (updated.prefill_replicas or 0))
+            if total_cache > refreshed.facts.cpu_buffer_gib * 0.25:
+                raise ValueError("The revised CPU cache exceeds 25% of current free host memory; regenerate the plan.")
+            updated = updated.model_copy(
+                update={
+                    "native_cpu_cache_gib": cache_gib,
+                    "guide_variant": selected.guide_variant,
+                }
+            )
+        errors = candidate_requirement_errors(original.request.requirements, updated)
+        if errors:
+            raise ValueError("; ".join(errors))
+        if original.status != AgenticDeploymentStatus.AWAITING_APPROVAL or run_id in self._approving:
+            raise ValueError("The original plan changed during validation. Retry from the current plan.")
+        run = original.model_copy(
+            deep=True,
+            update={
+                "id": str(uuid4()),
+                "parent_run_id": original.id,
+                "revision": original.revision + 1,
+                "request": revised_request,
+                "candidates": [updated],
+                "selected_candidate": self._agentic_candidate(updated),
+                "optimization": None,
+                "decision_evidence_ids": [],
+                "planning_evidence": refreshed.evidence,
+                "planning_cluster_snapshot": refreshed.cluster_snapshot,
+                "planning_snapshot_id": None,
+                "planning_snapshot_path": None,
+                "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
+            },
+        )
+        run.decision = None
+        self._refresh_configuration_plan(run)
+        self._snapshot_store.save(run, refreshed.facts, event="user-revision")
+        self._runs[run.id] = run
+        return run
+
     def select_candidate(self, run_id: str, candidate_id: str) -> AgenticDeploymentRun:
+        if run_id in self._approving:
+            raise ValueError("Deployment approval is already in progress.")
         run = self._runs.get(run_id)
         if run is None:
             raise KeyError("agentic deployment run not found")
@@ -1335,6 +1899,13 @@ class AgenticDeploymentService:
         selected = next((candidate for candidate in run.candidates if candidate.id == candidate_id), None)
         if selected is None or not selected.deployable:
             raise ValueError("candidate is not a validated alternative for this Agentic deployment")
+        source_plan = run.configuration_plan
+        if source_plan is not None and source_plan.source_bundle is not None:
+            if candidate_id not in source_plan.source_candidates:
+                raise ValueError("The candidate has no reviewed source resources; compose it before selection.")
+            if (run.optimization or {}).get("status") in {"running", "cancelling", "interrupted", "cleanup_failed"}:
+                raise ValueError("Finish or clean up optimization trials before changing the source candidate.")
+            run = run.model_copy(deep=True)
         run.selected_candidate = self._agentic_candidate(selected)
         if run.decision is not None:
             run.decision = run.decision.model_copy(
@@ -1359,9 +1930,56 @@ class AgenticDeploymentService:
                 update={"selection_method": "The user selected a validated alternative from the current plan."}
             )
         run.updated_at = datetime.now(UTC)
+        if run.request.requirements is not None:
+            if source_plan is not None and source_plan.source_bundle is not None:
+                from .source_plan import apply_source_record
+
+                run.revision += 1
+                apply_source_record(
+                    run,
+                    run.configuration_plan.source_candidates[candidate_id],
+                    rejected=source_plan.validation.get("coverage", {}).get("rejected", []),
+                )
+            else:
+                self._refresh_configuration_plan(run)
+            self._snapshot_store.save(run, run.request.planning_facts, event="candidate-selected")
+            self._runs[run_id] = run
         return run
 
-    async def approve(self, run_id: str, *, owner_user_id: str | None = None) -> AgenticDeploymentRun:
+    async def approve(
+        self,
+        run_id: str,
+        *,
+        owner_user_id: str | None = None,
+        http_request=None,
+        source_endpoint: str | None = None,
+        approval=None,
+    ) -> AgenticDeploymentRun:
+        if run_id in self._approving:
+            raise ValueError("Deployment approval is already in progress.")
+        self._approving.add(run_id)
+        try:
+            run = self.get(run_id)
+            if (
+                run is not None
+                and run.configuration_plan is not None
+                and run.configuration_plan.source_bundle is not None
+            ):
+                from .source_plan import approve_source_plan
+
+                if run.status != AgenticDeploymentStatus.AWAITING_APPROVAL:
+                    raise ValueError("Only an awaiting approval plan can be deployed.")
+                if source_endpoint not in {item["value"] for item in run.configuration_plan.endpoints}:
+                    raise ValueError("Choose a reviewed inference Service before deployment.")
+                run.source_endpoint = source_endpoint
+                return await approve_source_plan(
+                    self, run, owner_user_id=owner_user_id, request=http_request, approval=approval
+                )
+            return await self._approve(run_id, owner_user_id=owner_user_id, approval=approval)
+        finally:
+            self._approving.discard(run_id)
+
+    async def _approve(self, run_id: str, *, owner_user_id: str | None = None, approval=None) -> AgenticDeploymentRun:
         run = self._runs.get(run_id)
         if run is None:
             raise KeyError("agentic deployment run not found")
@@ -1391,6 +2009,9 @@ class AgenticDeploymentService:
             ):
                 raise ValueError("selected node label is not present in the cluster")
         selected = next(candidate for candidate in run.candidates if candidate.id == run.selected_candidate.id)
+        errors = candidate_requirement_errors(run.request.requirements, selected)
+        if errors:
+            raise ValueError("; ".join(errors))
         refreshed = await resolve_planning_facts(
             session.server_id,
             run.request.model,
@@ -1403,6 +2024,12 @@ class AgenticDeploymentService:
         )
         if selected.required_gpus > refreshed.facts.free_gpu_count:
             raise ValueError("selected Agentic candidate no longer has sufficient free accelerator cards")
+        if selected.native_cpu_cache_gib is not None:
+            total_cache = selected.native_cpu_cache_gib * (selected.replicas + (selected.prefill_replicas or 0))
+            if total_cache > refreshed.facts.cpu_buffer_gib * 0.25:
+                raise ValueError(
+                    "The selected CPU cache no longer fits 25% of current free host memory; regenerate the plan."
+                )
         proposal = CandidateProposal(
             provider_ref=selected.provider_ref,
             replicas=selected.replicas,
@@ -1442,7 +2069,15 @@ class AgenticDeploymentService:
 
         run.model_secret = model_secret or ModelSecretConfiguration()
         accelerator = cluster_accelerator(refreshed.cluster_snapshot.get("hardware") or {})
-        configuration = build_agentic_configuration(run.request, selected, run.model_secret, accelerator=accelerator)
+        if (
+            run.configuration_plan is not None
+            and run.configuration_plan.validation.get("status") == "resources_checked"
+        ):
+            configuration = DeployableConfiguration.model_validate(run.configuration_plan.configuration)
+        else:
+            configuration = build_agentic_configuration(
+                run.request, selected, run.model_secret, accelerator=accelerator
+            )
         configuration.provenance["cluster_ref"] = {
             "id": session.server_id,
             "name": session.server_id,
@@ -1455,29 +2090,38 @@ class AgenticDeploymentService:
             or run.updated_at != previous_updated_at
         ):
             raise ValueError("Agentic plan changed during approval; reload the current plan")
-        run.status = AgenticDeploymentStatus.DEPLOYING
-        run.updated_at = datetime.now(UTC)
+        from .source_plan import reviewed_deployment
+
         try:
-            deployment = await deployment_run_manager.start_run(
+            deployment, review = await reviewed_deployment(
+                deployment_run_manager,
+                run,
                 DeploymentRunCreateRequest(
                     configurations=[configuration],
                     runtime_binding=RuntimeBinding(placement=placement, runtime_class=run.request.runtime_class),
                     provenance={
                         "deployment_source": {"kind": "agentic-deployment"},
+                        "cluster_server_id": session.server_id,
                         "cluster_session_id": session.id,
                         "deployment_name": run.request.deployment_name,
                         "agentic_deployment_run_id": run.id,
                     },
                 ),
-                owner_user_id=owner_user_id,
+                owner_user_id,
+                approval,
             )
+            if review is not None:
+                return review
         except (Exception, asyncio.CancelledError):
             run.status = AgenticDeploymentStatus.FAILED
             run.error = "Deployment submission did not complete; verify deployment runs before creating a new plan."
             run.updated_at = datetime.now(UTC)
             raise
         run.deployment_run_id = deployment.id
+        run.status = AgenticDeploymentStatus.DEPLOYING
         run.updated_at = datetime.now(UTC)
+        if run.request.requirements is not None:
+            self._snapshot_store.save(run, run.request.planning_facts, event="deployment-approved")
         return run
 
 
