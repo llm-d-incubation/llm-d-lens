@@ -1020,3 +1020,11 @@ def test_multi_permission_remediation_route_records_matched_or_compacted_audit_p
         assert len(mcp_deny_events) == 1
         assert mcp_deny_events[0].permission == "mcp:tool:invoke | playground:chat:use"
         assert mcp_deny_events[0].detail["requiredPermissions"] == ["mcp:tool:invoke", "playground:chat:use"]
+
+
+def test_matrix_artifact_names_with_a_slash_are_routed_through_authorization():
+    with _client() as client:
+        _bootstrap_and_login(client)
+        run_id = "00000000-0000-4000-8000-000000000000"
+        # 404 comes from the handler; an unregistered route would be refused here with 403.
+        assert client.get(f"/api/v1/evaluate/runs/{run_id}/artifacts/matrix-0/config.yaml").status_code == 404
