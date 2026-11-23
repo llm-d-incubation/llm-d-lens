@@ -810,8 +810,11 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
     发送 `model_name`、`scenario`（`inference_scheduling` 或 `pd_disaggregation`）、
     `gpu_count`、`mean_input_tokens`、`mean_output_tokens`、AIC 系统/后端/数据库，
     以及拓扑结构字段（`tp` 和 `replicas`，或者 prefill/decode 的 TP 和副本数）。
-    可选的 `ttft_target_ms` 和 `tpot_target_ms` 会保留受约束的实验路径；
-    两者都省略时，则在没有 SLO 过滤的情况下估算固定的拓扑结构。
+    此接口仅执行 engine replay，不再使用分析型估算或受约束的实验搜索。
+    即使提供 `ttft_target_ms` 或 `tpot_target_ms`，这些兼容字段也不会过滤或调整部署。
+    不支持大于 1 的流水线并行。输入输出长度固定，`num_requests` 默认 `32`，上限 `100000`。
+    可以提供整数 `target_concurrency` 或正数 `target_request_rate`（泊松到达，每秒请求数），
+    二选一；均省略时使用并发 `1`。
 
     ```json
     {
@@ -828,8 +831,12 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
     }
     ```
 
-    响应中包含 `mode`、拓扑结构字段，以及在可测量时的 `ttft_ms`、
-    `tpot_ms` 和 `throughput_tokens_per_sec`。估算值并不能证明符合 SLO。
+    响应包含 `execution_mode: "engine_replay"`、`mode`、拓扑字段、均值 `ttft_ms` 和
+    `tpot_ms`，以及按模拟窗口计算的已完成输出 token 吞吐 `throughput_tokens_per_sec`。
+    `replay_metrics` 包含完成数、样本数和 `duration_ms`。报告不完整或无效时明确失败，
+    不回退到分析方式。模拟结果不能证明符合 SLO，也不代表真实部署精度认证。
+    共享 Python estimate 使用 `aisimulate-engine-replay-v1` 运行配置，接受工作负载并发或
+    QPS 及 `run.num_requests`，拒绝旧的 `aisimulate-native` estimate 配置。本阶段搜索不变。
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python

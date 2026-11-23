@@ -218,10 +218,10 @@ async def experiments(request: AICExperimentRequest) -> AICExperimentResponse:
 
 
 def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
-    """Return an estimate only when AIC's experiment matches the requested topology."""
+    """Replay one fixed deployment without analytical prediction or topology search."""
     is_agg = payload.scenario == "inference_scheduling"
-    if is_agg and payload.pp != 1:
-        raise AICError("Aggregated estimate cannot verify PP greater than 1 in AIC's response")
+    if payload.pp != 1:
+        raise AICError("Engine replay does not support pipeline parallelism")
     required_gpus = (
         payload.tp * payload.pp * payload.replicas
         if is_agg
@@ -229,120 +229,90 @@ def estimate_sync(payload: AICEstimateRequest) -> dict[str, Any]:
     )
     if payload.gpu_count != required_gpus:
         raise AICError(f"Requested topology requires {required_gpus} GPUs, not {payload.gpu_count}")
-    if payload.ttft_target_ms is None and payload.tpot_target_ms is None:
-        try:
-            from aisimulate.legacy_cli.api import cli_estimate
+    try:
+        from aisimulate.runner import EngineReplayRunner
+        from aisimulate.sweeper.replay import BackendDeploymentSpec, ReplaySpec, RunnerCapabilities
 
-            kwargs: dict[str, Any] = {
-                "model_path": payload.model_name,
-                "system_name": payload.aic_system_name,
-                "backend_name": payload.aic_backend_name.lower(),
-                "database_mode": payload.aic_database_mode.upper(),
-                "mode": "agg" if is_agg else "disagg",
+        backend = payload.aic_backend_name.lower()
+        mode = "agg" if is_agg else "disagg"
+
+        def engine_args(tp: int) -> dict[str, Any]:
+            return {
+                "aic_model_path": payload.model_name,
+                "aic_system": payload.aic_system_name,
+                "aic_backend": backend,
+                "aic_database_mode": payload.aic_database_mode.upper(),
+                "tensor_parallel_size": tp,
+            }
+
+        deployment = BackendDeploymentSpec(
+            deployment_mode=mode,
+            backend=backend,
+            backend_version="",
+            agg_engine_args=engine_args(payload.tp) if is_agg else None,
+            prefill_engine_args=None if is_agg else engine_args(payload.prefill_tp),
+            decode_engine_args=None if is_agg else engine_args(payload.decode_tp),
+            num_workers=payload.replicas if is_agg else 0,
+            num_prefill_workers=0 if is_agg else payload.prefill_replicas,
+            num_decode_workers=0 if is_agg else payload.decode_replicas,
+        )
+        spec = ReplaySpec(
+            backend_deployment=deployment,
+            workload={
                 "isl": payload.mean_input_tokens,
                 "osl": payload.mean_output_tokens,
-            }
-            if is_agg:
-                kwargs.update(tp_size=payload.tp, pp_size=payload.pp, batch_size=1)
-            else:
-                kwargs.update(
-                    prefill_tp_size=payload.prefill_tp,
-                    prefill_num_workers=payload.prefill_replicas,
-                    prefill_batch_size=1,
-                    decode_tp_size=payload.decode_tp,
-                    decode_num_workers=payload.decode_replicas,
-                    decode_batch_size=1,
-                )
-            result = cli_estimate(**kwargs)
-            raw = result.raw
-            if is_agg:
-                topology_matches = (
-                    raw.get("tp") == payload.tp
-                    and raw.get("pp") == payload.pp
-                    and raw.get("num_total_gpus") == payload.tp * payload.pp
-                )
-            else:
-                topology_matches = (
-                    raw.get("(p)tp") == payload.prefill_tp
-                    and raw.get("(p)workers") == payload.prefill_replicas
-                    and raw.get("(d)tp") == payload.decode_tp
-                    and raw.get("(d)workers") == payload.decode_replicas
-                    and raw.get("num_total_gpus") == required_gpus
-                )
-            if not topology_matches or not result.ttft or not result.tpot:
-                raise AICError("AISimulate returned no estimate matching the requested topology")
-            prediction = {
-                "mode": "agg" if is_agg else "disagg",
-                "num_total_gpus": required_gpus,
-                "ttft_ms": result.ttft,
-                "tpot_ms": result.tpot,
-                "throughput_tokens_per_sec": raw.get("tokens/s") if not is_agg or payload.replicas == 1 else None,
-            }
-            if is_agg:
-                prediction.update(tp=payload.tp, replicas=payload.replicas)
-            else:
-                prediction.update(
-                    prefill_tp=payload.prefill_tp,
-                    prefill_replicas=payload.prefill_replicas,
-                    decode_tp=payload.decode_tp,
-                    decode_replicas=payload.decode_replicas,
-                )
-            return prediction
-        except AICError:
-            raise
-        except Exception as error:
-            raise AICError(str(error)) from error
-    experiment: dict[str, Any] = {
-        "serving_mode": "agg" if is_agg else "disagg",
-        "isl": payload.mean_input_tokens,
-        "osl": payload.mean_output_tokens,
-        "ttft": payload.ttft_target_ms or 2000,
-        "tpot": payload.tpot_target_ms or 30,
-        "total_gpus": payload.gpu_count,
-        "database_mode": payload.aic_database_mode.upper(),
-    }
-    model = payload.model_name
-    system = payload.aic_system_name
-    backend = payload.aic_backend_name.lower()
-    if is_agg:
-        experiment.update(
-            model_path=model,
-            system_name=system,
-            backend_name=backend,
-            agg_tp_candidates=[payload.tp],
-            agg_pp_candidates=[payload.pp],
-            agg_num_gpu_candidates=[payload.tp * payload.pp],
+                "request_count": payload.num_requests,
+                **(
+                    {"request_rate": payload.target_request_rate}
+                    if payload.target_request_rate is not None
+                    else {"concurrency": payload.target_concurrency or 1}
+                ),
+                "random_range_ratio": 1.0,
+            },
+            goal={},
+            concurrency=None if payload.target_request_rate is not None else payload.target_concurrency or 1,
         )
-    else:
-        for role in ("prefill", "decode"):
-            experiment[f"{role}_model_path"] = model
-            experiment[f"{role}_system_name"] = system
-            experiment[f"{role}_backend_name"] = backend
-            experiment[f"{role}_tp_candidates"] = [getattr(payload, f"{role}_tp")]
-            experiment[f"{role}_num_gpu_candidates"] = [getattr(payload, f"{role}_tp")]
-    response = experiments_sync(AICExperimentRequest(yaml_text=yaml.safe_dump({"manual": experiment}), top_n=1))
-    for result in response.experiments:
-        if not result.get("ttft_ms") or not result.get("tpot_ms"):
-            continue
-        if result.get("num_total_gpus") not in (None, required_gpus):
-            continue
-        if (
-            is_agg
-            and result.get("mode") == "agg"
-            and result.get("tp") == payload.tp
-            and result.get("replicas") == payload.replicas
-        ):
-            return result
-        if (
-            not is_agg
-            and result.get("mode") == "disagg"
-            and all(
-                result.get(field) == getattr(payload, field)
-                for field in ("prefill_tp", "prefill_replicas", "decode_tp", "decode_replicas")
+        runner = EngineReplayRunner(
+            worker_id=0,
+            capabilities=RunnerCapabilities(supported_backend_topologies=((backend, mode),)),
+            determinism="canonical_v1",
+        )
+        try:
+            report = runner.run(spec)
+        finally:
+            runner.close()
+        metrics = report.metrics
+        for name in ("num_requests", "completed_requests", "num_ttft_samples", "num_tpot_samples", "duration_ms"):
+            value = metrics.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise AICError(f"Engine replay returned invalid {name}")
+        if metrics["completed_requests"] != payload.num_requests or metrics["num_requests"] != payload.num_requests:
+            raise AICError("Engine replay did not complete every requested request")
+        for name in ("mean_ttft_ms", "mean_tpot_ms", "output_throughput_tok_s"):
+            value = metrics.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise AICError(f"Engine replay returned invalid {name}")
+        prediction = {
+            "mode": mode,
+            "execution_mode": "engine_replay",
+            "num_total_gpus": required_gpus,
+            "ttft_ms": metrics.get("mean_ttft_ms"),
+            "tpot_ms": metrics.get("mean_tpot_ms"),
+            "throughput_tokens_per_sec": metrics.get("output_throughput_tok_s"),
+            "replay_metrics": dict(metrics),
+        }
+        if is_agg:
+            prediction.update(tp=payload.tp, replicas=payload.replicas)
+        else:
+            prediction.update(
+                prefill_tp=payload.prefill_tp,
+                prefill_replicas=payload.prefill_replicas,
+                decode_tp=payload.decode_tp,
+                decode_replicas=payload.decode_replicas,
             )
-        ):
-            return result
-    raise AICError("AISimulate returned no estimate matching the requested topology")
+        return prediction
+    except Exception as error:
+        raise AICError(str(error)) from error
 
 
 async def estimate(payload: AICEstimateRequest) -> dict[str, Any]:

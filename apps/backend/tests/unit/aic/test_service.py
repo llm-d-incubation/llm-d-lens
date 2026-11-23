@@ -3,9 +3,48 @@
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 from llm_d_lens.estimate_tools.aic import service
+
+
+def test_fixed_estimate_uses_engine_replay(monkeypatch):
+    from aisimulate.runner import EngineReplayRunner
+
+    captured = []
+
+    def replay(runner, spec, **kwargs):
+        captured.append(spec)
+        return SimpleNamespace(
+            metrics={
+                "mean_ttft_ms": 100.0,
+                "mean_tpot_ms": 10.0,
+                "output_throughput_tok_s": 200.0,
+                "completed_requests": 32,
+                "num_requests": 32,
+                "duration_ms": 5000.0,
+                "num_ttft_samples": 32,
+                "num_tpot_samples": 32,
+            },
+            metadata={},
+        )
+
+    monkeypatch.setattr(EngineReplayRunner, "run", replay)
+    result = service.estimate_sync(
+        estimate_request(
+            model_name="example/model",
+            scenario="inference_scheduling",
+            gpu_count=4,
+            tp=2,
+            replicas=2,
+            ttft_target_ms=2000,
+        )
+    )
+    assert len(captured) == 1
+    assert captured[0].backend_deployment.num_workers == 2
+    assert captured[0].backend_deployment.agg_engine_args["tensor_parallel_size"] == 2
+    assert result["ttft_ms"] == 100.0
+    assert result["throughput_tokens_per_sec"] == 200.0
+    assert result["execution_mode"] == "engine_replay"
 
 
 def estimate_request(**kwargs):
@@ -147,23 +186,14 @@ def test_search_rejects_recommendation_above_capacity(monkeypatch):
 
 
 def test_estimate_rejects_a_different_aggregated_topology(monkeypatch):
-    monkeypatch.setattr(
-        service,
-        "experiments_sync",
-        lambda request: SimpleNamespace(
-            experiments=[
-                {
-                    "mode": "agg",
-                    "tp": 2,
-                    "replicas": 4,
-                    "ttft_ms": 120,
-                    "tpot_ms": 20,
-                }
-            ]
-        ),
-    )
+    from aisimulate.runner import EngineReplayRunner
 
-    with pytest.raises(service.AICError, match="topology"):
+    def fail(*args, **kwargs):
+        raise RuntimeError("replay unavailable")
+
+    monkeypatch.setattr(EngineReplayRunner, "run", fail)
+    monkeypatch.setattr(service, "experiments_sync", lambda request: pytest.fail("No analytical fallback"))
+    with pytest.raises(service.AICError, match="replay unavailable"):
         service.estimate_sync(
             estimate_request(
                 scenario="inference_scheduling",
@@ -177,23 +207,7 @@ def test_estimate_rejects_a_different_aggregated_topology(monkeypatch):
 
 
 def test_estimate_passes_exact_aggregated_topology_and_workload(monkeypatch):
-    captured = {}
-
-    def experiments(request):
-        captured.update(yaml.safe_load(request.yaml_text)["manual"])
-        return SimpleNamespace(
-            experiments=[
-                {
-                    "mode": "agg",
-                    "tp": 2,
-                    "replicas": 2,
-                    "ttft_ms": 120,
-                    "tpot_ms": 20,
-                }
-            ]
-        )
-
-    monkeypatch.setattr(service, "experiments_sync", experiments)
+    captured = replay_stub(monkeypatch)
     result = service.estimate_sync(
         estimate_request(
             scenario="inference_scheduling",
@@ -207,11 +221,11 @@ def test_estimate_passes_exact_aggregated_topology_and_workload(monkeypatch):
         )
     )
 
-    assert result["ttft_ms"] == 120
-    assert captured["total_gpus"] == 4
-    assert captured["agg_tp_candidates"] == [2]
-    assert captured["agg_num_gpu_candidates"] == [2]
-    assert captured["isl"] == 4096
+    assert result["ttft_ms"] == 100
+    assert result["num_total_gpus"] == 4
+    assert captured[0].backend_deployment.num_workers == 2
+    assert captured[0].backend_deployment.agg_engine_args["tensor_parallel_size"] == 2
+    assert captured[0].workload["isl"] == 4096
 
 
 def test_estimate_rejects_inconsistent_gpu_count(monkeypatch):
@@ -231,7 +245,7 @@ def test_estimate_rejects_inconsistent_gpu_count(monkeypatch):
 
 def test_estimate_rejects_unverifiable_pipeline_parallelism(monkeypatch):
     monkeypatch.setattr(service, "experiments_sync", lambda request: pytest.fail("SDK must not be called"))
-    with pytest.raises(service.AICError, match="PP greater than 1"):
+    with pytest.raises(service.AICError, match="pipeline parallelism"):
         service.estimate_sync(
             estimate_request(
                 scenario="inference_scheduling",
@@ -244,25 +258,8 @@ def test_estimate_rejects_unverifiable_pipeline_parallelism(monkeypatch):
 
 
 def test_estimate_rejects_a_different_disaggregated_worker_allocation(monkeypatch):
-    monkeypatch.setattr(
-        service,
-        "experiments_sync",
-        lambda request: SimpleNamespace(
-            experiments=[
-                {
-                    "mode": "disagg",
-                    "prefill_tp": 2,
-                    "prefill_replicas": 1,
-                    "decode_tp": 1,
-                    "decode_replicas": 2,
-                    "ttft_ms": 120,
-                    "tpot_ms": 20,
-                }
-            ]
-        ),
-    )
-
-    with pytest.raises(service.AICError, match="topology"):
+    replay_stub(monkeypatch, completed_requests=31)
+    with pytest.raises(service.AICError, match="complete every"):
         service.estimate_sync(
             estimate_request(
                 scenario="pd_disaggregation",
@@ -278,26 +275,7 @@ def test_estimate_rejects_a_different_disaggregated_worker_allocation(monkeypatc
 
 
 def test_estimate_accepts_matching_disaggregated_topology(monkeypatch):
-    captured = {}
-
-    def experiments(request):
-        captured.update(yaml.safe_load(request.yaml_text)["manual"])
-        return SimpleNamespace(
-            experiments=[
-                {
-                    "mode": "disagg",
-                    "prefill_tp": 2,
-                    "prefill_replicas": 1,
-                    "decode_tp": 1,
-                    "decode_replicas": 2,
-                    "num_total_gpus": 4,
-                    "ttft_ms": 180,
-                    "tpot_ms": 25,
-                }
-            ]
-        )
-
-    monkeypatch.setattr(service, "experiments_sync", experiments)
+    captured = replay_stub(monkeypatch)
     result = service.estimate_sync(
         estimate_request(
             scenario="pd_disaggregation",
@@ -311,31 +289,17 @@ def test_estimate_accepts_matching_disaggregated_topology(monkeypatch):
         )
     )
 
-    assert result["tpot_ms"] == 25
-    assert captured["prefill_tp_candidates"] == [2]
-    assert captured["decode_tp_candidates"] == [1]
-    assert captured["total_gpus"] == 4
+    assert result["tpot_ms"] == 10
+    deployment = captured[0].backend_deployment
+    assert deployment.prefill_engine_args["tensor_parallel_size"] == 2
+    assert deployment.decode_engine_args["tensor_parallel_size"] == 1
+    assert deployment.num_prefill_workers == 1
+    assert deployment.num_decode_workers == 2
+    assert result["num_total_gpus"] == 4
 
 
-def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch):
-    from aisimulate.legacy_cli import api
-
-    captured = {}
-
-    def direct(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            ttft=45,
-            tpot=7,
-            raw={
-                "tp": 1,
-                "pp": 1,
-                "num_total_gpus": 1,
-                "tokens/s": 150,
-            },
-        )
-
-    monkeypatch.setattr(api, "cli_estimate", direct)
+def test_estimate_without_targets_uses_replay_with_fixed_lengths(monkeypatch):
+    captured = replay_stub(monkeypatch)
     result = service.estimate_sync(
         estimate_request(
             scenario="inference_scheduling",
@@ -348,27 +312,16 @@ def test_estimate_without_targets_uses_direct_aggregated_prediction(monkeypatch)
         )
     )
 
-    assert result["ttft_ms"] == 45
-    assert result["throughput_tokens_per_sec"] == 150
-    assert captured["isl"] == 1024
-    assert captured["osl"] == 256
-    assert captured["batch_size"] == 1
-    assert "ttft" not in captured and "tpot" not in captured
+    assert result["ttft_ms"] == 100
+    assert result["throughput_tokens_per_sec"] == 200
+    assert captured[0].workload["isl"] == 1024
+    assert captured[0].workload["osl"] == 256
+    assert captured[0].workload["random_range_ratio"] == 1.0
 
 
-def test_estimate_without_targets_rejects_mismatched_direct_topology(monkeypatch):
-    from aisimulate.legacy_cli import api
-
-    monkeypatch.setattr(
-        api,
-        "cli_estimate",
-        lambda **kwargs: SimpleNamespace(
-            ttft=45,
-            tpot=7,
-            raw={"(p)tp": 1, "(p)workers": 1, "(d)tp": 1, "(d)workers": 2, "num_total_gpus": 3},
-        ),
-    )
-    with pytest.raises(service.AICError, match="topology"):
+def test_estimate_rejects_zero_latency_samples(monkeypatch):
+    replay_stub(monkeypatch, num_ttft_samples=0)
+    with pytest.raises(service.AICError, match="num_ttft_samples"):
         service.estimate_sync(
             estimate_request(
                 scenario="pd_disaggregation",
@@ -382,27 +335,8 @@ def test_estimate_without_targets_rejects_mismatched_direct_topology(monkeypatch
         )
 
 
-def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeypatch):
-    from aisimulate.legacy_cli import api
-
-    captured = {}
-
-    def direct(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            ttft=44,
-            tpot=7,
-            raw={
-                "(p)tp": 1,
-                "(p)workers": 2,
-                "(d)tp": 1,
-                "(d)workers": 3,
-                "num_total_gpus": 5,
-                "tokens/s": 300,
-            },
-        )
-
-    monkeypatch.setattr(api, "cli_estimate", direct)
+def test_estimate_without_targets_replays_disaggregation(monkeypatch):
+    captured = replay_stub(monkeypatch)
     result = service.estimate_sync(
         estimate_request(
             scenario="pd_disaggregation",
@@ -417,27 +351,16 @@ def test_estimate_without_targets_accepts_matching_direct_disaggregation(monkeyp
         )
     )
 
-    assert result["throughput_tokens_per_sec"] == 300
+    assert result["throughput_tokens_per_sec"] == 200
     assert result["prefill_replicas"] == 2
     assert result["decode_replicas"] == 3
-    assert captured["prefill_num_workers"] == 2
-    assert captured["decode_num_workers"] == 3
-    assert captured["isl"] == 1024 and captured["osl"] == 256
-    assert "ttft" not in captured and "tpot" not in captured
+    assert captured[0].backend_deployment.num_prefill_workers == 2
+    assert captured[0].backend_deployment.num_decode_workers == 3
+    assert captured[0].workload["isl"] == 1024 and captured[0].workload["osl"] == 256
 
 
-def test_estimate_without_targets_does_not_infer_multi_replica_throughput(monkeypatch):
-    from aisimulate.legacy_cli import api
-
-    monkeypatch.setattr(
-        api,
-        "cli_estimate",
-        lambda **kwargs: SimpleNamespace(
-            ttft=45,
-            tpot=7,
-            raw={"tp": 1, "pp": 1, "num_total_gpus": 1, "tokens/s": 150},
-        ),
-    )
+def test_estimate_reports_measured_multi_replica_throughput(monkeypatch):
+    replay_stub(monkeypatch)
     result = service.estimate_sync(
         estimate_request(
             scenario="inference_scheduling",
@@ -449,4 +372,76 @@ def test_estimate_without_targets_does_not_infer_multi_replica_throughput(monkey
     )
 
     assert result["replicas"] == 2
-    assert result["throughput_tokens_per_sec"] is None
+    assert result["throughput_tokens_per_sec"] == 200
+
+
+def replay_stub(monkeypatch, **changes):
+    from aisimulate.runner import EngineReplayRunner
+
+    captured = []
+
+    def replay(runner, spec, **kwargs):
+        captured.append(spec)
+        return SimpleNamespace(
+            metrics={
+                "mean_ttft_ms": 100,
+                "mean_tpot_ms": 10,
+                "output_throughput_tok_s": 200,
+                "num_requests": 32,
+                "completed_requests": 32,
+                "duration_ms": 5000,
+                "num_ttft_samples": 32,
+                "num_tpot_samples": 32,
+                **changes,
+            }
+        )
+
+    monkeypatch.setattr(EngineReplayRunner, "run", replay)
+    return captured
+
+
+@pytest.mark.parametrize("load", [{"target_concurrency": 4}, {"target_request_rate": 2.0}])
+def test_replay_honors_explicit_load_and_request_count(monkeypatch, load):
+    from aisimulate.runner import _materialize_requests
+
+    captured = replay_stub(monkeypatch, num_requests=8, completed_requests=8)
+    service.estimate_sync(
+        estimate_request(
+            model_name="example/model",
+            scenario="inference_scheduling",
+            gpu_count=1,
+            num_requests=8,
+            **load,
+        )
+    )
+    spec = captured[0]
+    requests, concurrency = _materialize_requests(spec, 512)
+    assert len(requests) == 8
+    assert "source_type" not in spec.workload
+    if "target_concurrency" in load:
+        assert concurrency == 4
+    else:
+        assert concurrency is None
+        assert spec.workload["request_rate"] == 2.0
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"mean_ttft_ms": float("nan")},
+        {"mean_tpot_ms": -1},
+        {"duration_ms": 0},
+        {"num_requests": 31},
+        {"num_tpot_samples": 0},
+    ],
+)
+def test_replay_rejects_invalid_report(monkeypatch, changes):
+    replay_stub(monkeypatch, **changes)
+    with pytest.raises(service.AICError):
+        service.estimate_sync(
+            estimate_request(
+                model_name="example/model",
+                scenario="inference_scheduling",
+                gpu_count=1,
+            )
+        )

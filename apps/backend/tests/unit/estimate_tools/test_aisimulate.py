@@ -36,8 +36,16 @@ def test_shared_adapter_preserves_hardware_form_factor(model, system):
 
 
 @pytest.mark.asyncio
-async def test_exact_adapter_calls_legacy_once_and_keeps_native_definitions(monkeypatch):
-    call = AsyncMock(return_value={"ttft_ms": 100, "tpot_ms": 10, "throughput_tokens_per_sec": None})
+async def test_exact_adapter_calls_replay_once_with_explicit_definitions(monkeypatch):
+    call = AsyncMock(
+        return_value={
+            "execution_mode": "engine_replay",
+            "ttft_ms": 100,
+            "tpot_ms": 10,
+            "throughput_tokens_per_sec": 200,
+            "replay_metrics": {"num_requests": 32, "completed_requests": 32, "duration_ms": 5000},
+        }
+    )
     monkeypatch.setattr(service, "estimate", call)
     result = await adapter.estimate(request())
     call.assert_awaited_once()
@@ -47,9 +55,12 @@ async def test_exact_adapter_calls_legacy_once_and_keeps_native_definitions(monk
     assert legacy.gpu_count == 1
     assert result.status == "succeeded"
     assert result.constraint_assessment == "unknown"
-    assert [metric.name for metric in result.metrics] == ["ttft_ms", "tpot_ms"]
-    assert all(metric.statistic == "native_unspecified" for metric in result.metrics)
-    assert all(metric.window == "not_reported" for metric in result.metrics)
+    assert [metric.name for metric in result.metrics] == ["ttft_ms", "tpot_ms", "throughput_tokens_per_sec"]
+    assert [metric.statistic for metric in result.metrics] == ["mean", "mean", "rate"]
+    assert all(metric.window == "replay_duration_ms=5000" for metric in result.metrics)
+    assert result.strategy == "engine_replay"
+    assert result.runtime_profile == adapter.REPLAY_PROFILE_ID
+    assert result.request_accounting == {"submitted": 32, "completed": 32}
 
 
 @pytest.mark.asyncio
@@ -81,7 +92,8 @@ async def test_native_search_and_experiments_delegate_unchanged(monkeypatch):
         ({"model": {"name": "model", "precision": "fp8"}}, "precision_mapping_missing"),
         ({"configuration": {"engine_settings": {"max_num_seqs": 64}}}, "settings_not_representable"),
         ({"configuration": {"offload": {"tiers": [{"bytes": 1073741824}]}}}, "offload_not_representable"),
-        ({"workload": {"request_rate": 2}}, "exact_load_not_representable"),
+        ({"run": {"num_requests": 0}}, "run_controls_not_representable"),
+        ({"runtime_profiles": {"aisimulate": "aisimulate-native"}}, "unknown_runtime_profile"),
         ({"run": {"horizon_s": 60}}, "run_controls_not_representable"),
         ({"runtime_profiles": {"aisimulate": "unknown"}}, "unknown_runtime_profile"),
     ],
@@ -116,7 +128,17 @@ async def test_support_uses_selected_serving_mode_and_not_validation_claim(monke
 
 @pytest.mark.asyncio
 async def test_nonfinite_native_metrics_are_not_success(monkeypatch):
-    monkeypatch.setattr(service, "estimate", AsyncMock(return_value={"ttft_ms": float("inf")}))
+    monkeypatch.setattr(
+        service,
+        "estimate",
+        AsyncMock(
+            return_value={
+                "execution_mode": "engine_replay",
+                "ttft_ms": float("inf"),
+                "replay_metrics": {"num_requests": 32, "completed_requests": 32, "duration_ms": 5000},
+            }
+        ),
+    )
     result = await adapter.estimate(request())
     assert result.status == "failed"
     assert result.error.code == "invalid_native_metric"

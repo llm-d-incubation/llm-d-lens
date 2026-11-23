@@ -1007,8 +1007,13 @@ AISimulate recommendations, including replica counts outside the ordinary candid
     Send `model_name`, `scenario` (`inference_scheduling` or `pd_disaggregation`),
     `gpu_count`, `mean_input_tokens`, `mean_output_tokens`, the AIC system/backend/database
     and the topology fields (`tp` and `replicas`, or prefill/decode TP and replicas).
-    Optional `ttft_target_ms` and `tpot_target_ms` retain the constrained experiment path;
-    omit both to estimate the fixed topology without an SLO filter.
+    This endpoint runs engine replay only: analytical estimation and constrained
+    experiment search are no longer used, including when `ttft_target_ms` or
+    `tpot_target_ms` is supplied. These compatibility fields do not filter or resize
+    the deployment. Pipeline parallelism greater than one is rejected.
+    Token lengths are constant. `num_requests` defaults to `32` (maximum `100000`).
+    Supply either integer `target_concurrency` or positive `target_request_rate`
+    (Poisson arrivals, requests/second); omitting both uses concurrency `1`.
 
     ```json
     {
@@ -1025,8 +1030,14 @@ AISimulate recommendations, including replica counts outside the ordinary candid
     }
     ```
 
-    The response includes `mode`, topology fields, `ttft_ms`, `tpot_ms` and
-    `throughput_tokens_per_sec` when measurable. Estimates do not prove SLO compliance.
+    The response includes `execution_mode: "engine_replay"`, `mode`, topology fields,
+    mean `ttft_ms` and `tpot_ms`, and completed output tokens per simulated second
+    as `throughput_tokens_per_sec`. `replay_metrics` includes completion/sample counts
+    and `duration_ms`. Incomplete or invalid replay reports fail without analytical
+    fallback. Estimates do not prove SLO compliance or real-world accuracy.
+    The shared Python estimate uses runtime profile `aisimulate-engine-replay-v1`,
+    accepts workload concurrency/request rate and `run.num_requests`, and rejects
+    the old `aisimulate-native` profile for estimates. Search is unchanged in this stage.
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
