@@ -1283,10 +1283,14 @@ async def _search_joint(
     if len(set(variants)) != len(variants):
         return Problem(code="duplicate_configuration", message="Engine variants produce duplicate effective settings")
     targets = (
-        ("ttft", "ttft", request.space.ttft_statistic, request.space.ttft_target_ms),
-        ("itl", "tpot_excl_first", request.space.tpot_statistic, request.space.tpot_target_ms),
-        ("e2e", "e2el", request.space.latency_statistic, request.space.latency_target_ms),
-    ) if isinstance(request, _JointSweepRequest) else ()
+        (
+            ("ttft", "ttft", request.space.ttft_statistic, request.space.ttft_target_ms),
+            ("itl", "tpot_excl_first", request.space.tpot_statistic, request.space.tpot_target_ms),
+            ("e2e", "e2el", request.space.latency_statistic, request.space.latency_target_ms),
+        )
+        if isinstance(request, _JointSweepRequest)
+        else ()
+    )
     for family, formula, statistic, target in targets:
         if target is None:
             continue
@@ -1305,8 +1309,11 @@ async def _search_joint(
             )
         )
     latency_names = (
-        (f"ttft_{request.space.ttft_statistic}_ms", f"itl_{request.space.tpot_statistic}_ms",
-         f"e2e_{request.space.latency_statistic}_ms")
+        (
+            f"ttft_{request.space.ttft_statistic}_ms",
+            f"itl_{request.space.tpot_statistic}_ms",
+            f"e2e_{request.space.latency_statistic}_ms",
+        )
         if isinstance(request, _JointSweepRequest)
         else tuple(constraint.metric.name for constraint in request.constraints.metrics)
     )
@@ -1358,10 +1365,7 @@ async def _search_joint(
             metrics=evaluation.metrics,
         )
         latency_ties = tuple(
-            metric.value
-            for name in latency_names
-            for metric in evaluation.metrics
-            if metric.name == name
+            metric.value for name in latency_names for metric in evaluation.metrics if metric.name == name
         )
         key = (
             (devices, -matches[0], latency_ties, point.fingerprint)
@@ -1458,10 +1462,7 @@ async def _search_joint(
 
     def validated_key(candidate: _JointRecommendation) -> tuple:
         latency_ties = tuple(
-            metric.value
-            for name in latency_names
-            for metric in candidate.metrics
-            if metric.name == name
+            metric.value for name in latency_names for metric in candidate.metrics if metric.name == name
         )
         return (
             (candidate.device_count, -candidate.measured_throughput, latency_ties, candidate.point_fingerprint)
