@@ -469,9 +469,7 @@ async def test_disaggregated_joint_never_promotes_failed_or_unvalidated_screenin
 
 
 @pytest.mark.asyncio
-async def test_disaggregated_joint_keeps_managed_profile_gate(
-    disagg_request, bundle_profile, tmp_path, monkeypatch
-):
+async def test_disaggregated_joint_keeps_managed_profile_gate(disagg_request, bundle_profile, tmp_path, monkeypatch):
     bundle_profile.disagg_enabled = False
     execute = AsyncMock()
     monkeypatch.setattr("llm_d_lens.estimate_tools.blis.service._execute_bundle", execute)

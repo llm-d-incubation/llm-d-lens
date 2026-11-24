@@ -10,16 +10,18 @@ import hashlib
 import importlib.metadata
 import io
 import json
+import logging
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from aisimulate.legacy_cli.api import cli_recommend
-
 from llm_d_lens.estimate_tools.aic.service import _plain
 from llm_d_lens.estimate_tools.blis import service as blis
 from llm_d_lens.estimate_tools.models import Problem
+
+logger = logging.getLogger(__name__)
 
 
 def encode(value):
@@ -33,7 +35,10 @@ def digest(path: Path) -> str:
 
 
 def save(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, default=encode, ensure_ascii=True, allow_nan=False, indent=2) + "\n")
+    path.write_text(
+        json.dumps(data, default=encode, ensure_ascii=True, allow_nan=False, indent=2)
+        + "\n"
+    )
 
 
 async def run(args) -> None:
@@ -48,7 +53,9 @@ async def run(args) -> None:
     if args.output.exists():
         data = json.loads(args.output.read_text())
         if data["provenance"] != provenance:
-            raise ValueError("Cannot resume results produced with different inputs or code")
+            raise ValueError(
+                "Cannot resume results produced with different inputs or code"
+            )
     else:
         data = {
             "created_at": datetime.now(UTC).isoformat(),
@@ -79,7 +86,9 @@ async def run(args) -> None:
     current = {}
 
     async def capture(request, runtime, destination, *positional, **kwargs):
-        execution = await original_execute(request, runtime, destination, *positional, **kwargs)
+        execution = await original_execute(
+            request, runtime, destination, *positional, **kwargs
+        )
         record = {
             **current,
             "stage": "validation" if request.run.num_requests == 0 else "screening",
@@ -87,7 +96,12 @@ async def run(args) -> None:
             "execution": execution,
             "files": {},
         }
-        for name in ("stdout.log", "stderr.log", "manifest.json", "effective-input.json"):
+        for name in (
+            "stdout.log",
+            "stderr.log",
+            "manifest.json",
+            "effective-input.json",
+        ):
             path = destination / name
             if path.exists():
                 record["files"][name] = path.read_text(errors="replace")
@@ -96,14 +110,18 @@ async def run(args) -> None:
         return execution
 
     blis._execute_bundle = capture
-    limits = blis._SearchLimits(max_evaluations=256, parallelism=4, wall_duration_s=1200)
+    limits = blis._SearchLimits(
+        max_evaluations=256, parallelism=4, wall_duration_s=1200
+    )
     completed = {record["case"]["id"] for record in data["cases"]}
     try:
         with TemporaryDirectory(prefix="blis-recommend-validation-") as temporary:
             directory = Path(temporary)
             for old in source["cases"]:
                 case = old["case"]
-                if case["id"] in completed or (args.cases and case["id"] not in args.cases):
+                if case["id"] in completed or (
+                    args.cases and case["id"] not in args.cases
+                ):
                     continue
                 record = {"case": case}
                 for kind in ("blis_native", "blis_controlled"):
@@ -130,7 +148,11 @@ async def run(args) -> None:
                     if isinstance(result, Problem):
                         print(case["id"], kind, result.code, flush=True)
                     else:
-                        best = result.recommendations[0] if result.recommendations else None
+                        best = (
+                            result.recommendations[0]
+                            if result.recommendations
+                            else None
+                        )
                         print(
                             case["id"],
                             kind,
@@ -147,10 +169,14 @@ async def run(args) -> None:
                 log = io.StringIO()
                 started = time.monotonic()
                 try:
-                    with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+                    with (
+                        contextlib.redirect_stdout(log),
+                        contextlib.redirect_stderr(log),
+                    ):
                         native = cli_recommend(**old["aic"]["request"])
                     rows = {
-                        mode: _plain(frame.to_dict(orient="records")) for mode, frame in native.best_configs.items()
+                        mode: _plain(frame.to_dict(orient="records"))
+                        for mode, frame in native.best_configs.items()
                     }
                     eligible = [
                         row
@@ -159,7 +185,8 @@ async def run(args) -> None:
                         and row.get("dp", 1) == 1
                         and row["ttft"] <= case["ttft_ms"]
                         and row["tpot"] <= case["tpot_ms"]
-                        and row["num_total_gpus"] * row.get("replicas_needed", 1) <= source["gpu_budget"]
+                        and row["num_total_gpus"] * row.get("replicas_needed", 1)
+                        <= source["gpu_budget"]
                     ]
                     selected = eligible[0] if eligible else None
                     record["aic"] = {
@@ -170,7 +197,9 @@ async def run(args) -> None:
                         "log": log.getvalue(),
                     }
                     if selected is not None:
-                        validation = blis._JointSweepRequest.model_validate(old["blis_controlled"]["request"])
+                        validation = blis._JointSweepRequest.model_validate(
+                            old["blis_controlled"]["request"]
+                        )
                         role = validation.configuration.roles[0]
                         role.tp = int(selected["tp"])
                         role.replicas = int(selected.get("replicas_needed", 1))
@@ -212,13 +241,21 @@ async def run(args) -> None:
                         record["aic"]["validation_passed"] = (
                             not isinstance(checked, Problem)
                             and bool(checked.points)
-                            and blis._assess_joint_validation(checked.points[0], validation)
+                            and blis._assess_joint_validation(
+                                checked.points[0], validation
+                            )
                         )
                 except Exception as error:
+                    logger.exception("AIC validation failed for case %s", case["id"])
                     record["aic"] = {"error": str(error), "log": log.getvalue()}
                 data["cases"].append(json.loads(json.dumps(record, default=encode)))
                 save(args.output, data)
-                print(case["id"], "saved; AIC validation", record["aic"].get("validation_passed"), flush=True)
+                print(
+                    case["id"],
+                    "saved; AIC validation",
+                    record["aic"].get("validation_passed"),
+                    flush=True,
+                )
     finally:
         blis._execute_bundle = original_execute
     if raw_path.exists():
