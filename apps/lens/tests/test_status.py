@@ -4,6 +4,7 @@ import pytest
 
 from lens import health, lifecycle
 from lens.cli import main
+from lens.commands.status import print_status
 from lens.errors import NotReadyError
 from lens.kube import Kube
 from lens.status import instance_status, list_instances, wait_ready
@@ -36,6 +37,68 @@ def test_status_finds_pods_through_the_workload_selector(llmrepo, cluster):
     assert status["endpoints"] == ["http://model-a.team-a.svc.cluster.local:8000"]
     pod = cluster.get("team-a", "pods", "model-a-0")
     assert "lens.llm-d.ai/instance" not in pod["metadata"]["labels"]
+
+
+def test_status_resolves_declared_inference_without_guessing_metrics(llmrepo, cluster, capsys):
+    (llmrepo / STACK / "lens.yaml").write_text(
+        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: http\n    preferred: true\n"
+    )
+    kube = stood_up(llmrepo, cluster)
+    service = cluster.get("team-a", "services", "model-a")
+    service["spec"]["ports"].insert(0, {"name": "metrics", "port": 9090})
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"]["url"] == "http://model-a.team-a.svc.cluster.local:8000"
+    assert status["inferenceEndpoint"]["portName"] == "http"
+    assert status["endpointDetails"][0]["purpose"] == "unknown"
+    assert status["endpointDetails"][1]["purpose"] == "inference"
+    assert not status["endpointFindings"]
+    print_status(status)
+    output = capsys.readouterr().out
+    assert "inference http://model-a.team-a.svc.cluster.local:8000 (Service/model-a, port http)" in output
+    service["spec"]["ports"][1]["port"] = 8080
+    assert instance_status(kube, "team-a", "r1")["inferenceEndpoint"]["port"] == 8080
+    service["spec"]["ports"].pop()
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointFindings"][0]["code"] == "endpoint-unresolved"
+    print_status(status)
+    assert "endpoint-unresolved" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("change", ["replaced", "missing", "unreadable"])
+def test_status_never_returns_an_unverified_inference_endpoint(llmrepo, cluster, change):
+    (llmrepo / STACK / "lens.yaml").write_text(
+        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: http\n"
+    )
+    kube = stood_up(llmrepo, cluster)
+    if change == "replaced":
+        cluster.get("team-a", "services", "model-a")["metadata"]["uid"] = "replacement"
+    elif change == "missing":
+        del cluster.objects[("team-a", "services", "model-a")]
+    else:
+        cluster.denied.add(("get", "services"))
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointFindings"]
+
+
+def test_legacy_instances_do_not_guess_an_inference_endpoint(llmrepo, cluster):
+    status = instance_status(stood_up(llmrepo, cluster), "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointDetails"][0]["purpose"] == "unknown"
+
+
+def test_status_preserves_a_numeric_port_declaration(llmrepo, cluster):
+    (llmrepo / STACK / "lens.yaml").write_text(
+        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: 8000\n"
+    )
+    kube = stood_up(llmrepo, cluster)
+    assert instance_status(kube, "team-a", "r1")["inferenceEndpoint"]["portSelector"] == 8000
+    service = cluster.get("team-a", "services", "model-a")
+    service["spec"]["ports"][0]["port"] = 8080
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointFindings"][0]["code"] == "endpoint-unresolved"
 
 
 def test_pod_problems_and_replaced_objects(llmrepo, cluster):

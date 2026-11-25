@@ -1,8 +1,10 @@
 import json
 
+import pytest
+
 from lens.catalog import find_stack
 from lens.cli import main
-from lens.plan import Options, make_plan
+from lens.plan import Options, make_plan, resolve_endpoints
 from lens.process import subprocess_runner
 from lens.sources import resolve_source
 
@@ -19,6 +21,98 @@ def test_a_plan_digest_follows_what_would_be_applied(llmrepo):
         {"apiVersion": "v1", "kind": "Service", "name": "model-a"},
         {"apiVersion": "apps/v1", "kind": "Deployment", "name": "model-a"},
     ]
+
+
+def test_declared_inference_endpoint_is_resolved_and_covered_by_digest(llmrepo):
+    stack = find_stack(resolve_source(str(llmrepo)), STACK)
+    options = Options(namespace="team-a", instance="r1")
+    original = make_plan(stack, options, runner=subprocess_runner)
+    (stack.path / "lens.yaml").write_text(
+        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: 8000\n    preferred: true\n"
+    )
+    plan = make_plan(stack, options, runner=subprocess_runner)
+    endpoint = plan.summary()["inferenceEndpoint"]
+    assert endpoint == {
+        "purpose": "inference",
+        "service": "model-a",
+        "namespace": "team-a",
+        "port": 8000,
+        "portName": "http",
+        "portSelector": 8000,
+        "scheme": "http",
+        "preferred": True,
+        "url": "http://model-a.team-a.svc.cluster.local:8000",
+    }
+    assert plan.summary()["endpointDetails"] == [endpoint]
+    assert plan.stack_record()["endpoints"] == [endpoint]
+    assert plan.digest != original.digest
+    assert not plan.blocking
+
+
+@pytest.mark.parametrize(
+    ("declarations", "code"),
+    [
+        (None, "endpoint-invalid"),
+        (["not a mapping"], "endpoint-invalid"),
+        ([{"purpose": "inference", "service": "model-a", "port": True}], "endpoint-invalid"),
+        ([{"purpose": "inference", "service": "model-a", "port": "http", "scheme": "ftp"}], "endpoint-invalid"),
+        ([{"purpose": "metrics", "service": "model-a", "port": "http", "preferred": True}], "endpoint-invalid"),
+        ([{"purpose": "inference", "service": "missing", "port": "http"}], "endpoint-unresolved"),
+        ([{"purpose": "inference", "service": "model-a", "port": "missing"}], "endpoint-unresolved"),
+        ([{"purpose": "inference", "service": "model-a", "port": "udp"}], "endpoint-unresolved"),
+        (
+            [
+                {"purpose": "inference", "service": "model-a", "port": "http"},
+                {"purpose": "inference", "service": "model-a", "port": "https"},
+            ],
+            "endpoint-ambiguous",
+        ),
+        (
+            [
+                {"purpose": "inference", "service": "model-a", "port": "http", "preferred": True},
+                {"purpose": "inference", "service": "model-a", "port": "https", "preferred": True},
+            ],
+            "endpoint-ambiguous",
+        ),
+    ],
+)
+def test_invalid_endpoint_declarations_are_blocking(declarations, code):
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"name": "model-a"},
+        "spec": {
+            "ports": [
+                {"name": "http", "port": 8000},
+                {"name": "https", "port": 8443},
+                {"name": "udp", "port": 9000, "protocol": "UDP"},
+            ]
+        },
+    }
+    _, findings = resolve_endpoints(declarations, [service], "team-a")
+    assert any(finding.severity == "error" and finding.code == code for finding in findings)
+
+
+def test_named_ports_resolve_to_service_ports_not_target_ports():
+    declarations = [
+        {"purpose": "metrics", "service": "router", "port": "metrics"},
+        {"purpose": "inference", "service": "router", "port": "https", "scheme": "https", "preferred": True},
+    ]
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {"name": "router"},
+        "spec": {
+            "ports": [
+                {"name": "metrics", "port": 9090},
+                {"name": "https", "port": 443, "targetPort": 8443},
+            ]
+        },
+    }
+    endpoints, findings = resolve_endpoints(declarations, [service], "team-a")
+    assert not findings
+    assert endpoints[1]["port"] == 443
+    assert endpoints[1]["url"] == "https://router.team-a.svc.cluster.local:443"
 
 
 def test_offline_plan_output_and_exit_codes(llmrepo, tmp_path, capsys):

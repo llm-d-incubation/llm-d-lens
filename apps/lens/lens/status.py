@@ -24,6 +24,7 @@ from typing import Any
 from . import health, inventory
 from .errors import CommandError, NotReadyError
 from .kube import Kube
+from .plan import preferred_inference_endpoint, resolve_endpoints
 from .policy import pod_templates, template_accelerators
 
 
@@ -37,6 +38,7 @@ def _denied(error: CommandError) -> str:
 def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]:
     record = inventory.require(kube, namespace, instance)
     objects, problems, endpoints, seen, unreadable = [], [], [], [], []
+    services, endpoint_details = [], []
     pods_ready = pods_total = 0
     kube.progress(f"reading {len(record.get('objects') or [])} object(s) of {instance}")
     kube.prefetch([(item["resource"], item["name"]) for item in record.get("objects") or []], namespace)
@@ -76,8 +78,30 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
             problems += found
             seen += pods
         if live and item["kind"] == "Service":
+            services.append(live)
             for port in (live.get("spec") or {}).get("ports") or []:
-                endpoints.append(f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}")
+                url = f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}"
+                endpoints.append(url)
+                endpoint_details.append(
+                    {
+                        "purpose": "unknown",
+                        "service": item["name"],
+                        "namespace": namespace,
+                        "port": port.get("port"),
+                        "portName": port.get("name"),
+                        "scheme": "http",
+                        "preferred": False,
+                        "url": url,
+                    }
+                )
+    declarations = [
+        {key: endpoint[key] for key in ("purpose", "service", "scheme", "preferred")}
+        | {"port": endpoint.get("portSelector", endpoint.get("portName") or endpoint["port"])}
+        for endpoint in (record.get("stack") or {}).get("endpoints", [])
+    ]
+    resolved, endpoint_findings = resolve_endpoints(declarations, services, namespace)
+    by_port = {(endpoint["service"], endpoint["port"]): endpoint for endpoint in resolved}
+    endpoint_details = [by_port.get((endpoint["service"], endpoint["port"]), endpoint) for endpoint in endpoint_details]
     problems += _pending_warnings(kube, namespace, seen, problems)
     kube.forget()
     return {
@@ -91,6 +115,9 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "objects": objects,
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
+        "endpointDetails": endpoint_details,
+        "inferenceEndpoint": preferred_inference_endpoint(resolved) if not endpoint_findings else None,
+        "endpointFindings": [finding.as_dict() for finding in endpoint_findings],
         "unreadable": unreadable,
         "overrides": dict(record.get("overrides") or {}),
     }

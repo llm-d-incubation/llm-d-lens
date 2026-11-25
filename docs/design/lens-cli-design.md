@@ -160,6 +160,29 @@ follow without a blocking finding.
 exist, SelfSubjectAccessReviews allow every verb, prerequisites exist, no object
 belongs to someone else, and a server-side dry run accepts the rest.
 
+### 5.3 Declared endpoints
+
+Endpoint semantics belong to the stack: a guide declares `lens.endpoints` in `guide.yaml`, and other
+stacks declare `endpoints` in a `lens.yaml` beside their manifests. Guide declarations use the resolved
+guide variables. Each declaration names a `purpose`, `service` and `port` (Service port name or number),
+with optional `scheme` (`http` or `https`) and `preferred` (inference only). The plan validates the
+referenced Service and TCP port after namespace policy. Multiple inference entries require exactly
+one preferred entry; one entry is selected automatically. No inference declaration means no inferred
+inference endpoint.
+
+`Plan.summary()` adds `endpointDetails` and `inferenceEndpoint`. Resolved declarations are covered by
+the digest and persisted as `stack.endpoints` by standup, import and rollouts. Each resolved endpoint
+contains `purpose`, `service`, `namespace`, `port`, `portName`, `portSelector`, `scheme`, `preferred` and
+`url`. The selector preserves the declared name or number independently of the resolved Service port.
+
+`instance_status()` revalidates against live, UID-matching recorded Services without needing the
+source checkout. It adds `endpointDetails`, `inferenceEndpoint` and `endpointFindings`; any endpoint
+validation failure suppresses the preferred inference endpoint. The old `endpoints` URL list remains
+unchanged. Undeclared live ports have purpose `unknown` and no `portSelector`. Older records without
+`stack.endpoints` remain readable and do not implicitly select inference. This is reference validation,
+not an HTTP probe. Workflows pass `inferenceEndpoint.url` to a benchmark and fail when it is absent,
+rather than deriving a URL from a Service name, a conventional port or the legacy URL list.
+
 ## 6. Core datatypes
 
 Every command turns a `Source` and `Options` into a `Plan`. Standup, import and

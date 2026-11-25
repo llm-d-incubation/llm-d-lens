@@ -89,6 +89,54 @@ what `llmd` did with it:
 
 Gateway Mode needs a cluster Gateway, so `llmd` follows Standalone Mode.
 
+## Inference endpoints
+
+Stacks declare endpoint semantics; Lens resolves and validates them, and consumers pass the resulting
+inference URL to their benchmark without selecting Services or ports themselves. In a guide, add:
+
+```yaml
+lens:
+  endpoints:
+    - purpose: inference
+      service: ${GUIDE_NAME}-router
+      port: http
+      preferred: true
+    - purpose: metrics
+      service: ${GUIDE_NAME}-router
+      port: metrics
+```
+
+Use the actual rendered Service and port names. Guide declarations expand resolved guide variables.
+For a kustomize or manifest stack, put `endpoints:` at the root of `lens.yaml` beside the stack
+directory's manifests (or beside a single manifest file), without the `lens:` wrapper.
+
+`purpose` and `service` are required strings. `port` is a Service port name or integer Service port
+number, not a container's `targetPort`. `scheme` defaults to `http` and accepts `http` or `https`.
+`preferred` defaults to `false` and is valid only for `purpose: inference`. One inference declaration
+is selected automatically; multiple inference declarations require exactly one `preferred: true`.
+Missing Services, unresolved or non-TCP ports, invalid declarations and ambiguous selection block the plan.
+
+The Python `Plan.summary()` and `instance_status()` results, and `llmd -o json plan` / `status`, expose
+`endpointDetails` and a structured `inferenceEndpoint` (or `null`). Each endpoint contains `purpose`,
+`service`, `namespace`, `port`, `portName`, `scheme`, `preferred` and `url`. Declarations are included in
+the plan digest and persisted with the instance. Declared endpoints also include `portSelector`, the
+original port name or number: named ports follow changes to their Service port number, while numeric
+selectors must still match that exact number. Status revalidates recorded declarations against live,
+UID-matching Services; failed validation returns `inferenceEndpoint: null` and `endpointFindings`.
+This verifies the Service reference and port, not HTTP reachability or model readiness.
+
+The existing status `endpoints` URL list remains compatible. Undeclared live ports have purpose `unknown`
+in `endpointDetails`; neither old instances nor metrics-only declarations imply an inference endpoint.
+Consumers must reject a missing inference endpoint, not fall back to the first URL:
+
+```sh
+llmd -o json status my-instance -n my-namespace > status.json
+INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
+# Pass "$INFERENCE_URL" to the benchmark's endpoint option.
+```
+
+The URL uses cluster-local Service DNS; the benchmark must have network access to that Service.
+
 ## An empty namespace
 
 ```sh

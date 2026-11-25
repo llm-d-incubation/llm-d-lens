@@ -60,6 +60,11 @@ def print_status(status: dict) -> None:
         print(f"  scaled       {workload} to {count} with `llmd scale` (record it in the stack's repository)")
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
+    if endpoint := status.get("inferenceEndpoint"):
+        port = endpoint["portName"] or endpoint["port"]
+        print(f"  inference {endpoint['url']} (Service/{endpoint['service']}, port {port})")
+    for finding in status.get("endpointFindings", []):
+        print(f"  {finding['severity']} {finding['code']}: {finding['message']}")
     if status.get("unreadable"):
         print(
             f"  could not read {len(status['unreadable'])} part(s) with your permissions in "

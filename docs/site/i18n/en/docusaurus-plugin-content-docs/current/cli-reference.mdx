@@ -3,6 +3,55 @@ title: CLI Reference
 description: Command-line tools for running, installing and managing Lens.
 ---
 
+## `llmd` inference endpoints
+
+The Lens engine resolves inference endpoints declared by a stack, rather than asking workflows to
+guess a Service or port. In `guide.yaml`, declare:
+
+```yaml
+lens:
+	endpoints:
+		- purpose: inference
+			service: ${GUIDE_NAME}-router
+			port: http
+			preferred: true
+		- purpose: metrics
+			service: ${GUIDE_NAME}-router
+			port: metrics
+```
+
+Replace the example names with the rendered Service and port names. Guide variables are expanded.
+For kustomize and manifest stacks, use `lens.yaml` in the stack directory (beside a single manifest
+when the stack is a file), with `endpoints:` at the root and no `lens:` wrapper.
+
+`purpose`, `service` and `port` are required. The port is a Service port name or integer port number,
+not `targetPort`. `scheme` accepts `http` (default) or `https`; `preferred` defaults to `false` and
+can be true only for inference. A single inference entry is selected automatically; multiple entries
+require exactly one preferred entry. Invalid declarations, missing Services, unresolved or non-TCP
+ports and ambiguous inference selection block the plan.
+
+`llmd -o json plan STACK -n NAMESPACE` and `llmd -o json status INSTANCE -n NAMESPACE` return
+`endpointDetails` and `inferenceEndpoint` (an object or `null`). Each object contains `purpose`,
+`service`, `namespace`, `port`, `portName`, `scheme`, `preferred` and `url`. The same contract is
+returned by the Python `Plan.summary()` and `instance_status()` APIs. Declarations are covered by
+the plan digest and stored with the instance. Declared endpoints also carry `portSelector`, the original
+port name or number. Named ports follow changes to their numeric Service port; numeric selectors must
+still match the exact declared number. Status validates live, UID-matching Services again,
+returning `endpointFindings` and a null inference endpoint on validation failure. This does not
+check HTTP reachability or model readiness.
+
+Status retains the legacy `endpoints` URL list; undeclared ports have purpose `unknown` in
+`endpointDetails` and are never guessed to be inference. A workflow should only extract
+`inferenceEndpoint.url` and pass it to the benchmark, failing if it is absent:
+
+```sh
+llmd -o json status my-instance -n my-namespace > status.json
+INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
+```
+
+The benchmark must be able to reach the cluster-local Service URL. It must not fall back to the
+first legacy endpoint or select a metrics port.
+
 ## `hack/lens-local.sh` (local source installation and services)
 
 | Command | Purpose |

@@ -3,6 +3,51 @@ title: CLI 参考
 description: 用于运行、安装和管理 Lens 的命令行工具。
 ---
 
+## `llmd` 推理入口
+
+推理入口由 stack 声明，Lens engine 负责解析和验证，workflow 不再猜测 Service 或端口。
+在 `guide.yaml` 中声明：
+
+```yaml
+lens:
+	endpoints:
+		- purpose: inference
+			service: ${GUIDE_NAME}-router
+			port: http
+			preferred: true
+		- purpose: metrics
+			service: ${GUIDE_NAME}-router
+			port: metrics
+```
+
+示例名称需替换为实际渲染得到的 Service 和端口名，guide 变量会展开。
+kustomize 或 manifest stack 使用 stack 目录中的 `lens.yaml`；单文件 stack 使用该文件旁的
+`lens.yaml`。其中直接以 `endpoints:` 为根，不使用 `lens:` 包装。
+
+`purpose`、`service` 和 `port` 必填。`port` 是 Service 端口名或整数端口号，不是 `targetPort`。
+`scheme` 支持 `http`（默认）和 `https`；`preferred` 默认为 `false`，只有推理入口可以设为 `true`。
+只有一个推理入口时自动选用；存在多个时必须恰好指定一个首选入口。
+声明无效、Service 缺失、端口无法解析或不是 TCP，以及首选入口不明确，都会阻止 plan 通过。
+
+`llmd -o json plan STACK -n NAMESPACE` 和 `llmd -o json status INSTANCE -n NAMESPACE`
+返回 `endpointDetails` 和 `inferenceEndpoint`（对象或 `null`）。每个对象包含 `purpose`、
+`service`、`namespace`、`port`、`portName`、`scheme`、`preferred` 和 `url`。
+Python 的 `Plan.summary()` 与 `instance_status()` API 返回相同契约。
+声明纳入 plan digest 并随实例保存。声明的入口还包含 `portSelector`，保留原始端口名或端口号：
+命名端口可跟随 Service 的数字端口变化，数字选择器必须始终匹配所声明的端口号。
+status 会重新验证实时 Service 及其 UID；
+验证失败时返回 `endpointFindings`，并将推理入口设为 `null`。这不代表已验证 HTTP 可达性或模型就绪状态。
+
+status 保留旧的 `endpoints` URL 列表。未声明用途的端口在 `endpointDetails` 中标为 `unknown`，
+不会被猜成推理入口。workflow 只读取 `inferenceEndpoint.url` 并传给 benchmark；缺失时应失败：
+
+```sh
+llmd -o json status my-instance -n my-namespace > status.json
+INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
+```
+
+benchmark 必须能够访问该集群内 Service URL，不得回退到旧列表的首个 URL 或选择 metrics 端口。
+
 ## `hack/lens-local.sh`（本地源码安装与服务管理）
 
 | 命令 | 用途 |

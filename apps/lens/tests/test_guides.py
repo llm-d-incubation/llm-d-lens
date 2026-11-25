@@ -97,6 +97,24 @@ def test_expansion_follows_the_shell():
 
 
 @needs_tools
+def test_guide_declares_inference_using_resolved_variables(llmrepo):
+    path = llmrepo / GUIDE / "guide.yaml"
+    path.write_text(
+        path.read_text() + "\nlens:\n  endpoints:\n    - purpose: inference\n      service: ${GUIDE_NAME}-epp\n"
+        "      port: http\n      preferred: true\n"
+    )
+    stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
+    plan = make_plan(stack, Options(namespace="team-a", instance="r1", skip_admin_parts=True), runner=subprocess_runner)
+    assert not plan.blocking
+    assert plan.inference_endpoint["service"] == "demo-baseline-epp"
+    assert plan.inference_endpoint["portName"] == "http"
+    assert plan.inference_endpoint["port"] == 80
+    path.write_text(path.read_text().replace("${GUIDE_NAME}-epp", "${UNDECLARED_SERVICE}"))
+    invalid = make_plan(stack, plan.options, runner=subprocess_runner)
+    assert any(finding.code == "endpoint-invalid" for finding in invalid.blocking)
+
+
+@needs_tools
 def test_a_guide_renders_what_its_readme_would_apply(llmrepo):
     stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
     rendered = render(stack, runner=subprocess_runner, namespace="team-a")
