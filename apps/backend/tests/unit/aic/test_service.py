@@ -110,6 +110,8 @@ def test_search_routes_explicit_load_to_engine_sweeper(monkeypatch, target):
     assert config.workload.isl == 4000
     assert config.workload.osl == 1000
     assert config.goal.target == "min_gpus"
+    assert config.sweep.algorithm == "random"
+    assert config.sweep.seed == 42
     assert config.sweep.parallel_evals == 1
     assert config.sweep.max_trials == 32
     assert result.configs[0]["replicas"] == 2
@@ -139,9 +141,41 @@ def test_search_without_load_target_uses_replay_throughput_objective(monkeypatch
     captured = sweep_stub(monkeypatch)
     service.search_sync(service.AICRequest(model_name="model", aic_system_name="system", gpu_count=4))
     assert captured[0].search_space.gpu_budget == 4
+    assert captured[0].sweep.algorithm == "random"
     assert captured[0].goal.target == "throughput"
     assert captured[0].workload.concurrency == 1
     assert captured[0].workload.request_rate is None
+
+
+@pytest.mark.parametrize("elapsed", [60.0, 61.0])
+@pytest.mark.parametrize("feasible", [True, False])
+def test_search_stops_at_wall_budget_and_keeps_completed_predictions(monkeypatch, elapsed, feasible):
+    from aisimulate.sweeper import Sweeper
+
+    sweep_stub(monkeypatch)
+    run = Sweeper.run
+    clock = [100.0]
+    monkeypatch.setattr(service, "monotonic", lambda: clock[0])
+
+    def bounded_run(sweeper, config, *, on_candidate, **kwargs):
+        record = run(sweeper, config, **kwargs).candidates[0]
+        if not feasible:
+            record.status = "infeasible"
+        clock[0] += elapsed
+        on_candidate(record)
+        pytest.fail("Search must stop after the wall budget rather than starting another candidate")
+
+    monkeypatch.setattr(Sweeper, "run", bounded_run)
+    if not feasible:
+        with pytest.raises(service.AICError, match="wall-clock budget was exhausted"):
+            service.search_sync(service.AICRequest(model_name="model", aic_system_name="system"))
+        return
+    result = service.search_sync(service.AICRequest(model_name="model", aic_system_name="system"))
+
+    assert result.evaluated_candidates == 1
+    assert result.configs[0]["num_total_gpus"] == 4
+    assert not result.search_complete
+    assert any("wall-clock budget" in warning for warning in result.warnings)
 
 
 def test_legacy_experiment_normalization_scales_both_pd_worker_pools():

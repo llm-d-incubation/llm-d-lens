@@ -784,6 +784,11 @@ Agentic 负载目标规划会直接校验 AIC 原生推荐的精确拓扑，包�
     QPS 搜索额外要求原生 goodput 不低于目标 QPS。`num_requests` 默认 `32`，并发 replay
     至少使用并发数两倍的请求。`max_evaluations` 默认 `32`，范围 `1` 到 `256`；
     单次评估限时 `20` 秒，使用一个评估 worker。
+    搜索明确使用原生 `random` 算法和种子 `42`，不使用贝叶斯优化。
+    有限配置采用无放回抽样；有界搜索不保证覆盖全部配置。
+    搜索另有 `60` 秒墙钟时间预算，Manual 规划也适用。每个候选结束后检查预算；
+    当前评估可能继续运行至完成或达到 `20` 秒上限，随后停止搜索并清理工作进程。
+    已完成的可行预测会被保留，预算耗尽时响应附带警告；此预算不是 HTTP 响应的硬截止时间。
     找不到可接受候选时明确报错，不回退分析方式；有界搜索失败不代表不存在可行配置。
     响应标记 `execution_mode: "engine_replay"`、运行配置 `aisimulate-engine-replay-v1`、
     `evaluated_candidates` 及 `search_complete: false`。候选包含原生 `replay_metrics` 和

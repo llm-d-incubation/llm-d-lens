@@ -982,6 +982,14 @@ AISimulate recommendations, including replica counts outside the ordinary candid
     `num_requests` defaults to `32`; concurrency replay uses at least twice the
     concurrency. `max_evaluations` defaults to `32`, accepts `1` through `256`,
     and each evaluation has a `20` second limit. Evaluations use one worker.
+    Search explicitly uses the native `random` algorithm with seed `42`, rather
+    than Bayesian optimization. Finite configurations are sampled without
+    replacement; the bounded search does not guarantee exhaustive coverage.
+    A `60` second wall-clock search budget also applies, including during Manual
+    planning. The budget is checked after each candidate: the current evaluation
+    may finish or reach its `20` second limit before search stops and workers are
+    cleaned up. Completed feasible predictions are retained, with a warning when
+    the wall-clock budget is exhausted; this is not a hard HTTP response deadline.
     No accepted candidate returns an explicit error without analytical fallback;
     a bounded search failure does not prove that no feasible configuration exists.
     Responses identify `execution_mode: "engine_replay"` and runtime profile

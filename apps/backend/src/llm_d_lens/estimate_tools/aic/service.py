@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from time import monotonic
 from typing import Any
 
 import yaml
@@ -28,6 +29,10 @@ from .models import (
 
 class AICError(RuntimeError):
     """A user-visible AISimulate integration failure."""
+
+
+class _SearchBudgetExceededError(Exception):
+    pass
 
 
 def _cli():
@@ -135,6 +140,7 @@ def _result_candidates(result: Any, limit: int) -> list[dict[str, Any]]:
 
 def search_sync(request: AICRequest) -> AICSearchResponse:
     """Recommend only configurations evaluated by the native engine replay sweeper."""
+    deadline = monotonic() + 60.0
     try:
         from aisimulate.runner import EngineReplayRunnerFactory
         from aisimulate.sweeper import SmartSearchConfig, Sweeper
@@ -180,6 +186,7 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
                     ),
                 },
                 "sweep": {
+                    "algorithm": "random",
                     "parallel_evals": 1,
                     "max_rounds": request.max_evaluations,
                     "max_trials": request.max_evaluations,
@@ -189,12 +196,24 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
                 },
             }
         )
-        result = Sweeper(
-            runner_factory=EngineReplayRunnerFactory(determinism="canonical_v1"),
-            show_progress=False,
-        ).run(config, top_n=None)
+        records = []
+        budget_exceeded = False
+
+        def on_candidate(record):
+            records.append(record)
+            if monotonic() >= deadline:
+                raise _SearchBudgetExceededError
+
+        try:
+            result = Sweeper(
+                runner_factory=EngineReplayRunnerFactory(determinism="canonical_v1"),
+                show_progress=False,
+            ).run(config, top_n=None, on_candidate=on_candidate)
+            records = result.candidates
+        except _SearchBudgetExceededError:
+            budget_exceeded = True
         configs = []
-        for record in result.candidates:
+        for record in records:
             if record.status != "feasible":
                 continue
             metrics = record.metrics
@@ -274,16 +293,22 @@ def search_sync(request: AICRequest) -> AICSearchResponse:
             raise AICError(
                 "AISimulate engine replay found no complete configuration meeting the TTFT/TPOT SLOs "
                 f"within the {request.gpu_count}-GPU budget and {request.max_evaluations}-evaluation search limit. "
-                "This bounded search does not prove that no feasible configuration exists."
+                + ("The 60-second wall-clock budget was exhausted. " if budget_exceeded else "")
+                + "This bounded search does not prove that no feasible configuration exists."
             )
         return AICSearchResponse(
             configs=configs[: request.max_candidates],
             chosen_mode=configs[0]["mode"],
-            evaluated_candidates=len(result.candidates),
+            evaluated_candidates=len(records),
             warnings=[
                 "Bounded engine-replay search; optimality and real-world accuracy are not established. "
                 "Latency limits apply to means, not percentiles. Reproduce the returned engine_configuration."
-            ],
+            ]
+            + (
+                ["The 60-second wall-clock budget was exhausted; returning completed feasible predictions only."]
+                if budget_exceeded
+                else []
+            ),
         )
     except AICError:
         raise
