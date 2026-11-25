@@ -711,6 +711,8 @@ def test_source_composition_deploy_handles_already_exists_plus_403_with_bootstra
     async def runner_mismatched_ns_marker(cmd):
         if cmd[:3] == ["kubectl", "create", "namespace"]:
             return 1, "", 'Error from server (Forbidden): namespaces "llmd-sc" is forbidden'
+        if cmd[:3] == ["kubectl", "get", "serviceaccounts"]:
+            return 1, "", 'Error from server (Forbidden): serviceaccounts in namespace "llmd-sc" is forbidden'
         if cmd[:4] == ["kubectl", "get", "configmap", "lens-deployment-bootstrap"]:
             return (
                 0,
