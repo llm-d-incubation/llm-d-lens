@@ -93,9 +93,7 @@ async def get_deployment_monitoring(
             require_cluster_access_fn=require_cluster_access,
         )
     try:
-        resolved_cluster_id = deployment_monitoring.resolve_execution_cluster_id(
-            execution_id, normalized_cluster_id
-        )
+        resolved_cluster_id = deployment_monitoring.resolve_execution_cluster_id(execution_id, normalized_cluster_id)
         authorize_monitoring_cluster_request(
             principal,
             resolved_cluster_id,
@@ -135,9 +133,7 @@ async def manage_deployment_monitoring(
             require_cluster_access_fn=require_cluster_access,
         )
     try:
-        resolved_cluster_id = deployment_monitoring.resolve_execution_cluster_id(
-            execution_id, normalized_cluster_id
-        )
+        resolved_cluster_id = deployment_monitoring.resolve_execution_cluster_id(execution_id, normalized_cluster_id)
         authorize_monitoring_cluster_request(
             principal,
             resolved_cluster_id,

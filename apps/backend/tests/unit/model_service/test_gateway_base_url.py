@@ -89,15 +89,20 @@ def test_gateway_base_url_and_normalize_preserve_explicit_scheme_and_port():
     )
 
     # Explicit port or scheme is never overwritten or duplicated
-    assert _gateway_base_url(
-        _cluster(gateway_public_url="10.112.228.229:8443", gateway_port=32592), "10.0.0.9", None
-    ) == "http://10.112.228.229:8443/v1"
-    assert _gateway_base_url(
-        _cluster(gateway_public_url="http://10.112.228.229:8443/v1", gateway_port=32592), "10.0.0.9", None
-    ) == "http://10.112.228.229:8443/v1"
-    assert _gateway_base_url(
-        _cluster(gateway_public_url="https://gw.example.com", gateway_port=32592), "10.0.0.9", None
-    ) == "https://gw.example.com/v1"
+    assert (
+        _gateway_base_url(_cluster(gateway_public_url="10.112.228.229:8443", gateway_port=32592), "10.0.0.9", None)
+        == "http://10.112.228.229:8443/v1"
+    )
+    assert (
+        _gateway_base_url(
+            _cluster(gateway_public_url="http://10.112.228.229:8443/v1", gateway_port=32592), "10.0.0.9", None
+        )
+        == "http://10.112.228.229:8443/v1"
+    )
+    assert (
+        _gateway_base_url(_cluster(gateway_public_url="https://gw.example.com", gateway_port=32592), "10.0.0.9", None)
+        == "https://gw.example.com/v1"
+    )
 
     assert _normalize_gateway_url("2001:db8::1") == "http://[2001:db8::1]/v1"
     assert _normalize_gateway_url("10.112.228.229:8443", default_port=32592) == "http://10.112.228.229:8443/v1"

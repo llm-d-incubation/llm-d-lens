@@ -1740,9 +1740,7 @@ def synthesize_nodes_from_prometheus(
         sources = (telemetry.device_metric_sources if telemetry is not None else {}) or {}
         for semantic, samples in semantic_map.items():
             canonical = (
-                "deviceInfo"
-                if semantic in {"device_info", "gpu_info"}
-                else _DEVICE_METRIC_KEYS.get(semantic, semantic)
+                "deviceInfo" if semantic in {"device_info", "gpu_info"} else _DEVICE_METRIC_KEYS.get(semantic, semantic)
             )
             source_spec = sources.get(semantic)
             source_unit = source_spec.unit if source_spec is not None else ""
@@ -2333,11 +2331,7 @@ async def _prometheus_hardware_metrics(
                         node: {pid: sorted(models) for pid, models in by_prof.items() if models}
                         for node, by_prof in exporter_models.items()
                     }
-                device_models = {
-                    key: meta["model"]
-                    for key, meta in prom_gpu_devices.items()
-                    if meta.get("model")
-                }
+                device_models = {key: meta["model"] for key, meta in prom_gpu_devices.items() if meta.get("model")}
                 if device_models:
                     metrics["deviceModels"] = device_models
                 metrics["reachable"] = any_data
@@ -4854,11 +4848,7 @@ def update_cluster_settings(
             ) from error
         extra_kwargs["update_vllm_image"] = True
         extra_kwargs["vllm_image"] = validated_vllm_image
-        if (
-            invalidate_execution_on_vllm_image_change
-            and cluster.draft
-            and validated_vllm_image != cluster.vllm_image
-        ):
+        if invalidate_execution_on_vllm_image_change and cluster.draft and validated_vllm_image != cluster.vllm_image:
             extra_kwargs["invalidate_execution"] = True
 
     if stale_before is not None:
@@ -5551,9 +5541,9 @@ def _infer_models_from_label_patterns(
             key_candidates = [key_str]
             if ksm and key_str.startswith("label_"):
                 key_candidates.append(key_str[len("label_") :])
-            if any(
-                re.search(pat, cand, re.IGNORECASE) for pat in pattern_candidates for cand in key_candidates
-            ) and (expected_val is None or str(val or "").lower() == str(expected_val).lower()):
+            if any(re.search(pat, cand, re.IGNORECASE) for pat in pattern_candidates for cand in key_candidates) and (
+                expected_val is None or str(val or "").lower() == str(expected_val).lower()
+            ):
                 matched = True
                 break
         if matched and model not in found:
@@ -5640,9 +5630,7 @@ def _build_node_gpu_list(
 
     for i in range(effective_count):
         key = node_device_keys[i] if i < len(node_device_keys) else None
-        dev_meta = (
-            (gpu_devices.get(key) or pci_meta_by_node_pci.get((node_name, key[1]), {})) if key else {}
-        )
+        dev_meta = (gpu_devices.get(key) or pci_meta_by_node_pci.get((node_name, key[1]), {})) if key else {}
         dev_metrics = per_device_metrics.get(key, {}) if key else {}
 
         dev_pci = dev_meta.get("pciAddress") or (key[1] if key else f"0000:0{i + 3}:00.0")
@@ -6508,9 +6496,7 @@ async def build_overview(cluster: registry.Cluster) -> dict[str, Any]:
     prom_node_vram = prometheus_metrics.get("nodeVram") or {}
     for node in node_summaries:
         node_name = node["name"]
-        models_by_profile = {
-            pid: list(models) for pid, models in (node.get("gpuModelsByProfile") or {}).items()
-        }
+        models_by_profile = {pid: list(models) for pid, models in (node.get("gpuModelsByProfile") or {}).items()}
         for pid, exp_models in (exporter_models_by_node.get(node_name) or {}).items():
             merged = set(models_by_profile.get(pid) or ())
             merged.update(exp_models)

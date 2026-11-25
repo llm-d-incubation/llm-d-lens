@@ -1221,9 +1221,7 @@ async def test_supporting_issues_skips_cache_empty_when_cache_read_failed(monkey
 
     issues = await service._supporting_issues(None, [collector.clusters[0]], {"a"})
     assert real_collector._cache_failed is True
-    assert not any(
-        issue.code in {"cluster.model_cache_empty", "cluster.model_cache_storage_empty"} for issue in issues
-    )
+    assert not any(issue.code in {"cluster.model_cache_empty", "cluster.model_cache_storage_empty"} for issue in issues)
 
     # Recovery via _refresh_model_cache resets _cache_failed to False
     async def ok_list(self):
@@ -1416,7 +1414,9 @@ async def test_gateway_issues_enforce_gateway_and_group_read_per_cluster_and_sna
             RoleBinding("cluster-b-read", ScopeType.CLUSTER, scope_cluster_id="b"),
         ),
         role_permissions={
-            "cluster-a-gw": frozenset({"cluster:cluster:read", "model-service:group:read", "model-service:gateway:read"}),
+            "cluster-a-gw": frozenset(
+                {"cluster:cluster:read", "model-service:group:read", "model-service:gateway:read"}
+            ),
             "cluster-b-read": frozenset({"cluster:cluster:read", "model-service:group:read"}),
         },
     )
@@ -1444,9 +1444,7 @@ def test_non_admin_prometheus_healthy_gateway_with_missing_ipp():
         "pending_operations_count": 0,
     }
     assert (
-        gateway_cluster_issues(
-            SimpleNamespace(**healthy_gw_missing_ipp), cluster_name="sprocean-min", service_names=[]
-        )
+        gateway_cluster_issues(SimpleNamespace(**healthy_gw_missing_ipp), cluster_name="sprocean-min", service_names=[])
         == []
     )
     with_services = gateway_cluster_issues(
@@ -1491,7 +1489,9 @@ def test_non_admin_synced_http_probed_qwen3_has_available_status_and_no_issues()
         },
     )
     context_by_id = {
-        "exec-qwen3": SimpleNamespace(execution_id="exec-qwen3", name="qwen3-vllm", display_name="qwen3", status="ready")
+        "exec-qwen3": SimpleNamespace(
+            execution_id="exec-qwen3", name="qwen3-vllm", display_name="qwen3", status="ready"
+        )
     }
     principal = _principal(BUILTIN_ROLE_MAINTAINER, BUILTIN_ROLE_PERMISSIONS[BUILTIN_ROLE_MAINTAINER])
     svc = service_module.DashboardService()

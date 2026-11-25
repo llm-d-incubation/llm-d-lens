@@ -1522,10 +1522,7 @@ def _wait_metrics_accepts_optional_epp(fn: Any) -> bool:
         params = inspect.signature(fn).parameters.values()
     except (TypeError, ValueError):
         return False
-    return any(
-        p.name == "allow_optional_epp" or p.kind == inspect.Parameter.VAR_KEYWORD
-        for p in params
-    )
+    return any(p.name == "allow_optional_epp" or p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
 
 
 async def _prepare_benchmark_monitoring(run: dict) -> None:
@@ -1621,8 +1618,7 @@ async def _prepare_benchmark_monitoring(run: dict) -> None:
         raise RuntimeError(message) from error
     except Exception as error:
         message = (
-            "Monitoring preparation failed; benchmark traffic was not started: "
-            f"{redact_monitoring_error(str(error))}"
+            f"Monitoring preparation failed; benchmark traffic was not started: {redact_monitoring_error(str(error))}"
         )
         run["monitoring"].update(status="unavailable", message=message)
         raise RuntimeError(message) from error
@@ -2700,11 +2696,7 @@ async def _prometheus_profile_device_snapshot(client: Any, profile: Any) -> dict
     telemetry = getattr(profile, "telemetry", None)
     if telemetry is None or not telemetry.device_metric_sources:
         return None
-    sources = [
-        (semantic, source)
-        for semantic, source in telemetry.device_metric_sources.items()
-        if source.metric
-    ]
+    sources = [(semantic, source) for semantic, source in telemetry.device_metric_sources.items() if source.metric]
     if not sources:
         return None
     query_results = await asyncio.gather(
@@ -2953,9 +2945,7 @@ async def _kubernetes_resource_snapshot(
                                     c_dict = containers_map.setdefault(pod_name, {}).setdefault(
                                         cname, {"requests": {}, "limits": {}}
                                     )
-                                    c_dict[kind_key][norm_res] = (
-                                        str(int(val)) if float(val).is_integer() else str(val)
-                                    )
+                                    c_dict[kind_key][norm_res] = str(int(val)) if float(val).is_integer() else str(val)
                             all_pod_names = sorted(set(pod_nodes) | set(pod_phases) | set(containers_map))
                             for pod_name in all_pod_names:
                                 c_list = []

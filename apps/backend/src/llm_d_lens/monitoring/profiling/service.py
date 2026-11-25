@@ -96,23 +96,14 @@ def _safe_promql_namespace(namespace: str) -> str:
         return validate_namespace(namespace)
     except ValueError:
         escaped = str(namespace or "")
-        return (
-            escaped.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-        )
+        return escaped.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
 
 
-async def _prometheus_local_port(
-    cluster_id: str | None, *, namespace: str | None = None
-) -> int | None:
+async def _prometheus_local_port(cluster_id: str | None, *, namespace: str | None = None) -> int | None:
     """Open (or reuse) a tunnel to the central Prometheus and return its port."""
     try:
         if namespace is not None and namespace.strip():
-            endpoint = await resolve_prometheus_endpoint(
-                cluster_id, namespace=namespace, allow_port_forward=True
-            )
+            endpoint = await resolve_prometheus_endpoint(cluster_id, namespace=namespace, allow_port_forward=True)
         else:
             endpoint = await resolve_prometheus_endpoint(cluster_id, allow_port_forward=True)
     except Exception as exc:
@@ -127,19 +118,11 @@ async def _prometheus_local_port(
     return endpoint.local_port if endpoint is not None else None
 
 
-async def _prometheus_endpoint(
-    cluster_id: str | None, *, namespace: str | None = None
-) -> PrometheusEndpoint | None:
+async def _prometheus_endpoint(cluster_id: str | None, *, namespace: str | None = None) -> PrometheusEndpoint | None:
     """Resolve a direct Prometheus endpoint first, falling back to port-forward."""
-    explicit_ns = (
-        validate_namespace(namespace)
-        if (namespace is not None and namespace.strip())
-        else None
-    )
+    explicit_ns = validate_namespace(namespace) if (namespace is not None and namespace.strip()) else None
     if explicit_ns is not None:
-        endpoint = await resolve_prometheus_endpoint(
-            cluster_id, namespace=explicit_ns, allow_port_forward=False
-        )
+        endpoint = await resolve_prometheus_endpoint(cluster_id, namespace=explicit_ns, allow_port_forward=False)
         if endpoint is not None:
             return endpoint
         try:
@@ -600,12 +583,7 @@ _RE2_META = re.compile(r"([\\.+*?()|\[\]{}^$])")
 
 def _re2_escape(value: str) -> str:
     re2_pattern = _RE2_META.sub(r"\\\1", value)
-    return (
-        re2_pattern.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
+    return re2_pattern.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
 
 
 def _epp_phase_queries(
@@ -943,9 +921,7 @@ async def _prometheus_pods_and_direct_profiles(
         if not ns_label or not pod_label:
             continue
         direct_join = (
-            telemetry.allocation_join
-            if telemetry.allocation_join not in {"dra", "pod-status", "none"}
-            else None
+            telemetry.allocation_join if telemetry.allocation_join not in {"dra", "pod-status", "none"} else None
         )
         if direct_join is None:
             for mode_cfg in (telemetry.modes or {}).values():
@@ -1858,9 +1834,7 @@ async def build_flow_map(
                         client,
                         f'{{namespace="{safe_ns}", pod=~"{pod_re}"}}',
                     )
-                    for pod_re in (
-                        "|".join(_re2_escape(pod) for pod in instances[role]) for role in latency_roles
-                    )
+                    for pod_re in ("|".join(_re2_escape(pod) for pod in instances[role]) for role in latency_roles)
                 )
             )
             metrics_results, latency_results = await asyncio.gather(metrics_task, latency_task)

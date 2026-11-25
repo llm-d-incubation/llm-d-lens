@@ -600,7 +600,11 @@ clusters:
     invalidated = registry.update_cluster(
         cluster.id,
         description="updated desc",
-        monitoring_plan={"mode": "managed", "namespace": "llm-d-monitoring", "prometheusUrl": "http://10.20.30.41:9090"},
+        monitoring_plan={
+            "mode": "managed",
+            "namespace": "llm-d-monitoring",
+            "prometheusUrl": "http://10.20.30.41:9090",
+        },
         invalidate_execution=True,
     )
     assert invalidated.description == "updated desc"

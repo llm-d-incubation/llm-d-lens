@@ -147,8 +147,7 @@ async def _discover_non_admin_status(
     observed_at = datetime.now(UTC)
     cap = provider.capability()
     access_modes = [
-        AccessModeAvailability(mode=mode, available=True, detected=False, message=None)
-        for mode in cap.access_modes
+        AccessModeAvailability(mode=mode, available=True, detected=False, message=None) for mode in cap.access_modes
     ]
     base_kwargs = {
         "accelerator": cap.type,
@@ -261,10 +260,7 @@ async def _discover_non_admin_status(
                         ComponentDiagnostic(
                             severity="info",
                             code="METRICS_DETECTED",
-                            message=(
-                                f"Detected {series_count} series{node_detail} "
-                                f"({', '.join(metrics_found)})"
-                            ),
+                            message=(f"Detected {series_count} series{node_detail} ({', '.join(metrics_found)})"),
                         )
                     ],
                 )
@@ -510,9 +506,7 @@ async def _grafana_dashboard_path(
     )
     tokens = _dashboard_search_tokens(accelerator)
     candidates = (
-        [item for item in items if any(tok in _service_name(item) for tok in tokens)]
-        if tokens
-        else list(items)
+        [item for item in items if any(tok in _service_name(item) for tok in tokens)] if tokens else list(items)
     )
     fallback_path: str | None = None
     title: str | None = None
@@ -539,9 +533,7 @@ async def _grafana_dashboard_path(
         # Prefer the uid Grafana actually serves (via its API); if that is not
         # resolvable, return no path so the frontend opens the Grafana root rather
         # than a broken "Dashboard not found" deep link.
-        return await _grafana_api_dashboard_path(
-            local_port, namespace, cluster_id, title, search_tokens=tokens
-        )
+        return await _grafana_api_dashboard_path(local_port, namespace, cluster_id, title, search_tokens=tokens)
 
     return fallback_path
 
@@ -627,9 +619,7 @@ async def get_links(
                 )
             ).local_port
             dashboard_path = (
-                await _grafana_dashboard_path(
-                    namespace, cluster_id, local_port=local_port, accelerator=cap.type
-                )
+                await _grafana_dashboard_path(namespace, cluster_id, local_port=local_port, accelerator=cap.type)
                 if kind == "grafana"
                 else None
             )

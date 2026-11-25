@@ -579,9 +579,7 @@ async def get_cluster_status(cluster_id):
         namespace=_monitoring_namespace_for_cluster(cluster_id),
     )
     reachable = access.reachable
-    stack_ready = (
-        await _central_stack_ready(cluster_id, access_mode=access.access_mode) if reachable else False
-    )
+    stack_ready = await _central_stack_ready(cluster_id, access_mode=access.access_mode) if reachable else False
 
     items = await asyncio.gather(
         *(
@@ -704,11 +702,11 @@ def render_deployment_monitoring_admin_script(
                 'kubectl get prometheus -n "$MONITORING_NS" '
                 "-o jsonpath='{.items[0].spec.serviceAccountName}' 2>/dev/null || true"
                 ')"',
-                'PROM_SA="$(printf \'%s\' "$PROM_SA" | tr -cd \'A-Za-z0-9._-\')"',
+                "PROM_SA=\"$(printf '%s' \"$PROM_SA\" | tr -cd 'A-Za-z0-9._-')\"",
                 'if [[ -z "$PROM_SA" ]]; then',
                 '  PROM_SA="$DEFAULT_PROM_SA"',
                 "fi",
-                'cat <<\'LENS_METRICS_READER_RBAC\' | sed "s|__PROMETHEUS_SA__|${PROM_SA}|g" | kubectl apply -f -',
+                "cat <<'LENS_METRICS_READER_RBAC' | sed \"s|__PROMETHEUS_SA__|${PROM_SA}|g\" | kubectl apply -f -",
                 metrics_reader_yaml,
                 "LENS_METRICS_READER_RBAC",
             ]
@@ -758,7 +756,7 @@ def render_deployment_monitoring_admin_script(
                         *(
                             [
                                 f'POD_SAS="$(kubectl get pods -n "$TARGET_NS" -l {shlex.quote(selector_arg)} '
-                                '-o jsonpath=\'{range .items[*]}{.spec.serviceAccountName}{"\\n"}{end}\' '
+                                "-o jsonpath='{range .items[*]}{.spec.serviceAccountName}{\"\\n\"}{end}' "
                                 '2>/dev/null || true)"'
                             ]
                             if selector_arg
@@ -766,18 +764,18 @@ def render_deployment_monitoring_admin_script(
                                 'POD_SAS="$(kubectl get pods -n "$TARGET_NS" '
                                 '-o jsonpath=\'{range .items[*]}{.metadata.name}{"\\t"}'
                                 '{.spec.serviceAccountName}{"\\n"}{end}\' '
-                                '2>/dev/null | awk -F\'\\t\' \'$1 ~ /epp/ {print $2}\' || true)"'
+                                "2>/dev/null | awk -F'\\t' '$1 ~ /epp/ {print $2}' || true)\""
                             ]
                         ),
                         "while IFS= read -r sa; do",
-                        '  sa="$(printf \'%s\' "$sa" | tr -cd \'A-Za-z0-9._-\')"',
+                        "  sa=\"$(printf '%s' \"$sa\" | tr -cd 'A-Za-z0-9._-')\"",
                         '  if [[ -n "$sa" && "$sa" != "default" ]]; then',
                         '    EPP_SA="$sa"',
                         "    break",
                         "  fi",
                         'done <<< "$POD_SAS"',
                         'if [[ -n "$EPP_SA" ]]; then',
-                        '  cat <<\'LENS_EPP_RBAC\' | sed "s|__EPP_SA__|${EPP_SA}|g" | kubectl apply -f -',
+                        "  cat <<'LENS_EPP_RBAC' | sed \"s|__EPP_SA__|${EPP_SA}|g\" | kubectl apply -f -",
                         binding_template_yaml,
                         "LENS_EPP_RBAC",
                         "fi",
@@ -822,9 +820,9 @@ def render_deployment_monitoring_admin_script(
                     "while IFS=$'\\t' read -r svc_name app_name app_lbl; do",
                     '  [[ -z "$svc_name" ]] && continue',
                     '  if [[ "$svc_name" == *-epp || "$app_name" == *epp* || "$app_lbl" == *epp* ]]; then',
-                    '    EPP_SVC="$(printf \'%s\' "$svc_name" | tr -cd \'A-Za-z0-9._-\')"',
-                    '    EPP_APP_NAME="$(printf \'%s\' "$app_name" | tr -cd \'A-Za-z0-9._-\')"',
-                    '    EPP_APP_LABEL="$(printf \'%s\' "$app_lbl" | tr -cd \'A-Za-z0-9._-\')"',
+                    "    EPP_SVC=\"$(printf '%s' \"$svc_name\" | tr -cd 'A-Za-z0-9._-')\"",
+                    "    EPP_APP_NAME=\"$(printf '%s' \"$app_name\" | tr -cd 'A-Za-z0-9._-')\"",
+                    "    EPP_APP_LABEL=\"$(printf '%s' \"$app_lbl\" | tr -cd 'A-Za-z0-9._-')\"",
                     "    break",
                     "  fi",
                     'done < <(kubectl get svc -n "$TARGET_NS" '
@@ -855,23 +853,23 @@ def render_deployment_monitoring_admin_script(
                     '  EPP_SA=""',
                     '  if [[ -n "$POD_SELECTOR" ]]; then',
                     '    POD_SAS="$(kubectl get pods -n "$TARGET_NS" -l "$POD_SELECTOR" '
-                    '-o jsonpath=\'{range .items[*]}{.spec.serviceAccountName}{"\\n"}{end}\' '
+                    "-o jsonpath='{range .items[*]}{.spec.serviceAccountName}{\"\\n\"}{end}' "
                     '2>/dev/null || true)"',
                     "  else",
                     '    POD_SAS="$(kubectl get pods -n "$TARGET_NS" '
                     '-o jsonpath=\'{range .items[*]}{.metadata.name}{"\\t"}'
                     '{.spec.serviceAccountName}{"\\n"}{end}\' '
-                    '2>/dev/null | awk -F\'\\t\' \'$1 ~ /epp/ {print $2}\' || true)"',
+                    "2>/dev/null | awk -F'\\t' '$1 ~ /epp/ {print $2}' || true)\"",
                     "  fi",
                     "  while IFS= read -r sa; do",
-                    '    sa="$(printf \'%s\' "$sa" | tr -cd \'A-Za-z0-9._-\')"',
+                    "    sa=\"$(printf '%s' \"$sa\" | tr -cd 'A-Za-z0-9._-')\"",
                     '    if [[ -n "$sa" && "$sa" != "default" ]]; then',
                     '      EPP_SA="$sa"',
                     "      break",
                     "    fi",
                     '  done <<< "$POD_SAS"',
                     '  if [[ -n "$EPP_SA" ]]; then',
-                    '    cat <<\'LENS_EPP_RBAC\' | sed "s|__EPP_SA__|${EPP_SA}|g" | kubectl apply -f -',
+                    "    cat <<'LENS_EPP_RBAC' | sed \"s|__EPP_SA__|${EPP_SA}|g\" | kubectl apply -f -",
                     binding_template_yaml,
                     "LENS_EPP_RBAC",
                     "  fi",
@@ -912,9 +910,7 @@ def render_deployment_monitoring_admin_script(
                 ]
             )
         else:
-            lines.append(
-                f'kubectl delete configmap {shlex.quote(MARKER_NAME)} -n "$TARGET_NS" --ignore-not-found=true'
-            )
+            lines.append(f'kubectl delete configmap {shlex.quote(MARKER_NAME)} -n "$TARGET_NS" --ignore-not-found=true')
 
     return "\n".join(lines) + "\n"
 

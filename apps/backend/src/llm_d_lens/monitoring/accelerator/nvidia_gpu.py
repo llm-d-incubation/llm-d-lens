@@ -574,38 +574,35 @@ class NvidiaGpuProvider:
             (
                 '      EXISTING_SM="$(kubectl get servicemonitor -n "$EXISTING_NS" '
                 f"-o jsonpath='{sm_existing_jp}' 2>/dev/null "
-                "| awk -F'\\t' '!found && tolower($1 \" \" $2 \" \" $3 \" \" $4) ~ /dcgm-exporter/ "
-                '{ print $1; found=1 }\' || true)"'
+                '| awk -F\'\\t\' \'!found && tolower($1 " " $2 " " $3 " " $4) ~ /dcgm-exporter/ '
+                "{ print $1; found=1 }' || true)\""
             ),
             '      if [[ -z "$EXISTING_SM" && "$MONITORING_NS" != "$EXISTING_NS" ]]; then',
             (
                 '        EXISTING_SM="$(kubectl get servicemonitor -n "$MONITORING_NS" '
                 f"-o jsonpath='{sm_mon_jp}' 2>/dev/null "
                 "| awk -F'\\t' -v target_ns=\"$EXISTING_NS\" "
-                "'!found && tolower($1 \" \" $4) ~ /dcgm-exporter/ "
+                '\'!found && tolower($1 " " $4) ~ /dcgm-exporter/ '
                 '&& ($2 == "true" || index(" " $3 " ", " " target_ns " ") > 0) '
-                '{ print $1; found=1 }\' || true)"'
+                "{ print $1; found=1 }' || true)\""
             ),
             "      fi",
             '      if [[ -n "$EXISTING_SM" ]]; then',
             (
-                '        echo "ServiceMonitor \'$EXISTING_SM\' already covers exporter '
-                'in namespace \'$EXISTING_NS\'; skipping fallback ServiceMonitor."'
+                "        echo \"ServiceMonitor '$EXISTING_SM' already covers exporter "
+                "in namespace '$EXISTING_NS'; skipping fallback ServiceMonitor.\""
             ),
             "      else",
             (
                 '        EXPORTER_SVC="$(kubectl get svc -n "$EXISTING_NS" '
                 "-o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}' 2>/dev/null "
                 "| awk '!found && tolower($0) ~ /dcgm-exporter/ "
-                '{ print $0; found=1 }\' || true)"'
+                "{ print $0; found=1 }' || true)\""
             ),
-            (
-                '        if [[ -z "$EXPORTER_SVC" '
-                '|| ! "$EXPORTER_SVC" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then'
-            ),
+            ('        if [[ -z "$EXPORTER_SVC" || ! "$EXPORTER_SVC" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then'),
             (
                 '          echo "Warning: no matching exporter Service found in '
-                '\'$EXISTING_NS\'; skipping fallback ServiceMonitor."'
+                "'$EXISTING_NS'; skipping fallback ServiceMonitor.\""
             ),
             "        else",
             (
@@ -614,9 +611,9 @@ class NvidiaGpuProvider:
                 "| awk -F'\\t' '!found { "
                 'keys[1]="app.kubernetes.io/name"; keys[2]="app"; '
                 'keys[3]="app.kubernetes.io/instance"; '
-                'for (i=1; i<=3; i++) { '
+                "for (i=1; i<=3; i++) { "
                 'if ($i != "" && length($i) <= 63 '
-                '&& $i ~ /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/) '
+                "&& $i ~ /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/) "
                 '{ print keys[i] "\\t" $i; found=1; break } } }\' || true)"'
             ),
             '          SM_SELECTOR_KEY=""',
@@ -629,10 +626,10 @@ class NvidiaGpuProvider:
                 '          METRICS_PORT_NAME="$(kubectl get svc "$EXPORTER_SVC" -n "$EXISTING_NS" '
                 f"-o jsonpath='{svc_ports_jp}' 2>/dev/null "
                 "| awk -F'\\t' '$0 != \"\" { count++; name=$1; port=$2; "
-                'if (name ~ /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/) { '
+                "if (name ~ /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/) { "
                 'if (p1 == "" && tolower(name) ~ /metrics/) p1=name; '
                 'if (p2 == "" && port == "9400") p2=name; '
-                'if (count == 1) p3=name } } '
+                "if (count == 1) p3=name } } "
                 'END { if (p1 != "") print p1; else if (p2 != "") print p2; '
                 'else if (count == 1 && p3 != "") print p3 }\' || true)"'
             ),
@@ -641,7 +638,7 @@ class NvidiaGpuProvider:
                 '|| ! "$SM_SELECTOR_VAL" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]]; then'
             ),
             (
-                '            echo "Warning: Service \'$EXPORTER_SVC\' in \'$EXISTING_NS\' '
+                "            echo \"Warning: Service '$EXPORTER_SVC' in '$EXISTING_NS' "
                 'lacks a safe selector label; skipping fallback ServiceMonitor."'
             ),
             (
@@ -649,7 +646,7 @@ class NvidiaGpuProvider:
                 '|| ! "$METRICS_PORT_NAME" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then'
             ),
             (
-                '            echo "Warning: Service \'$EXPORTER_SVC\' in \'$EXISTING_NS\' '
+                "            echo \"Warning: Service '$EXPORTER_SVC' in '$EXISTING_NS' "
                 'lacks a named metrics port; skipping fallback ServiceMonitor."'
             ),
             "          else",
@@ -678,7 +675,7 @@ class NvidiaGpuProvider:
             "    fi",
             "  else",
             (
-                '    echo "Warning: ignoring invalid exporter namespace \'$EXISTING_NS\'; '
+                "    echo \"Warning: ignoring invalid exporter namespace '$EXISTING_NS'; "
                 'skipping fallback ServiceMonitor."'
             ),
             "  fi",
@@ -751,7 +748,7 @@ class NvidiaGpuProvider:
             (
                 'EXISTING_DS="$(printf \'%s\\n\' "$DS_LIST" '
                 "| awk -F'\\t' '!found && tolower($1 \"/\" $2) ~ /dcgm-exporter/ "
-                '&& $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && ($3 + 0) > 0 && ($4 + 0) >= ($3 + 0) '
+                "&& $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && ($3 + 0) > 0 && ($4 + 0) >= ($3 + 0) "
                 '{ print $1 "/" $2; found=1 }\' || true)"'
             ),
             *detect_block,

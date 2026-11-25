@@ -698,9 +698,7 @@ async def put_cluster_plan(
         hf_updates: dict[str, Any] = {"secret_namespace": f"{STORAGE_NAMESPACE}-{cluster.id}"}
         if "secret_namespace_mode" not in payload.hf_token_secret.model_fields_set:
             hf_updates["secret_namespace_mode"] = "create"  # noqa: S105 - namespace mode, not a credential
-        payload = payload.model_copy(
-            update={"hf_token_secret": payload.hf_token_secret.model_copy(update=hf_updates)}
-        )
+        payload = payload.model_copy(update={"hf_token_secret": payload.hf_token_secret.model_copy(update=hf_updates)})
     need_existing_stack_vllm = (
         "stack" not in payload.model_fields_set or "vllm_image" not in payload.stack.model_fields_set
     )
@@ -959,11 +957,7 @@ def _effective_admin_operation_ids(
         operations,
         current_admin_ids=current_tuple,
     )
-    extra_valid = [
-        op_id
-        for op_id in extra_admin_ids
-        if op_id not in by_id or _is_promotable_to_admin(by_id[op_id])
-    ]
+    extra_valid = [op_id for op_id in extra_admin_ids if op_id not in by_id or _is_promotable_to_admin(by_id[op_id])]
     for op_id in extra_valid:
         if op_id not in current_set and op_id not in reclassified:
             reclassified.append(op_id)
@@ -1152,9 +1146,8 @@ def _resolve_handoff_prometheus_url(
     if explicit_prom_url:
         return explicit_prom_url
 
-    effective_host = (
-        (plan.monitoring.host or "").strip()
-        or registry.extract_url_host(plan.gateway.public_url or cluster.gateway_public_url)
+    effective_host = (plan.monitoring.host or "").strip() or registry.extract_url_host(
+        plan.gateway.public_url or cluster.gateway_public_url
     )
     if not effective_host:
         try:
@@ -1229,12 +1222,8 @@ def _preview_handoff_monitoring(
         except Exception:  # noqa: BLE001 - read-only preview fallback
             effective_host = None
 
-    explicit_prom_port = (
-        plan.monitoring.prometheus_node_port if "prometheusNodePort" not in auto_discovered else None
-    )
-    explicit_graf_port = (
-        plan.monitoring.grafana_node_port if "grafanaNodePort" not in auto_discovered else None
-    )
+    explicit_prom_port = plan.monitoring.prometheus_node_port if "prometheusNodePort" not in auto_discovered else None
+    explicit_graf_port = plan.monitoring.grafana_node_port if "grafanaNodePort" not in auto_discovered else None
     valid_prom_port = registry._monitoring_node_port(marker_mon.get("prometheusNodePort"))
     valid_graf_port = registry._monitoring_node_port(marker_mon.get("grafanaNodePort"))
     if valid_prom_port is not None and valid_graf_port is not None and valid_prom_port == valid_graf_port:
@@ -1299,9 +1288,7 @@ async def read_admin_handoff_status(cluster_id: str, request: Request) -> AdminH
     status = "ready" if not admin_ids else str(marker.get("status") or "unknown")
     if remaining and status == "complete":
         status = "partial"
-    kubeconfig_namespace = (
-        registry.cluster_kubeconfig_namespace(cluster.id) if status == "unconfirmed" else None
-    )
+    kubeconfig_namespace = registry.cluster_kubeconfig_namespace(cluster.id) if status == "unconfirmed" else None
     monitoring_preview = _preview_handoff_monitoring(cluster, state.plan, marker)
     return AdminHandoffStatusResponse(
         plan_hash=report.plan_hash,
@@ -2457,9 +2444,7 @@ async def complete_cluster_execution(
         async with _execution_heartbeat(cluster.id, execution_token):
             pre_synced = await sync_planned_storage_for_cluster(cluster.id, state.plan, run_model_scan=False)
         pre_synced_new_volume = (
-            pre_synced is not None
-            and pre_synced.cluster_id == cluster.id
-            and pre_synced.id not in existing_volume_ids
+            pre_synced is not None and pre_synced.cluster_id == cluster.id and pre_synced.id not in existing_volume_ids
         )
     for operation in operations:
         if operation.executor != "lens" or recorded.get(operation.id) == "lens_done":

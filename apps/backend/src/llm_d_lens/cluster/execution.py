@@ -625,9 +625,7 @@ def _gateway_manifest_istio_hint(operation: Any) -> bool | None:
         metadata = document.get("metadata")
         labels = metadata.get("labels") if isinstance(metadata, Mapping) else None
         provider_label = (
-            str((labels.get("lens.ai/gateway-provider") if isinstance(labels, Mapping) else "") or "")
-            .strip()
-            .lower()
+            str((labels.get("lens.ai/gateway-provider") if isinstance(labels, Mapping) else "") or "").strip().lower()
         )
         if provider_label:
             return provider_label == "istio"

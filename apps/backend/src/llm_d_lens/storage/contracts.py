@@ -120,10 +120,7 @@ class NfsSpec(StrictModel):
 
     @model_validator(mode="after")
     def _validate_path(self):
-        if (
-            any(ord(ch) < 32 or ord(ch) == 127 or ch.isspace() for ch in self.server)
-            or self.server.startswith("-")
-        ):
+        if any(ord(ch) < 32 or ord(ch) == 127 or ch.isspace() for ch in self.server) or self.server.startswith("-"):
             raise ValueError("server must not contain whitespace, control characters, or start with '-'")
         if (
             not self.path.startswith("/")
@@ -143,9 +140,7 @@ class DynamicPvcSpec(StrictModel):
     def _validate_access_mode(self):
         for field_name, value in (("storageClass", self.storage_class), ("namespace", self.namespace)):
             if any(ord(ch) < 32 or ord(ch) == 127 or ch.isspace() for ch in value) or value.startswith("-"):
-                raise ValueError(
-                    f"{field_name} must not contain whitespace, control characters, or start with '-'"
-                )
+                raise ValueError(f"{field_name} must not contain whitespace, control characters, or start with '-'")
         if self.access_mode not in {"ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany"}:
             raise ValueError("accessMode must be one of ReadWriteOnce, ReadWriteMany, ReadOnlyMany")
         return self

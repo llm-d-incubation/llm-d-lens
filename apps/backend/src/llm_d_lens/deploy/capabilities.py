@@ -1395,9 +1395,7 @@ def _ssar_operation_specs(
             "title": f"Grant deployment RBAC in namespace {namespace}",
             "required": True,
             "keys": [
-                _ssar_key(verb, group, resource, namespace)
-                for group, resource, verbs in ns_resources
-                for verb in verbs
+                _ssar_key(verb, group, resource, namespace) for group, resource, verbs in ns_resources for verb in verbs
             ],
         },
     ]
@@ -1706,8 +1704,7 @@ def _epp_auth_delegator_crb_manifest(namespace: str, service_accounts: Sequence[
             "name": AUTH_DELEGATOR_ROLE,
         },
         "subjects": [
-            {"kind": "ServiceAccount", "name": sa_name, "namespace": namespace}
-            for sa_name in service_accounts
+            {"kind": "ServiceAccount", "name": sa_name, "namespace": namespace} for sa_name in service_accounts
         ],
     }
 
@@ -1745,8 +1742,7 @@ def render_deployment_bootstrap_script(
     )
     assert validated_identity is not None
     validated_sas = [
-        validate_dns1123_label(sa, "epp_service_accounts[]", code="invalid_subject")
-        for sa in epp_service_accounts
+        validate_dns1123_label(sa, "epp_service_accounts[]", code="invalid_subject") for sa in epp_service_accounts
     ]
     clean_prepared_req = (
         _single_line_text(prepared_request_id, "prepared_request_id", code="invalid_labels")
@@ -1892,14 +1888,14 @@ def render_deployment_bootstrap_script(
             '  --from-literal="status=completed" \\',
             '  --from-literal="completedAt=$COMPLETED_AT" \\',
             "  --dry-run=client -o yaml | \\",
-            'kubectl label --local -f - \\',
+            "kubectl label --local -f - \\",
             '  "app.kubernetes.io/managed-by=lens" \\',
             '  "lens.llm-d.ai/cluster=$CLUSTER_LABEL" \\',
             '  "lens.llm-d.ai/bootstrap-digest=$BOOTSTRAP_DIGEST16" \\',
             "  --overwrite -o yaml | \\",
             'kubectl apply --namespace "$TARGET_NAMESPACE" -f - >/dev/null',
             "",
-            'printf \'Lens deployment namespace %s bootstrapped (digest %s)\\n\' '
+            "printf 'Lens deployment namespace %s bootstrapped (digest %s)\\n' "
             '"$TARGET_NAMESPACE" "$BOOTSTRAP_DIGEST"',
             "",
         ]

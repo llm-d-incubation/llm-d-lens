@@ -477,7 +477,9 @@ async def test_is_pvc_bound_uses_only_namespace_scoped_pvc_and_skips_satellite_p
     monkeypatch.setattr(
         storage_service,
         "ensure_mount_in_namespace",
-        AsyncMock(side_effect=AssertionError("cluster-scoped ensure_mount_in_namespace must not run when PVC is Bound")),
+        AsyncMock(
+            side_effect=AssertionError("cluster-scoped ensure_mount_in_namespace must not run when PVC is Bound")
+        ),
     )
 
     mount = await resolve_mount(
@@ -493,7 +495,9 @@ async def test_is_pvc_bound_uses_only_namespace_scoped_pvc_and_skips_satellite_p
     monkeypatch.setattr(
         cm_module,
         "ensure_mount_in_namespace",
-        AsyncMock(side_effect=AssertionError("ConfigurationManifestAdapter.deploy must skip ensure_mount_in_namespace")),
+        AsyncMock(
+            side_effect=AssertionError("ConfigurationManifestAdapter.deploy must skip ensure_mount_in_namespace")
+        ),
     )
     manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(

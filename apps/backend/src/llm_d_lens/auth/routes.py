@@ -314,9 +314,7 @@ ROUTE_PERMISSIONS: tuple[RoutePermission, ...] = (
     RoutePermission("GET", "/api/v1/hardware/capabilities", "hardware:profile:read"),
     # --- monitoring: accelerators ---
     RoutePermission("GET", "/api/v1/monitoring/accelerators", "monitoring:accelerator:read"),
-    RoutePermission(
-        "GET", "/api/v1/monitoring/accelerators/{accelerator}/admin-script", "monitoring:accelerator:read"
-    ),
+    RoutePermission("GET", "/api/v1/monitoring/accelerators/{accelerator}/admin-script", "monitoring:accelerator:read"),
     RoutePermission(
         "POST", "/api/v1/monitoring/accelerators/{accelerator}/installations", "monitoring:accelerator:install"
     ),

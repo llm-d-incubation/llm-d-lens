@@ -248,7 +248,9 @@ def _envoy_yaml(*, tls: bool) -> str:
     )
 
 
-def _router_deployment(*, name="optimized-baseline-epp", secure_serving="false", envoy_cm="envoy", proxy_enabled=True, available_replicas=1):
+def _router_deployment(
+    *, name="optimized-baseline-epp", secure_serving="false", envoy_cm="envoy", proxy_enabled=True, available_replicas=1
+):
     epp_args = ["--pool-name", "optimized-baseline", "--grpc-health-port", "9003"]
     if secure_serving is not None:
         epp_args.append(f"--secure-serving={secure_serving}")
@@ -286,7 +288,9 @@ def _router_deployment(*, name="optimized-baseline-epp", secure_serving="false",
     }
 
 
-def _modelserver_deployment(*, name="optimized-baseline-epp-model-servers", ports=None, args=None, available_replicas=1):
+def _modelserver_deployment(
+    *, name="optimized-baseline-epp-model-servers", ports=None, args=None, available_replicas=1
+):
     container = {"name": "modelserver", "command": ["vllm", "serve"], "args": args or ["Qwen/Qwen3-0.6B"]}
     if ports is not None:
         container["ports"] = ports
@@ -348,7 +352,9 @@ async def test_check_target_service_health_covers_failures_and_healthy_cases():
     )
     dep_zero = _router_deployment(available_replicas=0)
     assert (
-        await router._check_target_service_health("optimized-baseline-epp", 80, [svc_router], [dep_zero], lambda _n: None)
+        await router._check_target_service_health(
+            "optimized-baseline-epp", 80, [svc_router], [dep_zero], lambda _n: None
+        )
         == "backing_deployment_unavailable"
     )
     dep_no_proxy = _router_deployment(proxy_enabled=False)
@@ -412,7 +418,9 @@ async def test_discover_endpoints_excludes_epp_and_shadow_ports_and_supports_pod
     pods = [
         {
             "metadata": {"name": "lws-pod-0", "labels": {"lws": "worker"}},
-            "spec": {"containers": [{"name": "modelserver", "ports": [{"name": "modelserver", "containerPort": 8000}]}]},
+            "spec": {
+                "containers": [{"name": "modelserver", "ports": [{"name": "modelserver", "containerPort": 8000}]}]
+            },
             "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
         }
     ]
@@ -421,10 +429,7 @@ async def test_discover_endpoints_excludes_epp_and_shadow_ports_and_supports_pod
     assert router_url is None
     assert direct_url == "http://ms-lws-model-servers.ns-1.svc.cluster.local:8000"
     assert (
-        await router._check_target_service_health(
-            "ms-lws-model-servers", 8000, services, [], None, pods=pods
-        )
-        is None
+        await router._check_target_service_health("ms-lws-model-servers", 8000, services, [], None, pods=pods) is None
     )
 
     unready_pods = [
@@ -435,9 +440,7 @@ async def test_discover_endpoints_excludes_epp_and_shadow_ports_and_supports_pod
         }
     ]
     assert (
-        await router._check_target_service_health(
-            "ms-lws-model-servers", 8000, services, [], None, pods=unready_pods
-        )
+        await router._check_target_service_health("ms-lws-model-servers", 8000, services, [], None, pods=unready_pods)
         == "backing_deployment_unavailable"
     )
 

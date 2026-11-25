@@ -1974,7 +1974,9 @@ def test_execute_lens_monitoring_verify_discovers_nodeports_and_checks_health(mo
                 return CommandResult(
                     tuple(cmd),
                     0,
-                    json.dumps({"items": [{"status": {"addresses": [{"type": "InternalIP", "address": "10.0.0.22"}]}}]}),
+                    json.dumps(
+                        {"items": [{"status": {"addresses": [{"type": "InternalIP", "address": "10.0.0.22"}]}}]}
+                    ),
                     "",
                 )
             return CommandResult(tuple(cmd), 1, "", "unexpected")
@@ -1992,9 +1994,7 @@ def test_execute_lens_monitoring_verify_discovers_nodeports_and_checks_health(mo
     monkeypatch.setattr(prom_mod, "check_prometheus_health", flaky_then_healthy)
 
     original_hash = state.plan_hash
-    asyncio.run(
-        execution.execute_lens_operation(cluster.id, state.plan, verify_op, runner=_DiscoveryRunner())
-    )
+    asyncio.run(execution.execute_lens_operation(cluster.id, state.plan, verify_op, runner=_DiscoveryRunner()))
     assert health_calls == ["http://10.0.0.22:30901", "http://10.0.0.22:30901"]
     settings = registry.get_cluster_monitoring_settings(cluster.id)
     assert settings["prometheus_url"] == "http://10.0.0.22:30901"
@@ -2748,7 +2748,9 @@ def test_executor_crd_established_invalidates_discovery_cache_on_success_and_par
         apply=OperationApply(
             kind="command",
             argv=nfd_op.apply.argv,
-            wait=(OperationWait(kind="crd-established", target="crd/nodefeaturerules.nfd.k8s-sigs.io", timeout_seconds=1),),
+            wait=(
+                OperationWait(kind="crd-established", target="crd/nodefeaturerules.nfd.k8s-sigs.io", timeout_seconds=1),
+            ),
         ),
     )
 
@@ -2971,9 +2973,7 @@ def test_istio_gateway_manifests_falls_back_to_nodeport_on_address_not_assigned(
         gateway={"provider": "istio", "namespace": "lens-gateway", "name": "lens-gateway"},
     )
     gw_op = next(
-        op
-        for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id)
-        if op.id == "gateway.manifests"
+        op for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id) if op.id == "gateway.manifests"
     )
     runner = _IstioBareMetalRunner(gateway_json=_address_not_assigned_gateway_json())
     asyncio.run(execution.execute_user_operation(cluster.id, gw_op, runner=runner))
@@ -3110,9 +3110,7 @@ def test_istio_gateway_manifests_nodeport_fallback_retries_only_once_then_times_
         gateway={"provider": "istio", "namespace": "lens-gateway", "name": "lens-gateway"},
     )
     gw_op = next(
-        op
-        for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id)
-        if op.id == "gateway.manifests"
+        op for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id) if op.id == "gateway.manifests"
     )
 
     class _AlwaysPendingRunner(_OperationRunner):
@@ -3170,9 +3168,7 @@ def test_istio_gateway_manifests_working_loadbalancer_skips_nodeport_fallback():
         gateway={"provider": "istio", "namespace": "lens-gateway", "name": "lens-gateway"},
     )
     gw_op = next(
-        op
-        for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id)
-        if op.id == "gateway.manifests"
+        op for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id) if op.id == "gateway.manifests"
     )
     runner = _OperationRunner()
     asyncio.run(execution.execute_user_operation(cluster.id, gw_op, runner=runner))
@@ -3204,9 +3200,7 @@ def test_non_istio_gateways_and_malformed_inputs_never_trigger_istio_nodeport_fa
         gateway={"provider": provider, "namespace": "lens-gateway", "name": "lens-gateway"},
     )
     gw_op = next(
-        op
-        for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id)
-        if op.id == "gateway.manifests"
+        op for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id) if op.id == "gateway.manifests"
     )
 
     class _NonIstioWaitFailRunner(_OperationRunner):
@@ -3293,11 +3287,19 @@ def test_non_istio_gateways_and_malformed_inputs_never_trigger_istio_nodeport_fa
 @pytest.mark.parametrize(
     ("stage", "stderr", "expected_exc"),
     [
-        ("get", "Error from server (Forbidden): gateways.gateway.networking.k8s.io is forbidden", execution.OperationPermissionError),
+        (
+            "get",
+            "Error from server (Forbidden): gateways.gateway.networking.k8s.io is forbidden",
+            execution.OperationPermissionError,
+        ),
         ("get", "error: You must be logged in to the server (Unauthorized)", execution.OperationUnauthorizedError),
         ("apply", "Error from server (Forbidden): configmaps is forbidden", execution.OperationPermissionError),
         ("apply", "Error from server (Unauthorized): Unauthorized", execution.OperationUnauthorizedError),
-        ("patch", "Error from server (Forbidden): gateways.gateway.networking.k8s.io is forbidden", execution.OperationPermissionError),
+        (
+            "patch",
+            "Error from server (Forbidden): gateways.gateway.networking.k8s.io is forbidden",
+            execution.OperationPermissionError,
+        ),
         ("patch", "error: You must be logged in to the server (Unauthorized)", execution.OperationUnauthorizedError),
     ],
 )
@@ -3310,9 +3312,7 @@ def test_istio_gateway_nodeport_fallback_propagates_401_and_403_errors(stage, st
         gateway={"provider": "istio", "namespace": "lens-gateway", "name": "lens-gateway"},
     )
     gw_op = next(
-        op
-        for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id)
-        if op.id == "gateway.manifests"
+        op for op in cluster_router.build_operations(state.plan, cluster_id=cluster.id) if op.id == "gateway.manifests"
     )
 
     class _AuthFailureRunner(_OperationRunner):

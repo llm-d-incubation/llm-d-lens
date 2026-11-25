@@ -197,9 +197,7 @@ async def _list_cluster_resources_strict(
                     f"Kubernetes API returned 401 Unauthorized reading {resource}"
                 ) from error
             if error.status == 403:
-                raise StoragePermissionError(
-                    f"Kubernetes API returned 403 Forbidden reading {resource}"
-                ) from error
+                raise StoragePermissionError(f"Kubernetes API returned 403 Forbidden reading {resource}") from error
             logger.warning("Kubernetes SDK list failed: resource=%s category=api status=%s", resource, error.status)
             return []
         except (TimeoutError, ClientError, ValueError) as error:
@@ -297,9 +295,7 @@ def _has_sibling_volumes_in_namespace(
     active_store = store or default_store()
     target_ns = pvc_namespace(volume)
     return any(
-        item.id != volume.id
-        and item.cluster_id == volume.cluster_id
-        and pvc_namespace(item) == target_ns
+        item.id != volume.id and item.cluster_id == volume.cluster_id and pvc_namespace(item) == target_ns
         for item in active_store.list()
     )
 
@@ -325,11 +321,9 @@ def reusable_volume(volume: StorageVolume | None, request: StorageVolumeCreateRe
     if request.kind == StorageVolumeKind.LOCAL_DISK:
         if request.local_disk is None or volume.local_disk is None:
             return False
-        return (
-            volume.local_disk.host_path == request.local_disk.host_path
-            and (volume.local_disk.namespace or DEFAULT_STORAGE_NAMESPACE)
-            == (request.local_disk.namespace or DEFAULT_STORAGE_NAMESPACE)
-        )
+        return volume.local_disk.host_path == request.local_disk.host_path and (
+            volume.local_disk.namespace or DEFAULT_STORAGE_NAMESPACE
+        ) == (request.local_disk.namespace or DEFAULT_STORAGE_NAMESPACE)
     if request.kind == StorageVolumeKind.NFS:
         if request.nfs is None or volume.nfs is None:
             return False
@@ -618,9 +612,7 @@ async def _probe_prometheus_storage_statuses(
 
         pvc_names = [(volume.pvc_name or _pvc_name(volume)) for volume in volumes]
         static_pv_names = [
-            (volume.pv_name or _pv_name(volume))
-            for volume in volumes
-            if volume.kind != StorageVolumeKind.DYNAMIC_PVC
+            (volume.pv_name or _pv_name(volume)) for volume in volumes if volume.kind != StorageVolumeKind.DYNAMIC_PVC
         ]
         pvc_re = _prom_regex_for_names(pvc_names)
         if not pvc_re:
@@ -717,11 +709,7 @@ async def _probe_prometheus_storage_statuses(
             if volume.kind == StorageVolumeKind.DYNAMIC_PVC and volume.dynamic_pvc is not None
             else ["ReadWriteMany"]
         )
-        storage_class = (
-            info.get("storageclass") or None
-            if volume.kind == StorageVolumeKind.DYNAMIC_PVC
-            else None
-        )
+        storage_class = info.get("storageclass") or None if volume.kind == StorageVolumeKind.DYNAMIC_PVC else None
         pv_dict: dict | None = None
         if bound_pv_name and (bound_pv_name in pv_phase or bound_pv_name in pv_bytes):
             pv_dict = {
@@ -1164,9 +1152,7 @@ async def discover_nodes(cluster_id: str) -> list[StorageNodeSummary]:
             StorageNodeSummary(
                 name=str(node["name"]),
                 ready=bool(node.get("ready", False)),
-                schedulable=(
-                    node.get("role") != "control-plane" and not bool(node.get("schedulingDisabled", False))
-                ),
+                schedulable=(node.get("role") != "control-plane" and not bool(node.get("schedulingDisabled", False))),
             )
             for node in inventory.all_nodes
             if node.get("name")
@@ -1327,11 +1313,7 @@ def _mark_planned_storage_deleted(volume: StorageVolume, *, store: StorageVolume
     if isinstance(model_cache_raw, Mapping):
         ref_name = str(model_cache_raw.get("storageVolumeRef") or "").strip().lower()
     matches_id = planned_id == volume.id
-    matches_reused = (
-        active_store.get(planned_id) is None
-        and bool(ref_name)
-        and ref_name == volume.name.strip().lower()
-    )
+    matches_reused = active_store.get(planned_id) is None and bool(ref_name) and ref_name == volume.name.strip().lower()
     if not matches_id and not matches_reused:
         return
     updated = dict(raw_plan)
@@ -1568,10 +1550,7 @@ async def _submit_storage_ssar(cluster_id: str, rules: list[CheckRule]) -> dict[
 
     if not rules:
         return {}
-    keys = [
-        evaluator._resource_key(rule, rule.namespace if rule.scope == "namespace" else None)
-        for rule in rules
-    ]
+    keys = [evaluator._resource_key(rule, rule.namespace if rule.scope == "namespace" else None) for rule in rules]
     runner = (
         scoped_runner(cluster_id)
         if scoped_runner is not _DEFAULT_SCOPED_RUNNER
@@ -1845,9 +1824,7 @@ async def check_create_volume_permissions(
         else []
     )
     job_rules = (
-        _storage_scan_job_rules(ns)
-        if volume.kind in (StorageVolumeKind.LOCAL_DISK, StorageVolumeKind.NFS)
-        else []
+        _storage_scan_job_rules(ns) if volume.kind in (StorageVolumeKind.LOCAL_DISK, StorageVolumeKind.NFS) else []
     )
     try:
         ns_exists = await namespace_exists(ns, cluster_id=cluster_id)
@@ -1855,11 +1832,7 @@ async def check_create_volume_permissions(
         raise
     except Exception:
         ns_exists = False
-    ns_rule = (
-        CheckRule(verb="create", api_group="", resource="namespaces", scope="cluster")
-        if not ns_exists
-        else None
-    )
+    ns_rule = CheckRule(verb="create", api_group="", resource="namespaces", scope="cluster") if not ns_exists else None
     all_rules = [*pvc_rules, *pv_rules, *job_rules, *([ns_rule] if ns_rule is not None else [])]
 
     try:
@@ -2153,7 +2126,7 @@ def render_storage_cleanup_script(
                 "# in $NAMESPACE using your kubeconfig when you click Re-check & Delete, after which Kubernetes",
                 "# releases kubernetes.io/pv-protection and removes the PersistentVolume.",
                 (
-                    'kubectl delete pv --wait=false --ignore-not-found=true '
+                    "kubectl delete pv --wait=false --ignore-not-found=true "
                     '-l "prism.ai/storage-volume-id=$VOLUME_ID" || true'
                 ),
                 'kubectl delete pv --wait=false --ignore-not-found=true -- "$PV_NAME"',
@@ -2170,11 +2143,7 @@ def render_storage_cleanup_script(
         from llm_d_lens.model_cache.service import list_entries_for_volume
 
         entries = list_entries_for_volume(volume.id)
-        safe_paths = [
-            path
-            for entry in entries
-            if (path := _safe_relative_cache_path(entry.cache_path)) is not None
-        ]
+        safe_paths = [path for entry in entries if (path := _safe_relative_cache_path(entry.cache_path)) is not None]
         if safe_paths and volume.pvc_name:
             cleanup_job_name = f"lens-storage-cleanup-{volume.id}"[:63].rstrip("-")
             cleanup_job = {
@@ -2203,9 +2172,7 @@ def render_storage_cleanup_script(
                                     "volumeMounts": [{"name": "model-cache", "mountPath": "/mnt/models"}],
                                 }
                             ],
-                            "volumes": [
-                                {"name": "model-cache", "persistentVolumeClaim": {"claimName": pvc_name}}
-                            ],
+                            "volumes": [{"name": "model-cache", "persistentVolumeClaim": {"claimName": pvc_name}}],
                         },
                     },
                 },
@@ -2229,7 +2196,7 @@ def render_storage_cleanup_script(
     lines.extend(
         [
             'kubectl delete jobs -n "$NAMESPACE" --ignore-not-found=true -l "prism.ai/storage-volume-id=$VOLUME_ID"',
-            'kubectl delete pvc --all-namespaces --ignore-not-found=true'
+            "kubectl delete pvc --all-namespaces --ignore-not-found=true"
             ' -l "prism.ai/storage-volume-id=$VOLUME_ID" || true',
         ]
     )
@@ -2504,20 +2471,13 @@ async def verify_create_volume(
         elif pv_forbidden:
             pv_ok = bound_volume_name == pv_name
             if pvc_phase == "Bound" and not pv_ok:
-                pv_mismatch_message = (
-                    f"PVC {pvc_name} is Bound to a different PersistentVolume; expected '{pv_name}'."
-                )
+                pv_mismatch_message = f"PVC {pvc_name} is Bound to a different PersistentVolume; expected '{pv_name}'."
         else:
             claim_ref = (pv_obj.get("spec") or {}).get("claimRef") if pv_obj is not None else None
             claim_ref_ok = not (isinstance(claim_ref, Mapping) and claim_ref) or (
                 claim_ref.get("namespace") == target_ns and claim_ref.get("name") == pvc_name
             )
-            pv_ok = (
-                bound_volume_name == pv_name
-                and pv_obj is not None
-                and pv_phase == "Bound"
-                and claim_ref_ok
-            )
+            pv_ok = bound_volume_name == pv_name and pv_obj is not None and pv_phase == "Bound" and claim_ref_ok
             if pvc_phase == "Bound" and not pv_ok:
                 if bound_volume_name != pv_name:
                     pv_mismatch_message = (
@@ -2529,9 +2489,7 @@ async def verify_create_volume(
                         "(Bound to a different PersistentVolume claim)."
                     )
                 else:
-                    pv_mismatch_message = (
-                        f"PVC {pvc_name} is Bound, waiting for PersistentVolume '{pv_name}' to bind."
-                    )
+                    pv_mismatch_message = f"PVC {pvc_name} is Bound, waiting for PersistentVolume '{pv_name}' to bind."
 
         if pvc_obj is not None and pvc_phase == "Bound" and pv_ok:
             return await _persist_ready(
@@ -2546,9 +2504,8 @@ async def verify_create_volume(
                     f"PVC {pvc_name} is Bound, waiting for PersistentVolume '{pv_name}' to bind."
                 )
             else:
-                pending_message = (
-                    f"PVC {pvc_name} exists in namespace '{target_ns}' with phase '{pvc_phase}', "
-                    + (f"waiting for PersistentVolume '{pv_name}' to bind." if pv_name else "waiting for it to bind.")
+                pending_message = f"PVC {pvc_name} exists in namespace '{target_ns}' with phase '{pvc_phase}', " + (
+                    f"waiting for PersistentVolume '{pv_name}' to bind." if pv_name else "waiting for it to bind."
                 )
             return StorageCreateVerifyResponse(
                 verified=False,
@@ -2623,8 +2580,7 @@ async def verify_create_volume(
         return await _persist_ready(
             "manual",
             message=(
-                "Registered storage volume after confirmation that an Orchestration administrator "
-                "ran the setup script."
+                "Registered storage volume after confirmation that an Orchestration administrator ran the setup script."
             ),
         )
 

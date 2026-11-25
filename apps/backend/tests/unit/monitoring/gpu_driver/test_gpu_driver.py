@@ -129,7 +129,9 @@ async def test_install_dra_applies_nfd_then_dra_manifest(monkeypatch):
 @pytest.mark.asyncio
 async def test_install_dra_reuses_existing_ready_daemonset_in_custom_namespace(monkeypatch):
     runner = FakeRunner(
-        daemonsets=[_daemonset("intel-gpu-resource-driver-kubelet-plugin", namespace="intel-gpu-resource-driver-canary")]
+        daemonsets=[
+            _daemonset("intel-gpu-resource-driver-kubelet-plugin", namespace="intel-gpu-resource-driver-canary")
+        ]
     )
     _patch_runner(monkeypatch, runner)
     response = await gpu_driver_service.install("dra", cluster_id=None, hardware="intel-xpu")

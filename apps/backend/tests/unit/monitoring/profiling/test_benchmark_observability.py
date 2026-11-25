@@ -354,9 +354,7 @@ async def test_flow_map_route_and_service_forward_monitoring_namespace_override(
     # 1. Omitted monitoring_namespace falls back to cluster's monitoring_namespace via _prometheus_endpoint
     res_default = await service.build_flow_map("exec-1", "2790b2ae")
     assert res_default.prometheus_reachable is True
-    assert seen_calls == [
-        {"cluster_id": "2790b2ae", "namespace": None, "allow_port_forward": False, "use_cache": True}
-    ]
+    assert seen_calls == [{"cluster_id": "2790b2ae", "namespace": None, "allow_port_forward": False, "use_cache": True}]
 
     # 2. Port-forward fallback without override carries cluster.monitoring_namespace on PrometheusEndpoint
     monkeypatch.setattr(

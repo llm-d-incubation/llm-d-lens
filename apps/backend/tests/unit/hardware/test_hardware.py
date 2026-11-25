@@ -72,7 +72,9 @@ def test_bundled_intel_profile_matches_legacy_constants():
     dra = profile.driver.mode("dra")
     plugin = profile.driver.mode("plugin")
     assert dra is not None and plugin is not None
-    assert dra.manifest_ref == "oci://ghcr.io/intel/intel-resource-drivers-for-kubernetes/intel-gpu-resource-driver-chart"
+    assert (
+        dra.manifest_ref == "oci://ghcr.io/intel/intel-resource-drivers-for-kubernetes/intel-gpu-resource-driver-chart"
+    )
     assert dra.chart_version == "0.11.0"
     assert plugin.manifest_ref.endswith("ref=v0.36.0")
     assert plugin.monitoring_flag == "-enable-monitoring"
@@ -93,7 +95,9 @@ def test_bundled_intel_profile_matches_legacy_constants():
     )
     assert profile.telemetry.device_metrics["memory_io_throughput"] == "hw_memory_io_rate_bytes_per_second"
     assert profile.telemetry.device_metrics["device_info"] == "hw_gpu_info"
-    assert profile.telemetry.device_metric_sources["memory_io_throughput"].metric == "hw_memory_io_rate_bytes_per_second"
+    assert (
+        profile.telemetry.device_metric_sources["memory_io_throughput"].metric == "hw_memory_io_rate_bytes_per_second"
+    )
     assert profile.telemetry.device_metric_sources["memory_io_throughput"].tile_aggregation == "sum"
     assert profile.telemetry.label_schema["pci"] == "pci_bdf"
     assert profile.telemetry.label_schema["model"] == "hw_model"

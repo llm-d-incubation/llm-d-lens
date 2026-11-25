@@ -1242,9 +1242,7 @@ class ConfigurationManifestAdapter:
         return data if isinstance(data, dict) else {}
 
     @staticmethod
-    def _marker_matches_target(
-        marker: dict[str, Any] | None, *, namespace: str, cluster_id: str | None = None
-    ) -> bool:
+    def _marker_matches_target(marker: dict[str, Any] | None, *, namespace: str, cluster_id: str | None = None) -> bool:
         if marker is None or marker.get("status") != "completed":
             return False
         marker_ns = marker.get("namespace")

@@ -506,8 +506,7 @@ async def discover_cluster_stack(
     operator = _local_or_external_component("prometheus_operator", local_operator_resources, operator_resources)
     alertmanager = _component(
         "alertmanager",
-        _by_label_name(monitoring_resources, "alertmanager")
-        or _matching(monitoring_resources, ("alertmanager",)),
+        _by_label_name(monitoring_resources, "alertmanager") or _matching(monitoring_resources, ("alertmanager",)),
     )
     kube_state = _local_or_external_component("kube_state_metrics", local_kube_state, kube_state_resources)
     node_exporter = _local_or_external_component("node_exporter", local_node_exporter, node_exporter_resources)
@@ -693,11 +692,7 @@ async def discover_cluster_stack_via_http(
             if access_mode == "admin"
             else "Monitoring stack is not configured for non-admin access"
         )
-        message = (
-            "Prometheus endpoint is invalid or unreachable"
-            if status == "degraded"
-            else absent_message
-        )
+        message = "Prometheus endpoint is invalid or unreachable" if status == "degraded" else absent_message
         return ClusterStackStatusResponse(
             cluster=ClusterSummary(context=context, reachable=True, platform="kubernetes"),
             namespace=namespace,
@@ -842,11 +837,7 @@ async def discover_cluster_stack_via_http(
                     )
 
                 grafana_ok = graf_comp.status == "ready" or (mon_mode == "existing" and graf_url is None)
-                all_core_ok = (
-                    grafana_ok
-                    and kube_state_comp.status == "ready"
-                    and node_exp_comp.status == "ready"
-                )
+                all_core_ok = grafana_ok and kube_state_comp.status == "ready" and node_exp_comp.status == "ready"
                 status = "ready" if all_core_ok else "degraded"
                 message = (
                     "Monitoring stack is reachable via Prometheus HTTP"

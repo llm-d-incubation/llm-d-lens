@@ -191,9 +191,7 @@ class DeploymentRunManager:
                 if verified_ns is None:
                     requested_ns = request.provenance.get("target_namespace") or case_prov.get("target_namespace")
                     if isinstance(requested_ns, str) and requested_ns.strip():
-                        validated_ns = validate_deployment_namespace(
-                            requested_ns.strip(), cluster_id=session.server_id
-                        )
+                        validated_ns = validate_deployment_namespace(requested_ns.strip(), cluster_id=session.server_id)
                         if await is_bootstrap_marker_present(session.server_id, validated_ns):
                             verified_ns = validated_ns
                 if verified_ns:

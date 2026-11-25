@@ -888,7 +888,9 @@ def test_nvidia_render_install_script_managed_vs_existing(tmp_path: Path):
         env["SVC_LIST_ITEMS"] = "nvidia-dcgm-exporter\n"
         env["SVC_LABELS_LINE"] = "dcgm-exporter\t\t\n"
         env["SVC_PORTS_LINES"] = "metrics\t9400\n"
-        proc = subprocess.run(["bash", "-s"], input=existing_script, text=True, env=env, capture_output=True, check=False)
+        proc = subprocess.run(
+            ["bash", "-s"], input=existing_script, text=True, env=env, capture_output=True, check=False
+        )
         assert proc.returncode == 0, proc.stderr
         assert "skipping dcgm-exporter install" in proc.stdout
         assert "helm upgrade" not in log_file.read_text(encoding="utf-8")
@@ -1058,8 +1060,12 @@ def test_intel_render_install_script_managed_vs_existing_and_modes(tmp_path: Pat
     assert proc_dra.returncode == 0, proc_dra.stderr
     calls_dra = log_file.read_text(encoding="utf-8")
     assert "kubectl label --overwrite namespace -- intel-xpumd resource.kubernetes.io/admin-access=true" in calls_dra
-    label_node_calls = [line for line in calls_dra.splitlines() if line.startswith("kubectl label") and " node " in line]
-    assert label_node_calls == ["kubectl label --overwrite node -- gpu-node-dra intel.feature.node.kubernetes.io/gpu=true"]
+    label_node_calls = [
+        line for line in calls_dra.splitlines() if line.startswith("kubectl label") and " node " in line
+    ]
+    assert label_node_calls == [
+        "kubectl label --overwrite node -- gpu-node-dra intel.feature.node.kubernetes.io/gpu=true"
+    ]
     assert "helm upgrade --install xpumd oci://ghcr.io/intel/xpumanager/charts/xpumd" in calls_dra
     values_dra = yaml.safe_load(values_copy.read_text(encoding="utf-8"))
     assert values_dra["gpuAccess"] == "dra"
@@ -1311,8 +1317,22 @@ def test_intel_render_install_script_flag_ordering_and_double_dash_safety(
 @pytest.mark.parametrize(
     ("provider_cls", "target_ns", "ready_ds", "svc_name", "sm_name", "known_port"),
     [
-        (IntelGpuProvider, "intel-xpumd", "ext-ns\tintel-xpumanager\t2\t2\n", "intel-xpumanager", "lens-managed-xpumd", "29999"),
-        (NvidiaGpuProvider, "dcgm-exporter", "ext-ns\tnvidia-dcgm-exporter\t2\t2\n", "nvidia-dcgm-exporter", "lens-managed-dcgm-exporter", "9400"),
+        (
+            IntelGpuProvider,
+            "intel-xpumd",
+            "ext-ns\tintel-xpumanager\t2\t2\n",
+            "intel-xpumanager",
+            "lens-managed-xpumd",
+            "29999",
+        ),
+        (
+            NvidiaGpuProvider,
+            "dcgm-exporter",
+            "ext-ns\tnvidia-dcgm-exporter\t2\t2\n",
+            "nvidia-dcgm-exporter",
+            "lens-managed-dcgm-exporter",
+            "9400",
+        ),
     ],
 )
 def test_accelerator_install_script_fallback_sm_guards_and_idempotency(
@@ -1348,7 +1368,7 @@ def test_accelerator_install_script_fallback_sm_guards_and_idempotency(
     # 1. Existing ServiceMonitor in EXISTING_NS (including our own lens-managed-* SM on re-run) -> idempotent skip
     for sm_row in (
         f"vendor-sm\t{svc_name}\t\t\n",
-        f"{sm_name}\t\t\t{{\"app.kubernetes.io/name\":\"{svc_name}\"}}\n",
+        f'{sm_name}\t\t\t{{"app.kubernetes.io/name":"{svc_name}"}}\n',
     ):
         sm_file.unlink(missing_ok=True)
         env["SM_ITEMS_EXISTING_NS"] = sm_row
@@ -1360,8 +1380,8 @@ def test_accelerator_install_script_fallback_sm_guards_and_idempotency(
 
     # 2. Existing ServiceMonitor in MONITORING_NS targeting EXISTING_NS via matchNames or any:true -> skip
     for mon_sm_row in (
-        f"central-sm\t\tother-ns ext-ns\t{{\"app\":\"{svc_name}\"}}\n",
-        f"central-any-sm\ttrue\t\t{{\"app\":\"{svc_name}\"}}\n",
+        f'central-sm\t\tother-ns ext-ns\t{{"app":"{svc_name}"}}\n',
+        f'central-any-sm\ttrue\t\t{{"app":"{svc_name}"}}\n',
     ):
         sm_file.unlink(missing_ok=True)
         env["SM_ITEMS_EXISTING_NS"] = ""
@@ -1375,7 +1395,7 @@ def test_accelerator_install_script_fallback_sm_guards_and_idempotency(
     #    and port name containing "metrics" takes priority over known exporter port
     sm_file.unlink(missing_ok=True)
     env["SM_ITEMS_EXISTING_NS"] = ""
-    env["SM_ITEMS_MON_NS"] = f"other-sm\t\tunrelated-ns\t{{\"app\":\"{svc_name}\"}}\n"
+    env["SM_ITEMS_MON_NS"] = f'other-sm\t\tunrelated-ns\t{{"app":"{svc_name}"}}\n'
     env["SVC_PORTS_LINES"] = f"exporter\t{known_port}\nhttp-metrics\t9100\n"
     proc = subprocess.run(["bash", "-s"], input=script, text=True, env=env, capture_output=True, check=False)
     assert proc.returncode == 0, proc.stderr
@@ -1416,7 +1436,13 @@ def test_accelerator_install_script_fallback_sm_guards_and_idempotency(
     ("provider_cls", "target_ns", "helm_release", "unready_base", "ready_ds"),
     [
         (IntelGpuProvider, "intel-xpumd", "xpumd", "intel-xpumd\txpumd", "ext-ns\tintel-xpumanager\t2\t2\n"),
-        (NvidiaGpuProvider, "dcgm-exporter", "dcgm-exporter", "dcgm-exporter\tdcgm-exporter", "ext-ns\tnvidia-dcgm-exporter\t2\t2\n"),
+        (
+            NvidiaGpuProvider,
+            "dcgm-exporter",
+            "dcgm-exporter",
+            "dcgm-exporter\tdcgm-exporter",
+            "ext-ns\tnvidia-dcgm-exporter\t2\t2\n",
+        ),
     ],
 )
 def test_accelerator_install_script_unready_and_mixed_daemonsets(
@@ -1451,7 +1477,9 @@ def test_accelerator_install_script_unready_and_mixed_daemonsets(
             for status_cols in ("\t0\t0\n", "\t2\t1\n", "\t\t\n", "\t2\t\n"):
                 log_file.write_text("", encoding="utf-8")
                 env["DS_ITEMS"] = f"{ns_prefix}{status_cols}"
-                proc = subprocess.run(["bash", "-s"], input=script, text=True, env=env, capture_output=True, check=False)
+                proc = subprocess.run(
+                    ["bash", "-s"], input=script, text=True, env=env, capture_output=True, check=False
+                )
                 assert proc.returncode == 0, proc.stderr
                 assert f"helm upgrade --install {helm_release}" in log_file.read_text(encoding="utf-8")
 
@@ -1685,9 +1713,15 @@ async def test_admin_script_recheck_and_non_admin_install_guard(monkeypatch):
     assert "skipping dcgm-exporter install" in script_res.script
 
     invalidated = []
-    monkeypatch.setattr(accel_service, "invalidate_monitoring_access_cache", lambda cid: invalidated.append(("access", cid)))
-    monkeypatch.setattr(accel_service, "invalidate_prometheus_endpoint_cache", lambda cid: invalidated.append(("prom", cid)))
-    monkeypatch.setattr(accel_service, "read_and_persist_monitoring_marker", AsyncMock(return_value={"status": "complete"}))
+    monkeypatch.setattr(
+        accel_service, "invalidate_monitoring_access_cache", lambda cid: invalidated.append(("access", cid))
+    )
+    monkeypatch.setattr(
+        accel_service, "invalidate_prometheus_endpoint_cache", lambda cid: invalidated.append(("prom", cid))
+    )
+    monkeypatch.setattr(
+        accel_service, "read_and_persist_monitoring_marker", AsyncMock(return_value={"status": "complete"})
+    )
     monkeypatch.setattr(
         accel_service,
         "probe_monitoring_access",
@@ -1753,8 +1787,13 @@ def test_accelerator_router_enforces_cluster_access_on_routes(monkeypatch):
         )
 
         # Inaccessible cluster rejected
-        assert client.get("/api/v1/monitoring/accelerators/nvidia_gpu/admin-script?cluster_id=c-forbidden").status_code == 403
-        assert client.post("/api/v1/monitoring/accelerators/nvidia_gpu/recheck?cluster_id=c-forbidden").status_code == 403
+        assert (
+            client.get("/api/v1/monitoring/accelerators/nvidia_gpu/admin-script?cluster_id=c-forbidden").status_code
+            == 403
+        )
+        assert (
+            client.post("/api/v1/monitoring/accelerators/nvidia_gpu/recheck?cluster_id=c-forbidden").status_code == 403
+        )
         assert client.get("/api/v1/monitoring/accelerators/nvidia_gpu/status?cluster_id=c-forbidden").status_code == 403
         assert client.get("/api/v1/monitoring/accelerators/nvidia_gpu/links?cluster_id=c-forbidden").status_code == 403
 
@@ -1797,9 +1836,11 @@ async def test_accelerator_missing_counts_and_custom_monitoring_namespace_end_to
     monkeypatch.setattr(
         cluster_registry,
         "get_cluster_monitoring_settings",
-        lambda cid: {"monitoring_mode": "managed", "monitoring_namespace": "llm-d-monitoring-123454"}
-        if cid == "2790b2ae"
-        else None,
+        lambda cid: (
+            {"monitoring_mode": "managed", "monitoring_namespace": "llm-d-monitoring-123454"}
+            if cid == "2790b2ae"
+            else None
+        ),
     )
     monkeypatch.setattr(
         accel_service,
@@ -1865,7 +1906,9 @@ async def test_accelerator_missing_counts_and_custom_monitoring_namespace_end_to
     # Install wires monitoring_namespace into argv, post_install (configure_monitoring), and verifier
     captured_install: dict = {}
 
-    async def fake_op_create(request, *, context, argv, verifier, post_install=None, idempotency_key=None, cluster_id=None):
+    async def fake_op_create(
+        request, *, context, argv, verifier, post_install=None, idempotency_key=None, cluster_id=None
+    ):
         captured_install["argv"] = argv
         captured_install["post_install"] = post_install
         captured_install["verifier"] = verifier
@@ -1924,7 +1967,9 @@ async def test_accelerator_missing_counts_and_custom_monitoring_namespace_end_to
         assert r1.status_code == 200
         assert seen_route_mon_ns == [("status", "llm-d-monitoring-123454")]
 
-        r_bad = client.get("/api/v1/monitoring/accelerators/intel_gpu/links?cluster_id=2790b2ae&monitoring_namespace=Bad_NS")
+        r_bad = client.get(
+            "/api/v1/monitoring/accelerators/intel_gpu/links?cluster_id=2790b2ae&monitoring_namespace=Bad_NS"
+        )
         assert r_bad.status_code == 422
 
         r_recheck = client.post(

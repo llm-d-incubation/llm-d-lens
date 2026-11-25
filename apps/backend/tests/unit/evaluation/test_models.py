@@ -459,7 +459,7 @@ async def test_benchmark_storage_non_admin_403_falls_back_to_prometheus_and_name
         del stdin
         if arguments[:2] == ("get", "storageclass"):
             raise RuntimeError(
-                'Error from server (Forbidden): storageclasses.storage.k8s.io is forbidden: '
+                "Error from server (Forbidden): storageclasses.storage.k8s.io is forbidden: "
                 'User "dev" cannot list resource "storageclasses" at the cluster scope'
             )
         if arguments[:2] == ("get", "pvc"):
@@ -1250,7 +1250,7 @@ async def test_non_admin_pvc_validates_namespace_and_execute_redacts_error_crede
     async def fail_with_secrets(*_args, **_kwargs):
         raise RuntimeError(
             "kubectl failed with Bearer secret-bearer-123 HF_TOKEN=hf_AbCdEfGhIjKlMnOpQrStUvWxYz "
-            "OPENAI_API_KEY=sk-secret-value config file \"/tmp/cluster.kubeconfig\""
+            'OPENAI_API_KEY=sk-secret-value config file "/tmp/cluster.kubeconfig"'
         )
 
     monkeypatch.setattr(evaluate_router, "capture_benchmark_context", fail_with_secrets)
@@ -1344,8 +1344,14 @@ async def test_eval_k8s_helpers_short_circuit_without_real_cluster_target(monkey
         return CommandResult(tuple(argv), 1, "", "Forbidden")
 
     monkeypatch.setattr(k8s_commands, "execute_sdk_command", failing_sdk)
-    assert await evaluate_router._eval_k8s_json(["get", "pods", "-n", "ns"], {"KUBERNETES_SERVICE_HOST": "10.0.0.1"}) is None
-    assert await evaluate_router._eval_k8s_delete("configmap", "cm-a", "ns", {"KUBERNETES_SERVICE_HOST": "10.0.0.1"}) is False
+    assert (
+        await evaluate_router._eval_k8s_json(["get", "pods", "-n", "ns"], {"KUBERNETES_SERVICE_HOST": "10.0.0.1"})
+        is None
+    )
+    assert (
+        await evaluate_router._eval_k8s_delete("configmap", "cm-a", "ns", {"KUBERNETES_SERVICE_HOST": "10.0.0.1"})
+        is False
+    )
     assert spawn_calls == []
 
     # _eval_k8s_apply (which falls through to _process_spawn) must never re-inject stripped os.environ proxies.
@@ -1522,9 +1528,7 @@ spec:
         args: [Qwen/Qwen3-30B, -tp, "2"]
 """
     execution = SimpleNamespace(
-        configuration_artifacts=[
-            SimpleNamespace(content=json.dumps({"officialGuide": {"renderedManifest": manifest}}))
-        ]
+        configuration_artifacts=[SimpleNamespace(content=json.dumps({"officialGuide": {"renderedManifest": manifest}}))]
     )
     data = evaluate_router._build_standup_parameters_data(
         execution,
@@ -1690,9 +1694,7 @@ async def test_gaie_presets_config_b64_and_harness_env_override(tmp_path):
                 "spec": {
                     "template": {
                         "spec": {
-                            "containers": [
-                                {"name": "epp", "args": ["--config-file=/config/custom-epp.yaml"]}
-                            ],
+                            "containers": [{"name": "epp", "args": ["--config-file=/config/custom-epp.yaml"]}],
                             "volumes": [{"name": "cfg", "configMap": {"name": "epp-cm"}}],
                         }
                     }
@@ -1707,9 +1709,7 @@ async def test_gaie_presets_config_b64_and_harness_env_override(tmp_path):
         ]
     )
     exec_with_epp = SimpleNamespace(
-        configuration_artifacts=[
-            SimpleNamespace(content=json.dumps({"officialGuide": {"renderedManifest": manifest}}))
-        ]
+        configuration_artifacts=[SimpleNamespace(content=json.dumps({"officialGuide": {"renderedManifest": manifest}}))]
     )
     b64 = await evaluate_router._resolve_gaie_presets_config_b64(exec_with_epp, "ns", {})
     decoded = yaml.safe_load(base64.b64decode(b64).decode("utf-8"))

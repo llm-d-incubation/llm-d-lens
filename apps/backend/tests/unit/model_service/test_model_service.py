@@ -1149,7 +1149,9 @@ def test_remediation_endpoints_enforce_rbac_and_map_errors(monkeypatch):
             raise GatewayValidationError("bad marker namespace")
         return handoff
 
-    async def fake_create(cluster_id, *, mode="routes", ipp_config=None, provider=None, marker_namespace=None, actor=None):
+    async def fake_create(
+        cluster_id, *, mode="routes", ipp_config=None, provider=None, marker_namespace=None, actor=None
+    ):
         return handoff.model_copy(update={"mode": mode})
 
     async def fake_verify(cluster_id, *, expected_hash=None, marker_namespace=None, actor=None):
@@ -1396,7 +1398,9 @@ def test_non_admin_delete_member_returns_204_when_handoff_already_synced(monkeyp
     _patch_target(monkeypatch, execution_id="exec-sync-del", cluster_id="cluster-a")
     service = _service()
     group = service.create_group(GroupCreateRequest(name="sync-del-group", clusterId="cluster-a"), created_by=None)
-    member = service.create_member(MemberCreateRequest(groupId=group.id, executionId="exec-sync-del"), published_by=None)
+    member = service.create_member(
+        MemberCreateRequest(groupId=group.id, executionId="exec-sync-del"), published_by=None
+    )
     monkeypatch.setattr(router_module, "_service", service)
     principal = _admin_principal("u-del", "u-del")
 

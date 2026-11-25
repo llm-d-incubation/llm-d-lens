@@ -1978,7 +1978,9 @@ def _ssar_list_response(checks: list[dict], *, allow_fn) -> str:
 @pytest.mark.asyncio
 async def test_probe_capabilities_ssar_admin_vs_non_admin_and_cache(monkeypatch):
     _seed_member(cluster_id="cluster-ssar")
-    kubeconfig_value = "apiVersion: v1\nkind: Config\nclusters: [{name: c, cluster: {server: https://10.0.0.10:6443}}]\n"
+    kubeconfig_value = (
+        "apiVersion: v1\nkind: Config\nclusters: [{name: c, cluster: {server: https://10.0.0.10:6443}}]\n"
+    )
     monkeypatch.setattr(gateway_ops_module, "read_kubeconfig", lambda _cid: kubeconfig_value)
     monkeypatch.setattr(
         gateway_ops_module,
@@ -2016,7 +2018,10 @@ async def test_probe_capabilities_ssar_admin_vs_non_admin_and_cache(monkeypatch)
     assert caps.can_port_forward_gateway is False
     assert caps.permitted_member_namespaces == frozenset({"ns"})
     assert len(ssar_calls) == 1
-    sent_attrs = [(i["spec"]["resourceAttributes"].get("group", ""), i["spec"]["resourceAttributes"]["resource"]) for i in ssar_calls[0]["items"]]
+    sent_attrs = [
+        (i["spec"]["resourceAttributes"].get("group", ""), i["spec"]["resourceAttributes"]["resource"])
+        for i in ssar_calls[0]["items"]
+    ]
     assert ("llm-d.ai", "inferencemodelrewrites") in sent_attrs
     assert ("gateway.networking.k8s.io", "gatewayclasses") in sent_attrs
 
@@ -2043,9 +2048,13 @@ async def test_probe_capabilities_ssar_admin_vs_non_admin_and_cache(monkeypatch)
         (_Result(returncode=1, stderr="Error from server (Forbidden): selfsubjectaccessreviews is forbidden"), False),
     ],
 )
-async def test_probe_capabilities_registered_cluster_fails_closed_and_surfaces_401(monkeypatch, result, expect_auth_error):
+async def test_probe_capabilities_registered_cluster_fails_closed_and_surfaces_401(
+    monkeypatch, result, expect_auth_error
+):
     monkeypatch.setattr(gateway_ops_module, "read_kubeconfig", lambda _cid: "kubeconfig-bytes")
-    monkeypatch.setattr(gateway_ops_module, "get_cluster", lambda _cid: SimpleNamespace(gateway_namespace="lens-gateway"))
+    monkeypatch.setattr(
+        gateway_ops_module, "get_cluster", lambda _cid: SimpleNamespace(gateway_namespace="lens-gateway")
+    )
 
     class _ErrRunner:
         async def run(self, argv, *, cwd=None, env=None, input=None, timeout=10):  # noqa: A002
@@ -2179,7 +2188,9 @@ async def test_non_admin_status_uses_http_probe_without_gateway_ns_reads(monkeyp
 async def test_get_ipp_config_separates_403_from_401(monkeypatch):
     from llm_d_lens.model_service.gateway_ops import GatewayUnauthenticatedError
 
-    monkeypatch.setattr(gateway_ops_module, "get_cluster", lambda _cid: SimpleNamespace(gateway_namespace="lens-gateway"))
+    monkeypatch.setattr(
+        gateway_ops_module, "get_cluster", lambda _cid: SimpleNamespace(gateway_namespace="lens-gateway")
+    )
     service = GatewayOpsService()
 
     service._kubectl = AsyncMock(return_value=_Result(returncode=1, stderr="Error from server (Forbidden)"))
@@ -2325,7 +2336,10 @@ async def test_non_admin_reconcile_delete_handoff_script_and_verify(monkeypatch)
     async with gateway_ops_module.gateway_lock("cluster-na2"):
         with pytest.raises(GatewayAdminHandoffRequired) as exc_info:
             await service.remove_model_route(group)
-    assert any(op_item.action == "delete" and op_item.kind == "httproute" for op_item in exc_info.value.handoff.pending_operations)
+    assert any(
+        op_item.action == "delete" and op_item.kind == "httproute"
+        for op_item in exc_info.value.handoff.pending_operations
+    )
 
     # 6. record_member_deletion records pending delete on non-admin
     mem_handoff = await service.record_member_deletion(member, group, remaining_members=[])
@@ -2338,7 +2352,11 @@ async def test_non_admin_reconcile_delete_handoff_script_and_verify(monkeypatch)
 async def test_remediation_validation_rejects_bad_inputs(monkeypatch):
     from llm_d_lens.model_service.gateway_ops import GatewayClusterNotFoundError, GatewayValidationError
 
-    monkeypatch.setattr(gateway_ops_module, "get_cluster", lambda cid: None if cid == "missing" else SimpleNamespace(gateway_namespace="lens-gateway"))
+    monkeypatch.setattr(
+        gateway_ops_module,
+        "get_cluster",
+        lambda cid: None if cid == "missing" else SimpleNamespace(gateway_namespace="lens-gateway"),
+    )
     service = GatewayOpsService()
 
     with pytest.raises(GatewayClusterNotFoundError):
@@ -2568,7 +2586,9 @@ async def test_qualified_pool_name_without_epp_ref_and_error_redaction(monkeypat
     assert "secret-tok" not in redacted
     assert "abc123" not in redacted
     assert "/tmp/kc.yaml" not in redacted
-    assert gateway_ops_module._normalize_gateway_url("2001:db8::1", default_port=30080) == "http://[2001:db8::1]:30080/v1"
+    assert (
+        gateway_ops_module._normalize_gateway_url("2001:db8::1", default_port=30080) == "http://[2001:db8::1]:30080/v1"
+    )
 
 
 @pytest.mark.asyncio
@@ -3482,7 +3502,9 @@ async def test_service_state_endpointslice_fallback_on_forbidden(monkeypatch):
     async def fake_kubectl_empty(_cluster_id, argv, **_kwargs):
         if argv[:2] == ["get", "endpoints"]:
             return _Result(returncode=1, stderr="Forbidden")
-        return _Result(stdout=json.dumps({"items": [{"endpoints": [{"addresses": ["10.0.0.1"], "conditions": {"ready": False}}]}]}))
+        return _Result(
+            stdout=json.dumps({"items": [{"endpoints": [{"addresses": ["10.0.0.1"], "conditions": {"ready": False}}]}]})
+        )
 
     monkeypatch.setattr(service, "_kubectl", fake_kubectl_empty)
     assert await service._service_state("cluster-es", "qwen-epp", "ns") == ("missing", 0)
@@ -3546,7 +3568,11 @@ async def test_member_health_non_admin_unknown_components_and_probe_members_stab
                 if kind == "endpointslices":
                     return _Result(
                         stdout=json.dumps(
-                            {"items": [{"endpoints": [{"addresses": ["10.233.115.33"], "conditions": {"ready": True}}]}]}
+                            {
+                                "items": [
+                                    {"endpoints": [{"addresses": ["10.233.115.33"], "conditions": {"ready": True}}]}
+                                ]
+                            }
                         )
                     )
                 if kind == "inferencepool":
@@ -4107,7 +4133,9 @@ async def test_superset_candidates_cover_omitted_inferred_deletes(monkeypatch):
             if list(argv[:3]) == ["kubectl", "create", "-f"]:
                 payload = json.loads(input or "{}")
                 allowed = {boot_ns, "lens-edit"} if permit_boot_ns else {"lens-edit"}
-                return _Result(stdout=_ssar_list_response(payload["items"], allow_fn=lambda a: a.get("namespace") in allowed))
+                return _Result(
+                    stdout=_ssar_list_response(payload["items"], allow_fn=lambda a: a.get("namespace") in allowed)
+                )
             if list(argv[:3]) == ["kubectl", "get", "configmap"]:
                 cm = marker_store.get(argv[3])
                 return _Result(stdout=json.dumps(cm)) if cm else _Result(stdout="")
@@ -4236,8 +4264,9 @@ async def test_verify_remediation_http_probe_header_and_advisory_vs_blocking(mon
                 return _Result(
                     stdout=_ssar_list_response(
                         payload["items"],
-                        allow_fn=lambda a: a.get("namespace") == "lens-edit"
-                        or (can_read_gw and a.get("verb") in ("get", "list")),
+                        allow_fn=lambda a: (
+                            a.get("namespace") == "lens-edit" or (can_read_gw and a.get("verb") in ("get", "list"))
+                        ),
                     )
                 )
             if list(argv[:3]) == ["kubectl", "get", "deploy"]:
@@ -4388,7 +4417,9 @@ async def test_probe_gateway_via_prometheus_ksm_excludes_sysctl_and_handles_zero
 @pytest.mark.asyncio
 async def test_status_uses_marker_discovered_gateway_with_ssrf_guard(monkeypatch):
     cluster_id = "cluster-disc"
-    kubeconfig = "apiVersion: v1\nkind: Config\nclusters: [{name: c, cluster: {server: https://169.254.169.254:6443}}]\n"
+    kubeconfig = (
+        "apiVersion: v1\nkind: Config\nclusters: [{name: c, cluster: {server: https://169.254.169.254:6443}}]\n"
+    )
     cluster = SimpleNamespace(
         id=cluster_id,
         name="Discovered Cluster",
@@ -5068,7 +5099,7 @@ async def test_prometheus_ksm_details_scaled_zero_envoy_prefix_ssrf_and_status(m
                 ]
             return []
         if scenario["mode"] == "envoy_running":
-            if 'namespace="envoy-gateway-system"' in promql and 'envoy-.*lens-inference-gateway.*' in promql:
+            if 'namespace="envoy-gateway-system"' in promql and "envoy-.*lens-inference-gateway.*" in promql:
                 if promql.startswith("kube_deployment_spec_replicas"):
                     return [{"metric": {"deployment": "envoy-lens-gateway-c1"}, "value": [1, "1"]}]
                 if promql.startswith("kube_deployment_status_replicas_available"):
@@ -5221,7 +5252,9 @@ async def test_non_admin_mutating_gates_403_fallback_and_stale_recovery(monkeypa
         "metadata": {"labels": {"lens.llm-d.ai/cluster": cluster_id}},
         "data": {"desiredHash": repair_preview.desired_hash, "status": "complete"},
     }
-    res_repair = await ops.verify_remediation(cluster_id, mode="gateway_repair", expected_hash=repair_preview.desired_hash)
+    res_repair = await ops.verify_remediation(
+        cluster_id, mode="gateway_repair", expected_hash=repair_preview.desired_hash
+    )
     assert res_repair.verified is True
     assert res_repair.reconcile_status == "synced"
     _, saved_after_verify = ops._load_handoff_locked(cluster_id)
@@ -5403,16 +5436,12 @@ async def test_gateway_serving_state_falls_back_to_discovered_url_with_loopback_
     group = SimpleNamespace(name="qwen3", model_ref="Qwen/Qwen3-8B", base_model=None)
 
     # 1. Loopback discovered URL is blocked by block_loopback=True
-    monkeypatch.setattr(
-        service, "cluster_gateway_base_url", AsyncMock(return_value="http://127.0.0.1:32592/v1")
-    )
+    monkeypatch.setattr(service, "cluster_gateway_base_url", AsyncMock(return_value="http://127.0.0.1:32592/v1"))
     assert await service._gateway_serving_state(member, group) == "unreachable"
     assert captured_hooks == []
 
     # 2. Valid non-loopback discovered URL succeeds and uses _ssrf_discovered_gateway_request_hook
-    monkeypatch.setattr(
-        service, "cluster_gateway_base_url", AsyncMock(return_value="http://10.239.11.206:32592/v1")
-    )
+    monkeypatch.setattr(service, "cluster_gateway_base_url", AsyncMock(return_value="http://10.239.11.206:32592/v1"))
     assert await service._gateway_serving_state(member, group) == "ready"
     assert captured_hooks == [[gateway_ops_module._ssrf_discovered_gateway_request_hook]]
 

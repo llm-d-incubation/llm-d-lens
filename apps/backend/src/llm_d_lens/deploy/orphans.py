@@ -306,9 +306,7 @@ def is_deletable_deployment_namespace(namespace: str | None, *, cluster_id: str 
 
 def _require_deletable_namespace(namespace: str | None, *, cluster_id: str | None = None) -> str:
     if not is_deletable_deployment_namespace(namespace, cluster_id=cluster_id):
-        raise OrphanCleanupError(
-            f"refusing to clean protected or non-prefixed namespace {namespace!r}"
-        )
+        raise OrphanCleanupError(f"refusing to clean protected or non-prefixed namespace {namespace!r}")
     assert namespace is not None
     return namespace
 
@@ -642,8 +640,7 @@ def render_deployment_cleanup_script(
         lines.append(f"# {op['title']}")
         lines.append(
             " ".join(
-                shlex.quote(part)
-                for part in ("kubectl", "delete", op["kind"], op["name"], "--ignore-not-found=true")
+                shlex.quote(part) for part in ("kubectl", "delete", op["kind"], op["name"], "--ignore-not-found=true")
             )
         )
         lines.append("")
@@ -664,7 +661,7 @@ def render_deployment_cleanup_script(
                 '  --from-literal="status=completed" \\',
                 '  --from-literal="completedAt=$COMPLETED_AT" \\',
                 "  --dry-run=client -o yaml | \\",
-                'kubectl label --local -f - \\',
+                "kubectl label --local -f - \\",
                 '  "app.kubernetes.io/managed-by=lens" \\',
                 '  "lens.llm-d.ai/cluster=$CLUSTER_LABEL" \\',
                 '  "lens.llm-d.ai/cleanup-digest=$CLEANUP_DIGEST16" \\',
@@ -676,7 +673,7 @@ def render_deployment_cleanup_script(
 
     lines.extend(
         [
-            'printf \'Lens Orchestration administrator deployment cleanup completed for %s (digest %s)\\n\' '
+            "printf 'Lens Orchestration administrator deployment cleanup completed for %s (digest %s)\\n' "
             '"$TARGET_NAMESPACE" "$CLEANUP_DIGEST"',
             "",
         ]
@@ -884,13 +881,7 @@ async def verify_deployment_cleanup(
                         cluster_ok = (cluster_val is None or cluster_val == "") or (
                             isinstance(cluster_val, str) and cluster_val == clean_cluster_id
                         )
-                        if (
-                            status_val == "completed"
-                            and ns_val == target_ns
-                            and digest_ok
-                            and exec_ok
-                            and cluster_ok
-                        ):
+                        if status_val == "completed" and ns_val == target_ns and digest_ok and exec_ok and cluster_ok:
                             marker_verified = True
                             marker_info = {
                                 "namespace": marker_ns,

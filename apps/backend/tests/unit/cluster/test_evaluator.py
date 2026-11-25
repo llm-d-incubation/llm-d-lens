@@ -841,10 +841,7 @@ async def test_intel_plugin_is_admin_only_even_when_every_check_is_allowed():
     user_ids = {item["id"] for item in ready_report.user_operations}
     assert {"accelerator.nfd", "accelerator.nfd.rules", "accelerator.intel.plugin.0"} <= user_ids
     submitted_wildcard = [
-        item
-        for call in ready_runner.calls
-        for item in call["items"]
-        if _resource(item["spec"])[:3] == ("*", "*", "*")
+        item for call in ready_runner.calls for item in call["items"] if _resource(item["spec"])[:3] == ("*", "*", "*")
     ]
     assert len(submitted_wildcard) == 1
 
@@ -901,11 +898,7 @@ async def test_unbound_namespace_checks_are_never_user_or_ready():
     assert report.admin_operations[0]["id"] == "unbound.op"
     assert report.missing[0]["reason"] == "namespace target is not bound"
     # Non-wildcard plans never submit a cluster-wide wildcard SSAR probe.
-    assert not any(
-        _resource(item["spec"])[:3] == ("*", "*", "*")
-        for call in runner.calls
-        for item in call["items"]
-    )
+    assert not any(_resource(item["spec"])[:3] == ("*", "*", "*") for call in runner.calls for item in call["items"])
 
     # Even when a wildcard op in the same batch triggers */*/*=True, non-wildcard unbound ops remain fail-closed.
     wildcard_op = _op(
@@ -1058,13 +1051,21 @@ async def test_gateway_and_storage_namespace_splits_avoid_admin_to_user_errors()
     assert ready_report.status == "ready"
     assert ready_report.admin_operations == []
     ready_user_ids = {entry["id"] for entry in ready_report.user_operations}
-    assert {"gateway.namespace", "gateway.manifests", "storage.namespace", "storage.pv", "storage.pvc"} <= ready_user_ids
+    assert {
+        "gateway.namespace",
+        "gateway.manifests",
+        "storage.namespace",
+        "storage.pv",
+        "storage.pvc",
+    } <= ready_user_ids
 
     # Partial RBAC: denying gateway.manifests / storage.pvc while namespaces is allowed
     # promotes gateway.namespace, gateway.crds, gateway.provider.0, storage.namespace, storage.pv cleanly.
     partial_runner = FakeRunner(
-        deny=lambda spec: _resource_attributes(spec).get("resource") in {"gateways", "persistentvolumeclaims"}
-        and _resource_attributes(spec).get("verb") == "create"
+        deny=lambda spec: (
+            _resource_attributes(spec).get("resource") in {"gateways", "persistentvolumeclaims"}
+            and _resource_attributes(spec).get("verb") == "create"
+        )
     )
     partial_report = await evaluate_operations(
         CLUSTER_ID,
@@ -1255,9 +1256,7 @@ async def test_custom_storage_namespace_targets_capabilities_and_non_admin_opera
         MODEL_CACHE_TOKEN_SECRET,
     ) in cache_secret_checks
 
-    unnormalized_plan = plan.model_copy(
-        update={"storage": plan.storage.model_copy(update={"namespace": None})}
-    )
+    unnormalized_plan = plan.model_copy(update={"storage": plan.storage.model_copy(update={"namespace": None})})
     assert _storage_namespace_for_plan(unnormalized_plan) == STORAGE_NAMESPACE_PREFIX
     assert _model_cache_namespace_for_plan(unnormalized_plan) == STORAGE_NAMESPACE_PREFIX
     assert any(
@@ -1271,9 +1270,7 @@ async def test_custom_storage_namespace_targets_capabilities_and_non_admin_opera
     runner = FakeRunner(
         deny=lambda spec: (
             _resource_attributes(spec).get("resource") in {"persistentvolumes", "nodes"}
-            or (
-                _resource_attributes(spec).get("namespace", "") not in {"", "team-inference"}
-            )
+            or (_resource_attributes(spec).get("namespace", "") not in {"", "team-inference"})
         ),
     )
     report = await evaluate_operations(CLUSTER_ID, operations, plan_hash="plan-hash", runner=runner)
@@ -1922,11 +1919,14 @@ async def test_apply_live_prometheus_satisfaction_fails_closed_on_ssrf_timeout_h
             transport=httpx.MockTransport(timeout_handler),
         ),
     )
-    assert await apply_live_prometheus_satisfaction(
-        marker,
-        admin_operation_ids=admin_ops,
-        prometheus_url="http://10.0.0.15:30090",
-    ) == marker
+    assert (
+        await apply_live_prometheus_satisfaction(
+            marker,
+            admin_operation_ids=admin_ops,
+            prometheus_url="http://10.0.0.15:30090",
+        )
+        == marker
+    )
 
     # 3. HTTP 500
     monkeypatch.setattr(
@@ -1938,11 +1938,14 @@ async def test_apply_live_prometheus_satisfaction_fails_closed_on_ssrf_timeout_h
             transport=httpx.MockTransport(lambda _req: httpx.Response(500, text="error")),
         ),
     )
-    assert await apply_live_prometheus_satisfaction(
-        marker,
-        admin_operation_ids=admin_ops,
-        prometheus_url="http://10.0.0.15:30090",
-    ) == marker
+    assert (
+        await apply_live_prometheus_satisfaction(
+            marker,
+            admin_operation_ids=admin_ops,
+            prometheus_url="http://10.0.0.15:30090",
+        )
+        == marker
+    )
 
     # 4. Invalid JSON
     monkeypatch.setattr(
@@ -1954,11 +1957,14 @@ async def test_apply_live_prometheus_satisfaction_fails_closed_on_ssrf_timeout_h
             transport=httpx.MockTransport(lambda _req: httpx.Response(200, text="not-json")),
         ),
     )
-    assert await apply_live_prometheus_satisfaction(
-        marker,
-        admin_operation_ids=admin_ops,
-        prometheus_url="http://10.0.0.15:30090",
-    ) == marker
+    assert (
+        await apply_live_prometheus_satisfaction(
+            marker,
+            admin_operation_ids=admin_ops,
+            prometheus_url="http://10.0.0.15:30090",
+        )
+        == marker
+    )
 
 
 def test_promote_admin_dependencies_respects_completed_blocked_prohibited_and_unknown_seeds():
@@ -2214,9 +2220,7 @@ def test_storage_operator_role_and_binding_manifests_and_rule_matcher():
         "kind": "Role",
         "name": STORAGE_OPERATOR_ROLE_NAME,
     }
-    assert sa_binding["subjects"] == [
-        {"kind": "ServiceAccount", "name": "runner-sa", "namespace": "team-inference"}
-    ]
+    assert sa_binding["subjects"] == [{"kind": "ServiceAccount", "name": "runner-sa", "namespace": "team-inference"}]
 
     user_binding = storage_operator_role_binding_manifest(
         "lens-storage-283db094",
@@ -2302,7 +2306,9 @@ async def test_detect_kubeconfig_subject_covers_ssr_whoami_kubeconfig_cert_and_s
         return f"{header}.{body}.sig"
 
     class _SubjectRunner:
-        def __init__(self, *, ssr_out: str | None = None, ssr_rc: int = 1, whoami_out: str | None = None, whoami_rc: int = 1):
+        def __init__(
+            self, *, ssr_out: str | None = None, ssr_rc: int = 1, whoami_out: str | None = None, whoami_rc: int = 1
+        ):
             self.ssr_out = ssr_out
             self.ssr_rc = ssr_rc
             self.whoami_out = whoami_out
@@ -2441,9 +2447,7 @@ async def test_evaluate_operations_defers_storage_rbac_pre_handoff_and_enforces_
 
     # 1. Pre-handoff (missing marker): storage_ns denials are deferred; status is admin_required (NOT blocked).
     pre_runner = FakeRunner(
-        deny=lambda spec: (
-            _resource_attributes(spec).get("namespace", "") != "team-inference"
-        ),
+        deny=lambda spec: _resource_attributes(spec).get("namespace", "") != "team-inference",
     )
     pre_report = await evaluate_operations(
         CLUSTER_ID,

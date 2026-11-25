@@ -1173,7 +1173,9 @@ async def test_scale_disaggregated_set_rejects_external_role(deployment_store, m
 
 
 @pytest.mark.asyncio
-async def test_delete_execution_and_delete_run_return_409_cleanup_handoff(deployment_store, worker_factory, monkeypatch):
+async def test_delete_execution_and_delete_run_return_409_cleanup_handoff(
+    deployment_store, worker_factory, monkeypatch
+):
     from llm_d_lens.deploy.executions import DeploymentCleanupPermissionDenied
 
     handoff_payload = {
@@ -1186,13 +1188,26 @@ async def test_delete_execution_and_delete_run_return_409_cleanup_handoff(deploy
             "clusterId": "cluster-1",
             "namespace": "llmd-qwen-ready",
             "cleanupDigest": "a" * 64,
-            "operations": [{"id": "cleanup.namespace", "title": "Delete Namespace llmd-qwen-ready", "kind": "namespace", "name": "llmd-qwen-ready", "namespace": None}],
+            "operations": [
+                {
+                    "id": "cleanup.namespace",
+                    "title": "Delete Namespace llmd-qwen-ready",
+                    "kind": "namespace",
+                    "name": "llmd-qwen-ready",
+                    "namespace": None,
+                }
+            ],
             "completedOperations": [],
             "script": "#!/usr/bin/env bash\n",
             "scriptFilename": "lens-deploy-cleanup-llmd-qwen-ready.sh",
             "filename": "lens-deploy-cleanup-llmd-qwen-ready.sh",
             "instructions": "Run script",
-            "marker": {"namespace": "lens-edit", "name": "lens-deploy-cleanup-1234", "status": "pending", "verified": False},
+            "marker": {
+                "namespace": "lens-edit",
+                "name": "lens-deploy-cleanup-1234",
+                "status": "pending",
+                "verified": False,
+            },
             "canVerifyMarker": True,
             "confirmRequired": False,
             "warnings": [],
@@ -1311,7 +1326,7 @@ async def test_guide_service_clean_triggers_phase1_handoff_on_403_and_raises_on_
             return {"cleaned_up": False, "error": self._err}
 
     adapter = _Adapter()
-    adapter._err = "namespaces \"llmd-ns\" is forbidden"
+    adapter._err = 'namespaces "llmd-ns" is forbidden'
     catalog = GuideCatalog([])
     monkeypatch.setattr(catalog, "get_adapter", lambda _ref: adapter)
     svc = GuideAdapterDeploymentService(catalog, lambda _req: "llmd-ns", log_archive=None)

@@ -86,9 +86,7 @@ def _jwt_with_sa(namespace: str, name: str) -> str:
 
     header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode("ascii")
     payload = (
-        base64.urlsafe_b64encode(
-            json.dumps({"sub": f"system:serviceaccount:{namespace}:{name}"}).encode("utf-8")
-        )
+        base64.urlsafe_b64encode(json.dumps({"sub": f"system:serviceaccount:{namespace}:{name}"}).encode("utf-8"))
         .rstrip(b"=")
         .decode("ascii")
     )
@@ -190,7 +188,15 @@ def test_ssar_preflight_admin_sufficient_and_non_admin_denied(monkeypatch):
     monkeypatch.setattr(
         cluster_registry,
         "get_cluster",
-        lambda _cid: type("C", (), {"hf_token_secret_namespace": "lens-edit", "hf_token_secret_name": "hf-secret", "gateway_namespace": "lens-gateway"})(),
+        lambda _cid: type(
+            "C",
+            (),
+            {
+                "hf_token_secret_namespace": "lens-edit",
+                "hf_token_secret_name": "hf-secret",
+                "gateway_namespace": "lens-gateway",
+            },
+        )(),
     )
 
     req = caps.DeploymentPermissionCheckRequest(
@@ -243,7 +249,15 @@ def test_ssar_preflight_surfaces_401_immediately_and_validates_inputs(monkeypatc
     with pytest.raises(caps.DeploymentClusterAuthError):
         asyncio.run(caps.check_deployment_permissions(req, runner=_FakeBootstrapRunner(unauthorized=True)))
 
-    for bad_ns in ("kube-system", "lens-edit", "llm-d-monitoring", "llm-d-bench-storage", "other-ns", "llmd-", "INVALID_NS"):
+    for bad_ns in (
+        "kube-system",
+        "lens-edit",
+        "llm-d-monitoring",
+        "llm-d-bench-storage",
+        "other-ns",
+        "llmd-",
+        "INVALID_NS",
+    ):
         with pytest.raises(caps.DeploymentCapabilityValidationError):
             caps.validate_deployment_namespace(bad_ns, cluster_id="cluster-a")
 
@@ -353,7 +367,9 @@ def test_verify_bootstrap_marker_and_namespace_binding_and_runner_allowlist(monk
     res = asyncio.run(caps.verify_deployment_bootstrap(verify_req, runner=runner))
     assert res["verified"] is True
     assert res["status"] == "verified"
-    assert caps.consume_verified_namespace("cluster-a", agentic_deployment_run_id="agentic-run-42") == "llmd-verified-ns"
+    assert (
+        caps.consume_verified_namespace("cluster-a", agentic_deployment_run_id="agentic-run-42") == "llmd-verified-ns"
+    )
     assert caps.consume_verified_namespace("cluster-a", agentic_deployment_run_id="agentic-run-42") is None
 
     # Stale digest fails verification
@@ -386,11 +402,21 @@ def test_verify_bootstrap_marker_and_namespace_binding_and_runner_allowlist(monk
         tmp_path / "kubectl",
         tmp_path / "helm",
         "llmd-",
-        SimpleNamespace(readiness_deployment_name="modelserver", router_release_name="r", router_chart="c", router_chart_version="v1", router_base_values_path=tmp_path, router_values_path=tmp_path, neutral_router_values_path=tmp_path),
+        SimpleNamespace(
+            readiness_deployment_name="modelserver",
+            router_release_name="r",
+            router_chart="c",
+            router_chart_version="v1",
+            router_base_values_path=tmp_path,
+            router_values_path=tmp_path,
+            neutral_router_values_path=tmp_path,
+        ),
         60,
         tmp_path,
     )
-    guide_runner._validate_kustomize(["kubectl", "get", "serviceaccounts", "--namespace", "llmd-verified-ns", "-o", "name"])
+    guide_runner._validate_kustomize(
+        ["kubectl", "get", "serviceaccounts", "--namespace", "llmd-verified-ns", "-o", "name"]
+    )
     guide_runner._validate_kustomize(
         [
             "kubectl",
@@ -454,7 +480,9 @@ def test_capability_security_hardening_isolation_and_redaction(monkeypatch) -> N
             namespace="llmd-safe-ns",
             identity={"kind": "User", "name": "alice", "subject": "alice", "overrideRequired": False},
         )
-    with pytest.raises(caps.DeploymentCapabilityValidationError, match="unsupported characters|valid Kubernetes subject"):
+    with pytest.raises(
+        caps.DeploymentCapabilityValidationError, match="unsupported characters|valid Kubernetes subject"
+    ):
         caps.render_deployment_bootstrap_script(
             cluster_id="cluster-a",
             namespace="llmd-safe-ns",
@@ -486,8 +514,13 @@ def test_capability_security_hardening_isolation_and_redaction(monkeypatch) -> N
         owner_user_id="alice",
         agentic_deployment_run_id="run-shared",
     )
-    assert caps.consume_verified_namespace("cluster-a", owner_user_id="bob", agentic_deployment_run_id="run-shared") is None
-    assert caps.consume_verified_namespace("cluster-a", owner_user_id=None, agentic_deployment_run_id="run-shared") is None
+    assert (
+        caps.consume_verified_namespace("cluster-a", owner_user_id="bob", agentic_deployment_run_id="run-shared")
+        is None
+    )
+    assert (
+        caps.consume_verified_namespace("cluster-a", owner_user_id=None, agentic_deployment_run_id="run-shared") is None
+    )
     assert (
         caps.consume_verified_namespace("cluster-a", owner_user_id="alice", agentic_deployment_run_id="run-shared")
         == "llmd-user-ns"

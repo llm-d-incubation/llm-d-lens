@@ -749,7 +749,7 @@ async def probe_accelerator_metrics_via_prometheus(
 
     metrics = _extract_profile_metric_names(profile)
     telemetry = profile.telemetry
-    source_label = (telemetry.source_label if telemetry and telemetry.source_label else profile.display_name)
+    source_label = telemetry.source_label if telemetry and telemetry.source_label else profile.display_name
     node_label = ((telemetry.label_schema or {}).get("node") if telemetry else None) or ""
     valid_node_label = node_label if _PROM_IDENT_RE.fullmatch(node_label) else None
 

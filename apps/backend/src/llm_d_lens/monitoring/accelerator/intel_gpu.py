@@ -804,38 +804,35 @@ class IntelGpuProvider:
             (
                 '      EXISTING_SM="$(kubectl get servicemonitor -n "$EXISTING_NS" '
                 f"-o jsonpath='{sm_existing_jp}' 2>/dev/null "
-                "| awk -F'\\t' '!found && tolower($1 \" \" $2 \" \" $3 \" \" $4) ~ /(xpumd|intel-xpumanager)/ "
-                '{ print $1; found=1 }\' || true)"'
+                '| awk -F\'\\t\' \'!found && tolower($1 " " $2 " " $3 " " $4) ~ /(xpumd|intel-xpumanager)/ '
+                "{ print $1; found=1 }' || true)\""
             ),
             '      if [[ -z "$EXISTING_SM" && "$MONITORING_NS" != "$EXISTING_NS" ]]; then',
             (
                 '        EXISTING_SM="$(kubectl get servicemonitor -n "$MONITORING_NS" '
                 f"-o jsonpath='{sm_mon_jp}' 2>/dev/null "
                 "| awk -F'\\t' -v target_ns=\"$EXISTING_NS\" "
-                "'!found && tolower($1 \" \" $4) ~ /(xpumd|intel-xpumanager)/ "
+                '\'!found && tolower($1 " " $4) ~ /(xpumd|intel-xpumanager)/ '
                 '&& ($2 == "true" || index(" " $3 " ", " " target_ns " ") > 0) '
-                '{ print $1; found=1 }\' || true)"'
+                "{ print $1; found=1 }' || true)\""
             ),
             "      fi",
             '      if [[ -n "$EXISTING_SM" ]]; then',
             (
-                '        echo "ServiceMonitor \'$EXISTING_SM\' already covers exporter '
-                'in namespace \'$EXISTING_NS\'; skipping fallback ServiceMonitor."'
+                "        echo \"ServiceMonitor '$EXISTING_SM' already covers exporter "
+                "in namespace '$EXISTING_NS'; skipping fallback ServiceMonitor.\""
             ),
             "      else",
             (
                 '        EXPORTER_SVC="$(kubectl get svc -n "$EXISTING_NS" '
                 "-o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}' 2>/dev/null "
                 "| awk '!found && tolower($0) ~ /(xpumd|intel-xpumanager)/ "
-                '{ print $0; found=1 }\' || true)"'
+                "{ print $0; found=1 }' || true)\""
             ),
-            (
-                '        if [[ -z "$EXPORTER_SVC" '
-                '|| ! "$EXPORTER_SVC" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then'
-            ),
+            ('        if [[ -z "$EXPORTER_SVC" || ! "$EXPORTER_SVC" =~ ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$ ]]; then'),
             (
                 '          echo "Warning: no matching exporter Service found in '
-                '\'$EXISTING_NS\'; skipping fallback ServiceMonitor."'
+                "'$EXISTING_NS'; skipping fallback ServiceMonitor.\""
             ),
             "        else",
             (
@@ -844,9 +841,9 @@ class IntelGpuProvider:
                 "| awk -F'\\t' '!found { "
                 'keys[1]="app.kubernetes.io/name"; keys[2]="app"; '
                 'keys[3]="app.kubernetes.io/instance"; '
-                'for (i=1; i<=3; i++) { '
+                "for (i=1; i<=3; i++) { "
                 'if ($i != "" && length($i) <= 63 '
-                '&& $i ~ /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/) '
+                "&& $i ~ /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/) "
                 '{ print keys[i] "\\t" $i; found=1; break } } }\' || true)"'
             ),
             '          SM_SELECTOR_KEY=""',
@@ -859,10 +856,10 @@ class IntelGpuProvider:
                 '          METRICS_PORT_NAME="$(kubectl get svc "$EXPORTER_SVC" -n "$EXISTING_NS" '
                 f"-o jsonpath='{svc_ports_jp}' 2>/dev/null "
                 "| awk -F'\\t' '$0 != \"\" { count++; name=$1; port=$2; "
-                'if (name ~ /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/) { '
+                "if (name ~ /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/) { "
                 'if (p1 == "" && tolower(name) ~ /metrics/) p1=name; '
                 'if (p2 == "" && (port == "8080" || port == "29999")) p2=name; '
-                'if (count == 1) p3=name } } '
+                "if (count == 1) p3=name } } "
                 'END { if (p1 != "") print p1; else if (p2 != "") print p2; '
                 'else if (count == 1 && p3 != "") print p3 }\' || true)"'
             ),
@@ -871,7 +868,7 @@ class IntelGpuProvider:
                 '|| ! "$SM_SELECTOR_VAL" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$ ]]; then'
             ),
             (
-                '            echo "Warning: Service \'$EXPORTER_SVC\' in \'$EXISTING_NS\' '
+                "            echo \"Warning: Service '$EXPORTER_SVC' in '$EXISTING_NS' "
                 'lacks a safe selector label; skipping fallback ServiceMonitor."'
             ),
             (
@@ -879,7 +876,7 @@ class IntelGpuProvider:
                 '|| ! "$METRICS_PORT_NAME" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then'
             ),
             (
-                '            echo "Warning: Service \'$EXPORTER_SVC\' in \'$EXISTING_NS\' '
+                "            echo \"Warning: Service '$EXPORTER_SVC' in '$EXISTING_NS' "
                 'lacks a named metrics port; skipping fallback ServiceMonitor."'
             ),
             "          else",
@@ -908,7 +905,7 @@ class IntelGpuProvider:
             "    fi",
             "  else",
             (
-                '    echo "Warning: ignoring invalid exporter namespace \'$EXISTING_NS\'; '
+                "    echo \"Warning: ignoring invalid exporter namespace '$EXISTING_NS'; "
                 'skipping fallback ServiceMonitor."'
             ),
             "  fi",
@@ -929,7 +926,7 @@ class IntelGpuProvider:
         awk_extract = (
             'BEGIN { ORS="" } '
             "function flush_doc(    i, n, line, in_meta, skip_block, saw_ns) { "
-            'if (doc ~ /(^|\\n)kind:[[:space:]]*ConfigMap([[:space:]]|\\n|$)/ && doc ~ /grafana_dashboard/) { '
+            "if (doc ~ /(^|\\n)kind:[[:space:]]*ConfigMap([[:space:]]|\\n|$)/ && doc ~ /grafana_dashboard/) { "
             'gsub(/app\\.kubernetes\\.io\\/managed-by:[[:space:]]*["\\047]?Helm["\\047]?/, '
             '"app.kubernetes.io/managed-by: lens", doc); '
             'n = split(doc, lines, "\\n"); in_meta = 0; skip_block = 0; saw_ns = 0; print "---\\n"; '
@@ -962,16 +959,16 @@ class IntelGpuProvider:
             ),
             '    if [[ -n "$EXISTING_MON_DASH" ]]; then',
             (
-                '      echo "Grafana dashboard ConfigMap \'$EXISTING_MON_DASH\' already present '
-                'in \'$MONITORING_NS\'; skipping dashboard reconciliation."'
+                "      echo \"Grafana dashboard ConfigMap '$EXISTING_MON_DASH' already present "
+                "in '$MONITORING_NS'; skipping dashboard reconciliation.\""
             ),
             "    else",
             (
                 '      SRC_DASH_PAIR="$(kubectl get configmap --all-namespaces -l grafana_dashboard=1 '
                 f"-o jsonpath='{cm_all_jp}' 2>/dev/null "
                 "| awk -F'\\t' -v mon_ns=\"$MONITORING_NS\" "
-                "'!found && $1 != \"\" && $1 != mon_ns && tolower($2) ~ /(xpumd|intel)/ "
-                "{ print $1 \"\\t\" $2; found=1 }' || true)\""
+                '\'!found && $1 != "" && $1 != mon_ns && tolower($2) ~ /(xpumd|intel)/ '
+                '{ print $1 "\\t" $2; found=1 }\' || true)"'
             ),
             '      DASH_JSON=""',
             '      DASH_CM_NAME="intel-xpumd-dashboard"',
@@ -1013,7 +1010,7 @@ class IntelGpuProvider:
             '        cat "$DASH_CM_FILE" | kubectl apply -f -',
             "      else",
             '        DASH_VALUES_FILE="$TMP_DIR/xpumd-dashboard-values.yaml"',
-            '        cat <<\'LENS_XPUMD_DASH_VALUES\' >"$DASH_VALUES_FILE"',
+            "        cat <<'LENS_XPUMD_DASH_VALUES' >\"$DASH_VALUES_FILE\"",
             dash_values_yaml,
             "LENS_XPUMD_DASH_VALUES",
             (
@@ -1023,7 +1020,7 @@ class IntelGpuProvider:
             ),
             (
                 '        DASH_MANIFEST="$(printf \'%s\\n\' "$RENDERED_DASH" '
-                f"| awk -v mon_ns=\"$MONITORING_NS\" {shlex.quote(awk_extract)})\""
+                f'| awk -v mon_ns="$MONITORING_NS" {shlex.quote(awk_extract)})"'
             ),
             '        if [[ -n "$DASH_MANIFEST" ]]; then',
             '          printf \'%s\\n\' "$DASH_MANIFEST" | kubectl apply -n "$MONITORING_NS" -f -',
@@ -1113,20 +1110,20 @@ class IntelGpuProvider:
             )
             slices_jp = '{range .items[*]}{.spec.driver}{"\\t"}{.spec.nodeName}{"\\n"}{end}'
             prep_lines.append(
-                f'  GPU_NODES="$(kubectl get resourceslices -o jsonpath=\'{slices_jp}\' 2>/dev/null '
-                f'| awk -F\'\\t\' \'({driver_conditions}) && $2 != "" && !seen[$2]++ {{print $2}}\' || true)"'
+                f"  GPU_NODES=\"$(kubectl get resourceslices -o jsonpath='{slices_jp}' 2>/dev/null "
+                f"| awk -F'\\t' '({driver_conditions}) && $2 != \"\" && !seen[$2]++ {{print $2}}' || true)\""
             )
         else:
             prefix_pattern = "|".join(re.escape(prefix) for prefix in _resource_prefixes())
             nodes_jp = '{range .items[*]}{.metadata.name}{"\\t"}{.status.allocatable}{"\\n"}{end}'
             alloc_re = shlex.quote(f"(^|[^A-Za-z0-9_.-])({prefix_pattern})")
             prep_lines.append(
-                f'  GPU_NODES="$(kubectl get nodes -o jsonpath=\'{nodes_jp}\' 2>/dev/null '
+                f"  GPU_NODES=\"$(kubectl get nodes -o jsonpath='{nodes_jp}' 2>/dev/null "
                 f"| grep -E {alloc_re} | cut -f1 | awk 'NF && !seen[$0]++' || true)\""
             )
         prep_lines.extend(
             [
-                '  while IFS= read -r node_name; do',
+                "  while IFS= read -r node_name; do",
                 '    [[ "$node_name" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || continue',
                 f'    kubectl label --overwrite node -- "$node_name" {label_args}',
                 '  done <<< "$GPU_NODES"',
@@ -1156,7 +1153,7 @@ class IntelGpuProvider:
             (
                 'EXISTING_DS="$(printf \'%s\\n\' "$DS_LIST" '
                 "| awk -F'\\t' '!found && tolower($1 \"/\" $2) ~ /(xpumd|intel-xpumanager)/ "
-                '&& $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && ($3 + 0) > 0 && ($4 + 0) >= ($3 + 0) '
+                "&& $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ && ($3 + 0) > 0 && ($4 + 0) >= ($3 + 0) "
                 '{ print $1 "/" $2; found=1 }\' || true)"'
             ),
             *detect_block,
@@ -1172,7 +1169,7 @@ class IntelGpuProvider:
             "  fi",
             '  VALUES_FILE="$TMP_DIR/xpumd-values.yaml"',
             (
-                '  cat <<\'LENS_XPUMD_VALUES\' | sed -e "s/[\'\\"]*__SM_ENABLED__[\'\\"]*/${SM_ENABLED}/" '
+                "  cat <<'LENS_XPUMD_VALUES' | sed -e \"s/['\\\"]*__SM_ENABLED__['\\\"]*/${SM_ENABLED}/\" "
                 '-e "s/[\'\\"]*__DASHBOARDS_ENABLED__[\'\\"]*/${DASHBOARDS_ENABLED}/" >"$VALUES_FILE"'
             ),
             values_yaml,

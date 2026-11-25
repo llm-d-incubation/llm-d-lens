@@ -127,9 +127,7 @@ class DashboardCollector:
             self._overview_timeouts[cluster_id] = count
             logger.info("dashboard cluster overview timed out for %s (consecutive=%d)", cluster_id, count)
             self._overview_errors[cluster_id] = (
-                "overview_timeout"
-                if count < CONSECUTIVE_OVERVIEW_TIMEOUT_THRESHOLD
-                else "overview_unavailable"
+                "overview_timeout" if count < CONSECUTIVE_OVERVIEW_TIMEOUT_THRESHOLD else "overview_unavailable"
             )
             previous = self._overview.get(cluster_id)
             if previous is not None:

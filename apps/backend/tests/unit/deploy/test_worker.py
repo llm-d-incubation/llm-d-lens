@@ -241,9 +241,13 @@ def test_enable_ready_monitoring_falls_back_to_namespace_scoped_monitors_on_403_
         monkeypatch.setattr(
             monitoring,
             "_discover_epp_service",
-            lambda _ns, _cid: asyncio.sleep(0, result={"name": "svc-epp", "labels": {"app.kubernetes.io/name": "svc-epp"}}),
+            lambda _ns, _cid: asyncio.sleep(
+                0, result={"name": "svc-epp", "labels": {"app.kubernetes.io/name": "svc-epp"}}
+            ),
         )
-        monkeypatch.setattr(caps, "is_bootstrap_marker_present", lambda _cid, _ns, runner=None: asyncio.sleep(0, result=True))
+        monkeypatch.setattr(
+            caps, "is_bootstrap_marker_present", lambda _cid, _ns, runner=None: asyncio.sleep(0, result=True)
+        )
         monkeypatch.setattr("llm_d_lens.infrastructure.kubernetes.scoped_runner", lambda _cid: _Runner())
 
         worker = DeploymentRunWorker(store, SimpleNamespace())

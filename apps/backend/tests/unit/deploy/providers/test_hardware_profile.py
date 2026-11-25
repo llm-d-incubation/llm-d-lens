@@ -498,7 +498,9 @@ def test_deploy_service_preserves_official_guide_manifests_and_applies_cluster_p
         lambda policy, _token, _cid: policy,
     )
     monkeypatch.setattr("llm_d_lens.deploy.service.register_artifacts", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service, "_log_archive", SimpleNamespace(register_execution=lambda *_a: None, append_snapshot=lambda *_a: None))
+    monkeypatch.setattr(
+        service, "_log_archive", SimpleNamespace(register_execution=lambda *_a: None, append_snapshot=lambda *_a: None)
+    )
     asyncio.run(service.prepare(request))
     asyncio.run(service.create(request))
     assert len(seen_overrides) == 2

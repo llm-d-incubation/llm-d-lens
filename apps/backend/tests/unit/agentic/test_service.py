@@ -3201,7 +3201,11 @@ def test_approve_threads_target_namespace_and_non_admin_node_label_fallback(monk
 
     # 1. Prometheus fallback confirms hostname label -> succeeds and threads target_namespace
     async def prom_nodes(_cid):
-        return ([{"metadata": {"name": "worker-1", "labels": {"kubernetes.io/hostname": "worker-1"}}}], [], "prometheus")
+        return (
+            [{"metadata": {"name": "worker-1", "labels": {"kubernetes.io/hostname": "worker-1"}}}],
+            [],
+            "prometheus",
+        )
 
     monkeypatch.setattr(slice_capacity, "fetch_cluster_nodes_and_pods", prom_nodes)
     run1 = asyncio.run(

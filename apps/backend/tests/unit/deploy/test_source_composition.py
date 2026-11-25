@@ -996,6 +996,7 @@ async def test_model_binding_resolves_local_disk_and_nfs_namespace(monkeypatch):
             "nfs": {"server": "nfs.example.com", "path": "/exports", "namespace": "lens-edit"},
         },
     ):
+
         async def fake_get_volume(_volume_id, _request, _payload=volume_payload):
             return _payload
 

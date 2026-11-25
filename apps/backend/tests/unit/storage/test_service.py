@@ -1117,7 +1117,9 @@ async def test_non_admin_401_vs_403_across_discovery_and_status(monkeypatch, tmp
     statuses = await storage_service.storage_resource_statuses([static_vol, dyn_vol])
     assert statuses[static_vol.id]["statusSource"] == "prometheus"
     assert statuses[static_vol.id]["persistentVolumeClaims"][0]["capacity"] == "500000Gi"
-    assert statuses[static_vol.id]["persistentVolumeClaims"][0]["persistentVolume"]["name"] == "prism-storage-vol-static"
+    assert (
+        statuses[static_vol.id]["persistentVolumeClaims"][0]["persistentVolume"]["name"] == "prism-storage-vol-static"
+    )
     assert statuses[dyn_vol.id]["statusSource"] == "prometheus"
     assert statuses[dyn_vol.id]["persistentVolumeClaims"][0]["persistentVolume"]["name"] == "pvc-csi-1234"
 
@@ -1172,7 +1174,9 @@ async def test_handoff_preflight_scripts_and_verify_create_delete(monkeypatch, t
         StorageVolumeDeleteVerifyRequest,
     )
 
-    vol = _local_disk_volume(id="storage-handoff1", pvcName="prism-storage-storage-handoff1", pvName="prism-storage-storage-handoff1")
+    vol = _local_disk_volume(
+        id="storage-handoff1", pvcName="prism-storage-storage-handoff1", pvName="prism-storage-storage-handoff1"
+    )
 
     # 1. Script terminology (#546) + cleanup job when keep_model_files=False
     create_script = storage_service.render_storage_create_script(vol)
@@ -1404,7 +1408,7 @@ async def test_security_injection_promql_and_redaction_guards(monkeypatch):
 
     # 4. Credential and kubeconfig path redaction on errors and failure_detail
     raw_err = (
-        'Unauthorized: Bearer secret-tok-123 at https://user:pass@10.0.0.1:6443 '
+        "Unauthorized: Bearer secret-tok-123 at https://user:pass@10.0.0.1:6443 "
         'using config file "/tmp/kubeconfig-abc" token=rawtok password=rawpw'
     )
     redacted = storage_service._redact_storage_error(raw_err)
@@ -1575,14 +1579,11 @@ async def test_check_create_volume_permissions_handles_403_namespace_get_with_wr
     # cluster-admin passes all rules -> allowed=True, missing=[]
     async def ssar_cluster_admin(_cid, rules):
         return {
-            evaluator._resource_key(rule, rule.namespace if rule.scope == "namespace" else None): True
-            for rule in rules
+            evaluator._resource_key(rule, rule.namespace if rule.scope == "namespace" else None): True for rule in rules
         }
 
     monkeypatch.setattr(storage_service, "_submit_storage_ssar", ssar_cluster_admin)
-    admin_vol = _local_disk_volume(
-        localDisk=LocalDiskSpec(hostPath="/data/models", namespace="lens-storage-283db094")
-    )
+    admin_vol = _local_disk_volume(localDisk=LocalDiskSpec(hostPath="/data/models", namespace="lens-storage-283db094"))
     admin_allowed, admin_missing, _ = await storage_service.check_create_volume_permissions("cluster-1", admin_vol)
     assert admin_allowed is True
     assert admin_missing == []
@@ -1684,9 +1685,7 @@ def test_render_create_and_cleanup_scripts_pv_only_and_full_modes():
         pv_only=False,
         subject={"kind": "unknown", "name": None, "namespace": None, "overrideRequired": True},
     )
-    parsed_unknown = json.loads(
-        unknown_script.split("<<'LENS_STORAGE_EOF'\n", 1)[1].split("\nLENS_STORAGE_EOF", 1)[0]
-    )
+    parsed_unknown = json.loads(unknown_script.split("<<'LENS_STORAGE_EOF'\n", 1)[1].split("\nLENS_STORAGE_EOF", 1)[0])
     assert [item["kind"] for item in parsed_unknown["items"]] == [
         "Role",
         "PersistentVolume",
@@ -1706,10 +1705,10 @@ def test_render_create_and_cleanup_scripts_pv_only_and_full_modes():
     # Full cleanup on lens-storage-283db094 conditionally removes RBAC + empty namespace
     managed_cleanup = storage_service.render_storage_cleanup_script(managed_vol, keep_model_files=True, pv_only=False)
     assert 'if [ -z "$(kubectl -n "$NAMESPACE" get pvc -o name 2>/dev/null || true)" ]; then' in managed_cleanup
-    assert 'delete rolebinding --ignore-not-found=true -- lens-storage-operator' in managed_cleanup
-    assert 'delete role --ignore-not-found=true -- lens-storage-operator' in managed_cleanup
+    assert "delete rolebinding --ignore-not-found=true -- lens-storage-operator" in managed_cleanup
+    assert "delete role --ignore-not-found=true -- lens-storage-operator" in managed_cleanup
     assert 'kubectl delete namespace --ignore-not-found=true -- "$NAMESPACE"' in managed_cleanup
-    assert managed_cleanup.index("kubectl delete pv --ignore-not-found=true -- \"$PV_NAME\"") < managed_cleanup.index(
+    assert managed_cleanup.index('kubectl delete pv --ignore-not-found=true -- "$PV_NAME"') < managed_cleanup.index(
         'kubectl delete namespace --ignore-not-found=true -- "$NAMESPACE"'
     )
 
@@ -1856,7 +1855,12 @@ async def test_storage_resource_statuses_per_namespace_fallback_and_unverified_p
         storage_service,
         "_prometheus_storage_resource_statuses",
         lambda *_a, **_kw: _async_val(
-            {vol.id: {"persistentVolumeClaims": [{"phase": "Bound", "persistentVolume": None}], "statusSource": "prometheus"}}
+            {
+                vol.id: {
+                    "persistentVolumeClaims": [{"phase": "Bound", "persistentVolume": None}],
+                    "statusSource": "prometheus",
+                }
+            }
         ),
     )
 

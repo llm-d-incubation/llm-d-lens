@@ -189,6 +189,8 @@ def invalidate_gateway_capability_cache(cluster_id: str | None = None) -> None:
         _CLUSTER_CAPABILITY_EPOCH.clear()
         return
     _CLUSTER_CAPABILITY_EPOCH[cluster_id] = _CLUSTER_CAPABILITY_EPOCH.get(cluster_id, 0) + 1
+
+
 _METADATA_ADDRESSES = frozenset({"169.254.169.254", "169.254.170.2", "fd00:ec2::254", "100.100.100.200"})
 _NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
 _NAT64_LOCAL = ipaddress.IPv6Network("64:ff9b:1::/48")
@@ -275,10 +277,7 @@ def _raise_if_auth_error(result: Any, *, allow_forbidden: bool = False) -> None:
 
 def _is_blocked_single_gateway_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return (
-        str(address) in _METADATA_ADDRESSES
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_unspecified
+        str(address) in _METADATA_ADDRESSES or address.is_link_local or address.is_multicast or address.is_unspecified
     )
 
 
@@ -413,9 +412,7 @@ def _is_loopback_gateway_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Addre
     return any(candidate.is_loopback for candidate in _ipv6_embedded_addresses(address))
 
 
-async def _ensure_safe_gateway_url(
-    url: str, *, allow_query: bool = False, block_loopback: bool = False
-) -> None:
+async def _ensure_safe_gateway_url(url: str, *, allow_query: bool = False, block_loopback: bool = False) -> None:
     """Validate literal URL and async DNS resolution against SSRF / DNS rebinding."""
     if not allow_query:
         validated = validate_monitoring_http_url(url, field="gateway_url")
@@ -871,9 +868,7 @@ class GatewayOpsService:
             gw_ns = gateway_namespace_for(cluster_id, namespace)
         else:
             cluster = get_cluster(cluster_id)
-            gw_ns = gateway_namespace_for(
-                cluster_id, getattr(cluster, "gateway_namespace", None) if cluster else None
-            )
+            gw_ns = gateway_namespace_for(cluster_id, getattr(cluster, "gateway_namespace", None) if cluster else None)
         if member_namespaces is not None:
             target_member_namespaces = sorted({ns for ns in member_namespaces if ns})
         else:
@@ -884,8 +879,7 @@ class GatewayOpsService:
                     if getattr(m, "endpoint_kind", None) == "llm-d-epp"
                     and (
                         ns := (
-                            split_pool_name(getattr(m, "pool_name", None))[0]
-                            or getattr(m, "target_namespace", None)
+                            split_pool_name(getattr(m, "pool_name", None))[0] or getattr(m, "target_namespace", None)
                         )
                     )
                 }
@@ -978,9 +972,7 @@ class GatewayOpsService:
                 seen_checks.add(key)
                 all_checks.append(key)
 
-        def _fail_closed(
-            *, auth_error: str | None = None, cacheable: bool = False
-        ) -> ClusterGatewayCapabilities:
+        def _fail_closed(*, auth_error: str | None = None, cacheable: bool = False) -> ClusterGatewayCapabilities:
             caps = ClusterGatewayCapabilities(
                 can_manage_gateway_infra=False,
                 can_manage_gateway_config=False,
@@ -2618,9 +2610,7 @@ class GatewayOpsService:
             await self._log(on_log, "Waiting for the IPP rollout...")
             exists = await self._kubectl(cluster_id, ["get", "deploy", name, "-n", namespace, "-o", "name"], timeout=20)
             if exists.returncode != 0:
-                missing_ipp_msg = (
-                    f"IPP Deployment {name} not found in {namespace}: {(exists.stderr or '').strip()}"
-                )
+                missing_ipp_msg = f"IPP Deployment {name} not found in {namespace}: {(exists.stderr or '').strip()}"
                 if _should_handoff_on_forbidden(cluster_id, caps) and _is_forbidden_error(exists):
                     self._invalidate_capability_cache(cluster_id)
                     return await self._finish_remediation_handoff(
@@ -2941,9 +2931,7 @@ class GatewayOpsService:
         except ValueError:
             ip_addr = None
         if ip_addr is not None:
-            if _is_blocked_gateway_ip(ip_addr) or (
-                reject_cluster_internal and _is_loopback_gateway_ip(ip_addr)
-            ):
+            if _is_blocked_gateway_ip(ip_addr) or (reject_cluster_internal and _is_loopback_gateway_ip(ip_addr)):
                 return None
             return str(ip_addr)
         lowered = cleaned.rstrip(".").lower()
@@ -3090,11 +3078,7 @@ class GatewayOpsService:
         if not isinstance(data, Mapping):
             return "partial", None, {}
         raw_hash = data.get("desiredHash")
-        observed_hash = (
-            raw_hash.strip()[:128]
-            if isinstance(raw_hash, str) and raw_hash.strip()
-            else None
-        )
+        observed_hash = raw_hash.strip()[:128] if isinstance(raw_hash, str) and raw_hash.strip() else None
         raw_status = data.get("status")
         label_cluster = labels.get("lens.llm-d.ai/cluster") if isinstance(labels, Mapping) else None
         cluster_label = _sanitize_k8s_label_value(cluster_id)
@@ -3154,9 +3138,7 @@ class GatewayOpsService:
             ids.update(cluster_group_ids)
 
         if "pendingMarkerNames" in state:
-            pending_entries = [
-                e for e in (state.get("pendingMarkerNames") or []) if isinstance(e, Mapping)
-            ]
+            pending_entries = [e for e in (state.get("pendingMarkerNames") or []) if isinstance(e, Mapping)]
         elif state.get("markerName") and not has_verified:
             pending_entries = [{"name": state["markerName"], "groupIds": sorted(cluster_group_ids)}]
         else:
@@ -3185,9 +3167,7 @@ class GatewayOpsService:
                     continue
                 g_members = by_group.get(group.id, [])
                 routable = (
-                    [m for m in g_members if _member_configured_for_handoff(m)]
-                    if group.status != "disabled"
-                    else []
+                    [m for m in g_members if _member_configured_for_handoff(m)] if group.status != "disabled" else []
                 )
                 if routable and group.id not in extra_set:
                     continue
@@ -3225,13 +3205,9 @@ class GatewayOpsService:
                 continue
             route_name = resource_name(f"{group.name}-{group.id}")
             routable = (
-                [m for m in cluster_members if _member_configured_for_handoff(m)]
-                if group.status != "disabled"
-                else []
+                [m for m in cluster_members if _member_configured_for_handoff(m)] if group.status != "disabled" else []
             )
-            routable_namespaces = {
-                split_pool_name(m.pool_name)[0] or m.target_namespace for m in routable
-            }
+            routable_namespaces = {split_pool_name(m.pool_name)[0] or m.target_namespace for m in routable}
             if routable:
                 if gw_provider in ("istio", "agentgateway"):
                     for member in routable:
@@ -3243,9 +3219,7 @@ class GatewayOpsService:
                         if epp_name and (epp_ns, epp_name) not in healed_epps:
                             healed_epps.add((epp_ns, epp_name))
                             with suppress(Exception):
-                                await self._ensure_epp_plaintext(
-                                    cluster_id, epp_ns, epp_name, on_log=on_log
-                                )
+                                await self._ensure_epp_plaintext(cluster_id, epp_ns, epp_name, on_log=on_log)
                 permitted_bindings = [
                     PoolBinding(
                         member_pool_name(m),
@@ -3369,18 +3343,13 @@ class GatewayOpsService:
             return []
 
         base_deletes: list[dict[str, Any]] = list(superset_context["merged_deletes"])
-        desired_keys_set: set[tuple[str, str, str]] = {
-            tuple(k) for k in (superset_context.get("desired_keys") or ())
-        }
+        desired_keys_set: set[tuple[str, str, str]] = {tuple(k) for k in (superset_context.get("desired_keys") or ())}
 
         def _merge_sup_deletes(chosen_ns: set[str]) -> list[dict[str, Any]]:
             if not omitted_deletes or not chosen_ns:
                 return base_deletes
             out = list(base_deletes)
-            seen = {
-                (d["kind"], d["namespace"], d["name"], d.get("labelSelector", ""))
-                for d in base_deletes
-            }
+            seen = {(d["kind"], d["namespace"], d["name"], d.get("labelSelector", "")) for d in base_deletes}
             added = False
             for trigger_nss, raw_del in omitted_deletes:
                 if not any(ns in chosen_ns for ns in trigger_nss):
@@ -3426,9 +3395,7 @@ class GatewayOpsService:
             if sup_hash not in (desired_hash, full_sup_hash) and sup_hash not in single_ns_hashes:
                 single_ns_hashes.append(sup_hash)
 
-        valid_hashes: set[str] = {
-            h for h in (full_sup_hash, *single_ns_hashes) if h and h != desired_hash
-        }
+        valid_hashes: set[str] = {h for h in (full_sup_hash, *single_ns_hashes) if h and h != desired_hash}
         explicit_hints = {h for h in (expected_hash, saved_desired_hash) if h and h != desired_hash}
         if (explicit_hints - valid_hashes) and 2 < len(extra_namespaces) <= 6:
             for mask in range(1, (1 << len(extra_namespaces)) - 1):
@@ -3545,7 +3512,7 @@ class GatewayOpsService:
             "        break",
             "      fi",
             '    done < <(kubectl get service "$svc_name" -n "$svc_ns"'
-            " -o jsonpath='{range .spec.ports[*]}{.port}{\":\"}{.nodePort}{\"\\n\"}{end}'"
+            ' -o jsonpath=\'{range .spec.ports[*]}{.port}{":"}{.nodePort}{"\\n"}{end}\''
             " 2>/dev/null || true)",
             '    GATEWAY_ADDRESS="$(kubectl get service "$svc_name" -n "$svc_ns"'
             " -o jsonpath='{.status.loadBalancer.ingress[0].ip}{\" \"}{.status.loadBalancer.ingress[0].hostname}'"
@@ -3578,9 +3545,9 @@ class GatewayOpsService:
             "      fi",
             "    fi",
             "  done < <(kubectl get nodes -o jsonpath="
-            "'{range .items[*]}{.status.conditions[?(@.type==\"Ready\")].status}{\"|\"}"
-            "{.status.addresses[?(@.type==\"ExternalIP\")].address}{\"|\"}"
-            "{.status.addresses[?(@.type==\"InternalIP\")].address}{\"\\n\"}{end}'"
+            '\'{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"|"}'
+            '{.status.addresses[?(@.type=="ExternalIP")].address}{"|"}'
+            '{.status.addresses[?(@.type=="InternalIP")].address}{"\\n"}{end}\''
             " 2>/dev/null || true)",
             '  if [[ -z "$GATEWAY_NODE_ADDRESS" && -n "$first_int" ]]; then',
             '    GATEWAY_NODE_ADDRESS="$first_int"',
@@ -3591,7 +3558,7 @@ class GatewayOpsService:
             '  local marker_status="$1"',
             '  if [[ "$MARKER_WRITTEN" -eq 1 || "$MARKER_WRITING" -eq 1 ]]; then return 0; fi',
             "  MARKER_WRITING=1",
-            '  local completed_at',
+            "  local completed_at",
             '  completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"',
             "  local extra_args=()",
             '  if [[ -n "$GATEWAY_PORT" ]]; then extra_args+=(--from-literal="gatewayPort=$GATEWAY_PORT"); fi',
@@ -3670,7 +3637,7 @@ class GatewayOpsService:
         ]
         if epp_targets:
             jsonpath_args = "'{.spec.template.spec.containers[*].args}'"
-            jsonpath_rows = "'{range .spec.template.spec.containers[*]}{.name}{\"\\t\"}{.args[*]}{\"\\n\"}{end}'"
+            jsonpath_rows = '\'{range .spec.template.spec.containers[*]}{.name}{"\\t"}{.args[*]}{"\\n"}{end}\''
             lines.extend(
                 [
                     "patch_epp_plaintext() {",
@@ -3772,7 +3739,7 @@ class GatewayOpsService:
         if ipp_release is not None:
             ipp_values_yaml = _validate_multiline_yaml(ipp_release["valuesYaml"], "ippValuesYaml")
             delim = _heredoc_delimiter(ipp_values_yaml, "LENS_MS_IPP")
-            lines.append(f'cat > "$TMP_DIR/ipp-values.yaml" <<\'{delim}\'')
+            lines.append(f"cat > \"$TMP_DIR/ipp-values.yaml\" <<'{delim}'")
             lines.extend(ipp_values_yaml.rstrip("\n").splitlines())
             lines.append(delim)
             lines.append('chmod 600 "$TMP_DIR/ipp-values.yaml"')
@@ -3910,9 +3877,7 @@ class GatewayOpsService:
             if service_type is None and service_type_override is not None:
                 service_type = service_type_override or None
             if service_type is None and service_type_override is None and effective_caps.can_read_gateway_namespace:
-                service_type = await self._existing_gateway_service_type(
-                    safe_cluster_id, gw_ns, gw_name, gw_provider
-                )
+                service_type = await self._existing_gateway_service_type(safe_cluster_id, gw_ns, gw_name, gw_provider)
             service_port = getattr(cluster, "gateway_port", None)
             if service_port is not None and not (30000 <= int(service_port) <= 32767):
                 raise GatewayValidationError(f"exposed port must be between 30000 and 32767 (got {service_port})")
@@ -3974,9 +3939,7 @@ class GatewayOpsService:
                     continue
                 route_name = resource_name(f"{group.name}-{group.id}")
                 routable = (
-                    [m for m in g_members if _member_configured_for_handoff(m)]
-                    if group.status != "disabled"
-                    else []
+                    [m for m in g_members if _member_configured_for_handoff(m)] if group.status != "disabled" else []
                 )
                 if routable:
                     routable_group_ids.append(group.id)
@@ -4143,13 +4106,7 @@ class GatewayOpsService:
                     ]
                 )
                 member_nss = tuple(
-                    sorted(
-                        {
-                            ns
-                            for m in g_members
-                            if (ns := (split_pool_name(m.pool_name)[0] or m.target_namespace))
-                        }
-                    )
+                    sorted({ns for m in g_members if (ns := (split_pool_name(m.pool_name)[0] or m.target_namespace))})
                 )
                 all_members_permitted = bool(g_members) and all(
                     (split_pool_name(m.pool_name)[0] or m.target_namespace)
@@ -4365,11 +4322,7 @@ class GatewayOpsService:
             d for d in merged_deletes if d.get("reason") in ("group_deleted", "member_deleted", "persisted")
         ]
         deleted_group_ids = sorted(
-            {
-                str(d.get("groupId") or "")
-                for d in merged_deletes
-                if d.get("groupId") and d.get("kind") == "httproute"
-            }
+            {str(d.get("groupId") or "") for d in merged_deletes if d.get("groupId") and d.get("kind") == "httproute"}
         )
         if reconcile_status == "synced":
             pending_markers: list[dict[str, Any]] = []
@@ -4816,9 +4769,7 @@ class GatewayOpsService:
             _, saved_state = self._load_handoff_locked(cluster_id)
             active_mode_raw = saved_state.get("mode") or "routes"
             active_mode: GatewayRemediationMode = (
-                active_mode_raw
-                if active_mode_raw in ("routes", "gateway_repair", "ipp_config", "all")
-                else "routes"
+                active_mode_raw if active_mode_raw in ("routes", "gateway_repair", "ipp_config", "all") else "routes"
             )
             effective_mode: GatewayRemediationMode = mode if mode is not None else active_mode
             if (
@@ -4911,9 +4862,13 @@ class GatewayOpsService:
                 return m_status, obs_hash, m_details, eff_name, matched_hash
 
             # 1. Check marker ConfigMap in writable namespace (superset + repeat Re-check + multi-mode fallback)
-            marker_status, observed_hash, marker_details, effective_marker_name, matched_target_hash = (
-                await _lookup_marker(payload, superset_context, effective_mode)
-            )
+            (
+                marker_status,
+                observed_hash,
+                marker_details,
+                effective_marker_name,
+                matched_target_hash,
+            ) = await _lookup_marker(payload, superset_context, effective_mode)
             desired_hash = payload.desired_hash
             accepted_hashes = {desired_hash, matched_target_hash}
 
@@ -4954,9 +4909,13 @@ class GatewayOpsService:
                         delete_items = snap_deletes
                         superset_context = snap_superset
                         routable_group_ids = snap_routable
-                        marker_status, observed_hash, marker_details, effective_marker_name, matched_target_hash = (
-                            await _lookup_marker(payload, superset_context, effective_mode)
-                        )
+                        (
+                            marker_status,
+                            observed_hash,
+                            marker_details,
+                            effective_marker_name,
+                            matched_target_hash,
+                        ) = await _lookup_marker(payload, superset_context, effective_mode)
                         desired_hash = payload.desired_hash
                         accepted_hashes = {desired_hash, matched_target_hash}
                         break
@@ -5018,13 +4977,9 @@ class GatewayOpsService:
             )
             discovered_gateway_dict = dict(discovered_gateway) if isinstance(discovered_gateway, Mapping) else None
             discovered_port = (
-                _valid_gateway_port(discovered_gateway_dict.get("gatewayPort"))
-                if discovered_gateway_dict
-                else None
+                _valid_gateway_port(discovered_gateway_dict.get("gatewayPort")) if discovered_gateway_dict else None
             )
-            probe_url = _external_gateway_probe_url(
-                cluster, cluster_id=cluster_id, default_port=discovered_port
-            )
+            probe_url = _external_gateway_probe_url(cluster, cluster_id=cluster_id, default_port=discovered_port)
             probe_block_loopback = False
             if probe_url:
                 try:
@@ -5053,9 +5008,7 @@ class GatewayOpsService:
                     )
                 ]
                 probe_hook = (
-                    _ssrf_discovered_gateway_request_hook
-                    if probe_block_loopback
-                    else _ssrf_gateway_request_hook
+                    _ssrf_discovered_gateway_request_hook if probe_block_loopback else _ssrf_gateway_request_hook
                 )
                 try:
                     async with httpx.AsyncClient(
@@ -5136,11 +5089,7 @@ class GatewayOpsService:
                 verified = (
                     marker_ok
                     or no_work_ok
-                    or (
-                        caps.can_read_gateway_namespace
-                        and k8s_routes_ok
-                        and bool(desired_route_names or delete_items)
-                    )
+                    or (caps.can_read_gateway_namespace and k8s_routes_ok and bool(desired_route_names or delete_items))
                 ) and not has_blocking_http
 
             reconcile_status: GatewayReconcileStatus = "synced" if verified else "admin_handoff_required"
@@ -5155,28 +5104,27 @@ class GatewayOpsService:
                             snap_key, saved_state, remaining_snapshots[snap_key], cluster
                         ):
                             remaining_snapshots.pop(snap_key, None)
-                active_is_stale = (
-                    active_mode in ("ipp_config", "gateway_repair")
-                    and self._is_stale_handoff_mode(active_mode, saved_state, snapshots.get(active_mode) or {}, cluster)
+                active_is_stale = active_mode in ("ipp_config", "gateway_repair") and self._is_stale_handoff_mode(
+                    active_mode, saved_state, snapshots.get(active_mode) or {}, cluster
                 )
                 other_pending_modes = [k for k in remaining_snapshots if k != effective_mode]
-                active_still_pending = effective_mode != active_mode and not active_is_stale and (
-                    active_mode in remaining_snapshots
-                    or saved_state.get("reconcileStatus") == "admin_handoff_required"
+                active_still_pending = (
+                    effective_mode != active_mode
+                    and not active_is_stale
+                    and (
+                        active_mode in remaining_snapshots
+                        or saved_state.get("reconcileStatus") == "admin_handoff_required"
+                    )
                 )
                 keep_pending_other_mode = active_still_pending or (
                     effective_mode in ("ipp_config", "gateway_repair") and bool(other_pending_modes)
                 )
                 if keep_pending_other_mode:
                     fallback_rem_mode = (
-                        active_mode
-                        if active_mode != effective_mode and not active_is_stale
-                        else other_pending_modes[0]
+                        active_mode if active_mode != effective_mode and not active_is_stale else other_pending_modes[0]
                     )
                     remaining_mode: GatewayRemediationMode = (
-                        "routes"
-                        if "routes" in remaining_snapshots
-                        else fallback_rem_mode  # type: ignore[assignment]
+                        "routes" if "routes" in remaining_snapshots else fallback_rem_mode  # type: ignore[assignment]
                     )
                     rem_snap = remaining_snapshots.get(remaining_mode) or {}
                     verified_state: dict[str, Any] = {
@@ -5272,8 +5220,7 @@ class GatewayOpsService:
                 )
                 if has_advisory_warnings:
                     msg = (
-                        "Gateway handoff verified and synced. "
-                        "External route probe reported advisory backend warnings."
+                        "Gateway handoff verified and synced. External route probe reported advisory backend warnings."
                     )
                 elif not payload.pending_operations:
                     msg = "No Orchestration administrator operations are pending; cluster is synced."
@@ -5438,11 +5385,7 @@ class GatewayOpsService:
                             )
                         )
                     ),
-                    *(
-                        [pool_ns]
-                        if getattr(member, "endpoint_kind", None) == "llm-d-epp" and pool_ns
-                        else []
-                    ),
+                    *([pool_ns] if getattr(member, "endpoint_kind", None) == "llm-d-epp" and pool_ns else []),
                 }
             )
             self._invalidate_capability_cache(member.cluster_id)
@@ -5653,9 +5596,7 @@ class GatewayOpsService:
 
         synced_member_ns: set[str] = set()
 
-        async def _handoff_locked(
-            reason_message: str, *, mode: GatewayRemediationMode = "routes"
-        ) -> GatewayOperation:
+        async def _handoff_locked(reason_message: str, *, mode: GatewayRemediationMode = "routes") -> GatewayOperation:
             _, saved_state = self._load_handoff_locked(cluster_id)
             refreshed_caps = await self.probe_capabilities(cluster_id, namespace=namespace)
             if (
@@ -6336,9 +6277,7 @@ class GatewayOpsService:
                 _, saved_state = self._load_handoff_locked(member.cluster_id)
                 if pool_routed and self._non_admin_route_handoff_pending(saved_state, member.group_id):
                     pool_routed = False
-            pool_state, selector = await self._pool_state(
-                member.cluster_id, pool_ns, pool_name, routed=pool_routed
-            )
+            pool_state, selector = await self._pool_state(member.cluster_id, pool_ns, pool_name, routed=pool_routed)
             components["inferencePool"] = pool_state
             if pool_state == "unknown" and not selector:
                 components["modelServer"] = "unknown"
@@ -6486,9 +6425,7 @@ class GatewayOpsService:
             )
             discovered_port = _valid_gateway_port(discovered_gw.get("gatewayPort")) if discovered_gw else None
             if discovered_port is None:
-                namespace = gateway_namespace_for(
-                    member.cluster_id, getattr(cluster, "gateway_namespace", None)
-                )
+                namespace = gateway_namespace_for(member.cluster_id, getattr(cluster, "gateway_namespace", None))
                 try:
                     caps = await self.probe_capabilities(member.cluster_id, namespace=namespace)
                 except Exception:  # noqa: BLE001
@@ -6503,8 +6440,7 @@ class GatewayOpsService:
                     except Exception:  # noqa: BLE001
                         discovered_port = None
             base = (
-                _external_gateway_probe_url(cluster, cluster_id=member.cluster_id, default_port=discovered_port)
-                or ""
+                _external_gateway_probe_url(cluster, cluster_id=member.cluster_id, default_port=discovered_port) or ""
             )
         if not base:
             return "n/a"
@@ -6797,8 +6733,7 @@ class GatewayOpsService:
                         f'deployment=~"envoy-.*{gw_re}.*",{dep_exclusion}}}'
                     )
                     primary_promqls["gw_pod_info_envoy"] = (
-                        'kube_pod_info{namespace="envoy-gateway-system",'
-                        f'pod=~"envoy-.*{gw_re}.*",{pod_exclusion}}}'
+                        f'kube_pod_info{{namespace="envoy-gateway-system",pod=~"envoy-.*{gw_re}.*",{pod_exclusion}}}'
                     )
 
                 keys = list(primary_promqls)
@@ -7347,9 +7282,13 @@ class GatewayOpsService:
             name = (getattr(cluster, "gateway_name", None) if cluster else None) or DEFAULT_GATEWAY_NAME
             provider = getattr(cluster, "gateway_provider", None) if cluster else None
             caps = await self.probe_capabilities(target_cluster_id, namespace=namespace)
-            reconcile_status, pending_count, desired_hash, handoff_ns, handoff_mode = (
-                await self._handoff_summary_for_status(target_cluster_id, cluster, caps=caps)
-            )
+            (
+                reconcile_status,
+                pending_count,
+                desired_hash,
+                handoff_ns,
+                handoff_mode,
+            ) = await self._handoff_summary_for_status(target_cluster_id, cluster, caps=caps)
             last = self.operations.latest_for_kind("reconcile-gateway", cluster_id=target_cluster_id)
             if (
                 caps.access_mode == "non_admin"
@@ -7424,13 +7363,9 @@ class GatewayOpsService:
                         except Exception:  # noqa: BLE001 - best-effort NodePort discovery in status
                             effective_port = None
                     node_address = (
-                        await self._node_address(target_cluster_id)
-                        if cluster is not None and effective_port
-                        else None
+                        await self._node_address(target_cluster_id) if cluster is not None and effective_port else None
                     )
-                    ipp_state, ipp_ready = await self._deployment_state(
-                        target_cluster_id, namespace, DEFAULT_IPP_NAME
-                    )
+                    ipp_state, ipp_ready = await self._deployment_state(target_cluster_id, namespace, DEFAULT_IPP_NAME)
                     # "Stop" scales the Gateway's data-plane Deployment to zero without
                     # removing the Gateway, so neither `state` nor the `Programmed`
                     # condition changes. Read the Deployment to tell stopped from running.
@@ -7440,9 +7375,7 @@ class GatewayOpsService:
                             target_cluster_id, namespace, name, provider or DEFAULT_PROVIDER
                         )
                         if target is not None:
-                            _, gateway_running = await self._deployment_state(
-                                target_cluster_id, target[0], target[1]
-                            )
+                            _, gateway_running = await self._deployment_state(target_cluster_id, target[0], target[1])
                     probe_source: str = "k8s"
                 except GatewayUnauthenticatedError as error:
                     clusters.append(

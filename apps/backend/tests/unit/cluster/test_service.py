@@ -4436,9 +4436,9 @@ async def test_prometheus_non_finite_values_and_malformed_envelopes_degrade_grac
 
 
 def test_scale_device_metric_value_handles_ratio_and_percent_without_double_scaling():
-    assert service._scale_device_metric_value(0.0597, canonical="gpuUsagePercent", source_unit="ratio") == pytest.approx(
-        5.97
-    )
+    assert service._scale_device_metric_value(
+        0.0597, canonical="gpuUsagePercent", source_unit="ratio"
+    ) == pytest.approx(5.97)
     assert service._scale_device_metric_value(
         0.0198, canonical="vramBandwidthPercent", source_unit="ratio"
     ) == pytest.approx(1.98)
@@ -4807,7 +4807,9 @@ async def test_prometheus_hardware_metrics_real_resolver_fallback_and_pod_over_r
         if request.url.path == "/api/v1/query":
             q = request.url.params.get("query", "")
             if q == "1":
-                return httpx.Response(200, json={"status": "success", "data": {"result": [{"metric": {}, "value": [1, "1"]}]}})
+                return httpx.Response(
+                    200, json={"status": "success", "data": {"result": [{"metric": {}, "value": [1, "1"]}]}}
+                )
             if "node_cpu_seconds_total" in q:
                 return httpx.Response(
                     200,

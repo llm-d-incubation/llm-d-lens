@@ -1414,7 +1414,9 @@ async def test_preflight_delete_pv_only_vs_managed_namespace_cleanup_and_scan_40
     assert "cleans up model files and the PVC in 'team-inference'" in wipe_resp["instructions"]
 
     # Exercise real check_delete_volume_permissions for sole vs sibling volume in lens-storage-283db094
-    monkeypatch.setattr(storage_router, "check_delete_volume_permissions", storage_service.check_delete_volume_permissions)
+    monkeypatch.setattr(
+        storage_router, "check_delete_volume_permissions", storage_service.check_delete_volume_permissions
+    )
 
     async def ssar_non_admin(_cid, rules):
         return {

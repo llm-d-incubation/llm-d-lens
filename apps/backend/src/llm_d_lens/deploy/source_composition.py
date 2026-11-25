@@ -1529,9 +1529,7 @@ async def compose(request, body: dict, shared: dict | None = None) -> dict:
         for container in workload["pod"].get("containers", []):
             if container.get("name") == "modelserver":
                 try:
-                    validate_container_image_ref(
-                        container.get("image"), field="modelserver.image", allow_empty=False
-                    )
+                    validate_container_image_ref(container.get("image"), field="modelserver.image", allow_empty=False)
                 except ValueError as error:
                     raise GuideError(str(error)) from error
     resource_references(parsed)

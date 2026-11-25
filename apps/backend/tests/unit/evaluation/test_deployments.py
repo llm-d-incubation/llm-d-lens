@@ -729,7 +729,11 @@ async def test_execute_owned_e20cf405_fallback_standup_cm_cleanup_and_gaie_prese
                     "containers": [
                         {
                             "name": "epp",
-                            "args": ["--pool-name=optimized-baseline", "--secure-serving=false", "--config-file=/config/epp.yaml"],
+                            "args": [
+                                "--pool-name=optimized-baseline",
+                                "--secure-serving=false",
+                                "--config-file=/config/epp.yaml",
+                            ],
                             "ports": [{"containerPort": 9002}],
                             "volumeMounts": [{"name": "epp-cfg", "mountPath": "/config"}],
                         },
@@ -755,14 +759,22 @@ async def test_execute_owned_e20cf405_fallback_standup_cm_cleanup_and_gaie_prese
             "replicas": 1,
             "template": {
                 "metadata": {"labels": {"llm-d.ai/role": "decode"}},
-                "spec": {"containers": [{"name": "modelserver", "command": ["vllm", "serve"], "args": ["Qwen/Qwen3-0.6B"]}]},
+                "spec": {
+                    "containers": [{"name": "modelserver", "command": ["vllm", "serve"], "args": ["Qwen/Qwen3-0.6B"]}]
+                },
             },
         },
         "status": {"availableReplicas": 1},
     }
     services = [
-        {"metadata": {"name": "optimized-baseline-epp"}, "spec": {"selector": {"app": "optimized-baseline-epp"}, "ports": [{"port": 80, "targetPort": 8081}]}},
-        {"metadata": {"name": "optimized-baseline-epp-model-servers"}, "spec": {"selector": {"llm-d.ai/role": "decode"}, "ports": [{"port": 8000}]}},
+        {
+            "metadata": {"name": "optimized-baseline-epp"},
+            "spec": {"selector": {"app": "optimized-baseline-epp"}, "ports": [{"port": 80, "targetPort": 8081}]},
+        },
+        {
+            "metadata": {"name": "optimized-baseline-epp-model-servers"},
+            "spec": {"selector": {"llm-d.ai/role": "decode"}, "ports": [{"port": 8000}]},
+        },
     ]
 
     async def fake_k8s_json(args, _env):

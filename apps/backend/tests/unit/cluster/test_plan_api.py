@@ -3134,10 +3134,7 @@ def test_resolve_handoff_prometheus_url_survives_synthetic_cluster_errors(monkey
     plan_with_nodeport = ProvisioningPlan.model_validate(
         _plan_data(monitoring={"mode": "managed", "prometheusNodePort": 30090, "host": "10.0.0.42"})
     )
-    assert (
-        cluster_router._resolve_handoff_prometheus_url(synthetic, plan_with_nodeport, {})
-        == "http://10.0.0.42:30090"
-    )
+    assert cluster_router._resolve_handoff_prometheus_url(synthetic, plan_with_nodeport, {}) == "http://10.0.0.42:30090"
 
 
 def test_list_clusters_exposes_kubeconfig_namespace():
@@ -3363,7 +3360,9 @@ def test_non_admin_storage_rbac_remediation_verify_handoff_and_cluster_admin_zer
                 return CommandResult(
                     tuple(argv),
                     0,
-                    json.dumps({"status": {"userInfo": {"username": "system:serviceaccount:team-inference:runner-sa"}}}),
+                    json.dumps(
+                        {"status": {"userInfo": {"username": "system:serviceaccount:team-inference:runner-sa"}}}
+                    ),
                     "",
                 )
             body = json.loads(input or "{}")
@@ -3371,7 +3370,9 @@ def test_non_admin_storage_rbac_remediation_verify_handoff_and_cluster_admin_zer
                 return CommandResult(
                     tuple(argv),
                     0,
-                    json.dumps({"status": {"userInfo": {"username": "system:serviceaccount:team-inference:runner-sa"}}}),
+                    json.dumps(
+                        {"status": {"userInfo": {"username": "system:serviceaccount:team-inference:runner-sa"}}}
+                    ),
                     "",
                 )
             answered = []
@@ -3403,7 +3404,9 @@ def test_non_admin_storage_rbac_remediation_verify_handoff_and_cluster_admin_zer
                         "status": {"allowed": allowed},
                     }
                 )
-            return CommandResult(tuple(argv), 0, json.dumps({"apiVersion": "v1", "kind": "List", "items": answered}), "")
+            return CommandResult(
+                tuple(argv), 0, json.dumps({"apiVersion": "v1", "kind": "List", "items": answered}), ""
+            )
 
     dyn_runner = _DynamicRbacRunner()
     monkeypatch.setattr("llm_d_lens.cluster.evaluator.validate_stored_cluster_egress", lambda _cid: None)
@@ -3457,10 +3460,7 @@ def test_non_admin_storage_rbac_remediation_verify_handoff_and_cluster_admin_zer
             flags=re.DOTALL,
         )
         decoded_docs = [
-            doc
-            for block in b64_blocks
-            for doc in yaml.safe_load_all(base64.b64decode(block).decode("utf-8"))
-            if doc
+            doc for block in b64_blocks for doc in yaml.safe_load_all(base64.b64decode(block).decode("utf-8")) if doc
         ]
         rbac_kinds = [(d["kind"], d["metadata"]["name"], d["metadata"].get("namespace")) for d in decoded_docs]
         assert ("Role", "lens-storage-operator", storage_ns) in rbac_kinds

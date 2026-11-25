@@ -468,9 +468,15 @@ async def test_probe_monitoring_access_ssar_admin_non_admin_401_and_cache(monkey
                 return SimpleNamespace(returncode=0, stdout="ctx-1\n", stderr="")
             self.calls += 1
             if self.mode == "401":
-                return SimpleNamespace(returncode=1, stdout="", stderr="error: You must be logged in to the server (Unauthorized)")
+                return SimpleNamespace(
+                    returncode=1, stdout="", stderr="error: You must be logged in to the server (Unauthorized)"
+                )
             if self.mode == "403_ssar":
-                return SimpleNamespace(returncode=1, stdout="", stderr="Error from server (Forbidden): selfsubjectaccessreviews is forbidden")
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr="Error from server (Forbidden): selfsubjectaccessreviews is forbidden",
+                )
             payload = json.loads(input or "{}")
             items = payload.get("items") or []
             if self.mode == "admin":
@@ -545,9 +551,11 @@ async def test_check_http_endpoint_reachable_and_direct_links(monkeypatch):
         prometheus,
         "create_prometheus_client",
         make_transport(
-            lambda req: httpx.Response(404)
-            if req.url.path == "/api/health"
-            else httpx.Response(302, headers={"Location": "/login"})
+            lambda req: (
+                httpx.Response(404)
+                if req.url.path == "/api/health"
+                else httpx.Response(302, headers={"Location": "/login"})
+            )
         ),
     )
     assert await service_links.check_http_endpoint_reachable("http://10.20.30.40:30300") is True
@@ -556,9 +564,11 @@ async def test_check_http_endpoint_reachable_and_direct_links(monkeypatch):
         prometheus,
         "create_prometheus_client",
         make_transport(
-            lambda req: httpx.Response(404)
-            if req.url.path == "/api/health"
-            else httpx.Response(302, headers={"Location": "http://169.254.169.254/latest"})
+            lambda req: (
+                httpx.Response(404)
+                if req.url.path == "/api/health"
+                else httpx.Response(302, headers={"Location": "http://169.254.169.254/latest"})
+            )
         ),
     )
     assert await service_links.check_http_endpoint_reachable("http://10.20.30.40:30300") is False
@@ -675,7 +685,7 @@ async def test_deployment_monitoring_non_admin_status_and_403_admin_handoff(monk
                     returncode=1,
                     stdout="",
                     stderr=(
-                        'Error from server (Forbidden): clusterrolebindings.rbac.authorization.k8s.io is forbidden '
+                        "Error from server (Forbidden): clusterrolebindings.rbac.authorization.k8s.io is forbidden "
                         '(config file "/var/lib/lens/kubeconfig_cache/c-1.kubeconfig", Bearer secret-tok-123)'
                     ),
                 )
@@ -734,7 +744,9 @@ async def test_deployment_monitoring_non_admin_status_and_403_admin_handoff(monk
     assert "bad/key/extra" not in filtered_script
 
     # Dynamic EPP discovery when epp_service is None (e.g. non-admin got 403 listing services)
-    dynamic_script = deploy_svc.render_deployment_monitoring_admin_script("enable", namespace="ns-deploy", epp_service=None)
+    dynamic_script = deploy_svc.render_deployment_monitoring_admin_script(
+        "enable", namespace="ns-deploy", epp_service=None
+    )
     proc_dyn = subprocess.run(["bash", "-n"], input=dynamic_script, text=True, capture_output=True, check=False)
     assert proc_dyn.returncode == 0, proc_dyn.stderr
     assert "tr -cd 'A-Za-z0-9._-'" in dynamic_script
@@ -742,7 +754,10 @@ async def test_deployment_monitoring_non_admin_status_and_403_admin_handoff(monk
     assert "llm-d-prism-metrics-reader" in dynamic_script
 
     disable_script = deploy_svc.render_deployment_monitoring_admin_script("disable", namespace="ns-deploy")
-    assert subprocess.run(["bash", "-n"], input=disable_script, text=True, capture_output=True, check=False).returncode == 0
+    assert (
+        subprocess.run(["bash", "-n"], input=disable_script, text=True, capture_output=True, check=False).returncode
+        == 0
+    )
     assert "state: disabled" in disable_script
 
     # Router returns 403 with admin_script in detail AND enforces cluster/permission scope unconditionally
@@ -819,9 +834,11 @@ async def test_deployment_and_service_links_honor_custom_cluster_monitoring_name
     monkeypatch.setattr(
         cluster_registry,
         "get_cluster_monitoring_settings",
-        lambda cid: {"monitoring_mode": "managed", "monitoring_namespace": "llm-d-monitoring-123454"}
-        if cid == "2790b2ae"
-        else None,
+        lambda cid: (
+            {"monitoring_mode": "managed", "monitoring_namespace": "llm-d-monitoring-123454"}
+            if cid == "2790b2ae"
+            else None
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -904,7 +921,8 @@ async def test_deployment_and_service_links_honor_custom_cluster_monitoring_name
     crbs = [
         d
         for d in applied_docs
-        if d.get("kind") == "ClusterRoleBinding" and d.get("metadata", {}).get("name") == deploy_svc.METRICS_READER_BINDING
+        if d.get("kind") == "ClusterRoleBinding"
+        and d.get("metadata", {}).get("name") == deploy_svc.METRICS_READER_BINDING
     ]
     assert len(crbs) == 1
     assert crbs[0]["subjects"] == [
@@ -1017,7 +1035,9 @@ async def test_resolve_prometheus_endpoint_stale_url_nodeport_refresh_and_port_f
             )
         raise AssertionError(f"Unexpected kubectl call: {argv}")
 
-    forward_fail = AsyncMock(side_effect=AssertionError("ensure_port_forward must not be called when NodePort is healthy"))
+    forward_fail = AsyncMock(
+        side_effect=AssertionError("ensure_port_forward must not be called when NodePort is healthy")
+    )
     monkeypatch.setattr(prometheus, "ensure_port_forward", forward_fail)
 
     ep_refreshed = await resolve_prometheus_endpoint("c-stale-np", allow_port_forward=True, kubectl_fn=kubectl_nodeport)
@@ -1065,7 +1085,9 @@ async def test_resolve_prometheus_endpoint_stale_url_nodeport_refresh_and_port_f
         namespace="custom-mon",
         local_port=19091,
     )
-    forward_ok.assert_awaited_once_with("custom-mon", "llmd-kube-prometheus-stack-prometheus", 9090, cluster_id="c-clusterip")
+    forward_ok.assert_awaited_once_with(
+        "custom-mon", "llmd-kube-prometheus-stack-prometheus", 9090, cluster_id="c-clusterip"
+    )
     assert len(updated_calls) == 1
     assert updated_calls[0][1]["prometheusUrl"] is None
     assert updated_calls[0][1]["prometheusNodePort"] is None
@@ -1372,7 +1394,9 @@ async def test_resolve_prometheus_endpoint_validation_cache_invalidation_transie
         },
         raising=False,
     )
-    assert prometheus._should_update_cluster_monitoring(cluster_registry.get_cluster_monitoring_settings("c-ex")) is False
+    assert (
+        prometheus._should_update_cluster_monitoring(cluster_registry.get_cluster_monitoring_settings("c-ex")) is False
+    )
 
     from llm_d_lens.db.dao.cluster import ClusterDao
 
@@ -1516,7 +1540,9 @@ async def test_central_stack_ready_non_admin_retry_fallback_and_admin_isolation(
     # 4. Non-admin unhealthy direct endpoint -> passes skip_direct_url=True and probes distinct fallback
     resolve_calls.clear()
     ep_stale = PrometheusEndpoint(base_url="http://10.0.0.5:30900", source="explicit_url", namespace="lens-monitoring")
-    ep_pf = PrometheusEndpoint(base_url="http://127.0.0.1:19090", source="port_forward", namespace="lens-monitoring", local_port=19090)
+    ep_pf = PrometheusEndpoint(
+        base_url="http://127.0.0.1:19090", source="port_forward", namespace="lens-monitoring", local_port=19090
+    )
 
     async def stale_then_pf(cluster_id, *, allow_port_forward=True, use_cache=True, skip_direct_url=False):
         assert cluster_id == "c-stale"

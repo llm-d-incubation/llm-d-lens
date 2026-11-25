@@ -539,8 +539,7 @@ async def _check_namespaced_resource_access(
         raise CapabilityCheckUnavailable(f"{error_label} failed: {exc}") from exc
 
     return {
-        namespace: all(answers.get(key) is True for key in ns_keys)
-        for namespace, ns_keys in keys_by_namespace.items()
+        namespace: all(answers.get(key) is True for key in ns_keys) for namespace, ns_keys in keys_by_namespace.items()
     }
 
 
@@ -627,14 +626,8 @@ _STORAGE_OPERATOR_CHECK_RULES: tuple[CheckRule, ...] = (
         CheckRule(verb=verb, api_group="", resource="persistentvolumeclaims", scope="namespace")
         for verb in ("get", "list", "create", "patch", "delete")
     ),
-    *(
-        CheckRule(verb=verb, api_group="batch", resource="jobs", scope="namespace")
-        for verb in _STORAGE_OPERATOR_VERBS
-    ),
-    *(
-        CheckRule(verb=verb, api_group="", resource="pods", scope="namespace")
-        for verb in ("get", "list", "watch")
-    ),
+    *(CheckRule(verb=verb, api_group="batch", resource="jobs", scope="namespace") for verb in _STORAGE_OPERATOR_VERBS),
+    *(CheckRule(verb=verb, api_group="", resource="pods", scope="namespace") for verb in ("get", "list", "watch")),
     CheckRule(verb="get", api_group="", resource="pods", scope="namespace", subresource="log"),
     *(
         CheckRule(verb=verb, api_group="", resource="secrets", scope="namespace")
@@ -1614,11 +1607,7 @@ async def evaluate_operations(
 
     storage_pvc_op = by_id.get("storage.pvc")
     storage_ns = getattr(storage_pvc_op, "namespace", None) if storage_pvc_op is not None else None
-    if (
-        ("storage.namespace" in admin_ids or "storage.pvc" in admin_ids)
-        and not marker.get("verified")
-        and storage_ns
-    ):
+    if ("storage.namespace" in admin_ids or "storage.pvc" in admin_ids) and not marker.get("verified") and storage_ns:
         for op_id in ("model-cache.token-secret", "model-cache.job"):
             if op_id not in blocked_ids:
                 continue

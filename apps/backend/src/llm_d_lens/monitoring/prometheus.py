@@ -110,12 +110,7 @@ def _is_inet_aton_literal(host: str) -> bool:
 
 
 def _is_blocked_single_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return (
-        str(addr) in _METADATA_ADDRESSES
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_unspecified
-    )
+    return str(addr) in _METADATA_ADDRESSES or addr.is_link_local or addr.is_multicast or addr.is_unspecified
 
 
 def _is_blocked_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -378,8 +373,7 @@ def _should_update_cluster_monitoring(settings: Mapping[str, Any] | None) -> boo
     source = str(settings.get("prometheus_url_source") or "").strip().lower()
     raw_auto = settings.get("auto_discovered") if "auto_discovered" in settings else settings.get("autoDiscovered")
     prom_auto = raw_auto is True or (
-        isinstance(raw_auto, (list, tuple, set))
-        and ("prometheusUrl" in raw_auto or "prometheusNodePort" in raw_auto)
+        isinstance(raw_auto, (list, tuple, set)) and ("prometheusUrl" in raw_auto or "prometheusNodePort" in raw_auto)
     )
     if mode == "existing":
         return source in {"auto_discovered", "node_port"} or prom_auto

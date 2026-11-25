@@ -1043,7 +1043,7 @@ def test_command_bash_s_uses_single_quoted_heredoc_and_falls_back_on_delimiter_o
 
     op_id = "monitoring.stack"
     delimiter = _heredoc_name("LENS_SCRIPT", op_id)
-    script_body = "set -euo pipefail\necho \"$HOME\" literal\n"
+    script_body = 'set -euo pipefail\necho "$HOME" literal\n'
     rendered = _render_command(
         OperationApply(kind="command", argv=("bash", "-s"), stdin=script_body),
         op_id,
@@ -1062,7 +1062,7 @@ def test_command_bash_s_uses_single_quoted_heredoc_and_falls_back_on_delimiter_o
         check=True,
     )
     assert proc.returncode == 0
-    assert '$HOME' in capture.read_text()
+    assert "$HOME" in capture.read_text()
 
     # Fallback to base64 if delimiter appears as a line or stdin contains CR.
     for unsafe_stdin in (f"echo ok\n{delimiter}\necho done\n", "echo ok\r\n"):
@@ -1168,7 +1168,10 @@ def test_render_admin_cleanup_script_orders_helm_rbac_and_namespace_and_validate
         "clusterrolebinding",
         "namespace",
     ]
-    assert "if command -v helm >/dev/null 2>&1 && helm status llmd --namespace llm-d-monitoring >/dev/null 2>&1; then" in script
+    assert (
+        "if command -v helm >/dev/null 2>&1 && helm status llmd --namespace llm-d-monitoring >/dev/null 2>&1; then"
+        in script
+    )
     assert "helm uninstall llmd --namespace llm-d-monitoring" in script
     assert "--ignore-not-found" not in script.split("helm uninstall")[1].splitlines()[0]
     assert script.index("helm uninstall llmd --namespace llm-d-monitoring") < script.index(
@@ -1207,18 +1210,18 @@ def test_render_admin_cleanup_script_orders_helm_rbac_and_namespace_and_validate
     )
     kubectl.chmod(0o755)
     helm = bindir / "helm"
-    helm.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -e\n"
-        'printf "helm %s\\n" "$*" >> "$CMD_LOG"\n'
-        "exit 0\n"
-    )
+    helm.write_text('#!/usr/bin/env bash\nset -e\nprintf "helm %s\\n" "$*" >> "$CMD_LOG"\nexit 0\n')
     helm.chmod(0o755)
     script_path = tmp_path / "cleanup.sh"
     script_path.write_text(script)
     proc = subprocess.run(
         ["bash", str(script_path)],
-        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "CMD_LOG": str(log), "MARKER_CAPTURE": str(marker)},
+        env={
+            **os.environ,
+            "PATH": f"{bindir}:{os.environ['PATH']}",
+            "CMD_LOG": str(log),
+            "MARKER_CAPTURE": str(marker),
+        },
         capture_output=True,
         text=True,
         timeout=15,
@@ -1435,7 +1438,7 @@ def test_render_admin_operations_script_emits_storage_rbac_for_sa_user_group_and
         'if [[ "$1" == "get" && "$2" == "namespace" ]]; then exit 1; fi\n'
         'if [[ "$1" == "apply" ]]; then\n'
         '  file=""\n'
-        '  while (($#)); do\n'
+        "  while (($#)); do\n"
         '    if [[ "$1" == "-f" ]]; then file="$2"; shift 2; continue; fi\n'
         "    shift\n"
         "  done\n"

@@ -474,7 +474,9 @@ def _assert_bash_syntax(script: str) -> None:
     assert proc.returncode == 0, f"bash -n failed:\n{proc.stderr}"
 
 
-def _setup_stub_bin(tmp_path: Path, *, kubectl_body: str, helm_body: str = "#!/usr/bin/env bash\nexit 0\n") -> tuple[Path, dict[str, str]]:
+def _setup_stub_bin(
+    tmp_path: Path, *, kubectl_body: str, helm_body: str = "#!/usr/bin/env bash\nexit 0\n"
+) -> tuple[Path, dict[str, str]]:
     import os
 
     bin_dir = tmp_path / "bin"
@@ -922,7 +924,9 @@ async def test_probe_monitoring_access_ssar_admin_non_admin_stream_and_errors(mo
         async def run(self, argv: list[str], **_kwargs) -> CommandResult:
             return _result(argv, stderr="selfsubjectaccessreviews.authorization.k8s.io is forbidden", returncode=1)
 
-    forbidden = await probe_monitoring_access("c1", scope="cluster_stack", runner=ForbiddenSsarRunner(), use_cache=False)
+    forbidden = await probe_monitoring_access(
+        "c1", scope="cluster_stack", runner=ForbiddenSsarRunner(), use_cache=False
+    )
     assert forbidden.reachable is True
     assert forbidden.access_mode == "non_admin"
     assert forbidden.can_manage is False
@@ -990,10 +994,19 @@ async def test_check_http_endpoint_reachable_and_direct_links(monkeypatch):
     monkeypatch.setattr(
         prom_mod,
         "create_prometheus_client",
+        make_client(lambda req: httpx.Response(200) if req.url.path == "/api/health" else httpx.Response(404)),
+    )
+    assert await check_http_endpoint_reachable("http://grafana.local:30300") is True
+
+    monkeypatch.setattr(
+        prom_mod,
+        "create_prometheus_client",
         make_client(
-            lambda req: httpx.Response(200)
-            if req.url.path == "/api/health"
-            else httpx.Response(404)
+            lambda req: (
+                httpx.Response(404)
+                if req.url.path == "/api/health"
+                else httpx.Response(302, headers={"Location": "/login"})
+            )
         ),
     )
     assert await check_http_endpoint_reachable("http://grafana.local:30300") is True
@@ -1002,20 +1015,11 @@ async def test_check_http_endpoint_reachable_and_direct_links(monkeypatch):
         prom_mod,
         "create_prometheus_client",
         make_client(
-            lambda req: httpx.Response(404)
-            if req.url.path == "/api/health"
-            else httpx.Response(302, headers={"Location": "/login"})
-        ),
-    )
-    assert await check_http_endpoint_reachable("http://grafana.local:30300") is True
-
-    monkeypatch.setattr(
-        prom_mod,
-        "create_prometheus_client",
-        make_client(
-            lambda req: httpx.Response(404)
-            if req.url.path == "/api/health"
-            else httpx.Response(302, headers={"Location": "https://evil.example/login"})
+            lambda req: (
+                httpx.Response(404)
+                if req.url.path == "/api/health"
+                else httpx.Response(302, headers={"Location": "https://evil.example/login"})
+            )
         ),
     )
     assert await check_http_endpoint_reachable("http://grafana.local:30300") is False
@@ -1075,7 +1079,9 @@ async def test_discover_cluster_stack_non_admin_and_existing_grafana_optional(mo
     async def fake_resolve(_cid, *, allow_port_forward=True, use_cache=True):
         assert allow_port_forward is False
         assert use_cache is False
-        return PrometheusEndpoint(base_url="http://10.0.0.10:30900", source="explicit_url", namespace="llm-d-monitoring")
+        return PrometheusEndpoint(
+            base_url="http://10.0.0.10:30900", source="explicit_url", namespace="llm-d-monitoring"
+        )
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/-/ready":
@@ -1708,16 +1714,18 @@ async def test_cluster_stack_custom_monitoring_namespace_resolution_and_registry
     monkeypatch.setattr(
         cluster_registry,
         "get_cluster_monitoring_settings",
-        lambda cid: {
-            "monitoring_mode": current_mon_plan["mode"],
-            "monitoring_namespace": current_mon_plan["namespace"],
-            "prometheus_url": current_mon_plan["prometheusUrl"],
-            "grafana_url": current_mon_plan["grafanaUrl"],
-            "prometheus_node_port": current_mon_plan["prometheusNodePort"],
-            "grafana_node_port": current_mon_plan["grafanaNodePort"],
-        }
-        if cid == "2790b2ae"
-        else None,
+        lambda cid: (
+            {
+                "monitoring_mode": current_mon_plan["mode"],
+                "monitoring_namespace": current_mon_plan["namespace"],
+                "prometheus_url": current_mon_plan["prometheusUrl"],
+                "grafana_url": current_mon_plan["grafanaUrl"],
+                "prometheus_node_port": current_mon_plan["prometheusNodePort"],
+                "grafana_node_port": current_mon_plan["grafanaNodePort"],
+            }
+            if cid == "2790b2ae"
+            else None
+        ),
     )
 
     updated_plans: list[tuple[str, dict, bool]] = []
@@ -1833,7 +1841,9 @@ async def test_cluster_stack_custom_monitoring_namespace_resolution_and_registry
         # 4. Recheck on an absent custom namespace does NOT clobber; recheck on a ready custom namespace DOES sync
         updated_plans.clear()
         status_by_ns["absent-other-ns"] = "absent"
-        rc_absent = client.post("/api/v1/monitoring/cluster-stack/recheck?cluster_id=2790b2ae&namespace=absent-other-ns")
+        rc_absent = client.post(
+            "/api/v1/monitoring/cluster-stack/recheck?cluster_id=2790b2ae&namespace=absent-other-ns"
+        )
         assert rc_absent.status_code == 200
         assert updated_plans == []
 
@@ -1886,17 +1896,19 @@ async def test_online_install_reinstall_preserves_nodeports_applies_rbac_and_upd
     monkeypatch.setattr(
         cluster_registry,
         "get_cluster_monitoring_settings",
-        lambda cid: {
-            "monitoring_mode": current_mon_plan["mode"],
-            "monitoring_namespace": current_mon_plan["namespace"],
-            "prometheus_url": current_mon_plan["prometheusUrl"],
-            "grafana_url": current_mon_plan["grafanaUrl"],
-            "prometheus_node_port": current_mon_plan["prometheusNodePort"],
-            "grafana_node_port": current_mon_plan["grafanaNodePort"],
-            "monitoring_host": current_mon_plan["host"],
-        }
-        if cid == "c-reinstall"
-        else None,
+        lambda cid: (
+            {
+                "monitoring_mode": current_mon_plan["mode"],
+                "monitoring_namespace": current_mon_plan["namespace"],
+                "prometheus_url": current_mon_plan["prometheusUrl"],
+                "grafana_url": current_mon_plan["grafanaUrl"],
+                "prometheus_node_port": current_mon_plan["prometheusNodePort"],
+                "grafana_node_port": current_mon_plan["grafanaNodePort"],
+                "monitoring_host": current_mon_plan["host"],
+            }
+            if cid == "c-reinstall"
+            else None
+        ),
     )
 
     updated_calls: list[tuple[str, dict, bool]] = []
@@ -1966,7 +1978,9 @@ async def test_online_install_reinstall_preserves_nodeports_applies_rbac_and_upd
             if argv[:3] == ["kubectl", "get", "nodes"]:
                 return _result(
                     argv,
-                    json.dumps({"items": [{"status": {"addresses": [{"type": "InternalIP", "address": "10.20.30.40"}]}}]}),
+                    json.dumps(
+                        {"items": [{"status": {"addresses": [{"type": "InternalIP", "address": "10.20.30.40"}]}}]}
+                    ),
                 )
             raise AssertionError(f"Unexpected kubectl command: {argv}")
 
@@ -2015,7 +2029,9 @@ async def test_online_install_reinstall_preserves_nodeports_applies_rbac_and_upd
         )
 
     monkeypatch.setattr(stack_service.operations, "create", fake_create)
-    await stack_service.install(ClusterStackInstallRequest(reinstall=True), idempotency_key="reinstall-k1", cluster_id="c-reinstall")
+    await stack_service.install(
+        ClusterStackInstallRequest(reinstall=True), idempotency_key="reinstall-k1", cluster_id="c-reinstall"
+    )
 
     verified = await captured_verifier["fn"]("custom-obs-ns")
     assert verified.status == "ready"
@@ -2026,7 +2042,10 @@ async def test_online_install_reinstall_preserves_nodeports_applies_rbac_and_upd
 
     # Services were patched to NodePort with preserved ports
     assert reconcile_runner.services_state["llmd-kube-prometheus-stack-prometheus"]["spec"]["type"] == "NodePort"
-    assert reconcile_runner.services_state["llmd-kube-prometheus-stack-prometheus"]["spec"]["ports"][0]["nodePort"] == 30900
+    assert (
+        reconcile_runner.services_state["llmd-kube-prometheus-stack-prometheus"]["spec"]["ports"][0]["nodePort"]
+        == 30900
+    )
     assert reconcile_runner.services_state["llmd-grafana"]["spec"]["type"] == "NodePort"
     assert reconcile_runner.services_state["llmd-grafana"]["spec"]["ports"][0]["nodePort"] == 30300
 
@@ -2037,7 +2056,9 @@ async def test_online_install_reinstall_preserves_nodeports_applies_rbac_and_upd
     bindings = [d for d in reconcile_runner.applied_manifests if d.get("kind") == "ClusterRoleBinding"]
     assert len(roles) == 1 and roles[0]["metadata"]["name"] == METRICS_READER_ROLE
     assert len(bindings) == 1 and bindings[0]["metadata"]["name"] == expected_binding
-    assert bindings[0]["subjects"] == [{"kind": "ServiceAccount", "name": "custom-prom-sa", "namespace": "custom-obs-ns"}]
+    assert bindings[0]["subjects"] == [
+        {"kind": "ServiceAccount", "name": "custom-prom-sa", "namespace": "custom-obs-ns"}
+    ]
 
     # Cluster record updated with invalidate_execution=False and Prom endpoint cache invalidated
     assert len(updated_calls) == 1
@@ -2292,7 +2313,9 @@ done
     default_script = render_monitoring_stack_script(namespace="llm-d-monitoring")
     _assert_bash_syntax(default_script)
     applied_file.write_text("", encoding="utf-8")
-    proc_def = subprocess.run(["bash", "-s"], input=default_script, text=True, env=env, capture_output=True, check=False)
+    proc_def = subprocess.run(
+        ["bash", "-s"], input=default_script, text=True, env=env, capture_output=True, check=False
+    )
     assert proc_def.returncode == 0, proc_def.stderr
     def_vals = yaml.safe_load(values_copy.read_text(encoding="utf-8"))
     assert "fullnameOverride" not in def_vals
@@ -2502,17 +2525,14 @@ done
         "matchLabels": {"monitoring-ns": target_ns}
     }
     assert online_vals["grafana"]["sidecar"]["dashboards"]["searchNamespace"] == target_ns
-    assert (
-        f"https://llmd-{ns_hash}-prometheus.{target_ns}.svc.cluster.local:9090"
-        in yaml.safe_dump(online_vals["grafana"]["datasources"])
+    assert f"https://llmd-{ns_hash}-prometheus.{target_ns}.svc.cluster.local:9090" in yaml.safe_dump(
+        online_vals["grafana"]["datasources"]
     )
 
     online_rbac = [d for d in yaml.safe_load_all(applied_file.read_text(encoding="utf-8")) if isinstance(d, dict)]
     crb = next(d for d in online_rbac if d.get("kind") == "ClusterRoleBinding")
     assert crb["metadata"]["name"] == f"llm-d-prism-metrics-reader-{ns_hash}"
-    assert crb["subjects"] == [
-        {"kind": "ServiceAccount", "name": f"llmd-{ns_hash}-prometheus", "namespace": target_ns}
-    ]
+    assert crb["subjects"] == [{"kind": "ServiceAccount", "name": f"llmd-{ns_hash}-prometheus", "namespace": target_ns}]
     assert dash_marker.read_text(encoding="utf-8") == target_ns
 
 
@@ -2729,7 +2749,9 @@ async def test_discovery_recognizes_suffixed_workloads_and_external_kube_state()
             if "--all-namespaces" in cmd and "pods,daemonsets" in cmd:
                 return _result(argv, json.dumps({"items": []}))
             if "grafana_dashboard=1" in cmd:
-                return _result(argv, json.dumps({"items": [{"kind": "ConfigMap", "metadata": {"name": "llm-d-overview"}}]}))
+                return _result(
+                    argv, json.dumps({"items": [{"kind": "ConfigMap", "metadata": {"name": "llm-d-overview"}}]})
+                )
             if cmd.startswith("kubectl get crd"):
                 return _result(argv, "crd")
             raise AssertionError(f"Unexpected cmd: {cmd}")

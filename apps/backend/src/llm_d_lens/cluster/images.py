@@ -111,10 +111,7 @@ def render_image_puller_daemonset(images: list[str], *, namespace: str, name: st
     container statuses report per-image completion (the pod is Ready only once
     every image is pulled on that node).
     """
-    validated_images = [
-        validate_container_image_ref(item, field="images", allow_empty=False)
-        for item in images
-    ]
+    validated_images = [validate_container_image_ref(item, field="images", allow_empty=False) for item in images]
     containers = []
     for index, item in enumerate(validated_images):
         assert item is not None

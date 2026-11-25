@@ -1221,9 +1221,7 @@ def _operation_payload_with_handoff(operation: Any) -> dict:
 async def admin_gateway_ipp_config(body: IppConfigRequest, request: Request) -> dict:
     principal = current_principal(request)
     require_cluster_access(principal, body.cluster_id)
-    operation = await _gateway_ops.set_ipp_config(
-        body.cluster_id, body.config, actor=owner_for_create(principal)
-    )
+    operation = await _gateway_ops.set_ipp_config(body.cluster_id, body.config, actor=owner_for_create(principal))
     return _operation_payload_with_handoff(operation)
 
 

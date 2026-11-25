@@ -251,9 +251,7 @@ def _invalidate_cluster_monitoring_cache(cluster_id: str | None) -> None:
         invalidate(cluster_id)
 
 
-async def get_status(
-    namespace: str | None = None, *, cluster_id: str | None = None
-) -> ClusterStackStatusResponse:
+async def get_status(namespace: str | None = None, *, cluster_id: str | None = None) -> ClusterStackStatusResponse:
     settings = _safe_monitoring_settings(cluster_id)
     namespace = _resolve_monitoring_namespace(namespace, cluster_id, settings=settings)
     if cluster_id is not None:
@@ -388,9 +386,7 @@ def _cluster_stack_metrics_reader_manifests(
 ) -> list[dict[str, Any]]:
     """Build metrics-reader RBAC manifests with per-namespace ClusterRoleBinding disambiguation."""
     mon_ns = validate_namespace(monitoring_namespace)
-    manifests = copy.deepcopy(
-        _metrics_reader_manifests(prometheus_service_account, monitoring_namespace=mon_ns)
-    )
+    manifests = copy.deepcopy(_metrics_reader_manifests(prometheus_service_account, monitoring_namespace=mon_ns))
     binding_name = metrics_reader_binding_name(mon_ns)
     for doc in manifests:
         if isinstance(doc, dict) and doc.get("kind") == "ClusterRoleBinding":
@@ -746,9 +742,7 @@ async def _reconcile_managed_post_install(
     return monitoring_payload
 
 
-async def verify_status(
-    namespace: str | None = None, *, cluster_id: str | None = None
-) -> ClusterStackStatusResponse:
+async def verify_status(namespace: str | None = None, *, cluster_id: str | None = None) -> ClusterStackStatusResponse:
     """Read status without overlaying the operation currently being verified."""
     resolved_ns = _resolve_monitoring_namespace(namespace, cluster_id)
     active_runner = _runner(cluster_id)
@@ -931,11 +925,11 @@ def _render_online_installer_script(
         f"TARGET_NS={shlex.quote(mon_ns)}",
         "while [[ $# -gt 0 ]]; do",
         '  case "$1" in',
-        '    -n|--namespace) if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;',
+        "    -n|--namespace) if [[ $# -ge 2 ]]; then shift 2; else shift; fi ;;",
         '    -u|--uninstall) ACTION="uninstall"; shift ;;',
-        '    -i|--individual|-t|--enable-tls|-d|--debug) shift ;;',
+        "    -i|--individual|-t|--enable-tls|-d|--debug) shift ;;",
         '    -g|--context) if [[ $# -ge 2 ]]; then export KUBECONFIG="$2"; shift 2; else shift; fi ;;',
-        '    *) shift ;;',
+        "    *) shift ;;",
         "  esac",
         "done",
         "",
@@ -1057,9 +1051,7 @@ _PROMETHEUS_PORT = 9090
 _GRAFANA_PORT = 80
 
 
-async def get_links(
-    namespace: str | None = None, *, cluster_id: str | None = None
-) -> ClusterStackLinksResponse:
+async def get_links(namespace: str | None = None, *, cluster_id: str | None = None) -> ClusterStackLinksResponse:
     """Discover Prometheus/Grafana in the Cluster infrastructure stack via direct URLs or tunnels."""
     namespace = _resolve_monitoring_namespace(namespace, cluster_id)
     direct_prom, direct_graf = resolve_direct_monitoring_links(cluster_id, namespace=namespace)
@@ -1233,13 +1225,13 @@ def _render_nodeport_patch_block(svc_var: str, service_port: int, target_node_po
                 "    PORT_IDX=$((PORT_IDX + 1))",
                 (
                     f'  done < <(kubectl get svc "${svc_var}" -n "$MONITORING_NS" '
-                    '-o jsonpath=\'{range .spec.ports[*]}}{{.port}}:{{.nodePort}}{{"\\n"}}{{end}\')'
+                    "-o jsonpath='{range .spec.ports[*]}}{{.port}}:{{.nodePort}}{{\"\\n\"}}{{end}')"
                 ),
                 '  if [[ -z "$FOUND_IDX" ]]; then',
                 '    FOUND_IDX="0"',
                 (
                     f'    CURRENT_NODE_PORT="$(kubectl get svc "${svc_var}" -n "$MONITORING_NS" '
-                    '-o jsonpath=\'{.spec.ports[0].nodePort}\' || true)"'
+                    "-o jsonpath='{.spec.ports[0].nodePort}' || true)\""
                 ),
                 "  fi",
                 '  if [[ "$CURRENT_NODE_PORT" != "$TARGET_PORT" ]]; then',
@@ -1405,12 +1397,12 @@ def _render_tls_bootstrap_block(rel_name: str, ns_hash: str | None) -> list[str]
             '-extensions req_ext -extfile "$TMP_DIR/certs/openssl.cnf" >/dev/null 2>&1'
         ),
         (
-            '  kubectl create secret tls prometheus-web-tls '
+            "  kubectl create secret tls prometheus-web-tls "
             '--cert="$TMP_DIR/certs/tls.crt" --key="$TMP_DIR/certs/tls.key" '
             '-n "$MONITORING_NS" --dry-run=client -o yaml | kubectl apply -f -'
         ),
         (
-            '  kubectl create configmap prometheus-web-tls-ca '
+            "  kubectl create configmap prometheus-web-tls-ca "
             '--from-file=ca.crt="$TMP_DIR/certs/ca.crt" '
             '-n "$MONITORING_NS" --dry-run=client -o yaml | kubectl apply -f -'
         ),
@@ -1577,8 +1569,8 @@ def render_monitoring_stack_script(
     ksm_awk = (
         '$1 != "" && $1 != ns '
         '&& (tolower($4) == "kube-state-metrics" || tolower($5) == "kube-state-metrics" '
-        '|| tolower($3) ~ /(kube-state-metrics|'
-        '-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-ksm($|-))/) '
+        "|| tolower($3) ~ /(kube-state-metrics|"
+        "-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-ksm($|-))/) "
         '&& ((($2 == "Deployment" || $7 != "") && $7 ~ /^[0-9]+$/ && ($7 + 0) > 0 '
         '&& ($6 == "" || ($7 + 0) >= ($6 + 0))) '
         '|| (($2 == "Pod" || $8 != "") && $8 == "True")) '
@@ -1604,9 +1596,9 @@ def render_monitoring_stack_script(
         'OP_ENABLED="true"',
         (
             'ALL_OP_ITEMS="$(kubectl get pods,deployments --all-namespaces '
-            "-o jsonpath='{range .items[*]}{.metadata.namespace}{\"\\t\"}"
-            "{.metadata.name}{\"\\t\"}{.metadata.labels.app\\.kubernetes\\.io/name}"
-            "{\"\\n\"}{end}' 2>/dev/null || true)\""
+            '-o jsonpath=\'{range .items[*]}{.metadata.namespace}{"\\t"}'
+            '{.metadata.name}{"\\t"}{.metadata.labels.app\\.kubernetes\\.io/name}'
+            '{"\\n"}{end}\' 2>/dev/null || true)"'
         ),
         (
             'EXISTING_OPERATOR="$(printf \'%s\\n\' "$ALL_OP_ITEMS" '
@@ -1621,9 +1613,9 @@ def render_monitoring_stack_script(
         'NE_ENABLED="true"',
         (
             'ALL_NE_ITEMS="$(kubectl get pods,daemonsets --all-namespaces '
-            "-o jsonpath='{range .items[*]}{.metadata.namespace}{\"\\t\"}"
-            "{.metadata.name}{\"\\t\"}{.metadata.labels.app}{\"\\t\"}"
-            "{.metadata.labels.app\\.kubernetes\\.io/name}{\"\\n\"}{end}' 2>/dev/null || true)\""
+            '-o jsonpath=\'{range .items[*]}{.metadata.namespace}{"\\t"}'
+            '{.metadata.name}{"\\t"}{.metadata.labels.app}{"\\t"}'
+            '{.metadata.labels.app\\.kubernetes\\.io/name}{"\\n"}{end}\' 2>/dev/null || true)"'
         ),
         (
             'EXISTING_NODE_EXPORTER="$(printf \'%s\\n\' "$ALL_NE_ITEMS" '
@@ -1670,11 +1662,11 @@ def render_monitoring_stack_script(
         "",
         (
             'PROM_SA="$(kubectl get prometheus -n "$MONITORING_NS" '
-            '-o jsonpath=\'{.items[0].spec.serviceAccountName}\' 2>/dev/null || true)"'
+            "-o jsonpath='{.items[0].spec.serviceAccountName}' 2>/dev/null || true)\""
         ),
         "PROM_SA=\"$(printf '%s' \"$PROM_SA\" | tr -cd 'A-Za-z0-9._-')\"",
         *fallback_sa_lines,
-        'cat <<\'LENS_METRICS_READER_RBAC\' | sed "s/__PROMETHEUS_SA__/${PROM_SA}/g" | kubectl apply -f -',
+        "cat <<'LENS_METRICS_READER_RBAC' | sed \"s/__PROMETHEUS_SA__/${PROM_SA}/g\" | kubectl apply -f -",
         rbac_yaml,
         "LENS_METRICS_READER_RBAC",
         "",
@@ -1713,7 +1705,7 @@ def render_metrics_reader_rbac_script(*, monitoring_namespace: str = "llm-d-moni
                 '  if [[ -z "$PROM_SA" ]]; then',
                 (
                     f'    PROM_SA="$(kubectl get sa -n "$MONITORING_NS" {shlex.quote(suffixed_sa)} '
-                    '-o jsonpath=\'{.metadata.name}\' 2>/dev/null || true)"'
+                    "-o jsonpath='{.metadata.name}' 2>/dev/null || true)\""
                 ),
                 "    PROM_SA=\"$(printf '%s' \"$PROM_SA\" | tr -cd 'A-Za-z0-9._-')\"",
                 "  fi",
@@ -1736,18 +1728,15 @@ def render_metrics_reader_rbac_script(*, monitoring_namespace: str = "llm-d-moni
             f"if kubectl get clusterrole {shlex.quote(METRICS_READER_ROLE)} >/dev/null 2>&1 "
             f"&& kubectl get clusterrolebinding {shlex.quote(binding_name)} >/dev/null 2>&1; then"
         ),
-        (
-            f'  echo "ClusterRole {METRICS_READER_ROLE} and '
-            f'ClusterRoleBinding {binding_name} already exist; skipping."'
-        ),
+        (f'  echo "ClusterRole {METRICS_READER_ROLE} and ClusterRoleBinding {binding_name} already exist; skipping."'),
         "else",
         (
             '  PROM_SA="$(kubectl get prometheus -n "$MONITORING_NS" '
-            '-o jsonpath=\'{.items[0].spec.serviceAccountName}\' 2>/dev/null || true)"'
+            "-o jsonpath='{.items[0].spec.serviceAccountName}' 2>/dev/null || true)\""
         ),
         "  PROM_SA=\"$(printf '%s' \"$PROM_SA\" | tr -cd 'A-Za-z0-9._-')\"",
         *sa_fallback_lines,
-        '  cat <<\'LENS_METRICS_READER_RBAC\' | sed "s/__PROMETHEUS_SA__/${PROM_SA}/g" | kubectl apply -f -',
+        "  cat <<'LENS_METRICS_READER_RBAC' | sed \"s/__PROMETHEUS_SA__/${PROM_SA}/g\" | kubectl apply -f -",
         rbac_yaml,
         "LENS_METRICS_READER_RBAC",
         "fi",
@@ -1808,7 +1797,7 @@ def render_nodeport_discovery_snippet(
         '  if [[ -z "$_PROM_NP" ]]; then',
         (
             '    _PROM_NP="$(kubectl get svc "$_PROM_SVC" -n "$_MON_NS" '
-            '-o jsonpath=\'{.spec.ports[0].nodePort}\' 2>/dev/null || true)"'
+            "-o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)\""
         ),
         "  fi",
         "  _PROM_NP=\"$(printf '%s' \"$_PROM_NP\" | tr -cd '0-9')\"",
@@ -1823,19 +1812,19 @@ def render_nodeport_discovery_snippet(
         '  if [[ -z "$_GRAFANA_NP" ]]; then',
         (
             '    _GRAFANA_NP="$(kubectl get svc "$_GRAFANA_SVC" -n "$_MON_NS" '
-            '-o jsonpath=\'{.spec.ports[0].nodePort}\' 2>/dev/null || true)"'
+            "-o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)\""
         ),
         "  fi",
         "  _GRAFANA_NP=\"$(printf '%s' \"$_GRAFANA_NP\" | tr -cd '0-9')\"",
         "fi",
         (
-            '_MON_HOST="$(kubectl get nodes -o jsonpath=\'{range .items[*]}'
+            "_MON_HOST=\"$(kubectl get nodes -o jsonpath='{range .items[*]}"
             '{range .status.addresses[?(@.type=="InternalIP")]}{.address}{"\\n"}{end}{end}\' '
             '2>/dev/null | head -n 1 || true)"'
         ),
         'if [[ -z "$_MON_HOST" ]]; then',
         (
-            '  _MON_HOST="$(kubectl get nodes -o jsonpath=\'{range .items[*]}'
+            "  _MON_HOST=\"$(kubectl get nodes -o jsonpath='{range .items[*]}"
             '{range .status.addresses[?(@.type=="ExternalIP")]}{.address}{"\\n"}{end}{end}\' '
             '2>/dev/null | head -n 1 || true)"'
         ),
@@ -1858,10 +1847,10 @@ def render_nodeport_discovery_snippet(
             '    _URL_HOST="[$_URL_HOST]"',
             "  fi",
             '  if [[ -n "$_PROM_NP" ]]; then',
-            "    printf 'Prometheus URL: http://%s:%s\\n' \"$_URL_HOST\" \"$_PROM_NP\"",
+            '    printf \'Prometheus URL: http://%s:%s\\n\' "$_URL_HOST" "$_PROM_NP"',
             "  fi",
             '  if [[ -n "$_GRAFANA_NP" ]]; then',
-            "    printf 'Grafana URL: http://%s:%s\\n' \"$_URL_HOST\" \"$_GRAFANA_NP\"",
+            '    printf \'Grafana URL: http://%s:%s\\n\' "$_URL_HOST" "$_GRAFANA_NP"',
             "  fi",
             "fi",
         ]

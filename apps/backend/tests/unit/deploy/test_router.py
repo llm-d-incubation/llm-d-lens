@@ -895,7 +895,9 @@ async def test_start_run_consumes_verified_namespace_for_single_case_only(monkey
 
     store = JsonDeploymentRunStore(tmp_path)
     manager = application.DeploymentRunManager(store=store)
-    monkeypatch.setattr(application, "require_active_session", lambda _sid: SimpleNamespace(id="s1", server_id="cluster-a"))
+    monkeypatch.setattr(
+        application, "require_active_session", lambda _sid: SimpleNamespace(id="s1", server_id="cluster-a")
+    )
     monkeypatch.setattr(application, "cluster_deployment_source", lambda _s, _d: {"resolved_repository": "/tmp/llm-d"})
     monkeypatch.setattr(manager, "_worker", lambda _run: SimpleNamespace())
     monkeypatch.setattr(manager, "_schedule_run", lambda _run_id, _worker: None)
@@ -928,7 +930,9 @@ async def test_start_run_consumes_verified_namespace_for_single_case_only(monkey
     assert run2.cases[0].create_request.deployment_policy.value.get("namespace_policy") is None
 
     # Multi-case run never shares one verified namespace across cases
-    capabilities.record_verified_namespace("cluster-a", "llmd-verified-target", agentic_deployment_run_id="agentic-multi")
+    capabilities.record_verified_namespace(
+        "cluster-a", "llmd-verified-target", agentic_deployment_run_id="agentic-multi"
+    )
     multi_req = DeploymentRunCreateRequest(
         configurations=[config, config],
         provenance={
@@ -1115,8 +1119,12 @@ async def test_router_preserves_401_and_redacts_kubectl_errors(monkeypatch):
     async def restart_401(*_a, **_kw):
         raise _FakeInventoryAuthError("Unauthorized")
 
-    monkeypatch.setattr("llm_d_lens.deploy.slice_capacity.ClusterInventoryAuthError", _FakeInventoryAuthError, raising=False)
-    monkeypatch.setattr(router.deployment_run_manager, "worker_for_run", lambda _rid: SimpleNamespace(restart_case=restart_401))
+    monkeypatch.setattr(
+        "llm_d_lens.deploy.slice_capacity.ClusterInventoryAuthError", _FakeInventoryAuthError, raising=False
+    )
+    monkeypatch.setattr(
+        router.deployment_run_manager, "worker_for_run", lambda _rid: SimpleNamespace(restart_case=restart_401)
+    )
     monkeypatch.setattr(router._store, "get_run", lambda _rid: SimpleNamespace(id="run-1", provenance={}))
     restart_resp = await router.restart_case("run-1", "case-1", router.RestartCaseRequest(), None)
     assert isinstance(restart_resp, JSONResponse)
@@ -1419,8 +1427,7 @@ def test_standard_kubernetes_service_uses_cluster_vllm_image_when_configured(mon
     asyncio.run(router.create_standard_kubernetes_service_run(request))
 
     assert (
-        captured["request"].configurations[0].content["runtime"]["image"]
-        == "registry.internal:5000/org/vllm:cluster"
+        captured["request"].configurations[0].content["runtime"]["image"] == "registry.internal:5000/org/vllm:cluster"
     )
     fallback_cfg = build_standard_kubernetes_service_configuration(
         request,

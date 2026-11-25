@@ -249,7 +249,9 @@ _IMAGE_REF_FORBIDDEN_CHARS = frozenset(";&|$`()<>[]{}*?!#~%,=")
 _OCI_HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
 _OCI_PORT = r"[1-9]\d{0,4}"
 _OCI_REGISTRY_HOST = (
-    rf"(?:localhost(?::{_OCI_PORT})?|{_OCI_HOST_LABEL}(?:\.{_OCI_HOST_LABEL})+(?::{_OCI_PORT})?|{_OCI_HOST_LABEL}:{_OCI_PORT})"
+    rf"(?:localhost(?::{_OCI_PORT})?"
+    + rf"|{_OCI_HOST_LABEL}(?:\.{_OCI_HOST_LABEL})+(?::{_OCI_PORT})?"
+    + rf"|{_OCI_HOST_LABEL}:{_OCI_PORT})"
 )
 _OCI_REGISTRY_HOST_RE = re.compile(rf"^{_OCI_REGISTRY_HOST}\Z", re.ASCII)
 _OCI_REPO_SEGMENT = r"[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*"
@@ -490,9 +492,7 @@ class Cluster:
         raw_vllm_image = data.get("vllmImage") if "vllmImage" in data else data.get("vllm_image")
         try:
             vllm_image = (
-                validate_container_image_ref(raw_vllm_image, field="vllmImage")
-                if raw_vllm_image is not None
-                else None
+                validate_container_image_ref(raw_vllm_image, field="vllmImage") if raw_vllm_image is not None else None
             )
         except ValueError:
             vllm_image = None
@@ -540,14 +540,10 @@ class Cluster:
             prometheus_url=str(data.get("prometheusUrl")) if data.get("prometheusUrl") else None,
             grafana_url=str(data.get("grafanaUrl")) if data.get("grafanaUrl") else None,
             prometheus_node_port=(
-                int(raw_prom_port)
-                if raw_prom_port is not None and not isinstance(raw_prom_port, bool)
-                else None
+                int(raw_prom_port) if raw_prom_port is not None and not isinstance(raw_prom_port, bool) else None
             ),
             grafana_node_port=(
-                int(raw_graf_port)
-                if raw_graf_port is not None and not isinstance(raw_graf_port, bool)
-                else None
+                int(raw_graf_port) if raw_graf_port is not None and not isinstance(raw_graf_port, bool) else None
             ),
         )
 
@@ -883,9 +879,7 @@ def kubeconfig_namespace_hint(kubeconfig_text: str | None) -> str | None:
             (
                 item.get("user")
                 for item in raw_users
-                if isinstance(item, Mapping)
-                and item.get("name") == user_name
-                and isinstance(item.get("user"), Mapping)
+                if isinstance(item, Mapping) and item.get("name") == user_name and isinstance(item.get("user"), Mapping)
             ),
             None,
         )
@@ -978,9 +972,7 @@ def resolve_monitoring_settings(
         else monitoring.get("prometheus_node_port")
     )
     grafana_node_port = _monitoring_node_port(
-        monitoring.get("grafanaNodePort")
-        if "grafanaNodePort" in monitoring
-        else monitoring.get("grafana_node_port")
+        monitoring.get("grafanaNodePort") if "grafanaNodePort" in monitoring else monitoring.get("grafana_node_port")
     )
 
     explicit_prometheus_url = _safe_monitoring_url(
@@ -997,11 +989,7 @@ def resolve_monitoring_settings(
         else monitoring.get("install_accelerator_exporters")
     )
     install_accelerator_exporters = True if raw_exporters is None else bool(raw_exporters)
-    raw_auto = (
-        monitoring.get("autoDiscovered")
-        if "autoDiscovered" in monitoring
-        else monitoring.get("auto_discovered")
-    )
+    raw_auto = monitoring.get("autoDiscovered") if "autoDiscovered" in monitoring else monitoring.get("auto_discovered")
     auto_discovered = set(raw_auto) if isinstance(raw_auto, (list, tuple, set)) else set()
 
     derived_host: str | None = None
@@ -1011,9 +999,7 @@ def resolve_monitoring_settings(
         nonlocal derived_host, host_resolved
         if not host_resolved:
             derived_host = (
-                monitoring_host
-                or extract_url_host(gateway_public_url)
-                or kubeconfig_server_host(kubeconfig_text)
+                monitoring_host or extract_url_host(gateway_public_url) or kubeconfig_server_host(kubeconfig_text)
             )
             host_resolved = True
         return derived_host
@@ -1021,9 +1007,7 @@ def resolve_monitoring_settings(
     prometheus_url: str | None = explicit_prometheus_url
     if explicit_prometheus_url is not None:
         prometheus_url_source = (
-            "node_port"
-            if ("prometheusUrl" in auto_discovered and prometheus_node_port is not None)
-            else "explicit_url"
+            "node_port" if ("prometheusUrl" in auto_discovered and prometheus_node_port is not None) else "explicit_url"
         )
     else:
         prometheus_url_source = None

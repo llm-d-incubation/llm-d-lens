@@ -101,9 +101,7 @@ class RestartCaseRequest(BaseModel):
 class CleanupVerifyRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    cleanup_digest: str | None = Field(
-        default=None, validation_alias=AliasChoices("cleanup_digest", "cleanupDigest")
-    )
+    cleanup_digest: str | None = Field(default=None, validation_alias=AliasChoices("cleanup_digest", "cleanupDigest"))
     delete_record_on_verify: bool = Field(
         default=True, validation_alias=AliasChoices("delete_record_on_verify", "deleteRecordOnVerify")
     )
@@ -1072,9 +1070,7 @@ async def get_execution_pod_logs(
             "kubeconfig_unauthorized",
         )
     logs = (
-        result.stdout
-        if result.returncode == 0
-        else redact_kubectl_error(result.stderr or result.stdout or "")
+        result.stdout if result.returncode == 0 else redact_kubectl_error(result.stderr or result.stdout or "")
     ).strip()
     return {
         "execution_id": execution_id,
@@ -1602,9 +1598,7 @@ async def check_deployment_permissions_route(
         marker = report.get("marker") or {}
         explicit_ns = bool(body.namespace and body.namespace.strip())
         markerless_non_admin = (
-            bool(report.get("namespaceExists"))
-            and not bool(report.get("canCreateNamespaces"))
-            and explicit_ns
+            bool(report.get("namespaceExists")) and not bool(report.get("canCreateNamespaces")) and explicit_ns
         )
         if (
             report.get("sufficient")

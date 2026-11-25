@@ -329,19 +329,9 @@ async def preflight_storage_volume_create(
         )
 
     warnings = list(warnings)
-    can_manage_pvc = not any(
-        rule.resource in ("persistentvolumeclaims", "namespaces")
-        for rule in missing_permissions
-    )
-    can_run_jobs = not any(
-        rule.resource in ("jobs", "pods")
-        for rule in missing_permissions
-    )
-    pv_only = (
-        volume.kind in (StorageVolumeKind.LOCAL_DISK, StorageVolumeKind.NFS)
-        and can_manage_pvc
-        and can_run_jobs
-    )
+    can_manage_pvc = not any(rule.resource in ("persistentvolumeclaims", "namespaces") for rule in missing_permissions)
+    can_run_jobs = not any(rule.resource in ("jobs", "pods") for rule in missing_permissions)
+    pv_only = volume.kind in (StorageVolumeKind.LOCAL_DISK, StorageVolumeKind.NFS) and can_manage_pvc and can_run_jobs
     if allowed:
         script = None
     else:
@@ -631,10 +621,10 @@ async def preflight_storage_volume_delete(
         )
     except StorageUnauthorizedError as error:
         return _kubeconfig_unauthorized_problem(error)
-    can_manage_namespaced_cleanup = not any(
-        rule.resource in ("persistentvolumeclaims", "jobs", "namespaces")
-        for rule in missing_permissions
-    ) and not warnings
+    can_manage_namespaced_cleanup = (
+        not any(rule.resource in ("persistentvolumeclaims", "jobs", "namespaces") for rule in missing_permissions)
+        and not warnings
+    )
     pv_only = bool(volume.pv_name) and can_manage_namespaced_cleanup
     if allowed:
         script = None

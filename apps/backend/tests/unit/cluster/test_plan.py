@@ -297,9 +297,7 @@ def test_effective_namespaces_uses_custom_storage_namespace_for_model_cache():
     assert namespaces["storage"] == "team-inference"
     assert namespaces["model_cache"] == "team-inference"
 
-    unnormalized_default = plan.model_copy(
-        update={"storage": plan.storage.model_copy(update={"namespace": None})}
-    )
+    unnormalized_default = plan.model_copy(update={"storage": plan.storage.model_copy(update={"namespace": None})})
     assert effective_namespaces(unnormalized_default)["model_cache"] == STORAGE_NAMESPACE_PREFIX
 
 
@@ -1414,9 +1412,7 @@ def test_persist_discovered_monitoring_endpoints_clears_stale_auto_url_on_port_c
     prior_prom_gw_collision = prior_prom_collides.model_copy(
         update={
             "gateway": prior_prom_collides.gateway.model_copy(update={"port": 30300}),
-            "monitoring": prior_prom_collides.monitoring.model_copy(
-                update={"prometheus_node_port": None}
-            ),
+            "monitoring": prior_prom_collides.monitoring.model_copy(update={"prometheus_node_port": None}),
         }
     )
     res_prom_cleared = registry.persist_discovered_monitoring_endpoints(
@@ -1584,8 +1580,9 @@ def test_is_monitoring_only_plan_is_fail_closed_for_resource_owning_stack_keys()
     assert is_monitoring_only_plan(None) is False
     assert is_monitoring_only_plan({}) is False
     assert is_monitoring_only_plan({"stack": {"imagePrepullEnabled": True}}) is False
-    assert (
-        is_monitoring_only_plan({"stack": {"vllmImage": "vllm/vllm-openai:v0.8.5", "lwsEnabled": True}}) is False
-    )
+    assert is_monitoring_only_plan({"stack": {"vllmImage": "vllm/vllm-openai:v0.8.5", "lwsEnabled": True}}) is False
     assert is_monitoring_only_plan({"stack": "invalid"}) is False
-    assert is_monitoring_only_plan({"gateway": {"provider": "istio"}, "stack": {"vllmImage": "vllm/vllm-openai:v0.8.5"}}) is False
+    assert (
+        is_monitoring_only_plan({"gateway": {"provider": "istio"}, "stack": {"vllmImage": "vllm/vllm-openai:v0.8.5"}})
+        is False
+    )

@@ -1386,9 +1386,9 @@ def test_gateway_manifests_filter_namespace_and_wait_for_programmed():
 
 
 def test_gateway_exposure_is_lens_only():
-    without_port = _by_id(
-        build_operations(_gateway_plan("istio", gateway={"port": None}), cluster_id=CLUSTER_ID)
-    )["gateway.exposure"]
+    without_port = _by_id(build_operations(_gateway_plan("istio", gateway={"port": None}), cluster_id=CLUSTER_ID))[
+        "gateway.exposure"
+    ]
     assert without_port.executor == "lens"
     assert without_port.apply.kind == "lens"
     assert without_port.lens_action == "gateway-exposure"
@@ -1411,9 +1411,9 @@ def test_gateway_exposure_is_lens_only():
         ("create", "", "pods", "portforward", "namespace", "lens-gateway"),
     }
 
-    envoy_exposure = _by_id(
-        build_operations(_gateway_plan("envoy-ai-gateway"), cluster_id=CLUSTER_ID)
-    )["gateway.exposure"]
+    envoy_exposure = _by_id(build_operations(_gateway_plan("envoy-ai-gateway"), cluster_id=CLUSTER_ID))[
+        "gateway.exposure"
+    ]
     assert {
         (c.verb, c.api_group, c.resource, c.subresource, c.scope, c.namespace)
         for c in envoy_exposure.requirement.checks
@@ -1428,8 +1428,7 @@ def test_gateway_exposure_is_lens_only():
     for provider in ("agentgateway", "gke"):
         exposure = _by_id(build_operations(_gateway_plan(provider), cluster_id=CLUSTER_ID))["gateway.exposure"]
         assert {
-            (c.verb, c.api_group, c.resource, c.subresource, c.scope, c.namespace)
-            for c in exposure.requirement.checks
+            (c.verb, c.api_group, c.resource, c.subresource, c.scope, c.namespace) for c in exposure.requirement.checks
         } == {
             ("get", "", "services", None, "namespace", "lens-gateway"),
             ("list", "", "services", None, "namespace", "lens-gateway"),
